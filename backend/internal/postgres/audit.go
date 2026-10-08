@@ -150,13 +150,27 @@ func NewAuditTrail(pool *pgxpool.Pool) *AuditTrail {
 	return &AuditTrail{pool: pool}
 }
 
+// auditListWhere selects what AuditTrail.List answers, with the filter as $1
+// to $6. It names only audit_log's own columns, so the count past the end
+// reads it without the joins that name things for the page.
+const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
+		  AND ($2 = '' OR a.action = $2)
+		  AND ($3 = '' OR a.entity = $3)
+		  AND ($4 = '' OR a.entity_id = $4)
+		  AND ($5::timestamptz IS NULL OR a.created_at >= $5)
+		  AND ($6::timestamptz IS NULL OR a.created_at < $6)`
+
 // List returns a page of the trail, newest first, and the total matching.
+//
+// The total rides on the page's own rows, so a page past the end has no row
+// to carry it; only then is it counted on its own (Contests.List's own doc).
 //
 // The actor is joined to a login because a page of identifiers answers
 // nothing. The join is LEFT: a system event has no actor, and an account that
 // has since been deleted still has its entries — the trail outlives the people
 // in it, which is the point of keeping one.
 func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, int, error) {
+	args := []any{nilUUID(f.Actor), f.Action, f.Entity, f.EntityID, f.From, f.To}
 	rows, err := storage.QuerierFrom(ctx, r.pool).Query(ctx, `
 		SELECT a.id, a.actor_id, COALESCE(u.login, ''), a.action,
 		       COALESCE(a.entity, ''), COALESCE(a.entity_id, ''),
@@ -187,18 +201,13 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 		    WHERE a.entity = 'contest' AND ct.contest_id::text = a.entity_id
 		    LIMIT 1
 		) AS contest_title ON true
-		WHERE ($1::uuid IS NULL OR a.actor_id = $1)
-		  AND ($2 = '' OR a.action = $2)
-		  AND ($3 = '' OR a.entity = $3)
-		  AND ($4 = '' OR a.entity_id = $4)
-		  AND ($5::timestamptz IS NULL OR a.created_at >= $5)
-		  AND ($6::timestamptz IS NULL OR a.created_at < $6)
+		`+auditListWhere+`
 		-- Newest first: somebody opening the panel is looking at what just
 		-- happened. The id breaks ties within the same instant, so paging
 		-- cannot show one entry twice and skip another.
 		ORDER BY a.created_at DESC, a.id DESC
 		LIMIT $7 OFFSET $8`,
-		nilUUID(f.Actor), f.Action, f.Entity, f.EntityID, f.From, f.To, f.Limit, f.Offset)
+		append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("read audit trail: %w", err)
 	}
@@ -225,6 +234,12 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("read audit trail: %w", err)
+	}
+	if len(found) == 0 && f.Offset > 0 {
+		if err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx,
+			`SELECT COUNT(*) FROM audit_log a `+auditListWhere, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count audit trail: %w", err)
+		}
 	}
 	return found, total, nil
 }

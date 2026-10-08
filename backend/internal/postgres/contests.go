@@ -172,15 +172,10 @@ func (r *Contests) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, er
 		`SELECT `+contestColumns+` FROM contests c WHERE c.id = $1`, id))
 }
 
-// List returns a page of contests and the total matching the filter.
-//
-// The two scopes are applied here rather than by the caller because they are
-// selection, not authorisation: ManagedBy is what keeps an organizer's list
-// their own, and VisibleTo is what a student may see at all.
-func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Contest, int, error) {
-	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT `+contestColumns+`, COUNT(*) OVER() AS total
-		FROM contests c
+// contestListWhere selects what Contests.List answers, with the filter's
+// arguments as $1 to $5 (contestListArgs). The page and the count past the
+// end both read it, so they cannot disagree about what matches.
+const contestListWhere = `
 		WHERE ($1 = '' OR EXISTS (
 		          SELECT 1 FROM contest_translations t
 		          WHERE t.contest_id = c.id AND t.title ILIKE '%' || $1 || '%'))
@@ -201,14 +196,35 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 		  -- AND rather than part of the clause above, which is what stops it
 		  -- widening anything: whatever this says, the visibility rule has
 		  -- already decided the row may be seen.
-		  AND ($7::boolean IS NULL OR $7 = EXISTS (
+		  AND ($5::boolean IS NULL OR $5 = EXISTS (
 		          SELECT 1 FROM registrations reg
-		          WHERE reg.contest_id = c.id AND reg.user_id = $4))
+		          WHERE reg.contest_id = c.id AND reg.user_id = $4))`
+
+// contestListArgs are contestListWhere's $1 to $5.
+func contestListArgs(f contests.Filter) []any {
+	// The search text is typed by a person and lands in an ILIKE pattern,
+	// so its metacharacters are neutralised (see like.go).
+	return []any{escapeLike(f.Query), f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Enrolled}
+}
+
+// List returns a page of contests and the total matching the filter.
+//
+// The two scopes are applied here rather than by the caller because they are
+// selection, not authorisation: ManagedBy is what keeps an organizer's list
+// their own, and VisibleTo is what a student may see at all.
+//
+// The total rides on the page's own rows (COUNT(*) OVER()), so a page past
+// the end has no row to carry it; only then is it counted on its own. A
+// screen that went one page too far is told how many there are, not that
+// there are none, and every other page still costs one round trip.
+func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Contest, int, error) {
+	args := contestListArgs(f)
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT `+contestColumns+`, COUNT(*) OVER() AS total
+		FROM contests c`+contestListWhere+`
 		ORDER BY c.starts_at DESC NULLS LAST, c.created_at DESC
-		LIMIT $5 OFFSET $6`,
-		// The search text is typed by a person and lands in an ILIKE pattern,
-		// so its metacharacters are neutralised (see like.go).
-		escapeLike(f.Query), f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Limit, f.Offset, f.Enrolled)
+		LIMIT $6 OFFSET $7`,
+		append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list contests: %w", err)
 	}
@@ -240,6 +256,12 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("list contests: %w", err)
+	}
+	if len(found) == 0 && f.Offset > 0 {
+		if err := r.querier(ctx).QueryRow(ctx,
+			`SELECT COUNT(*) FROM contests c`+contestListWhere, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count contests: %w", err)
+		}
 	}
 	return found, total, nil
 }

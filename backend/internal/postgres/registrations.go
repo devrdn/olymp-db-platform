@@ -65,19 +65,28 @@ func scanParticipant(row pgx.Row) (contests.Participant, error) {
 	return p, nil
 }
 
-// List returns a page of the contest's participants and the total.
-func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {
-	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT `+participantColumns+`, COUNT(*) OVER() AS total
+// participantListFrom selects what Registrations.List answers, with the
+// contest, status and search as $1 to $3. The page and the count past the end
+// both read it, so they cannot disagree about what matches.
+const participantListFrom = `
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.contest_id = $1
 		  AND ($2 = '' OR r.status = $2)
-		  AND ($3 = '' OR u.login ILIKE '%' || $3 || '%' OR u.full_name ILIKE '%' || $3 || '%')
+		  AND ($3 = '' OR u.login ILIKE '%' || $3 || '%' OR u.full_name ILIKE '%' || $3 || '%')`
+
+// List returns a page of the contest's participants and the total.
+//
+// The total rides on the page's own rows, so a page past the end has no row
+// to carry it; only then is it counted on its own (Contests.List's own doc).
+func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {
+	// Typed by a person and used as an ILIKE pattern, so escaped (see like.go).
+	args := []any{contestID, f.Status, escapeLike(f.Query)}
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT `+participantColumns+`, COUNT(*) OVER() AS total`+participantListFrom+`
 		ORDER BY u.login
 		LIMIT $4 OFFSET $5`,
-		// Typed by a person and used as an ILIKE pattern, so escaped (see like.go).
-		contestID, f.Status, escapeLike(f.Query), f.Limit, f.Offset)
+		append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list participants: %w", err)
 	}
@@ -96,6 +105,12 @@ func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contest
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("list participants: %w", err)
+	}
+	if len(found) == 0 && f.Offset > 0 {
+		if err := r.querier(ctx).QueryRow(ctx,
+			`SELECT COUNT(*)`+participantListFrom, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count participants: %w", err)
+		}
 	}
 	return found, total, nil
 }
