@@ -18,7 +18,7 @@ import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
 
-import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
+import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
 import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
@@ -467,10 +467,15 @@ async function PlayPanels({
  * rate-limit case keeps its way back for exactly the reason recorded on
  * `UnavailablePage` — that one lifts by itself within the minute, and the
  * others do not lift at all.
+ *
+ * It also tells the header which refusal it shows (content-loaded.tsx): a
+ * contest that was not open now can open before the header's channel first
+ * connects, and the header refreshes this page once it learns both.
  */
 function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; dict: PlayDictionary }) {
   return (
     <div className="flex min-h-0 flex-col items-start gap-4 p-10 max-narrow:p-4.5 narrow:flex-1">
+      {code !== undefined ? <RenderedRefusalSignal code={code} /> : null}
       <p className="max-w-body text-body text-ink">{body}</p>
       {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
     </div>

@@ -8,8 +8,9 @@ import type { PlayDictionary } from "./dictionary";
 import { readableDuration } from "@/lib/format/bytes";
 import { cn } from "@/lib/utils";
 
-import { useContentLoaded } from "./content-loaded";
+import { useContentLoaded, useRenderedRefusal } from "./content-loaded";
 import { PanelToggles } from "./panel-toggles";
+import { refusalKind } from "./refusals";
 import { useContestEvents } from "./use-contest-events";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -48,9 +49,16 @@ export function PlayHeader({
 }) {
   const t = dict.participant.play;
   const router = useRouter();
+  // Whether the page under this bar is showing "not open now" in the
+  // workspace's place (content-loaded.tsx). Only that refusal can go stale
+  // under a running channel: a closed one never reopens, and the others are
+  // not about the contest's window at all.
+  const renderedRefusal = useRenderedRefusal();
+  const renderedDormant = renderedRefusal !== null && refusalKind(renderedRefusal) === "dormant";
   const { offsetRef, deadlineRef, phase, channelError, resync, reopened } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
+    renderedDormant,
   );
 
   // The workspace's content reads start an individual participant's clock on
@@ -65,16 +73,21 @@ export function PlayHeader({
   }, [contentLoaded, phase, resync, deadlineRef]);
 
   // Refreshed once, the moment one of two specific transitions matters: a
-  // waiting room learning the contest started, or a running screen whose
-  // channel was refused as not open now and has just been admitted. The
-  // second is a running contest with individual timing whose own window had
-  // not opened when the page was rendered (an organiser started it early):
-  // the page under this bar shows that refusal, and nothing but a refresh
-  // replaces it with the workspace. Every other phase change (running while
-  // already showing the running screen, or finishing) needs no refetch: the
-  // story and the questions a participant has already have not become wrong,
-  // and the existing refusal flow already says what changed the moment an
-  // action is actually attempted.
+  // waiting room learning the contest started, or a running screen that
+  // shows "not open now" learning the contest has opened. The second is a
+  // running contest with individual timing whose own window had not opened
+  // when the page was rendered (an organiser started it early): the page
+  // under this bar shows that refusal, and nothing but a refresh replaces it
+  // with the workspace. The hook reports it as `reopened`, whichever side of
+  // this channel's first connection the window opened on: after it, that
+  // connection is refused as not open now and a later one is admitted;
+  // before it, the first connection is simply admitted, and only the page's
+  // own `renderedDormant` says there is anything stale to replace. Every
+  // other phase change (running while already showing the running screen,
+  // or finishing) needs no refetch: the story and the questions a
+  // participant has already have not become wrong, and the existing refusal
+  // flow already says what changed the moment an action is actually
+  // attempted.
   const refreshed = useRef(false);
   useEffect(() => {
     const started = waitingForStart && phase === "running";
