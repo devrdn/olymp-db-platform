@@ -282,13 +282,13 @@ type Service struct {
 // New assembles the façade around gate, the participation gate every
 // admission asks. Panics on a nil gate: there is no grace this package could
 // assume that is sure to match the one the rest of the installation uses.
-func New(people People, contests Contests, games Games, databases Databases, runner Executor, gate *contests.Gate) *Service {
+func New(people People, contestStore Contests, games Games, databases Databases, runner Executor, gate *contests.Gate) *Service {
 	if gate == nil {
 		panic("queryproxy: New needs the participation gate")
 	}
 	return &Service{
 		people: people, databases: databases, runner: runner,
-		lookup:           defaultLookup{people: people, contests: contests, games: games, databases: databases},
+		lookup:           defaultLookup{people: people, contests: contestStore, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
 		now:              func() time.Time { return time.Now().UTC() },

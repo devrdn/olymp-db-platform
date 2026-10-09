@@ -621,7 +621,7 @@ func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
 // which is what the deployment's cache is when REDIS_ADDR is set: the
 // simulated round trip above, measured. Skipped unless MONITOR_BENCH_REDIS is
 // the address of a Redis this benchmark may write to (it writes only keys
-// named after fresh identifiers).
+// named after fresh identifiers, and leaves them for their own expiry).
 func BenchmarkObserveUnchangedOnRedis(b *testing.B) {
 	addr := os.Getenv("MONITOR_BENCH_REDIS")
 	if addr == "" {
