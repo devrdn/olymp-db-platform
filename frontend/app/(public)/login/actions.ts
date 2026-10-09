@@ -12,9 +12,8 @@ import { fetchIdentity } from "@/lib/auth/session";
 export type SignInState = { code?: string };
 
 /**
- * A Server Action rather than a fetch from the browser, for two reasons: the
- * form then works with JavaScript switched off, and the API's origin stays on
- * the server, which matters in development where it is not behind the proxy.
+ * A Server Action: works without JavaScript and keeps the API origin on the
+ * server (it is not behind the proxy in development).
  */
 export async function signInAction(
   _previous: SignInState,
@@ -24,9 +23,8 @@ export async function signInAction(
   const password = String(form.get("password") ?? "");
   if (login === "" || password === "") return { code: "invalid_request" };
 
-  // Where the guard was taking them before it stopped here. It arrives from
-  // the browser, so `destinationAfterLogin` is the one that decides whether it
-  // is a path on this origin at all.
+  // Where the guard was taking them; from the browser, so
+  // `destinationAfterLogin` decides whether it is a same-origin path.
   const next = form.get("next");
 
   const jar = await cookies();
@@ -36,12 +34,10 @@ export async function signInAction(
     {
       fetchImpl: fetch,
       origin: apiOrigin(),
-      // The browser's own address, handed on: sign-in leaves from this
-      // server, and without the chain the API's per-address throttle counts
-      // every student in the building as one machine.
+      // Forward the browser's address, or the API's per-address throttle sees
+      // every student as this server.
       headers: await callerHeaders(),
-      // The proof that this browser has signed in to the account before,
-      // handed on for the same reason as the address above.
+      // The device token, forwarded for the same reason.
       deviceToken: jar.get(DEVICE_COOKIE)?.value,
       setCookie: (cookie) =>
         jar.set(cookie.name, cookie.value, {
@@ -49,10 +45,8 @@ export async function signInAction(
           maxAge: cookie.maxAge,
           httpOnly: true,
           sameSite: "lax",
-          // From the deployment, not from NODE_ENV. A production build served
-          // over plain http — `make front-start`, a box behind no proxy — used
-          // to mark this Secure, and the browser then discarded it: signing in
-          // appeared to work and the next click went back to the form.
+          // From the deployment, not NODE_ENV: a production build served over
+          // plain http must not set Secure, or the browser drops the cookie.
           secure: cookieSecure(),
         }),
     },
@@ -60,12 +54,11 @@ export async function signInAction(
 
   if (!outcome.ok) return { code: outcome.code };
 
-  // The session exists either way — it was just issued. If the API cannot be
-  // asked what it may do, the safe landing is the participant's own screen,
-  // which every account can open.
+  // The session exists either way; if permissions cannot be read, land on the
+  // participant's screen, which every account can open.
   const identity = await fetchIdentity().catch(() => null);
 
-  // redirect() signals by throwing, so it stays outside any try/catch.
+  // redirect() throws, so it stays outside any try/catch.
   redirect(
     destinationAfterLogin(
       {

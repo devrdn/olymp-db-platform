@@ -7,17 +7,9 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
 import type { Role } from "@/lib/api/accounts";
 
-// The bulk actions are Server Actions ("use server"): importing the real
-// module for a component test would pull in Next's server runtime. The
-// module boundary is what gets faked, the same way change-password-form.test.tsx
-// fakes its own actions module.
-// Typed as `(previous, form) => Promise<...>` — the same shape every bulk
-// action has — purely so `.mock.calls[0][1]` below is a `FormData` and not
-// `undefined`; no test relies on a default resolution, every one that reads
-// the result calls `mockResolvedValueOnce` first. Built inside one
-// `vi.hoisted` block: everything it needs has to be declared in the same
-// hoisted call, since hoisting moves the call itself but not ordinary code
-// around it.
+// The real Server Actions module would pull in Next's server runtime. Typed as
+// `(previous, form) => Promise<...>` so `.mock.calls[0][1]` is a `FormData`.
+// Everything the hoisted factory needs is declared inside it.
 const {
   bulkBlockAction,
   bulkUnblockAction,
@@ -67,18 +59,12 @@ beforeAll(async () => {
   ru = await getDictionary("ru");
 });
 
-// The bulk action mocks are module-level `vi.fn()`s shared by every test in
-// this file; without clearing their call history between tests, a test that
-// asserts `not.toHaveBeenCalled()` would see calls made by an earlier test.
-// This only clears `.mock.calls` and friends, not a mock's implementation, so
-// the default stub each one carries (an empty successful result) survives.
+// Clears call history between tests; the default implementations survive.
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-/** Renders the bar with a selection already picked, in the Russian locale the
- * brief's own wording (заблокировать, подтвердить, укажите причину) is
- * written against. */
+/** Renders the bar with a selection already picked, in the Russian locale. */
 async function renderBar({
   selected = [],
   roles = [],
@@ -86,9 +72,7 @@ async function renderBar({
 }: {
   selected?: string[];
   roles?: Role[];
-  /** Ids the bar treats as "on the current page". Defaults to `selected`
-   * itself — most tests here pick only rows that are, in fact, the one page
-   * being rendered, so nothing should read as off-page by default. */
+  /** Ids on the current page; defaults to `selected`. */
   pageIds?: string[];
 } = {}) {
   render(
@@ -435,9 +419,7 @@ describe("bulk actions: an empty roles submit needs a second, explicit step", ()
     const confirmButton = screen.getByRole("button", {
       name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
     });
-    // Disabled for a moment when it first appears — see the fast-double-click
-    // guard covered on its own below — so this test waits it out rather than
-    // clicking straight away, the same as a real, unhurried confirmation would.
+    // Disabled briefly when it appears (see the double-click test below).
     await waitFor(() => expect(confirmButton).toBeEnabled(), {
       timeout: CONFIRM_EMPTY_ARM_MS + 1000,
     });
@@ -465,9 +447,8 @@ describe("bulk actions: an empty roles submit needs a second, explicit step", ()
     expect(screen.getByRole("checkbox", { name: /Administrator/ })).toBeVisible();
   });
 
-  // Already covered by "the roles dialog replaces the role set with exactly
-  // what is checked" above: ticking at least one role still submits in a
-  // single step, with no confirmation screen in between.
+  // A single step with a role ticked is covered by "the roles dialog replaces
+  // the role set with exactly what is checked".
 });
 
 describe("bulk dialogs: dismissal is blocked while pending or holding a result", () => {
@@ -484,11 +465,8 @@ describe("bulk dialogs: dismissal is blocked while pending or holding a result",
   });
 
   test("Escape does not close the dialog while the request is pending", async () => {
-    // Held open under this test's own control rather than left to hang
-    // forever: an action promise that never settles leaves React's own
-    // pending-transition bookkeeping stuck, which then bleeds into whichever
-    // test runs next against the same mock. Resolving it before this test
-    // ends (below) keeps the test isolated.
+    // Resolved before the test ends: a promise that never settles leaves
+    // React's pending transition stuck for the next test.
     let resolveAction: (value: { code?: string; result?: unknown }) => void = () => {};
     bulkUnblockAction.mockImplementationOnce(
       () =>
@@ -546,8 +524,7 @@ describe("bulk dialog: the corner control reads as close, not cancel", () => {
     await renderBar({ selected: ["a"] });
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.block }));
 
-    // The footer's own Cancel button keeps its own label; the corner control
-    // is a distinct, generic "close" — not the same string as either.
+    // The corner control has its own generic "close" label.
     expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeVisible();
     expect(
       screen.getByRole("button", { name: ru.accounts.selection.bulk.cancel }),
@@ -652,12 +629,8 @@ describe("SelectionBar: honest about a selection that spans more than the curren
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "b" }));
 
-    // Both are picked, but `pageIds` says only "a" is on this page — "b" is
-    // what an earlier search or another page contributed, and the bar must
-    // say so rather than only stating the total. The count and the off-page
-    // note share one paragraph as sibling text nodes (see `SelectionBar`),
-    // so both are checked against that one element rather than as two
-    // separate text queries, which the split would make ambiguous.
+    // Only "a" is on this page; the count and the off-page note are sibling
+    // text nodes in one paragraph, so the element is checked as a whole.
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent(ru.accounts.selection.count.replace("{n}", "2"));
     expect(status).toHaveTextContent(ru.accounts.selection.offPage.replace("{n}", "1"));
@@ -694,8 +667,7 @@ describe("SelectionBar: seeing exactly who is selected", () => {
     );
     expect(screen.queryByText("petrov")).not.toBeInTheDocument();
 
-    // The rows behind the (still open) dialog are inert to the accessibility
-    // tree while it is up, so close it before reading their state.
+    // Rows behind the open dialog are inert, so close it first.
     await userEvent.keyboard("{Escape}");
 
     expect(screen.getByRole("checkbox", { name: "a" })).toBeChecked();
@@ -714,7 +686,7 @@ describe("SelectAllCheckbox: this page's box adds to a cross-page pick rather th
       </SelectionProvider>,
     );
 
-    // Stands in for an account picked on an earlier search or another page.
+    // An account picked on an earlier search or page.
     await userEvent.click(screen.getByRole("checkbox", { name: "off" }));
 
     await userEvent.click(screen.getByRole("checkbox", { name: "page" }));
@@ -745,14 +717,8 @@ describe("SelectAllCheckbox: this page's box adds to a cross-page pick rather th
 });
 
 describe("bulk actions: the empty-roles confirmation resists a fast double click", () => {
-  // The single-shot guard this replaces was proven unsafe by the very shape
-  // of the two screens: the confirmation renders shorter than the role
-  // picker it replaces (no checkbox list, just a warning), so the button a
-  // first, empty submit was intercepted from sits above where the
-  // confirmation's own "Remove all roles" button lands. A fast double-click
-  // aimed at the first button puts its second hit on the second button by
-  // pure layout accident, and nothing used to stand between that and an
-  // unconfirmed strip of every role.
+  // The confirmation is shorter than the role picker, so the second half of a
+  // fast double-click lands on its button by layout accident.
   test("a click on the confirm-empty button right after it appears does not submit", async () => {
     const roles: Role[] = [{ code: "admin", name: "Administrator" }];
     await renderBar({ selected: ["a"], roles });
@@ -765,18 +731,13 @@ describe("bulk actions: the empty-roles confirmation resists a fast double click
     const confirmButton = await screen.findByRole("button", {
       name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
     });
-    // Disabled the instant the confirmation screen appears.
     expect(confirmButton).toBeDisabled();
 
-    // Fired directly rather than through userEvent, which would itself
-    // refuse to click a disabled control: this is the click that must not
-    // reach the server action no matter how it arrives — a stray dblclick,
-    // a stuck key, anything.
+    // Fired directly, since userEvent refuses to click a disabled control.
     fireEvent.click(confirmButton);
     expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
 
-    // Once the button has had a genuine moment to be a deliberate press, the
-    // very same interaction goes through.
+    // After the delay the same click goes through.
     await waitFor(() => expect(confirmButton).toBeEnabled(), {
       timeout: CONFIRM_EMPTY_ARM_MS + 1000,
     });

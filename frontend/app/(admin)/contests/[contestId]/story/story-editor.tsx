@@ -11,24 +11,10 @@ import { saveStoryAction, type StoryState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The crime story, one box per declared language.
- *
- * Side by side rather than behind tabs. A translator's actual question is
- * "does this paragraph say what the English one says", and a tab hides the
- * sentence they are comparing against. Below the layout breakpoint they stack,
- * which is the same order at a different width.
- *
- * The whole set is submitted together, because the endpoint replaces it as a
- * set and the publish gate reasons about it as one.
- *
- * Formatting is shown where it is typed rather than in a pane underneath: a
- * heading is large, bold is bold, a table is a table. What is stored is still
- * Markdown, so prepared Markdown can be pasted in and what comes back out is
- * Markdown somebody could edit by hand.
- *
- * What a reader finally sees is rendered by `StoryText`, not by this editor —
- * that separation is what keeps the security boundary on the reading side
- * where it belongs (see `components/ui/markdown-editor.tsx`).
+ * The story, one box per language side by side, so a translator can compare
+ * paragraphs; they stack below the breakpoint. Submitted as a set, which the
+ * endpoint replaces whole. Readers see it through `StoryText`, where the
+ * security boundary lives.
  */
 export function StoryEditor({
   contestId,
@@ -42,9 +28,10 @@ export function StoryEditor({
   languages: string[];
   defaultLanguage?: string;
   translations: Record<string, string>;
-  /** Content freezes at the start: changing a question under someone answering
-   *  it is changing their task. The API refuses either way; this is so the
-   *  refusal is visible before it is provoked. */
+  /**
+   * Content freezes at the start. The API refuses edits anyway; this makes the
+   * refusal visible first.
+   */
   editable: boolean;
   dict: Dictionary;
 }) {
@@ -77,11 +64,8 @@ export function StoryEditor({
                 labels={{ expand: t.expand, collapse: t.collapse, unavailable: t.unavailable }}
               />
             ) : (
-              // A frozen contest gets the story as a reader sees it, rendered
-              // by the same component the participant's screen uses. A
-              // read-only editor would be chrome around text nobody may
-              // change, and it would show the author something subtly other
-              // than what is being read right now.
+              // Frozen: render it exactly as participants see it, with the same
+              // component.
               <StoryText
                 markdown={translations[lang] ?? ""}
                 className="max-w-narrative border border-line p-4"
@@ -96,7 +80,7 @@ export function StoryEditor({
           {pending ? t.saving : t.save}
         </Button>
 
-        {/* `status`, not `alert`: a save that worked is not an interruption. */}
+        {/* `status`, not `alert`: a successful save is not an interruption. */}
         {state.saved ? (
           <p role="status" className="text-small text-good">
             {t.saved}

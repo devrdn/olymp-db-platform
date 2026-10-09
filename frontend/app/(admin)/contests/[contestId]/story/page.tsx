@@ -7,13 +7,8 @@ import { loadContest, loadContestResource } from "../contest";
 import { StoryEditor } from "./story-editor";
 
 /**
- * The crime story.
- *
- * A contest that has none is the ordinary state of a draft, not a wrong
- * address, so the loader is told to read that 404 as "nothing written yet" and
- * the editor opens on empty boxes. Turning it into a not-found page would send
- * an author looking for a broken link when the answer is that they have not
- * started.
+ * The story. A 404 means nothing is written yet, so the editor opens empty
+ * rather than showing a not-found page.
  */
 export default async function StoryPage(props: PageProps<"/contests/[contestId]/story">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
@@ -40,8 +35,7 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
       </div>
 
       {languages.length === 0 ? (
-        /* Nothing to write in. The set of languages is chosen in Settings, and
-           saying so beats an editor with no boxes in it. */
+        /* No languages yet; they are chosen in Settings. */
         <p className="max-w-body text-body text-ink-3">{t.noLanguages}</p>
       ) : (
         <StoryEditor

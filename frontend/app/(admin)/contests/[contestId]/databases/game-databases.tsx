@@ -25,31 +25,15 @@ const STATUS_TONE: Record<GameInstance["status"], "good" | "warn" | "bad" | "mut
   dropped: "mute",
 };
 
-/** A failure this panel is reporting, in the interface's own words. */
+/** A failure code in the interface's words. */
 function message(code: string | undefined, dict: Dictionary): string | null {
   return code ? (messageForCode(code, dict.errors)) : null;
 }
 
 /**
- * The databases that already exist for one contest.
- *
- * Two kinds of row in one table rather than two tables: a spare copy and a
- * participant's own are one column apart in the record, and separating them on
- * screen would make "how many databases does this contest have" a sum the
- * reader has to do. What the table adds over a cluster listing is the holder's
- * name — the question this screen exists to answer is "which of these is
- * Ivan's", and a list of generated database names cannot answer it.
- *
- * Only a held copy offers the button. A spare that has gone wrong is not worth
- * an organiser's attention — nobody is waiting on it, and the pool tender
- * replaces it on its own, so a control duplicating a background job is how a
- * screen teaches somebody to distrust it. A row already dropped offers nothing
- * either, for the plainest of reasons.
- *
- * No heading of its own. This is the sole panel of the `databases` route —
- * the same reason `StoryEditor` and `QuestionList` carry none either — and
- * the route's own page supplies it, the way every other single-panel section
- * does.
+ * The contest's databases in one table, spare and held alike, with the holder's
+ * name. Only a held copy offers the drop button: the pool tender replaces a
+ * broken spare on its own. The route's page supplies the heading.
  */
 export function GameDatabases({
   contestId,
@@ -134,13 +118,7 @@ export function GameDatabases({
   );
 }
 
-/**
- * Whose copy this is.
- *
- * An account that has since been deleted is said to be gone rather than given
- * an invented name: the row outlives the person on it, which is the same rule
- * the audit trail keeps about the things it describes.
- */
+/** The holder; a deleted account is shown as gone, never given an invented name. */
 function Holder({
   instance,
   t,
@@ -160,13 +138,7 @@ function Holder({
   );
 }
 
-/**
- * One row's button.
- *
- * The confirmation names the participant rather than asking "are you sure":
- * the mistake this guards against is pressing it on the wrong row, and a
- * question that does not say whose database it is cannot catch that.
- */
+/** The confirmation names the participant, since the risk is pressing it on the wrong row. */
 function DropDatabase({
   contestId,
   instance,

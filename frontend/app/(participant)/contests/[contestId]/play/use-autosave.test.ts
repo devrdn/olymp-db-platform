@@ -308,8 +308,7 @@ describe("a save that fails", () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
-  // Every refusal counts against the budget, so a zero wait must not turn
-  // into a loop of them.
+  // Refusals count against the budget, so a zero wait must not loop.
   test("waits at least the first pause when a 429 said to wait zero seconds", async () => {
     const save = vi
       .fn<SaveFn>()
@@ -389,11 +388,9 @@ describe("a save that fails", () => {
 
 describe("two saves that overlap", () => {
   /**
-   * The page being hidden sends the newest text while an ordinary save is
-   * still running, so two requests for one document are in flight. Nothing
-   * says which of them the database commits last, so neither answer proves
-   * what the server now holds: the engine confirms neither, and sends the
-   * current text once more as soon as both have answered.
+   * Hiding the page sends the newest text while an ordinary save runs, so two
+   * requests overlap and neither answer proves what the database committed
+   * last. The engine confirms neither and saves once more after both answer.
    */
   test("confirm nothing on their own, and are followed by one more save", async () => {
     const first = deferred<string>();
@@ -408,7 +405,7 @@ describe("two saves that overlap", () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(save).toHaveBeenLastCalledWith("ab", { keepalive: true });
 
-    // In reverse order: the newer text answers first, the older one after.
+    // Reverse order: the newer text answers first.
     await act(async () => second.resolve("v2"));
     expect(hook.result.current.status).toEqual({ kind: "saving" });
     await act(async () => first.resolve("v1"));
@@ -460,8 +457,8 @@ describe("leaving the page", () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
-  // Every refused write counts against the shared 60-a-minute budget, so a
-  // tab that is merely hidden waits its turn like everything else.
+  // Refused writes count against the shared per-minute budget, so a merely
+  // hidden tab waits its turn.
   test("waits out a pending retry when the tab is only hidden", async () => {
     const save = vi.fn<SaveFn>().mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue("v1");
     const hook = mount({ save });
@@ -593,11 +590,9 @@ describe("the draft", () => {
     expect(draftStorageKey("u1", "c1", "notes")).not.toBe(draftStorageKey("u1", "c1", "tab:1"));
   });
 
-  // The computers in a lab are shared, and two accounts that have never saved
-  // their notes both stand on a null version: the draft of the one who sat
-  // here before would pass the "is this newer than the server copy" test and
-  // be restored — and then autosaved into the account reading it. The key
-  // carries the account, so the two never meet.
+  // Lab machines are shared, and two accounts that never saved both stand on
+  // a null version; without the account in the key, the previous user's draft
+  // would be restored and autosaved into the current account.
   test("belongs to one account", () => {
     expect(draftStorageKey("u1", "c1", "notes")).not.toBe(draftStorageKey("u2", "c1", "notes"));
   });
@@ -615,9 +610,8 @@ describe("the draft", () => {
     expect(hook.save).not.toHaveBeenCalled();
   });
 
-  // Leaving the text behind is a leak of its own: the next student at this
-  // machine cannot read it, but the one after them signs in as its author
-  // one day. The screen sweeps what is not its reader's on the way in.
+  // A leftover draft would wait for its author's next sign-in on a shared
+  // machine; the screen sweeps other accounts' drafts on the way in.
   test("of another account is swept when this account opens the screen", () => {
     const mine = draftStorageKey("u1", "c1", "notes");
     const theirs = draftStorageKey("u2", "c1", "notes");
@@ -632,9 +626,8 @@ describe("the draft", () => {
     expect(window.localStorage.getItem("unrelated")).toBe("kept");
   });
 
-  // Who is reading is unknown, so there is no key that is safely theirs.
-  // Losing the draft costs a reload's worth of typing; writing it under a
-  // key another account could read costs somebody their notes.
+  // With no known account no key is safely theirs; losing a draft costs less
+  // than exposing one.
   test("is not kept at all when the account is unknown", async () => {
     const hook = mount({ accountId: null });
 
@@ -660,8 +653,7 @@ describe("the draft", () => {
 });
 
 describe("writing the draft", () => {
-  // A SQL tab holds up to 64 KiB; stringifying that on every keystroke is
-  // work nobody asked for.
+  // A SQL tab holds up to 64 KiB; serialising it per keystroke is waste.
   test("costs one storage write for a burst of typing, not one per keystroke", async () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     const hook = mount();
@@ -686,8 +678,8 @@ describe("writing the draft", () => {
 });
 
 describe("an engine attached without the hook", () => {
-  // Task 4 keeps one engine per SQL tab, which no hook can do; the wiring
-  // it needs is this one helper.
+  // The SQL tabs hold one engine per tab, so they use this helper, not the
+  // hook.
   test("saves on pagehide while attached, and nothing once detached", async () => {
     const save = vi.fn<SaveFn>(async () => "v1");
     const engine = new AutosaveEngine({

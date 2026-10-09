@@ -22,21 +22,21 @@ const DIFF_CONTEXT = 3;
 /** Diff rows rendered at a time; "show more" adds as many again. */
 const DIFF_PAGE = 400;
 
-/** Revision bodies kept after reading, so going back and forth reads nothing again. */
+/** Revision bodies cached, so going back and forth reads nothing again. */
 const CACHED_BODIES = 32;
 
 type DocumentHistory = {
   document: string;
-  /** The name it is listed under: "Notes", the tab's title now, or its last title. */
+  /** "Notes", the tab's current title, or its last one. */
   label: string;
   /** Newest first. */
   revisions: RevisionInfo[];
 };
 
 /**
- * The revisions per document: the notes first, then the open tabs in their
- * order, then closed tabs, newest first within each. A closed tab keeps its
- * history (design §2.4), under the last title it had.
+ * Revisions per document: notes, open tabs in order, then closed tabs (which
+ * keep their history under their last title, SPEC.md §5.1), newest first within
+ * each.
  */
 export function groupRevisions(workspace: Workspace, t: WorkspaceDict): DocumentHistory[] {
   const byDocument = new Map<string, RevisionInfo[]>();
@@ -68,18 +68,15 @@ type Selected =
       id: number;
       state: "ready";
       body: string;
-      /** The previous revision's body; null when there is none, undefined when it is past the listed ones. */
+      /** The previous body: null when there is none, undefined when beyond the listed ones. */
       previous: string | null | undefined;
     };
 
 /**
- * The workspace tab (design §6): the notes and SQL tabs as they are now, and
- * their history — a list of revisions per document; choosing one shows what
- * changed since the one before it of the same document, and its own text.
- *
- * Bodies are read on choosing, the chosen one and the one before together,
- * and kept for the next time. The diff is computed once per pair
- * (`RevisionDiff`, memoised) and is bounded (`line-diff.ts`).
+ * The workspace tab (SPEC.md §5.1): notes and SQL tabs as they are now, and each
+ * document's revisions with a diff against the previous one. Bodies are read on
+ * choosing (the pair together) and cached; the diff is memoised and bounded
+ * (`line-diff.ts`).
  */
 export function WorkspaceTab({
   contestId,
@@ -113,7 +110,7 @@ export function WorkspaceTab({
     return revision.body;
   };
 
-  // Where each revision stands: its document's history and its place in it.
+  // Each revision's document history and place in it.
   const positions = useMemo(() => {
     const out = new Map<number, { group: DocumentHistory; index: number }>();
     for (const group of history) group.revisions.forEach((revision, index) => out.set(revision.id, { group, index }));
@@ -141,9 +138,8 @@ export function WorkspaceTab({
     }
   };
 
-  // The rows get one callback for the tab's life, reading the latest
-  // `choose` through a ref: a new callback per render would render every
-  // row of a list that can hold two thousand.
+  // One stable callback reading `choose` through a ref, so a render does not
+  // re-render up to two thousand rows.
   const chooseRef = useRef(choose);
   useEffect(() => {
     chooseRef.current = choose;
@@ -262,9 +258,8 @@ export function WorkspaceTab({
 }
 
 /**
- * One document's revisions, newest first. Memoised, and each row with it:
- * choosing a revision renders the row that was chosen and the row that no
- * longer is, not the whole list.
+ * One document's revisions, newest first. Memoised per row, so choosing renders
+ * two rows, not the list.
  */
 const RevisionList = memo(function RevisionList({
   group,
@@ -334,14 +329,10 @@ const RevisionRow = memo(function RevisionRow({
   );
 });
 
-/** Each diff line's mark, in words for a screen reader and as a sign for the eye. */
+/** Each diff line's sign. */
 const SIGN = { same: " ", added: "+", removed: "−" } as const;
 
-/**
- * The line diff of two bodies, collapsed around the changes. Memoised on its
- * inputs: choosing the same pair again, or anything else on the tab
- * rendering, computes nothing.
- */
+/** The line diff of two bodies, collapsed around changes and memoised on its inputs. */
 const RevisionDiff = memo(function RevisionDiff({
   before,
   after,

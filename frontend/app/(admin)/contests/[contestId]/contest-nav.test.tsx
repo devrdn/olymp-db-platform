@@ -28,11 +28,7 @@ describe("ContestNav", () => {
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
   });
 
-  /**
-   * The overview owns the workspace's bare address, which is a prefix of every
-   * other section's. Matched by prefix it would be marked current on all of
-   * them at once, which is the same as marking none.
-   */
+  /** The overview's address is a prefix of every section's. */
   test("does not mark the overview while a section under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions`);
     render(<ContestNav groups={groups} />);
@@ -48,11 +44,7 @@ describe("ContestNav", () => {
     expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
   });
 
-  /**
-   * A question's own screen lives under the question list. Its section stays
-   * marked while it is open, or the author loses their place in the workspace
-   * the moment they open anything.
-   */
+  /** A section stays marked on screens under it. */
   test("keeps a section marked while a screen under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions/9f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6`);
     render(<ContestNav groups={groups} />);
@@ -60,10 +52,7 @@ describe("ContestNav", () => {
     expect(screen.getByRole("link", { name: "Questions" })).toHaveAttribute("aria-current", "page");
   });
 
-  /**
-   * A sibling whose address merely starts with the same characters is not a
-   * child. `/questions-archive` is not inside `/questions`.
-   */
+  /** `/questions-archive` is not inside `/questions`. */
   test("does not mark a section on an address that merely shares its prefix", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions-archive`);
     render(<ContestNav groups={groups} />);
@@ -72,11 +61,7 @@ describe("ContestNav", () => {
   });
 });
 
-/**
- * The reason the navigation is a column rather than a row of tabs. Work that
- * blocks publication belongs beside the section that owns it, not four screens
- * away in a report the author has to translate into a destination.
- */
+/** Blocking work is marked beside the section that owns it. */
 describe("ContestNav, what a section still owes", () => {
   test("names the outstanding work beside the section", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);

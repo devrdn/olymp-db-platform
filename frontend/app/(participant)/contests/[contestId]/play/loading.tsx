@@ -4,32 +4,16 @@ import { playDictionary } from "./dictionary";
 import { PlayHeaderSkeleton, WorkspaceSkeleton } from "./skeleton";
 
 /**
- * What is on screen between the click and the workspace (finding 2).
+ * What is on screen between the click and the workspace; Next renders it
+ * before the route's first `await`. The header is a skeleton only here, since
+ * the contest's title is not known yet.
  *
- * `/my`, `/open`, `/audit`, `/users` and `/contests` all had one of these;
- * the one screen hundreds of people enter within the same minute did not, so
- * a participant pressing "Enter" watched the page they were leaving sit
- * there — and a hard reload showed nothing at all — for as long as the
- * server took. Next renders this the instant navigation starts, which is
- * before this route's own first `await`.
+ * It also keeps a prefetch from starting a clock: under individual timing the
+ * page's reads start it, and with this boundary a prefetched `<Link>` renders
+ * only down to this file, not the page.
  *
- * The header is a skeleton here and only here: this runs before the page has
- * read which contest this is, so there is no title to show and no deadline
- * to count down from. A moment later the page has both, and renders the real
- * `PlayHeader` above its own Suspense boundary.
- *
- * It also keeps a prefetch from starting anybody's clock. Under individual
- * timing the page's own reads of the story and the questions are what start
- * a participant's clock, and a `<Link>` to this route is prefetched as soon
- * as it scrolls into view. With a loading boundary here, Next prefetches only
- * down to this file and renders the page itself on the real navigation;
- * without one, merely showing a link to the workspace could render the page
- * in the background and start the clock before the participant chose to.
- *
- * No `Band`: the workspace is the one route in the product that goes
- * full-bleed (SPEC.md §5's named exception), and a loading state that keeps
- * the hatched fields would put the skeleton in a narrower column than the
- * thing it stands in for.
+ * No `Band`: the workspace is full-bleed (SPEC.md §5's exception), and the
+ * skeleton must match it.
  */
 export default async function Loading() {
   const dict = playDictionary(await activeDictionary());

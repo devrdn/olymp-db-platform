@@ -7,22 +7,11 @@ import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 
 /**
- * Loading one contest, for every screen in its workspace.
- *
- * Written once because every tab needs the same four decisions and getting one
- * of them wrong on one tab is exactly the kind of difference nobody notices
- * until it matters:
- *
- * - A segment that is not an identifier never becomes a request. The address
- *   is wrong, and spending a round trip to be told 400 only delays saying so.
- * - A dead session goes back to sign-in and an account still on its one-time
- *   password goes to the password screen. Neither is a failure a retry fixes,
- *   which is all the error boundary could offer.
- * - `forbidden` is answered as "no such address", not as "not yours". A
- *   contest existing is not the business of an account that may not see it —
- *   the same reasoning the API applies to a question belonging to another
- *   contest, where it answers 404 rather than 403.
- * - Anything else is thrown on to the error boundary, where a retry is honest.
+ * Loads one contest for every workspace screen, so all tabs decide the same
+ * way: a non-id segment never becomes a request; a dead session goes to sign-in
+ * and a one-time password to the password screen; `forbidden` is answered as
+ * not found, since a contest's existence is not the business of someone who may
+ * not see it; anything else goes to the error boundary.
  */
 export async function loadContest(contestId: string): Promise<Contest> {
   if (!isId(contestId)) notFound();
@@ -41,12 +30,8 @@ export async function loadContest(contestId: string): Promise<Contest> {
 }
 
 /**
- * The same treatment for anything else hanging off a contest: its story, its
- * questions, its people.
- *
- * `notFoundIsEmpty` is the difference between "this contest has no story yet",
- * which is an ordinary state of a draft, and "this address is wrong". The
- * first must not become a 404 page — the author is about to write one.
+ * The same for a contest's sub-resources. `notFoundIsEmpty` turns a 404 into an
+ * empty answer where absence is an ordinary state (a draft without a story).
  */
 export async function loadContestResource<T>(
   contestId: string,

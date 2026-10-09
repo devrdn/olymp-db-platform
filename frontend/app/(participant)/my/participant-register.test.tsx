@@ -4,9 +4,8 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { ContestSummary } from "@/lib/api/contests";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The join control submits to a Server Action; importing it for real pulls in
-// `next/headers`. What the register decides — whether to offer the control at
-// all — is what is under test.
+// The real Server Action pulls in `next/headers`; only whether the control
+// is offered is under test.
 vi.mock("./actions", () => ({ enrollAction: vi.fn() }));
 
 import { ParticipantRegister } from "./participant-register";
@@ -24,17 +23,15 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   questionMode: "multi",
   lang: "en",
   title: "The Greenhouse",
-  // Spelled out rather than omitted: the schema's transform produces the key
-  // whether or not the API sent one, so a factory that leaves it out is not
-  // building the shape the component actually receives.
+  // Spelled out: the schema's transform always produces the key, so the
+  // fixture matches what the component receives.
   description: undefined,
   startsAt: "2026-05-14T07:00:00Z",
   endsAt: "2026-05-14T10:00:00Z",
   enrolled: false,
   scoring: "points",
   icpcPenaltyMin: 20,
-  // Spelled out for the same reason `description` above is: the transform
-  // produces these keys whether or not the API sent them.
+  // Spelled out for the same reason as `description`.
   coverHash: "",
   coverAttribution: "",
   ...over,
@@ -49,8 +46,8 @@ const render_ = (contests: ContestSummary[]) =>
       locale="en"
       heading={en.participant.mine.heading}
       countLabel={en.participant.mine.countLabel}
-      // Shaped as a page shapes it: the dictionary holds the label, the
-      // destination is the application's and not the translator's.
+      // As a page passes it: the label from the dictionary, the destination
+      // from the app.
       empty={{
         title: en.participant.mine.empty.title,
         body: en.participant.mine.empty.body,
@@ -67,9 +64,8 @@ describe("the way in", () => {
   });
 
   /**
-   * The API decides who may join; the register decides only what is worth
-   * offering. A button on a contest nobody can self-join is a control that
-   * exists to be refused, and the state column already says why.
+   * The API decides who may join; the register only withholds a button that
+   * could only be refused. The state column already says why.
    */
   test("is withheld from a contest that is by invitation", () => {
     render_([contest({ enrollment: "invite_only" })]);
@@ -84,10 +80,7 @@ describe("the way in", () => {
     expect(screen.queryByRole("button", { name: en.participant.join })).not.toBeInTheDocument();
   });
 
-  /**
-   * A contest already under way is the game loop's to open, and that is step 5.
-   * Offering "join" here would promise a door this build does not have.
-   */
+  /** Joining is offered only before the contest starts. */
   test("is withheld from a contest already under way", () => {
     render_([contest({ status: "running" })]);
 
@@ -109,12 +102,7 @@ describe("the register itself", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  /**
-   * The screen has no filters, so there is no control to clear. Offering a
-   * reset here would be offering a way out of a state nothing led into — the
-   * link that is offered goes to the open list, which is a next step and not
-   * an undo.
-   */
+  /** There are no filters, so no reset; the offered link leads to the open list. */
   test("offers no filter reset it could not honour", () => {
     render_([]);
 
@@ -137,12 +125,8 @@ describe("the register itself", () => {
 
 describe("a contest the visitor is already on", () => {
   test("says so instead of offering to join it again", () => {
-    // The catalogue lists open contests including the ones already joined —
-    // hiding those would answer "what is there" incompletely, and somebody who
-    // cannot find a familiar name concludes their registration was lost. So
-    // the row has to distinguish them. Offering the button and letting the API
-    // answer `already_enrolled` was tolerable while both kinds shared one
-    // screen; on a catalogue it turns an ordinary state into an error message.
+    // The catalogue lists joined contests too, so the row must say so rather
+    // than offer a button that answers `already_enrolled`.
     render_([contest({ enrolled: true })]);
 
     expect(screen.getByText(en.participant.enrolled)).toBeInTheDocument();
@@ -152,8 +136,7 @@ describe("a contest the visitor is already on", () => {
   });
 
   test("still says so when the contest is no longer taking signups", () => {
-    // A running or finished contest cannot be joined by anyone. For somebody
-    // who is on it, "nothing to do yet" would read as though they were not.
+    // "Nothing to do yet" would read as though they were not on it.
     render_([contest({ enrolled: true, status: "finished", enrollment: "invite_only" })]);
 
     expect(screen.getByText(en.participant.enrolled)).toBeInTheDocument();
@@ -169,8 +152,7 @@ describe("a contest the visitor is already on", () => {
 });
 
 describe("the way into a running contest", () => {
-  // Without this the console existed and nothing led to it, which is the same
-  // as it not existing.
+  // The only way into the console from the register.
   test("a contest that is running and enrolled offers a way in", () => {
     render_([contest({ id: "c1", status: "running", enrolled: true })]);
 
@@ -180,17 +162,14 @@ describe("the way into a running contest", () => {
     );
   });
 
-  // A contest that has not started has no console, and one that has finished
-  // has no console left. Offering the door either side of the contest is
-  // offering a refusal.
+  // Before the start there is no console, after the finish none is left.
   test.each(["published", "finished"] as const)("but %s does not", (status) => {
     render_([contest({ id: "c1", status, enrolled: true })]);
 
     expect(screen.queryByRole("link", { name: en.participant.openConsole })).not.toBeInTheDocument();
   });
 
-  // Enrolment is the other half: a running contest somebody is not in is not
-  // a contest they may walk into.
+  // Running but not enrolled is not a way in either.
   test("nor does a running contest the viewer is not in", () => {
     render_([contest({ id: "c1", status: "running", enrolled: false })]);
 

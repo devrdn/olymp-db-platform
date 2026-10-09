@@ -5,22 +5,12 @@ import { callerHeaders } from "@/lib/api/caller";
 import { API_PREFIX } from "@/lib/api/client";
 import { apiOrigin } from "@/lib/api/config";
 
-/**
- * The session cookie's name, written here and nowhere else.
- *
- * It has to match `auth.SessionCookieName` in the Go service. One constant on
- * each side of the wire is unavoidable; two on this side is how they drift.
- */
+/** Must match `auth.SessionCookieName` in the Go service. Defined only here on this side. */
 export const SESSION_COOKIE = "dbcontest_session";
 
 /**
- * Who the caller is, as `/auth/me` reports it.
- *
- * Permissions are what route protection branches on — the same thing the
- * server's middleware decides on, so a role added as data needs no change
- * here. The name and roles are what a profile shows: a person is greeted by
- * name, and told what they are, which a permission list spells out but does
- * not name.
+ * Who the caller is, as `/auth/me` reports it. Route protection branches on
+ * permissions, as the server's middleware does; names and roles are for display.
  */
 export type CurrentIdentity = {
   id: string;
@@ -32,12 +22,8 @@ export type CurrentIdentity = {
 };
 
 /**
- * The session, shaped as a header for a server-to-server call.
- *
- * A Server Component's `fetch` carries no cookies of its own, so the session
- * has to be attached by hand. Callers get an object they can spread, empty when
- * there is nothing to send, which keeps the decision here rather than repeated
- * at every call site.
+ * The session as a header for a server-to-server call, which carries no
+ * cookies of its own. Empty when there is no session.
  */
 export async function sessionHeader(): Promise<Record<string, string>> {
   const jar = await cookies();
@@ -47,11 +33,8 @@ export async function sessionHeader(): Promise<Record<string, string>> {
 }
 
 /**
- * Raised when the API could not be asked who the caller is.
- *
- * Distinct from a null identity, and the distinction is the whole point: null
- * means the server answered "nobody", this means it did not answer. Only the
- * first is a reason to send somebody to the sign-in form.
+ * The API could not be asked who the caller is. Unlike a null identity
+ * ("nobody"), this is no reason to send anyone to sign-in.
  */
 export class IdentityUnavailableError extends Error {
   constructor(readonly status: number) {
@@ -61,28 +44,13 @@ export class IdentityUnavailableError extends Error {
 }
 
 /**
- * Who the caller is, according to the API.
+ * Who the caller is, according to the API; null when there is no usable
+ * session. Throws `IdentityUnavailableError` when the API could not be asked,
+ * so a restart or a 500 does not become a forced sign-out.
  *
- * `/auth/me` reports permissions rather than roles, so the interface branches
- * on the same thing the server's middleware does and a role added as data
- * needs no change here. Returns null when there is no usable session, which is
- * what route protection reads.
- *
- * It throws rather than returning null when the question could not be put at
- * all. Treating those the same is how a restarted API, a dropped connection or
- * a 500 becomes a forced sign-out: the visitor's session was fine, and they
- * are told to sign in again — which is the bug that kept being reported as
- * "it throws me to login on every click" and never reproduced, because
- * reproducing it needs the API to blink at the moment somebody navigates.
- *
- * Wrapped in React's `cache()` so the admin layout, the users layout and an
- * account page — each of which calls this to render one request — share one
- * round trip instead of asking `/auth/me` two or three times for the same
- * answer. `cache()` is safe here specifically because its memoization is
- * scoped to one request: React gives each request its own cache with nothing
- * shared between them, so this cannot hand one visitor's identity to
- * another's — unlike a module-level variable, which would, since a Node
- * process serves many requests through the same module instance.
+ * React's `cache()` shares one `/auth/me` round trip among the layouts and
+ * page of a request. It is per-request, so one visitor's identity never
+ * reaches another (a module-level variable would).
  */
 export const fetchIdentity = cache(async (): Promise<CurrentIdentity | null> => {
   const header = await sessionHeader();
@@ -97,15 +65,13 @@ export const fetchIdentity = cache(async (): Promise<CurrentIdentity | null> => 
 });
 
 /**
- * Reads one `/auth/me` response, separated from the fetch so the decision it
- * makes is testable without a framework or a live API.
- *
- * `null` for the response itself means the request never completed.
+ * Reads one `/auth/me` response, apart from the fetch for testing. A null
+ * response means the request never completed.
  */
 export async function identityFrom(
   response: Response | null,
 ): Promise<CurrentIdentity | null> {
-  // The one answer that means "no session": the server was asked and said so.
+  // Only a 401 means "no session".
   if (response?.status === 401) return null;
 
   if (!response?.ok) {
@@ -124,9 +90,7 @@ export async function identityFrom(
   return {
     id: body.id,
     login: body.login,
-    // The API leaves the name out when it could not read the account behind
-    // the session — it does not fail the request over a display field. The
-    // login is always there, and is what the interface falls back to.
+    // Omitted when the API could not read the account; the login is the fallback.
     fullName: body.full_name ?? "",
     email: body.email,
     roles: body.roles ?? [],

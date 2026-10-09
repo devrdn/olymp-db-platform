@@ -18,7 +18,6 @@ describe("Breadcrumbs", () => {
       "href",
       "/contests/c-1",
     );
-    // A link to the page you are already on is a control that does nothing.
     expect(screen.queryByRole("link", { name: "Story" })).not.toBeInTheDocument();
   });
 

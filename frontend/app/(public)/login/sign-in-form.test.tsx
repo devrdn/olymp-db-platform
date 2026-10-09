@@ -4,9 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The action is a Server Action: importing it for real pulls in `next/headers`
-// and a running framework. The module boundary is the one thing worth faking
-// here, and the form's own behaviour is what is under test.
+// The real Server Action would pull in `next/headers`.
 const signInAction = vi.hoisted(() => vi.fn());
 vi.mock("./actions", () => ({ signInAction }));
 
@@ -29,10 +27,8 @@ describe("SignInForm, a rejected sign-in", () => {
   });
 
   /**
-   * The API answers `invalid_credentials` without saying which of the two was
-   * wrong, deliberately, so the form cannot be used to enumerate logins. Both
-   * fields are therefore marked invalid, and both point at the one message —
-   * otherwise a screen reader reports a rejected sign-in as nothing at all.
+   * `invalid_credentials` does not say which field, so both are invalid and
+   * point at the one message.
    */
   test("marks both fields invalid and points them at the message", async () => {
     signInAction.mockResolvedValue({ code: "invalid_credentials" });
@@ -48,11 +44,7 @@ describe("SignInForm, a rejected sign-in", () => {
     }
   });
 
-  /**
-   * An overloaded server refuses before checking the password at all. Saying
-   * "wrong login or password" there would send somebody who typed both
-   * correctly off to reset a password that works.
-   */
+  /** A busy server never checked the password, so it must not say "wrong login or password". */
   test("tells the visitor to retry when the server is too busy to check", async () => {
     signInAction.mockResolvedValue({ code: "sign_in_busy" });
     render(<SignInForm dict={en} />);
@@ -65,8 +57,7 @@ describe("SignInForm, a rejected sign-in", () => {
   });
 
   test("does not mark the fields invalid when the server was too busy to check them", async () => {
-    // Nothing typed was wrong. Marking both fields invalid would send a
-    // screen reader user back to retype a password that was correct.
+    // Nothing typed was wrong, so no field is invalid.
     signInAction.mockResolvedValue({ code: "sign_in_busy" });
     render(<SignInForm dict={en} />);
 

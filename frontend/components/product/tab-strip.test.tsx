@@ -20,10 +20,7 @@ describe("a strip of tabs", () => {
     expect(screen.getByRole("link", { name: "My notes" })).toHaveAttribute("href", "/report?tab=notes");
   });
 
-  /**
-   * Five labels do not fit a phone's width. The strip scrolls inside itself
-   * so that the page never does — the rule the whole product holds at 375 px.
-   */
+  /** Five labels do not fit a phone; the page must never scroll sideways at 375px. */
   test("scrolls sideways inside itself rather than widening the page", () => {
     render(<TabStrip label="What you did" tabs={tabs} current="/report" />);
 

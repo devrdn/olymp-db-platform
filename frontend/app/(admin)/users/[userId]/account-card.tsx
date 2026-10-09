@@ -34,25 +34,11 @@ import { offeredActions } from "./offered";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * One account, and what an administrator may do to it.
- *
- * Three forms, not one, because they are three endpoints: the descriptive
- * fields, the role set, and access. A single save would send all three on
- * every change, and a refusal from one would discard the other two — the same
- * reasoning the contest settings panels carry.
- *
- * That is not in tension with the single Save the questions page is getting
- * (architecture 6.3). There the three requests describe *one* object and the
- * fix is one endpoint taking it whole; here they are three genuinely separate
- * decisions, and blocking somebody is not a thing to do by accident while
- * correcting the spelling of their name.
+ * One account and its actions. Three forms for three endpoints (profile, roles,
+ * access): these are separate decisions, and a typo fix must not risk a block.
  */
 
-/**
- * A titled block. `help` is what the block is for, behind a "?" beside the
- * heading; `hint` is a consequence worth reading before acting, and stays on
- * screen under it.
- */
+/** A titled block: `help` behind a "?", `hint` a consequence that stays on screen. */
 function Panel({
   title,
   hint,
@@ -87,7 +73,7 @@ function Outcome({
 }: {
   state: AccountState;
   dict: Dictionary;
-  /** What success says, when "Saved" is not the right word for it. */
+  /** Success text, when "Saved" does not fit. */
   doneLabel?: string;
 }) {
   const failure = state.code
@@ -112,11 +98,9 @@ function Outcome({
 }
 
 /**
- * A reason field that refuses to submit empty or whitespace-only, the same
- * rule the bulk block and delete dialogs enforce (`selection.tsx`'s
- * `StatusForm`). `noValidate` on the enclosing form keeps the browser's own
- * unstyled, unlocalised validation bubble from ever firing — this check, and
- * the message it shows, are what decide whether the request leaves.
+ * A reason field that refuses empty or whitespace-only input, as the bulk
+ * dialogs do. The form is `noValidate`, so this check, not the browser bubble,
+ * decides.
  */
 function ReasonField({
   id,
@@ -147,13 +131,9 @@ function ReasonField({
 }
 
 /**
- * Clearing a sign-in lockout, behind a confirmation.
- *
- * It is confirmed because it cannot tell the owner from whoever was guessing:
- * both get their attempts back. The confirmation says so, and names the login,
- * so it is not pressed on the wrong card. The request is dispatched from the
- * confirming button rather than a form inside the dialog, which unmounts the
- * moment it closes.
+ * Clears a sign-in lockout after a confirmation naming the login: it cannot
+ * tell the owner from whoever was guessing. Dispatched from the confirm button,
+ * since a form inside the dialog unmounts on close.
  */
 function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary }) {
   const t = dict.accounts.card;
@@ -203,12 +183,12 @@ export function AccountCard({
   roles,
   viewerId,
   dict,
-  /** The status-change moment, already formatted for the active locale. */
+  /** Already formatted for the locale. */
   statusChangedAtLabel,
 }: {
   account: Account;
   roles: Role[];
-  /** Who is looking, so the screen does not offer them a self-block. */
+  /** The viewer, so a self-block is not offered. */
   viewerId: string;
   dict: Dictionary;
   statusChangedAtLabel: string | null;
@@ -248,19 +228,13 @@ export function AccountCard({
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Only when there is something to account for: an account nobody has
-          ever blocked or deleted carries an empty statusReason (see
-          `accountSchema` in `lib/api/accounts.ts`), and showing this panel
-          for it would be an empty frame around nothing. */}
+      {/* Only when there is a status reason to show. */}
       {account.statusReason ? (
         <Panel title={t.statusTitle}>
           <div className="flex flex-col gap-2">
             <p className="max-w-body text-body text-ink">{account.statusReason}</p>
             <p className="text-small text-ink-3">
-              {/* A row backfilled without a timestamp still names the actor —
-                  the sentence just drops its second half rather than leaving
-                  the punctuation stranded around an empty date ("Changed by
-                  X, ."). */}
+              {/* A backfilled row may lack a timestamp; drop the date half of the sentence. */}
               {statusChangedAtLabel
                 ? t.changedBy
                     .replace("{name}", account.statusChangedByLogin || t.unknownActor)
@@ -273,8 +247,7 @@ export function AccountCard({
 
       {offered.profile ? (
         <Panel title={t.profile}>
-          {/* Keyed on what the server last returned, so a saved value replaces
-              what was typed rather than the field keeping a stale draft. */}
+          {/* Keyed on the server's values, so a save replaces the draft. */}
           <form key={account.fullName + account.email} action={saveProfile} className="flex flex-col gap-5">
             <input type="hidden" name="userId" value={account.id} />
 
@@ -334,7 +307,7 @@ export function AccountCard({
               <form
                 action={changeAccess}
                 onSubmit={(event) => {
-                  // Unblocking needs no justification — only a block does.
+                  // Only a block needs a reason.
                   if (!offered.block) return;
                   const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
                   if (reason === "") {
@@ -444,9 +417,7 @@ export function AccountCard({
                   <Outcome state={{ code: reset.code }} dict={dict} />
                 </div>
 
-                {/* Shown until the administrator leaves the page, not flashed in a
-                    toast: it arrives exactly once and cannot be retrieved again,
-                    so a glance that misses it costs another reset. */}
+                {/* Shown until the page is left: it arrives once and cannot be retrieved. */}
                 {reset.oneTimePassword ? (
                   <div className="mt-2 flex max-w-body flex-col gap-2 border border-warn bg-warn-wash p-4">
                     <p className="text-small text-ink-2">{t.handover}</p>

@@ -6,12 +6,8 @@ import { revalidatePath } from "next/cache";
 import { LOCALE_COOKIE, LOCALES, type Locale } from "@/lib/i18n/config";
 
 /**
- * Records the chosen language.
- *
- * A Server Action rather than a cookie written from the browser: the language
- * is read on the server before a page renders, and doing the write here means
- * the switcher also works with JavaScript switched off. The visitor stays
- * exactly where they were, because the language is not part of the address.
+ * Records the chosen language in a cookie the server reads before rendering. A
+ * Server Action, so the switcher works without JavaScript.
  */
 export async function chooseLocale(form: FormData) {
   const requested = String(form.get("locale") ?? "");
@@ -22,7 +18,7 @@ export async function chooseLocale(form: FormData) {
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
     sameSite: "lax",
-    // Nothing secret here, and the server is the only reader that matters.
+    // Not secret; the server is the reader that matters.
     httpOnly: false,
   });
 

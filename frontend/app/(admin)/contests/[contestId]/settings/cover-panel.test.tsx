@@ -5,9 +5,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { ContestCover } from "@/lib/api/contests";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// Server Actions ("use server"): the real module would pull Next's server
-// runtime into a component test, the same reason `image-slots.test.tsx` fakes
-// its own two.
+// The real Server Actions would pull in Next's server runtime.
 const uploadCoverAction = vi.hoisted(() => vi.fn(async () => ({}) as Record<string, unknown>));
 const removeCoverAction = vi.hoisted(() => vi.fn(async () => ({}) as Record<string, unknown>));
 
@@ -35,21 +33,20 @@ function cover(overrides: Partial<ContestCover> = {}): ContestCover {
   };
 }
 
-/** A picture as far as the browser is concerned; the API reads the bytes. */
+/** A picture as far as the browser knows; the API reads the bytes. */
 function picture(name = "archive.jpg"): File {
   return new File([new Uint8Array([0xff, 0xd8, 0xff])], name, { type: "image/jpeg" });
 }
 
-/** The ids a control points its reader at, as one string. */
+/** The control's `aria-describedby` ids. */
 function describedBy(control: HTMLElement): string {
   return control.getAttribute("aria-describedby") ?? "";
 }
 
 describe("CoverPanel, what the contest is wearing", () => {
   /**
-   * Design spec §2.3: a contest with no uploaded picture is not a hole in the
-   * screen. It wears the cover drawn for it, and the panel says so rather than
-   * showing an empty frame an organiser reads as "broken".
+   * SPEC.md §10.3: without an upload the contest wears its drawn cover, and
+   * the panel says so.
    */
   test("a contest with no picture wears its drawn cover", () => {
     render(<CoverPanel contestId={contestId} cover={null} editable dict={dict} />);
@@ -63,12 +60,10 @@ describe("CoverPanel, what the contest is wearing", () => {
 
     const picture = screen.getByRole("img", { name: t.currentAlt });
     const src = picture.getAttribute("src") ?? "";
-    // The staff address, not the public one: a cover is chosen while the
-    // contest is still a draft, and the public route refuses a draft.
+    // The staff address: the public route refuses a draft.
     expect(src).toContain(`/contests/${contestId}/cover/file`);
     expect(src).not.toContain("/public/");
-    // The address carries the hash, or a replaced cover would stay invisible
-    // behind whatever the browser cached for the old one.
+    // The hash in the address busts the browser cache on replacement.
     expect(src).toContain(cover().hash);
   });
 
@@ -101,10 +96,8 @@ describe("CoverPanel, choosing a picture", () => {
   });
 
   /**
-   * The credit line is not decoration: the publish gate refuses a contest
-   * whose cover has nobody credited (design spec §10.1). The panel says so
-   * while the organiser is choosing, and refuses to spend the upload budget
-   * on a request the API would only send back.
+   * The publish gate refuses an uncredited cover (SPEC.md §10.1), so the panel
+   * refuses before spending the upload budget.
    */
   test("will not upload a picture with nobody credited", async () => {
     const user = userEvent.setup();
@@ -128,11 +121,7 @@ describe("CoverPanel, choosing a picture", () => {
 });
 
 describe("CoverPanel, a refusal from the server", () => {
-  /**
-   * Every other form in this product puts a refusal against the field that
-   * caused it. A banner over the page would say the upload failed without
-   * saying which of the two controls to change.
-   */
+  /** A refusal sits beside the control that caused it. */
   test("about the file, stands beside the file", async () => {
     uploadCoverAction.mockResolvedValueOnce({ code: "cover_kind" });
     const user = userEvent.setup();

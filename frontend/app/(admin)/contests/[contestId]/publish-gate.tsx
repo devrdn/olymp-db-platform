@@ -3,25 +3,15 @@ import type { CellState, PublishGate } from "@/lib/api/publish-gate";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-/**
- * What is still missing before this contest can be published.
- *
- * The gate answers 200 even when publishing is impossible — being asked what
- * is left is not a failure — and it returns *every* problem at once. An author
- * fixing one refusal per round trip would make as many round trips as they
- * have untranslated questions, so the whole list is shown at once and the
- * publish button is disabled with this beside it.
- *
- * Two shapes, because there are two kinds of problem. A missing schedule or a
- * question count that does not match the format belongs to the contest and has
- * no cell to sit in; a missing translation belongs to one language, and those
- * are a matrix — one row per declared language, so an author can see that
- * Romanian is three questions behind English without counting.
- */
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py)";
 
+/**
+ * What is missing before publishing. The gate answers 200 with every problem at
+ * once, so the whole list is shown beside the disabled button. Contest-level
+ * problems are a list; missing translations are a matrix, one row per language.
+ */
 export function PublishGateReport({
   gate,
   ready,
@@ -56,13 +46,9 @@ export function PublishGateReport({
               <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-warn" />
               <span>
                 {(t.problems as Record<string, string>)[problem.code] ?? problem.code}
-                {/* The server's detail is a developer's aid in English. It is
-                    shown in the monospace register, where the interface's own
-                    prose ends and raw data begins, so it never reads as a
-                    translated sentence. A count belongs to that register too:
-                    it is a numeral, it needs no translation, and it says the
-                    sentence is true of that many questions — which repeating
-                    the sentence never did. */}
+                {/* The server's detail is an English developer aid, shown in
+                   monospace so it never reads as translated text; so is the
+                   count. */}
                 {problem.count > 1 ? (
                   <span className="ml-2 font-mono text-data text-ink-3">×{problem.count}</span>
                 ) : problem.detail ? (
@@ -125,17 +111,9 @@ export function PublishGateReport({
 }
 
 /**
- * A cell's verdict, in three states rather than two.
- *
- * "Not written in this language" and "not written at all" look the same to an
- * author if both are a dash, and only the first is theirs to fix here — the
- * second is one piece of work for every language at once. The dot says the
- * work has not begun; it is grey, not amber, because nothing is wrong with a
- * draft that has no story yet.
- *
- * The mark is a character and the word behind it is for a screen reader: a
- * tick carries nothing read aloud, and against a language name it is the
- * entire content of the cell.
+ * Three states: written, missing in this language, or not written in any (grey,
+ * since a fresh draft is not wrong). The mark is visual; the word behind it is
+ * for screen readers.
  */
 function Mark({ state, dict }: { state: CellState; dict: Dictionary }) {
   const t = dict.workspace.gate;

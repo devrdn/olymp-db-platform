@@ -1,10 +1,10 @@
 /**
- * The vocabulary a question is written in, apart from the schemas that validate the wire.
+ * The vocabulary a question is written in, apart from the wire schemas.
  *
- * A schema module calls `z.object()` when it loads, so a bundler cannot drop
- * it — and a client component importing one string array from such a module
- * ships the whole of zod with it: 280 KB of parser for a row of buttons. The
- * schemas import these, so a term still has one definition.
+ * Every `*-terms` module exists for the same reason: a schema module calls
+ * `z.object()` at load, so a bundler cannot drop it, and a client component
+ * importing one array from it would ship all of zod (about 280 KB). The
+ * schemas import these, so each term keeps one definition.
  */
 
 import type { Question } from "./content";

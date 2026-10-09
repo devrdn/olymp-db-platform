@@ -1,26 +1,17 @@
 import { MATCH_KINDS, QUESTION_KINDS, type MatchKind } from "@/lib/api/content";
 
 /**
- * One editor form, read into one request.
- *
- * The question used to be saved in three: its own fields, its wording, its
- * reference answers — three buttons, three endpoints, three chances for the
- * second to fail after the first had landed. This reads the whole form at
- * once, and the API writes it in one transaction.
- *
- * Kept apart from the Server Action so the parsing has tests. It is where all
- * the judgement is: what an empty box means, which fields survive a change of
- * kind, and which half-filled row is not an answer.
+ * Reads the whole editor form into one request, which the API writes in one
+ * transaction. Separate from the Server Action so the parsing, where the
+ * judgement is, has tests.
  */
 
 export type QuestionBody = {
   kind: string;
   points: number;
   max_attempts: number | null;
-  // A pointer on the wire (finding 1): omitting the key — sent here as
-  // `null`, which encodes the same way — leaves the stored penalty alone,
-  // rather than resetting it to zero. Zero is a meaningful setting of its
-  // own (no penalty), so absence has to read differently from it.
+  // `null` leaves the stored penalty alone; zero is a real setting (no
+  // penalty).
   penalty_pct: number | null;
   is_visible: boolean;
   choice_ids: string[];
@@ -37,16 +28,13 @@ export function questionFrom(form: FormData): Parsed {
   const points = Number(form.get("points"));
   if (!Number.isFinite(points) || points < 0) return { ok: false, code: "invalid_request" };
 
-  // Unlimited is the absent field, never zero: a question allowing zero
-  // attempts is one nobody can answer, which is never what an empty box meant.
+  // Unlimited is the absent field, never zero: zero attempts could never be
+  // answered.
   const attempts = Number(form.get("maxAttempts"));
   const max_attempts = Number.isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : null;
 
-  // Blank is not the same absence as maxAttempts's own: here it leaves the
-  // stored penalty alone (QuestionBody's own doc) rather than standing for a
-  // real value, because zero is itself a meaningful setting — "no penalty" —
-  // and an editor that always sent it for an untouched field would silently
-  // clear whatever an organizer had configured through the API.
+  // Blank leaves the stored penalty alone rather than sending zero, which would
+  // clear a value set through the API.
   const rawPenalty = String(form.get("penaltyPct") ?? "").trim();
   let penalty_pct: number | null = null;
   if (rawPenalty !== "") {
@@ -57,11 +45,9 @@ export function questionFrom(form: FormData): Parsed {
     penalty_pct = Math.floor(parsedPenalty);
   }
 
-  // Only a choice question has options, and the API refuses them on any other
-  // kind — so switching back to typed text has to let go of them here. The
-  // identifiers are language-independent by design: a participant's answer is
-  // an identifier, so renaming a label in Romanian must not change what a
-  // correct answer is.
+  // The API refuses options on other kinds, so they are dropped here. Ids are
+  // language-independent: an answer is an id, so relabelling must not change
+  // what is correct.
   const choice_ids =
     kind === "choice"
       ? [
@@ -78,15 +64,12 @@ export function questionFrom(form: FormData): Parsed {
   for (const [key, value] of form.entries()) {
     if (!key.startsWith("body.")) continue;
     const body = String(value).trim();
-    // A language whose body is blank is dropped rather than sent empty. "Not
-    // written yet" and "deliberately empty" are different facts, and an empty
-    // string satisfies the publish gate's presence check — publishing a
-    // question that asks its Romanian readers nothing.
+    // A blank body is dropped: an empty string would pass the publish gate's
+    // presence check.
     if (body) texts[key.slice("body.".length)] = { body_md: body };
   }
 
-  // Labels only follow a body. Attached to a language with no text they would
-  // be options for a question that does not exist in that language.
+  // Labels only for languages that have a body.
   for (const [key, value] of form.entries()) {
     if (!key.startsWith("choice.")) continue;
     const [, lang, choiceId] = key.split(".");
@@ -101,7 +84,7 @@ export function questionFrom(form: FormData): Parsed {
   const answers: QuestionBody["answers"] = [];
   for (const [index, raw] of values.entries()) {
     const value = raw.trim();
-    // The editor offers a spare row; an untouched one is not an answer.
+    // An untouched spare row is not an answer.
     if (!value) continue;
 
     const matchKind = kinds[index];

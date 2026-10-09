@@ -17,21 +17,10 @@ import { saveQuestionAction, type QuestionState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * One question, in one form with one save.
- *
- * It was three forms saving separately, on the reasoning that they were three
- * endpoints. That had the argument backwards: the endpoints were three because
- * nothing had put them together, and an author never edits a third of a
- * question — they edit the question.
- *
- * Three saves also made two things impossible. A failure in the second left
- * the first already committed, under a button that had said "saved". And a
- * change of kind could not be expressed at all: turning a typed question into
- * a choice question needs the kind, the options and the answers to move
- * together, and sent separately each half was refused on account of the other.
- *
- * The order is still the order the work happens in: what the question *is*,
- * then what it says, then what counts as right.
+ * One question in one form with one save, so a partial failure cannot leave
+ * part of it committed and a change of kind can move with its options and
+ * answers. Sections follow the order of the work: what it is, what it says,
+ * what counts as right.
  */
 export function QuestionEditor({
   contestId,
@@ -46,23 +35,14 @@ export function QuestionEditor({
   question: Question;
   languages: string[];
   editable: boolean;
-  // Whether this contest's own sequential progression (§6.1.1) is actually
-  // in effect — contests.sequentialActive on the wire side, computed once by
-  // the page from the contest it already loaded, rather than this editor
-  // reading contest.progression and contest.questionMode itself and risking
-  // a second copy of that rule (finding 4).
+  // Whether sequential progression (docs/ARCHITECTURE.md §6.1.1) is in
+  // effect, computed by the page so the rule is not restated here.
   sequentialActive: boolean;
-  // The contest's own scoring mode, read once by the page from the contest
-  // it already loaded. ICPC scoring (decision 1 of the design doc) does not
-  // use a question's own points or percentage penalty at all — the fields
-  // stay in the data, since the mode can still be reverted before the
-  // contest starts, but the editor disables them here.
   scoring: Scoring;
   dict: Dictionary;
 }) {
-  // The option identifiers are edited in the shape form and labelled in the
-  // texts form, so the label rows have to follow what is typed above them
-  // before either is saved.
+  // Option ids are edited in one section and labelled in another, so the label
+  // rows must follow what is typed before a save.
   const [choiceIds, setChoiceIds] = useState<string[]>(question.choiceIds);
   const [kind, setKind] = useState(question.kind);
 
@@ -72,11 +52,6 @@ export function QuestionEditor({
   );
 
   return (
-    // One form and one save. The question is one thing an author edits, and it
-    // used to be saved in three requests — three chances for the second to
-    // fail after the first had landed. It is also the only shape in which a
-    // change of kind and its answers can be expressed at all: sent separately,
-    // each half was refused on account of the other.
     <form action={formAction} className="flex flex-col gap-12">
       <input type="hidden" name="contestId" value={contestId} />
       <input type="hidden" name="questionId" value={question.id} />
@@ -109,8 +84,6 @@ export function QuestionEditor({
         dict={dict}
       />
 
-      {/* One save row for the whole question, at the end of everything it
-          saves — not three, each claiming a third of the same object. */}
       <div className="border-t border-line pt-5">
         <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </div>
@@ -118,7 +91,7 @@ export function QuestionEditor({
   );
 }
 
-/** A titled part of the question; what it covers sits behind a "?" beside the heading. */
+/** A titled part of the question, with help behind a "?". */
 function Section({
   title,
   help,
@@ -141,7 +114,6 @@ function Section({
   );
 }
 
-/** The save control and whatever the last attempt had to say about itself. */
 function SaveRow({
   state,
   pending,
@@ -202,17 +174,12 @@ function ShapeSection({
   onChoiceIds: (value: string[]) => void;
 }) {
   const t = dict.workspace.question;
-  // ICPC scoring does not use a question's own points or percentage penalty
-  // (decision 1 of the design doc) — the fields stay in the form, disabled,
-  // with whatever they already held, rather than disappearing: the mode can
-  // still be reverted to `points` or `winner` before the contest starts.
+  // ICPC ignores points and penalty; the fields stay, disabled, since the mode
+  // can still be reverted before the start.
   const icpc = scoring === "icpc";
 
-  // Tracked only so the penalty preview and the sequential-attempts warning
-  // below can react as an organizer types, the same reason choiceIds above is
-  // mirrored into state — the inputs themselves stay uncontrolled
-  // (defaultValue), so a save that revalidates the page still shows the
-  // server's own copy rather than fighting it.
+  // Mirrored only for the live preview and warning; the inputs stay
+  // uncontrolled so a save shows the server's copy.
   const [points, setPoints] = useState(question.points);
   const [penaltyPct, setPenaltyPct] = useState<number | null>(question.penaltyPct);
   const [unlimitedAttempts, setUnlimitedAttempts] = useState(question.maxAttempts == null);
@@ -267,10 +234,8 @@ function ShapeSection({
               disabled={!editable || icpc}
             />
           </Field>
-          {/* Disabled inputs are excluded from FormData entirely, so without
-              this a save that only touched the wording would submit
-              `points: 0` and silently zero out the question's own points the
-              moment its contest turned ICPC. */}
+          {/* Disabled inputs are not submitted; without this a wording-only save
+             would zero the points under ICPC. */}
           {icpc ? <input type="hidden" name="points" value={points} /> : null}
 
           <Field id="maxAttempts" label={t.shape.attempts} hint={t.shape.attemptsHint}>
@@ -287,16 +252,14 @@ function ShapeSection({
           </Field>
         </div>
 
-        {/* The publish gate refuses exactly this combination under sequential
-            progression (§6.1.1): a stuck participant would have nothing left
-            to move on to. Said here, at the setting that would trigger it,
-            rather than left for an organizer to discover at publish time. */}
+        {/* The publish gate refuses unlimited attempts under sequential
+           progression (docs/ARCHITECTURE.md §6.1.1): a stuck participant
+           could not move on. */}
         {sequentialActive && unlimitedAttempts ? (
           <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
         ) : null}
-        {/* The same, for winner scoring: the first correct final answer wins
-            and a wrong one costs nothing, so the gate refuses an unlimited
-            final question there. */}
+        {/* Likewise for winner scoring: a wrong final answer costs nothing, so
+           the gate refuses unlimited attempts. */}
         {scoring === "winner" && kind === "final" && unlimitedAttempts ? (
           <p className="max-w-body text-small text-warn">{t.shape.winnerFinalNeedsAttempts}</p>
         ) : null}
@@ -328,19 +291,14 @@ function ShapeSection({
             className="max-w-40"
           />
         </Field>
-        {/* Same reasoning as the hidden `points` field above: a pointer on
-            the wire, and blank already means "leave the stored penalty
-            alone" (QuestionBody's own doc) — but ICPC always disables the
-            visible field, so without this the stored penalty would never be
-            resubmitted at all, only ever left as it was the day scoring
-            changed. */}
+        {/* As with `points`: the visible field is disabled under ICPC, so the
+           stored penalty is resubmitted here. */}
         {icpc ? (
           <input type="hidden" name="penaltyPct" value={penaltyPct ?? ""} />
         ) : null}
 
-        {/* What the setting above actually means for this question, worked
-            out instead of left for an organizer to compute by hand (§6.1.1).
-            Meaningless in ICPC scoring, where the penalty is not used at all. */}
+        {/* The penalty worked out for this question (docs/ARCHITECTURE.md
+            §6.1.1); not used under ICPC. */}
         {!icpc ? (
           <p className="-mt-3 max-w-body text-small text-ink-3">
             {t.shape.penaltyPreview
@@ -349,9 +307,7 @@ function ShapeSection({
           </p>
         ) : null}
 
-        {/* Only a choice question has options, and the API refuses them on any
-            other kind — so the field disappears with the kind rather than
-            sending values that would be rejected. */}
+        {/* The API refuses options on any other kind. */}
         {kind === "choice" ? (
           <Field
             id="choiceIds"
@@ -376,8 +332,7 @@ function ShapeSection({
           </Field>
         ) : null}
 
-        {/* The "?" beside the label, not inside it: inside, its name would
-            become part of the checkbox's own. */}
+        {/* Beside the label, so its name does not join the checkbox's. */}
         <div className="flex items-center gap-2">
           <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
             <input
@@ -436,9 +391,8 @@ function TextsSection({
                   placeholder={t.texts.placeholder}
                 />
 
-                {/* One label per option, per language. The identifier stays put
-                    and only the wording changes, which is what makes checking a
-                    choice question language-independent. */}
+                {/* One label per option per language; the id stays fixed, which
+                   keeps checking language-independent. */}
                 {choiceIds.map((choiceId) => (
                   <div key={choiceId} className="flex items-center gap-3">
                     <span className="w-10 shrink-0 font-mono text-data text-ink-3">{choiceId}</span>
@@ -474,7 +428,7 @@ function AnswersSection({
   dict: Dictionary;
 }) {
   const t = dict.workspace.question;
-  // One spare row, so adding an answer needs no button and no client state.
+  // One spare row, so adding an answer needs no button or client state.
   const rows = [...question.answers, { id: undefined, matchKind: "exact" as const, value: "" }];
   const [extra, setExtra] = useState(0);
 
@@ -484,10 +438,7 @@ function AnswersSection({
         <div className="flex flex-col gap-3">
           {[...rows, ...Array.from({ length: extra }, () => null)].map((answer, index) => (
             <div key={index} className="flex flex-wrap items-center gap-3">
-              {/* A choice question's answer must be one of its own option
-                  identifiers, so the field offers them instead of free text —
-                  an answer nobody could submit is one the author only finds out
-                  about when the results are worked out. */}
+              {/* A choice answer must be one of the option ids, so the field offers them. */}
               {kind === "choice" && choiceIds.length > 0 ? (
                 <select
                   name="answerValue"
@@ -553,13 +504,10 @@ function AnswersSection({
           </Button>
         ) : null}
 
-        {/* An empty row is how an answer is removed: the action drops blanks,
-            so clearing a field and saving is the deletion. Said out loud,
-            because a control that is absent has to be explained. */}
+        {/* The action drops blank rows, so clearing a field removes the answer. */}
         <p className="max-w-body text-small text-ink-3">{t.answers.removeHint}</p>
-        {/* Grading anchors a pattern to the whole answer (the backend's
-            compileAnswerPattern). An author used to substring matching would
-            otherwise write a pattern that no longer accepts what they meant. */}
+        {/* Patterns are anchored to the whole answer (backend
+           `compileAnswerPattern`), unlike substring matching. */}
         <p className="max-w-body text-small text-ink-3">{t.answers.regexHint}</p>
 
       </Section>

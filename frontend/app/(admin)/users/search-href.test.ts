@@ -4,8 +4,7 @@ import { accountsHref } from "./search-href";
 
 describe("accountsHref", () => {
   test("is the bare address when nothing is being asked", () => {
-    // A URL full of empty parameters is a URL nobody wants to share, and it
-    // makes "am I filtering?" a question about string contents.
+    // Empty parameters are left out.
     expect(accountsHref({ query: "", status: "" })).toBe("/users");
   });
 
@@ -16,8 +15,7 @@ describe("accountsHref", () => {
   });
 
   test("escapes what a person typed", () => {
-    // The query goes into an address. A space or an ampersand typed into the
-    // box must not become a second parameter.
+    // A space or ampersand must not become a second parameter.
     expect(accountsHref({ query: "a&b c" })).toBe("/users?q=a%26b+c");
   });
 
@@ -27,9 +25,8 @@ describe("accountsHref", () => {
   });
 
   test("drops the page whenever the question changes", () => {
-    // The trap this exists to close. Searching from page three of the old
-    // result leaves somebody on page three of a result with four rows — an
-    // empty screen that says nothing matched, when plenty did.
+    // A new search drops the page, or it could land past the end of a short
+    // result.
     expect(accountsHref({ query: "ivanov", offset: 100, resetPage: true })).toBe("/users?q=ivanov");
   });
 });

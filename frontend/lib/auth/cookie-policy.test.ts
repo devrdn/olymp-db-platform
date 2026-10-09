@@ -4,9 +4,7 @@ import { cookieSecure } from "./cookie-policy";
 
 const original = { ...process.env };
 
-// NODE_ENV is typed read-only, which is right for application code and in the
-// way here: these tests exist to pin what happens when the build kind and the
-// deployment disagree, so both have to be set.
+// NODE_ENV is typed read-only; these tests set it to make build and deployment disagree.
 const setEnv = (key: string, value?: string) => {
   const env = process.env as Record<string, string | undefined>;
   if (value === undefined) delete env[key];
@@ -17,20 +15,6 @@ afterEach(() => {
   process.env = { ...original };
 });
 
-/**
- * The bug this file exists for.
- *
- * `next start` sets NODE_ENV=production, so a production build served over
- * plain HTTP — which is exactly what `make front-start` does locally — marked
- * the session cookie Secure. A browser silently discards a Secure cookie
- * delivered over http, so signing in appeared to succeed and the next click
- * went back to the form. The project's own Caddyfile documents that failure
- * mode; the interface walked into it anyway.
- *
- * NODE_ENV describes how the code was built. Whether the deployment is served
- * over TLS is a different fact, and it is the one that decides this — the same
- * reasoning the Go CookieWriter already carries.
- */
 describe("cookieSecure", () => {
   test("obeys the deployment when it says so", () => {
     setEnv("COOKIE_SECURE", "false");
@@ -61,9 +45,6 @@ describe("cookieSecure", () => {
   });
 
   test("treats an unreadable value as unset rather than as false", () => {
-    // Falling back to the safe default beats reading "yes" as false and
-    // dropping the attribute in production, which is the failure worth
-    // designing out.
     setEnv("COOKIE_SECURE", "yes please");
     setEnv("NODE_ENV", "production");
 

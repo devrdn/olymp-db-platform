@@ -16,49 +16,31 @@ import { cn } from "@/lib/utils";
 import type { PlayDictionary } from "./dictionary";
 
 /**
- * Which of the workspace's panels are collapsed, the toggles that collapse
- * them, and the shortcuts that do it without the mouse — §8 of the workspace
- * design.
+ * Which workspace panels are collapsed, the header toggles, and the
+ * shortcuts (SPEC.md §5): Ctrl/⌘+B for the left panel, Ctrl/⌘+Alt+B for
+ * the right, Ctrl/⌘+J for the bottom, as in VS Code. `Workspace` drops a collapsed panel
+ * from its grid so the editor gains the room.
  *
- * VS Code is the model, down to the keys: Ctrl/⌘+B for the panel on the left,
- * Ctrl/⌘+Alt+B for the one on the right, Ctrl/⌘+J for the one below. An
- * olympiad is two or three hours in front of one screen, and the screen a
- * participant needs while reading a forty-column result is not the one they
- * need while writing the query — so the panels get out of the way, and
- * `Workspace` drops a collapsed one out of its grid entirely rather than
- * hiding it in place, which is what lets the editor actually take the room.
- *
- * # Why this lives above the workspace
- *
- * The toggles are in the header, and the header is `page.tsx`'s own sibling
- * of the workspace, outside the `<Suspense>` boundary the four content reads
- * sit behind (page.tsx's own doc). Nothing can be passed between two
- * siblings, so the state sits above both, in a provider around the pair —
- * the same shape `content-loaded.tsx` already uses to carry one fact the
- * other way. Outside a provider nothing is collapsed and the toggles draw
- * nothing at all, which is the right reading for the header the waiting room
- * renders on its own.
+ * The state sits in a provider above the header and the workspace, which are
+ * siblings across the Suspense boundary in `page.tsx`. Outside a provider
+ * nothing is collapsed and the toggles render nothing, which suits the
+ * waiting room's header.
  */
 
-/** The three panels §8 names, left to right and then below. */
+/** The three panels that collapse. */
 export type PanelKey = "schema" | "side" | "bottom";
 
-/** True where a panel is collapsed — absent from the grid, not merely hidden. */
+/** True where a panel is collapsed: absent from the grid, not merely hidden. */
 export type CollapsedPanels = Record<PanelKey, boolean>;
 
 const PANEL_KEYS: readonly PanelKey[] = ["schema", "side", "bottom"];
 
-/** Every panel showing: what a participant who has never touched a toggle sees, and what the server renders. */
+/** Every panel showing: the default, and what the server renders. */
 const NOTHING_COLLAPSED: CollapsedPanels = { schema: false, side: false, bottom: false };
 
 /**
- * Where the layout lives between visits — beside the pane sizes
- * (`pane-splitter.tsx`), in the same `dbcontest.console.<group>.<contest>`
- * shape and per contest for the same reason: an olympiad whose questions are
- * a paragraph and one whose questions are two lines are different screens.
- *
- * Its own group rather than a fourth key in the sizes, so a build that learns
- * a new panel does not have to migrate a record of widths.
+ * Stored per contest beside the pane sizes (`pane-splitter.tsx`), as its own
+ * group so a new panel needs no migration of the widths.
  */
 const STORAGE_PREFIX = "dbcontest.console.collapsed.";
 
@@ -67,26 +49,17 @@ function storageKey(contestId: string) {
 }
 
 /**
- * What one contest's record holds: the value in force, and the raw string
- * storage was seen to hold when that value was settled on.
- *
- * Keeping the raw string is the whole point. A browser can refuse `setItem`
- * — a private window, a machine in a computer class whose storage is full —
- * and if the value were then read back out of storage the panel would spring
- * open again the moment anything else re-rendered, which is precisely the
- * defect Task 4 met with the notes draft. So what is in force is what this
- * module holds; storage is a mirror, and it is believed again only once what
- * it holds has actually changed.
- *
- * A refused write therefore records the string storage *really* has — the
- * older record it kept, not the one it refused — so that record can no
- * longer look like news.
+ * One contest's layout in force, and the raw string storage held when it was
+ * settled on. Storage is only a mirror: `setItem` can be refused (a private
+ * window, a full quota), and reading the value back would then reopen the
+ * panel on the next render. Storage is believed again only once its raw
+ * string changes; a refused write records the string storage really kept.
  */
 type Remembered = { raw: string | null; value: CollapsedPanels };
 
 const held = new Map<string, Remembered>();
 
-/** Listeners, so a press in this tab re-renders without a round trip through a storage event. */
+/** Lets a press in this tab re-render without waiting for a storage event. */
 const listeners = new Set<() => void>();
 
 function readRaw(contestId: string): string | null {
@@ -97,7 +70,7 @@ function readRaw(contestId: string): string | null {
   }
 }
 
-/** One stored record, or nothing collapsed — a value this build cannot read is not a reason to fail. */
+/** One stored record, or nothing collapsed when it cannot be read. */
 function parse(raw: string | null): CollapsedPanels {
   if (!raw) return NOTHING_COLLAPSED;
   try {
@@ -111,21 +84,16 @@ function parse(raw: string | null): CollapsedPanels {
 }
 
 /**
- * The layout in force for a contest.
- *
- * `useSyncExternalStore` rather than state seeded from storage, for the
- * reason `pane-splitter.tsx` records: the server has no storage, so a value
- * read during render would be a hydration mismatch, and reading it in an
- * effect is a second render of the whole screen on every visit. The snapshot
- * has to be referentially stable or React re-renders forever, which is what
- * the record above is for.
+ * The layout in force for a contest, via `useSyncExternalStore`: storage read
+ * during render would mismatch hydration, and an effect would render the
+ * screen twice. The snapshot must be referentially stable, which is what
+ * `held` is for.
  */
 function snapshot(contestId: string): CollapsedPanels {
   const raw = readRaw(contestId);
   const record = held.get(contestId);
-  // Storage still holds what it held when this value was settled on, so it
-  // has nothing new to say — whether that is because it took the write or
-  // because it refused one.
+  // Storage holds what it held when this value was settled on, so it has
+  // nothing new to say.
   if (record && record.raw === raw) return record.value;
   const value = parse(raw);
   held.set(contestId, { raw, value });
@@ -138,10 +106,8 @@ function commit(contestId: string, value: CollapsedPanels) {
   try {
     window.localStorage.setItem(storageKey(contestId), raw);
   } catch {
-    // Refused. What storage holds is whatever it held before — possibly an
-    // older record it can still read perfectly well — and remembering that
-    // string is what keeps the next snapshot from mistaking it for a change
-    // made somewhere else.
+    // Refused: remember what storage still holds, so the next snapshot does
+    // not take that older record for a change made elsewhere.
     observed = readRaw(contestId);
   }
   held.set(contestId, { raw: observed, value });
@@ -150,12 +116,8 @@ function commit(contestId: string, value: CollapsedPanels) {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  // Another tab of the same contest collapsing a panel: forgetting the held
-  // record is what makes the next snapshot read storage again, and telling
-  // the listeners is what makes this tab follow it there and then. Two
-  // windows of one olympiad are rare, and the alternative — the record here
-  // and the record in storage disagreeing until something else re-renders —
-  // is the state this whole arrangement exists to avoid.
+  // Another tab changed the layout: drop the held record so the next
+  // snapshot reads storage, and notify so this tab follows at once.
   const onStorage = (event: StorageEvent) => {
     if (event.key === null) held.clear();
     else if (event.key.startsWith(STORAGE_PREFIX)) held.delete(event.key.slice(STORAGE_PREFIX.length));
@@ -172,19 +134,17 @@ type PanelVisibility = {
   collapsed: CollapsedPanels;
   /** Collapses a showing panel, shows a collapsed one. */
   toggle: (panel: PanelKey) => void;
-  /** Brings a panel back whatever it was doing — a completed run does this to the panel its result is in. */
+  /** Brings a panel back; a completed run does this to the result's panel. */
   expand: (panel: PanelKey) => void;
-  /** False in a contest that hides its schema: there is no left panel to have a control for. */
+  /** False in a contest that hides its schema: no left panel to control. */
   hasSchema: boolean;
-  /** Told by the workspace, which is the only thing that knows — see `useSchemaPanel`. */
+  /** Called by the workspace, the only thing that knows; see `useSchemaPanel`. */
   reportSchema: (present: boolean) => void;
-  /** Whether a provider is above at all. The waiting room's header has none. */
+  /** Whether a provider is above at all; the waiting room has none. */
   present: boolean;
   /**
-   * Hands the provider one of the toggle buttons, so a shortcut that hides
-   * the panel the focus is in can put the focus somewhere that still exists.
-   * Called by `PanelToggles` as a ref callback; stable, and it renders
-   * nothing.
+   * Registers a toggle button, so hiding the panel that holds the focus can
+   * move the focus to it. A stable ref callback.
    */
   registerToggle: (panel: PanelKey, node: HTMLButtonElement | null) => void;
 };
@@ -214,10 +174,9 @@ export function PanelVisibilityProvider({
     () => NOTHING_COLLAPSED,
   );
 
-  // True until the workspace says otherwise: it arrives after the header,
-  // from behind the Suspense boundary, and a control that appears a moment
-  // late reads worse than one that leaves in the rarer contest that has no
-  // schema to show.
+  // True until the workspace reports: it arrives after the header, and a
+  // control appearing late reads worse than one leaving in the rarer
+  // contest with no schema.
   const [hasSchema, setHasSchema] = useState(true);
   const reportSchema = useCallback((present: boolean) => setHasSchema(present), []);
 
@@ -230,22 +189,11 @@ export function PanelVisibilityProvider({
     (panel: PanelKey) => {
       const current = snapshot(contestId);
       const collapsing = !current[panel];
-      // Hiding the panel the participant is standing in has to put them
-      // somewhere that will still be there. Left alone, focus falls to
-      // `<body>`: the next Tab starts at the top of the document and a
-      // screen reader is told nothing about what just happened. The toggle
-      // is the nearest control to where they were and the one that undoes
-      // it — and moving the focus there is itself the announcement.
-      //
-      // Here rather than in the key handler, because a press needs it just
-      // as much: on macOS, Safari and Firefox do not focus a `<button>` when
-      // it is clicked, so a participant who was typing an answer and reached
-      // for the toggle with the mouse still has the caret in the field that
-      // is about to disappear.
-      //
-      // Only when the focus really is inside that panel. A participant
-      // typing a query and collapsing the schema beside it must keep their
-      // caret exactly where it was.
+      // Hiding the panel that holds the focus moves the focus to its toggle;
+      // otherwise it falls to `<body>` and a screen reader hears nothing. Done
+      // here, not in the key handler, because Safari and Firefox on macOS do
+      // not focus a clicked button, so a mouse press needs it too. Only when
+      // the focus is inside that panel, so a caret elsewhere stays put.
       if (collapsing && document.activeElement?.closest(`[data-panel="${panel}"]`)) {
         toggleRefs.current[panel]?.focus();
       }
@@ -264,28 +212,21 @@ export function PanelVisibilityProvider({
   );
 
 
-  // The keys, from anywhere on the screen that is not the editor. The editor
-  // carries the same three in its own keymap (`code-editor-core.ts`), because
-  // CodeMirror would otherwise take them first — and a binding that runs
-  // there calls `preventDefault`, which is exactly what this listener reads
-  // to know the key has already been dealt with.
+  // The shortcuts anywhere outside the editor. The editor binds the same
+  // keys (see `workspace.tsx`) since CodeMirror sees them first; a binding
+  // that runs calls `preventDefault`, which this listener checks.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const panel = shortcutFor(event);
       if (!panel) return;
-      // Claimed even where it does nothing: all three combinations belong to
-      // this screen while it is open, and an unclaimed Ctrl+B opens the
+      // Claimed even where it does nothing: an unclaimed Ctrl+B opens the
       // bookmarks in Firefox.
       event.preventDefault();
-      // A contest that closed its catalogues draws no schema panel and
-      // offers no toggle for one. Flipping the flag for it would be a press
-      // with nothing on screen to show for it, and the change would still be
-      // there — remembered — the next time the participant opened the
-      // screen.
+      // No schema panel and no toggle for it: flipping the flag would change
+      // nothing on screen yet be remembered for the next visit.
       if (panel === "schema" && !hasSchema) return;
-      // `toggle` itself carries the focus hand-off, so a press and a press
-      // of a key are answered the same way.
+      // `toggle` carries the focus hand-off for keys and clicks alike.
       toggle(panel);
     };
     window.addEventListener("keydown", onKeyDown);
@@ -299,18 +240,14 @@ export function PanelVisibilityProvider({
   return <PanelVisibilityContext.Provider value={value}>{children}</PanelVisibilityContext.Provider>;
 }
 
-/** What the workspace reads to lay its grid out, and what a completed run reaches for. */
+/** The workspace reads this to lay out its grid. */
 export function usePanelVisibility(): PanelVisibility {
   return useContext(PanelVisibilityContext);
 }
 
 /**
- * Tells the header whether this contest has a schema panel at all.
- *
- * An effect rather than a prop for the reason this file's own doc gives: the
- * header and the workspace are siblings, and the schema is read behind the
- * boundary between them. `ContentLoadedSignal` carries its own one fact the
- * same way.
+ * Tells the header whether this contest has a schema panel. An effect, not a
+ * prop: the schema is read behind the Suspense boundary the header is outside.
  */
 export function useSchemaPanel(present: boolean) {
   const { reportSchema } = useContext(PanelVisibilityContext);
@@ -320,26 +257,22 @@ export function useSchemaPanel(present: boolean) {
 }
 
 /**
- * Whether this keyboard event is the modifier VS Code writes as `Mod` — ⌘ on
- * a Mac, Ctrl everywhere else.
- *
- * `navigator.platform` is deprecated and it is still the right test here,
- * because it is the exact one CodeMirror's own keymap uses (`browser.mac`).
- * The editor and this listener resolve the same three combinations, and two
- * criteria that could ever disagree would mean a shortcut that works in the
- * editor and nowhere else, or fires twice.
+ * Whether the event carries VS Code's `Mod`: ⌘ on a Mac, Ctrl elsewhere.
+ * `navigator.platform` is deprecated but is the test CodeMirror uses
+ * (`browser.mac`); a different test could make a shortcut work only in the
+ * editor, or fire twice.
  */
 function modPressed(event: KeyboardEvent): boolean {
   const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
   return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
-/** Which letter was pressed, by position rather than by what it produced: ⌥+b on a Mac types `∫`. */
+/** Which letter was pressed, by physical key: ⌥+b on a Mac types `∫`. */
 function letter(event: KeyboardEvent, code: string, key: string): boolean {
   return event.code ? event.code === code : event.key.toLowerCase() === key;
 }
 
-/** The panel a key combination toggles, or null for every other key on the keyboard. */
+/** The panel a key combination toggles, or null. */
 function shortcutFor(event: KeyboardEvent): PanelKey | null {
   if (!modPressed(event) || event.shiftKey) return null;
   if (letter(event, "KeyB", "b")) return event.altKey ? "side" : "schema";
@@ -348,21 +281,15 @@ function shortcutFor(event: KeyboardEvent): PanelKey | null {
 }
 
 /**
- * The three icon buttons at the right end of the play header.
- *
- * `aria-pressed` rather than a name that changes between "Show" and "Hide":
- * the button is a toggle for one named panel, and the ARIA pattern for a
- * toggle is a name that stays put with a state beside it. The shortcut is in
- * the tooltip rather than in the name, so a screen reader does not read
- * "control B" after every panel.
+ * The three icon buttons at the right end of the play header. `aria-pressed`
+ * with a fixed name, the ARIA toggle pattern; the shortcut sits in the
+ * tooltip so a screen reader does not read it after every name.
  */
 export function PanelToggles({ dict }: { dict: PlayDictionary }) {
   const { collapsed, toggle, hasSchema, present, registerToggle } = usePanelVisibility();
   const t = dict.participant.play.workspace.panels;
-  // One stable callback each, rather than an arrow written at the call site:
-  // a ref callback with a new identity is detached and re-attached on every
-  // render of this component, which is a needless DOM write on a screen that
-  // re-renders whenever a panel moves.
+  // Stable ref callbacks: a new identity would detach and reattach the ref
+  // on every render.
   const refSchema = useCallback((node: HTMLButtonElement | null) => registerToggle("schema", node), [registerToggle]);
   const refSide = useCallback((node: HTMLButtonElement | null) => registerToggle("side", node), [registerToggle]);
   const refBottom = useCallback((node: HTMLButtonElement | null) => registerToggle("bottom", node), [registerToggle]);
@@ -414,7 +341,7 @@ function Toggle({
   name: string;
   tooltip: string;
   showing: boolean;
-  /** Registers the button with the provider, which focuses it when a shortcut hides the panel the focus was in. */
+  /** Registers the button with the provider for the focus hand-off. */
   buttonRef: (node: HTMLButtonElement | null) => void;
   onClick: () => void;
   children: React.ReactNode;
@@ -428,8 +355,7 @@ function Toggle({
       title={tooltip}
       onClick={onClick}
       className={cn(
-        // 24px is the smallest target WCAG 2.5.8 accepts for a finger, and
-        // the olympiad hall has tablets.
+        // 24px, the smallest target WCAG 2.5.8 accepts; the hall has tablets.
         "inline-flex size-6 items-center justify-center rounded-md",
         "transition-colors duration-(--t-input) ease-standard",
         showing ? "text-ink" : "text-ink-3",

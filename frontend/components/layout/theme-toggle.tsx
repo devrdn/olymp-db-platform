@@ -11,13 +11,9 @@ const ICONS: Record<Theme, typeof Monitor> = {
 };
 
 /**
- * One control for three states, because three controls for three states is
- * three times the chrome for a setting most people touch once.
- *
- * It submits the *next* theme rather than toggling in the browser: the choice
- * is a cookie the server reads before rendering, so the page comes back in the
- * new theme already painted, with no flash and no hydration step. The
- * accessible name says where the press leads, not where it is.
+ * One control cycling three states. It submits the next theme to the server,
+ * which reads the cookie before rendering, so there is no flash. The accessible
+ * name says where the press leads.
  */
 export function ThemeToggle({
   current,

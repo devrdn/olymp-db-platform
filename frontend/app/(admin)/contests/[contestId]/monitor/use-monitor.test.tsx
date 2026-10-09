@@ -78,7 +78,7 @@ describe("the polling cadence", () => {
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     expect(fetchFeed).toHaveBeenCalledTimes(1);
 
-    // And then back to the ordinary cadence, not a second immediate one.
+    // Then the ordinary cadence, not a second immediate read.
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS - 1));
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     await act(() => vi.advanceTimersByTimeAsync(1));
@@ -107,7 +107,6 @@ describe("what a poll brings", () => {
     expect(result.current.feed.items.map((i) => i.cursor)).toEqual(["c1", "c2"]);
     expect([...result.current.fresh]).toEqual(["b"]);
 
-    // The light goes out on its own.
     await act(() => vi.advanceTimersByTimeAsync(4000));
     expect(result.current.fresh.size).toBe(0);
   });
@@ -120,11 +119,7 @@ describe("what a poll brings", () => {
     expect(result.current.rows).toBe(before);
   });
 
-  /**
-   * A query arrives as `running`, and the feed does not deliver it again. The
-   * next poll asks for that participant's running queries by time, and the
-   * finished one takes its place.
-   */
+  /** A running query is re-read by time on the next poll and replaced when finished. */
   test("refreshes a query that was still running", async () => {
     const at = "2026-09-20T10:00:01.100Z";
     const runningItem = feedItem("c2", { registrationId: "a", at });
@@ -236,9 +231,8 @@ describe("the organiser's own moves", () => {
 });
 
 /**
- * A tab hidden for an hour comes back thousands of items behind. Paging
- * through all of them would spend most of the read budget to show a list
- * that keeps only the last thousand anyway.
+ * A long-hidden tab skips the backlog rather than paging through items the list
+ * would drop anyway.
  */
 describe("catching up after a long absence", () => {
   function pageOf(prefix: string, n: number, more: boolean): FeedPage {
@@ -262,14 +256,13 @@ describe("catching up after a long absence", () => {
       await act(() => vi.advanceTimersByTimeAsync(1000));
     }
 
-    // One ordinary read of the table, then only feed pages.
+    // One table read, then only feed pages.
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     expect(fetchFeed).toHaveBeenLastCalledWith(CONTEST, { kinds: [], limit: 200 }, expect.anything());
     expect(result.current.feed.items.map((i) => i.cursor)).toEqual(["latest"]);
     expect(result.current.feed.gap).toBe((MAX_CATCH_UP_PAGES + 1) * 200);
     expect(result.current.fresh.size).toBe(0);
 
-    // And back to the ordinary cadence.
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
     expect(fetchRoster).toHaveBeenCalledTimes(2);
   });
@@ -369,10 +362,7 @@ test("abandons reads still in flight when the screen goes away", async () => {
   expect(signal?.aborted).toBe(true);
 });
 
-/**
- * The same live state for one participant's page: the timeline instead of
- * the contest's feed, no table, and a time range beside the kinds.
- */
+/** One participant's page: their timeline, no table, and a time range. */
 describe("one participant's timeline", () => {
   const REG = "9a1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
 

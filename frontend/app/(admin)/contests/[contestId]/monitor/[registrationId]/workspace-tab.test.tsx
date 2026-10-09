@@ -9,8 +9,7 @@ vi.mock("@/lib/api/monitor", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/monitor")>()),
   fetchRevision,
 }));
-// Every revision row formats its size once per render, so counting the calls
-// counts the rows that rendered.
+// Each row formats its size once per render, so the calls count rendered rows.
 const { readableBytes } = vi.hoisted(() => ({ readableBytes: vi.fn() }));
 vi.mock("@/lib/format/bytes", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/format/bytes")>();
@@ -42,7 +41,6 @@ const BODIES: Record<number, string> = {
   6: "SELECT * FROM guests",
 };
 
-// Newest first, as the API lists them.
 const workspace: Workspace = {
   notes: { body: "suspects:\nbutler\ncook", updatedAt: "2026-09-20T10:04:00.000Z" },
   tabs: [{ id: TAB, title: "Guests", position: 0, body: "SELECT 1", updatedAt: "2026-09-20T10:05:00.000Z" }],
@@ -110,7 +108,7 @@ describe("the history", () => {
     expect(screen.getByText("+1 −1")).toBeInTheDocument();
   });
 
-  /** The numbers the eye reads in the margin are hidden from a screen reader; a changed line says its own. */
+  /** Margin numbers are hidden from screen readers; a changed line names its own. */
   test("a changed line tells a screen reader which line it is", async () => {
     renderTab();
     await pick(t().notes, 0);
@@ -161,8 +159,8 @@ describe("the history", () => {
 
 describe("choosing among many revisions", () => {
   /**
-   * The list can hold two thousand revisions; choosing one, or switching
-   * between the diff and the text, must not lay every row out again.
+   * With up to two thousand revisions, a selection change must re-render only
+   * the affected rows.
    */
   test("re-renders only the rows whose selection changed", async () => {
     renderTab();

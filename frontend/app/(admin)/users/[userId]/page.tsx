@@ -23,25 +23,16 @@ export async function generateMetadata(props: PageProps<"/users/[userId]">) {
 }
 
 /**
- * One account.
- *
- * The identifier is checked before it becomes a request path: a segment that
- * is not an identifier is a wrong address, and spending a round trip to be
- * told 400 only delays saying so.
- *
- * Who is looking is fetched too, so the screen can decline to offer an
- * administrator a button that blocks themselves. That is presentation, not
- * protection — `users.Service` refuses it either way — but a control which
- * exists only to be refused teaches somebody a rule by making them break it.
+ * Loads one account. A non-id segment is a wrong address, not a request. The
+ * viewer is fetched too so a self-block is not offered; `users.Service` refuses
+ * it regardless.
  */
 async function loadAccount(userId: string) {
   const payload = await serverRequest(`/users/${userId}`).catch((error: unknown) => {
     const target = authRecoveryRedirect(error, `/users/${userId}`);
     if (target) redirect(target);
 
-    // `forbidden` is answered as "no such address", the same way the contest
-    // workspace does: that an account exists is not the business of somebody
-    // who may not manage accounts.
+    // `forbidden` is answered as not found, as in the contest workspace.
     if (error instanceof ApiError && (error.code === "not_found" || error.code === "forbidden")) {
       notFound();
     }
@@ -66,11 +57,8 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
   const { items: roles } = roleListSchema.parse(rolesPayload);
   const t = dict.accounts;
 
-  // The actor's login already rides along on `account` — resolved by the
-  // repository's own query (a LEFT JOIN, `internal/postgres/users.go`)
-  // rather than a second `GET /users/{id}` this page used to send for every
-  // blocked or deleted account. Only the date still needs work here: turning
-  // it into a locale-formatted string is presentation, not a fetch.
+  // The actor's login comes joined on `account`; only the date needs formatting
+  // here.
   const statusChangedAtLabel = account.statusChangedAt
     ? formatMoment(account.statusChangedAt, { locale })
     : null;

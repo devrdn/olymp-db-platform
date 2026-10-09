@@ -5,14 +5,10 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Contest } from "@/lib/api/contests";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The save action is a Server Action ("use server"): importing the real
-// module here would pull Next's server runtime into a component test, the
-// same reason `selection.test.tsx` fakes `bulk-actions`. Built with
-// `vi.hoisted` because `vi.mock` factories run before the ordinary top-level
-// code in this file does.
+// The real Server Action would pull in Next's server runtime; `vi.hoisted`
+// because `vi.mock` factories run first.
 const { saveTranslationsAction } = vi.hoisted(() => ({
-  // Typed as `(previous, form) => Promise<...>` — the action's own shape —
-  // purely so `.mock.calls[0][1]` below is a `FormData` and not `unknown`.
+  // Typed so `.mock.calls[0][1]` is a `FormData`.
   saveTranslationsAction: vi.fn(async (previous: unknown, form: FormData) => {
     void previous;
     void form;
@@ -71,9 +67,7 @@ describe("TitleEditor: reachability", () => {
 
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
 
-    // The default language's current title is unique in this fixture, so
-    // finding it by value sidesteps every field in this dialog sharing the
-    // same "Title" label — English's and Russian's both carry one.
+    // Found by value, since every field here shares the "Title" label.
     expect(screen.getByDisplayValue("Night in the archive")).toBeVisible();
   });
 });
@@ -83,10 +77,7 @@ describe("TitleEditor: the default language is the short path, the rest stay rea
     render(<TitleEditor contest={contest()} editable dict={dict} />);
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
 
-    // jsdom does not implement a closed `<details>` hiding its content the
-    // way a real browser does, so the field inside it is still findable —
-    // proving the collapse means reading the element's own `open` state
-    // rather than the visibility of what it holds.
+    // jsdom does not hide a closed `<details>`, so check its `open` state.
     const disclosure = screen.getByText(dict.workspace.titleEditor.otherLanguages).closest("details");
     expect(disclosure).not.toBeNull();
     expect(disclosure).not.toHaveAttribute("open");
@@ -96,9 +87,7 @@ describe("TitleEditor: the default language is the short path, the rest stay rea
     render(<TitleEditor contest={contest()} editable dict={dict} />);
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
 
-    // Present in the DOM, and thus in what a submit sends, even before the
-    // disclosure is opened — collapsing it must never drop the language from
-    // the whole-set replace this form eventually submits.
+    // Present, and so submitted, even while collapsed.
     expect(screen.getByDisplayValue("Ночь в архиве")).toBeInTheDocument();
 
     await userEvent.click(screen.getByText(dict.workspace.titleEditor.otherLanguages));
@@ -123,8 +112,7 @@ describe("TitleEditor: editing reaches the server action", () => {
     const form = saveTranslationsAction.mock.calls[0]![1] as FormData;
     expect(form.get("contestId")).toBe("f767af3b-f135-40d2-a3a6-82d368de1004");
     expect(form.get("title.en")).toBe("Night in the archive, revised");
-    // The Russian title never entered the open form, but the whole set is a
-    // replace on the wire — dropping it here would delete it there.
+    // The whole set is replaced, so omitting it would delete it.
     expect(form.get("title.ru")).toBe("Ночь в архиве");
   });
 
@@ -166,11 +154,7 @@ describe("TitleEditor: dismissal is blocked while the save is pending", () => {
   });
 });
 
-/**
- * The one "?" that lives inside a Base UI modal. The dialog closes on Escape
- * too, and one press should close one layer: the bubble first, the dialog on
- * the next press.
- */
+/** The "?" inside a modal: one Escape closes the bubble, the next the dialog. */
 describe("TitleEditor: the explanation beside the title", () => {
   test("Escape closes the explanation and leaves the dialog open", async () => {
     const user = userEvent.setup();
@@ -178,7 +162,7 @@ describe("TitleEditor: the explanation beside the title", () => {
 
     await user.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
     const dialog = await screen.findByRole("dialog");
-    // Named by the title alone: the "?" is beside it, not inside it.
+    // Named by the title alone.
     expect(dialog).toHaveAccessibleName(dict.workspace.titleEditor.heading);
 
     await user.click(screen.getByRole("button", { name: dict.chrome.helpLabel }));

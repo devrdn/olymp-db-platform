@@ -1,13 +1,9 @@
 /**
- * Turns the publish check into the matrix the constructor renders.
- *
- * `GET /publish-check` answers 200 even when publishing is impossible: being
- * asked what is left is not a failure. The response is a flat list of problems,
- * each optionally naming a language and a question. The constructor shows a
- * row per declared language, so the flat list is regrouped here rather than in
- * the component.
+ * Turns the publish check's flat problem list (200 even when publishing is
+ * impossible) into the per-language matrix the constructor renders.
  */
 
+/** The problem codes the publish check reports. */
 export const PUBLISH_PROBLEMS = {
   noLanguages: "no_languages",
   missingContestTranslation: "missing_contest_translation",
@@ -19,37 +15,24 @@ export const PUBLISH_PROBLEMS = {
   missingChoiceLabel: "missing_choice_label",
   noReferenceAnswer: "no_reference_answer",
   noSchedule: "no_schedule",
-  // Sequential-progression-only refusals (backend/internal/contests/publish.go):
-  // a question with no attempt cap, or a hidden one with another ordered
-  // after it, either of which could trap a participant on the day it costs
-  // most. Neither has a cell of its own — both name a question, not a
-  // language — so they fall into the same global list every other
-  // contest-wide problem does.
+  // The codes below name no language, so they land in the global list.
+  // Sequential progression: an uncapped question, or a hidden one with another
+  // after it, could trap a participant.
   sequentialNeedsMaxAttempts: "sequential_needs_max_attempts",
   sequentialHidesQuestion: "sequential_hides_question",
-  // Contest-wide, like the two above: winner mode with no final question, and
-  // a leaderboard freeze that no longer fits the window.
   winnerNeedsFinal: "winner_needs_final",
-  // Winner mode only: a final question with no attempt limit, which the
-  // first correct guess wins for nothing. Names a question, not a language.
+  // A final question with no attempt limit is won by guessing.
   winnerFinalNeedsAttemptLimit: "winner_final_needs_attempt_limit",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
-  // A choice question whose attempt limit is not below its own number of
-  // options can always be guessed through. Two codes because the cost
-  // differs: in ICPC scoring it is penalty time, in every other mode it is
-  // the question's points. Both name a question, not a language, so they
-  // fall into the same global list — and both belong in this list, which is
-  // what the dictionary test checks every locale against.
+  // A choice question whose attempt limit is not below its option count can be
+  // guessed through; two codes because the cost differs (penalty time under
+  // ICPC, points otherwise).
   icpcChoiceNeedsAttemptLimit: "icpc_choice_needs_attempt_limit",
   choiceNeedsAttemptLimit: "choice_needs_attempt_limit",
-  // Contest-wide: somebody on the roster whose account administers every
-  // contest, and so already reads this one's reference answers and unfrozen
-  // leaderboard. The detail is their login, because the organizer's next
-  // move is to find that person in the roster.
+  // A roster member who administers every contest and so can read the
+  // answers. The detail is their login.
   staffRegistered: "staff_registered",
-  // Contest-wide: an uploaded cover with nobody credited. A contest with no
-  // uploaded cover wears a drawn one, whose author is us, and never appears
-  // here.
+  // An uploaded cover with nobody credited; a drawn cover never appears here.
   coverNeedsAttribution: "cover_needs_attribution",
 } as const;
 
@@ -63,14 +46,8 @@ export type PublishProblem = {
 export type PublishCheck = { ready: boolean; problems: PublishProblem[] };
 
 /**
- * A cell in the language matrix.
- *
- * Three states, not two. "There is no story in Romanian" and "there is no
- * story at all" are different facts, and collapsing the second into "done"
- * — which is what happens when only per-language problems are consulted —
- * prints a tick beside a language whose story does not exist. The author is
- * then told, in the same panel, that the story is missing and that every
- * language has one.
+ * A cell in the language matrix. "not-started" keeps "no story at all" from
+ * showing as a tick beside every language.
  */
 export type CellState = "ok" | "missing" | "not-started";
 
@@ -84,26 +61,17 @@ export type LanguageRow = {
 };
 
 /**
- * A problem that belongs to the contest, not to one of its languages.
- *
- * `count` because several of these arrive under one code: the gate reports a
- * missing reference answer once per question. Listed as they come, two
- * questions produce two identical sentences — neither naming which question,
- * so the repetition tells an author nothing — and two list children under one
- * key, which React will not guarantee the rendering of.
+ * A problem of the contest, not a language. Problems sharing a code (one per
+ * question) collapse into a `count`, avoiding identical sentences and
+ * duplicate React keys.
  */
 export type GlobalProblem = { code: string; count: number; detail?: string };
 
 export type PublishGate = { global: GlobalProblem[]; byLanguage: LanguageRow[] };
 
 export function summarisePublishCheck(check: PublishCheck, languages: string[]): PublishGate {
-  // A problem without a language is about the contest itself: no schedule, no
-  // questions, the wrong number of them for the mode. It has no cell to sit in.
-  //
-  // Grouped by code, in the order the codes first appear. The detail survives
-  // only on a code that occurs once: where several arrive, each one describes a
-  // different question, and showing one of them beside a count would say
-  // something true of a single question as though it were true of all of them.
+  // Grouped by code in first-seen order. The detail survives only on a code
+  // that occurs once: with several, it would describe one question as if all.
   const global: GlobalProblem[] = [];
   for (const problem of check.problems) {
     if (problem.lang) continue;
@@ -117,10 +85,8 @@ export function summarisePublishCheck(check: PublishCheck, languages: string[]):
     delete seen.detail;
   }
 
-  // What does not exist yet cannot be translated. The gate reports "no story"
-  // once, without a language, and says nothing further about any language's
-  // story — so a matrix built only from per-language problems concludes that
-  // every language's story is in order.
+  // "No story" arrives once, without a language, and no per-language problem
+  // follows it.
   const noStory = global.some((p) => p.code === PUBLISH_PROBLEMS.noStory);
   const noQuestions = global.some((p) => p.code === PUBLISH_PROBLEMS.noQuestions);
 
@@ -133,12 +99,7 @@ export function summarisePublishCheck(check: PublishCheck, languages: string[]):
       lang,
       title: missing(PUBLISH_PROBLEMS.missingContestTranslation),
       story: noStory ? ("not-started" as const) : missing(PUBLISH_PROBLEMS.missingStoryTranslation),
-      // A question with no text and a question whose choice has no label are
-      // both a question that is not finished in this language. Counting only
-      // the first left the second reported nowhere at all: it names a language,
-      // so it is not a contest-wide problem, and nothing in the matrix looked
-      // for it — the panel called every language complete while the gate went
-      // on refusing to publish.
+      // An unlabelled choice also leaves the question unfinished in this language.
       questionsMissing: named.filter(
         (p) =>
           p.code === PUBLISH_PROBLEMS.missingQuestionTranslation ||

@@ -7,27 +7,19 @@ import type { GameDefinition } from "@/lib/api/game";
 
 import { GameBuilder } from "./game-builder";
 
-// The data section renders a real `GameBuilderTable`, which refreshes the
-// page after every write that marks the game out of date (its own
-// `refreshGameState`). Outside Next's own router there is no app router to
-// mount, so the hook is stood in for here the same way
-// `game-builder-table.test.tsx` and `game-build.test.tsx` stand it in.
+// The real `GameBuilderTable` calls `router.refresh()`, and there is no app
+// router here.
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 const saved = vi.hoisted(() => ({ current: { saved: true } as { saved?: boolean; code?: string } }));
 const saveGameDefinitionAction = vi.hoisted(() => vi.fn(async (_prev: unknown, form: FormData) => ({
   ...saved.current,
-  // Exposed so a test can inspect exactly what was about to be sent, the
-  // same way `game-editor.test.tsx` never needed to (a script is one
-  // string; a definition is a tree, worth checking the actual shape of).
+  // Exposed so tests can check the definition tree that was sent.
   sentDefinition: JSON.parse(String(form.get("definition"))),
 })));
 
-// The data section renders a real `GameBuilderTable` per table, which fetches
-// its own first window on mount — every test needs this to resolve rather
-// than throw, `game-builder-table.test.tsx`'s own beforeEach gives the
-// identical reason.
+// Each real `GameBuilderTable` fetches its first window on mount.
 const gameTableDataWindowAction = vi.hoisted(() =>
   vi.fn(async () => ({ value: { fromRow: 1, rows: [], totalRows: 0, truncated: false } })),
 );
@@ -110,9 +102,8 @@ describe("the table builder's own structure editor", () => {
     expect(screen.getByDisplayValue("suspects")).toBeDisabled();
   });
 
-  // The mutation this guards against: a table-count ceiling taken from a
-  // constant instead of `builder_limits.max_tables` would not track a
-  // deployment that configured a different one — here, two.
+  // A constant table ceiling would not follow `builder_limits.max_tables` (two
+  // here).
   test("stops offering another table once builder_limits.max_tables is reached", async () => {
     show({ initial: definition({ tables: [definition().tables[0], { name: "clues", columns: [{ name: "id", type: "integer", nullable: false }], primaryKey: [] }] }) });
 
@@ -149,14 +140,8 @@ describe("the table builder's own structure editor", () => {
     expect(screen.getAllByRole("textbox")).toHaveLength(2); // the table name, the one column name
   });
 
-  // The server enforces this rule and answers 409
-  // (`provisioning.ErrDefinitionTableLocked`, tested at the handler in
-  // `game_handler_test.go`); this screen disables the edit *as well*, so an
-  // organiser is not offered a change only to have a round trip refuse it —
-  // `GameBuilder`'s own doc gives the reasoning. So what this test holds is
-  // the client half: the row count is what decides it, and it is checked
-  // before any click rather than after one. Bypassing this screen does not
-  // bypass the rule.
+  // The server enforces the lock (409); this checks the client half: the row
+  // count decides it before any click.
   test("locks a table's name and columns once it already holds data", () => {
     show({ rowCounts: { suspects: 3 } });
 
@@ -212,9 +197,8 @@ describe("the table builder's own structure editor", () => {
     );
   });
 
-  // The mutation this guards against: a byte-size ceiling taken from a
-  // constant instead of `builder_limits.max_definition_bytes` would not
-  // refuse a definition this installation's own (tiny, here) ceiling does.
+  // A constant size ceiling would not follow this installation's tiny
+  // `max_definition_bytes`.
   test("refuses to save once the definition is larger than builder_limits.max_definition_bytes", () => {
     show({ initial: definition({ builderLimits: { ...limits, maxDefinitionBytes: 4 } }) });
 

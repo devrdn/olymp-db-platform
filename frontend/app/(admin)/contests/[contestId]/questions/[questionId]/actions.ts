@@ -33,20 +33,9 @@ async function attempt(path: string, init: { method: string; body: unknown }, at
 }
 
 /**
- * Saving the question.
- *
- * One action, one request, one button. It was three of each — the question's
- * own fields, its wording, its reference answers — and that was not only three
- * presses: the second was free to fail after the first had committed, leaving
- * a half-saved question under a button that had already said "saved".
- *
- * It also made one change impossible rather than merely tedious. Turning a
- * typed question into a choice question needs the kind, the options and the
- * answers to move together; sent separately, each request saw half the change
- * and refused on account of the other half. The API now takes the whole
- * question and writes it in one transaction, so both halves are known at once.
- *
- * The parsing lives in `question-form.ts`, where it has tests.
+ * Saves the whole question in one request, written in one transaction, so no
+ * half-saved state is possible and a change of kind moves with its options and
+ * answers. Parsing lives in `question-form.ts`.
  */
 export async function saveQuestionAction(
   _previous: QuestionState,

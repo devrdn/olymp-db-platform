@@ -13,8 +13,7 @@ describe("the button", () => {
 
     const button = screen.getByRole("button", { name: "Run" });
     expect(button.tagName).toBe("BUTTON");
-    // No `type` of its own: inside a form this still submits, which is what
-    // every form on this product relies on.
+    // No `type`: inside a form it still submits.
     expect(button).not.toHaveAttribute("type");
   });
 
@@ -52,14 +51,9 @@ describe("the button", () => {
 });
 
 /**
- * Finding 6: two byte-identical builds of this file plus Base UI were in the
- * play route's chunks — about 53 KiB raw and 25 KiB gzipped of a 159/56 KiB
- * route — to render a `<button>` and an `<input>`. What the primitive gave
- * was `useRender`/`mergeProps` and a `render` prop nothing here ever passed.
- *
- * Nothing in the rendered output can show that it is gone again, which is
- * why it is asserted against the source, the way this project already
- * asserts what `workspace.tsx` drags into the client bundle.
+ * Base UI once cost the play route about 25 KiB gzipped for a `<button>` and an
+ * `<input>`. The rendered output cannot show it is gone, so the source is
+ * asserted.
  */
 describe("what the two plainest controls import", () => {
   test.each(["button.tsx", "input.tsx"])("%s reaches no component library", (file) => {

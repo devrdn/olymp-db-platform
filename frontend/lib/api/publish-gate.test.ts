@@ -35,13 +35,8 @@ describe("summarisePublishCheck", () => {
   });
 });
 
-/**
- * The trap this pair of tests exists for. The gate reports "there is no story"
- * once, without naming a language, and then says nothing further about any
- * language's story — there is nothing to say. A matrix built only from
- * per-language problems reads that silence as approval, and prints a tick
- * beside every language in the same panel that says the story is missing.
- */
+// "No story" arrives once without a language; it must not read as every
+// language being done.
 describe("summarisePublishCheck, what does not exist yet", () => {
   test("does not call a language's story done when there is no story at all", () => {
     const gate = summarisePublishCheck(
@@ -102,14 +97,6 @@ describe("summarisePublishCheck, contest-wide problems", () => {
 });
 
 describe("summarisePublishCheck, problems that repeat", () => {
-  /**
-   * The gate reports a missing reference answer once per question, and those
-   * problems name no language. Listed as they arrive, two questions produce
-   * two identical sentences — and, because the component keys the list by the
-   * code, two children under one key, which React refuses to guarantee the
-   * rendering of. Neither line says which question, so the repetition buys
-   * nothing an author could act on either.
-   */
   test("collapses a repeated code into one entry that counts itself", () => {
     const gate = summarisePublishCheck(
       {
@@ -130,8 +117,6 @@ describe("summarisePublishCheck, problems that repeat", () => {
   });
 
   test("keeps the server's detail on a problem that occurs once", () => {
-    // `single_mode_needs_one_question` carries how many there are, and that
-    // number is the whole point of the message.
     const gate = summarisePublishCheck(
       {
         ready: false,
@@ -146,11 +131,6 @@ describe("summarisePublishCheck, problems that repeat", () => {
   });
 
   test("counts an unlabelled choice as a question that is not finished", () => {
-    // It names a language and a question, so it belongs in the matrix. It was
-    // in neither: not global, because it has a language, and not counted in
-    // the language row, which looked only for a missing question text. The
-    // panel therefore reported every language complete while the gate went on
-    // refusing to publish, which is the one thing this panel exists to prevent.
     const gate = summarisePublishCheck(
       {
         ready: false,

@@ -15,11 +15,7 @@ beforeAll(async () => {
 
 const t = () => dict.profile.report;
 
-/**
- * A whole standing, so a test that varies one field of it spreads a complete
- * one rather than `report().result`, which may now be null: a row the
- * published table does not carry has no standing at all.
- */
+/** A complete standing to override, since `report().result` may be null. */
 function result(overrides: Partial<NonNullable<ProfileReport["result"]>> = {}): NonNullable<ProfileReport["result"]> {
   return {
     scoring: "points",
@@ -58,11 +54,7 @@ function report(overrides: Partial<ProfileReport> = {}): ProfileReport {
   };
 }
 
-/**
- * One figure of the result strip, by the caption under it. Scoped to the
- * strip: "Points" is a caption there and a column heading in the table
- * below, and they are two different things with one word.
- */
+/** A strip figure by caption, scoped to the strip: "Points" is also a table heading. */
 function strip(): HTMLElement {
   return document.querySelector("dl") as HTMLElement;
 }
@@ -84,7 +76,7 @@ describe("a contest scored in points", () => {
     expect(figure(t().result.solved)).toBe("3");
     expect(figure(t().result.queries)).toBe("120");
     expect(figure(t().result.successful)).toBe("98");
-    // 5,400,000 ms is an hour and a half, as a clock reads it.
+    // 5,400,000 ms is an hour and a half.
     expect(figure(t().result.worked)).toBe("1:30:00");
     expect(figure(t().result.place)).toContain("4");
     expect(within(strip()).getByText(t().result.placeOf.replace("{n}", "31"))).toBeInTheDocument();
@@ -99,26 +91,21 @@ describe("a contest scored in points", () => {
     expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByText(t().questions.solved)).toBeInTheDocument();
     expect(within(rows[0]).getByText("2")).toBeInTheDocument();
-    // 08:00 UTC in May is 11:00 where the contest is held.
+    // 08:00 UTC in May is 11:00 in the contest's zone.
     expect(within(rows[0]).getByText("11:00")).toBeInTheDocument();
     expect(within(rows[1]).getByText(t().questions.unsolved)).toBeInTheDocument();
     expect(within(rows[1]).getAllByText(t().questions.never).length).toBeGreaterThan(0);
   });
 });
 
-/**
- * ICPC writes no points at all — the server sends nought — so a screen that
- * printed them would report nought over four solved questions. Solved and
- * penalty are the result in that mode.
- */
+/** ICPC has no points (the server sends 0); solved and penalty are the result. */
 describe("a contest scored the ICPC way", () => {
   test("shows solved and penalty, and no points anywhere", () => {
     renderSummary(
       report({
         result: result({ scoring: "icpc", points: 0, solved: 4, penalty: 87 }),
         questions: [
-          // points is 0 because the server awards none in this mode; the
-          // minutes are what the question cost.
+          // No points in this mode; the minutes are the cost.
           { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
           { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0 },
         ],
@@ -134,11 +121,7 @@ describe("a contest scored the ICPC way", () => {
     expect(within(table).queryByText(t().questions.columns.points)).not.toBeInTheDocument();
   });
 
-  /**
-   * The column says "Penalty", so it must print the minutes and not the
-   * points beside them, which the server writes as nought for every ICPC
-   * submission: a whole column of noughts under a row that cost 87 minutes.
-   */
+  /** Under ICPC the column prints minutes, not the zero points. */
   test("prints the minutes a question cost, not the points it did not earn", () => {
     renderSummary(
       report({
@@ -155,12 +138,7 @@ describe("a contest scored the ICPC way", () => {
   });
 });
 
-/**
- * The report carries only the first of a long session's attempts, and the
- * sentence says how many were counted. That is the attempts, not the
- * questions: two questions with fifty attempts between them would otherwise
- * be reported as two.
- */
+/** The truncation note counts attempts, not questions. */
 describe("a report cut at the bound", () => {
   test("counts the attempts it carries, not the questions", () => {
     renderSummary(report({ truncated: true }));
@@ -179,7 +157,7 @@ describe("a report cut at the bound", () => {
 });
 
 describe("a table that is not open", () => {
-  /** The freeze is not worked around: with no open table there is no place. */
+  /** No open table, no place. */
   test("says where the place will appear rather than leaving a gap", () => {
     renderSummary(
       report({ result: result({ state: "frozen", placeOpen: false, place: null, participants: null }) }),
@@ -189,12 +167,7 @@ describe("a table that is not open", () => {
     expect(within(strip()).queryByText(t().result.place)).not.toBeInTheDocument();
   });
 
-  /**
-   * A contest that never opened is not a frozen one, and the freeze's
-   * sentence would promise a table somebody is about to reveal. It is the
-   * report a participant disqualified before the window opened is left with,
-   * so it says the plain thing instead.
-   */
+  /** A contest that never opened must not promise a reveal. */
   test("says the contest never opened rather than promising a reveal", () => {
     renderSummary(
       report({
@@ -217,10 +190,9 @@ describe("a table that is not open", () => {
 });
 
 /**
- * The published table is bounded, so a participant below the cut — and one
- * disqualified before it was computed — has no row on it. The server sends no
- * result rather than one of zeroes, and the screen says which of the two
- * things is missing: their standing, not their work.
+ * The published table is bounded, so someone below the cut has no row; the
+ * server sends no result, and the screen says the standing is missing, not
+ * their work.
  */
 describe("a row the published table does not carry", () => {
   test("says the row is outside the table and still shows the session", () => {
@@ -254,11 +226,7 @@ describe("a contest with one winner", () => {
     expect(figure(t().result.place)).toContain("1");
   });
 
-  /**
-   * An open table that places nobody but its winner leaves everybody else's
-   * place null — which is a different thing from a frozen table, and gets a
-   * different sentence.
-   */
+  /** Winner mode places only the winner; everyone else gets their own sentence. */
   test("tells everybody else that this contest places only the winner", () => {
     renderSummary(
       report({

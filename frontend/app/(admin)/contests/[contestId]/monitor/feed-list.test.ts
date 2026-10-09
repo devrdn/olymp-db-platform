@@ -60,10 +60,7 @@ describe("a poll for what is new", () => {
     expect(state.newest).toBe("c4");
   });
 
-  /**
-   * The server never repeats an item past the cursor, but a poll that raced
-   * a reset, or a response that arrived twice, must not show a line twice.
-   */
+  /** A poll racing a reset, or a duplicated response, must not show a line twice. */
   test("never shows an item twice", () => {
     const first = initialFeed(page(items(1, 3)));
     const { state, added } = appendNewer(first, page(items(2, 5)));
@@ -87,7 +84,7 @@ describe("a poll for what is new", () => {
     expect(state.items).toHaveLength(FEED_LIMIT);
     expect(state.items[0].cursor).toBe("c151");
     expect(state.items.at(-1)?.cursor).toBe(`c${FEED_LIMIT + 150}`);
-    // What was dropped can be asked for again.
+    // Dropped items can be read again.
     expect(state.olderAvailable).toBe(true);
   });
 });
@@ -102,20 +99,13 @@ describe("loading older items", () => {
     expect(state.detached).toBe(false);
   });
 
-  /**
-   * The notice about a skipped backlog stops being true once the organiser
-   * reads back into it.
-   */
+  /** The skipped-items note is stale once older items are read. */
   test("clears the note about skipped items once older ones are read", () => {
     const first = initialFeed(page(items(5, 6), true), 1200);
     expect(prependOlder(first, page(items(3, 4), true)).gap).toBe(0);
   });
 
-  /**
-   * Scrolling back past the bound drops the newest end instead. The list is
-   * then no longer the live tail, so new items are counted rather than added
-   * until the organiser jumps back to the latest.
-   */
+  /** Past the bound the newest end is dropped and new items are counted until the jump back. */
   test("past the bound, drops the newest end and stops following", () => {
     const first = initialFeed(page(items(201, 200 + FEED_LIMIT), true));
     const state = prependOlder(first, page(items(1, 200), true));
@@ -134,8 +124,8 @@ describe("loading older items", () => {
 });
 
 /**
- * A query first reaches the feed as `running`, and the feed does not deliver
- * it again once its cursor has passed. The screen asks for it again by time.
+ * A query first arrives as `running` and the cursor never returns to it, so it
+ * is re-read by time.
  */
 describe("queries still running", () => {
   test("asks for one participant's running queries by their time", () => {
@@ -156,17 +146,12 @@ describe("queries still running", () => {
       until: "2026-09-20T10:00:03.501Z",
     });
 
-    // The next one goes to whoever has waited longest, so a query that runs
-    // for a minute does not starve everybody else's.
+    // Whoever waited longest goes next, so none starves.
     expect(runningWindow(state.items, tried, 2000)).toMatchObject({ participant: "p2" });
     expect(runningWindow(state.items, tried, 3000)).toMatchObject({ participant: "p1" });
   });
 
-  /**
-   * A query the journal never completed (its runner died mid-statement)
-   * stays `running` for ever. It is asked about for a while, then left as it
-   * is, rather than costing a read every five seconds for the rest of the day.
-   */
+  /** A query whose runner died stays `running`; it is asked about a while, then left. */
   test("gives up on a query that never ends", () => {
     const items = [running("c1", "p1", "2026-09-20T10:00:01.100Z")];
     const tried: RunningTries = new Map();

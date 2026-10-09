@@ -1,24 +1,13 @@
 /**
- * Reading the session cookie the API issued.
- *
- * Sign-in happens in a Server Action, so the API's `Set-Cookie` arrives at the
- * server rather than at the browser. It has to be handed on deliberately, and
- * its lifetime carried with it: the server decides how long a session lives,
- * and dropping Max-Age here would quietly turn it into a session cookie that
- * dies when the browser closes.
- *
- * HttpOnly, SameSite and Secure are not read back. They are set again on the
- * outgoing cookie from this application's own configuration, because a browser
- * over plain HTTP silently discards a Secure cookie and a local stack has no
- * certificate.
+ * Parses the API's `Set-Cookie`, which reaches the server during sign-in and
+ * must be handed on. Max-Age is kept, or the cookie would die with the
+ * browser. HttpOnly, SameSite and Secure are not read: they are set again from
+ * this application's configuration (see cookie-policy.ts).
  */
 
 export type ParsedCookie = { name: string; value: string; maxAge?: number; path?: string };
 
-/**
- * A Set-Cookie header always opens with the pair. If the first thing is an
- * attribute name, there is no cookie here and "Path" is not its name.
- */
+/** A header that opens with an attribute name carries no cookie. */
 const ATTRIBUTE_NAMES = new Set([
   "path",
   "domain",

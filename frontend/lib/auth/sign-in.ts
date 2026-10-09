@@ -3,58 +3,37 @@ import { API_PREFIX } from "@/lib/api/client";
 import { parseSetCookie, type ParsedCookie } from "./cookie";
 
 /**
- * Signing in.
- *
- * This runs on the server, so the API's `Set-Cookie` lands here rather than in
- * the browser and has to be handed on. Both the fetch and the cookie writer are
- * injected, which keeps the whole exchange testable without a framework and
- * without a live API.
- *
- * There is one sign-in for everyone: the API has no separate admin endpoint,
- * and the difference shows up afterwards in the permissions it reports.
+ * Signing in, on the server: the API's `Set-Cookie` arrives here and has to be
+ * handed on to the browser. Fetch and cookie writer are injected for testing.
+ * There is one sign-in for everyone; staff differ only in permissions.
  */
 
 export type Credentials = { login: string; password: string };
 
-/**
- * The cookie the API sets on a browser that has signed in to an account. It
- * has to match `auth.DeviceCookieName` in the Go service.
- */
+/** Must match `auth.DeviceCookieName` in the Go service. */
 export const DEVICE_COOKIE = "dbcontest_device";
 
 export type SignInDeps = {
   fetchImpl: typeof fetch;
   setCookie: (cookie: ParsedCookie) => void;
   origin?: string;
-  /**
-   * Forwarded verbatim, so the API sees who is really signing in. This call
-   * leaves from the server, and without the browser's forwarded address the
-   * API throttles and audits the web container instead of the person.
-   */
+  /** The forwarded client headers, so the API throttles and audits the person. */
   headers?: Record<string, string>;
   /**
-   * The browser's device cookie, when it has one. The API throttles a browser
-   * the owner has signed in from on its own, rather than with the address a
-   * whole lecture hall shares — which it can only do if the cookie reaches it
-   * through this server. Only this cookie is sent: the rest of the browser's
-   * jar is none of the sign-in's business.
+   * The browser's device cookie, so the API can throttle a known browser on
+   * its own rather than with a whole lecture hall's shared address. Only this
+   * cookie is sent.
    */
   deviceToken?: string;
-  /** How a retry waits. Injected so a test does not wait in real time. */
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** The code the API answers when it is too busy to check a password. */
+/** The API is too busy to check a password. */
 const BUSY = "sign_in_busy";
 
-/**
- * How long a retry after a busy answer may wait at most. The API asks for a
- * second; a header asking for longer is not a reason to hold a person's
- * sign-in open, and past this the form's own answer is the better one.
- */
+/** A longer `Retry-After` is not worth holding a sign-in open for. */
 const MAX_RETRY_WAIT_MS = 5000;
 
-/** The wait when the API names none, or none that can be read. */
 const DEFAULT_RETRY_WAIT_MS = 1000;
 
 function retryWait(header: string | null): number {
@@ -89,11 +68,8 @@ export async function signIn(
   let response = await attempt();
   let failure = response.ok ? null : await failureCode(response);
 
-  // Too busy to check the password is not a verdict on it: the person typed
-  // nothing wrong. So the sign-in waits as long as the API asks — bounded —
-  // and tries exactly once more before saying so. Once, because a second
-  // refusal means the load is not a moment's, and repeating would only add to
-  // it.
+  // "Busy" is not a verdict on the password: wait as asked (bounded) and retry
+  // once. A second refusal means sustained load, which retries would add to.
   if (failure === BUSY) {
     await sleep(retryWait(response.headers.get("retry-after")));
     response = await attempt();
@@ -113,9 +89,8 @@ export async function signIn(
 }
 
 /**
- * The code of a refused sign-in. The server answers a wrong login and a wrong
- * password identically, so this code must never be turned into "no such
- * account".
+ * A wrong login and a wrong password get the same code; never turn it into
+ * "no such account".
  */
 async function failureCode(response: Response): Promise<string> {
   const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;

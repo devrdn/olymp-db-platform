@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { tokenizeSql, type SqlTokenKind } from "./sql-tokens";
 
-/** Each piece in the editor's own colours (code-editor-core.ts), from the same tokens. */
+/** The editor's colour tokens (code-editor-core.ts). */
 const TONE: Record<Exclude<SqlTokenKind, "plain">, string> = {
   keyword: "text-accent",
   function: "text-(--sql-function)",
@@ -17,10 +17,8 @@ const TONE: Record<Exclude<SqlTokenKind, "plain">, string> = {
 };
 
 /**
- * A statement shown whole and read-only, highlighted. It scrolls inside its
- * own box both ways, so a long line or a long statement never widens or
- * lengthens the page. Memoised, and the tokens with it: a list that renders
- * again for an unrelated reason does not read the SQL again.
+ * A read-only highlighted statement that scrolls inside its own box both ways.
+ * Memoised with its tokens, so an unrelated re-render does not re-tokenise.
  */
 export const SqlBlock = memo(function SqlBlock({ sql, label }: { sql: string; label?: string }) {
   const tokens = useMemo(() => tokenizeSql(sql), [sql]);
@@ -44,12 +42,12 @@ export const SqlBlock = memo(function SqlBlock({ sql, label }: { sql: string; la
   );
 });
 
-/** How long "Copied" stays before the button reads as a button again. */
+/** How long "Copied" stays. */
 const COPIED_MS = 2_000;
 
 /**
- * Copies a text and says whether it worked, in a live region that is always
- * in the document so the change is announced.
+ * Copies text and reports the result in a live region that is always rendered,
+ * so the change is announced.
  */
 export function CopyButton({
   text,

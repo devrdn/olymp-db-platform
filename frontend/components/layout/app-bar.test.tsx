@@ -3,8 +3,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// Both switchers submit to Server Actions; importing those for real pulls in
-// `next/headers`. The bar's own composition is what is under test.
+// The switchers' Server Actions would pull in `next/headers`.
 vi.mock("./locale-actions", () => ({ chooseLocale: vi.fn() }));
 vi.mock("./theme-actions", () => ({ chooseTheme: vi.fn() }));
 vi.mock("./session-actions", () => ({ signOutAction: vi.fn() }));
@@ -18,11 +17,6 @@ beforeAll(async () => {
   en = await getDictionary("en");
 });
 
-/**
- * A mark that navigates somewhere is a promise that the somewhere exists.
- * `/` has no page: the public landing is a later step, and until it is built a
- * link there is a 404 with the product's name on it.
- */
 describe("the product mark", () => {
   test("leads to the home of whichever audience the shell was built for", () => {
     render(
@@ -37,11 +31,7 @@ describe("the product mark", () => {
     );
   });
 
-  /**
-   * The whole reason there is one shell and not two. A participant sent to the
-   * author's register would meet it scoped to contests they manage, which is
-   * empty — an accurate answer to a question they never asked.
-   */
+  /** A participant sent to the author's register would find it empty. */
   test("leads somewhere else for a participant", () => {
     render(
       <ProductShell
@@ -93,9 +83,7 @@ describe("the app bar", () => {
   });
 
   test("names the account and leads to its profile", () => {
-    // The way into one's own account, and the answer to "who am I signed in
-    // as" — which on a shared lab machine is a question people actually ask
-    // before they type anything.
+    // Also answers "who am I signed in as" on a shared lab machine.
     render(
       <ProductShell
         locale="en"
@@ -113,8 +101,8 @@ describe("the app bar", () => {
   });
 
   test("puts initials in the circle, and does not read them out", () => {
-    // SPEC 10.4: initials, never a photograph. The letters are decoration —
-    // the link already carries the name, and "I I" beside it would be noise.
+    // SPEC 10.4: initials, never a photograph. Decorative, since the link
+    // already carries the name.
     const { container } = render(
       <ProductShell
         locale="en"
@@ -132,8 +120,6 @@ describe("the app bar", () => {
   });
 
   test("offers no account door on the sign-in screen", () => {
-    // There is no account yet, and a door to nobody's profile is one that
-    // invites a press to find out.
     render(
       <FocusShell locale="en" theme="system" dict={en}>
         <p>form</p>
@@ -145,10 +131,8 @@ describe("the app bar", () => {
   });
 
   test("keeps the way out on a screen that cannot reach the profile", () => {
-    // The forced password change. That account is signed in and the API
-    // refuses every endpoint but three, so /profile would answer 403 — and
-    // without a control here the only escape from somebody else's handover
-    // password is clearing a cookie by hand.
+    // The forced password change: /profile would answer 403, so sign-out must
+    // be in the bar.
     render(
       <FocusShell locale="en" theme="system" dict={en} signedIn>
         <p>form</p>
@@ -170,12 +154,7 @@ describe("the app bar", () => {
     expect(screen.getByRole("button", { name: en.chrome.theme.light })).toBeInTheDocument();
   });
 
-  // The bar every screen wears (this file's own doc) is not one any screen
-  // wants printed — nobody asked for the logo, the theme toggle or the
-  // language switcher on a printed page, on any screen, including the one the
-  // print/page.tsx route is built around. One rule here rather than a
-  // per-route stylesheet is what keeps a future screen from needing to
-  // remember it.
+  // One rule here, so no route has to remember to hide the bar when printing.
   test("hides itself when the page it sits on is printed", () => {
     const { container } = render(
       <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>

@@ -40,13 +40,8 @@ describe("questionFrom", () => {
     });
   });
 
-  // Finding 1: the penalty is a pointer on the wire, and blank has to mean
-  // "leave the stored value alone" rather than "reset it to zero" — zero is
-  // itself a meaningful setting (no penalty), and an editor that always sent
-  // it for an untouched field would silently clear a penalty set through the
-  // API. This is what fails against a form that always sends a plain number:
-  // saving any other change to a question with a penalty already configured
-  // would zero it out.
+  // A blank penalty must mean "leave it alone": zero is a real setting, and
+  // sending it would wipe a penalty set through the API.
   test("leaves the penalty alone when its box is untouched, never zeroing it", () => {
     expect(questionFrom(form(base))).toMatchObject({ body: { penalty_pct: null } });
     expect(questionFrom(form([...base, ["penaltyPct", ""]]))).toMatchObject({
@@ -79,8 +74,7 @@ describe("questionFrom", () => {
   });
 
   test("treats unlimited attempts as absent, never as zero", () => {
-    // A question allowing zero attempts is one nobody can answer, which is
-    // never what an empty box meant.
+    // Zero attempts would be unanswerable, which an empty box never meant.
     expect(questionFrom(form([...base, ["maxAttempts", ""]]))).toMatchObject({
       body: { max_attempts: null },
     });
@@ -93,9 +87,7 @@ describe("questionFrom", () => {
   });
 
   test("drops a language whose body was left blank", () => {
-    // "Not written yet" and "deliberately empty" are different facts, and an
-    // empty string satisfies the publish gate's presence check — publishing a
-    // question that asks its Romanian readers nothing.
+    // An empty string would pass the publish gate's presence check.
     const parsed = questionFrom(form([...base, ["body.en", "Who?"], ["body.ro", "   "]]));
 
     expect(parsed).toMatchObject({ body: { texts: { en: { body_md: "Who?" } } } });
@@ -103,8 +95,7 @@ describe("questionFrom", () => {
   });
 
   test("keeps an option label only where the question has words", () => {
-    // A label attached to a language with no body is an option for a question
-    // that does not exist in that language.
+    // Labels without a body in that language are dropped.
     const parsed = questionFrom(
       form([
         ["kind", "choice"],
@@ -127,8 +118,7 @@ describe("questionFrom", () => {
   });
 
   test("drops the options when the question is no longer a choice", () => {
-    // The API refuses options on any other kind, so switching back to typed
-    // text has to let go of them here.
+    // The API refuses options on other kinds.
     expect(questionFrom(form([...base, ["choiceIds", "a, b"]]))).toMatchObject({
       body: { choice_ids: [] },
     });
@@ -136,8 +126,7 @@ describe("questionFrom", () => {
 
   test("takes each option identifier once, however it was typed", () => {
     const parsed = questionFrom(
-      // Spaces, commas, semicolons and a real newline: how a list actually
-      // arrives when somebody pastes it out of a document.
+      // Separators as they arrive from a pasted document.
       form([["kind", "choice"], ["points", "5"], ["choiceIds", "a b,a; b\nc"]]),
     );
 
@@ -145,7 +134,7 @@ describe("questionFrom", () => {
   });
 
   test("ignores an answer row left empty", () => {
-    // The editor offers a spare row. An untouched one is not an answer.
+    // An untouched spare row is not an answer.
     const parsed = questionFrom(
       form([
         ...base,

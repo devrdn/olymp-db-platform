@@ -7,17 +7,11 @@ import type { GameSchema, GameTable } from "@/lib/api/schema";
 import type { PlayDictionary } from "./dictionary";
 
 /**
- * The console's schema panel: the tables of the game, their columns, each
- * column's type and the table a foreign key points at.
- *
- * The left column of the design's console (docs/design/preview.html,
- * "SQL-консоль"). It is the one part of that screen that is pure reference —
- * nothing here submits anything — and the reason it earns a permanent column
- * rather than a tab is that it is read *while* typing the query beside it.
- *
- * The panel is absent, not empty, in a contest whose organiser closed the
- * catalogues: `page.tsx` never passes a schema in that case, because
- * discovering the shape is the puzzle there (queryproxy.ErrSchemaHidden).
+ * The console's schema panel: the game's tables, their columns, each column's
+ * type and the table a foreign key points at. A permanent column because it
+ * is read while typing. Absent, not empty, when the organiser closed the
+ * catalogues, where discovering the shape is the puzzle
+ * (queryproxy.ErrSchemaHidden).
  */
 export function SchemaPanel({
   schema,
@@ -27,13 +21,11 @@ export function SchemaPanel({
 }: {
   schema: GameSchema;
   /**
-   * The participant has collapsed this panel (§8). The panel is still
-   * mounted — its search text and which tables are open are theirs, not
-   * something a keystroke should discard — and what changes here is only
-   * what ⌘K has to do first.
+   * Collapsed by the participant. Still mounted, so the search and the
+   * open tables survive; only ⌘K has to reveal it first.
    */
   hidden?: boolean;
-  /** Asks the screen to show this panel again. Called by ⌘K while collapsed. */
+  /** Asks the screen to show this panel again; called by ⌘K while collapsed. */
   onReveal?: () => void;
   dict: PlayDictionary;
 }) {
@@ -41,20 +33,18 @@ export function SchemaPanel({
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // The filter runs against the typed value one render behind, so a keystroke
-  // is never waiting on it. A game this product is for has seven tables and
-  // would not notice; the API's own bound allows two hundred tables of two
-  // hundred columns, and this is what keeps the panel's typing at the 120ms
-  // SPEC.md §6 asks for even there.
+  // The filter runs one render behind the typed value, so typing stays
+  // within SPEC.md §6's 120ms even at the API's bound of 200 tables of 200
+  // columns.
   const deferred = useDeferredValue(query);
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => initiallyCollapsed(schema.tables));
 
-  /** ⌘K arrived while the panel was collapsed: focus the field once it is on screen again. */
+  /** ⌘K arrived while collapsed: focus the field once it is shown again. */
   const focusWhenShown = useRef(false);
 
-  // Read through refs rather than captured, so the document listener below
-  // is bound once and still sees the panel as it is now.
+  // Read through refs so the document listener is bound once and still sees
+  // the current props.
   const hiddenRef = useRef(hidden);
   const onRevealRef = useRef(onReveal);
   useEffect(() => {
@@ -62,15 +52,10 @@ export function SchemaPanel({
     onRevealRef.current = onReveal;
   });
 
-  // ⌘K, the shortcut the design draws inside the search field. Bound on the
-  // document rather than the panel: the participant's hands are in the
-  // editor, which is where the shortcut has to work from.
-  //
-  // Collapsed, the panel asks to be shown first (§8). Focusing straight away
-  // would be focusing inside a `display:none` subtree, which is a documented
-  // no-op — the same defect the code editor's own mount path records — so
-  // the intent is remembered and spent in the layout effect below, after the
-  // owner's re-render has actually put the panel back on screen.
+  // ⌘K, bound on the document so it works from the editor. While collapsed
+  // the panel asks to be shown first; focusing inside a `display:none`
+  // subtree does nothing, so the intent is spent in the layout effect below
+  // once the panel is back.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return;
@@ -106,13 +91,8 @@ export function SchemaPanel({
         <span>{schema.tables.length}</span>
       </header>
 
-      {/* `relative` for the same reason SidePanel's own panels carry it: the
-          search field's `sr-only` label is `position: absolute`, and a static
-          scroll box does not clip one. It is near the top here rather than at
-          the end of a long list, so it never grew the page the way the
-          questions' hidden labels did — but a scroll box that holds
-          visually-hidden text has to be the containing block for it either
-          way. */}
+      {/* `relative` so this scroll box is the containing block of the
+          `sr-only` label (`position: absolute`), as in SidePanel. */}
       <div className="relative min-h-0 flex-1 overflow-y-auto py-2.5">
         <div className="px-3 pb-2">
           <label className="sr-only" htmlFor="schema-search">
@@ -127,8 +107,7 @@ export function SchemaPanel({
               placeholder={t.search}
               className="min-w-0 flex-1 bg-transparent font-mono text-data text-ink outline-none placeholder:text-ink-3"
             />
-            {/* Decorative: the shortcut is announced by the field's own label,
-                and reading "command K" after every placeholder is noise. */}
+            {/* Decorative: reading "command K" after the placeholder is noise. */}
             <span aria-hidden="true" className="shrink-0 font-mono text-label text-ink-3">
               ⌘K
             </span>
@@ -146,8 +125,7 @@ export function SchemaPanel({
         ) : (
           <ul className="font-mono text-data">
             {matches.map((table) => {
-              // A search result opens the tables it matched inside: a hit the
-              // participant cannot see is not a hit.
+              // A search opens the tables it matched inside: a hidden hit is no hit.
               const open = deferred.trim() !== "" ? table.matchedColumns : !collapsed.has(table.name);
               return (
                 <TableRow
@@ -217,29 +195,15 @@ function TableRow({
               <span className="truncate" title={column.name}>
                 {column.name}
               </span>
-              {/* Shrinkable, not fixed. `shrink-0` here meant the type took
-                  whatever it wanted and the *name* absorbed the whole
-                  shortfall: at the design's own 212px pane a column called
-                  `badge_number` was left 11px of room and rendered as an
-                  ellipsis, while `character varying` beside it was printed
-                  in full. The name is what a participant has to type into
-                  the query; the type is what they can read from the title
-                  attribute either way. `shrink-3` weights the giving-way
-                  three to one in the name's favour rather than splitting it
-                  evenly — measured at the same 212px pane, `badge_number`
-                  goes from 79px of it missing to 9px, and `occupation_id`
-                  from 59px to 5px — and `truncate` is what keeps a long type
-                  from pushing a horizontal scrollbar onto the panel
-                  (`timestamp with time zone` overflowed its own row by
-                  34px). */}
+              {/* Shrinkable, three to one in the name's favour: the name is what
+                  the participant types, while the type can be read from the title.
+                  `truncate` keeps a long type such as `timestamp with time zone`
+                  from overflowing the row. */}
               <span
                 className="ml-auto min-w-0 shrink-3 truncate font-mono text-label text-ink-3 normal-case"
-                // The visible text comes first, because it is now the text
-                // that can be cut off: a truncated `timestamp with time zone`
-                // has to be readable somewhere, and the note that used to be
-                // the whole title ("nullable", "foreign key to …") is still
-                // there after it. Joined with the same interpunct this panel's
-                // own heading uses, so nothing new has to be translated.
+                // The visible text first, since it may be cut off, then the note
+                // (nullable, or the foreign key's target), joined with the heading's
+                // interpunct so nothing new needs translating.
                 title={[
                   column.references !== "" ? `fk ${column.references}` : column.type,
                   column.references !== ""
@@ -261,17 +225,13 @@ function TableRow({
   );
 }
 
-/** A table narrowed to what the search matched, plus whether the match was inside it. */
+/** A table narrowed to what the search matched, and whether it matched. */
 type MatchedTable = GameTable & { matchedColumns: boolean };
 
 /**
- * Which tables start collapsed.
- *
- * A game this product is for has a handful of tables, and a participant
- * opening the console wants to see the columns without clicking seven times
- * — so a small schema starts fully open. The API's own bound allows two
- * hundred tables of two hundred columns, and forty thousand rows laid out at
- * once is a frame budget nothing recovers from, so a large one starts closed.
+ * Which tables start collapsed: none in a small schema, so the columns are
+ * visible without clicking; all of them past 200 rows, since laying out up to
+ * forty thousand rows at once blows the frame budget.
  */
 function initiallyCollapsed(tables: readonly GameTable[]): ReadonlySet<string> {
   const rows = tables.reduce((total, table) => total + table.columns.length + 1, 0);
@@ -279,11 +239,8 @@ function initiallyCollapsed(tables: readonly GameTable[]): ReadonlySet<string> {
 }
 
 /**
- * Tables matching the search, with the ones whose *columns* matched narrowed
- * to those columns.
- *
- * A table matched by its own name keeps all of its columns: the participant
- * asked about the table, not about a column of it.
+ * Tables matching the search. A table matched by name keeps all its columns;
+ * one matched by its columns is narrowed to them.
  */
 function filterTables(tables: readonly GameTable[], query: string): MatchedTable[] {
   const needle = query.trim().toLowerCase();

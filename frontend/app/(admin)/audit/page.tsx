@@ -15,20 +15,10 @@ export async function generateMetadata() {
 }
 
 /**
- * The audit trail.
- *
- * A Server Component with the session already in hand, so no trail data and no
- * token reach the browser beyond what is rendered. Filters and the page live
- * in the address, which makes a view shareable — "here is every refusal from
- * that address on Tuesday" is a link.
- *
- * The action list offered by the filter is fetched beside the trail
- * (`GET /audit/actions`) rather than built from the rows in hand — the
- * accounts screen fetches its role catalogue beside `/users` for the same
- * reason. A list built from the current page can only ever offer an action
- * already on screen, which made a deletion unfilterable until one happened to
- * appear by accident; the endpoint offers the whole vocabulary before a
- * single matching entry exists.
+ * The audit trail. A Server Component; filters and paging live in the address,
+ * so a view is a shareable link. The filter's action list comes from `GET
+ * /audit/actions`, so an action can be filtered before any entry for it is on
+ * screen.
  */
 export default async function AuditPage(props: PageProps<"/audit">) {
   const [params, locale, dict] = await Promise.all([
@@ -54,12 +44,8 @@ export default async function AuditPage(props: PageProps<"/audit">) {
     return shown.size > 0 ? `/audit?${shown}` : "/audit";
   };
 
-  // The proxy could only see that a session cookie exists; whether it is
-  // still worth anything is this answer.
-  //
-  // Both requests together: they render one screen, and a page whose filter
-  // could only name the actions on it would be no better than the bug this
-  // replaces.
+  // proxy.ts only saw a cookie; this answer says whether the session is alive.
+  // Both reads run together.
   const onAuthFailure = (error: unknown) => {
     const target = authRecoveryRedirect(error, here());
     if (target) redirect(target);
@@ -71,9 +57,7 @@ export default async function AuditPage(props: PageProps<"/audit">) {
   ]);
 
   const { items, total } = auditPageSchema.parse(payload);
-  // Sorted for the dropdown; the server's own order is grouped by domain
-  // (auth, then accounts, then contests…), which reads well in source but not
-  // as a pick list.
+  // Sorted for the dropdown; the server groups by domain.
   const { items: actions } = auditActionsSchema.parse(actionsPayload);
   actions.sort();
 

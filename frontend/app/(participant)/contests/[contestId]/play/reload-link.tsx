@@ -7,14 +7,9 @@ import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 /**
- * The way back from a refusal that lifts by itself.
- *
- * Only the rate limit gets this. SPEC.md's state list keeps "retry" for the
- * network and 5xx, and a `blocked` state is supposed to name "the reason and
- * the moment it lifts" instead — but here the moment is "within the minute"
- * and the way to find out is to ask again, so a button is the honest shape.
- * Nothing polls: this screen belongs to somebody who is waiting, and a page
- * that reloads itself under them is the thing SPEC.md §6 rules out.
+ * A reload button for the rate-limit refusal, which lifts within the minute
+ * (SPEC.md's `blocked` state). Nothing polls: a page reloading itself under
+ * a waiting participant is what SPEC.md §6 rules out.
  */
 export function ReloadLink({ dict }: { dict: PlayDictionary }) {
   const router = useRouter();

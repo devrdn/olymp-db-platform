@@ -3,25 +3,10 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * A square field.
- *
- * A plain `<input>`, not Base UI's (finding 6). Base UI's `Input` is its
- * `Field.Control` under another name — it exists to integrate with Base UI's
- * own `Field`, and this project has its own (`components/ui/field.tsx`), so
- * every one of the states that primitive tracks (filled, dirty, touched)
- * was being computed for nothing while pulling the whole Field machinery
- * into the bundle. See `button.tsx`'s own doc for what that weighed on the
- * one route it matters most on.
- *
- * The registry ships `rounded-lg`, and the specification puts rounding on the
- * outer frame and on small controls only — a field is neither. Square is also
- * what the direction is: this is a register, and a register's cells have
- * corners.
- *
- * The border is `--edge` rather than `--line-2`, because a field is an
- * interactive control and WCAG 1.4.11 holds its boundary to 3:1 while asking
- * nothing of a decorative rule. Focus darkens that border to ink; the ring
- * itself is global, so it is not repeated here.
+ * A square field. A plain `<input>`: Base UI's `Input` only integrates with
+ * Base UI's `Field`, and this project has its own. The border is `--edge`
+ * because WCAG 1.4.11 holds a control's boundary to 3:1; the focus ring is
+ * global.
  */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (

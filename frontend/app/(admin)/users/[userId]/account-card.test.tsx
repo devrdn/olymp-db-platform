@@ -1,8 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Only the unlock is replaced: it is the one action these tests submit, and
-// the server action behind it would otherwise need a running API.
+// Only the unlock is mocked: it is the one action submitted here.
 const unlockSignInAction = vi.hoisted(() => vi.fn());
 vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
@@ -42,9 +41,7 @@ const roles: Role[] = [
   { code: "admin", name: "System administrator" },
 ];
 
-// The viewer is a different account throughout: `offeredActions` (offered.ts)
-// refuses to offer a self-block, and a viewer equal to the account under test
-// would hide the very form these tests submit.
+// A different viewer, since a self-block form is not offered.
 const viewerId = "viewer-0000-0000-0000-000000000000";
 
 describe("AccountCard, the block form's reason requirement", () => {
@@ -59,11 +56,11 @@ describe("AccountCard, the block form's reason requirement", () => {
       />,
     );
 
-    // No text is typed into the reason field — it starts, and stays, empty.
+    // The reason stays empty.
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.block }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(en.errors.reason_required);
-    // Refused client-side: nothing here claims the block went through.
+    // Refused client-side.
     expect(screen.queryByText(en.accounts.card.saved)).not.toBeInTheDocument();
   });
 });
@@ -80,8 +77,7 @@ describe("AccountCard, the status-explanation panel", () => {
       />,
     );
 
-    // An empty statusReason is the signal that nothing needs explaining — the
-    // panel must not render as an empty frame around nothing.
+    // No status reason, no panel.
     expect(screen.queryByText(en.accounts.card.statusTitle)).not.toBeInTheDocument();
   });
 
@@ -104,16 +100,13 @@ describe("AccountCard, the status-explanation panel", () => {
 
     expect(screen.getByText(en.accounts.card.statusTitle)).toBeInTheDocument();
     expect(screen.getByText("cheating in the October contest")).toBeInTheDocument();
-    // The login the server's own query resolved — not a fetch this component
-    // makes, and not the unknown-actor fallback.
+    // The login the server joined in, not a fallback.
     expect(screen.getByText(/a\.admin/)).toBeInTheDocument();
     expect(screen.queryByText(en.accounts.card.unknownActor)).not.toBeInTheDocument();
   });
 
   test("names the actor without a stranded date when the timestamp is missing", () => {
-    // A row backfilled with a reason but no status_changed_at: `.replace`
-    // used to leave "Changed by X, ." — the sentence must drop its second
-    // half instead of the date placeholder.
+    // A backfilled row without a date: the sentence drops its date half.
     render(
       <AccountCard
         account={account({
@@ -136,9 +129,8 @@ describe("AccountCard, the status-explanation panel", () => {
 });
 
 describe("AccountCard, the roles panel", () => {
-  // Split from one string: what roles are is an explanation behind the "?";
-  // that saving them signs the account out everywhere is a consequence to
-  // read before pressing Save, so it stays on screen.
+  // The explanation sits behind the "?"; the sign-out consequence stays
+  // visible.
   test("keeps the consequence of saving visible and the explanation closed", () => {
     render(
       <AccountCard

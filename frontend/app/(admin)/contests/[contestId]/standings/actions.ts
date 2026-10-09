@@ -12,14 +12,9 @@ export type RevealState = { code?: string; revealedAt?: string };
 export type StaffStandingsResult = { kind: "ok"; standings: StaffStandings } | { kind: "refused"; code: string };
 
 /**
- * Reads a contest's live table (GET /contests/{id}/leaderboard/live) for the
- * staff page that polls it.
- *
- * A plain data fetch rather than router.refresh(): the staff table is the
- * one thing on the page that moves while a contest runs, and re-running the
- * whole layout tree for it would re-fetch the contest, the publish check and
- * the questions list along with it, on every poll, for no reason the table
- * needs.
+ * Reads the live table (GET /contests/{id}/leaderboard/live) for the staff
+ * poll; a plain fetch, since `router.refresh()` would re-run the whole layout's
+ * reads.
  */
 export async function fetchStaffStandingsAction(contestId: string): Promise<StaffStandingsResult> {
   if (!isId(contestId)) return { kind: "refused", code: "not_found" };
@@ -34,9 +29,7 @@ export async function fetchStaffStandingsAction(contestId: string): Promise<Staf
 
 /**
  * Reveals a frozen contest's final standings (POST .../leaderboard/reveal).
- *
- * Irreversible on the server, which is why the button asks first. A second
- * reveal is not an error there: it answers with the moment already in force.
+ * Irreversible; a second reveal answers with the moment already set.
  */
 export async function revealStandingsAction(_previous: RevealState, form: FormData): Promise<RevealState> {
   const contestId = form.get("contestId");

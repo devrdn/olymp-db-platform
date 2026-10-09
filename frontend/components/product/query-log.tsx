@@ -11,7 +11,6 @@ import type { QueryLogState } from "./use-query-log";
 
 const CONTROL = "h-(--control-h) w-full min-w-0 border border-edge bg-bg px-2.5 text-control text-ink";
 
-/** The words the panel around the rows is written in. */
 export type QueryLogLabels = QueryRowLabels & {
   status: string;
   anyStatus: string;
@@ -24,21 +23,13 @@ export type QueryLogLabels = QueryRowLabels & {
   loading: string;
 };
 
-/** What the panel says when a read was refused or failed. */
 export type QueryLogProblems = { forbidden: string; tooOften: string; failed: string };
 
 /**
- * Every statement somebody ran, whole, newest first, with a status filter and
- * a text search, fifty at a time.
- *
- * Two screens show this: a contest's staff read one participant's queries on
- * the monitoring page, and a participant reads their own on their report. The
- * difference between them is the route, the words and the address column —
- * each of which arrives as a prop — and nothing below that line is written
- * twice.
- *
- * The list itself is `useQueryLog`, which the caller holds, because the caller
- * is what knows which route to read.
+ * Every statement someone ran, newest first, with a status filter and search,
+ * fifty at a time. Shared by the staff monitoring page and the participant's
+ * report, which differ only in props; the caller holds `useQueryLog` because it
+ * knows the route.
  */
 export function QueryLog({
   log,
@@ -53,10 +44,9 @@ export function QueryLog({
   labels: QueryLogLabels;
   statuses: Record<string, string>;
   problems: QueryLogProblems;
-  /** Names the list for a screen reader — "SQL queries", "My queries". */
+  /** Names the list for a screen reader. */
   listLabel: string;
   locale: string;
-  /** Whether each row carries the address the query was run from. */
   address?: boolean;
 }) {
   const ids = useId();
@@ -110,9 +100,8 @@ export function QueryLog({
         {log.search.length >= MAX_QUERY_SEARCH ? labels.searchTooLong.replace("{n}", String(MAX_QUERY_SEARCH)) : ""}
       </p>
 
-      {/* Empty, it takes back the column's gap above it rather than being
-          hidden: a hidden region is out of the accessibility tree, which is
-          what keeping it in the document is for. */}
+      {/* Collapsed when empty rather than hidden, so the live region stays in
+         the accessibility tree. */}
       <p role="status" className="text-small text-warn empty:-mt-4">
         {problem}
       </p>

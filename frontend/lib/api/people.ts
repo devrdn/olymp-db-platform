@@ -4,14 +4,9 @@ import { z } from "zod";
 export { removable } from "./people-terms";
 
 
-/**
- * The wire shapes of who runs a contest and who takes part in it.
- *
- * Two audiences, two endpoints, two permissions — and one module, because a
- * screen that shows staff almost always shows participants beside them, and
- * splitting a five-field schema from a seven-field one buys nothing.
- */
+/** The wire shapes of who runs a contest and who takes part in it. */
 
+/** The roles a contest's staff hold. */
 export const MANAGER_ROLES = ["owner", "manager"] as const;
 export type ManagerRole = (typeof MANAGER_ROLES)[number];
 
@@ -73,12 +68,8 @@ export const participantListSchema = z.object({
 });
 
 /**
- * What an import actually did.
- *
- * A partial success, and honestly so: one typo in a list of three hundred
- * student numbers must not reject the other two hundred and ninety-nine. Every
- * line that did not go in is named with its reason, so it can be found again
- * in the spreadsheet it came from.
+ * What an enrolment import did. Partial success: one typo must not reject the
+ * rest, and every skipped line comes back with its reason.
  */
 export const importResultSchema = z
   .object({
@@ -90,20 +81,9 @@ export const importResultSchema = z
 export type ImportResult = z.infer<typeof importResultSchema>;
 
 /**
- * Whether this participant can still be removed rather than disqualified.
- *
- * Someone who has started cannot be deleted: their queries and answers are
- * part of the record of the contest. Excluding them is a disqualification,
- * which keeps everything they did.
- */
-/**
- * Turns a pasted list into the logins the import endpoint takes.
- *
- * Authors arrive with a column copied out of a spreadsheet, so newlines,
- * commas, semicolons and stray spaces all have to count as separators.
- * Duplicates are dropped here rather than sent: the API would skip the second
- * one as `already_enrolled` and report a failure for something the author
- * never asked for twice.
+ * Splits a pasted spreadsheet column into logins on whitespace, commas and
+ * semicolons. Duplicates are dropped so the API does not report the second as
+ * `already_enrolled`.
  */
 export function parseLogins(pasted: string): string[] {
   const seen = new Set<string>();

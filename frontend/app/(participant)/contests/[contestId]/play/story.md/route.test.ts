@@ -2,14 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 
-// This handler's whole job is orchestration: ask the Core API for the story
-// and for the contest's own title, then hand back a file. Both calls go
-// through `serverRequest`, which itself calls `next/headers`'s `cookies()` —
-// unavailable outside a real request (see app/(admin)/users/layout.test.tsx's
-// own comment for the same reason). Faking the module boundary is what lets
-// this run under vitest at all, and it is also the right boundary: what is
-// under test here is what this route does with what the API answers, not how
-// the session reaches the API.
+// `serverRequest` reads `cookies()`, unavailable outside a request, so the
+// module is faked; what is tested is what the route does with the answers.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
@@ -47,10 +41,8 @@ describe("GET .../play/story.md", () => {
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
       if (path.startsWith("/contests/c1/play/story")) {
-        // The literal `<br />` a WYSIWYG editor writes for an empty
-        // paragraph (lib/format/markdown.ts's own doc): a story written
-        // before that editor stopped storing them still carries one, and the
-        // export must not hand it over verbatim.
+        // The literal `<br />` older stories still carry
+        // (lib/format/markdown.ts); the export must clean it.
         return { lang: "en", body_md: "A.\n\n<br />\n\nB." };
       }
       if (path.startsWith("/contests?")) {
@@ -63,10 +55,7 @@ describe("GET .../play/story.md", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
-    // The identifier, not the title: a title is authored text in any script
-    // and this header is ASCII — the same reason the CSV and JSON exports on
-    // the Go side name their files this way (participant_handler.go,
-    // contest_package.go).
+    // The identifier, not the title: the header is ASCII.
     expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="story-c1.md"');
     const text = await response.text();
     expect(text).toBe("# The Warehouse Fire\n\nA.\n\nB.\n");
@@ -92,9 +81,8 @@ describe("GET .../play/story.md", () => {
   });
 
   test("refuses rather than heading the file with the bare identifier when the caller is not on this contest's own roster", async () => {
-    // The story read succeeded — this session is enrolled somewhere — but the
-    // listing this route reads for the title does not carry *this* contest,
-    // which can only mean the session is not actually taking part in it.
+    // The story read succeeded, but the listing lacks this contest, so the
+    // session is not taking part in it.
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
       if (path.startsWith("/contests/c1/play/story")) {
@@ -112,9 +100,7 @@ describe("GET .../play/story.md", () => {
   });
 
   test("fails rather than heading the file with a title it could not confirm", async () => {
-    // The story read and the title read share one session and one
-    // admission; a title lookup that fails while the story succeeds is not
-    // "close enough" to degrade quietly — see this route's own doc.
+    // A failed title read fails the download rather than degrading quietly.
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
       if (path.startsWith("/contests/c1/play/story")) {

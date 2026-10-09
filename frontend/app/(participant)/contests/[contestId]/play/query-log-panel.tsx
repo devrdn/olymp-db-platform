@@ -16,39 +16,17 @@ import { fetchQueryLogAction } from "./actions";
 
 /**
  * The "Query log" tab: every statement this participant has run in this
- * contest, newest first — what survives a reload, per the plan's own
- * requirement that a refresh mid-olympiad must not lose the history.
+ * contest, newest first, surviving a reload.
  *
- * `initial` is what page.tsx already fetched server-side (the same pattern
- * the story and the questions use), so the first paint needs no client round
- * trip at all. `initial.failed` is true when that server-side read itself
- * failed and page.tsx degraded to an empty page rather than losing the whole
- * screen over it (finding 4): without this flag, a broken log and a
- * genuinely empty one rendered as the identical "you have not run a query
- * yet", and a participant trying to recall what they already tried had no
- * way to tell a real answer from a shrug — and no retry, since `total` being
- * zero hides "load more" too. This is what lets the panel show the
- * dictionary's own failure string instead, with a button to try again.
+ * `initial` comes from page.tsx's server-side read; `initial.failed` marks a
+ * read that failed, so the panel shows the failure with a retry instead of
+ * the "no queries yet" an empty log shows.
  *
- * `active` is whether the "Query log" tab is the one currently showing
- * (finding 3). This panel stays mounted the whole time — never unmounted by
- * a tab switch, `TabsContent`'s own doc — so it refreshes itself on the
- * transition into being shown rather than once per completed query, which is
- * what an earlier version of this component did. That cost more than it
- * looked like: `AdmitRead` (what this refetch calls) shares its per-minute
- * budget with `Run`, so every completed query was quietly spending a second
- * unit of the participant's own rate limit — and spending it on a tab that,
- * because a completed run switches the workspace straight to "Result", was
- * essentially never even the one showing when the refetch fired. Refreshing
- * on entry instead costs one request per deliberate visit to this tab, which
- * is also the one moment stale data would actually be seen.
+ * The panel stays mounted and refreshes on becoming `active`, not after each
+ * run: its reads (`AdmitRead`) share the per-minute budget with `Run`.
  *
- * Bounded, deliberately: QUERY_LOG_PAGE_SIZE (50) is what loads at a time,
- * and the table only ever grows by that much per "load more" press — see
- * querylog-terms.ts's own doc for why fifty. A contest can run two hours, and
- * a participant who never stops querying can put hundreds of rows in their
- * own log; this is what keeps that from being hundreds of table rows
- * re-rendered on every keystroke of an unrelated query.
+ * It loads `QUERY_LOG_PAGE_SIZE` rows at a time (querylog-terms.ts), so a
+ * long log is not hundreds of rows re-rendered per page.
  */
 export function QueryLogPanel({
   contestId,
@@ -59,7 +37,7 @@ export function QueryLogPanel({
 }: {
   contestId: string;
   initial: { items: QueryLogEntry[]; total: number; failed: boolean };
-  /** Whether the "Query log" tab is the one currently showing — see this component's own doc. */
+  /** Whether the "Query log" tab is showing. */
   active: boolean;
   locale: Locale;
   dict: PlayDictionary;
@@ -70,60 +48,35 @@ export function QueryLogPanel({
   const [loadingMore, setLoadingMore] = useState(false);
   const [failed, setFailed] = useState(initial.failed);
 
-  // Finding 4 of the follow-up review: two problems with refreshing on every
-  // transition into this tab. First, nothing stopped a superseded response
-  // from overwriting a newer one — the `cancelled` flag the very first
-  // version of this effect used (still visible in this file's own history)
-  // was dropped when this became a plain `async` callback, and two refreshes
-  // really can overlap: a slow one from an earlier transition still in
-  // flight when a later transition starts another. `requestSeq` is a ticket
-  // number bumped at the start of every refresh; a response is only applied
-  // if its ticket is still the most recent one issued, so an answer that
-  // arrives late can no longer clobber one that already landed. Second, a
-  // student who idly toggles Result and Log spent one `AdmitRead` — the
-  // budget `Run` itself shares — on every single transition, even back into
-  // data that was just fetched a moment ago; `lastRefreshAt` is when a
-  // refresh last actually ran, and the effect below skips firing another one
-  // inside `QUERY_LOG_REFRESH_MIN_INTERVAL_MS` of it. That gate applies only
-  // to the automatic, on-transition refresh: `retry` (an explicit click,
-  // always after a failure) calls this same function and always goes
-  // through, which is what a student pressing "retry" actually asked for.
+  // Two guards on the on-show refresh. `requestSeq` numbers each refresh,
+  // and only the latest one's answer is applied, since a slow response can
+  // overlap a newer one. `lastRefreshAt` keeps toggling between tabs from
+  // spending a read within `QUERY_LOG_REFRESH_MIN_INTERVAL_MS`; `retry` is
+  // an explicit click and bypasses it.
   //
-  // How large a page to ask for depends on how many rows are already
-  // loaded, so `refresh` closes over `items.length` directly rather than
-  // over a ref holding it: reading a ref during render to avoid this
-  // dependency is exactly what `react-hooks/refs` refuses (a render is not
-  // guaranteed to commit), and there is no render-time read to avoid here in
-  // the first place — `items.length` already is a render-time value.
-  // `refresh` getting a new identity whenever the list changes costs
-  // nothing: the effect below only ever acts on it through the
-  // active-transition guard, so a changed identity with no real transition
-  // re-runs the effect but calls nothing.
+  // `refresh` depends on `items.length` (the page size to re-read); a new
+  // identity re-runs the effect below, which calls nothing without a real
+  // transition.
   const requestSeq = useRef(0);
   const lastRefreshAt = useRef(0);
   const refresh = useCallback(async () => {
     const requestId = ++requestSeq.current;
     lastRefreshAt.current = Date.now();
     const result = await fetchQueryLogAction(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
-    if (requestId !== requestSeq.current) return; // a newer refresh has already started; this answer is stale
+    if (requestId !== requestSeq.current) return; // superseded by a newer refresh
     if (result.kind === "ok") {
       setItems(result.items);
       setTotal(result.total);
       setFailed(false);
     } else {
-      // A refresh that fails leaves the list exactly as it was — the
-      // participant's own history a moment ago is still true, just possibly
-      // one row behind — but says so rather than pretending nothing is
-      // wrong (finding 4).
+      // The list stays as it was, possibly a row behind, but the failure is
+      // shown.
       setFailed(true);
     }
   }, [contestId, items.length]);
 
-  // Fires only on the transition into this tab being shown — see this
-  // component's own doc (finding 3) for why not on every completed run.
-  // Seeded from the initial `active` value so a page that opens straight on
-  // this tab does not immediately refetch the same data page.tsx just
-  // fetched server-side.
+  // Only on the transition into being shown. Seeded from the initial
+  // `active`, so opening on this tab does not refetch what page.tsx fetched.
   const wasActive = useRef(active);
   useEffect(() => {
     if (active && !wasActive.current && Date.now() - lastRefreshAt.current >= QUERY_LOG_REFRESH_MIN_INTERVAL_MS) {
@@ -173,12 +126,9 @@ export function QueryLogPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-      {/* The whole session as a file, beside the page of it on screen. A link
-          to the endpoint rather than a button that serialises `items`: what is
-          loaded here is one page of fifty, and a "download" that quietly gave
-          the participant fifty of their nine hundred rows would be the wrong
-          answer in the format that looks most authoritative. Offered only
-          when there is something to take — see the empty branch above. */}
+      {/* A link to the whole session's CSV rather than serialising `items`,
+          which hold only the loaded pages. Offered only when the log is not
+          empty. */}
       <ExportMenu
         heading={t.export.heading}
         formats={[
@@ -192,8 +142,7 @@ export function QueryLogPanel({
       />
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-body">
-          {/* Opaque, and in a colour this design system actually has: a sticky
-              head with no fill is a head the rows scroll through. */}
+          {/* Opaque, or the rows would show through the sticky head. */}
           <thead className="sticky top-0 bg-bg">
             <tr className="border-b border-edge">
               <th className="p-2 text-left font-medium text-ink">{t.columns.sql}</th>
@@ -206,15 +155,9 @@ export function QueryLogPanel({
           <tbody>
             {items.map((entry, i) => (
               <tr key={i} className="border-b border-edge last:border-b-0">
-                {/* One page of the log is bounded in bytes as well as in
-                    rows, so a very long statement arrives as its beginning
-                    (`sqlTruncated`). The ellipsis says so — in the tooltip
-                    too, which is otherwise where the whole statement is, and
-                    a shortened copy of a student's own query presented as the
-                    whole of it is the one thing this table must not do. The
-                    rest is in the CSV export offered above. Language-neutral
-                    on purpose: no dictionary string, since the character says
-                    it in every language this interface speaks. */}
+                {/* A page is bounded in bytes too, so a long statement arrives
+                    truncated (`sqlTruncated`); the ellipsis says so, in the tooltip
+                    as well. The full text is in the CSV. */}
                 <td
                   className="max-w-80 truncate p-2 font-mono text-ink"
                   title={entry.sqlTruncated ? `${entry.sql}…` : entry.sql}
@@ -269,9 +212,10 @@ export function QueryLogPanel({
   );
 }
 
-/** The status column's own colour, echoing the console's own passing/failing
- * distinction: running is neutral, ok is fine, everything else is worth a
- * second look. */
+/**
+ * The status in the console's tones: running neutral, ok good, anything else
+ * bad.
+ */
 function StatusBadge({ status, labels }: { status: string; labels: Record<string, string> }) {
   const label = labels[status] ?? status;
   const tone =

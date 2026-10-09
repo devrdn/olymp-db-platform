@@ -15,13 +15,9 @@ import { PublishGateReport } from "./publish-gate";
 import { StatusActions } from "./status-actions";
 
 /**
- * The contest at a glance: what state it is in, what stands between it and
- * publication, and what an author is still allowed to change.
- *
- * The gate is fetched here rather than only on the way out of a failed
- * publish. Being told what is left *before* pressing the button is the
- * difference between a checklist and a refusal, and the endpoint exists
- * precisely so the constructor can show the remaining work.
+ * The contest at a glance: its state, what blocks publication, and what may
+ * still change. The gate is fetched up front so the remaining work is a
+ * checklist, not a refusal.
  */
 export default async function ContestOverviewPage(props: PageProps<"/contests/[contestId]">) {
   const [{ contestId }, locale, dict] = await Promise.all([
@@ -30,10 +26,7 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
     activeDictionary(),
   ]);
 
-  // Both deduplicated against the layout's own calls (same pass, same
-  // request) and, unlike a sequential pair of awaits, run concurrently with
-  // each other rather than one after the other: neither depends on what the
-  // other returns.
+  // Deduplicated against the layout's calls, and run concurrently.
   const [contest, check] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/publish-check", (payload) =>
@@ -66,11 +59,8 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
         />
       </section>
 
-      {/* The contest as a file (docs/ARCHITECTURE.md §15, item 12). On this
-          page rather than in settings because it is about the contest as a
-          whole rather than about one of its fields — and it is the only
-          control here that reaches the reference answers, which is why the
-          endpoint behind it is the contest.edit one. */}
+      {/* The contest export (ARCHITECTURE.md §15, item 12). It includes the
+         reference answers, so it sits behind contest.edit. */}
       <section aria-labelledby="export-heading" className="flex flex-col gap-4">
         <h2 id="export-heading" className="text-h3 text-ink">
           {t.export.heading}
@@ -94,14 +84,9 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
           {t.facts.heading}
         </h2>
 
-        {/* A description list, because that is what this is: a term and its
-            value, repeated. A grid of divs would say the same thing to a
-            sighted reader and nothing at all to anyone else. */}
+        {/* Terms and values, as a description list. */}
         <dl className="grid gap-x-10 gap-y-5 narrow:grid-cols-2">
-          {/* The format is not repeated here: the header above already
-              carries it, on this exact page, as the mode badge beside the
-              status tag. A second copy in this list would be the same word
-              read twice without a step in between. */}
+          {/* The format is already in the header's mode badge. */}
           <Fact term={t.facts.timing} value={t.timing[contest.timing]} />
           <Fact
             term={t.facts.enrollment}

@@ -9,9 +9,8 @@ import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 import type { AnswerState, QuestionsRefreshResult } from "./actions";
 import { pasteTargetOf } from "./use-signals";
 
-// The two actions are the boundary: what they return is what the panel has
-// to render, and everything behind them (the server action itself, the API
-// call) is tested where it lives.
+// The two actions are the boundary; what lies behind them is tested where
+// it lives.
 const answer = vi.hoisted(() => ({ current: { kind: "idle" } as AnswerState }));
 const refresh = vi.hoisted(() => ({
   current: { kind: "ok", items: [] } as QuestionsRefreshResult,
@@ -43,12 +42,7 @@ function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
   };
 }
 
-/**
- * The panel never runs Markdown itself (questions-panel.tsx's own doc): a
- * Server Component renders the body once and hands the panel the result.
- * This fake stands in for that render — a plain span carrying the question's
- * own wording — so a test can still find it by text.
- */
+/** A question entry whose body is a plain span, standing in for the server render. */
 function entry(overrides: Partial<PlayQuestion> = {}, index = 1): QuestionEntry {
   const q = question(overrides);
   return { question: q, index, body: <span>{q.bodyMd}</span> };
@@ -75,14 +69,9 @@ describe("the questions panel", () => {
     expect(screen.getByText("10 pts")).toBeInTheDocument();
   });
 
-  // `useActionState`'s own state update settles on a later microtask than
-  // `userEvent.click` awaits (console.test.tsx's own finding, for the same
-  // `formAction`/`pending` shape) — asserting immediately after `submit()`
-  // passed on an idle machine and failed once several `vitest run` processes
-  // were contending for the same CPUs (reproduced by running this suite four
-  // times in parallel). Every assertion below that reads what a submission
-  // settled to is therefore wrapped in `waitFor` rather than asserted
-  // straight after `submit()` returns.
+  // A submission settles on a later microtask than `userEvent.click`, so
+  // every assertion on what it settled to waits (`waitFor`); asserting at
+  // once failed under CPU contention.
   test("a correct answer shows the verdict and the points awarded", async () => {
     answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 2, closed: false } };
     render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 3 })]} dict={en} />);
@@ -123,8 +112,8 @@ describe("the questions panel", () => {
 
     await submit();
 
-    // The one assertion actually gated on the submission settling; the two
-    // that follow read the same render once it has.
+    // The one assertion gated on the settle; the two after read the same
+    // render.
     await waitFor(() => expect(screen.queryByRole("textbox")).not.toBeInTheDocument());
     expect(screen.getByText(en.participant.play.questions.closed)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Correct!");
@@ -135,9 +124,8 @@ describe("the questions panel", () => {
       kind: "answer",
       result: { correct: true, pointsAwarded: 10, attemptsRemaining: undefined, closed: true },
     };
-    // The refetch reports q1 closed and q2 now open — a sequential contest
-    // moving on. Neither item's own wording is part of this response; the
-    // rendered body each entry already carries must survive untouched.
+    // q1 closed and q2 open, as a sequential contest moves on; each entry's
+    // rendered body must survive the re-read.
     refresh.current = {
       kind: "ok",
       items: [question({ id: "q1", closed: true }), question({ id: "q2", canAnswer: true })],
@@ -155,13 +143,8 @@ describe("the questions panel", () => {
     await userEvent.click(screen.getAllByRole("button", { name: en.participant.play.questions.submit })[0]);
 
     expect(await screen.findByText(en.participant.play.questions.closed)).toBeInTheDocument();
-    // Two settles, not one: q1's own submission closing is the first, and it
-    // is what `findByText` above waits for — but the re-read that unlocks q2
-    // is a *second* one, kicked off from an Effect that only runs after that
-    // first render commits. `findByText` resolving here says nothing about
-    // whether that second settle has happened yet, and asserting straight
-    // after it — reliably true on an idle machine — is exactly what failed
-    // under a full-suite run: q2 was still shown locked.
+    // Two settles: q1's submission, then the re-read an Effect starts after
+    // it commits. `findByText` above waits only for the first.
     await waitFor(() => expect(screen.queryByText(en.participant.play.questions.locked)).not.toBeInTheDocument());
     expect(screen.getByText(/Name the hour/)).toBeInTheDocument();
     expect(refresh.calls).toBe(1);
@@ -201,11 +184,8 @@ describe("the questions panel", () => {
     expect(screen.getByRole("radio", { name: "The gardener" })).toBeInTheDocument();
   });
 
-  // The radio itself is 16px, which is what the design draws; what has to be
-  // hittable is the label around it, because clicking anywhere on the label
-  // is what selects the choice. Measured, that row was 22px tall on every
-  // screen size — under the 24px a thumb needs — so the whole answer to a
-  // multiple-choice question was a strip too thin to press reliably.
+  // The 16px radio is what the design draws; the label is the hit area and
+  // must reach the 24px a thumb needs.
   test("a choice's own label is the hit area, and is kept at least 24px tall", () => {
     render(
       <QuestionsPanel
@@ -251,9 +231,8 @@ describe("the questions panel", () => {
       kind: "answer",
       result: { correct: true, pointsAwarded: 5, attemptsRemaining: undefined, closed: true },
     };
-    // The refetch this triggers reports both still open, the way a
-    // non-sequential contest would: nothing about the second question
-    // changed, so its own field must not be reset by the first one's refresh.
+    // Both still open, as in a non-sequential contest: the refresh must not
+    // reset the second question's field.
     refresh.current = {
       kind: "ok",
       items: [question({ id: "q1" }), question({ id: "q2" })],
@@ -272,16 +251,13 @@ describe("the questions panel", () => {
     await userEvent.click(screen.getAllByRole("button", { name: en.participant.play.questions.submit })[0]);
 
     await screen.findByText("Correct!", { exact: false });
-    // Only the second question still shows a field — the first closed — and
-    // it must still hold what was typed before the first one was submitted.
+    // Only the second still has a field, holding what was typed.
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     expect(screen.getByRole("textbox")).toHaveValue("midnight");
   });
 
-  // Finding 6: the display number is a sibling of the question's own
-  // rendered wording, never text spliced in front of the Markdown that
-  // produced it — spliced text would break a question whose wording opens
-  // with a heading, a list or a fenced block.
+  // Spliced in front of the Markdown, the number would break a question
+  // opening with a heading, a list or a fenced block.
   test("shows the question's own display number as an element separate from its wording", () => {
     render(
       <QuestionsPanel
@@ -297,9 +273,7 @@ describe("the questions panel", () => {
     expect(screen.getByText(/Name the hour/)).toBeInTheDocument();
   });
 
-  // Finding 3: `attempt_conflict` and `query_too_often` both tell the student
-  // to try again — remounting the form on those had already deleted what
-  // they typed by the time they read the instruction.
+  // These refusals say "try again", so the typed text must still be there.
   test("a refusal that says try again leaves what the student typed in the field", async () => {
     answer.current = { kind: "refused", code: "attempt_conflict" };
     render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
@@ -309,9 +283,7 @@ describe("the questions panel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("the gardener");
   });
 
-  // Answering too often is a wait, not a fault: shown in the same quiet
-  // style as a query sent too often, with no request reference to report and
-  // what the student typed still in the field for when the minute is out.
+  // A wait, not a fault: quiet, no reference, the text kept.
   test("answering too often reads as a wait and keeps what the student typed", async () => {
     answer.current = { kind: "refused", code: "answer_too_often", requestId: "req-7" };
     render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
@@ -325,9 +297,7 @@ describe("the questions panel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("the gardener");
   });
 
-  // The same rule as the console's: a reference printed under an ordinary
-  // refusal reads as though the refusal were a fault, and nobody will be
-  // asked to quote it.
+  // As in the console: a reference under an ordinary refusal reads as a fault.
   test("carries a reference for a fault, and not for an ordinary refusal", async () => {
     answer.current = { kind: "refused", code: "answer_too_long", requestId: "req-7" };
     const { unmount } = render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
@@ -342,9 +312,8 @@ describe("the questions panel", () => {
     expect(await screen.findByText(/req-8/)).toBeInTheDocument();
   });
 
-  // Finding 5: a closed question loaded fresh from the server — no live
-  // submission behind it — must still say whether it was won, and for how
-  // much, the same way one just answered in this session does.
+  // Loaded from the server with no live submission, it still shows the
+  // verdict and the points.
   test("a closed question loaded from the server shows what it was won for", () => {
     render(
       <QuestionsPanel
@@ -369,9 +338,7 @@ describe("the questions panel", () => {
     expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.questions.incorrect);
   });
 
-  // Finding 6: a sequential contest's next question depends on this re-read
-  // to unlock; swallowing its own refusal left that question locked with
-  // nothing on screen saying a reload would fix it.
+  // A sequential contest needs this re-read to unlock the next question.
   test("a refused re-read after a question closes says a reload would help, rather than staying silent", async () => {
     answer.current = {
       kind: "answer",
@@ -386,12 +353,7 @@ describe("the questions panel", () => {
   });
 });
 
-/**
- * The state of every question at a glance, which is the whole reason the
- * design's own card carries a tag beside the points: a participant halfway
- * through an olympiad should not have to open four cards to find the one they
- * are on.
- */
+/** Each question's state as a tag, so the current one is visible at a glance. */
 describe("a question's state", () => {
   const t = en.participant.play.questions.status;
 
@@ -420,9 +382,7 @@ describe("a question's state", () => {
     expect(screen.queryAllByText(t.current)).toHaveLength(1);
   });
 
-  // "Accepted" and "attempts spent" both close a question and mean opposite
-  // things. Collapsing them would tell a participant they solved something
-  // they did not.
+  // Both close a question but mean opposite things.
   test("tells a closed question that was answered from one that ran out of attempts", () => {
     render(
       <QuestionsPanel
@@ -440,8 +400,8 @@ describe("a question's state", () => {
     expect(screen.getByText(t.spent)).toBeInTheDocument();
   });
 
-  // §6.1.1 puts sequential order on the server; this only names the question
-  // the server is waiting on, so "after 2" beats "not yet".
+  // The server enforces the order (docs/ARCHITECTURE.md §6.1.1); naming the
+  // blocking question beats "not yet".
   test("names the question a locked one is waiting on", () => {
     render(
       <QuestionsPanel
@@ -458,10 +418,8 @@ describe("a question's state", () => {
     expect(screen.getByText(t.after.replace("{n}", "2"))).toBeInTheDocument();
   });
 
-  // Nothing is being worked on when nothing can be answered — after the
-  // deadline, or before the contest opens, the server marks every question
-  // unanswerable while leaving them open. Marking one "current" then would
-  // point a participant at work they cannot do.
+  // After the deadline or before opening, the server marks every question
+  // unanswerable but open; "current" would point at impossible work.
   test("marks nothing as current when the server says nothing can be answered", () => {
     render(
       <QuestionsPanel
@@ -476,9 +434,8 @@ describe("a question's state", () => {
     );
 
     expect(screen.queryByText(t.current)).not.toBeInTheDocument();
-    // And the row is not marked either. The tag alone would have hidden this:
-    // a locked question already reads "after N", so only the mark on the row
-    // itself says which question the participant is on.
+    // Nor the row: a locked question's tag reads "after N", so only the row's
+    // mark says which question is current.
     expect(document.querySelector('[aria-current="step"]')).toBeNull();
   });
 
@@ -500,10 +457,8 @@ describe("a question's state", () => {
   });
 });
 
-// docs/ARCHITECTURE.md §6.1.1: place is decided
-// by how many questions are solved and, at a tie, by penalty time — a
-// question's own points are never shown to a participant in this mode, and a
-// correct answer is worth mentioning without a point value attached.
+// docs/ARCHITECTURE.md §6.1.1: ICPC ranks by questions solved, then penalty
+// time, so points are never shown and a correct answer carries no value.
 describe("the questions panel, ICPC scoring", () => {
   test("hides a question's own points, and states the penalty once for the whole list", () => {
     render(

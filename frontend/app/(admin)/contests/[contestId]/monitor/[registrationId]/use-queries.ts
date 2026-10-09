@@ -11,15 +11,10 @@ import { MONITOR_POLL_MS } from "../use-monitor";
 export { SEARCH_DEBOUNCE_MS } from "@/components/product/use-query-log";
 
 /**
- * The queries tab's list: one participant's queries, as the monitoring routes
- * serve them.
- *
- * What the list does is `useQueryLog`, which the participant's own report uses
- * too. This is the monitoring half of it: the route the pages come from, and
- * the one thing the staff screen can do that the report cannot — find out how
- * a query that was still running ended. A query is journalled as `running`
- * before it runs and the queries route is keyset by position, so it would not
- * deliver it again; the timeline is asked for that stretch instead.
+ * One participant's queries from the monitoring routes, on top of
+ * `useQueryLog`. Only staff can learn how a running query ended: it is logged
+ * as `running` first and the keyset route will not deliver it again, so the
+ * timeline is read for that stretch.
  */
 export function useQueries({
   contestId,
@@ -44,7 +39,7 @@ export function useQueries({
         const page = await fetchTimeline(
           contestId,
           registrationId,
-          // `from` inclusive, `until` exclusive, and times to the millisecond.
+          // `from` inclusive, `until` exclusive, millisecond precision.
           { kinds: ["query"], from, until: new Date(Date.parse(until) + 1).toISOString(), limit: MAX_FEED_PAGE },
           options,
         );

@@ -1,23 +1,16 @@
 import type { AccountStatus } from "@/lib/api/accounts";
 
 /**
- * What this screen may offer for this account.
- *
- * Split out from the component because it is the only part with decisions in
- * it, and the decisions are worth pinning: a control that exists only to be
- * refused teaches somebody that a thing is possible and then that it is not,
- * which is the rudest way to state a rule.
- *
- * The server still enforces every one of these. This decides what to *show* —
- * hiding a control is never the guarantee, and `users.Service` refuses a
- * self-block whatever this returns.
+ * What the screen offers for this account. A control that exists only to be
+ * refused is worse than none. The server still enforces every rule;
+ * `users.Service` refuses a self-block whatever this returns.
  */
 export type Offered = {
   block: boolean;
   unblock: boolean;
-  /** Soft-deletes the account. Offered on anything that is not deleted yet. */
+  /** Soft-delete, offered on any account not yet deleted. */
   delete: boolean;
-  /** The one action a deleted account can take. */
+  /** The only action on a deleted account. */
   restore: boolean;
   resetPassword: boolean;
   /** Forgets the failed sign-in attempts counted against the account. */
@@ -30,45 +23,31 @@ export function offeredActions(
   account: { id: string; status: AccountStatus },
   viewerId: string,
 ): Offered {
-  // An empty viewer is "we could not find out who is looking". Nothing equals
-  // an empty string, so treating it as "not you" would make every account
-  // look blockable — including the reader's own. Unknown fails closed.
+  // An empty viewer id means unknown; treating it as "not you" would offer a
+  // self-block. Unknown fails closed.
   const known = viewerId !== "";
   const isSelf = account.id === viewerId;
   const deleted = account.status === "deleted";
 
   return {
-    // Blocking your own account locks the installation out of itself, which
-    // is why the service refuses it. Offering it and reporting the refusal
-    // afterwards would mean finding out by pressing.
+    // Blocking yourself could lock the installation out of itself; the service
+    // refuses it.
     block: known && !isSelf && account.status === "active",
     unblock: known && !isSelf && account.status === "blocked",
-    // A separate transition from blocking, not a third state of the same
-    // toggle: an active or a blocked account can be deleted alike, so this is
-    // offered whenever the account is not deleted yet rather than only beside
-    // "block".
+    // Independent of blocking: active and blocked accounts can both be deleted.
     delete: known && !isSelf && !deleted,
-    // Deleted is the one status this offers a way out of. Every control below
-    // it assumes the account can still be reached in some way — signed in
-    // with a new password, given a role — and a deleted account cannot be.
+    // Every other control assumes the account is reachable, which a deleted one
+    // is not.
     restore: known && !isSelf && deleted,
-    // Recoverable, and on your own account too: whoever asks is handed the
-    // new password, so there is nothing to withhold. Meaningless once the
-    // account cannot sign in at all — nobody is left to hand it to.
+    // Allowed on your own account, since the asker receives the password;
+    // pointless once deleted.
     resetPassword: !deleted,
-    // Clearing counted attempts locks nobody out and hands nobody a secret,
-    // so it is offered on your own account too and whether or not the viewer
-    // is known. A deleted account cannot sign in, so there is nothing to clear.
+    // Harmless, so offered on your own account and for an unknown viewer.
     unlockSignIn: !deleted,
-    // Allowed on your own record. Demoting yourself retires your sessions and
-    // you find out at once, which is honest — and forbidding it would leave
-    // the last administrator unable to correct their own row. A deleted
-    // account holds no session to retire and no permission the roles matter
-    // to.
+    // Allowed on your own record, or the last administrator could not fix their
+    // own row.
     roles: !deleted,
-    // A deleted account has no screen to read the new name or email from,
-    // and the server refuses the edit outright (ErrAccountDeleted) — the
-    // same reasoning as resetPassword and roles above, now applied here too.
+    // The server refuses editing a deleted account (ErrAccountDeleted).
     profile: !deleted,
   };
 }

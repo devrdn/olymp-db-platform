@@ -10,7 +10,7 @@ import { serverRequest } from "@/lib/api/server";
 export type PeopleState = { code?: string; done?: boolean; skipReason?: string };
 export type ImportState = { code?: string; result?: ImportResult };
 
-/** Both identifiers reach a request path, so both are checked before they do. */
+/** Both ids reach a request path, so both are validated first. */
 function pair(form: FormData): { contestId: string; userId: string } | null {
   const contestId = form.get("contestId");
   const userId = form.get("userId");
@@ -29,14 +29,7 @@ async function attempt(path: string, init: { method: string; body?: unknown }, c
   return { done: true };
 }
 
-/**
- * Appointing a manager.
- *
- * The role is fixed rather than chosen. Ownership is not granted through this
- * list: two owners make "who may appoint" ambiguous and none leaves the
- * contest with nobody who can appoint anyone. Handing over a contest is a
- * separate act, not a quiet side effect of editing its staff.
- */
+/** Appoints a manager. The role is fixed: ownership is never granted through this list. */
 export async function grantManagerAction(
   _previous: PeopleState,
   form: FormData,
@@ -66,12 +59,8 @@ export async function revokeManagerAction(
 }
 
 /**
- * Removing someone who has not started.
- *
- * Somebody who has started cannot be deleted: their queries and answers are
- * part of the record of the contest. Excluding them is a disqualification,
- * which keeps everything they did. The API enforces the distinction; the
- * interface offers whichever control actually applies.
+ * Removes someone who has not started. Someone who has can only be
+ * disqualified, which keeps their record; the API enforces this.
  */
 export async function removeParticipantAction(
   _previous: PeopleState,
@@ -102,21 +91,10 @@ export async function disqualifyParticipantAction(
 }
 
 /**
- * Adding one participant, chosen from the directory picker.
- *
- * Sends `user_ids` rather than `logins` — the picker already resolved a
- * person to an account id, and re-typing their login for the server to
- * resolve a second time would throw that resolution away and reopen the
- * chance of a typo the picker exists to close.
- *
- * Routed through the same `importResultSchema` the roster import uses,
- * rather than through `attempt()`: the endpoint the two share always answers
- * 200 with `{ added, skipped }`, never a 4xx, for a person already on the
- * roster. `attempt()` turns any 2xx into `{ done: true }`, so picking
- * somebody already enrolled used to report success with nothing added. A
- * chosen candidate can still land in `skipped` — enrolled by somebody else a
- * moment earlier, or no longer a usable account by the time the form
- * submits — and that has to be told apart from an actual success.
+ * Adds one participant from the picker. Sends `user_ids`, since the picker
+ * already resolved the account. Parsed with `importResultSchema`, not
+ * `attempt()`: the endpoint answers 200 with `{ added, skipped }` even for
+ * someone already enrolled, and a skip must not read as success.
  */
 export async function addParticipantAction(
   _previous: PeopleState,
@@ -142,16 +120,9 @@ export async function addParticipantAction(
 }
 
 /**
- * Importing a list of participants.
- *
- * Logins, not identifiers: what an organiser has in hand is a column of
- * student numbers copied out of a spreadsheet. One typo must not reject the
- * other two hundred and ninety-nine rows, so the answer is an honest partial
- * success — every line that did not go in, named with its reason, so it can be
- * found again in the spreadsheet it came from.
- *
- * The result is returned rather than only revalidated. Revalidating shows the
- * list that did import; it cannot show which rows did not.
+ * Imports participants by login. One typo must not reject the rest, so the
+ * result is a partial success naming every rejected line; it is returned
+ * because a revalidated list cannot show what failed.
  */
 export async function importParticipantsAction(
   _previous: ImportState,

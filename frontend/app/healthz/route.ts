@@ -1,22 +1,13 @@
 /**
- * Liveness: whether this server is up and answering, and nothing else.
- *
- * The web container's healthcheck asks it (deploy/docker-compose.yml). It used
- * to fetch /login, and rendering any page asks the API for the site's settings
- * (lib/api/branding.ts, from the root layout's metadata): every installation,
- * idle or not, sent the API four requests a minute — on a real install almost
- * all of its access log — to learn whether this process was up. (With the API
- * down the page still renders on the product's default branding, so the probe
- * stayed green; it was measuring more than it reported, not failing.)
- *
- * So this is a route handler, which renders no layout, and it reads no cookie
- * and calls nothing. It is public (lib/auth/guard.ts, PUBLIC_EXACT) because
- * the probe has no session, and harmless to be public because "ok" is all it
- * says. It is not under /api/, which the reverse proxy sends to the API.
+ * Liveness for the web container's healthcheck (deploy/docker-compose.yml). A
+ * route handler renders no layout, so it reads no cookie and calls nothing;
+ * probing a page would hit the API for settings on every check. Public
+ * (lib/auth/guard.ts, PUBLIC_EXACT) because the probe has no session, and
+ * harmless since it only says "ok". Not under /api/, which the reverse proxy
+ * (deploy/Caddyfile) sends to the API.
  */
 
-// Answered by the running server on every request, never prerendered at build
-// time into a file that says "ok" whether or not anything is running.
+// Answered per request, never prerendered into a static "ok".
 export const dynamic = "force-dynamic";
 
 export function GET(): Response {

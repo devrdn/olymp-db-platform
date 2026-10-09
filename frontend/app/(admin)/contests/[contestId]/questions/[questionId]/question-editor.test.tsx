@@ -5,10 +5,8 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The save action is a Server Action ("use server"): importing the real
-// module pulls Next's server runtime into a component test (the same reason
-// `title-editor.test.tsx` fakes it). Built with `vi.hoisted` because
-// `vi.mock` factories run before the rest of this file's top-level code.
+// The real Server Action would pull in Next's server runtime; `vi.hoisted`
+// because `vi.mock` factories run first.
 const { saveQuestionAction } = vi.hoisted(() => ({
   saveQuestionAction: vi.fn(async (previous: unknown, form: FormData) => {
     void previous;
@@ -46,11 +44,8 @@ function question(overrides: Partial<Question> = {}): Question {
   } as Question;
 }
 
-// Finding 1: the question editor sent no penalty at all — questions.penalty_pct
-// was reachable only by a hand-crafted API call. These prove the field is on
-// the same screen as the question's other settings, that an organizer sees
-// what it means for this question rather than a bare number, and that
-// sequential progression's own publish-gate refusal is said here too.
+// The penalty is editable here with its effect worked out, and the
+// sequential-progression publish refusal is stated.
 describe("QuestionEditor, the penalty and the sequential warning", () => {
   test("shows what a wrong attempt costs on this question, and updates it live", async () => {
     const user = userEvent.setup();
@@ -161,9 +156,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
   });
 });
 
-// The client's split, on the busiest form in the constructor: what a person
-// needs before the mistake stays under the field; why the field exists sits
-// behind a "?" beside its label.
+// Rules stay under the field; explanations sit behind a "?".
 describe("QuestionEditor, rules on screen and explanations behind a question mark", () => {
   function renderChoice() {
     render(
@@ -185,8 +178,8 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
     const t = dict.workspace.question.shape;
     expect(screen.getByText(t.attemptsHint)).toBeVisible();
     expect(screen.getByText(t.choicesHint)).toBeVisible();
-    // The rule, then the explanation behind the "?": a screen-reader user who
-    // moves between fields reaches the control, never the button beside it.
+    // The rule, then the explanation, since screen-reader users reach the
+    // control, not the button.
     expect(screen.getByLabelText(t.choices)).toHaveAccessibleDescription(
       `${t.choicesHint} ${t.choicesHelp}`,
     );
@@ -206,7 +199,7 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
     await user.click(penaltyHint);
 
     expect(screen.getByText(t.penaltyHelp)).toBeVisible();
-    // Beside the label, not in it: the field is still named by its label alone.
+    // Beside the label, so the field is named by its label alone.
     expect(screen.getByRole("spinbutton", { name: t.penalty })).toBeInTheDocument();
   });
 
@@ -219,12 +212,9 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
   });
 });
 
-// docs/ARCHITECTURE.md §6.1.1: a
-// question's own points and percentage penalty do not exist in ICPC scoring
-// — place is decided by how many questions are solved and, at a tie, by the
-// contest's own penalty time. The fields stay in the data (the mode can
-// still be reverted before the contest starts), so the editor disables them
-// rather than removing them, and a save must not wipe what they already held.
+// ICPC (docs/ARCHITECTURE.md §6.1.1) has no per-question points or penalty. The
+// fields stay (the mode can be reverted) but are disabled, and a save must keep
+// their values.
 describe("QuestionEditor, ICPC scoring", () => {
   test("disables the points and penalty fields, with the reason beside them", () => {
     render(
@@ -268,9 +258,8 @@ describe("QuestionEditor, ICPC scoring", () => {
     ).toBeNull();
   });
 
-  // Finding: a disabled input is excluded from FormData entirely, so a save
-  // that only touched the wording would submit `points: 0` and silently
-  // zero out a question's own points the moment its contest turned ICPC.
+  // Disabled inputs are not submitted; a wording-only save must not zero the
+  // points.
   test("still submits the disabled fields' current values on save", async () => {
     const user = userEvent.setup();
     render(
@@ -294,9 +283,8 @@ describe("QuestionEditor, ICPC scoring", () => {
   });
 });
 
-// A regular expression reference answer is matched against the whole answer.
-// An author who expects substring matching writes a pattern that no longer
-// accepts what they meant, so the rule is said beside the answers, in words.
+// Patterns match the whole answer, which authors expecting substrings get
+// wrong; the rule is stated beside the answers.
 describe("QuestionEditor, the reference answers", () => {
   test("says that a regular expression must match the whole answer", () => {
     render(

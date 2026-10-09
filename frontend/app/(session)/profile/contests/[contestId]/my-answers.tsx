@@ -6,9 +6,8 @@ import type { Answers } from "@/lib/api/journal";
 import type { ReportDict } from "./report-tabs";
 
 /**
- * Every attempt this participant made, by question, each opening to the
- * queries that led to it — the same view the organiser has of the same
- * record, in the second person and without the address column.
+ * The participant's attempts by question with the queries behind each, as
+ * organisers see them but without the address column.
  */
 export function MyAnswers({
   answers,

@@ -8,21 +8,6 @@ import {
   vouchedByIngress,
 } from "./forwarded";
 
-/**
- * Every request the Go API ever sees comes from this server, not from the
- * browser: sign-in, enrolment, every admin action is a Server Action that
- * dials the API itself. Without these headers the API's view of "the client"
- * is this process — the per-address login throttle becomes one counter shared
- * by the whole installation, a contest's network restriction compares against
- * the web container's address, and the audit trail records the proxy for
- * every action.
- *
- * And because the API believes this server, whatever it hands on is believed
- * too. So the address is handed on only when the reverse proxy vouched for
- * it: a browser that reaches this server some other way chooses its own
- * X-Forwarded-For, and relaying that would let it pick the address every one
- * of those checks is made against.
- */
 describe("forwardedHeaders", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
   const from = (values: Record<string, string>) => (name: string) => values[name] ?? null;
@@ -36,8 +21,6 @@ describe("forwardedHeaders", () => {
   });
 
   test("keeps every hop, because the API decides which ones to believe", () => {
-    // Right to left, skipping its trusted proxies: that walk is the API's
-    // job, and it needs the whole chain to do it.
     const headers = forwardedHeaders(
       viaProxy({ "x-forwarded-for": "203.0.113.7, 172.28.0.2" }),
       SECRET,
@@ -63,14 +46,10 @@ describe("forwardedHeaders", () => {
   });
 
   test("sends nothing when there is nothing", () => {
-    // A development request that never went through the proxy has no chain.
-    // Inventing one here would be this server vouching for an address it
-    // does not know.
     expect(forwardedHeaders(from({}), SECRET)).toEqual({});
   });
 
   test("drops a chain the proxy did not vouch for", () => {
-    // The browser reached this server directly and named its own address.
     const headers = forwardedHeaders(
       from({ "x-forwarded-for": "10.20.30.40", "user-agent": "Mozilla/5.0" }),
       SECRET,
@@ -89,8 +68,6 @@ describe("forwardedHeaders", () => {
   });
 
   test("drops every chain when this server has no secret to check against", () => {
-    // Unconfigured is not "trust everybody": a request cannot prove it crossed
-    // the proxy, so none of them did.
     for (const configured of [undefined, "", "short"]) {
       const headers = forwardedHeaders(
         from({ "x-forwarded-for": "10.20.30.40", [INGRESS_HEADER]: configured ?? "" }),
@@ -102,10 +79,7 @@ describe("forwardedHeaders", () => {
   });
 
   test("drops a chain that does not look like addresses at all", () => {
-    // The value is written into an outgoing header. fetch refuses control
-    // characters by throwing — which would turn hostile input into a failed
-    // sign-in — and anything else unparseable is noise the API would discard
-    // anyway, so it is dropped here, quietly, instead.
+    // fetch throws on control characters in a header.
     const headers = forwardedHeaders(viaProxy({ "x-forwarded-for": "gotcha\r\nhost: evil" }), SECRET);
 
     expect(headers["x-forwarded-for"]).toBeUndefined();
@@ -136,11 +110,6 @@ describe("vouchedByIngress", () => {
   });
 });
 
-/**
- * The headers every request carries on from the proxy file: a forwarded
- * address nobody vouched for is removed whatever the path, and the proxy's
- * secret is removed where the request is headed for the API.
- */
 describe("incomingRequestHeaders", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
 

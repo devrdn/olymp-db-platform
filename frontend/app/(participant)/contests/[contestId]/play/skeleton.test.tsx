@@ -13,7 +13,7 @@ vi.mock("@/lib/i18n/server", () => ({
   activeLocale: async () => "en",
 }));
 
-/** The source of a file in this route, for the two facts about it no rendering assertion can reach. */
+/** The source of a file in this route, for facts no render can show. */
 function sourceOf(file: string): string {
   return readFileSync(path.resolve(__dirname, file), "utf8");
 }
@@ -25,17 +25,15 @@ describe("the workspace skeleton", () => {
     expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.loading);
   });
 
-  // A skeleton is decoration: a screen reader should hear the one sentence
-  // above, not forty empty boxes. `Skeleton` marks itself `aria-hidden`, and
-  // the containers holding the shapes are marked too — this is what keeps a
-  // future shape from being added outside one of them.
+  // Screen readers hear the one sentence, not forty empty boxes; the shape
+  // containers are `aria-hidden` too, so a new shape cannot leak.
   test("puts nothing but that sentence in the accessibility tree", () => {
     const { container } = render(<WorkspaceSkeleton dict={en} />);
 
     const exposed = [...container.querySelectorAll("*")].filter(
       (element) => element.closest("[aria-hidden]") === null,
     );
-    // The root, the status line, and the status line's own text node holder.
+    // The root, the status line, and its text holder.
     for (const element of exposed) {
       expect(element.getAttribute("role") ?? "status").toBe("status");
     }
@@ -49,15 +47,9 @@ describe("the workspace skeleton", () => {
 });
 
 /**
- * Finding 2: `/play` had neither of the two things that put something on
- * screen while the server works — a `loading.tsx` for the wait before the
- * route renders at all, and a `<Suspense>` for the wait on the four requests
- * the workspace is built from.
- *
- * The second one is a fact about *where* a boundary sits, which no rendered
- * output can show: a header inside the boundary and a header above it look
- * identical once both have arrived. So it is checked the way this route's
- * client-graph rule already is (workspace.test.tsx) — against the source.
+ * Where the Suspense boundary sits relative to the header cannot be seen in
+ * rendered output, so it is checked against the source, like the client-graph
+ * rule in workspace.test.tsx.
  */
 describe("what is on screen while the workspace is still being built", () => {
   test("loading.tsx draws the bar and the panes, and names the wait", async () => {
@@ -72,13 +64,13 @@ describe("what is on screen while the workspace is still being built", () => {
     const page = sourceOf("page.tsx");
 
     const header = page.indexOf("<PlayHeader");
-    // The opening tag, not the several mentions of the name in prose above it.
+    // The opening tag, not mentions of the name in comments.
     const boundary = page.indexOf("<Suspense fallback");
     const panels = page.indexOf("<PlayPanels");
 
     expect(header).toBeGreaterThan(-1);
     expect(boundary).toBeGreaterThan(-1);
-    // The bar first, then the boundary, then everything that waits on an API.
+    // The header first, then the boundary.
     expect(header).toBeLessThan(boundary);
     expect(boundary).toBeLessThan(panels);
   });

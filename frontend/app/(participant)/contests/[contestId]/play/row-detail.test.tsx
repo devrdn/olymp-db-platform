@@ -28,11 +28,8 @@ function show(
 }
 
 /**
- * A clipboard the browser is willing to write to.
- *
- * Stubbed *after* `userEvent.setup()`, which installs a clipboard of its own:
- * what is under test is which of the two ways this component takes, so the
- * one it finds has to be the one this test put there.
+ * A working clipboard, stubbed after `userEvent.setup()` (which installs its
+ * own) so the component finds this one.
  */
 function clipboardThatWorks() {
   const writeText = vi.fn(async () => {});
@@ -40,7 +37,7 @@ function clipboardThatWorks() {
   return writeText;
 }
 
-/** The older way, which the component falls through to. jsdom has no copy of its own. */
+/** The `execCommand` fallback; jsdom has no copy of its own. */
 function stubExecCommand(exec: (command: string) => boolean) {
   Object.defineProperty(document, "execCommand", { value: exec, configurable: true, writable: true });
 }
@@ -50,13 +47,12 @@ afterEach(() => {
   Reflect.deleteProperty(document, "execCommand");
 });
 
-/** Repeated text without the trailing space a normalised text match would trip over. */
+/** Repeated text without a trailing space, which text matching would trip over. */
 const A_STATEMENT = "the witness said ".repeat(30).trim();
 
 /**
- * §7: the table clips a cell at its column's width, so a long value cannot be
- * read there at all. This panel is where the whole row lives — every column,
- * every value in full, and a way to take one out of the page.
+ * SPEC.md §5: the table clips cells, so the open row shows every value in
+ * full and can copy it.
  */
 describe("the open row", () => {
   test("names every column of the row and shows each value whole", () => {
@@ -66,13 +62,12 @@ describe("the open row", () => {
     const region = screen.getByRole("region", { name: t.region.replace("{n}", "1") });
     expect(within(region).getByText("id")).toBeInTheDocument();
     expect(within(region).getByText("note")).toBeInTheDocument();
-    // Whole, not clipped and not carried on a `title` the way the table has to.
+    // Whole, not clipped and not only in a `title`.
     expect(within(region).getByText(statement)).toBeInTheDocument();
   });
 
-  // The table draws a null as the word, in its own colour; a panel that drew
-  // it as an empty line would collapse exactly the distinction a participant
-  // debugging a left join opened the row to see.
+  // A null drawn as an empty line would hide the distinction a left-join
+  // debugger opened the row to see.
   test("shows a null the same way the table does", () => {
     show({ columns: ["alibi"], columnTypes: undefined, row: [null] });
 
@@ -96,11 +91,8 @@ describe("the open row", () => {
     expect(screen.getByText(t.heading.replace("{n}", "42"))).toBeInTheDocument();
   });
 
-  // The panel is rendered only while a row is open, so opening one is this
-  // component mounting. Nothing else on the screen says it happened: a `tr`
-  // marked `aria-selected` in an ordinary table is not announced, and
-  // neither is a panel that simply appears. The focus landing on the region
-  // reads its name, which is the row number.
+  // The panel mounts when a row opens. Neither `aria-selected` nor a new
+  // panel is announced, so focus lands on the region and reads its name.
   test("takes the keyboard when it opens, without joining the tab order", () => {
     show({ index: 2 });
 
@@ -130,8 +122,7 @@ describe("taking a value out of the page", () => {
     expect(screen.getByRole("status")).toHaveTextContent(t.copied);
   });
 
-  // A null is not the empty string, and neither is what the word NULL would
-  // paste as. The cell has no text to take, so the button is not offered.
+  // The word NULL is not the value, so nothing is offered to copy.
   test("offers no copy for a column that holds a null", () => {
     show({ columns: ["alibi"], columnTypes: undefined, row: [null] });
 
@@ -150,20 +141,19 @@ describe("taking a value out of the page", () => {
     expect(writeText).toHaveBeenCalledWith("id,alibi\r\n7,at the lighthouse\r\n");
   });
 
-  // A live region only announces what changes inside it: one created together
-  // with its own text is a region the reader never had, and a refused copy —
-  // the message that matters most — goes unsaid.
+  // A live region announces only changes inside it, so it must exist before
+  // the first message.
   test("keeps the line that reports a copy on the page before there is one to report", () => {
     show();
 
     const status = screen.getByRole("status");
     expect(status).toBeEmptyDOMElement();
-    // And costs nothing while it is empty.
+    // And takes no space while empty.
     expect(status.className).not.toMatch(/(^|\s)py-1(\s|$)/);
   });
 
-  // Not every browser this runs in has the async clipboard on an insecure
-  // origin, and a classroom's own machine is exactly where that bites.
+  // The async clipboard is missing on an insecure origin, as on a
+  // classroom's local server.
   test("falls back to a selection when there is no clipboard API", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
@@ -175,12 +165,11 @@ describe("taking a value out of the page", () => {
 
     expect(exec).toHaveBeenCalledWith("copy");
     expect(screen.getByRole("status")).toHaveTextContent(t.copied);
-    // Nothing of the fallback is left behind in the document.
+    // The fallback leaves nothing behind.
     expect(document.querySelectorAll("textarea")).toHaveLength(0);
   });
 
-  // Quietly: a refused clipboard is a thing to say in a line under the
-  // buttons, not an exception that takes the result panel down with it.
+  // A refused copy is a line of text, not an exception.
   test("says so, and throws nothing, when the copy is refused", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("navigator", {
@@ -201,9 +190,8 @@ describe("taking a value out of the page", () => {
     expect(screen.getByRole("status")).toHaveTextContent(t.copyFailed);
   });
 
-  // The fallback selects a textarea to copy from, and a selection takes the
-  // focus with it. Left there, the row's own Esc and arrows stop working —
-  // on exactly the plain-HTTP machines the fallback exists for.
+  // Selecting the fallback textarea takes the focus, which the row's Esc and
+  // arrows need back.
   test("gives the focus back to whatever had it before the selection", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });

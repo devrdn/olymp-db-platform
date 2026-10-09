@@ -10,10 +10,8 @@ describe("a band", () => {
     expect(container.querySelector("section")?.className).toContain("border-b");
   });
 
-  // The last band on a page has nothing after it. This is a prop rather than
-  // a class because `className` lands on the content column: passing
-  // `border-b-0` looks like it works, does nothing, and takes a browser to
-  // notice.
+  // A prop because `className` lands on the content column, where `border-b-0`
+  // does nothing.
   test("can be told not to, and that reaches the element that draws it", () => {
     const { container } = render(<Band rule={false}>content</Band>);
 

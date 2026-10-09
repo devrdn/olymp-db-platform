@@ -2,9 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-// The editor itself is a ProseMirror instance bound to a DOM node, and it does
-// not survive jsdom. What is under test is the shell around it: the control
-// that expands it, what that does to the page, and the field the form submits.
+// ProseMirror does not survive jsdom; this tests the shell around it.
 vi.mock("@milkdown/crepe", () => ({
   Crepe: class {
     static Feature = {
@@ -13,8 +11,7 @@ vi.mock("@milkdown/crepe", () => ({
       AI: "ai",
       BlockEdit: "block-edit",
     };
-    // The Milkdown editor underneath, which the component adds its paste
-    // handler to before creating anything.
+    // The component adds its paste handler here before creating anything.
     editor = { use: () => this.editor };
     on() {
       return this;
@@ -52,8 +49,7 @@ describe("MarkdownEditor, the field it submits", () => {
 
 describe("MarkdownEditor, full screen", () => {
   test("opens and closes from one control that says which it will do", async () => {
-    // Two labels on one button, never two buttons: a page carrying both would
-    // have one that is always wrong.
+    // Two labels on one button, never two buttons.
     render(<MarkdownEditor name="body.en" defaultValue="" labels={labels} />);
 
     const toggle = screen.getByRole("button", { name: labels.expand });
@@ -70,8 +66,7 @@ describe("MarkdownEditor, full screen", () => {
   });
 
   test("stops the page behind it from scrolling while it is open", async () => {
-    // Otherwise the wheel scrolls the page under a surface that fills the
-    // screen, and closing it leaves the author somewhere they never went.
+    // Otherwise the page scrolls under the expanded editor.
     render(<MarkdownEditor name="body.en" defaultValue="" labels={labels} />);
 
     await userEvent.click(screen.getByRole("button", { name: labels.expand }));
@@ -91,13 +86,12 @@ describe("MarkdownEditor, full screen", () => {
   });
 
   test("leaves nothing behind when it unmounts while open", async () => {
-    // Navigating away from an expanded editor must not leave the page unable
-    // to scroll, with no control left to fix it.
+    // Unmounting while expanded must release the scroll lock.
     const { unmount } = render(
       <MarkdownEditor name="body.en" defaultValue="" labels={labels} />,
     );
     await userEvent.click(screen.getByRole("button", { name: labels.expand }));
-    // Guards against the assertion below passing because nothing ever opened.
+    // Guards against the assertion below passing because nothing opened.
     expect(document.body.style.overflow).toBe("hidden");
 
     unmount();
@@ -106,9 +100,7 @@ describe("MarkdownEditor, full screen", () => {
   });
 
   test("keeps the same editor rather than building a second one", async () => {
-    // The editor is a ProseMirror instance bound to one node. Rendering a
-    // separate copy for the expanded state would lose the undo history and,
-    // on the way back, whatever was typed into the one being discarded.
+    // A second copy for the expanded state would lose the undo history.
     const { container } = render(
       <MarkdownEditor name="body.en" defaultValue="" labels={labels} />,
     );

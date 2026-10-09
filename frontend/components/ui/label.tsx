@@ -3,12 +3,8 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The field label is the tab on a card-index divider: mono, uppercase, small
- * and wide-tracked.
- *
- * That is the same treatment column headings and pane headings get, which is
- * the point — one voice names things throughout the product, and it is never
- * the voice that says them.
+ * The field label: mono, uppercase, small and wide-tracked, the same voice as
+ * column and pane headings.
  */
 function Label({ className, ...props }: React.ComponentProps<"label">) {
   return (

@@ -11,16 +11,9 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
 /**
- * The frame for a screen both audiences share.
- *
- * `(admin)` and `(participant)` each know where their own home is. This group
- * is for what neither owns — the profile — so the mark is pointed from the
- * permissions the API reports, the same rule sign-in follows when it decides
- * where to land.
- *
- * No navigation: the profile is a place you arrive at from the bar and leave
- * by the mark, and offering the register to a participant who cannot open it
- * would be offering a door that answers 403.
+ * The frame for the profile, which both audiences share. The mark's target
+ * comes from the API's permissions, as sign-in's landing does. No navigation:
+ * the register would be a 403 for a participant.
  */
 export default async function SessionLayout({ children }: { children: React.ReactNode }) {
   const [brand, dict, locale, theme, identity] = await Promise.all([
@@ -31,8 +24,7 @@ export default async function SessionLayout({ children }: { children: React.Reac
     fetchIdentity(),
   ]);
 
-  // The bar's own account door led here, so a request arriving without a
-  // usable session has one: it lapsed in between. Back to the form.
+  // The session lapsed since the bar linked here; back to sign-in.
   if (!identity) redirect("/login?next=%2Fprofile");
 
   return (
@@ -45,10 +37,9 @@ export default async function SessionLayout({ children }: { children: React.Reac
       home={homeFor(identity.permissions)}
       account={{ fullName: identity.fullName, login: identity.login }}
     >
-      {/* This group's own dictionary scope, on top of the root's: the profile's boundary reads from `profile` and borrows the retry wording from `participant`,
-          and none of that is a section the root scope carries. The sections
-          are chosen here, on the server, so what crosses the wire is what
-          this subtree can actually read (finding 5). */}
+      {/* This group's dictionary sections (`profile`, plus retry wording from
+         `participant`), selected on the server so only what the subtree reads
+         crosses the wire. */}
       <SessionDictionaryProvider dict={selectSession(dict)} locale={locale}>
         {children}
       </SessionDictionaryProvider>

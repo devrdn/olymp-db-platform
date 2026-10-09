@@ -14,26 +14,16 @@ export async function generateMetadata() {
 }
 
 /**
- * The catalogue: everything a participant may see, whether or not they are on
- * it.
- *
- * Deliberately not "only what I have not joined". Filtering out the contests
- * somebody is already enrolled in would answer "what is there" incompletely,
- * and a student who cannot find a familiar name concludes their registration
- * was lost. They are listed and marked instead — which is what the `enrolled`
- * flag on each row is for.
- *
- * The address is `/open` rather than `/contests`: route groups do not appear
- * in URLs, so `/contests` is the author's register. A participant who reached
- * it would meet that register scoped to contests they manage, which for them
- * is empty — an accurate answer to a question they never asked.
+ * The catalogue: every contest a participant may see, joined or not. Joined
+ * ones are listed and marked (`enrolled`), since a familiar name missing
+ * would look like a lost registration. At `/open` because route groups do
+ * not appear in URLs, and `/contests` is the author's register.
  */
 export default async function OpenContestsPage() {
   const [locale, dict] = await Promise.all([activeLocale(), activeDictionary()]);
 
-  // No `enrolled` narrowing: this is the whole visible set. The scope still
-  // decides what may be seen at all, and a draft or somebody else's
-  // invitation-only contest is not in it.
+  // No `enrolled` filter: the whole visible set. The scope still hides drafts
+  // and other people's invitation-only contests.
   const search = new URLSearchParams({ scope: "participant", lang: locale });
 
   const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
@@ -53,8 +43,7 @@ export default async function OpenContestsPage() {
         locale={locale}
         heading={dict.participant.open.heading}
         countLabel={dict.participant.open.countLabel}
-        // No next step: this screen is the next step. A link back to itself
-        // would be the empty state offering the reader where they already are.
+        // No action: this screen is already the next step.
         empty={dict.participant.open.empty}
       />
     </Band>

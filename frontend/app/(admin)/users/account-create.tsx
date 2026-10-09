@@ -26,41 +26,17 @@ import {
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * Registering an account from the register itself — the last thing this
- * screen could not do. Everything else `/users` already offered (search,
- * filter, block, delete, roles, password reset, in bulk and one at a time)
- * assumed the account already existed; there was no form for one person and
- * no roster import, so an administrator's only way in was a hand-written
- * request.
+ * Creating accounts from the register: one account (`NewAccountForm`) or a
+ * roster (`ImportRosterForm`).
  *
- * Two dialogs, one trigger row: `NewAccountForm` for the one name an
- * administrator has in mind right now, `ImportRosterForm` for the group a
- * department hands over as a list — the same split `people-panels.tsx`
- * draws between `AddOneParticipant` and `ImportParticipants`, and for the
- * same reason: reaching for the wrong one costs nothing, but a screen
- * offering both without saying which is which is the confusion the separate
- * headings exist to close.
- *
- * A one-time password is the one thing on this screen that is genuinely
- * unrecoverable — lost, the account has to be reset — so both dialogs follow
- * `selection.tsx`'s own answer to that (`ActionDialog` + `ResetPasswordForm`)
- * rather than inventing a second way: `dismissible` stays false, decided by
- * the form itself through `reportDismissible`, for as long as a request is
- * pending or a result with a password on it is on screen. Escape, an outside
- * click and the corner X all route through the same `Dialog`/`DialogContent`
- * `dismissible` prop that solved this the first time.
+ * A one-time password cannot be recovered, so, as in `selection.tsx`, each form
+ * keeps its dialog undismissable while a request is pending or a password is on
+ * screen.
  */
 
 /**
- * A trigger button and the dialog it opens, closed by default.
- *
- * A near-duplicate of `ActionDialog` in `selection.tsx`, which this file does
- * not import: that component is not exported, kept private to the selection
- * bar's own dialogs, and the two features share nothing else that would
- * justify reaching across them for one component. `dismissible` is decided
- * by the form inside, through `reportDismissible` — only it knows whether a
- * request is pending or a result the administrator must acknowledge is on
- * screen.
+ * A trigger and its dialog. Mirrors the private `ActionDialog` in
+ * `selection.tsx`; the form decides `dismissible` through `reportDismissible`.
  */
 function TriggerDialog({
   triggerLabel,
@@ -87,9 +63,8 @@ function TriggerDialog({
       >
         {triggerLabel}
       </Button>
-      {/* keepMounted defaults to false, so the form inside — and the
-          useActionState it holds — starts fresh every time this reopens
-          rather than showing the last run's result. */}
+      {/* Content mounts only while open, so the form and its `useActionState`
+         start fresh on every reopen. */}
       <Dialog open={open} onOpenChange={setOpen} dismissible={dismissible}>
         <DialogContent closeLabel={closeLabel} dismissible={dismissible}>
           {children(() => setOpen(false), setDismissible)}
@@ -99,10 +74,7 @@ function TriggerDialog({
   );
 }
 
-/** The role catalogue, as a list of checkboxes — the same control the bulk
- * roles dialog and the single-account card use. Nothing renders when the
- * installation has no roles to offer, which is the honest empty case rather
- * than a heading over nothing. */
+/** The role catalogue as checkboxes; nothing renders when there are no roles. */
 function RolesPicker({ roles, label }: { roles: Role[]; label: string }) {
   if (roles.length === 0) return null;
   return (
@@ -121,8 +93,7 @@ function RolesPicker({ roles, label }: { roles: Role[]; label: string }) {
   );
 }
 
-/** One issued password, with a way to copy it — the same row
- * `selection.tsx`'s `IssuedRow` renders for a bulk password reset. */
+/** One issued password with a copy button. */
 function PasswordRow({
   login,
   password,
@@ -151,9 +122,8 @@ function PasswordRow({
             await navigator.clipboard.writeText(password);
             setCopied(true);
           } catch {
-            // Clipboard access can be refused (insecure origin, no
-            // permission). The password stays on screen and selectable by
-            // hand either way — see `select-all` above.
+            // Clipboard access can be refused; the password stays selectable on
+            // screen.
           }
         }}
       >
@@ -163,11 +133,10 @@ function PasswordRow({
   );
 }
 
-/** Every row a roster import declined, named by login with its reason in the
- * interface's own words. `reason` is looked up in the closed vocabulary this
- * build translates (`accounts.create.roster.reason`, mirroring
- * `IMPORT_SKIP_REASONS`) and shown raw when the lookup misses — a reason a
- * newer server has shipped is still an outcome the administrator has to see. */
+/**
+ * Rows an import declined, by login with the reason; an unknown reason from a
+ * newer server is shown raw.
+ */
 function SkippedRows({
   skipped,
   reasons,
@@ -188,10 +157,11 @@ function SkippedRows({
   );
 }
 
-/** The rows an import stopped before reaching — nothing was wrong with them,
- * the server stopped (`stopped` names why) — so the administrator can paste
- * exactly those lines again. Shown apart from the skipped rows, which are
- * lines to fix. */
+/**
+ * Rows the import never reached (the server stopped, `stopped` says why),
+ * listed so they can be pasted again. Separate from skipped rows, which need
+ * fixing.
+ */
 function NotImportedRows({ logins, title, why }: { logins: readonly string[]; title: string; why: string | null }) {
   return (
     <div role="alert" className="flex flex-col gap-1 border-t border-line pt-3">
@@ -225,9 +195,7 @@ function NewAccountForm({
     {},
   );
 
-  // While a request is in flight, or while the password it issued is still
-  // on screen, Escape, an outside click and the corner X must not be able to
-  // discard it — only the explicit Done below can.
+  // While pending or showing a password, only Done may close the dialog.
   useEffect(() => {
     reportDismissible(!pending && !state.result);
   }, [pending, state.result, reportDismissible]);
@@ -362,10 +330,8 @@ function ImportRosterForm({
               size="sm"
               className="self-start"
               onClick={async () => {
-                // Every login and its password, one pair per line — the same
-                // shape a spreadsheet or a mail merge can paste from
-                // directly, so handing over thirty passwords is one paste
-                // rather than thirty individual copies.
+                // One login and password per line, ready to paste into a
+                // spreadsheet or mail merge.
                 const lines = created
                   .map((row) => `${row.user.login}\t${row.one_time_password}`)
                   .join("\n");
@@ -373,8 +339,7 @@ function ImportRosterForm({
                   await navigator.clipboard.writeText(lines);
                   setCopiedAll(true);
                 } catch {
-                  // Same tolerance as every other copy control here: the
-                  // list stays on screen and selectable by hand either way.
+                  // The list stays selectable if the clipboard is refused.
                 }
               }}
             >
@@ -453,14 +418,7 @@ function ImportRosterForm({
   );
 }
 
-/**
- * The two entry points: a trigger for one account, a trigger for a roster.
- *
- * `roles` is the catalogue the server publishes (already fetched beside the
- * register for `SelectionBar`), so both dialogs offer exactly what the
- * single-account card and the bulk roles dialog do, nothing this build has
- * to keep in step by hand.
- */
+/** Triggers for one account and for a roster. `roles` is the server's catalogue. */
 export function AccountCreateControls({ roles, dict }: { roles: Role[]; dict: Dictionary }) {
   const t = dict.accounts.create;
 

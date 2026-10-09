@@ -8,18 +8,8 @@ import en from "./dictionaries/en";
 import { ParticipantDictionary } from "./client";
 import { selectApp, selectParticipant } from "./scopes";
 
-/**
- * Finding 5: one provider at the root carried every section, so the whole
- * dictionary — 50,727 bytes of `en` — was a client prop on every screen. The
- * fix is that a scope names what a subtree can read and narrows the value on
- * the server, before it is ever a prop.
- *
- * Two things have to hold for that to be safe, and neither is visible in the
- * rendered output: the narrowing has to actually drop the other sections,
- * and every scope a boundary reads from has to be provided above it — a
- * missing provider is a crash on the one screen that exists to survive a
- * crash.
- */
+// Two things rendered output cannot show: a scope must really drop the other
+// sections, and a missing provider crashes the very screen meant to survive one.
 describe("a dictionary scope", () => {
   test("hands over its own sections and no others", () => {
     expect(Object.keys(selectParticipant(en))).toEqual(["participant"]);
@@ -58,10 +48,7 @@ describe("a dictionary scope", () => {
   });
 });
 
-/**
- * The two rules the type system cannot state: a provider must narrow, and a
- * scope must be provided above every boundary that reads it.
- */
+// The two rules the type system cannot state.
 describe("how the scopes are wired into the app", () => {
   const appDir = path.resolve(__dirname, "../../app");
 
@@ -83,13 +70,6 @@ describe("how the scopes are wired into the app", () => {
       ),
     );
 
-    // This assertion used to demand `${scope}.select(dict)` — a call to a
-    // function exported from a "use client" module, which a Server Component
-    // cannot make. It was green here because vitest does not enforce that
-    // boundary, and it was the reason every page answered 500: a test that
-    // required the defect. The invariant it exists for is unchanged — each
-    // provider is handed its own slice, never the whole dictionary — and the
-    // slice now comes from the server module, `scopes.ts`.
     const selectorFor: Record<string, string> = {
       AppDictionary: "selectApp",
       AdminDictionary: "selectAdmin",

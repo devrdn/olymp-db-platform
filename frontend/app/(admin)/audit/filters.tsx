@@ -6,21 +6,12 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 /**
- * The filters, as a plain form that navigates.
- *
- * A GET form, so what is being looked at lives in the address: the view is
- * shareable, the browser's back button steps through it, and the reset is an
- * ordinary link rather than state somebody has to remember to clear. Reading
- * the trail involves no JavaScript at all.
- *
- * These four and not a free-text search, because each one narrows an index the
- * table already carries. A search across a year of history would be a table
- * scan on the largest table in the database, run from a screen an
- * administrator leaves open.
+ * The trail filters as a GET form: the view lives in the address and needs no
+ * JavaScript. No free-text search: each filter is backed by an index, while a
+ * search would scan the largest table (CLAUDE.md rule 7).
  */
 
-/* The controls are laid out here rather than through Field, which types its
-   child as an input and would fight a select for no gain. */
+/* Laid out here rather than through Field, which types its child as an input. */
 const CONTROL = "h-(--control-h) w-full border border-edge bg-bg px-2.5 text-control text-ink";
 
 export function AuditFilters({
@@ -35,10 +26,7 @@ export function AuditFilters({
   entity: string;
   from: string;
   to: string;
-  /**
-   * Every action this installation can record, fetched from the server
-   * rather than scraped off the current page — see the note on AuditPage.
-   */
+  /** Every recordable action, from the server rather than the current page. */
   actions: string[];
   dict: Dictionary;
 }) {

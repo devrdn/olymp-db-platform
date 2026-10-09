@@ -5,10 +5,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import type { Role } from "@/lib/api/accounts";
 
-// The create actions are Server Actions ("use server"): importing the real
-// module for a component test would pull in Next's server runtime. The
-// module boundary is what gets faked, exactly the way `selection.test.tsx`
-// fakes `./bulk-actions`.
+// The real Server Actions would pull in Next's server runtime.
 const { createAccountAction, importAccountsAction } = vi.hoisted(() => {
   type ActionShape = (previous: unknown, form: FormData) => Promise<Record<string, unknown>>;
   const stub = (): ActionShape =>

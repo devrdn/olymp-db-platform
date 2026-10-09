@@ -11,14 +11,9 @@ import { loadContest, loadContestResource } from "../../contest";
 import { QuestionEditor } from "./question-editor";
 
 /**
- * One question.
- *
- * The API checks that the question belongs to this contest and answers 404
- * rather than 403 when it does not: without that check the owner of one
- * contest could reach another's question by guessing an identifier, and the
- * middleware would wave it through, because it checked the contest in the URL.
- * Saying "forbidden" would be its own leak — that somebody else's question
- * exists is not this account's business.
+ * One question. The API checks the question belongs to this contest (its
+ * middleware checks only the contest in the URL) and answers 404, not 403, so
+ * the question's existence is not revealed.
  */
 export default async function QuestionPage(
   props: PageProps<"/contests/[contestId]/questions/[questionId]">,
@@ -49,10 +44,7 @@ export default async function QuestionPage(
         </Link>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* `ord` is the contest's own numbering and starts at one, which is
-              the number the question list prints beside this question. Adding
-              to it here would have the two screens disagree about which
-              question is open. */}
+          {/* `ord` starts at one and matches the number in the question list. */}
           <h2 className="text-h3 text-ink">{t.heading.replace("{n}", String(question.ord))}</h2>
           {!question.isVisible ? (
             <Tag tone="mute">{dict.workspace.questions.hidden}</Tag>

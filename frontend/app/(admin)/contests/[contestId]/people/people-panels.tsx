@@ -39,20 +39,15 @@ const STATUS_TONE: Record<RegistrationStatus, "live" | "good" | "mute" | "bad"> 
   disqualified: "bad",
 };
 
-/** A failure this panel is reporting, in the interface's own words. */
+/** A failure code in the interface's words. */
 function message(code: string | undefined, dict: Dictionary): string | null {
   return code ? (messageForCode(code, dict.errors)) : null;
 }
 
 /**
- * Who runs the contest.
- *
- * The owner is in the list and has no controls, deliberately: ownership is not
- * granted or revoked here. Two owners make "who may appoint" ambiguous and
- * none leaves the contest with nobody who can appoint anyone, so handing a
- * contest over is a separate act rather than a quiet consequence of editing a
- * list. A row that cannot be acted on still belongs in the list — leaving the
- * owner out would make the staff list wrong.
+ * Who runs the contest. The owner is listed without controls: ownership is not
+ * granted or revoked here, since two owners make appointing ambiguous and none
+ * leaves nobody to appoint.
  */
 export function ManagerPanel({
   contestId,
@@ -163,12 +158,8 @@ function GrantManager({ contestId, dict }: { contestId: string; dict: Dictionary
 }
 
 /**
- * Who takes part.
- *
- * Two different controls on a row, and which one appears is the whole point:
- * somebody who has not started can be removed, and somebody who has can only
- * be disqualified, because their queries and answers are part of the record of
- * the contest.
+ * Who takes part. Someone who has not started can be removed; someone who has
+ * can only be disqualified, since their work is part of the record.
  */
 export function ParticipantPanel({
   contestId,
@@ -182,10 +173,8 @@ export function ParticipantPanel({
   participants: Participant[];
   total: number;
   locale: Locale;
-  // ICPC scoring (docs/ARCHITECTURE.md §6.1.1)
-  // ranks by how many questions are solved and, at a tie, by penalty time —
-  // `registrations.total_score` is always 0 in this mode, so the column that
-  // shows it would be a column of zeroes rather than a fact worth a glance.
+  // ICPC ranks by solved count, then penalty (docs/ARCHITECTURE.md §6.1.1);
+  // `total_score` is always 0 there, so its column is hidden.
   scoring: Scoring;
   dict: Dictionary;
 }) {
@@ -297,7 +286,7 @@ export function ParticipantPanel({
   );
 }
 
-/** One row's one control, with its own pending state and its own failure. */
+/** One row's control, with its own pending state and failure. */
 function RowAction({
   action,
   contestId,
@@ -341,14 +330,8 @@ function RowAction({
 }
 
 /**
- * One person, found by searching rather than by pasting an identifier.
- *
- * Kept apart from `ImportParticipants` below on purpose, and headed
- * differently: this is for the one name an organiser has in mind right now,
- * that is for the roster a whole cohort arrives as. Reaching for the wrong
- * one costs nothing — both end at the same `POST /participants` — but a
- * screen offering both without saying which is which is the confusion the
- * separate headings exist to close.
+ * Adds one person found by search; the roster import below is for a whole
+ * cohort. Both end at `POST /participants`.
  */
 function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.workspace.people;
@@ -357,9 +340,8 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
     {},
   );
   const failure = message(state.code, dict);
-  // Not an API error: the server answered 200 and skipped the one entry it
-  // was given, the same shape the roster import reports a row by, so it is
-  // read through the same reason vocabulary rather than `dict.errors`.
+  // Not an API error: the server answered 200 and skipped the entry, so read it
+  // through the import's reason vocabulary.
   const skipped = state.skipReason
     ? ((t.import.reason as Record<string, string>)[state.skipReason] ?? state.skipReason)
     : null;
@@ -368,13 +350,7 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
     <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
       <input type="hidden" name="contestId" value={contestId} />
 
-      {/* No heading of its own: `PersonPicker` below renders "Add one
-          participant" as the field's own visible label, and a heading
-          repeating it word for word would be the same fact said twice in a
-          row — see `ImportParticipants` just below, whose own label plays
-          the same double duty. How to use it sits behind the "?" beside
-          that label; the picker's own line under the input still says how
-          the keyboard drives it. */}
+      {/* No heading: the picker's label already says it. */}
       <div className="flex flex-wrap items-end gap-3">
         <PersonPicker
           id="participantId"
@@ -430,7 +406,7 @@ function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dict
         </label>
         <Tooltip label={dict.chrome.helpLabel}>{t.import.help}</Tooltip>
       </div>
-      {/* The format stays on screen, and is the textarea's description. */}
+      {/* The format stays on screen as the textarea's description. */}
       <p id="logins-format" className="max-w-body text-small text-ink-2">
         {t.import.hint}
       </p>
@@ -447,9 +423,8 @@ function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dict
         {pending ? t.import.importing : t.import.action}
       </Button>
 
-      {/* A partial success is the honest answer, so it is reported as one: the
-          count that went in, and every line that did not with its reason. A
-          revalidated list can show the first and never the second. */}
+      {/* Report a partial success: the count added and every rejected line with
+         its reason, which a revalidated list cannot show. */}
       {state.result ? (
         <div role="status" className="flex flex-col gap-2 pt-1">
           <p className="text-small text-good">

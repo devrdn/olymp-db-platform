@@ -8,34 +8,16 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * A modal surface, drawn from this project's own tokens rather than the
- * registry's defaults — the same reasoning as `button.tsx` and `checkbox.tsx`:
- *
- * - Flat, like every other panel in the register (`border border-line-2`, no
- *   ring, no shadow token exists to reach for). The registry's
- *   `ring-1 ring-foreground/10` is a glow, and section 15 has no glows in it.
- * - `rounded-none`, matching the register's own rectangles (`Field`, `Input`,
- *   `Textarea`) rather than the registry's `rounded-xl`. Only controls
- *   (`Button`, `Tag`, `Checkbox`'s absence of one) round at all here.
- * - No `dark:` utility: the theme is a variable swap on `data-theme`, so a
- *   colour written once through a token is already correct in both themes.
+ * A modal surface on the project's tokens: flat, no ring or shadow,
+ * `rounded-none`, and no `dark:` utilities since the theme is a variable swap.
  */
 
 /**
- * `dismissible` (default `true`) is the policy this component was missing:
- * with nothing to say otherwise, Escape, an outside click and the corner X
- * always closed the popup, which is safe for a plain confirmation but wrong
- * for a dialog that is mid-request or is holding a result the caller must
- * acknowledge before it can be lost — a bulk password reset's one-time
- * passwords, for one. Pass `dismissible={false}` for that window; the caller
- * decides when, this component only enforces it.
- *
- * Escape and the close button route through `onOpenChange` regardless of
- * `disablePointerDismissal` (that prop only governs an outside press), so
- * both are blocked the same way: the change event fires and this cancels it
- * via `eventDetails.cancel()`, Base UI's own mechanism for refusing a close
- * (see `DialogRoot.ChangeEventDetails`) — nothing here reaches for a
- * hand-rolled keydown listener.
+ * The dialog root. `dismissible={false}` blocks Escape, an outside press and
+ * the corner X, for a dialog mid-request or holding a result that must be
+ * acknowledged (one-time passwords). Escape and the close button go through
+ * `onOpenChange` regardless of `disablePointerDismissal`, so the close is
+ * refused there with `eventDetails.cancel()`.
  */
 function Dialog({
   dismissible = true,
@@ -86,11 +68,9 @@ function DialogBackdrop({ className, ...props }: DialogPrimitive.Backdrop.Props)
 }
 
 /**
- * The window itself. `closeLabel` names the corner control for assistive
- * tech. `dismissible` (default `true`) disables that control — rather than
- * hiding it, so the layout does not jump — when the caller's `Dialog` is
- * refusing Escape and outside clicks too; the two props are meant to travel
- * together.
+ * The dialog's window. `closeLabel` names the corner control.
+ * `dismissible={false}` disables it rather than hiding it, so the layout does
+ * not jump; pass it together with the `Dialog` prop.
  */
 function DialogContent({
   className,
@@ -115,10 +95,8 @@ function DialogContent({
         {...props}
       >
         {children}
-        {/* Styled with `buttonVariants` directly rather than through a
-            `Button` — `DialogPrimitive.Close` already renders its own
-            native button, the same way the selection bar's own "Clear
-            selection" control does below its own `buttonVariants` call. */}
+        {/* `DialogPrimitive.Close` renders its own button, so it takes
+           `buttonVariants` directly. */}
         <DialogPrimitive.Close
           data-slot="dialog-close"
           disabled={!dismissible}

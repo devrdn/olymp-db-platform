@@ -7,12 +7,8 @@ import { StateView } from "@/components/product/state-view";
 import { AppDictionary } from "@/lib/i18n/client";
 
 /**
- * The last boundary before the framework's own error page.
- *
- * A route with a boundary of its own keeps it; this one catches everything
- * else, so a failure outside `/contests` no longer lands on an untranslated
- * default. It speaks all three languages because the dictionary is in context
- * from the root layout, which a client boundary cannot await for itself.
+ * The catch-all error boundary. Translated, because the root layout puts the
+ * dictionary in context, which a client boundary cannot await itself.
  */
 export default function RootError({
   error,

@@ -1,12 +1,7 @@
 /**
- * Everything that actually depends on CodeMirror.
- *
- * Split from `code-editor.tsx` so the ~140 KiB (gzipped) it pulls in —
- * `@codemirror/*`, `@lezer/highlight` — is a chunk `import()`ed once the
- * route is already interactive, not part of what the play route ships
- * upfront. `code-editor.tsx` is the only importer, and it always imports this
- * module dynamically; a static `import` of this file from anywhere else
- * would put CodeMirror back on the critical path.
+ * Everything that depends on CodeMirror (~140 KiB gzipped). Only
+ * `code-editor.tsx` imports it, and only dynamically; a static import anywhere
+ * would put CodeMirror on the play route's critical path.
  */
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { PostgreSQL, sql } from "@codemirror/lang-sql";
@@ -23,15 +18,8 @@ import {
 import { tags } from "@lezer/highlight";
 
 /**
- * SQL syntax highlighting — section 11, circle 2's own naming: "CodeMirror 6,
- * our theme". Every colour is a `var()` reference into `styles/tokens.css`,
- * never a literal, for the same reason `bg-[#…]` is an ESLint error in JSX: a
- * colour written here would be a second place the palette lives, and the one
- * this system was built to rule out. A keyword and a comment already have a
- * semantic token (`--accent-ink`, `--ink-3`); a function, a string and a
- * number do not read as any of the eleven the token layer already names, so
- * section 3.1 gives them their own (`--sql-function`, `--sql-string`,
- * `--sql-number`) rather than writing three hex values into this file.
+ * SQL highlighting. Colours are `var()` references into `styles/tokens.css`,
+ * never literals, so the palette lives in one place.
  */
 const highlightStyle = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--accent-ink)" },
@@ -43,33 +31,16 @@ const highlightStyle = HighlightStyle.define([
 ]);
 
 /**
- * The editor's own chrome — background, caret, selection, focus — built from
- * the same tokens as everything else in the product, not from CodeMirror's
- * default theme and not from a second palette invented for this component.
- * A new `--sql-editor-…` token is deliberately absent: `--sunk` is already
- * "sunken area (editor)" in section 3.1's own table, so the editor's
- * background is that token directly rather than a new one that would just
- * alias it. `code-editor.tsx`'s fallback textarea uses the same classes this
- * theme's colours are built from, so the handoff between the two is not a
- * visible change of surface.
- *
- * Sizing reads `--font-mono` and `--text-body` — the same face and step
- * section 4 names for "SQL, every number, utility captions" — rather than
- * CodeMirror's own monospace default. Tailwind's `@theme` block emits both as
- * ordinary `:root` custom properties, so referencing them here does not
- * require Tailwind to have touched this file at all.
+ * Editor chrome from the product tokens rather than CodeMirror's default theme.
+ * The fallback textarea in `code-editor.tsx` uses the same tokens, so the
+ * handoff is not a visible change of surface.
  */
 const editorTheme = EditorView.theme({
   "&": {
     height: "100%",
     backgroundColor: "var(--sunk)",
     color: "var(--ink)",
-    // No border. The design's editor is a `--sunk` field between the rules
-    // that separate the panes, and nothing else (docs/design/preview.html,
-    // `.ed`): "no nested panel inside the window". `--edge` is a solid
-    // mid-grey the design spends on exactly one thing, a secondary button's
-    // outline, and a box drawn in it around the editor reads as a panel
-    // inside a panel.
+    // No border: a box around the editor reads as a panel inside a panel.
     fontFamily: "var(--font-mono)",
     fontSize: "var(--text-body)",
   },
@@ -87,11 +58,7 @@ const editorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "var(--accent-wash)",
   },
-  // The line numbers the design draws down the left of the editor
-  // (docs/design/preview.html, "SQL-консоль"). Quiet: the number is a
-  // reference, not content, so it takes ink-3 and no fill of its own — a
-  // gutter with a background would be a second panel inside a panel, which
-  // §3 forbids.
+  // Gutter without a fill, so it does not read as a second panel.
   ".cm-gutters": {
     backgroundColor: "transparent",
     border: "none",
@@ -99,27 +66,16 @@ const editorTheme = EditorView.theme({
     fontVariantNumeric: "tabular-nums",
   },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 0.5rem 0 0.75rem", minWidth: "2.25rem" },
-  // The active line's own number, so a participant reading an error position
-  // can find the line without counting.
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--ink)" },
   ".cm-scroller": { overflow: "auto" },
   ".cm-placeholder": { color: "var(--ink-3)" },
-  // `bracketMatching()` below brings its own `EditorView.baseTheme` for
-  // these two classes — `#328c8252` / `#bb555544`, CodeMirror's own palette,
-  // identical in both themes — which section 3.3 forbids ("no arbitrary
-  // colours"). A base theme always loses to a regular one for the same
-  // selector regardless of extension order, so repeating the exact
-  // selectors here (from `@codemirror/language`'s source) overrides them
-  // with tokens this product already has: `--accent-wash` is the same wash
-  // `cm-selectionBackground` above already uses for "something is
-  // highlighted here", and `--bad-wash` is the one `errorField` uses for
-  // "something is wrong" — reused rather than inventing a new pair for what
-  // is, structurally, the same two ideas.
+  // `bracketMatching()` ships a base theme with literal colours. A base theme
+  // always loses to a regular one for the same selector, so repeating its
+  // selectors here swaps in product tokens.
   "&.cm-focused .cm-matchingBracket": { backgroundColor: "var(--accent-wash)" },
   "&.cm-focused .cm-nonmatchingBracket": { backgroundColor: "var(--bad-wash)" },
-  // The one thing PostgreSQL's own position points at. Not colour alone
-  // (WCAG 1.4.1): the wavy underline is a second, shape-based channel, on top
-  // of the translated sentence ResultPanel already shows above the editor.
+  // The wavy underline is a shape cue, so the error is not shown by colour
+  // alone (WCAG 1.4.1).
   ".cm-error-position": {
     textDecoration: "underline wavy var(--bad)",
     textDecorationThickness: "2px",
@@ -128,17 +84,14 @@ const editorTheme = EditorView.theme({
   },
 });
 
-/** Sets, or clears, the error mark. `null` clears it. */
 const setErrorPositionEffect = StateEffect.define<number | null>();
 
 const errorMark = Decoration.mark({ class: "cm-error-position" });
 
 function markAt(position1Based: number, doc: Text): DecorationSet {
   let from = Math.max(0, position1Based - 1);
-  // A position just past the last character — "unexpected end of input" is
-  // reported this way — has nothing after it to underline. The last
-  // character is still the honest place to point: it is what the participant
-  // typed right before PostgreSQL gave up.
+  // "Unexpected end of input" points past the last character; underline the
+  // last one instead.
   if (from >= doc.length) from = Math.max(0, doc.length - 1);
   const to = Math.min(from + 1, doc.length);
   if (to <= from) return Decoration.none;
@@ -146,14 +99,8 @@ function markAt(position1Based: number, doc: Text): DecorationSet {
 }
 
 /**
- * Holds the current error decoration.
- *
- * A `StateField` rather than a one-off `Decoration.set` passed at
- * construction: the position arrives after the editor already exists (a
- * query has to be run and refused first), and clears itself on the next
- * keystroke — the text that made PostgreSQL say "here" may no longer be
- * there, and an underline that survives the edit that fixed it would be
- * pointing at nothing.
+ * The current error decoration. It clears on the next edit, since the text
+ * PostgreSQL pointed at may no longer be there.
  */
 const errorField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
@@ -172,21 +119,12 @@ const errorField = StateField.define<DecorationSet>({
 export type { EditorState, EditorView };
 
 /**
- * The extensions each view was built with, so another document can be built
- * with the same ones.
- *
- * A `WeakMap` keyed by the view: the extensions are only ever wanted while
- * that view exists, and a destroyed view takes them with it. Keeping the
- * array rather than rebuilding it per document also keeps the two states
- * genuinely alike — the same keymap, the same update listener, the same
- * theme — which is what lets one be swapped for the other.
+ * Each view's extensions, so another document gets exactly the same keymap,
+ * listener and theme and can be swapped in.
  */
 const documentExtensions = new WeakMap<EditorView, Extension[]>();
 
-/**
- * Builds the editor and attaches it to `host`, which must already be in the
- * document — `EditorView`'s own `parent` option appends into it immediately.
- */
+/** Builds the editor inside `host`, which must already be in the document. */
 export function mountEditor(
   host: HTMLElement,
   opts: {
@@ -195,32 +133,16 @@ export function mountEditor(
     placeholder: string;
     onChange: (text: string) => void;
     /**
-     * Run the query, from ⌘↵ (Ctrl+Enter) inside the editor.
-     *
-     * Bound here rather than on the surrounding form, and ahead of
-     * `defaultKeymap`, because CodeMirror's own default for `Mod-Enter` is
-     * `insertBlankLine`: a listener on the form would never see the key, and
-     * the participant would get an empty line where the design's own toolbar
-     * promises `Выполнить ⌘↵`.
+     * Bound to ⌘↵ / Ctrl+Enter ahead of `defaultKeymap`, whose `Mod-Enter`
+     * inserts a blank line.
      */
     onSubmit?: () => void;
     /**
-     * Keys the surrounding screen owns, in CodeMirror's own notation
-     * (`Mod-b`, `Mod-Alt-b`): the participant's workspace collapses its
-     * panels on those (§8 of the workspace design), and a shortcut that
-     * stops working the moment the caret is in a query is not a shortcut.
-     *
-     * Bound here for the same reason `onSubmit` is, and for one more: a
-     * command that runs returns true, which makes CodeMirror call
-     * `preventDefault` — both keeping the browser from acting on the key
-     * (Ctrl+B in a contenteditable is "bold") and telling the window
-     * listener above that this press has been dealt with.
-     *
-     * Read once. Each `run` must therefore reach through to whatever the
-     * owner has now, not close over what it had at mount — and say so:
-     * `false` means the owner no longer claims this key, and CodeMirror
-     * should go on treating it as it would any other, rather than the editor
-     * swallowing a combination whose handler has gone.
+     * Keys the surrounding screen owns, in CodeMirror notation (`Mod-b`). A
+     * command that returns true makes CodeMirror call `preventDefault`, so the
+     * browser does not act on the key (Ctrl+B is "bold" in a contenteditable).
+     * Read once; each `run` must look up the owner's current handler and return
+     * `false` when the key is no longer claimed.
      */
     shortcuts?: readonly { key: string; run: () => boolean }[];
   },
@@ -242,19 +164,12 @@ export function mountEditor(
           ]),
         ]
       : []),
-    // Before the defaults too: whatever the screen has claimed is claimed,
-    // and on a Mac `Ctrl-b` keeps its own meaning there (move back one
-    // character) because `Mod` is ⌘ and not Ctrl.
+    // Also before the defaults, so the screen's keys win. `Mod` is ⌘ on a Mac,
+    // so `Ctrl-b` keeps its editor meaning there.
     ...(opts.shortcuts?.length ? [keymap.of(opts.shortcuts.map(({ key, run }) => ({ key, run })))] : []),
-    // `indentWithTab` after the defaults, because it is a fallback rather
-    // than an override: Tab keeps its ordinary meaning wherever CodeMirror
-    // already has one, and indents otherwise.
-    //
-    // It does take Tab away from moving focus, which is a real cost for a
-    // keyboard user. CodeMirror's own answer is the one kept here: Escape
-    // first, then Tab, leaves the editor — and the participant's console is
-    // a place people type SQL into for two hours, where a Tab that jumps to
-    // the next control is the surprising behaviour.
+    // `indentWithTab` comes after the defaults, so it only applies where Tab
+    // has no other meaning. It takes Tab away from focus movement; Escape then
+    // Tab still leaves the editor.
     keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
     sql({ dialect: PostgreSQL }),
     syntaxHighlighting(highlightStyle),
@@ -277,22 +192,14 @@ export function mountEditor(
   return view;
 }
 
-/**
- * A second (third, tenth) document for a view that already exists — one SQL
- * tab's own text, with its own undo history and its own caret.
- */
+/** Another document for an existing view, with its own undo history and caret. */
 export function newDocument(view: EditorView, doc: string): EditorState {
   return EditorState.create({ doc, extensions: documentExtensions.get(view) ?? [] });
 }
 
 /**
- * Shows `next` and hands back the state that was showing, for the caller to
- * keep aside until that document is asked for again.
- *
- * `setState` rather than replacing the whole document with a transaction:
- * a transaction would put the other tab's text into *this* tab's undo
- * history, and one Ctrl+Z would then bring back a query the participant is
- * no longer looking at.
+ * Shows `next` and returns the state that was showing. Uses `setState`, not a
+ * transaction, so one tab's text never enters another tab's undo history.
  */
 export function swapDocument(view: EditorView, next: EditorState): EditorState {
   const previous = view.state;
@@ -300,20 +207,14 @@ export function swapDocument(view: EditorView, next: EditorState): EditorState {
   return previous;
 }
 
-/**
- * Replaces the showing document's text — a draft recovered from the last
- * visit, which the participant's own editing of that tab is expected to
- * continue from.
- */
+/** Replaces the showing document's text with a recovered draft. */
 export function setDocumentText(view: EditorView, text: string): void {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 }
 
 /**
- * Moves, or clears (`position === null`), the mark at a 1-based character
- * offset, and scrolls it into view when setting one — the whole point of
- * carrying the position at all is that the participant sees it without
- * having to go looking.
+ * Moves the mark to a 1-based character offset and scrolls it into view, or
+ * clears it on `null`.
  */
 export function setErrorPosition(view: EditorView, position: number | null): void {
   view.dispatch({ effects: setErrorPositionEffect.of(position) });

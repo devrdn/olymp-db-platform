@@ -6,28 +6,15 @@ import { SCORINGS } from "./contests-terms";
 import { queriesSchema, type QueriesPage, type QueriesParams, type ReadOptions } from "./journal";
 
 /**
- * The wire shapes of a participant's own profile
- * (`/me/…`, docs/ARCHITECTURE.md §9.5).
- *
- * Read on the server, where the session already is, and parsed at the boundary
- * so a contract change surfaces here with the field name in the message rather
- * than as `undefined` three components later. The API speaks snake_case; the
- * interface speaks camelCase, and the mapping happens once, here.
- *
- * The profile screen's own two reads first, then the report's four. The
- * queries and the answers of a report are the shapes of `./journal`, which
- * the monitoring routes serve too: one record, one reader.
+ * The wire shapes of a participant's own profile and contest reports (`/me/…`,
+ * docs/ARCHITECTURE.md §9.5). A report's queries use the shapes of `./journal`,
+ * which the monitoring routes share.
  */
 
 /**
- * The table's own state, as `leaderboard.Decide` names it.
- *
- * `not_started` is here because it reaches a real reader, not for symmetry: a
- * participant disqualified from a published contest is finished with it
- * (`contests.Standing.Over`), so their row and their report carry a result —
- * of a table whose contest never opened. The server says so rather than
- * rounding the state up to a running one, and the screen has a sentence of
- * its own for it.
+ * The table's state, as `leaderboard.Decide` names it. `not_started` is
+ * reachable: a participant disqualified from a published contest is finished
+ * with it, so their report carries a result of a table that never opened.
  */
 export const TABLE_STATES = ["not_started", "live", "frozen", "final"] as const;
 export type TableState = (typeof TABLE_STATES)[number];
@@ -42,18 +29,10 @@ export const profileSummarySchema = z.object({
 export type ProfileSummary = z.infer<typeof profileSummarySchema>;
 
 /**
- * What the participant scored, in whichever of the two shapes the contest's
- * mode makes a result.
- *
- * `penalty` is ICPC's and is sent in no other mode, which is what makes it the
- * honest discriminator: in ICPC scoring `points` is always zero — the server
- * writes none — so a row that read points there would report nought for four
- * solved questions.
- *
- * There is deliberately no place. Naming one means computing a whole standings
- * table per contest to decorate an overview (design §2.1); `placeOpen` says
- * only whether the report has a place to show, which is true of a final table
- * or a freeze an organiser revealed.
+ * What the participant scored. `penalty` is sent only under ICPC scoring,
+ * where `points` is always zero. No place here: naming one would compute a
+ * standings table per contest for an overview (docs/ARCHITECTURE.md §9.5);
+ * `placeOpen` says whether the report can show one.
  */
 export const profileResultSchema = z
   .object({
@@ -82,15 +61,13 @@ export const profileContestSchema = z
     status: z.enum(CONTEST_STATUSES),
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
-    /** The caller's own standing on the roster: registered, active, finished, disqualified. */
+    /** The caller's standing on the roster: registered, active, finished, disqualified. */
     registration_status: z.string(),
     /** Whether the contest has ended for this caller, and so whether its report opens. */
     over: z.boolean(),
     /**
-     * Absent for a contest that is not over for the caller. Absent rather than
-     * zeroed on purpose: a row has to tell "nothing to show yet" from "a
-     * result of nought", and during a contest the profile shows nothing of
-     * what is happening inside it (design §1).
+     * Absent, not zeroed, until the contest is over for the caller: "nothing
+     * yet" must differ from a result of nought.
      */
     result: profileResultSchema.optional(),
   })
@@ -115,15 +92,9 @@ export const profileContestsSchema = z.object({
 
 export type ProfileContests = z.infer<typeof profileContestsSchema>;
 
-/**
- * The report of one finished contest — the four tabs of design §2.2, each a
- * read of its own.
- *
- * Only a contest that has ended for this participant has one. Anything else —
- * somebody else's, one still running, one that does not exist — is the same
- * 404 from the API and the same not-found page here, so the screen never has
- * to tell them apart and never tells a reader which of the three it was.
- */
+// The report of one finished contest: four tabs, each its own read. Any
+// contest not ended for this participant is the same 404, so the reader
+// never learns which case it was.
 
 /** What the participant scored, with the place a single contest can afford to name. */
 const reportResultSchema = z
@@ -135,11 +106,8 @@ const reportResultSchema = z
     state: z.enum(TABLE_STATES),
     place_open: z.boolean(),
     /**
-     * Null in two cases, and the interface says something different for each:
-     * the table is not open yet, or it is open and places nobody but its
-     * winner. A place of nought would read as a place, which is why neither
-     * is zeroed. `participants` travels with it — a place is a place among a
-     * number of people, and half of that pair says nothing.
+     * Null, not zero, when the table is not open yet or places only its
+     * winner. `participants` travels with it.
      */
     place: z.number().nullish(),
     participants: z.number().nullish(),
@@ -179,13 +147,11 @@ const reportQuestionSchema = z
     attempts: raw.attempts,
     solved: raw.solved,
     solvedAt: raw.solved_at,
-    /** What the question earned. Always nought in ICPC scoring, which awards none. */
+    /** Always zero under ICPC scoring. */
     points: raw.points,
     /**
-     * What the question cost, in minutes: its solving minute plus the
-     * contest's penalty for each wrong attempt before the solve. ICPC's, and
-     * nought in every other mode, where nothing charges minutes.
-     * `result.scoring` says which of the two a reader is shown.
+     * ICPC only, in minutes: the solving minute plus the penalty for each
+     * wrong attempt before it. Zero in other modes.
      */
     penalty: raw.penalty ?? 0,
   }));
@@ -200,28 +166,17 @@ export const profileReportSchema = z
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
     /**
-     * Null for a row the published table does not carry — a participant below
-     * the table's row bound, or one disqualified before it was computed. Null
-     * rather than an object of zeroes on purpose: a zeroed one would name no
-     * scoring mode and no table state, and a reader shown it is told a result
-     * of nought under rules nobody can name. The rest of the report is still
-     * the participant's own work and still arrives.
+     * Null, not zeroed, for a row the published table does not carry (below
+     * its row bound, or disqualified before it was computed). The rest of the
+     * report still arrives.
      */
     result: reportResultSchema.nullable(),
     started_at: z.string().optional(),
     queries: z.number(),
     successful_queries: z.number(),
-    /**
-     * From the clock starting to the last answer. Absent when either end is
-     * missing: somebody who never started, or never answered, worked for no
-     * stretch this can name.
-     */
+    /** From the clock starting to the last answer; absent if either is missing. */
     worked_ms: z.number().optional(),
-    /**
-     * That the registration was excluded, and not a word about why. The
-     * reason is the organiser's note in the audit trail, which has access
-     * rules of its own (design §1).
-     */
+    /** Never says why: the reason lives in the audit trail. */
     disqualified: z.boolean().optional(),
     questions: z.array(reportQuestionSchema),
     /** More attempts were made than one read of the answers carries. */
@@ -246,11 +201,8 @@ export const profileReportSchema = z
 export type ProfileReport = z.infer<typeof profileReportSchema>;
 
 /**
- * The notes and SQL tabs as the contest left them.
- *
- * No revisions: the history of an edit is a monitoring fact about how
- * somebody worked, and it is the organiser's tool rather than a record the
- * participant is handed back (design §2.2). The API sends none.
+ * The notes and SQL tabs as the contest left them. No revisions: edit history
+ * is the organiser's monitoring tool.
  */
 export const profileWorkspaceSchema = z
   .object({
@@ -272,12 +224,10 @@ export const profileWorkspaceSchema = z
 
 export type ProfileWorkspace = z.infer<typeof profileWorkspaceSchema>;
 
-/** One finished contest of the caller's own: `/me/contests/{id}/…`. */
 function myContestBase(contestId: string): string {
   return `/me/contests/${encodeURIComponent(contestId)}`;
 }
 
-/** The caller's own queries, with the filters given and no parameter for the rest. */
 export function myQueriesPath(contestId: string, params: QueriesParams): string {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
@@ -288,7 +238,7 @@ export function myQueriesPath(contestId: string, params: QueriesParams): string 
   return text ? `${myContestBase(contestId)}/queries?${text}` : `${myContestBase(contestId)}/queries`;
 }
 
-/** GET /me/contests/{id}/queries, from the browser. */
+/** Browser-side read of the caller's own queries. */
 export async function fetchMyQueries(
   contestId: string,
   params: QueriesParams,
@@ -302,11 +252,8 @@ export async function fetchMyQueries(
 }
 
 /**
- * The caller's own log as a file, as a link the browser downloads.
- *
- * An address on this origin, never a blob built in the page: what leaves the
- * server is decided by the server, and the page holds one bounded slice of
- * the log anyway (see ExportMenu's own doc).
+ * The caller's log as a download link. A server address, not a blob built in
+ * the page, which holds only a bounded slice of the log.
  */
 export function myCsvHref(contestId: string): string {
   return `${API_PREFIX}${myContestBase(contestId)}/log.csv`;

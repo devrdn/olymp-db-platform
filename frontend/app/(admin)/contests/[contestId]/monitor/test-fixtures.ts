@@ -1,9 +1,6 @@
 import type { FeedDetail, FeedItem, MonitorFlags, RosterRow } from "@/lib/api/monitor";
 
-/**
- * Builders shared by this screen's tests: one participant row and one feed
- * item, each with nothing remarkable about it unless a test says otherwise.
- */
+/** Test builders: an unremarkable participant row and feed item. */
 
 export const NO_FLAGS: MonitorFlags = {
   multipleIps: false,
@@ -39,7 +36,7 @@ export function rosterRow(id: string, overrides: Partial<RosterRow> = {}): Roste
   };
 }
 
-/** A feed item whose cursor is `cursor`; a query that ended well unless told otherwise. */
+/** A feed item with this cursor; a successful query unless overridden. */
 export function feedItem(cursor: string, overrides: Partial<FeedItem> = {}): FeedItem {
   const detail: FeedDetail = {
     type: "query",

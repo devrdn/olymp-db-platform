@@ -29,11 +29,6 @@ describe("participantSchema", () => {
   });
 });
 
-/**
- * Removing and disqualifying are different acts. Somebody who has started
- * cannot be deleted — their queries and answers are part of the record of the
- * contest — so excluding them keeps everything they did.
- */
 describe("removable", () => {
   test("is true only before a participant has started", () => {
     expect(removable(participant("registered"))).toBe(true);
@@ -57,11 +52,6 @@ describe("parseLogins", () => {
     ]);
   });
 
-  /**
-   * A name pasted twice is not a failure to report. Sent as two lines, the API
-   * skips the second as `already_enrolled`, and the author is shown a problem
-   * they did not create.
-   */
   test("sends one copy of a login pasted twice", () => {
     expect(parseLogins("st12345\nst12345")).toEqual(["st12345"]);
   });
@@ -73,8 +63,6 @@ describe("parseLogins", () => {
 
 describe("importResultSchema", () => {
   test("keeps every skipped line with the reason it was skipped", () => {
-    // A partial success is the honest answer: one typo in three hundred rows
-    // must not reject the other two hundred and ninety-nine.
     const parsed = importResultSchema.parse({
       added: 298,
       skipped: [

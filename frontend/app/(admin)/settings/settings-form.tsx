@@ -12,13 +12,8 @@ import { saveSettingsAction, type SettingsState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The installation's own details.
- *
- * One form and one save, because these are one thing: a name and the address
- * to write to when it goes wrong are both answers to "whose installation is
- * this". Nothing here is a server setting — the palette in particular is not,
- * because colours are tokens whose contrast the system guarantees and a field
- * for them would be a field for breaking it (SPEC 3.3).
+ * The installation's details in one form. Colours are not a setting: they are
+ * tokens with guaranteed contrast (SPEC 3.3).
  */
 export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dictionary }) {
   const t = dict.settings;
@@ -32,8 +27,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
     : null;
 
   return (
-    // Keyed on what the server last returned, so a saved value replaces what
-    // was typed rather than the field keeping a stale draft.
+    // Keyed on the server's values, so a save replaces the draft.
     <form
       key={settings.name + settings.contact}
       action={formAction}
@@ -58,7 +52,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
           {pending ? t.saving : t.save}
         </Button>
 
-        {/* `status`, not `alert`: a save that worked is not an interruption. */}
+        {/* `status`, not `alert`: a successful save is not an interruption. */}
         {state.saved && !failure ? (
           <p role="status" className="text-small text-good">
             {t.saved}

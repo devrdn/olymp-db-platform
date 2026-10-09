@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — those would not exist yet when the factory
-// actually runs (the same pattern `people/actions.test.ts` already uses).
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -28,23 +25,14 @@ beforeEach(() => {
 });
 
 /**
- * Reviewer finding: the shape fieldset (`question_mode`, `progression`,
- * `scoring`, `timing`, `duration_min`) is disabled once the contest starts,
- * and a disabled radio group submits nothing at all — but the action used to
- * fall back to a hard-coded default for each of them regardless, so a save
- * that only touched the schedule or the leaderboard label sent
- * `question_mode: "multi"`, `progression: "free"`, `scoring: "points"` and
- * `timing: "fixed"` alongside it. `checkRunningChange` on the Go side then
- * refused the *whole* request for any running contest that was not already
- * that exact shape — every running ICPC contest included.
+ * A running contest's disabled shape fieldset submits nothing; sending defaults
+ * instead would make the server's `checkRunningChange` refuse the whole save.
  */
 describe("saveSettingsAction, a running contest's locked shape", () => {
   test("sends none of the shape fields, only what the open panels actually carried", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    // What a locked shape fieldset actually submits: nothing. The schedule,
-    // the leaderboard's own name column and the access panel stay open on a
-    // running contest, so their fields are present as usual.
+    // A locked shape submits nothing; the open panels submit as usual.
     await saveSettingsAction(
       {},
       form({
@@ -64,25 +52,17 @@ describe("saveSettingsAction, a running contest's locked shape", () => {
     for (const key of ["question_mode", "progression", "scoring", "timing", "duration_min", "icpc_penalty_min"]) {
       expect(init.body).not.toHaveProperty(key);
     }
-    // The panels that stayed open still went through, on the very same save.
+    // The open panels still went through.
     expect(init.body).toMatchObject({ enrollment: "open" });
   });
 
   test("still refuses an invalid rate or grace on the same locked-shape save", async () => {
-    // The shape being absent must not short-circuit the rest of the form's
-    // own validation — a locked shape and a broken access panel are two
-    // different problems, and only the second one belongs to this test's
-    // sibling suite below, but a regression that made every locked-shape
-    // save always "succeed" without checking anything else would be just as
-    // wrong as the one this fix corrects.
+    // An absent shape must not skip validation of the rest of the form.
     serverRequest.mockResolvedValueOnce({});
     await saveSettingsAction({}, form({ queryRateLimitPerMin: "-5" }));
     expect(serverRequest).toHaveBeenCalledTimes(1);
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
-    // A negative rate has no valid representation, so it degrades to the
-    // safest bound (no limit) rather than sending a negative number through —
-    // existing behaviour, unaffected by this fix, pinned here so a future
-    // change to the shape logic cannot quietly break it too.
+    // A negative rate degrades to no limit rather than being sent.
     expect(init.body.settings.query_rate_limit_per_min).toBe(0);
   });
 });

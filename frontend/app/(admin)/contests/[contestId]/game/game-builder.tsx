@@ -14,27 +14,17 @@ import { saveGameDefinitionAction, type GameState } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** One column of a table, as the editor works on it — `ColumnDefinition`
- * (`lib/api/game.ts`) plus a client-only `key` so a row can be reordered or
- * removed without React losing track of which `<input>` belongs to which
- * column, the same reason `key` exists on `DraftTable` below. */
+/**
+ * `ColumnDefinition` plus a client-only `key`, so reordering or removing keeps
+ * each `<input>` with its column.
+ */
 type DraftColumn = { key: string; name: string; type: string; nullable: boolean };
 
 /**
- * One table, as the editor works on it.
- *
- * `originalName` is the name this table had in the definition the page
- * loaded with, or `null` for a table the organiser has added since — it is
- * what `locked` (below) keys off, and it is deliberately not the same field
- * as `name`: a table already saved may still be renamed while it holds no
- * data, and a rename must not itself unlock a table that has some (an
- * organiser retyping a table's name one letter at a time must not find its
- * own row count reset to "empty" for the length of that edit).
- *
- * `primaryKeyKeys` names columns by their own `key`, not by name, for the
- * same reason: a column may be renamed while the table is unlocked, and a
- * primary key stored as a set of names would silently stop matching the
- * column it meant the moment that rename landed.
+ * One table in the editor. `originalName` is the saved name (`null` for a new
+ * table) and is what `locked` keys off, so renaming one letter at a time never
+ * unlocks a table with data. `primaryKeyKeys` uses column keys, not names, so a
+ * rename does not break the primary key.
  */
 type DraftTable = {
   key: string;
@@ -45,20 +35,16 @@ type DraftTable = {
 };
 
 let keyCounter = 0;
-/** A client-only identity for a table or column added in this session —
- * `crypto.randomUUID()` would do as well, but this needs no browser API and
- * is exercised the same way under `jsdom`. Never sent to the server: `toWire`
- * strips it back out. */
+/** Client-only identity for a table or column; `toWire` strips it. */
 function nextKey(): string {
   keyCounter += 1;
   return `k${keyCounter}`;
 }
 
-/** Turns the saved definition into the editor's own draft shape, minting a
- * client-only `key` for every table and column and translating
- * `primary_key`'s column *names* into the `key`s those columns just got —
- * `DraftTable`'s own doc explains why the editor tracks a primary key by
- * key rather than by name from this point on. */
+/**
+ * Builds the draft from the saved definition, minting keys and mapping
+ * `primary_key` names to them.
+ */
 function initialiseTables(tables: GameDefinition["tables"]): DraftTable[] {
   return tables.map((table) => {
     const columns = table.columns.map((c) => ({ key: nextKey(), name: c.name, type: c.type, nullable: c.nullable }));
@@ -78,40 +64,17 @@ function toWireDefinition(tables: DraftTable[]) {
 }
 
 /**
- * The third way to build a contest's game: tables and columns described
- * directly, alongside the SQL editor and the finished-dump upload above it
- * on this same page. `page.tsx`'s own doc explains why all three stay on
- * one screen rather than a tab each — an organiser choosing between them is
- * choosing between three ways to produce the very thing `GameEditor`'s own
- * status tag already reports on.
+ * Builds the game from tables and columns described directly.
  *
- * # Why a table with data locks its own structure
+ * The server refuses changes to the name, columns or primary key of a table
+ * holding data (`game_definition_table_locked`): a rename or removed column
+ * breaks the file header at the next build, and a type change can load silently
+ * since the header has no types. This screen disables those edits first rather
+ * than waiting for the 409.
  *
- * `SetDefinition` refuses a save that would change the name, columns or
- * primary key of a table that already holds data
- * (`provisioning.ErrDefinitionTableLocked`, `game_definition_table_locked`
- * on the wire) — a rename or a column's removal disagrees with the file's
- * own header at the next build; a type change is worse, because the header
- * only names columns, never their types, so a value that still happens to
- * parse under the new one loads silently. That refusal is real and this
- * screen cannot be bypassed around it (talking to the API directly still
- * gets the 409), but waiting for a request to come back to say "no" is a
- * worse experience than not offering the edit at all, so this screen still
- * disables it client-side first: a table whose row count (`rowCounts`,
- * lifted from `page.tsx`'s own best-effort read and kept current from every
- * write `GameBuilderTable` makes) is above zero has its name, columns and
- * primary key disabled, with `lockedTable`'s own sentence saying why, and
- * only removing that data first lifts the lock. Adding an all-new table, or
- * editing one that still has none, is never affected.
- *
- * `rowCounts` is deliberately `Lines`, not the deletion-adjusted count: the
- * server's own check above locks on a table's rows existing at all, ever
- * — a tombstoned row still leaves its file's old header behind — so a
- * delete that emptied every active row must not, on its own, read as
- * "unlocked" here. `activeRowCounts` (below) is the other number,
- * `ActiveRows()`, kept apart for exactly that reason: it is what
- * `lockedTable`'s own sentence shows, and it is the one a delete actually
- * moves.
+ * The lock reads `rowCounts` (`Lines`), not the deletion-adjusted count: a
+ * tombstone leaves the old header behind, so deleting every row must not
+ * unlock. `activeRowCounts` is what the sentence shows.
  */
 export function GameBuilder({
   contestId,
@@ -122,24 +85,17 @@ export function GameBuilder({
   dict,
 }: {
   contestId: string;
-  /** The definition as `page.tsx` read it, and the table names the data
-   * section below may show a tab for — `GameBuilderTable` reads
-   * `SetDefinition`'s own current, saved structure, never this component's
-   * unsaved draft. */
+  /** The saved definition; `GameBuilderTable` reads this, never the unsaved draft. */
   definition: GameDefinition;
-  /** Each table's row count as the page loaded, keyed by its *current*
-   * name. Lifted into local state below because every write a table's own
-   * data panel makes (`GameBuilderTable`'s `onRowCountChange`) has to be
-   * reflected here immediately — the lock this component enforces would
-   * otherwise only ever see the count the page happened to load with. */
+  /**
+   * Each table's `Lines` at page load, by current name. Kept in local state
+   * because every data write must update the lock immediately.
+   */
   rowCounts: Record<string, number>;
-  /** Each table's own chunked CSV upload the page found still receiving,
-   * keyed by table name, or null — `page.tsx`'s own `tableCurrentUpload`,
-   * passed straight through to `GameBuilderTable` so a reload can resume
-   * an unfinished table upload the same way `GameUpload` already resumes an
-   * unfinished dump. Read once, unlike `rowCounts`: an upload's own state
-   * lives entirely inside `GameBuilderTable` afterward and never needs this
-   * component to keep it current. */
+  /**
+   * Each table's upload still receiving at page load, by name, passed to
+   * `GameBuilderTable` for resuming. Read once.
+   */
   currentTableUploads?: Record<string, TableData | null>;
   editable: boolean;
   dict: Dictionary;
@@ -149,18 +105,10 @@ export function GameBuilder({
   const limits = definition.builderLimits;
 
   const [tables, setTables] = useState<DraftTable[]>(() => initialiseTables(definition.tables));
-  // `rowCounts` is `TableData.Lines` per table — never reduced by a delete
-  // (a tombstoned row leaves the file's own header exactly as it was), and
-  // the one `locked` below reads, since that is what the server's own
-  // structure lock actually checks (`checkTableDataCompatibility`,
-  // `tabledata.go`). `activeRowCounts` is `TableData.ActiveRows()`, the
-  // deletion-adjusted count `TableCard` shows next to a locked table's own
-  // name — seeded from the same initial read (the best guess available
-  // before any write has reported the true split) and kept current
-  // separately from then on, exactly the two `GameBuilderTable` callbacks
-  // below report separately. One shared variable for both used to mean a
-  // delete's own report (lower) and the very next window fetch's report
-  // (unchanged) fought over what a single number meant.
+  // `rowCounts` (`Lines`) drives the lock and never drops on a delete;
+  // `activeRowCounts` is what `TableCard` shows. Both start from the same read
+  // and are updated separately, since one shared number let a delete and a
+  // later window fetch overwrite each other.
   const [rowCounts, setRowCounts] = useState<Record<string, number>>(initialRowCounts);
   const [activeRowCounts, setActiveRowCounts] = useState<Record<string, number>>(initialRowCounts);
   const [activeTable, setActiveTable] = useState(definition.tables[0]?.name ?? "");
@@ -291,11 +239,7 @@ export function GameBuilder({
             {state.code ? (messageForCode(state.code, errors)) : state.saved ? tb.saved : ""}
           </span>
         </div>
-        {/* `Definition.Validate`'s own refusals name a table or column
-            (`ErrDefinitionInvalidName` and friends — `actions.ts`'s own
-            `GameState.detail` doc explains why that text is worth carrying
-            up), shown beside the dictionary's own sentence above rather
-            than in place of it. */}
+        {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}
         {state.code && state.detail ? (
           <div className="flex flex-col gap-1">
             <p className="text-label text-ink-3">{tb.detailLabel}</p>
@@ -345,11 +289,10 @@ export function GameBuilder({
   );
 }
 
-/** One table's own structure: its name, its columns, and which of them make
- * up its primary key. A pure presentational block — every edit it reports
- * goes back up to `GameBuilder`'s own state through the callbacks it is
- * given, so this component holds nothing itself that could drift from the
- * `DraftTable` it was handed. */
+/**
+ * One table's name, columns and primary key. Presentational: every edit goes
+ * back up through callbacks.
+ */
 function TableCard({
   table,
   editable,
@@ -369,10 +312,7 @@ function TableCard({
   table: DraftTable;
   editable: boolean;
   locked: boolean;
-  /** The active (deletion-adjusted) row count shown in `lockedTable`'s own
-   * sentence — `GameBuilder`'s own `activeRowCounts`, never the `rowCounts`
-   * that decides `locked` itself: the two answer different questions (this
-   * component's own doc on why). */
+  /** Active row count for the locked sentence, not the count that decides `locked`. */
   rowCount: number;
   limits: GameDefinition["builderLimits"];
   dict: Dictionary;

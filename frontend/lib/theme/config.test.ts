@@ -2,12 +2,6 @@ import { describe, expect, test } from "vitest";
 
 import { DEFAULT_THEME, nextTheme, readTheme, themeAttribute, THEMES } from "./config";
 
-/**
- * Coverage for code that arrived without it. The theme is read on the server
- * before anything renders, so a value out of this file decides what the very
- * first byte of HTML says — there is no second chance to correct it in the
- * browser.
- */
 describe("readTheme", () => {
   test("accepts each theme the system declares", () => {
     for (const theme of THEMES) {
@@ -26,9 +20,6 @@ describe("readTheme", () => {
 
 describe("themeAttribute", () => {
   test("stamps nothing for the system theme", () => {
-    // The absence of the attribute is what lets the prefers-color-scheme block
-    // in tokens.css apply; writing data-theme="system" would need a third
-    // branch in CSS saying exactly the same thing.
     expect(themeAttribute("system")).toBeUndefined();
   });
 

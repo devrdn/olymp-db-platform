@@ -5,9 +5,8 @@ import { loadContest, loadContestResource } from "../contest";
 import { StaffStandingsView } from "./staff-standings";
 
 /**
- * The contest's leaderboard for its staff. At /standings rather than
- * /leaderboard, because /contests/{id}/leaderboard is the public page and two
- * route groups may not answer the same address.
+ * The staff leaderboard, at /standings because /contests/{id}/leaderboard is
+ * the public page and two route groups may not share an address.
  */
 export default async function StandingsPage(props: PageProps<"/contests/[contestId]/standings">) {
   const [{ contestId }, locale, dict] = await Promise.all([props.params, activeLocale(), activeDictionary()]);

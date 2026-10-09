@@ -10,56 +10,34 @@ import { refusalKind } from "./refusals";
 export type { PasteTarget, Signal };
 
 /**
- * What the play screen tells the organiser about its own participant's
- * browser (docs/ARCHITECTURE.md §9.4,
- * §2.2): leaving the page, and pasting into the SQL editor, an answer or the
- * notes. The organiser's screen calls these signals, not proof — the browser
- * reports them, and a participant's browser can be made to say anything —
- * and the participant is told on this same screen that they are observed
- * (§8).
+ * What the play screen reports to the organiser about its participant's
+ * browser (docs/ARCHITECTURE.md §9.4): leaving the page, and pasting
+ * into the SQL editor, an answer or the notes. These are signals, not proof,
+ * since a browser can be made to say anything, and the participant is told
+ * they are observed. `SignalCollector` keeps these rules:
  *
- * The rules, all kept by `SignalCollector` below:
- *
- * - an absence starts when the page is hidden (`visibilitychange`) or the
- *   window loses focus (`blur`), whichever comes first, and ends on the first
- *   return (visible again, or focused again); a hide and a blur that overlap
- *   are one absence. It is recorded on the return, and only when it lasted a
- *   second or more — or, when the page goes away (`pagehide`) without the
- *   participant coming back, then, with the time away so far;
- * - a paste is recorded where it lands inside an element marked with
- *   `data-paste-target` (`editor`, `answer` or `notes`), with its length and
- *   its first 500 characters. One listener on the document, in the capture
- *   phase and passive, so it sees the paste before CodeMirror or React do and
- *   never changes what the paste does;
- * - signals wait in memory and leave in batches of at most 50: every 10 s
- *   when there is something to send, and at once — as a `keepalive` request —
- *   when the page is hidden or goes away (`pagehide`). A hide less than 5 s
- *   after the last batch left sends nothing of its own: switching tabs
- *   quickly would otherwise spend the twelve batches a minute on hides and
- *   silence the organiser's live view for a minute; the timer and
- *   `pagehide` still send;
- * - a batch lost on the network, refused for the rate (429, after its
- *   `Retry-After`) or by a server error goes back into the buffer, in the
- *   order the signals happened, and leaves again later. The buffer holds at most 200 signals; past that
- *   the oldest go first, so an unreachable server never costs more memory
- *   than that;
- * - a batch refused as such (another 4xx) is dropped: sending it again would
- *   be refused again;
- * - once the contest has closed for the participant (409
- *   `contest_ended`, `contest_finished` or `deadline_passed`), the
- *   participant is not on its roster (403 `not_a_participant`), or the
- *   session has ended (any 401), the collector stops for good:
- *   every later batch would be refused alike. `address_not_allowed` is not
- *   final — a laptop briefly on a hotspot is outside the network for a
- *   moment — so that batch is dropped like any other refusal and collecting
- *   goes on, at one refused request per 10 s at most;
- * - `contest_not_running` (a contest not open now) does not stop it either,
- *   and needs nothing of its own: signals are collected only on the running
- *   screen, and a running contest's one way onward is to finish — it can
- *   never go back to draft — so it cannot arrive mid-work. Should it arrive
- *   anyway, the batch is dropped like any other refusal;
- * - a page restored from the back/forward cache (`pageshow` with
- *   `persisted`) records the time since its `pagehide` as an absence.
+ * - an absence starts at the first of a hidden page or a window blur and ends
+ *   at the first return; it is recorded on return if it lasted at least a
+ *   second, or on `pagehide` with the time away so far;
+ * - a paste inside an element marked `data-paste-target` (`editor`, `answer`,
+ *   `notes`) is recorded with its length and first 500 characters, by one
+ *   passive capture-phase listener that sees it before CodeMirror or React
+ *   and never changes it;
+ * - signals leave in batches of at most 50: every 10 s when there are any,
+ *   and at once as `keepalive` when the page is hidden or goes away. A hide
+ *   within 5 s of the last batch sends nothing of its own (the timer and
+ *   `pagehide` still send), or quick tab switching would spend the twelve
+ *   batches a minute and silence the organiser's live view;
+ * - a batch lost on the network, rate-limited (429, after `Retry-After`) or
+ *   failed by the server returns to the buffer in signal order; the buffer
+ *   keeps the newest 200;
+ * - any other refused batch is dropped, since it would be refused again;
+ * - a closed contest (409 `contest_ended`, `contest_finished`,
+ *   `deadline_passed`), `not_a_participant` (403) or any 401 stops the
+ *   collector for good. `address_not_allowed` and `contest_not_running` only
+ *   drop the batch;
+ * - a page restored from the back/forward cache records the time since its
+ *   `pagehide` as an absence.
  *
  * Nothing here is React state: a signal never re-renders the screen.
  */
@@ -75,12 +53,10 @@ export const SIGNAL_BUFFER_MAX = 200;
 /** How much of a paste is kept (`monitor.MaxPasteTextRunes`). */
 export const SIGNAL_PASTE_TEXT_MAX = 500;
 /**
- * The largest body a `keepalive` batch may have. Browsers allow 64 KiB of
- * `keepalive` bodies in flight per page, shared with the autosave's own last
- * save on the way out, which matters more. Keeping the signals to a quarter
- * of it is a best-effort share, not a reserve: whichever `pagehide` listener
- * runs first takes the quota first, and nothing here decides that order.
- * Whatever does not fit waits for the next send.
+ * The largest `keepalive` batch body. Browsers allow 64 KiB of `keepalive`
+ * bodies in flight per page, shared with the autosave's last save, which
+ * matters more. A quarter is a best-effort share, not a reserve: whichever
+ * `pagehide` listener runs first takes the quota. What does not fit waits.
  */
 export const SIGNAL_KEEPALIVE_BYTES = 16 * 1024;
 /** A hide this soon after the last batch left does not send one of its own. */
@@ -93,9 +69,8 @@ export type SendSignals = (events: Signal[], options: { keepalive: boolean }) =>
 
 /**
  * Whether every later batch would be refused the same way, so the collector
- * stops. Not a refusal for the address: a laptop briefly on a hotspot is
- * outside the contest's network for a moment, and stopping would silence
- * monitoring until a reload.
+ * stops. Not the address refusal: a laptop briefly on a hotspot would
+ * otherwise silence monitoring until a reload.
  */
 function isFinal(code: string): boolean {
   const kind = refusalKind(code);
@@ -158,13 +133,12 @@ export class SignalCollector {
     };
     const onBlur = () => this.leave();
     const onFocus = () => this.back();
-    // The page going away ends an open absence: often the most telling one,
-    // a participant who hid the tab and never came back to it.
+    // The page going away ends an open absence, often the most telling one.
     const onPageHide = (event: PageTransitionEvent) => {
       this.back();
       this.flush(true);
-      // Kept in the back/forward cache: the page may come back, and the
-      // time until it does is an absence like any other.
+      // Kept in the back/forward cache: the time until it returns is an
+      // absence.
       if (event.persisted) this.leave();
     };
     const onPageShow = (event: PageTransitionEvent) => {
@@ -263,8 +237,7 @@ export class SignalCollector {
   private flush(keepalive: boolean) {
     if (this.stopped || this.buffer.length === 0) return;
     if (Date.now() < this.quietUntil) return;
-    // One ordinary send at a time; the one on the way out goes regardless,
-    // with whatever the ordinary one did not take.
+    // One ordinary send at a time; the one on the way out goes regardless.
     if (this.inFlight && !keepalive) return;
 
     const batch = this.take(keepalive);
@@ -280,8 +253,7 @@ export class SignalCollector {
   private failed(batch: Signal[], error: unknown) {
     if (this.stopped) return;
     if (error instanceof ApiError) {
-      // A 401 is final too, whatever its code: the session has ended, and
-      // retrying would hold the batch and send it every ten seconds forever.
+      // A 401 is final whatever its code: the session has ended.
       if (isFinal(error.code) || error.status === 401) {
         this.stop();
         return;
@@ -293,10 +265,9 @@ export class SignalCollector {
         return;
       }
     }
-    // Lost or deferred: back into the buffer in the order the signals
-    // happened. Two batches in flight can fail in either order, so putting
-    // this one at the front is not enough; a stable sort by the browser's own
-    // time (ISO strings compare as times) restores it.
+    // Lost or deferred: back into the buffer in signal order. Two batches can
+    // fail in either order, so a stable sort by `client_at` (ISO strings
+    // compare as times) restores it.
     this.buffer.unshift(...batch);
     this.buffer.sort((a, b) => (a.client_at < b.client_at ? -1 : a.client_at > b.client_at ? 1 : 0));
     this.trim();

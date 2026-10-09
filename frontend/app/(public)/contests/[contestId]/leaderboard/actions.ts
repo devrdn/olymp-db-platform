@@ -8,10 +8,9 @@ import { serverRequest } from "@/lib/api/server";
 import { activeLocale } from "@/lib/i18n/server";
 
 /**
- * Reads a contest's public table (GET /contests/{id}/leaderboard) for the page
- * that polls it. Open to a visitor with no session, exactly as the endpoint
- * is; the visitor's own address is forwarded, so the API's per-address limit
- * falls on them and not on this server.
+ * Reads the public table (GET /contests/{id}/leaderboard) for polling, without
+ * a session. The visitor's address is forwarded so the API's per-address limit
+ * falls on them, not this server.
  */
 export async function fetchPublicStandingsAction(contestId: string): Promise<StandingsResult> {
   if (!isId(contestId)) return { kind: "refused", code: "not_found" };

@@ -41,9 +41,8 @@ describe("a line diff of two revisions", () => {
   });
 
   /**
-   * Two bodies at the size limit that differ everywhere would be billions of
-   * cells; past the bound the middle is shown as removed then added, and the
-   * diff says it is not the smallest.
+   * Two maximum-size bodies differing everywhere would need billions of cells;
+   * past the bound the diff is marked inexact.
    */
   test("past its bound, shows the changed middle whole instead of the smallest diff", () => {
     const side = Math.ceil(Math.sqrt(MAX_DIFF_CELLS)) + 1;

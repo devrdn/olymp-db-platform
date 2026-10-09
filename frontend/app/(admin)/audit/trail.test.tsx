@@ -43,9 +43,7 @@ describe("AuditTrailRegister", () => {
   });
 
   test("shows a code it has no wording for rather than dropping the line", () => {
-    // The trail is a record. Hiding an entry because the interface has not
-    // caught up with the server would make the record lie, which is worse than
-    // showing a reader something raw.
+    // Hiding an untranslated entry would make the record lie.
     render(
       <AuditTrailRegister entries={[entry({ action: "contest.rehearsal" })]} {...props} dict={dict} />,
     );
@@ -54,8 +52,7 @@ describe("AuditTrailRegister", () => {
   });
 
   test("names the system rather than leaving the actor blank", () => {
-    // An empty cell reads as missing data. An entry with no actor is the
-    // system acting, and that is a fact worth stating.
+    // No actor means the system acted, which is stated.
     render(
       <AuditTrailRegister
         entries={[entry({ actor_id: undefined, actor_login: undefined })]}
@@ -75,8 +72,7 @@ describe("AuditTrailRegister", () => {
   });
 
   test("does not offer a reset when nothing has been recorded at all", () => {
-    // There is no filter to clear, and a button that cannot help is worse than
-    // none: it suggests the emptiness is the reader's doing.
+    // No filter to clear, so no reset button.
     render(<AuditTrailRegister entries={[]} {...props} dict={dict} />);
 
     expect(screen.getByText(dict.audit.emptyAll)).toBeInTheDocument();
@@ -108,9 +104,7 @@ describe("AuditTrailRegister, what an action changed", () => {
   };
 
   test("names the fields that moved, on the closed row", () => {
-    // A register is read by scanning down a column; a row that grows to a
-    // paragraph per edit destroys that. The names are what a reader is
-    // scanning for — "was the schedule touched?" — and they fit on the line.
+    // Names fit on the line, so the column stays scannable.
     const { container } = render(
       <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
     );
@@ -119,8 +113,7 @@ describe("AuditTrailRegister, what an action changed", () => {
   });
 
   test("stays closed until somebody opens it", () => {
-    // A row that arrives already unfolded is the paragraph-per-edit problem
-    // again, wearing a triangle.
+    // Closed by default.
     const { container } = render(
       <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
     );
@@ -129,8 +122,7 @@ describe("AuditTrailRegister, what an action changed", () => {
   });
 
   test("holds both values of every field, in the row itself", () => {
-    // They lived in a title attribute before, which is a tooltip: invisible on
-    // a touch screen, impossible to copy, and found by accident if at all.
+    // Not in a `title` attribute, which touch users cannot reach.
     const { container } = render(
       <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
     );
@@ -138,14 +130,12 @@ describe("AuditTrailRegister, what an action changed", () => {
     const values = container.querySelector("dl");
     expect(values).toHaveTextContent("2026-11-08T19:30:00Z");
     expect(values).toHaveTextContent("2026-11-08T22:30:00Z");
-    // An emptied list reads as an absence, not as nothing at all.
+    // An emptied list reads as an absence.
     expect(values).toHaveTextContent("10.20.0.0/16");
   });
 
   test("says a save moved nothing, and offers nothing to open", () => {
-    // The server records it deliberately; hiding it would make the entry
-    // indistinguishable from an edit the reader cannot see. There is simply
-    // nothing underneath it.
+    // Recorded on purpose; there is just nothing to disclose.
     const { container } = render(
       <AuditTrailRegister
         entries={[entry({ action: "contest.update", payload: { changed: false } })]}
@@ -172,10 +162,8 @@ describe("AuditTrailRegister, what an action changed", () => {
   });
 });
 
-// Finding 3: a contest.start_blocked entry names why, via the same problem
-// codes the publish gate's own screen already carries wording for
-// (workspace.gate.problems) — an organizer reading "a contest did not
-// start" must be able to see which check failed without leaving the trail.
+// A contest.start_blocked entry names the failed check with the publish gate's
+// wording.
 describe("AuditTrailRegister, why a contest did not start", () => {
   const blocked = (problems: string[]) =>
     entry({ action: "contest.start_blocked", entity_id: "c-1", payload: { problems } });
@@ -200,9 +188,7 @@ describe("AuditTrailRegister, why a contest did not start", () => {
   });
 
   test("shows a code it has no wording for rather than dropping it", () => {
-    // The same rule as an unknown action: the trail is a record, and this is
-    // the one line that names why a contest is stuck — hiding it because the
-    // interface has not caught up would be worse than showing it raw.
+    // Unknown codes are shown raw, as with unknown actions.
     render(
       <AuditTrailRegister entries={[blocked(["a_future_check"])]} {...props} dict={dict} />,
     );
@@ -219,10 +205,9 @@ describe("AuditTrailRegister, why a contest did not start", () => {
   });
 });
 
-// A wrong password and a login that does not exist collapse into the same
-// reason on the wire (§7.2), and the trail must not un-collapse them — an
-// administrator reading a blocked account's failed attempt must not be able
-// to tell "wrong password" from "wrong password against a blocked account".
+// A wrong password and an unknown login share one reason on the wire
+// (docs/ARCHITECTURE.md §7.2), and the trail keeps them together; a blocked
+// account and throttling have reasons of their own.
 describe("AuditTrailRegister, why a sign-in failed", () => {
   const failed = (reason?: string) =>
     entry({ action: "auth.login_failed", entity_id: "u-1", payload: { login: "s.popescu", reason } });
@@ -252,9 +237,8 @@ describe("AuditTrailRegister, why a sign-in failed", () => {
   });
 
   test("adds nothing for an entry recorded before the reason existed", () => {
-    // The register always renders one <p> of its own (the "N recorded"
-    // count above the table), so the absence of a reason line is "still
-    // exactly one", not "none at all".
+    // The register always renders one <p> (the count), so no reason line means
+    // exactly one.
     const { container } = render(
       <AuditTrailRegister entries={[failed(undefined)]} {...props} dict={dict} />,
     );
@@ -265,9 +249,7 @@ describe("AuditTrailRegister, why a sign-in failed", () => {
 
 describe("AuditTrailRegister, what the action was about", () => {
   test("names the contest and links to it", () => {
-    // "Changed the reference answers · Contest" answers half a question. The
-    // half that matters is which contest, and the next thing a reader wants
-    // is to open it.
+    // The reader needs which contest, as a link.
     render(
       <AuditTrailRegister
         entries={[
@@ -303,8 +285,7 @@ describe("AuditTrailRegister, what the action was about", () => {
   });
 
   test("keeps the identifier of something that no longer exists", () => {
-    // The trail outlives what it describes. Without a name the identifier is
-    // the only handle left, so it is shown rather than dropped.
+    // The trail outlives its subjects; the id is the only handle left.
     render(
       <AuditTrailRegister
         entries={[
@@ -322,9 +303,7 @@ describe("AuditTrailRegister, what the action was about", () => {
 
 describe("AuditTrailRegister, an edit that touched many fields", () => {
   test("names the first few and counts the rest", () => {
-    // A settings save can move ten fields. Listing all of them turns one row
-    // into a paragraph and undoes the register — and past the first few the
-    // names stop being scannable anyway.
+    // Past the first few, names are counted rather than listed.
     const changes = Object.fromEntries(
       ["a_one", "b_two", "c_three", "d_four", "e_five"].map((field) => [
         field,
@@ -356,7 +335,7 @@ describe("AuditTrailRegister, an edit that touched many fields", () => {
       />,
     );
 
-    // Closed, the row names the first few; opened, it holds every one.
+    // Closed, the first few; open, every one.
     expect(screen.getByText("a_one, b_two, c_three +1")).toBeInTheDocument();
     expect(screen.getByText("d_four")).toBeInTheDocument();
   });

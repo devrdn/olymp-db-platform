@@ -20,10 +20,7 @@ function Harness({ defaultValue }: { defaultValue: string }) {
 }
 
 describe("the hand-rolled tabs", () => {
-  // Finding 1: every panel must actually be in the DOM the whole time — a
-  // hidden one included — for state inside it (a scroll position, a
-  // half-typed value) to survive a switch. Only `hidden` may be what keeps
-  // it out of view.
+  // State inside a hidden panel survives only if the panel stays in the DOM.
   test("keeps every panel in the DOM, hiding the ones not selected with the hidden attribute", () => {
     render(<Harness defaultValue="one" />);
 
@@ -33,8 +30,6 @@ describe("the hand-rolled tabs", () => {
     expect(screen.getByText("Panel two").closest('[role="tabpanel"]')).toHaveAttribute("hidden");
   });
 
-  // Finding 6's own accessibility bar: a screen reader must still be able to
-  // tell which tab is selected.
   test("marks exactly the selected tab aria-selected", async () => {
     render(<Harness defaultValue="one" />);
 
@@ -59,8 +54,6 @@ describe("the hand-rolled tabs", () => {
     expect(panel).toHaveAttribute("aria-labelledby", tab.id);
   });
 
-  // Only the selected tab sits in the regular tab order (roving tabindex) —
-  // arrow keys, not Tab, move focus among the rest.
   test("only the selected tab is in the tab order", () => {
     render(<Harness defaultValue="two" />);
 
@@ -94,8 +87,6 @@ describe("the hand-rolled tabs", () => {
     expect(screen.getByRole("tab", { name: "One" })).toHaveFocus();
   });
 
-  // Manual activation: moving focus with arrow keys must not by itself
-  // change which panel is showing.
   test("arrow-key focus movement does not select a tab on its own", async () => {
     render(<Harness defaultValue="one" />);
     screen.getByRole("tab", { name: "One" }).focus();
@@ -107,8 +98,7 @@ describe("the hand-rolled tabs", () => {
     expect(screen.getByText("Panel one")).toBeVisible();
   });
 
-  // Enter/Space on a focused tab does select it — ordinary native <button>
-  // behaviour, not anything this component wires up by hand.
+  // Native `<button>` behaviour, not wired by hand.
   test("Enter activates the focused tab", async () => {
     render(<Harness defaultValue="one" />);
     screen.getByRole("tab", { name: "One" }).focus();

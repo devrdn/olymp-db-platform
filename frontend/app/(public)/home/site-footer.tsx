@@ -6,13 +6,8 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Theme } from "@/lib/theme/config";
 
 /**
- * Whether a contact is an address somebody can write to.
- *
- * The setting is one free-text row, and an installation may well put a room
- * number or a telephone in it. Only something shaped like an email becomes a
- * `mailto:` link; anything else is shown as the text it is, because a link
- * that opens a mail client on "Block C, room 214" is a broken promise, and
- * refusing to show it at all would be hiding the one way to reach anybody.
+ * The contact as an email address, or empty. The setting is free text and may
+ * hold a room or phone number, which is shown as plain text.
  */
 function mailAddress(contact: string): string {
   const trimmed = contact.trim();
@@ -20,21 +15,9 @@ function mailAddress(contact: string): string {
 }
 
 /**
- * The foot of the front page, and the first footer this product has.
- *
- * The working screens have none on purpose: they are a workspace, and
- * everything they offer is in the bar. This page is read rather than worked
- * in, and it is the one page a stranger arrives on, so it ends by saying whose
- * installation this is and how to reach them.
- *
- * The language and theme controls are the bar's own components rather than
- * copies. Both are forms submitting to Server Actions, so they work here
- * exactly as they do above — with no JavaScript, and with the page coming back
- * already painted in the new theme. A visitor who has scrolled the whole page
- * should not have to scroll back up to change either.
- *
- * Everything is handed in: the page above reads the settings, the cookies and
- * the dictionary once, which keeps this renderable without a running API.
+ * The front page footer: whose installation this is and how to reach them, plus
+ * the bar's own language and theme controls (Server Action forms, so they work
+ * without JavaScript). Everything is passed in, so it renders without an API.
  */
 export function SiteFooter({
   name,
@@ -43,9 +26,9 @@ export function SiteFooter({
   theme,
   dict,
 }: {
-  /** What this installation calls itself, already resolved to something. */
+  /** The installation's name, already resolved. */
   name: string;
-  /** How to reach whoever runs it, straight from the settings row. */
+  /** The raw contact setting. */
   contact: string;
   locale: Locale;
   theme: Theme;
@@ -55,11 +38,7 @@ export function SiteFooter({
 
   return (
     <footer>
-      {/* `rule={false}`: every other band draws a rule under itself to
-          separate it from the next one, and there is nothing after this one —
-          a hairline along the bottom of the page separates the page from the
-          browser. A class cannot say this: `className` lands on the content
-          column, and the rule belongs to the section around it. */}
+      {/* The last band draws no rule under itself. */}
       <Band rule={false} className="gap-8 py-10 max-narrow:py-8">
         <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-5">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">

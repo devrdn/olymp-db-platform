@@ -11,13 +11,7 @@ beforeAll(async () => {
   en = await getDictionary("en");
 });
 
-/**
- * The hero is the same page for everybody; one thing moves with the visitor.
- *
- * Sending somebody who is already signed in back to the sign-in form is
- * offering them a door they are standing behind, so the main action becomes
- * the way into their own work instead.
- */
+/** A signed-in visitor's main action leads to their own work, not the sign-in form. */
 describe("the hero", () => {
   test("offers the way in to a visitor, and the way to work to an account", () => {
     const { rerender } = render(<Hero name="Olymp Database System" signedIn={false} dict={en} />);
@@ -27,11 +21,7 @@ describe("the hero", () => {
     expect(screen.getByRole("link", { name: en.home.hero.mine })).toHaveAttribute("href", "/my");
   });
 
-  /**
-   * The catalogue at `/open` lives behind sign-in, so pointing a visitor
-   * without a session at it would hand them the sign-in form where they asked
-   * for a list of contests. The contests are on this page instead.
-   */
+  /** `/open` is behind sign-in, so a visitor without a session goes to the list on this page. */
   test("sends a visitor to the contests on this page, not to a catalogue behind sign-in", () => {
     render(<Hero name="X" signedIn={false} dict={en} />);
     expect(screen.getByRole("link", { name: en.home.hero.browse })).toHaveAttribute("href", "#contests");

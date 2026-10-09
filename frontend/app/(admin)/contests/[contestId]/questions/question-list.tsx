@@ -26,19 +26,10 @@ const HEAD =
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-top";
 
 /**
- * The question list, as a register in the contest's own order.
- *
- * The order is the thing being edited here, so it is the thing the screen is
- * built around: a numbered column, and a move on each row. Drag-and-drop was
- * the obvious alternative and it is the wrong one — the list is the one place
- * that has to work from a keyboard without exception, and a question moved by
- * mistake in a published contest is a question every participant meets in a
- * different place.
- *
- * Each move submits the complete new order rather than "swap 3 and 4", which
- * is what the endpoint takes: the repository performs the exchange inside a
- * transaction with a deferred constraint, because midway through it both rows
- * hold the same position.
+ * The question list in contest order, with move controls rather than
+ * drag-and-drop so it works from a keyboard. Each move submits the complete new
+ * order; the repository swaps inside a transaction with a deferred constraint,
+ * since both rows briefly share a position.
  */
 export function QuestionList({
   contestId,
@@ -52,9 +43,7 @@ export function QuestionList({
   questions: Question[];
   languages: string[];
   editable: boolean;
-  // The contest's scoring mode. A question has no points in ICPC scoring
-  // (decision 1 of the ICPC design doc), so the column is not shown there,
-  // as the question editor disables the field.
+  // ICPC has no per-question points, so the column is hidden.
   scoring: Scoring;
   dict: Dictionary;
 }) {
@@ -64,8 +53,7 @@ export function QuestionList({
   if (questions.length === 0) {
     return (
       <div className="flex flex-col gap-8 border-t border-line">
-        {/* `empty`, never `empty-filtered`: this list has no filters, so there
-            is no control to clear and offering one would be a lie. */}
+        {/* This list has no filters to clear. */}
         <StateView state={{ kind: "empty", title: t.empty.title, body: t.empty.body }} />
         {editable ? <AddQuestion contestId={contestId} dict={dict} /> : null}
       </div>
@@ -106,10 +94,8 @@ export function QuestionList({
 
               return (
                 <tr key={question.id} className="transition-colors duration-(--t-input) ease-standard hover:bg-panel">
-                  {/* The contest's own numbering, not this row's position in
-                      the array. The question's screen prints the same figure,
-                      and two screens deriving it separately is how they come to
-                      disagree about which question is open. */}
+                  {/* The contest's numbering, not the array index, so this and
+                     the question screen agree. */}
                   <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3")}>
                     {String(question.ord).padStart(2, "0")}
                   </td>
@@ -119,9 +105,8 @@ export function QuestionList({
                       href={`/contests/${contestId}/questions/${question.id}`}
                       className="block w-fit max-w-body text-row text-ink underline decoration-edge underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"
                     >
-                      {/* The first line of the body in any language it has.
-                          A question is recognised by its words, and a draft
-                          with none still needs to be openable. */}
+                      {/* The body's first line in any language; a draft without
+                         one is still openable. */}
                       {firstLine(question) || (
                         <span className="text-ink-3">{t.untitled}</span>
                       )}
@@ -138,13 +123,9 @@ export function QuestionList({
 
                   <td className={CELL}>
                     <div className="flex flex-wrap gap-1.5">
-                      {/* Only what is wrong or unusual is marked. A row with no
-                          tags is a question that is finished, and that is worth
-                          being able to see down the column. */}
-                      {/* `title` cannot be reached by touch or keyboard, so
-                          the explanation sits beside the tag as the same
-                          Tooltip every "?" affordance in the product uses,
-                          rather than on the tag itself. */}
+                      {/* Only what is wrong or unusual is marked. */}
+                      {/* A Tooltip beside the tag, since `title` is unreachable
+                         by touch or keyboard. */}
                       {!question.isVisible ? (
                         <span className="flex items-center gap-1">
                           <Tag tone="mute">{t.hidden}</Tag>
@@ -180,7 +161,6 @@ export function QuestionList({
   );
 }
 
-/** The body's opening line, in whichever language has one. */
 function firstLine(question: Question): string {
   for (const text of Object.values(question.texts)) {
     const line = text.bodyMd.trim().split("\n")[0];
@@ -190,11 +170,8 @@ function firstLine(question: Question): string {
 }
 
 /**
- * Moving one question, and deleting it.
- *
- * Three forms rather than one with three buttons: the delete needs a
- * confirmation the moves must not inherit, and a shared pending flag would
- * grey out the move while the delete is in flight.
+ * Move and delete controls. Separate forms, so the delete's confirmation and
+ * pending state do not affect the moves.
  */
 function RowControls({
   contestId,
@@ -293,9 +270,7 @@ function DeleteQuestion({
     <form
       action={formAction}
       className="contents"
-      /* A question and its reference answers do not come back. The confirm is
-         native because it must also work before hydration, which is exactly
-         when a stray click is most likely. */
+      /* Deletion is permanent. A native confirm also works before hydration. */
       onSubmit={(event) => {
         if (!window.confirm(t.confirmRemove)) event.preventDefault();
       }}

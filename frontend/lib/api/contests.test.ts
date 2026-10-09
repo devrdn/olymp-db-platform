@@ -56,12 +56,6 @@ describe("contestListSchema", () => {
     });
   });
 
-  /**
-   * The cover travels with the listing, because the one screen that shows a
-   * picture above a story (design spec §10) already reads this listing and
-   * must not ask a second time for a hash — a participant's screen is under
-   * a timer.
-   */
   test("carries the cover a contest wears", () => {
     const payload = {
       items: [
@@ -87,11 +81,7 @@ describe("contestListSchema", () => {
     });
   });
 
-  /**
-   * Absent is "no picture", not a broken listing: the fields are omitted for
-   * a contest wearing a drawn cover, and an older server omits them for
-   * every contest. Either way the screen draws a cover rather than failing.
-   */
+  // A drawn cover omits the fields, and so does an older server.
   test("reads a listing with no cover fields as a contest with no picture", () => {
     const payload = {
       items: [
@@ -159,11 +149,6 @@ describe("contestSchema", () => {
     expect(parsed.settings.queryRateLimitPerMin).toBe(30);
   });
 
-  /**
-   * Go writes `duration_min: null` for a contest on the fixed timing model,
-   * because the field is a pointer. Left as `null` it would reach a number
-   * input as the string "null".
-   */
   test("reads how the leaderboard is frozen, labelled and revealed", () => {
     expect(contestSchema.parse(detail).leaderboard).toEqual({
       freezeMin: 30,
@@ -175,16 +160,12 @@ describe("contestSchema", () => {
     ).toEqual({ freezeMin: null, names: "login", revealedAt: undefined });
   });
 
-  /**
-   * Whether the viewer may monitor the contest is the server's decision,
-   * sent only with the read of one contest; a write's answer, which omits
-   * it, reads as "no" rather than failing.
-   */
   test("reads whether the viewer may monitor the contest", () => {
     expect(contestSchema.parse({ ...detail, may_monitor: true }).mayMonitor).toBe(true);
     expect(contestSchema.parse(detail).mayMonitor).toBe(false);
   });
 
+  // Go writes `null` for fixed timing; left as is, a number input would show "null".
   test("reads a null duration as an absent one", () => {
     const parsed = contestSchema.parse({ ...detail, timing: "fixed", duration_min: null });
 
@@ -195,10 +176,6 @@ describe("contestSchema", () => {
     expect(() => contestSchema.parse({ ...detail, status: "cancelled" })).toThrow();
   });
 
-  // The ICPC penalty travels alongside scoring rather than nested under
-  // `leaderboard` — it is a property of the contest, not of the table — and
-  // is present whatever the scoring mode is, since the mode can still be
-  // reverted before the contest starts.
   test("accepts ICPC scoring and reads its own penalty", () => {
     const parsed = contestSchema.parse({ ...detail, scoring: "icpc", icpc_penalty_min: 15 });
 
@@ -214,11 +191,6 @@ describe("titleIn", () => {
     expect(titleIn(contest, "en")).toBe("Night in the archive");
   });
 
-  /**
-   * An editing screen with a blank heading tells the author nothing about
-   * which contest they have open. A listing must not do this — which is why
-   * the server negotiates that one instead of this function.
-   */
   test("falls through to the contest's default when the read language has none", () => {
     expect(titleIn(contest, "ru")).toBe("Noapte în arhivă");
   });
@@ -262,12 +234,6 @@ describe("defaultLanguage", () => {
   });
 });
 
-/**
- * Two lines, not one, and the gap between them is the point. Settings stay
- * open while a contest runs — extending the window after a power cut is
- * exactly what a running contest needs — while the content and the shape
- * freeze at the start, because people are already answering under them.
- */
 describe("the editing windows", () => {
   test("content closes when the contest starts", () => {
     expect(contentEditable("draft")).toBe(true);
@@ -290,8 +256,6 @@ describe("the editing windows", () => {
 
 describe("NEXT_STATUSES", () => {
   test("lets a published contest be pulled back to draft", () => {
-    // Publishing is how an author finds out the gate passes. Undoing it must
-    // not require deleting the contest.
     expect(NEXT_STATUSES.published).toContain("draft");
   });
 
@@ -305,9 +269,6 @@ describe("NEXT_STATUSES", () => {
   });
 });
 
-// Finding 4: the question editor and the settings panel must read this rule
-// from the one place the Go side also reads it from (contests.Contest's own
-// SequentialActive), not repeat the two-field comparison themselves.
 describe("sequentialActive", () => {
   test("is true only under sequential progression and multi question mode", () => {
     expect(sequentialActive({ progression: "sequential", questionMode: "multi" })).toBe(true);
@@ -317,12 +278,6 @@ describe("sequentialActive", () => {
   });
 });
 
-/**
- * The ICPC penalty is locked with the rest of the shape once the contest
- * starts (`shapeEditable`), the same as the scoring radio it sits beside — a
- * disabled field submits nothing, and that has to read as "leave it alone",
- * never as "clear it" (there is no cleared state for a penalty in this mode).
- */
 describe("icpcPenaltyFromForm", () => {
   test("reads a locked field as 'send no key'", () => {
     expect(icpcPenaltyFromForm(null)).toEqual({ ok: true, value: undefined });
@@ -346,22 +301,8 @@ describe("icpcPenaltyFromForm", () => {
   });
 });
 
-/**
- * Reviewer finding: `question_mode`, `progression`, `scoring` and `timing`
- * (with `duration_min`) all live in the same fieldset a running contest
- * disables — a disabled radio group submits nothing at all, not its own
- * default — and the settings action used to fall back to a hard-coded
- * default (`"multi"`, `"free"`, `"points"`, `"fixed"`) whenever a field was
- * absent. `checkRunningChange` on the Go side then refused the *whole*
- * PATCH the moment any one of those defaults disagreed with what the
- * contest actually held — which is every running contest that is not
- * `multi`/`free`/`points`/`fixed`, on a save that touched none of it (only
- * the schedule, say, or the leaderboard label).
- *
- * Each field here is therefore included only when the form actually
- * submitted it, the same "absent = leave unchanged" contract
- * `icpcPenaltyFromForm` above already gives `icpc_penalty_min`.
- */
+// A running contest disables the shape fieldset, so its fields are absent, and
+// a defaulted one would make the API refuse the whole PATCH.
 describe("shapeFromForm", () => {
   test("sends nothing at all when the whole shape is locked", () => {
     expect(shapeFromForm(shapeForm({}))).toEqual({ ok: true, value: {} });
@@ -391,10 +332,6 @@ describe("shapeFromForm", () => {
   });
 
   test("sends a null duration for fixed timing, never leaving it unset", () => {
-    // `Update` on the Go side forces `duration_min` to null whenever the
-    // contest's own timing ends up fixed either way — but the form always
-    // says so explicitly while the fieldset is open, rather than depending
-    // on that.
     expect(
       shapeFromForm(shapeForm({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" })),
     ).toEqual({
@@ -410,9 +347,6 @@ describe("shapeFromForm", () => {
   });
 
   test("never validates a duration when the shape is locked, whatever a stray field carries", () => {
-    // Nothing renders `durationMin` while `timing` itself is absent, but a
-    // garbage value reaching this function anyway must not block a save
-    // that has nothing to do with the shape.
     expect(shapeFromForm(shapeForm({ durationMin: "not a number" }))).toEqual({ ok: true, value: {} });
   });
 
@@ -432,12 +366,6 @@ describe("coverHref", () => {
   const contestId = "f767af3b-f135-40d2-a3a6-82d368de1004";
   const hash = "9f2c1ab4d5e6f70819a2b3c4d5e6f7081920a2b3c4d5e6f70819a2b3c4d5e6f7";
 
-  /**
-   * The path names the contest, not the file, so the hash has to travel in
-   * the query: without it the address of a replaced cover is the address of
-   * the old one, and the API answers a plain address with a minute of caching
-   * rather than the year an exact file earns.
-   */
   test("carries the hash, so a replaced cover is a different address", () => {
     expect(coverHref(contestId, hash)).toBe(
       `/api/v1/public/contests/${contestId}/cover?size=800&v=${hash}`,

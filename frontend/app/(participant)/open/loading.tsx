@@ -3,11 +3,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { activeDictionary } from "@/lib/i18n/server";
 
 /**
- * A skeleton shaped like the register, not a spinner: a spinner says "wait", a
- * skeleton says "here is what is coming". Its rows carry the real row height
- * and the real column offsets, so nothing moves when the data lands — the
- * trailing block stands in for the join control, which is the widest thing in
- * its column and therefore the one worth reserving.
+ * A skeleton shaped like the register, with the real row height and column
+ * offsets so nothing moves when the data lands; the trailing block reserves
+ * the join control, the widest thing in its column.
  */
 export default async function Loading() {
   const dict = await activeDictionary();

@@ -53,10 +53,7 @@ describe("a contest that has ended", () => {
     expect(link).toHaveAttribute("href", "/profile/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01");
   });
 
-  // ICPC writes no points at all: the result there is how many questions were
-  // solved and what the wrong attempts cost. A row printing "0 points" over
-  // four solved questions would be reporting the mode's own convention as a
-  // score.
+  // ICPC has no points: solved count and penalty are the result.
   test("under ICPC scoring counts solved questions and penalty, never points", () => {
     render_(
       list([
@@ -82,10 +79,7 @@ describe("a contest that has ended", () => {
     expect(within(row).queryByText(en.profile.contests.points)).not.toBeInTheDocument();
   });
 
-  // The numbers are read down the list, not across one row, so every row is
-  // the same two columns: a column sized by its own caption puts an ICPC
-  // row's figures somewhere else than the row above it, and a row carrying
-  // the sentence about a shut table drags its numbers away from the edge.
+  // Every row uses the same right-aligned column, whatever the mode.
   test("sets every figure on the same column, whatever the mode calls it", () => {
     render_(
       list([
@@ -105,9 +99,8 @@ describe("a contest that has ended", () => {
       ]),
     );
 
-    // jsdom lays nothing out, so what can be checked here is the rule that
-    // produces the alignment: one column with a width floor, set to its right
-    // edge. The widths themselves are for the browser pass.
+    // jsdom has no layout, so this checks the rule: one floored column aligned
+    // right.
     const columns = ["60", "3", "4", "1200"].map(
       (value) => screen.getByText(value).parentElement?.className,
     );
@@ -116,9 +109,7 @@ describe("a contest that has ended", () => {
     expect(columns[0]).toContain("text-right");
   });
 
-  // The list carries no place at all, and says so rather than leaving a gap:
-  // a frozen table is not a missing result, it is a result that is not public
-  // yet. The profile does not go round the freeze.
+  // No place while the table is closed, said rather than left blank.
   test("says the place is not there yet while the table is closed", () => {
     render_(
       list([
@@ -138,11 +129,8 @@ describe("a contest that has ended", () => {
     expect(screen.getByText(en.profile.contests.placePending)).toBeInTheDocument();
   });
 
-  // A contest that never opened is not a frozen one, and the sentence a
-  // frozen row gets would promise a table an organiser is about to reveal.
-  // Somebody disqualified before the window opened is finished with the
-  // contest, so this is the row they are shown: their own nothing, and a
-  // plain explanation.
+  // A contest that never opened must not promise a reveal (e.g. disqualified
+  // before the start).
   test("says the table has not opened when the contest never started", () => {
     render_(
       list([
@@ -171,11 +159,7 @@ describe("a contest that has ended", () => {
     expect(screen.queryByText(en.profile.contests.placePending)).not.toBeInTheDocument();
   });
 
-  // A contest can be over for this participant — their own timer ran out, or
-  // they were disqualified — while the clock says it is still running. What
-  // such a row must never do is fall back to the sentence a contest still to
-  // come gets: "starts" on something already finished is the one reading that
-  // is certainly wrong.
+  // Over for this participant while still running: never say "starts".
   test("stays quiet rather than announcing a start it is past", () => {
     render_(
       list([
@@ -192,13 +176,7 @@ describe("a contest that has ended", () => {
     ).toBeInTheDocument();
   });
 
-  /**
-   * The live tag belongs to a contest the reader can walk back into. On a row
-   * that is over for them — their timer ran out, or they were disqualified —
-   * it is an accent pointing at a door that is shut, beside a link to their
-   * finished report. The contest is still running for everybody else, which
-   * is not this reader's row to say.
-   */
+  /** No live tag once the contest is over for this reader, though it runs for others. */
   test("drops the live tag once the contest is over for this reader", () => {
     render_(list([finished({ title: "Cut short", status: "running", over: true })]));
 
@@ -240,13 +218,10 @@ describe("a contest that is running", () => {
     const row = screen.getByRole("listitem");
     const link = within(row).getByRole("link", { name: en.profile.contests.enter });
     expect(link).toHaveAttribute("href", "/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d02/play");
-    // The tag stays here: this contest is running for this reader, and the
-    // accent is pointing at a door they can walk through.
+    // Running for this reader, so the tag stays.
     expect(within(row).getByText(en.contests.status.running)).toBeInTheDocument();
 
-    // Nothing about what is happening inside it: no result, no report. What a
-    // participant needs mid-contest is on the contest's own screen, under
-    // that screen's rules.
+    // No result or report mid-contest; that belongs to the contest screen.
     expect(within(row).queryByText(en.profile.contests.points)).not.toBeInTheDocument();
     expect(within(row).queryByText(en.profile.contests.solved)).not.toBeInTheDocument();
     expect(
@@ -295,8 +270,7 @@ describe("the list itself", () => {
     ).toBeInTheDocument();
   });
 
-  // The larger of the page's two reads, and still not the page: the header
-  // above it is what a failed list must not take down with it.
+  // A failed list must not take the header down.
   test("gives up in one line when the read failed", () => {
     render_(null);
 

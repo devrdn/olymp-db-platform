@@ -8,7 +8,7 @@ import { serverRequest } from "@/lib/api/server";
 
 export type QuestionListState = { code?: string };
 
-/** Both identifiers reach a request path, so both are checked before they do. */
+/** Both ids reach a request path, so both are validated first. */
 function ids(form: FormData): { contestId: string; questionId?: string } | null {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return null;
@@ -31,20 +31,14 @@ async function attempt(
 
   if (failure) return { code: failureCode(failure) };
 
-  // The list, the publish gate on the overview and the question's own screen
-  // are all describing what just changed.
+  // The list, the publish gate and the question screen all changed.
   revalidatePath(`/contests/${contestId}`, "layout");
   return {};
 }
 
 /**
- * A new question, created bare.
- *
- * A typed-answer question with no text and no options is valid on the Go side,
- * and that is the point: the author gets a row to open and fill in rather than
- * a modal demanding six decisions before anything exists. The publish gate is
- * what insists on the text and the reference answer, at the moment those
- * actually matter.
+ * Creates a bare question, valid on the server, so the author gets a row to
+ * fill in; the publish gate demands text and answers later.
  */
 export async function addQuestionAction(
   _previous: QuestionListState,
@@ -78,13 +72,8 @@ export async function deleteQuestionAction(
 }
 
 /**
- * Reordering, submitted as the whole new order rather than as a move.
- *
- * That is the endpoint's shape, and it is the right one: the repository does
- * the swap inside a transaction with a deferred uniqueness constraint, because
- * half way through exchanging two questions both rows hold the same position.
- * A "move question 3 up" API would have to reconstruct that order server-side
- * from a list the client already knows.
+ * Submits the whole new order: the repository swaps inside a transaction with a
+ * deferred uniqueness constraint, since mid-swap both rows share a position.
  */
 export async function reorderQuestionsAction(
   _previous: QuestionListState,

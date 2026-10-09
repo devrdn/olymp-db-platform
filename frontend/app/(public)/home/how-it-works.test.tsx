@@ -12,11 +12,7 @@ beforeAll(async () => {
 });
 
 describe("the three points", () => {
-  /**
-   * Three sentences laid out by the same loop is where one of them quietly
-   * becomes a second copy of another, and a reader has no way to know that
-   * the promise they are not being told about was ever meant to be there.
-   */
+  /** Each of the three points appears once. */
   test("says all three things, each of them once", () => {
     render(<HowItWorks dict={en} />);
 

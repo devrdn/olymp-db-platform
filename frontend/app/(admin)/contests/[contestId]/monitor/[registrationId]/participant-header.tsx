@@ -10,13 +10,9 @@ import { FlagBadges } from "../participants-table";
 const TERM = "font-mono text-label text-ink-3 uppercase";
 
 /**
- * Who the page is about: name and login, registration status, when their
- * clock started and when they finished, their flags as the participants
- * table shows them, their CSV, and the way back to the whole contest.
- *
- * `flags` is null when the participants table did not carry this
- * registration (a contest past the table's bound): the heading then says
- * nothing about flags rather than "none".
+ * The participant: name, login, status, clock start and finish, flags, CSV and
+ * the way back. `flags` is null when the table did not carry this registration
+ * (past its bound); then nothing is said rather than "none".
  */
 export function ParticipantHeader({
   contestId,

@@ -7,15 +7,10 @@ import { StateView } from "@/components/product/state-view";
 import { SessionDictionary } from "@/lib/i18n/client";
 
 /**
- * When the account screen could not be built.
- *
- * It exists because this group is the one that decides, from `/auth/me`,
- * whether somebody is signed in — and that question now has three answers, not
- * two. "You are not signed in" is a redirect to the form; "the server did not
- * answer" is this screen, with a retry that can actually work.
- *
- * Collapsing the second into the first is what made a restarted API look like
- * an expired session, and sent people back to a form they had just filled in.
+ * The profile could not be built. This group decides from `/auth/me` whether
+ * someone is signed in: "not signed in" redirects to the form, "the server did
+ * not answer" lands here with a retry. Conflating them made a restarted API
+ * look like an expired session.
  */
 export default function ProfileError({
   error,

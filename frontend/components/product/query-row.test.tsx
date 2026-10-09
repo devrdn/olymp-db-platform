@@ -16,7 +16,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** The organiser's words and the address column: the fuller of the two rows. */
+/** The staff row, with the address column. */
 function renderRow(query = loggedQuery(1), address = true) {
   return render(
     <ol>
@@ -52,11 +52,7 @@ describe("one query", () => {
     expect(screen.queryByText(/rows/)).not.toBeInTheDocument();
   });
 
-  /**
-   * A participant's own report shows the same row without the address: it is
-   * their own, it explains nothing to them, and it is in the way (design
-   * §2.2). Not even "no address" — there is no column to leave empty.
-   */
+  /** A participant's report has no address column at all, not even "no address". */
   test("leaves the address out where it is not asked for", () => {
     renderRow(loggedQuery(1, { ip: "10.0.0.5" }), false);
 

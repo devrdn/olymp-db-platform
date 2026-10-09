@@ -4,9 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// Server Actions ("use server"): the real module would pull Next's server
-// runtime into a component test, the same reason `title-editor.test.tsx`
-// fakes its own.
+// The real Server Actions would pull in Next's server runtime.
 vi.mock("./actions", () => ({
   uploadImageAction: vi.fn(async () => ({})),
   removeImageAction: vi.fn(async () => ({})),
@@ -20,12 +18,7 @@ beforeAll(async () => {
   dict = await getDictionary("en");
 });
 
-/**
- * The string the client named as the example of a mixed hint: the rule was
- * put above the upload on purpose, so a 5 MB photo from a phone is not chosen
- * blind and refused after the fact. The rule stays on screen; only the
- * reasons behind it move behind the "?".
- */
+/** The accepted-format rule stays on screen; only the reasons move behind the "?". */
 describe("ImageSlots, the accepted-format rule and its reasons", () => {
   test("shows what is accepted before anything is chosen", () => {
     render(<ImageSlots images={{}} dict={dict} />);

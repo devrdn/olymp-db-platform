@@ -228,11 +228,7 @@ function icpcStandings(overrides: Partial<Standings> = {}): Standings {
   };
 }
 
-/**
- * The table row for a label, distinguished from the podium's own copy of the
- * same name (both are on screen at once on `page`, since the podium filters
- * to the same placed, scoring rows the table shows).
- */
+/** The table row for a label, not the podium's copy of the same name. */
 function tableRowOf(label: string): HTMLElement {
   const tr = screen
     .getAllByText(label)
@@ -259,8 +255,7 @@ describe("the ICPC standings", () => {
     expect(screen.getByText(t.columns.solved)).toBeInTheDocument();
     expect(screen.getByText(t.columns.penalty)).toBeInTheDocument();
     expect(screen.queryByText(t.columns.points)).not.toBeInTheDocument();
-    // The panel never renders the grid, so no cell competes with these cells
-    // for the same digits.
+    // The panel has no grid, so no cell competes for the same digits.
     const cells = within(rowOf("alpha")).getAllByRole("cell");
     expect(cells.at(-2)).toHaveTextContent("2");
     expect(cells.at(-1)).toHaveTextContent("65");
@@ -350,12 +345,8 @@ describe("the ICPC standings", () => {
     show(wide, "page");
 
     const table = screen.getByRole("table");
-    // Place (w-14 = 3.5rem) + solved (w-20 = 5rem) + penalty (w-20 = 5rem)
-    // + 12 grid cells (w-12 = 3rem each) + a still-legible 12rem name column.
-    // A phone never shows the grid (`max-narrow:hidden` on every grid cell),
-    // so the variable is only ever consumed from `narrow` up — an
-    // unconditional `min-width` would force a sideways scroll on a phone for
-    // a grid nobody there can see.
+    // Place 3.5 + solved 5 + penalty 5 + 12 grid cells × 3 + name floor 12
+    // (rem). Consumed only from `narrow` up, since phones never show the grid.
     expect(table.style.getPropertyValue("--grid-min-width")).toBe("61.5rem");
     expect(table.className).toContain("narrow:min-w-(--grid-min-width)");
     expect(table.style.minWidth).toBe("");

@@ -23,13 +23,7 @@ describe("destinationAfterLogin", () => {
   });
 });
 
-/**
- * `guardRedirect` carries the requested path along as `?next=` so signing in
- * resumes the journey instead of dropping the visitor on a listing. Reading it
- * back is the other half of that, and it is the half that is worth testing:
- * an unchecked `next` is a login-page open redirect, which is the classic way
- * a phishing link borrows a real domain.
- */
+// An unchecked `next` would make sign-in an open redirect.
 describe("destinationAfterLogin, resuming an interrupted journey", () => {
   const staff = { mustChangePassword: false, permissions: ["contest.create"] };
 
@@ -64,8 +58,6 @@ describe("destinationAfterLogin, resuming an interrupted journey", () => {
   });
 
   test("ignores it entirely while a one-time password is still in force", () => {
-    // Every other request answers password_change_required, so any other
-    // destination would bounce straight back here.
     expect(
       destinationAfterLogin({ mustChangePassword: true, permissions: ["contest.create"] },
         "/contests"),

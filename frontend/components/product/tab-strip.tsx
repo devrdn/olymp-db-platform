@@ -2,39 +2,26 @@ import Link from "next/link";
 
 import { cn } from "@/lib/utils";
 
-/** One tab: where it leads and what it is called. */
 export type Tab = {
   href: string;
   label: string;
 };
 
 /**
- * A strip of linkable tabs, as the monitoring page and a participant's own
- * report both wear it.
- *
- * Links rather than buttons, and the address rather than state: a tab can be
- * kept, shared and reloaded, the server reads that tab's data and only that
- * tab's before the page arrives, and the back button does what a reader
- * expects. `aria-current="page"` marks the one in the address, which is what
- * a screen reader announces — the underline alone says nothing.
- *
- * The strip scrolls sideways inside itself. Five labels do not fit a phone's
- * width, and the rule the whole product holds at 375 px is that the page
- * never scrolls sideways; something on it may.
- *
- * Which tab is current is decided by the caller and passed as the href it
- * matches, because each screen reads its own `?tab=` and knows its own
- * default.
+ * Linkable tabs: the address, not state, holds the tab, so it can be shared and
+ * reloaded and the server reads only that tab's data. `aria-current="page"`
+ * marks the current one. The strip scrolls sideways inside itself so the page
+ * never does at 375px. The caller passes the current href, since each screen
+ * knows its own `?tab=` default.
  */
 export function TabStrip({
   label,
   tabs,
   current,
 }: {
-  /** Names the group for a screen reader — "What this participant did". */
+  /** Names the group for a screen reader. */
   label: string;
   tabs: readonly Tab[];
-  /** The href of the tab in the address. */
   current: string;
 }) {
   return (

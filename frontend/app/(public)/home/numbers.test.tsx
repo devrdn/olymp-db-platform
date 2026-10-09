@@ -12,11 +12,7 @@ beforeAll(async () => {
 });
 
 describe("the four numbers", () => {
-  /**
-   * The one behaviour worth a test here: a strip of zeroes is a claim, and it
-   * is a false one. Nothing on this page can tell a reader that a read failed,
-   * so the only honest answer to a failed read is to say nothing at all.
-   */
+  /** A strip of zeroes would be a false claim, so a failed read hides it. */
   test("a failed read costs the strip, not the page", () => {
     const { container } = render(<Numbers stats={null} dict={en} />);
     expect(container).toBeEmptyDOMElement();
@@ -32,12 +28,7 @@ describe("the four numbers", () => {
     expect(screen.getByText("91244")).toHaveClass(/tabular-nums/);
   });
 
-  /**
-   * Four figures, each under its own caption. A strip that dropped one of
-   * them, or captioned two of them the same way, is a strip nobody can read
-   * the third number of — and the loop that lays them out is exactly where
-   * that happens unnoticed.
-   */
+  /** Each of the four captions appears once. */
   test("names all four, each of them once", () => {
     render(
       <Numbers

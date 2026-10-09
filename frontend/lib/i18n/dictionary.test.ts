@@ -8,21 +8,8 @@ import { LOCALES } from "./config";
 import { getDictionary } from "./dictionary";
 
 /**
- * The audit action vocabulary, read from the contract the backend generates
- * (`docs/api/audit-actions.json`, from `audit.Actions()` — see
- * `backend/cmd/auditcontract`), never from a hand-typed copy.
- *
- * A hand-typed list used to be what the coverage test below checked the
- * dictionaries against, and it was a second copy of the server's vocabulary
- * that nothing tied to the first: an action added to `audit.go` and to
- * `Actions()`, and never copied here, satisfied the Go guard (which reads the
- * same source it is proving) and this test at once. Reading the generated
- * contract makes that impossible — the same way
- * `frontend/scripts/error-codes.mjs` reads `docs/api/error-codes.json`
- * rather than a copy of the server's error codes. A Go-only addition fails
- * `go test ./...` (`cmd/auditcontract`'s own
- * `TestTheCommittedContractIsCurrent`) before it can reach this file
- * un-regenerated.
+ * The audit actions from the generated contract (`docs/api/audit-actions.json`,
+ * from `audit.Actions()`), never a hand-typed copy that could drift from it.
  */
 function contractActions(): string[] {
   const path = "../docs/api/audit-actions.json";
@@ -66,12 +53,7 @@ describe("getDictionary", () => {
   });
 
   test("every action the server can record has a translation in every locale", async () => {
-    // The parity test above only proves the three dictionaries agree with
-    // each other — it says nothing about whether they cover the server's
-    // vocabulary. An action missing from all three at once, the way
-    // `user.delete` and `user.restore` were, would pass that test and still
-    // reach the audit screen as a raw code. The generated contract, not a
-    // copy of it, is the reference this test checks the dictionaries against.
+    // Parity alone would pass an action missing from every locale at once.
     const actions = contractActions();
     const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
 
@@ -84,26 +66,8 @@ describe("getDictionary", () => {
   });
 
   test("every publish-gate problem code has a translation in every locale", async () => {
-    // The publication gate's problem codes are the second closed vocabulary
-    // the audit trail now renders, alongside the actions above
-    // (`contest.start_blocked`'s payload, `trail.tsx`'s `BlockedProblems`) —
-    // and the same failure the action coverage test above exists to catch
-    // (a code reaching the interface with no wording in any language)
-    // applies to it just as much: the constructor's own gate report
-    // (`publish-gate.tsx`) reads from this exact same key.
-    //
-    // Unlike audit actions, there is no generated contract to check this
-    // list against (`docs/api/audit-actions.json`'s own counterpart does not
-    // exist for these): CheckPublishable's problem codes are plain Go string
-    // constants, not values behind a declared-type registry the way
-    // httpx.Error's codes are, so nothing on the backend publishes them as
-    // data yet. PUBLISH_PROBLEMS is this side's own closed list — the status
-    // the audit actions' own list held before their contract existed — and this
-    // is what closes the one drift that actually surfaced in review: two
-    // sequential-progression codes (`sequential_needs_max_attempts`,
-    // `sequential_hides_question`) reaching CheckPublishable with no wording
-    // anywhere in this interface. A generated backend contract remains the
-    // more exact fix if this vocabulary keeps growing.
+    // No generated contract publishes these codes yet, so PUBLISH_PROBLEMS is
+    // the reference.
     const codes = Object.values(PUBLISH_PROBLEMS);
     const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
 
@@ -116,16 +80,7 @@ describe("getDictionary", () => {
   });
 
   test("every login-failure reason has a translation in every locale", async () => {
-    // A third closed vocabulary the audit trail renders, alongside the
-    // action codes and the publish-gate problem codes above
-    // (`auth.login_failed`'s payload, `trail.tsx`'s `LoginFailureReason`).
-    // Same failure to guard against: a reason reaching the interface with no
-    // wording in any language, which is exactly what "Failed to sign in"
-    // with no reason at all looked like before this vocabulary existed.
-    //
-    // No generated backend contract for this one either (the same gap
-    // PUBLISH_PROBLEMS documents above) — LOGIN_FAILURE_REASONS is this
-    // side's own closed list, checked here.
+    // No generated contract here either; LOGIN_FAILURE_REASONS is the reference.
     const codes = Object.values(LOGIN_FAILURE_REASONS);
     const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
 

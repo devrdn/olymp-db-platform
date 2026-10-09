@@ -36,9 +36,6 @@ describe("accountSchema", () => {
   });
 
   test("survives the fields the API leaves out", () => {
-    // `email` and `last_login_at` are omitempty on the wire: an account with
-    // no address and one that has never signed in are ordinary, and a schema
-    // that required them would fail the whole page over a blank cell.
     const account = accountSchema.parse(wire);
 
     expect(account.email).toBeUndefined();
@@ -46,22 +43,16 @@ describe("accountSchema", () => {
   });
 
   test("keeps the flag that says the password is still the handover one", () => {
-    // The screen marks those accounts: an administrator who reset a password
-    // needs to see who has not yet picked their own.
     const account = accountSchema.parse({ ...wire, must_change_password: true });
 
     expect(account.mustChangePassword).toBe(true);
   });
 
   test("refuses a status it has no wording for", () => {
-    // Better a loud failure at the boundary than a row rendering an empty
-    // badge three components later.
     expect(() => accountSchema.parse({ ...wire, status: "banished" })).toThrow();
   });
 
   test("reads a soft-deleted account", () => {
-    // The row stays, only its status moves: deleted is an ordinary status the
-    // list renders, not an account that disappears from the API's answers.
     const account = accountSchema.parse({ ...wire, status: "deleted" });
 
     expect(account.status).toBe("deleted");
@@ -80,17 +71,11 @@ describe("accountSchema", () => {
     expect(account.statusReason).toBe("cheating in the October contest");
     expect(account.statusChangedAt).toBe("2026-03-02T09:00:00Z");
     expect(account.statusChangedBy).toBe("9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6");
-    // Resolved by the server's own query — a LEFT JOIN in
-    // `internal/postgres/users.go` — so the card never has to ask a second
-    // time for the one login it needs.
     expect(account.statusChangedByLogin).toBe("a.admin");
   });
 
   test("reads an empty reason rather than an absent one, for an account nobody has touched", () => {
-    // The four fields are omitted on the wire (see `UserResponse` in
-    // `backend/internal/api/users_handler.go`), and the account card gates its
-    // status panel on `statusReason` being non-empty — a string it can always
-    // compare, not an optional it must first check for presence.
+    // The account card gates its status panel on a non-empty `statusReason`.
     const account = accountSchema.parse(wire);
 
     expect(account.statusReason).toBe("");
@@ -111,7 +96,6 @@ describe("accountListSchema", () => {
 
 describe("roleListSchema", () => {
   test("reads the catalogue the server publishes", () => {
-    // Never a hard-coded list: roles are rows so that adding one is data.
     const roles = roleListSchema.parse({
       items: [
         { code: "student", name: "Student" },
@@ -135,9 +119,6 @@ describe("skippedAccountSchema", () => {
   });
 
   test("keeps a reason it does not recognise rather than rejecting the row", () => {
-    // A newer backend can ship a skip reason before this build knows the
-    // word for it. The row is still an outcome the administrator has to see,
-    // so parsing must not throw and must not drop the field.
     const skipped = skippedAccountSchema.parse({
       id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
       login: "ivanov",
@@ -162,9 +143,6 @@ describe("bulkResultSchema", () => {
   });
 
   test("reads an empty selection outcome", () => {
-    // Every id in the request could be skipped; that is a 200 with an empty
-    // `changed`, not an error, and the schema must not require a non-empty
-    // list.
     const parsed = bulkResultSchema.parse({ changed: [], skipped: [] });
 
     expect(parsed.changed).toEqual([]);
@@ -174,9 +152,7 @@ describe("bulkResultSchema", () => {
 
 describe("createdAccountSchema", () => {
   test("carries the account and the one-time password, exactly as the wire spells the second", () => {
-    // No transform on `one_time_password`: unlike the account nested inside
-    // it, this field is read by its wire name everywhere it is used
-    // (`resetPasswordAction` does the same for `passwordResetSchema`).
+    // Read by its wire name everywhere, so not transformed.
     const parsed = createdAccountSchema.parse({ user: wire, one_time_password: "Xk9-mQ2p" });
 
     expect(parsed.user).toMatchObject({ login: "s.popescu", fullName: "Sergiu Popescu" });

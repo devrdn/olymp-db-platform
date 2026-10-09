@@ -5,17 +5,8 @@ import { loadContest, loadContestResource } from "../contest";
 import { ManagerPanel, ParticipantPanel } from "./people-panels";
 
 /**
- * Who runs the contest, and who takes part in it.
- *
- * Two audiences on one screen because an author appointing a colleague and an
- * author importing a group are doing the same job — deciding who is in the
- * room — and the two lists are read against each other often enough that
- * splitting them would mean navigating between them.
- *
- * Two different permissions guard them on the API, so either list can come
- * back forbidden while the other does not. A forbidden list is rendered as an
- * absent one rather than as a failure for the whole screen: an account that
- * may manage participants but not staff should still get its work done.
+ * Staff and participants on one screen. Each list has its own permission, so a
+ * forbidden one is shown as absent rather than failing the screen.
  */
 export default async function PeoplePage(props: PageProps<"/contests/[contestId]/people">) {
   const [{ contestId }, locale, dict] = await Promise.all([

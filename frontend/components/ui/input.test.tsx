@@ -4,12 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import { Input } from "./input";
 
-/**
- * The import guard for this file lives beside the button's
- * (`button.test.tsx`): the two were the same finding and share one
- * assertion, so a future edit that reaches back for a primitive fails in one
- * place rather than in two that can drift.
- */
+/** The import guard for this component is in `button.test.tsx`. */
 describe("the field", () => {
   test("is a native input, so a form reads it the ordinary way", async () => {
     render(
@@ -32,8 +27,8 @@ describe("the field", () => {
     expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
   });
 
-  // The invalid border is a Tailwind selector on the DOM attribute, so the
-  // attribute has to reach the element for it to mean anything.
+  // The invalid border is a selector on the DOM attribute, so the attribute
+  // must reach the element.
   test("marks itself invalid where it is told to", () => {
     render(<Input aria-label="Login" aria-invalid />);
 

@@ -4,17 +4,9 @@ import { Band } from "@/components/layout/band";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 /**
- * One line for the people who set the questions.
- *
- * A teacher and a participant sign in through the same door — the API has no
- * separate staff endpoint, and where an account lands is decided by the
- * permissions it turns out to hold. What a teacher lacks is not a door but the
- * knowledge that it is theirs too, and a sentence costs less than a second
- * entrance that would have to be kept honest.
- *
- * Deliberately not a section with a heading: it is an aside near the foot of
- * the page, and giving it the weight of "How it works" would suggest the page
- * is addressed to organisers, which it is not.
+ * One aside telling teachers the same sign-in is theirs too (an account's
+ * permissions decide where it lands). Not a headed section: the page is not
+ * addressed to organisers.
  */
 export function OrganiserLine({ dict }: { dict: Dictionary }) {
   const t = dict.home.organisers;

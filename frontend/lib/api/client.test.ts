@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 
 import { ApiError, request } from "./client";
 
-/** A fetch stand-in that answers once with the given body and status. */
 function respondWith(body: unknown, status: number): typeof fetch {
   return async () =>
     new Response(JSON.stringify(body), {
@@ -76,9 +75,6 @@ describe("request", () => {
     expect(seen?.init?.body).toBe('{"status":"published"}');
   });
 
-  // A game upload's chunk is a Blob straight off `File.slice`, sent exactly
-  // as raw bytes go — no content type, no wrapping JSON — the same as the
-  // ArrayBuffer the settings-image upload already sends this way.
   test("sends a Blob body as-is, with no content type declared for it", async () => {
     let seen: RequestInit | undefined;
     const fetchImpl: typeof fetch = async (_url, init) => {
@@ -97,8 +93,6 @@ describe("request", () => {
     expect(seen?.headers).not.toMatchObject({ "content-type": expect.anything() });
   });
 
-  // The one thing a browser-side upload loop needs that a Server Action
-  // never does: a way to cancel a request already in flight.
   test("carries an abort signal through to fetch", async () => {
     let seen: RequestInit | undefined;
     const fetchImpl: typeof fetch = async (_url, init) => {
@@ -114,8 +108,6 @@ describe("request", () => {
 });
 
 describe("what an error is about", () => {
-  // "A function is not available" without saying which is the unactionable
-  // answer this exists to prevent.
   test("carries the subject the server named beside the code", async () => {
     const fetchImpl = respondWith(
       { error: { code: "query_function_not_supported", message: "not allowed" }, subject: "pg_sleep" },
@@ -137,9 +129,6 @@ describe("what an error is about", () => {
     });
   });
 
-  // A syntax error is the one refusal that names a place in the text — the
-  // console needs the character PostgreSQL's own parser pointed at, not just
-  // its words.
   test("carries the position a syntax error named beside the code", async () => {
     const fetchImpl = respondWith(
       { error: { code: "query_parse_error", message: "bad" }, subject: 'syntax error at or near "FRO"', position: 15 },
@@ -163,9 +152,6 @@ describe("what an error is about", () => {
 });
 
 describe("a request the page may not outlive", () => {
-  // The browser-side autosave's last save goes out as the page is being
-  // closed, which only a keepalive request survives; and it names the
-  // session cookie explicitly rather than relying on the default.
   test("carries keepalive and credentials through to fetch", async () => {
     let seen: RequestInit | undefined;
     const fetchImpl: typeof fetch = async (_url, init) => {

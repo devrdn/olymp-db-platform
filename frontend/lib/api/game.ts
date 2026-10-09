@@ -1,22 +1,21 @@
 import { z } from "zod";
 
 /**
- * A contest's game database, as staff manage it.
- *
- * Two reads, not one, and deliberately so: the status is polled while a build
- * runs, and the script is up to half a mebibyte. Carrying the script inside
- * the status would make every poll pay for it.
+ * A contest's game database, as staff manage it. Status and script are
+ * separate reads: the status is polled during a build, and the script can be
+ * half a mebibyte.
  */
+
+/** The states of a contest's game database. */
 export const GAME_STATUSES = [
   /** No script has ever been written. Every contest starts here. */
   "absent",
   /** A script is stored and the build has not run yet. */
   "pending",
-  /** A build is under way. */
   "building",
   /** The template exists and participants' copies can be made from it. */
   "ready",
-  /** The build ran and did not finish. `buildError` says why. */
+  /** The build did not finish; `buildError` says why. */
   "failed",
   /** The reclaim sweep removed the template after the contest ended. */
   "dropped",
@@ -25,16 +24,9 @@ export const GAME_STATUSES = [
 export type GameStatus = (typeof GAME_STATUSES)[number];
 
 /**
- * The ceilings a chunked upload must respect on this installation —
- * `game_handler.go`'s `uploadLimitsResponse`.
- *
- * `enabled` travels apart from the two numbers on purpose, and is checked
- * first: an installation with no upload volume configured
- * (`GAME_UPLOAD_DIR` unset) reports both as zero, and zero is also a ceiling
- * an operator could genuinely set. Without this field the two would be
- * indistinguishable — a client would have no way to tell "uploads are off,
- * do not offer the button" from "the operator set a ceiling of zero, which
- * refuses everything anyway".
+ * The ceilings a chunked dump upload must respect. Check `enabled` first: with
+ * `GAME_UPLOAD_DIR` unset both numbers are zero, which is otherwise a valid
+ * ceiling.
  */
 export const uploadLimitsSchema = z
   .object({
@@ -50,45 +42,21 @@ export const uploadLimitsSchema = z
 
 export type UploadLimits = z.infer<typeof uploadLimitsSchema>;
 
-/**
- * A ceiling of "uploads are off" — the shape `enabled: false` always takes.
- *
- * Already camelCased, not the wire shape: zod applies a `.default()` value
- * as-is, without re-running the schema's own `.transform()` over it, so a
- * default has to be written in whatever shape the field is read in.
- */
+/** CamelCased because zod applies a `.default()` value without running `.transform()`. */
 const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 };
 
 /**
- * Which of the three ways this game was built — `game_handler.go`'s
- * `gameResponse.Source`, itself `provisioning.Template.Source`. `"builder"`
- * is the table builder's own way in (`provisioning.SourceBuilder`), a
- * structural description rather than SQL typed or uploaded — its own
- * `definitionSchema`, below, is that description's wire shape.
- *
- * A game with no source at all reads as `"editor"`: an editor-sourced game
- * with no script is exactly what a contest with no game yet looks like on
- * this screen. That has to cover two different absences, which is why the
- * field is coerced rather than merely defaulted. `undefined` is a response
- * from an API older than this field. The empty string is what this API sends
- * *today* for the synthetic `absent` answer — `gameResponse.Source` is a
- * plain string with no `omitempty`, so a contest with no game carries
- * `"source": ""` — and a bare `.default()` fires only on `undefined`, so it
- * let that through to the enum and rejected the server's own reply. Every
- * newly created contest's game screen was an error boundary.
+ * How the game was built: SQL typed in the editor, an uploaded dump, or the
+ * table builder's structural description (`definitionSchema`).
  */
 export const GAME_SOURCES = ["editor", "file", "builder"] as const;
 
 export type GameSource = (typeof GAME_SOURCES)[number];
 
 /**
- * The file a file-sourced game (`source === "file"`) was built from — enough
- * to reopen the console's own viewer on it after a reload, which is the
- * whole reason this travels here rather than only inside `uploadResponse`
- * while the upload was still in progress: the page that ran the upload is
- * gone by the time somebody reloads, and `GET .../uploads/current` no longer
- * names a *completed* upload (`provisioning.Games.CurrentUpload` answers only
- * for one still `'receiving'`) — this is the one place left that still can.
+ * The file a file-sourced game was built from, so the viewer can reopen it
+ * after a reload: `GET .../uploads/current` names only an upload still
+ * receiving, never a completed one.
  */
 export const gameUploadSourceSchema = z
   .object({
@@ -106,38 +74,23 @@ export const gameSchema = z
     status: z.enum(GAME_STATUSES),
     version: z.number().default(0),
     database: z.string().default(""),
+    // The API sends "" for a contest with no game yet (no `omitempty`), and a
+    // bare `.default()` fires only on `undefined`, so both are coerced.
     source: z.preprocess(
       (value) => (value === "" || value === undefined ? "editor" : value),
       z.enum(GAME_SOURCES),
     ),
-    // Absent (not merely empty) for an editor-sourced game — `.optional()`
-    // rather than a default so a client can tell "no file" from "a file
-    // whose fields happen to be empty", the same distinction `upload_limits`
-    // itself draws with its own `enabled` flag.
+    // Absent for an editor-sourced game, so "no file" stays distinct.
     upload: gameUploadSourceSchema.optional(),
     build_error: z.string().default(""),
     script_bytes: z.number().default(0),
-    // The ceiling the API refuses a script past (provisioning.MaxScriptBytes,
-    // published by game_handler.go on both the ordinary and the "absent"
-    // answer). Read rather than kept as a constant here: a copy in this
-    // bundle would go on refusing by the old number the day the server
-    // raises it, with nothing on either side to notice (CLAUDE.md rule 11).
-    //
-    // Defaulted to zero for the same reason `upload_limits` is defaulted —
-    // an older API that does not send it must not fail the whole render —
-    // and zero is read as "the server did not say" by whoever uses it, not
-    // as a ceiling of nothing.
+    // Read from the server, not kept as a constant here (CLAUDE.md rule 11).
+    // Zero means "the server did not say", not a ceiling of nothing.
     max_script_bytes: z.number().default(0),
     building: z.boolean().default(false),
     updated_at: z.string().optional(),
-    // Defaulted rather than required, the reason every field here is: an
-    // older API that does not send it must not fail the whole render, and
-    // `false` reads as "the server did not say the game is stale".
+    // Defaults here keep an older API from failing the whole render.
     needs_build: z.boolean().default(false),
-    // Defaulted rather than required: every current build of the API sends
-    // it (game_handler.go's uploadLimitsResponse), but a page that has no
-    // use for the file-upload half of this screen must not fail to render
-    // over a field it does not read.
     upload_limits: uploadLimitsSchema.default(DISABLED_UPLOAD_LIMITS),
   })
   .transform((raw) => ({
@@ -160,17 +113,10 @@ export type Game = z.infer<typeof gameSchema>;
 export const gameScriptSchema = z.object({ script: z.string() });
 
 /**
- * A game database built from a finished dump rather than a script typed in
- * the editor — the second way `POST .../game/uploads` through
- * `.../complete` lets an organiser produce the same thing `SetScript` does.
- *
- * A chunked upload, not a single request: the file is sent in pieces
- * (`PUT .../uploads/{id}/chunk?offset=N`) so a multi-gigabyte dump never has
- * to fit in the browser's memory, or this server's, all at once. `status`
- * carries a fourth value beyond `provisioning.UploadStatus`'s own three —
- * `"absent"` — that only `GET .../uploads/current` ever sends, for a contest
- * with no upload in progress; it is a handler-only sentinel, not a state a
- * real upload passes through.
+ * States of a chunked dump upload, sent in pieces so a multi-gigabyte file
+ * never has to fit in memory. `"absent"` is sent only by
+ * `GET .../uploads/current` when nothing is in progress; no real upload
+ * passes through it.
  */
 export const UPLOAD_STATUSES = ["absent", "receiving", "complete", "aborted"] as const;
 
@@ -182,8 +128,7 @@ export const uploadSchema = z
     filename: z.string(),
     declared_bytes: z.number(),
     received_bytes: z.number(),
-    // Empty until the upload is complete — the checksum is computed in
-    // Store.Complete's own one sequential pass over the finished file.
+    // Empty until the upload is complete.
     sha256: z.string(),
     lines: z.number(),
     status: z.enum(UPLOAD_STATUSES),
@@ -207,20 +152,16 @@ export const uploadSchema = z
 export type Upload = z.infer<typeof uploadSchema>;
 
 /**
- * One slice of a completed upload's lines — the console's own preview of a
- * dump it has not run yet, the same role the script editor's own textarea
- * plays for one typed in directly. Never the whole file: a line of a real
- * dump can run to megabytes, and the file itself to gigabytes.
+ * A slice of a completed upload's lines, for previewing a dump. Never the
+ * whole file: one line can run to megabytes.
  */
 export const uploadWindowSchema = z
   .object({
     from_line: z.number(),
     lines: z.array(z.string()),
     total_lines: z.number(),
-    // The byte budget ran out before max_lines lines were collected, which
-    // can happen mid-line — the last string in `lines` may not be a whole
-    // one. Never means the window ran past the end of the file; that is an
-    // ordinary short window, not a truncated one.
+    // The byte budget ran out, possibly mid-line, so the last string may be
+    // partial. Reaching the end of the file is not truncation.
     truncated: z.boolean(),
   })
   .transform((raw) => ({
@@ -233,19 +174,13 @@ export const uploadWindowSchema = z
 export type UploadWindow = z.infer<typeof uploadWindowSchema>;
 
 /**
- * The databases a contest already owns: its spare pool and the participants'
- * own copies.
- *
- * A separate read from the game's status, and deliberately not folded into
- * it: the status is polled every two seconds while a build runs, and this is
- * a row per participant that nobody needs at that rate.
+ * The databases a contest owns: its spare pool and participants' copies. A
+ * separate read from the status, which is polled every two seconds during a
+ * build; this is a row per participant.
  */
 export const GAME_INSTANCE_STATUSES = [
-  /** The copy is being made. */
   "provisioning",
-  /** The copy exists and can be worked in. */
   "ready",
-  /** Making the copy did not finish. */
   "failed",
   /** The database is gone from the cluster; the row survives as history. */
   "dropped",
@@ -263,9 +198,7 @@ const gameInstanceSchema = z
     template_version: z.number().default(0),
     status: z.enum(GAME_INSTANCE_STATUSES),
     size_bytes: z.number().default(0),
-    // Apart from the number on purpose: the sizes come from the game cluster,
-    // and one that could not be read must not reach the screen as a database
-    // of zero bytes.
+    // A size the game cluster could not report must not show as zero bytes.
     size_known: z.boolean().default(false),
     created_at: z.string().default(""),
     updated_at: z.string().default(""),
@@ -295,28 +228,13 @@ export const gameInstancesSchema = z
 
 export type GameInstances = z.infer<typeof gameInstancesSchema>;
 
-// --- The table builder: a structural description instead of SQL -----------
-//
-// The third way to build a contest's game (`GAME_SOURCES` above): tables and
-// columns described directly, with data loaded as CSV or typed in a row at a
-// time, rather than written as SQL. `game_handler.go`'s own comment names it
-// the same way: "a structural description of its tables and columns instead
-// of SQL, with data loaded as CSV".
+// --- The table builder: tables and columns described directly, with data
+// loaded as CSV or typed a row at a time, instead of SQL.
 
 /**
- * The ceilings the table builder's own third way must respect —
- * `game_handler.go`'s `builderLimitsResponse`. Every number a client uses to
- * slice a CSV chunk, cap a table or column count, or offer a type on a
- * column's picker comes from here — never a second copy kept on this side.
- * This is the field CLAUDE.md rule 11 names directly: "the chunk limit never
- * reached the browser, two independent ceilings stood on the same size, the
- * game's source never reached the status" is the exact history of defects a
- * client-side constant standing in for any one of these numbers would repeat.
- *
- * `enabled` is checked before `chunkBytes` or `maxFileBytes` mean anything,
- * the same convention `uploadLimitsSchema` draws for the dump's own pair: an
- * installation with no table-data volume configured reports both as zero,
- * which is also a ceiling an operator could genuinely set.
+ * The table builder's ceilings. Every limit and the column-type list come
+ * from the server, never a client-side copy (CLAUDE.md rule 11). As with
+ * `uploadLimitsSchema`, check `enabled` before the byte limits mean anything.
  */
 export const builderLimitsSchema = z
   .object({
@@ -330,11 +248,7 @@ export const builderLimitsSchema = z
     max_line_bytes: z.number(),
     max_rows: z.number(),
     max_deleted_rows: z.number(),
-    // The closed set of column types this platform offers —
-    // `provisioning.ColumnTypes`, as strings, in the order the domain
-    // declares them. Read as data rather than kept as a second, hand-typed
-    // list here: the whole reason `game_handler.go` walks that slice into
-    // this response is so a client's own picker never has to.
+    // `provisioning.ColumnTypes`, in declaration order.
     column_types: z.array(z.string()).default([]),
   })
   .transform((raw) => ({
@@ -354,34 +268,21 @@ export const builderLimitsSchema = z
 export type BuilderLimits = z.infer<typeof builderLimitsSchema>;
 
 /**
- * One column of a table the builder describes — `columnDefinitionView`'s own
- * wire shape, the same in both directions a `GET` reads and a `PUT` sends
- * (`definition.go`'s own doc on why `provisioning.ColumnDefinition` needs no
- * separate request/response pair).
- *
- * `type` stays a plain `string`, not a `z.enum` over some literal list: the
- * closed set of valid types is `builderLimitsSchema`'s own `columnTypes`,
- * read from the server, and an enum written here would be the exact second
- * copy rule 11 forbids. Whatever a picker cannot find in `columnTypes` it
- * must refuse to offer; a value already saved that is not in that list is
- * not this schema's problem to catch, since the server, not this parse, is
- * what actually validates a column's type.
+ * One builder column, the same shape for `GET` and `PUT`. `type` is a plain
+ * string: the valid set is `builderLimits.columnTypes`, read from the server,
+ * which also validates it.
  */
 export const columnDefinitionSchema = z
   .object({
     name: z.string(),
     type: z.string(),
-    // Absent, not merely false, on the wire for a NOT NULL column
-    // (`nullable,omitempty`) — `.default(false)` reads that the same way an
-    // explicit `false` would, which is `ColumnDefinition`'s own stricter
-    // default (`definition.go`: "False is the stricter default").
+    // Omitted on the wire for a NOT NULL column.
     nullable: z.boolean().default(false),
   })
   .transform((raw) => ({ name: raw.name, type: raw.type, nullable: raw.nullable }));
 
 export type ColumnDefinition = z.infer<typeof columnDefinitionSchema>;
 
-/** One table the builder describes — `tableDefinitionView`'s own wire shape. */
 export const tableDefinitionSchema = z
   .object({
     name: z.string(),
@@ -393,11 +294,8 @@ export const tableDefinitionSchema = z
 export type TableDefinition = z.infer<typeof tableDefinitionSchema>;
 
 /**
- * What `GET` and a successful `PUT .../game/definition` both answer —
- * `definitionResponse`'s own wire shape. Read and written whole, one request
- * either way: the document is bounded at `builderLimits.maxDefinitionBytes`
- * (tens of kilobytes at the very most), nothing like a dump's own gigabytes,
- * so there is no chunked path here the way `uploadSchema`'s own family needs.
+ * The builder's table definitions, read and written whole: the document is
+ * bounded at `builderLimits.maxDefinitionBytes`, so it needs no chunking.
  */
 export const definitionSchema = z
   .object({
@@ -408,25 +306,15 @@ export const definitionSchema = z
 
 export type GameDefinition = z.infer<typeof definitionSchema>;
 
-/**
- * Where one table's own CSV file has got to —
- * `provisioning.TableDataStatus`'s own three, plus `"absent"`: the same
- * handler-only sentinel `UPLOAD_STATUSES` carries for a dump, sent only by
- * `GET .../tables/{table}/data/current` for a table with nothing 'receiving'
- * — never a status a real upload passes through.
- */
+/** As with `UPLOAD_STATUSES`, `"absent"` means no upload in progress. */
 export const TABLE_DATA_STATUSES = ["absent", "receiving", "complete", "aborted"] as const;
 
 export type TableDataStatus = (typeof TABLE_DATA_STATUSES)[number];
 
 /**
- * One table's own chunked CSV upload, or the data it left behind once
- * complete — `tableDataResponse`'s own wire shape, the exact counterpart of
- * `uploadSchema` for a whole dump. `deletedRows` is the tombstoned row
- * numbers themselves (bounded at `builderLimits.maxDeletedRows`), not a
- * count — `activeRows` is `lines` minus how many of those there are, already
- * computed server-side (`TableData.ActiveRows()`), which is the number an
- * organiser's own screen shows as "N rows".
+ * One table's chunked CSV upload, or its data once complete. `deletedRows`
+ * holds the tombstoned row numbers, not a count; `activeRows` is `lines`
+ * minus those, computed by the server.
  */
 export const tableDataSchema = z
   .object({
@@ -458,19 +346,13 @@ export const tableDataSchema = z
 
 export type TableData = z.infer<typeof tableDataSchema>;
 
-/** One row of a table's current data — `tableRowResponse`'s own wire shape. */
 export const tableRowSchema = z
   .object({ row: z.number(), fields: z.array(z.string()).default([]) })
   .transform((raw) => ({ row: raw.row, fields: raw.fields }));
 
 export type TableRow = z.infer<typeof tableRowSchema>;
 
-/**
- * A page of one table's current rows — `tableRowWindowResponse`'s own wire
- * shape, the console's own preview of a table before it is ever built, the
- * same role `uploadWindowSchema` plays for a dump's lines. Never the whole
- * table: `rows` is bounded server-side the same way a dump's own window is.
- */
+/** A server-bounded page of a table's rows, for previewing it before a build. */
 export const tableRowWindowSchema = z
   .object({
     from_row: z.number(),

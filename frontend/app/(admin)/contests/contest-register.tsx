@@ -11,32 +11,13 @@ import { cn } from "@/lib/utils";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
- * The contest listing, as a register rather than a wall of cards.
- *
- * A row carries more than a tile at the same height and can be compared down a
- * column, which a grid of tiles cannot. It is a real `<table>`: the data is
- * tabular, so the semantics come for free and a screen reader announces which
- * column a cell belongs to.
- *
- * On a narrow screen it stays a table. Restacking into one card per contest is
- * the usual answer and it is the wrong one here: it dissolves the columns, and
- * comparing down a column is the entire reason this is a register and not the
- * wall of cards the direction was chosen to get away from.
- *
- * What gives instead is the column count. Enrollment and format fold under the
- * title, where they read as a caption on the contest rather than as columns
- * too thin to compare; state and the window stay, because those are what a
- * reader scans a register for. Nothing is ever shown twice: the folded line
- * only exists at the width where its columns are gone. Past that the box —
- * and only this box — scrolls sideways.
- *
- * Every string arrives in `dict`. The component holds no copy of its own, so a
- * fourth language needs a dictionary file and nothing here.
+ * The contest listing as a real `<table>`, so rows compare down columns and
+ * screen readers announce the column. On a narrow screen it stays a table:
+ * enrollment and format fold under the title (shown only at that width), and
+ * past that only this box scrolls sideways.
  */
 
-/* Padding comes from the density tokens, so the same register is comfortable
-   in the constructor and compact in the query log without a second component
-   or a prop threaded through four layers. */
+/* Padding comes from the density tokens, so one register serves comfortable and compact layouts. */
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
@@ -70,9 +51,7 @@ export function ContestRegister({
           <span className="font-mono text-data text-ink-3">
             {total} {t.countLabel}
           </span>
-          {/* The register's one action. A link rather than a button: it
-              navigates, and a button that navigates loses the middle click,
-              the new tab and the address the browser would otherwise show. */}
+          {/* A link, not a button: it navigates, and keeps middle click and new tab. */}
           <Link href="/contests/new" className={buttonVariants({ size: "sm" })}>
             {dict.workspace.create.action}
           </Link>
@@ -83,10 +62,10 @@ export function ContestRegister({
         <div className="border-t border-line">
           <StateView
             state={
-              /* "Nothing here" and "nothing matched" are different states and
-                 get different screens. The first has no filter
-                 to clear, so offering the control would be a lie; the second is
-                 a dead end without it. The type refuses to mix them up. */
+              /*
+               * "Nothing here" has no filter to reset; "nothing matched" needs
+               * one. The type keeps them apart.
+               */
               filtered && resetHref
                 ? {
                     kind: "empty-filtered",
@@ -129,15 +108,12 @@ export function ContestRegister({
                   key={contest.id}
                   className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
                 >
-                  {/* The register line number: a position in an ordered list,
-                      which is what the number on a card in a drawer is. */}
+                  {/* The row's position in the list. */}
                   <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3")}>
                     {String(index + 1).padStart(2, "0")}
                   </td>
                   <td className={CELL}>
-                    {/* The title is the way in. The whole row is not: a row
-                        that navigates cannot hold a second control, and this
-                        one will hold state changes before long. */}
+                    {/* Only the title links: a navigating row could not hold other controls. */}
                     <Link
                       href={`/contests/${contest.id}`}
                       className="block w-fit text-row text-ink underline decoration-edge underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"

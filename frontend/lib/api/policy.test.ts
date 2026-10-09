@@ -23,11 +23,6 @@ describe("sqlPolicySchema", () => {
   });
 });
 
-/**
- * These names become GRANT statements when a participant's database is built,
- * where they cannot be passed as parameters. The narrow form is the thing that
- * makes that construction safe, so it is checked on both sides of the wire.
- */
 describe("isTableName", () => {
   test("accepts a plain and a schema-qualified identifier", () => {
     expect(isTableName("suspects")).toBe(true);
@@ -68,9 +63,6 @@ describe("parseTables", () => {
   });
 
   test("reports every unusable entry rather than stopping at the first", () => {
-    // Same reason the publish gate returns all its problems at once: an author
-    // fixing one typo per round trip makes as many round trips as they have
-    // typos.
     const { tables, rejected } = parseTables("suspects, Bad Name, evidence, 2wrong");
 
     expect(tables).toEqual(["suspects", "evidence"]);

@@ -4,17 +4,9 @@ import type { ProfileWorkspace } from "@/lib/api/profile";
 import type { ReportDict } from "./report-tabs";
 
 /**
- * The notes and the SQL tabs as the contest left them.
- *
- * No history of the edits, and no way to ask for one. The record of how a
- * document changed is a monitoring fact about how somebody worked — the
- * organiser's tool — and handing it back to its author would be a second
- * feature wearing this one's clothes (design §2.2). What a participant came
- * for is what they wrote.
- *
- * Notes are prose and are set in the text face even inside the `pre` that
- * keeps their line breaks; a tab is SQL and gets the highlighted block the
- * rest of the product reads statements in.
+ * The notes and SQL tabs as the contest left them. No edit history: that is a
+ * monitoring fact for organisers (SPEC.md §5.2). Notes use the text face inside
+ * their `pre`; tabs get the SQL block.
  */
 export function MyNotes({ workspace, t }: { workspace: ProfileWorkspace; t: ReportDict }) {
   const notes = workspace.notes.body;
@@ -28,10 +20,8 @@ export function MyNotes({ workspace, t }: { workspace: ProfileWorkspace; t: Repo
     <div className="flex min-w-0 flex-col gap-8">
       <p className="max-w-body text-small text-ink-3">{t.notes.asLeft}</p>
 
-      {/* Two columns down to the page's one breakpoint, one below it. The
-          page's own breakpoint rather than a container query: nothing in
-          this screen declares `@container`, and a `@min-[…]` class without
-          one is a rule that never matches at any width. */}
+      {/* The page breakpoint, not a container query: nothing here declares
+         `@container`, so `@min-[…]` would never match. */}
       <div className="grid min-w-0 grid-cols-2 gap-8 max-narrow:grid-cols-1">
         <section aria-labelledby="report-notes" className="flex min-w-0 flex-col gap-3">
           <h2 id="report-notes" className="font-mono text-label text-ink-3 uppercase">

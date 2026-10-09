@@ -10,18 +10,10 @@ import { setStatusAction, type StatusState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The transitions a contest can be moved through, as buttons.
- *
- * Publishing is the only one that can be blocked by unfinished work, and it is
- * blocked *with the reason beside it* rather than greyed out in silence — the
- * gate's summary is rendered above this row. Everything else is offered
- * whenever the mirrored transition table allows it.
- *
- * Publishing gets the one dark button; every other move is outlined. Archiving
- * is the exception that reads as a discard, so it takes the danger variant. A
- * contest is never deleted from here: deletion is a different act with a
- * different endpoint, and putting it in a row of state changes is how it gets
- * pressed by somebody meaning to archive.
+ * Status transitions as buttons, offered when the mirrored table allows.
+ * Publishing may be blocked, with the gate's reasons shown above. Archive uses
+ * the danger variant; deletion is never offered here, so it cannot be pressed
+ * instead of archive.
  */
 export function StatusActions({
   contestId,
@@ -31,7 +23,7 @@ export function StatusActions({
 }: {
   contestId: string;
   next: readonly ContestStatus[];
-  /** Publishing is impossible until the gate passes; the reason is shown above. */
+  /** Publishing is blocked until the gate passes; the reason is shown above. */
   blocked?: boolean;
   dict: Dictionary;
 }) {

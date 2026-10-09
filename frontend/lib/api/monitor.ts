@@ -10,15 +10,12 @@ import {
 
 /**
  * The wire shapes of the organiser's monitoring routes
- * (`/contests/{id}/monitor/…`, docs/ARCHITECTURE.md §9.4)
- * and the browser-side reads the live screen polls them with.
- *
- * The live screen reads from the browser rather than through a Server Action:
- * a refusal's `Retry-After` is what the screen waits on after a 429, and a
- * Server Action hands back the error code and loses the header.
+ * (`/contests/{id}/monitor/…`, docs/ARCHITECTURE.md §9.4) and the browser-side
+ * reads that poll them. Browser-side because a Server Action loses the 429's
+ * `Retry-After` header.
  */
 
-/** The six flags of design §5, in the order the table shows them. */
+/** The six flags (docs/ARCHITECTURE.md §9.4), in the order the table shows them. */
 export const MONITOR_FLAGS = [
   "multipleIps",
   "parallelSessions",
@@ -107,10 +104,9 @@ export const rosterSchema = z
 export type Roster = z.infer<typeof rosterSchema>;
 
 /**
- * What one feed item carries, by kind. `none` is a kind with nothing to add
- * (the clock starting) and also a kind or payload this build cannot read: the
- * row still says who did something and when, which is better than a feed that
- * fails whole over one unfamiliar line.
+ * What one feed item carries, by kind. `none` covers a kind with nothing to
+ * add and any kind or payload this build cannot read, so one unfamiliar line
+ * does not fail the whole feed.
  */
 export type FeedDetail =
   | {
@@ -187,7 +183,6 @@ const tabData = z
   .object({ title: z.string().optional(), from: z.string().optional(), to: z.string().optional() })
   .transform((raw): FeedDetail => ({ type: "tab", title: raw.title, from: raw.from, to: raw.to }));
 
-/** The reader of each kind's data; a kind absent here carries nothing to show. */
 const DATA_BY_KIND: Record<string, z.ZodType<FeedDetail, unknown>> = {
   query: queryData,
   answer: answerData,
@@ -260,7 +255,7 @@ export const feedSchema = z.object({
 
 export type FeedPage = z.infer<typeof feedSchema>;
 
-/** What a feed read may ask. `from` is inclusive, `until` exclusive. */
+/** `from` is inclusive, `until` exclusive. */
 export type FeedParams = {
   after?: string;
   before?: string;
@@ -271,7 +266,7 @@ export type FeedParams = {
   limit?: number;
 };
 
-/** The most a feed page carries (monitor.MaxFeedPage). */
+/** The most events one page of the feed carries (`monitor.MaxFeedPage`). */
 export const MAX_FEED_PAGE = 200;
 
 function monitorBase(contestId: string): string {
@@ -283,7 +278,6 @@ function withQuery(path: string, query: URLSearchParams): string {
   return text ? `${path}?${text}` : path;
 }
 
-/** A feed read's parameters, in a fixed order; `participant` only where the route takes one. */
 function feedQuery(params: FeedParams, withParticipant: boolean): URLSearchParams {
   const query = new URLSearchParams();
   if (params.after) query.set("after", params.after);
@@ -296,34 +290,24 @@ function feedQuery(params: FeedParams, withParticipant: boolean): URLSearchParam
   return query;
 }
 
-/** The feed's path with the parameters that were given, in a fixed order. */
 export function feedPath(contestId: string, params: FeedParams): string {
   return withQuery(`${monitorBase(contestId)}/feed`, feedQuery(params, true));
 }
 
-/** One participant's routes: `…/monitor/participants/{registrationId}`. */
 export function participantBase(contestId: string, registrationId: string): string {
   return `${monitorBase(contestId)}/participants/${encodeURIComponent(registrationId)}`;
 }
 
-/**
- * One participant's timeline: the feed's parameters, less `participant` —
- * the route names the participant itself.
- */
+/** The feed's parameters less `participant`, which the route itself names. */
 export function timelinePath(contestId: string, registrationId: string, params: FeedParams): string {
   return withQuery(`${participantBase(contestId, registrationId)}/timeline`, feedQuery(params, false));
 }
 
-/** The contest-wide CSV, as a link the browser downloads (see ExportMenu). */
 export function monitorCsvHref(contestId: string): string {
   return `${API_PREFIX}${monitorBase(contestId)}/export.csv`;
 }
 
-/**
- * The shapes both audiences of the SQL log speak, re-exported so a reader of
- * the monitoring routes finds them where the routes are. They are defined in
- * `./journal`, which the participant's own profile reads from too.
- */
+// The SQL log's shapes live in `./journal`, shared with the participant's profile.
 export {
   answersSchema,
   loggedQuerySchema,
@@ -339,7 +323,6 @@ export {
   type ReadOptions,
 } from "./journal";
 
-/** GET …/monitor/participants, from the browser. */
 export async function fetchRoster(contestId: string, options: ReadOptions = {}): Promise<Roster> {
   const payload = await request(`${monitorBase(contestId)}/participants`, {
     credentials: "same-origin",
@@ -348,13 +331,11 @@ export async function fetchRoster(contestId: string, options: ReadOptions = {}):
   return rosterSchema.parse(payload);
 }
 
-/** GET …/monitor/feed, from the browser. */
 export async function fetchFeed(contestId: string, params: FeedParams, options: ReadOptions = {}): Promise<FeedPage> {
   const payload = await request(feedPath(contestId, params), { credentials: "same-origin", signal: options.signal });
   return feedSchema.parse(payload);
 }
 
-/** GET …/monitor/participants/{id}/timeline, from the browser. */
 export async function fetchTimeline(
   contestId: string,
   registrationId: string,
@@ -368,12 +349,10 @@ export async function fetchTimeline(
   return feedSchema.parse(payload);
 }
 
-/** One participant's CSV, as a link the browser downloads. */
 export function participantCsvHref(contestId: string, registrationId: string): string {
   return `${API_PREFIX}${participantBase(contestId, registrationId)}/export.csv`;
 }
 
-/** Who one participant is, for the heading of their page. */
 export const participantSchema = z
   .object({
     registration_id: z.string(),
@@ -403,7 +382,6 @@ export function queriesPath(contestId: string, registrationId: string, params: Q
   return withQuery(`${participantBase(contestId, registrationId)}/queries`, query);
 }
 
-/** GET …/monitor/participants/{id}/queries, from the browser. */
 export async function fetchQueries(
   contestId: string,
   registrationId: string,
@@ -476,7 +454,6 @@ export const revisionSchema = z
 
 export type Revision = z.infer<typeof revisionSchema>;
 
-/** GET …/monitor/participants/{id}/workspace/revisions/{revisionId}, from the browser. */
 export async function fetchRevision(
   contestId: string,
   registrationId: string,

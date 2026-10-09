@@ -32,8 +32,6 @@ describe("workspaceSchema", () => {
     });
   });
 
-  // Never-saved notes are a fact the draft recovery compares against, not a
-  // missing field.
   test("keeps never-saved notes as a null version", () => {
     const parsed = workspaceSchema.parse({ notes: { body: "", updated_at: null }, tabs: [tab] });
 

@@ -58,9 +58,8 @@ function tab(name: string) {
 }
 
 /**
- * Which half of a tab the pointer is over decides which side of it a
- * dragged tab lands on, and jsdom lays nothing out — every rectangle it
- * reports is empty. So the tab being dropped on is given one.
+ * Gives the drop target a rectangle: the pointer's half decides the side,
+ * and jsdom reports every rectangle as empty.
  */
 function measured(name: string): HTMLElement {
   const element = tab(name);
@@ -82,9 +81,8 @@ const LEFT_HALF = 120;
 const RIGHT_HALF = 160;
 
 /**
- * jsdom has no `DragEvent`, and `fireEvent`'s own drag events therefore
- * carry no pointer position — which is the one thing these need. A
- * `MouseEvent` of the same name is what React's own listener sees anyway.
+ * jsdom has no `DragEvent`, so `fireEvent`'s drag events carry no pointer
+ * position; a same-named `MouseEvent` is what React's listener sees anyway.
  */
 function dragTo(
   element: HTMLElement,
@@ -97,12 +95,7 @@ function dragTo(
   element.dispatchEvent(event);
 }
 
-/**
- * A `DataTransfer` this environment does not have. jsdom implements neither
- * it nor `DragEvent`, so what the strip writes onto the drag session — the
- * one thing a real browser needs and a synthesised event does not — is only
- * observable on a stand-in.
- */
+/** A stand-in `DataTransfer` (jsdom has none), to observe what the strip writes. */
 function transfer() {
   return { setData: vi.fn<(format: string, data: string) => void>(), effectAllowed: "", dropEffect: "" };
 }
@@ -122,8 +115,7 @@ describe("the SQL tab strip", () => {
     expect(tab("Query 1")).toHaveAttribute("aria-controls", "editor-panel");
   });
 
-  // The roving tabindex the tablist pattern asks for: one stop in the page's
-  // own tab order, and the arrows move within the strip from there.
+  // The tablist's roving tabindex: one tab stop, arrows within.
   test("puts only the active tab in the tab order", () => {
     show({ activeId: "t2" });
 
@@ -145,8 +137,7 @@ describe("the SQL tab strip", () => {
 
     await userEvent.keyboard("{ArrowRight}");
     expect(onSelect).toHaveBeenLastCalledWith("t3");
-    // Focus follows the selection, so the next arrow is pressed on the tab
-    // the last one landed on — which is what makes walking the strip work.
+    // Focus follows selection, so the next arrow starts from here.
     expect(tab("Alibis")).toHaveFocus();
 
     await userEvent.keyboard("{ArrowLeft}");
@@ -176,9 +167,7 @@ describe("the SQL tab strip", () => {
     expect(onCreate).toHaveBeenCalled();
   });
 
-  // A long sentence — "The contest is over, so this tab is no longer
-  // saved…" — must give way to the tabs rather than squeeze them. jsdom
-  // lays nothing out, so what is checkable is the rule itself.
+  // jsdom lays nothing out, so the shrink rule itself is checked.
   test("lets the status line give way to the tabs", () => {
     show({ status: <SqlTabStatus engine={null} error={null} stored={false} dict={en} /> });
 
@@ -195,10 +184,8 @@ describe("the SQL tab strip", () => {
     const plus = screen.getByRole("button", { name: t.newTab });
     expect(plus).toBeDisabled();
     expect(screen.getByText(en.errors.workspace_tab_limit)).toBeInTheDocument();
-    // A disabled control fires no pointer events, so its own `title` never
-    // becomes a tooltip in Chrome or Firefox: the mouse user's answer has to
-    // hang on something that is not disabled. The reader's answer is the
-    // `aria-describedby` region above, which needs no pointer at all.
+    // A disabled control shows no `title` tooltip, so it hangs on the
+    // wrapper; screen readers get the `aria-describedby` text.
     expect(plus.parentElement).toHaveAttribute("title", en.errors.workspace_tab_limit);
     expect(plus).toHaveAttribute("aria-describedby");
   });
@@ -211,8 +198,7 @@ describe("the SQL tab strip", () => {
     expect(onClose).toHaveBeenCalledWith("t2");
   });
 
-  // The server refuses to delete the last tab (`workspace_last_tab`), so the
-  // strip does not offer what cannot happen.
+  // The server refuses to delete the last tab (`workspace_last_tab`).
   test("offers no ✕ when there is only one tab left", () => {
     show({ tabs: [THREE[0]], activeId: "t1" });
 
@@ -255,11 +241,8 @@ describe("renaming a tab", () => {
     expect(onRename).toHaveBeenCalledWith("t2", "Witnesses");
   });
 
-  // The defect a real browser pass turned up: the caret landed at the end of
-  // the name with nothing selected (`value: "Query 2"`,
-  // `selectionStart === selectionEnd === 7`), so typing a new name produced
-  // "Query 2Suspects" instead of replacing it — VS Code, by contrast, selects
-  // the whole name so the first keystroke of a rename wipes it.
+  // The caret must not land at the end with nothing selected, or typing
+  // appends ("Query 2Suspects") instead of replacing.
   test("selects the whole name when rename opens on a double click", async () => {
     show();
 
@@ -321,12 +304,9 @@ describe("renaming a tab", () => {
 });
 
 describe("reordering the tabs", () => {
-  // The one part of a drag a synthesised event does not exercise, and the
-  // part a real browser refuses to start without: Firefox cancels a drag
-  // whose `DataTransfer` was never written to, and Safari is unreliable
-  // about it. Every other test here passes with an empty transfer, so
-  // nothing but this one would notice that "drag to reorder" (§5) never
-  // starts outside Chrome.
+  // Firefox cancels a drag whose `DataTransfer` is never written, and Safari
+  // is unreliable; synthesised events pass without it, so only this test
+  // guards it.
   test("hands the drag session the tab it is carrying, as a move", () => {
     show();
     const dataTransfer = transfer();
@@ -350,9 +330,8 @@ describe("reordering the tabs", () => {
     expect(onMove).toHaveBeenCalledWith("t3", 0);
   });
 
-  // Dragging rightwards is where an index taken straight from the target is
-  // wrong: the dragged tab has left its own place by the time it is put
-  // back, so "the third tab" is not the third position any more.
+  // Dragged rightwards, the tab leaves its place first, so the target's
+  // index is off by one.
   test("drops a tab dragged rightwards where the pointer says, on either side of the target", () => {
     const first = show();
     let target = measured("Alibis");
@@ -360,8 +339,7 @@ describe("reordering the tabs", () => {
     fireEvent.dragStart(tab("Query 1"));
     dragTo(target, "dragover", RIGHT_HALF);
     dragTo(target, "drop", RIGHT_HALF);
-    // Past the middle of the last tab: Query 1 goes after it, ending the
-    // strip — Suspects, Alibis, Query 1.
+    // Past the middle of the last tab: Suspects, Alibis, Query 1.
     expect(first.onMove).toHaveBeenCalledWith("t1", 2);
 
     cleanup();
@@ -371,8 +349,7 @@ describe("reordering the tabs", () => {
     fireEvent.dragStart(tab("Query 1"));
     dragTo(target, "dragover", LEFT_HALF);
     dragTo(target, "drop", LEFT_HALF);
-    // Before the middle: Query 1 takes Alibis' place and Alibis moves on —
-    // Suspects, Query 1, Alibis.
+    // Before the middle: Suspects, Query 1, Alibis.
     expect(second.onMove).toHaveBeenCalledWith("t1", 1);
   });
 
@@ -391,8 +368,7 @@ describe("reordering the tabs", () => {
     expect(target).not.toHaveAttribute("data-drop");
   });
 
-  // The same reordering without a pointer: a strip that can only be arranged
-  // by dragging cannot be arranged by half the room.
+  // The same reordering without a pointer.
   test("moves the focused tab with Ctrl+Shift+Arrow", async () => {
     const { onMove } = show({ activeId: "t2" });
     tab("Suspects").focus();
@@ -405,12 +381,7 @@ describe("reordering the tabs", () => {
   });
 });
 
-/**
- * Once the contest is over for this participant every write is refused
- * (`contest_ended` / `contest_finished`), so the strip stops offering
- * writes: what is on screen is still readable, and nothing invites an action
- * that can only fail.
- */
+/** Once the contest is over every write is refused, so the strip offers none. */
 describe("a contest that has ended", () => {
   test("offers no way to create, close, rename or move a tab", async () => {
     const { onRename, onMove } = show({ closed: true });

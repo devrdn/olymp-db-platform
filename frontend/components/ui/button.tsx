@@ -3,35 +3,13 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /**
- * The button, drawn from this project's tokens rather than from the registry's.
+ * The button, on the project's tokens. A plain `<button>` rather than Base UI's
+ * `Button`, which saved about 25 KiB gzipped on the play route for identical
+ * native behaviour.
  *
- * A plain `<button>` with a class, not a Base UI primitive (finding 6). What
- * that primitive contributed here was `useRender`/`mergeProps` and a
- * `render` prop this codebase never once used — measured, it cost 21.5 KiB
- * raw of `button.tsx`-plus-Base-UI per chunk that pulled it, and the play
- * route pulled two byte-identical copies of exactly that (one through
- * `workspace.tsx`, one through `app/error.tsx` → `StateView`) on top of
- * 10.1 KiB of shared Base UI runtime: about 53 KiB raw, 25 KiB gzipped, of a
- * 159/56 KiB route, spent on a `<button>` and an `<input>`. This is the same
- * trade `components/ui/tabs.tsx` recorded when it stopped using Base UI's
- * `Tabs`, and it is the same screen paying for it.
- *
- * Nothing about the element changed: Base UI's `Button`, given
- * `nativeButton` (its default) and no `render`, renders a native `<button>`
- * and forwards `disabled` to it natively. Focus, the disabled state and
- * every event handler are the browser's, exactly as they were.
- *
- * Three decisions separate it from what `shadcn add button` produces, and each
- * of them is a rule from the spec rather than a preference:
- *
- * - The focus treatment is a 2px accent ring at 2px offset, applied globally in
- *   globals.css. The registry's `ring-3 ring-ring/50` is a
- *   glow, and section 15 has no glows in it.
- * - Sizes come from `--control-h`, so the same button is 34px in a profile and
- *   28px in a results grid without a second variant.
- * - There is no `dark:` utility anywhere. The theme is a variable swap on
- *   `data-theme`, so a colour that is written once is already correct in both
- *   themes; a `dark:` class here would be a second, silently diverging source.
+ * The focus ring is global (globals.css), sizes come from `--control-h` so one
+ * variant serves dense and roomy layouts, and there are no `dark:` utilities
+ * since the theme is a variable swap.
  */
 const buttonVariants = cva(
   [
@@ -44,11 +22,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        /* The one dark mass on a white page, and the only place in the system
-           whose weight goes above 500. */
+        /* The only weight above 500 in the system. */
         primary: "bg-cta font-semibold text-cta-fg hover:opacity-88",
-        /* Outlined in the control edge, which is the token WCAG 1.4.11 holds
-           to 3:1 — not the decorative hairline. */
+        /* `--edge` is the token held to 3:1 (WCAG 1.4.11), not the decorative hairline. */
         secondary: "border border-edge bg-transparent text-ink hover:border-ink",
         quiet: "border border-transparent text-ink-2 hover:bg-sunk hover:text-ink",
         danger: "bg-bad-wash text-bad hover:bg-bad hover:text-bg",

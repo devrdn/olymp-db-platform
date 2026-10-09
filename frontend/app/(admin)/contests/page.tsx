@@ -12,13 +12,7 @@ export async function generateMetadata() {
   return { title: dict.contests.heading };
 }
 
-/**
- * The constructor's index.
- *
- * A Server Component: the data is fetched where the session already is, so no
- * token reaches the browser and the first paint carries the rows. Filters live
- * in the URL, which makes them shareable and the reset a plain link.
- */
+/** The contest register. A Server Component; filters live in the URL. */
 export default async function ContestsPage(props: PageProps<"/contests">) {
   const [params, locale, dict] = await Promise.all([
     props.searchParams,
@@ -32,13 +26,12 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
   const search = new URLSearchParams();
   if (query) search.set("q", query);
   if (status) search.set("status", status);
-  // The server negotiates the contest's own text; ask it in the same language
-  // the interface is rendering, so a page never mixes two.
+  // Ask for contest text in the interface's language, so a page never mixes
+  // two.
   search.set("lang", locale);
 
-  // The proxy could only see that a session cookie exists; whether it is still
-  // worth anything is this answer. A dead one goes back to the form rather than
-  // to the recoverable-error screen, whose retry could never fix it.
+  // proxy.ts only saw a cookie; a dead session goes back to sign-in, which a
+  // retry could never fix.
   const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
     const resume = new URLSearchParams();
     if (query) resume.set("q", query);

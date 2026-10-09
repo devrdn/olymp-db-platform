@@ -11,105 +11,53 @@ export type ContestPhase = "waiting" | "running" | "finished";
 type SyncPayload = { server_now: string; deadline?: string };
 
 /**
- * Whether a refusal of the channel is one reconnecting on a timer cannot
- * fix: this participant is not taking part (disqualified, say), or is
- * connecting from outside the contest's network. Neither clears on its own
- * the way a rate limit or a briefly busy server does; the second lifts only
- * once the machine is back on the network, and the header says why meanwhile.
+ * Whether a refusal of the channel cannot clear on a timer: the participant
+ * is excluded (disqualified, say) or is outside the contest's network. The
+ * header says why meanwhile.
  */
 function isTerminal(code: string): boolean {
   const kind = refusalKind(code);
   return kind === "excluded" || kind === "elsewhere";
 }
 
-/** How long to wait before the first reconnect attempt, and the ceiling a doubling backoff is capped at. */
+/** The first reconnect delay, and the ceiling the doubling backoff stops at. */
 const RECONNECT_MIN_DELAY_MS = 5_000;
 const RECONNECT_MAX_DELAY_MS = 60_000;
 
 /**
- * How much of a reconnect delay is spread out at random, as a fraction of the
- * delay itself: a wait is somewhere in `[delay, delay * 1.5)`.
- *
- * Added rather than subtracted, so the floor stays a floor — the reason a
- * reconnect is never immediate is that every attempt spends the query-rate
- * budget this channel shares with the SQL console, and jitter must not be a
- * way under that.
- *
- * It exists because the failures this hook reconnects from are usually not
- * one client's own: the server sends a flat thirty-second `retry:`, so a
- * deploy cuts every open channel at once and, without this, brings every one
- * of them back in the same instant — against an installation whose per-
- * participant connection cap is exactly what a synchronised herd runs into.
+ * Random spread added to a reconnect delay: a wait falls in
+ * `[delay, delay * 1.5)`. Added, never subtracted, because every attempt
+ * spends the query-rate budget this channel shares with the SQL console. A
+ * deploy cuts every channel at once, and without jitter they would all return
+ * in the same instant against the per-participant connection cap.
  */
 const RECONNECT_JITTER = 0.5;
 
 /**
- * The one Server-Sent Events connection this screen ever opens, and the one
- * place a participant's browser clock is corrected against the server's.
+ * The one Server-Sent Events connection this screen opens, and the one place
+ * the browser clock is corrected against the server's. Its consumers (the
+ * waiting room and the running header) are never on screen together, so
+ * there is never more than one connection.
  *
- * A single hook rather than one per consumer, because the screens that read
- * from it — the waiting room and the running header's clock — are never on
- * screen at the same time: which one renders is decided by `phase`, so there
- * is never more than one connection open regardless of how many places call
- * this.
+ * `offsetRef` and `deadlineRef` are refs: callers tick once a second and read
+ * `.current`, so a resync every thirty seconds need not render. `phase` is
+ * state: it moves at most twice a contest, each time with something new to
+ * show. `initialPhase` is what the page already knows, so the screen does not
+ * flash "not started" while the connection opens. The connection depends
+ * only on `contestId` and closes on unmount, freeing the connection slot.
  *
- * `offsetRef` and `deadlineRef` are refs, not state, on purpose: a caller
- * that ticks once a second reads `.current` at render time, and a value that
- * changed every thirty seconds (the server's own resync interval) has no
- * business re-rendering a component that only reads it once a second anyway —
- * the caller's own interval already guarantees the read is never stale by
- * more than a second. `phase` is state, because it is the one thing here that
- * should cause a render when it changes: it moves at most twice in two hours
- * (contest_started, contest_finished), and each time is exactly the moment
- * the screen has something new to say.
+ * While `EventSource` is still `CONNECTING` it retries on the server's
+ * `retry:` interval and this hook does nothing. A non-200 response fails the
+ * connection permanently (`CLOSED`), which would freeze the clock silently;
+ * then a plain `fetch` of the same URL asks why. A refusal that may clear (a
+ * rate limit, the connection cap, a server error, `contest_not_running`) is
+ * shown as `channelError` and retried; a terminal one (see isTerminal) is
+ * shown and not retried; an admitted probe is retried with no message. Every
+ * retry goes through `scheduleReconnect`.
  *
- * The connection survives every re-render of whoever calls this — the effect
- * below depends on nothing but `contestId` — and is closed the moment the
- * caller unmounts, which is what keeps a participant who navigates away from
- * leaving a socket, and this installation's connection limit, behind them.
- *
- * `initialPhase` seeds the state the server already knows before the first
- * event ever arrives — the page that rendered this screen already asked the
- * API whether the contest is running, and starting from "waiting" regardless
- * would flash a "not started" clock for the instant it takes the connection
- * to open and say what this page was already told.
- *
- * Reconnection on a connection the browser is still trying by itself is left
- * entirely to `EventSource`: the server sends its own `retry:` interval once,
- * at connect time (events_handler.go's own doc, finding 3), and a client that
- * reconnects at all does so on that schedule — this hook never calls
- * `.close()` on a live connection to "retry sooner".
- *
- * A connection the browser gives up on outright is a different case, and the
- * one this hook does handle. Per the SSE specification, a non-200 response —
- * a rate limit, this installation's own cap on how many of this channel one
- * participant may hold, a refusal because this account no longer belongs
- * here — fails the connection permanently: `readyState` becomes `CLOSED` and
- * the browser never tries again on its own. Left alone, the clock this
- * connection drives freezes on whatever it last showed for the rest of the
- * contest, silently. The `error` listener below is what tells the two cases
- * apart (`readyState` still `CONNECTING` means the browser itself is
- * retrying — nothing to do) and, only for a `CLOSED` connection, asks a plain
- * `fetch` of the same URL why: a code this installation expects to clear on
- * its own (too many connections, a rate limit, a transient server error)
- * gets a reconnect and a translated reason exposed as `channelError` for the
- * screen to show meanwhile — and so does a contest that is not open now but
- * may be (`contest_not_running`), which is never read as the contest having
- * finished; a code that will never clear on its own (this
- * account was removed from the contest, or the address it is on stopped
- * being allowed) gets the same message with no retry, since nothing this tab
- * does will change either fact. A probe the server *admits* — the proxy case
- * above — is the third answer: no message, because there is nothing to tell
- * anybody, and a reconnect on exactly the same terms as the second.
- *
- * "The same terms" is one function, `scheduleReconnect`: a capped doubling
- * wait with jitter on it, reset by a `sync`. It is one function because it
- * was two, and only one of them doubled — see finding 4 there.
- *
- * `renderedDormant` is the caller's word that the page under it was rendered
- * from a `dormant` refusal (content-loaded.tsx). The channel cannot know that
- * on its own when the contest opened between the page's render and this
- * channel's first connection: that connection is simply admitted.
+ * `renderedDormant` is the caller's word that the page was rendered from a
+ * `dormant` refusal (content-loaded.tsx); the channel cannot learn that
+ * itself when the contest opened before its first connection.
  */
 export function useContestEvents(
   contestId: string,
@@ -117,37 +65,28 @@ export function useContestEvents(
   renderedDormant = false,
 ) {
   const offsetRef = useRef(0);
-  // Three states, not two. `undefined` is "no sync has arrived yet"; `null`
-  // is "a sync arrived and the server said this participant has no deadline",
-  // which happens only under individual timing before their first action.
-  // Conflating them is what put "Starts with your first action" on the screen
-  // of a fixed-window contest for the moment before the channel connected —
-  // a sentence that is not merely early there, it is false.
+  // `undefined`: no sync yet. `null`: the server said this participant has no
+  // deadline, which happens only under individual timing before their first
+  // action. Conflating them would show "Starts with your first action" in a
+  // fixed-window contest before the channel connects.
   const deadlineRef = useRef<number | null | undefined>(undefined);
   const [phase, setPhase] = useState<ContestPhase>(initialPhase);
   const [channelError, setChannelError] = useState<string | null>(null);
-  // Whether a connection has been accepted after the channel was refused
-  // because the contest is not open now. A page the server rendered from that
-  // same refusal is stale from this moment, and this is the only place that
-  // learns it: the window opening is not an event the channel pushes, it is
-  // simply the next connection being admitted. The page may also have been
-  // rendered from that refusal while this channel was never refused at all
-  // (`renderedDormant`): then any admitted connection is the reopening.
-  // Stays true once set.
+  // Whether a connection was admitted after a `dormant` refusal, or after
+  // the page was rendered from one (`renderedDormant`). The contest opening
+  // is not pushed; it is only the next connection being admitted, and the
+  // page rendered from that refusal is stale from then. Stays true once set.
   const [reopened, setReopened] = useState(false);
-  // Read by the channel below, which outlives every render; kept current by
-  // the effect that follows it.
+  // Read by the channel, which outlives every render.
   const renderedDormantRef = useRef(renderedDormant);
-  // Whether any connection has been accepted yet. A ref, not state: an
-  // ordinary sync must not render (see `deadlineRef` above), and this matters
-  // only when the page says it rendered dormant after the fact.
+  // Whether any connection has been admitted. A ref: an ordinary sync must
+  // not render.
   const admittedRef = useRef(false);
-  // Set by the effect below to the live channel's own resync; a no-op until
-  // then and after unmount.
+  // The live channel's resync; a no-op before it opens and after unmount.
   const resyncRef = useRef<() => void>(() => {});
 
-  // The page streams in under its caller, so it can say it rendered dormant
-  // after the channel was already admitted: that is the reopening too.
+  // The page streams in later, so it can report rendering dormant after the
+  // channel was already admitted: that is the reopening too.
   useEffect(() => {
     renderedDormantRef.current = renderedDormant;
     if (renderedDormant && admittedRef.current) setReopened(true);
@@ -155,15 +94,13 @@ export function useContestEvents(
 
   useEffect(() => {
     const url = `${API_PREFIX}/contests/${contestId}/events`;
-    // A new channel has admitted nothing yet.
     admittedRef.current = false;
     let cancelled = false;
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryDelay = RECONNECT_MIN_DELAY_MS;
-    // Set by a `dormant` refusal and cleared by the first sync after it,
-    // which is the moment `reopened` reports. Other refusals in between
-    // leave it set: the contest was still not known to be open.
+    // Set by a `dormant` refusal and cleared by the next sync, which reports
+    // `reopened`. Other refusals in between leave it set.
     let dormant = false;
 
     const clearRetryTimer = () => {
@@ -174,23 +111,12 @@ export function useContestEvents(
     };
 
     /**
-     * Waits, then opens a fresh connection — the one path back onto this
-     * channel, whatever the reason the last attempt failed.
-     *
-     * One function rather than a branch each, because it used to be a branch
-     * each and only one of them grew the delay. The other — a probe the
-     * server admits while `EventSource` keeps failing, the proxy case this
-     * hook's own doc anticipates — put the wait back to the floor every turn,
-     * so a participant on a network that behaves that way reconnected every
-     * five seconds for the length of the contest. That is not free: the
-     * probe and the reconnect are two charges against the thirty-a-minute
-     * budget this channel shares with the SQL console (AdmitRead), spent
-     * while their own clock runs.
-     *
-     * The delay is read before it is doubled, so the first wait is the floor
-     * and each following one is twice the last up to the ceiling. A `sync`
-     * puts it back to the floor, because a sync only ever arrives on a
-     * connection the server has just accepted.
+     * Waits, then opens a fresh connection: the only path back onto the
+     * channel, whatever failed. The delay doubles up to the ceiling for every
+     * cause, including an admitted probe; a fixed floor there would reconnect
+     * every five seconds for the whole contest, each turn spending two charges
+     * of the budget shared with the SQL console (AdmitRead). A `sync` resets
+     * it, since it arrives only on an accepted connection.
      */
     const scheduleReconnect = () => {
       const delay = retryDelay * (1 + Math.random() * RECONNECT_JITTER);
@@ -211,9 +137,8 @@ export function useContestEvents(
           const data = JSON.parse(event.data) as SyncPayload;
           offsetRef.current = new Date(data.server_now).getTime() - Date.now();
           deadlineRef.current = data.deadline ? new Date(data.deadline).getTime() : null;
-          // A sync only ever arrives on a connection the server just
-          // accepted: whatever caused an earlier failure is over, so any
-          // banner and backoff from it are stale.
+          // A sync arrives only on an accepted connection, so any earlier banner
+          // and backoff are stale.
           retryDelay = RECONNECT_MIN_DELAY_MS;
           setChannelError(null);
           admittedRef.current = true;
@@ -222,8 +147,7 @@ export function useContestEvents(
             setReopened(true);
           }
         } catch {
-          // A malformed push changes nothing; the next sync, at most thirty
-          // seconds later, corrects it.
+          // A malformed push changes nothing; the next sync corrects it.
         }
       };
       const onStarted = () => setPhase("running");
@@ -232,54 +156,34 @@ export function useContestEvents(
       const onError = () => {
         if (cancelled) return;
         if (es.readyState !== EventSource.CLOSED) {
-          // The browser itself is retrying this exact connection (readyState
-          // CONNECTING) — a transient drop, and exactly the case left to
-          // EventSource's own reconnection (see this hook's own doc).
+          // CONNECTING: the browser is retrying by itself.
           return;
         }
         void diagnose(url).then((result) => {
           if (cancelled) return;
           if (result.ok) {
-            // The probe itself was admitted: the server would take a fresh
-            // connection right now, so whatever failed the first one was a
-            // one-off (a proxy hiccup, say) rather than a standing refusal.
-            // No banner — nothing here is worth telling a participant under
-            // a timer about — but the same backoff every other reconnect
-            // gets (finding 4). This branch used to reset the wait to the
-            // floor on every turn, which made it the one branch the doubling
-            // could never reach: if EventSource keeps failing on this URL
-            // while a plain fetch of it keeps succeeding (a proxy that
-            // handles the two differently, say), that is a reconnect every
-            // five seconds for the whole contest, and every turn spends two
-            // charges of the query-rate budget this channel shares with the
-            // SQL console (config.QueryPerMinute's own doc, AdmitRead).
+            // The probe was admitted, so the failure was a one-off (a proxy, say).
+            // No banner, but the same backoff as any other reconnect.
             setChannelError(null);
             scheduleReconnect();
             return;
           }
           const code = result.code ?? "unreachable";
           if (isClosed(code)) {
-            // Not an error to show — the contest is simply over for this
-            // participant, the same fact the resync loop announces as
-            // contest_finished when it happens after a connection is
-            // already open (events_handler.go's own doc). Reached here only
-            // when that refusal comes at connect time instead — a page
-            // opened after the participant's own deadline passed, say.
+            // The contest is over for this participant. Reached here only when
+            // the refusal comes at connect time, e.g. a page opened after the
+            // participant's deadline.
             setPhase("finished");
             return;
           }
-          // A contest that is not open now (`dormant`: a published contest
-          // taken back to draft, or a running one whose individual window
-          // has not opened yet) is not over, and is not terminal either: it
-          // is shown, and the channel keeps reconnecting on the same backoff
-          // until the contest opens and a sync clears the reason — and
-          // reports `reopened`, since the page was rendered from the same
-          // refusal.
+          // A contest not open now (`dormant`: a published contest taken back
+          // to draft, or an individual window not yet open) is neither over nor
+          // terminal: it is shown, retried until a sync clears it, and then
+          // reported as `reopened`.
           if (refusalKind(code) === "dormant") dormant = true;
           setChannelError(code);
           if (isTerminal(code)) {
-            // Retrying on a timer would only repeat the same refusal
-            // (isTerminal's own doc).
+            // A timer would only repeat the same refusal.
             return;
           }
           scheduleReconnect();
@@ -295,17 +199,11 @@ export function useContestEvents(
     connect();
 
     /**
-     * Asks for one fresh sync now, rather than at the next periodic one —
-     * once for this channel's lifetime, whatever calls it and however often.
-     *
-     * The server sends a sync when a connection opens and has no other way to
-     * be asked for one, so this reopens the channel: the current connection is
-     * closed and a new one opened at once. Bounded to one because every
-     * connection spends the read budget this channel shares with the SQL
-     * console, and a caller that asked on every render must not become a
-     * reconnect loop. A connection that has already failed is left to the
-     * reconnect already scheduled for it, whose own first sync is the fresh
-     * one this asks for.
+     * Asks for one fresh sync now, at most once per channel. The server syncs
+     * only when a connection opens, so this reopens the channel. Bounded to
+     * one because every connection spends the read budget shared with the SQL
+     * console. A failed connection is left to its scheduled reconnect, whose
+     * first sync is the fresh one.
      */
     let resynced = false;
     resyncRef.current = () => {
@@ -324,28 +222,21 @@ export function useContestEvents(
     };
   }, [contestId]);
 
-  // Stable across renders, so a caller can list it as an effect dependency.
+  // Stable, so a caller can list it as an effect dependency.
   const resync = useCallback(() => resyncRef.current(), []);
 
   return { offsetRef, deadlineRef, phase, channelError, resync, reopened };
 }
 
-/** What asking the same URL again turned up: an admission, or the API's own reason for refusing one. */
+/** An admission, or the API's reason for refusing one. */
 type DiagnoseResult = { ok: true } | { ok: false; code: string | null };
 
 /**
- * Asks, with a plain request against the same URL, why the channel's own
- * connection attempt was refused outright — `EventSource`'s `error` event
- * carries no status code or body, only the fact that something went wrong
- * (this hook's own doc). `code` is null when the response failed but carried
- * nothing this side could parse as the API's own error envelope (a gateway's
- * HTML page, say) — the same "unreachable" a client-side ApiError would
- * synthesise for that shape (lib/api/client.ts's own toApiError).
- *
- * A successful probe's own stream is cancelled at once: this call exists
- * only to read the response, never to hold a second connection open, and
- * leaving it running would burn one of this participant's own connLimiter
- * slots for nothing (events_handler.go's own doc on that limit).
+ * Asks with a plain request why the channel was refused: an `EventSource`
+ * error carries no status or body. `code` is null when the body is not the
+ * API's error envelope (a gateway's HTML page, say). An admitted probe's
+ * stream is cancelled at once so it does not hold one of the participant's
+ * connection slots.
  */
 async function diagnose(url: string): Promise<DiagnoseResult> {
   try {

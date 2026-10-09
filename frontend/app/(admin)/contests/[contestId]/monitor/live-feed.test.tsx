@@ -51,7 +51,7 @@ function renderFeed(feed: FeedState, overrides: Partial<Props> = {}) {
   return { ...view, props, rerenderWith: (next: Partial<Props>) => view.rerender(<LiveFeed {...props} {...next} />) };
 }
 
-/** jsdom lays nothing out: the scroll box is given a height, and its offset is the test's to set. */
+/** jsdom has no layout: the box gets a height and the test sets its offset. */
 function scroller(): HTMLElement {
   const element = screen.getByTestId("feed-scroller");
   Object.defineProperty(element, "clientHeight", { value: VIEW_PX, configurable: true });
@@ -96,7 +96,7 @@ describe("what each line says", () => {
     );
   });
 
-  /** Identical pastes in a row arrive folded into one line; the line says how many they were. */
+  /** Repeated identical pastes arrive folded; the line shows the count. */
   test("says how many times a folded paste was repeated", () => {
     const d = dict.workspace.monitor.feed.describe;
     renderFeed(state([withDetail("a", "paste", { type: "paste", target: "notes", chars: 3, text: "abc", count: 4 })]));
@@ -109,7 +109,7 @@ describe("what each line says", () => {
     ).toBeInTheDocument();
   });
 
-  /** The server creates every participant's first SQL tab; that line is noise beside the rest. */
+  /** The server creates every first SQL tab, so those events are muted. */
   test("de-emphasises tab events", () => {
     renderFeed(state([withDetail("h", "tab_created", { type: "tab", title: "Query 1" })]));
     const line = screen.getByText(dict.workspace.monitor.feed.describe.tabCreated.replace("{title}", "Query 1"));
@@ -164,7 +164,6 @@ describe("following the newest item", () => {
 
     rerenderWith({ feed: state(many(1, 23)) });
 
-    // The organiser's place is kept.
     expect(box.scrollTop).toBe(2 * ROW_PX);
     const jump = screen.getByRole("button", { name: dict.workspace.monitor.feed.newItems.replace("{n}", "3") });
 
@@ -178,8 +177,8 @@ describe("following the newest item", () => {
     const box = scroller();
     scrollTo(box, 500 * ROW_PX);
 
-    // Five new, five of the oldest dropped: the line that was at the top of
-    // the view is five rows higher in the list now.
+    // Five added and five oldest dropped: the line on top is now five rows
+    // higher.
     rerenderWith({ feed: state(many(6, FEED_LIMIT + 5)) });
     expect(box.scrollTop).toBe(495 * ROW_PX);
   });
@@ -205,9 +204,8 @@ describe("following the newest item", () => {
   });
 
   /**
-   * The newest end was dropped to make room for older lines. Nothing new
-   * arrived, and the organiser is at the bottom of what is held — the way
-   * back to the dropped lines must still be there, and must not claim news.
+   * Detached at the bottom with nothing missed: the way back is still offered,
+   * without claiming news.
    */
   test("detached, nothing missed, scrolled to the bottom: the way back is still offered", () => {
     renderFeed(state(many(1, 20), { detached: true, missed: 0 }));
@@ -224,7 +222,7 @@ describe("following the newest item", () => {
     const box = scroller();
     scrollTo(box, 0);
 
-    // Older lines came in and the newest end, c120 among it, was dropped.
+    // Older lines loaded; the newest end, c120 included, was dropped.
     rerenderWith({ feed: state(many(1, 110), { detached: true }) });
 
     expect(screen.queryByText(/new/)).not.toBeInTheDocument();
@@ -251,11 +249,7 @@ describe("older items", () => {
   });
 });
 
-/**
- * A thousand lines in the DOM, each re-laid out on every poll, is what the
- * bound on the list exists to avoid; only the lines in view are rendered, and
- * the list still says how long it is.
- */
+/** Only lines in view are rendered; the list still reports its length. */
 test("renders only the lines in view of a long feed", () => {
   const { rerenderWith } = renderFeed(state(many(1, FEED_LIMIT)));
   const box = scroller();
@@ -268,7 +262,7 @@ test("renders only the lines in view of a long feed", () => {
   expect(screen.getByText("SELECT 501")).toBeInTheDocument();
 });
 
-/** On one participant's page every line is theirs: the name would only repeat the heading. */
+/** On a participant's page the name would repeat the heading. */
 describe("on one participant's page", () => {
   test("names nobody", () => {
     renderFeed(state([withDetail("a", "page_left", { type: "page_left", awayMs: 5_000 })]), { showParticipant: false });

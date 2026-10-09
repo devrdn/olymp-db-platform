@@ -9,19 +9,10 @@ export async function generateMetadata() {
 }
 
 /**
- * Replacing the password an administrator handed over.
- *
- * Reached two ways, and both matter. Sign-in sends an account here directly
- * when the login response says so; and every other screen sends it here after
- * the API refuses with `password_change_required`, which it does on all but
- * three endpoints. The second path is what makes the screen real — without it,
- * an account that navigates anywhere by hand meets an error page offering a
- * retry that can never work.
- *
- * The composition is the sign-in screen's, deliberately: the same display
- * heading against the same hairline against the same 384px form column. These
- * two are one moment in the product — being let in — and a second layout for
- * the second half would read as a different application.
+ * Replaces the issued password. Reached from sign-in when the login says so,
+ * and from any screen after the API answers `password_change_required` (all but
+ * three endpoints do). Shares the sign-in screen's composition: both are part
+ * of being let in.
  */
 export default async function PasswordPage() {
   const dict = await activeDictionary();
@@ -33,10 +24,7 @@ export default async function PasswordPage() {
         <div className="flex flex-col justify-center gap-8 xl:py-24">
           <h1 className="max-w-head text-display text-balance text-ink">{t.title}</h1>
           <p className="max-w-lede text-lede text-ink-2">{t.lede}</p>
-          {/* Stated before the change, not discovered after it: every session
-              ends here, so an author with a contest open in another tab is
-              told it is about to be signed out rather than finding out by
-              being signed out. */}
+          {/* Every session ends here; say so before the change. */}
           <p className="max-w-body text-body text-ink-3">{t.note}</p>
         </div>
 

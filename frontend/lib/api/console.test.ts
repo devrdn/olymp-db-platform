@@ -17,14 +17,9 @@ describe("the query result wire shape", () => {
     expect(parsed.duration_micros).toBe(38_000);
   });
 
-  // The two lists are read together — the nth type belongs under the nth name
-  // — so the schema must carry the type list in the same shape as the names,
-  // never as a bare value the caller has to guess the arity of.
   it("keeps the type list in step with the column list", () => {
     const parsed = queryResultSchema.parse({
       columns: ["full_name", "at", "mystery"],
-      // A type the runner could not name arrives as an empty entry rather
-      // than as a missing one, so the positions still line up.
       column_types: ["text", "timestamp with time zone", ""],
       rows: [],
       truncated: false,
@@ -36,11 +31,6 @@ describe("the query result wire shape", () => {
     expect(parsed.column_types?.[2]).toBe("");
   });
 
-  // A runner that has not been upgraded names no types and reports no
-  // duration. The console must still draw the table it was given rather than
-  // refusing the whole answer over a missing label — and the absence has to
-  // stay visible, so that the meter can leave its field blank instead of
-  // claiming the query took no time.
   it("accepts an answer from a runner that names neither", () => {
     const parsed = queryResultSchema.parse({
       columns: ["id"],
@@ -54,8 +44,7 @@ describe("the query result wire shape", () => {
     expect(parsed.duration_micros).toBeUndefined();
   });
 
-  // The API never sends null for a list (console_handler.go's own rule), and
-  // a client that quietly accepted one would hide the day it did.
+  // The API never sends null for a list; accepting one would hide the day it did.
   it("refuses a null type list rather than rendering nothing", () => {
     expect(() =>
       queryResultSchema.parse({

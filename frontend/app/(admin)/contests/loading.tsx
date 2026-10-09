@@ -3,10 +3,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { activeDictionary } from "@/lib/i18n/server";
 
 /**
- * The loading state is a skeleton shaped like the register, not a spinner: a
- * spinner says "wait", a skeleton says "here is what is coming". Its rows
- * carry the real row height and the real column offsets,
- * so nothing moves when the data lands.
+ * A skeleton with the register's real row height and column offsets, so nothing
+ * moves when data lands.
  */
 export default async function Loading() {
   const dict = await activeDictionary();

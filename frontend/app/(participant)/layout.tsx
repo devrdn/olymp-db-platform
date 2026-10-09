@@ -9,21 +9,11 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
 /**
- * The frame a participant's screens wear.
- *
- * The same shell as the constructor's, pointed at a different home. A student
- * sent to `/contests` would meet the register scoped to contests they manage,
- * which for them is empty — an accurate answer to a question they never asked.
- *
- * A group of its own rather than a folder under `(admin)` because the audience
- * is the thing that differs, and it is the audience that decides where the
- * mark leads. When the case screen and the SQL console arrive in step 5 they
- * belong here, already framed.
- *
- * Two destinations, so a section label gives way to navigation. They answer
- * different questions — "when does mine start", asked under a timer on the
- * day, and "what can I join", browsed once a term — which is why they are two
- * screens and not one list.
+ * The frame of a participant's screens: the same shell as the constructor's,
+ * but its mark leads home to `/my`. A student sent to `/contests` would meet
+ * the author's register scoped to contests they manage, which is empty for
+ * them. Two destinations, `/my` and `/open`, as navigation: "when does mine
+ * start" and "what can I join" are different questions.
  */
 export default async function ParticipantLayout({ children }: { children: React.ReactNode }) {
   const [brand, dict, locale, theme, identity] = await Promise.all([
@@ -31,10 +21,10 @@ export default async function ParticipantLayout({ children }: { children: React.
     activeDictionary(),
     activeLocale(),
     activeTheme(),
-    // Tolerated here, and only here: this layout decorates and never
-    // redirects, so a server that cannot be asked costs the account door and nothing
-    // else. The screens that decide where somebody may go let the failure
-    // through, because there "unknown" must not be answered as "signed out".
+    // Tolerated only here: this layout decorates and never redirects, so an
+    // unreachable server costs only the account chip. Screens that decide
+    // where somebody may go let the failure through, since "unknown" must not
+    // read as "signed out".
     fetchIdentity().catch(() => null),
   ]);
 
@@ -56,10 +46,9 @@ export default async function ParticipantLayout({ children }: { children: React.
       }
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
-      {/* This group's own dictionary scope, on top of the root's: the participant's own boundaries (`/my`, `/open`) read from `participant`,
-          and none of that is a section the root scope carries. The sections
-          are chosen here, on the server, so what crosses the wire is what
-          this subtree can actually read (finding 5). */}
+      {/* The participant dictionary scope (`/my`, `/open` read `participant`),
+          narrowed on the server so only what this subtree reads crosses the
+          wire. */}
       <ParticipantDictionaryProvider dict={selectParticipant(dict)} locale={locale}>
         {children}
       </ParticipantDictionaryProvider>

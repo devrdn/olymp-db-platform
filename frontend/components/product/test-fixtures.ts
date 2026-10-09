@@ -1,8 +1,8 @@
 import type { LoggedQuery } from "@/lib/api/journal";
 
-/** Builders shared by the tests of the query log and everything built on it. */
+/** Builders shared by the query log tests and those built on it. */
 
-/** One logged query; ended well, from an address, unless told otherwise. */
+/** A successful query with an address, unless overridden. */
 export function loggedQuery(id: number, overrides: Partial<LoggedQuery> = {}): LoggedQuery {
   return {
     cursor: `q${id}`,

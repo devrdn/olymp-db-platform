@@ -40,9 +40,8 @@ const TABS: WorkspaceTab[] = [
 ];
 
 /**
- * The hook, the strip and a stand-in for the editor: a plain textarea that
- * reports what is typed into the tab that is showing, which is exactly the
- * contract `CodeEditor` keeps (`code-editor.test.tsx` covers the real one).
+ * The hook, the strip, and a textarea standing in for the editor under
+ * `CodeEditor`'s contract (the real one is in `code-editor.test.tsx`).
  */
 function Harness({ initial }: { initial: WorkspaceTab[] | null }) {
   const tabs = useSqlTabs({
@@ -101,10 +100,8 @@ function tab(name: string) {
 }
 
 /**
- * Drags one tab onto the left half of another. jsdom lays nothing out and
- * has no `DragEvent`, so the target is given a rectangle and the pointer
- * arrives on a `MouseEvent` of the same name — see `sql-tabs.test.tsx`,
- * which covers what the halves mean.
+ * Drags one tab onto another's left half, with the same jsdom workarounds as
+ * `sql-tabs.test.tsx`.
  */
 function dragOnto(dragged: string, target: string) {
   const onto = tab(target);
@@ -204,9 +201,7 @@ describe("the participant's SQL tabs", () => {
     expect(editor()).toHaveValue("SELECT 2");
   });
 
-  // §1 of the design: a private window or a policy that blocks storage
-  // costs the draft, never the function. Remembering which tab was open is
-  // storage's job; being able to switch tabs is not.
+  // Refused storage costs the memory of the open tab, never switching.
   test("switch tabs even where the browser refuses to remember which one", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("the quota is exceeded", "QuotaExceededError");
@@ -278,9 +273,7 @@ describe("the participant's SQL tabs", () => {
     expect(tab("Witnesses")).toBeInTheDocument();
   });
 
-  // A refusal is news for as long as it is true. Once a save has landed
-  // again the workspace is plainly answering, and a sentence about a name
-  // refused a minute ago is only in the way of the save status.
+  // Once a save lands, an older refusal is no longer news.
   test("take a refusal back once a save lands again", async () => {
     show();
     answer = () => refusal(400, "workspace_title_invalid");
@@ -299,10 +292,8 @@ describe("the participant's SQL tabs", () => {
     expect(status()).toBe(t.status.saved);
   });
 
-  // The server refuses a tab longer than a query may be
-  // (`workspace_tab_too_long`, 64 KiB). Sending it to hear that costs the
-  // participant one of their sixty writes a minute and 64 KiB of upload on a
-  // classroom connection, and the answer is knowable here.
+  // The server would refuse it (`workspace_tab_too_long`); asking costs a
+  // write and 64 KiB of upload, and the answer is known here.
   test("refuse a body longer than a query may be without sending it", async () => {
     show();
 
@@ -342,8 +333,8 @@ describe("closing a tab", () => {
     expect(screen.queryByRole("tab", { name: "Suspects" })).not.toBeInTheDocument();
   });
 
-  // A closed tab's autosave has to stop: otherwise it keeps a timer, keeps a
-  // draft, and sends one more save for a tab the server no longer has.
+  // Otherwise it keeps a timer and a draft, and saves once more for a tab
+  // the server no longer has.
   test("stops the closed tab's autosave and forgets its draft", async () => {
     show();
     fireEvent.click(tab("Suspects"));
@@ -380,10 +371,8 @@ describe("reordering the tabs", () => {
   });
 
   /**
-   * One deliberate write at a time, which `create` already kept to. Two
-   * orders in flight at once is how a move's rollback comes to undo a drop
-   * the server accepted: the refusal of the first one puts back the strip as
-   * it was when that move started, and the second move is not in it.
+   * One deliberate write at a time: with two orders in flight, the first's
+   * rollback would restore a strip without the second, accepted drop.
    */
   test("sends one order at a time", async () => {
     show();
@@ -395,7 +384,7 @@ describe("reordering the tabs", () => {
 
     dragOnto("Suspects", "Query 1");
     await settle();
-    // A second drop, and a close, while the first order is still in flight.
+    // A second drop and a close while the first order is in flight.
     dragOnto("Query 1", "Suspects");
     fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Query 1") }));
     await settle();
@@ -409,7 +398,7 @@ describe("reordering the tabs", () => {
 
     land();
     await settle();
-    // And the strip is writable again once the answer is in.
+    // Writable again once the answer is in.
     dragOnto("Query 1", "Suspects");
     await settle();
     expect(requests("PUT")).toHaveLength(2);

@@ -14,9 +14,8 @@ beforeAll(async () => {
   en = await getDictionary("en");
 });
 
-// The register now renders a RowCheckbox and a SelectAllCheckbox per row and
-// header, both of which read the selection store from context — so every
-// render needs a provider, exactly as page.tsx supplies one in the real app.
+// The checkboxes read the selection store from context, so every render needs a
+// provider, as `layout.tsx` supplies in the app.
 function renderRegister(ui: ReactElement) {
   return render(<SelectionProvider>{ui}</SelectionProvider>);
 }
@@ -62,32 +61,28 @@ describe("AccountRegister", () => {
   });
 
   test("shows a role by the name a person reads, not by its code", () => {
-    // The codes are what authorisation works in. An administrator picking who
-    // may do what should not have to know that "admin" is spelled that way.
+    // Roles are shown by name, not code.
     renderRegister(<AccountRegister accounts={[account({ roles: ["admin"] })]} {...props} dict={en} />);
 
     expect(screen.getByText("System administrator")).toBeInTheDocument();
   });
 
   test("falls back to the code for a role the catalogue does not name", () => {
-    // A role added to the table while this page was open. Showing nothing
-    // would say the account holds no role, which is a different and wrong fact.
+    // An unknown role is shown raw; an empty cell would deny it.
     renderRegister(<AccountRegister accounts={[account({ roles: ["dean"] })]} {...props} dict={en} />);
 
     expect(screen.getByText("dean")).toBeInTheDocument();
   });
 
   test("says an account holds no role rather than leaving the cell blank", () => {
-    // An empty cell reads as missing data. No roles at all is a real state and
-    // worth stating — such an account can sign in and do nothing.
+    // No roles is a real state and is stated.
     renderRegister(<AccountRegister accounts={[account({ roles: [] })]} {...props} dict={en} />);
 
     expect(screen.getByText(en.accounts.noRoles)).toBeInTheDocument();
   });
 
   test("marks an account still carrying the password it was handed", () => {
-    // The administrator who reset it needs to see who has not yet picked their
-    // own — that is the difference between "handed over" and "in use".
+    // Shows who still carries an issued password.
     renderRegister(
       <AccountRegister accounts={[account({ mustChangePassword: true })]} {...props} dict={en} />,
     );
@@ -112,8 +107,7 @@ describe("AccountRegister", () => {
   });
 
   test("does not offer a reset when nothing has been created at all", () => {
-    // There is no filter to clear, and a control that cannot help suggests the
-    // emptiness is the reader's doing.
+    // No filter, so no reset.
     renderRegister(<AccountRegister accounts={[]} {...props} dict={en} />);
 
     expect(screen.getByText(en.accounts.emptyAll.title)).toBeInTheDocument();
@@ -131,8 +125,7 @@ describe("AccountRegister", () => {
     expect(screen.getByRole("link", { name: en.accounts.olderPage })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.accounts.newerPage })).not.toBeInTheDocument();
 
-    // `rerender` swaps the whole mounted tree, so the provider has to be
-    // re-supplied here too — it is not carried over from the first render.
+    // `rerender` replaces the tree, so the provider is supplied again.
     rerender(
       <SelectionProvider>
         <AccountRegister accounts={many} {...props} total={120} offset={100} dict={en} />

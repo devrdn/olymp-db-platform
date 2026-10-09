@@ -9,38 +9,24 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-// Client components, imported into this server one. Importing a client
-// component does not itself pull `"use client"` onto this file — that
-// boundary already lives inside account-create.tsx and selection.tsx — so
-// the register stays server-rendered while the boxes and dialogs it renders
-// are the only client code on the page.
+// Client components; the `"use client"` boundary lives in their files, so the
+// register stays server-rendered.
 import { AccountCreateControls } from "./account-create";
 import { RowCheckbox, SelectAllCheckbox } from "./selection";
 
 /**
- * The accounts of the installation, as a register.
- *
- * The same shape as the contest register and for the same reason: rows compare
- * down a column, tiles do not, and "who is blocked" or "who has not signed in
- * yet" are questions answered by scanning one column.
- *
- * Roles arrive as codes and are shown by name. The codes are what
- * authorisation works in; an administrator deciding who may do what should not
- * have to know that the system administrator is spelled `admin`. A code the
- * catalogue does not name is shown raw rather than dropped — a role added
- * while this page was open is still a role the account holds, and an empty
- * cell would say the opposite.
+ * The installation's accounts as a register. Role codes are shown by catalogue
+ * name; an unknown code is shown raw, since an empty cell would deny a role the
+ * account holds.
  */
 
-/** How many rows a page carries. Matches the API's own default. */
+/** Rows per page; matches the API's default. */
 export const ACCOUNTS_PAGE = 50;
 
 const STATUS_TONE: Record<AccountStatus, "good" | "bad" | "mute"> = {
   active: "good",
   blocked: "bad",
-  // Softly deleted, not merely inactive: neither "good" nor a state somebody
-  // fixes by unblocking, so it gets the tone that reads as settled rather
-  // than urgent.
+  // Settled rather than urgent: unblocking does not fix it.
   deleted: "mute",
 };
 
@@ -62,9 +48,9 @@ export function AccountRegister({
   total: number;
   offset: number;
   pageHref: (offset: number) => string;
-  /** Whether a filter is in force, which decides which emptiness this is. */
+  /** Whether a filter is applied, which decides which empty state shows. */
   filtered: boolean;
-  /** The catalogue the server publishes, for turning codes into names. */
+  /** The server's role catalogue, for code-to-name lookup. */
   roles: Role[];
   dict: Dictionary;
   locale: Locale;
@@ -86,10 +72,8 @@ export function AccountRegister({
 
       {accounts.length === 0 ? (
         <div className="border-t border-line">
-          {/* Two emptinesses, and they are not the same fact. A filter that
-              matched nothing has a way out; an installation with no accounts
-              has a first step. Offering a reset for the second would suggest
-              the emptiness was the reader's doing. */}
+          {/* A filter that matched nothing offers a reset; an empty installation
+             offers a first step. */}
           <StateView
             state={
               filtered
@@ -166,9 +150,7 @@ export function AccountRegister({
                   <td className={CELL}>
                     <span className="flex flex-wrap items-center gap-1.5">
                       <Tag tone={STATUS_TONE[account.status]}>{t.status[account.status]}</Tag>
-                      {/* Handed over and not yet replaced. The administrator
-                          who reset it needs to see who is still carrying
-                          somebody else's password. */}
+                      {/* Still carrying an issued password that must be changed. */}
                       {account.mustChangePassword ? (
                         <Tag tone="warn">{t.handoverPending}</Tag>
                       ) : null}
