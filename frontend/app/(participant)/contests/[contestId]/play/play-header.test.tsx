@@ -13,6 +13,7 @@ type EventsSnapshot = {
   phase: ContestPhase;
   channelError?: string | null;
   resync?: () => void;
+  reopened?: boolean;
 };
 
 // The hook itself is tested on its own (use-contest-events.test.ts); this
@@ -161,6 +162,37 @@ describe("PlayHeader", () => {
   test("never refreshes a screen that already knows the contest is running", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  // A running contest whose own window had not opened when the page was
+  // rendered (individual timing, started early by the organiser) shows the
+  // "not open now" reason under this bar. When the channel reopens, the page
+  // under it is stale, and only a refresh replaces it with the workspace.
+  test("refreshes the page once when the channel reopens after the contest was not open", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", reopened: true };
+    const { rerender } = render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    rerender(<PlayHeader contestId="c1" title="Y" waitingForStart={false} dict={en} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not refresh on a channel that has not reopened", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", reopened: false };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  // The waiting room already refreshes on contest_started and on nothing
+  // else; reopening alone (a contest taken back to draft and published
+  // again) leaves it a waiting room.
+  test("leaves the waiting room alone when its channel reopens", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting", reopened: true };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
 
     expect(refresh).not.toHaveBeenCalled();
   });

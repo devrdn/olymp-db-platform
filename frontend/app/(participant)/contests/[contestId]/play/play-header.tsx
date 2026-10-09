@@ -48,7 +48,7 @@ export function PlayHeader({
 }) {
   const t = dict.participant.play;
   const router = useRouter();
-  const { offsetRef, deadlineRef, phase, channelError, resync } = useContestEvents(
+  const { offsetRef, deadlineRef, phase, channelError, resync, reopened } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
   );
@@ -64,18 +64,26 @@ export function PlayHeader({
     if (contentLoaded && phase === "running" && typeof deadlineRef.current !== "number") resync();
   }, [contentLoaded, phase, resync, deadlineRef]);
 
-  // Refreshed once, the moment this specific transition matters. Every other
-  // phase change (running while already showing the running screen, or
-  // finishing) needs no refetch: the story and the questions a participant
-  // has already have not become wrong, and the existing refusal flow already
-  // says what changed the moment an action is actually attempted.
+  // Refreshed once, the moment one of two specific transitions matters: a
+  // waiting room learning the contest started, or a running screen whose
+  // channel was refused as not open now and has just been admitted. The
+  // second is a running contest with individual timing whose own window had
+  // not opened when the page was rendered (an organiser started it early):
+  // the page under this bar shows that refusal, and nothing but a refresh
+  // replaces it with the workspace. Every other phase change (running while
+  // already showing the running screen, or finishing) needs no refetch: the
+  // story and the questions a participant has already have not become wrong,
+  // and the existing refusal flow already says what changed the moment an
+  // action is actually attempted.
   const refreshed = useRef(false);
   useEffect(() => {
-    if (waitingForStart && phase === "running" && !refreshed.current) {
+    const started = waitingForStart && phase === "running";
+    const opened = !waitingForStart && reopened;
+    if ((started || opened) && !refreshed.current) {
       refreshed.current = true;
       router.refresh();
     }
-  }, [waitingForStart, phase, router]);
+  }, [waitingForStart, phase, reopened, router]);
 
   return (
     /* `print:hidden` lives on the bar itself now that `page.tsx` renders it
