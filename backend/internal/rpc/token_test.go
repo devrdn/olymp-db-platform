@@ -23,18 +23,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// The runner executes whatever database, policy and quota a request names, so
-// the only thing standing between a socket and a participant's database is
-// knowing that the Core API sent the request. These tests hold that line with
-// a fake executor: what is under test is the door, not what is behind it, and
-// a door test that needs a game cluster is a door test nobody runs.
+// These tests use a fake executor: what is under test is the token check, and
+// a test that needs a game cluster would skip where it matters.
 
 const (
 	theToken   = "a-query-runner-token-of-at-least-32-bytes"
 	wrongToken = "not-the-query-runner-token-but-just-as-long"
 )
 
-// countingExecutor records whether a request got past the door.
+// countingExecutor records whether a request got past the token check.
 type countingExecutor struct{ calls atomic.Int32 }
 
 func (e *countingExecutor) Run(context.Context, queryrunner.Request) (*queryrunner.Result, error) {
@@ -42,8 +39,6 @@ func (e *countingExecutor) Run(context.Context, queryrunner.Request) (*queryrunn
 	return &queryrunner.Result{Columns: []string{"one"}, Rows: [][]any{{int64(1)}}}, nil
 }
 
-// behindTheDoor serves a fake executor with the given token and returns its
-// address, the executor and what the server logged.
 func behindTheDoor(t *testing.T, token string) (string, *countingExecutor, *syncBuffer) {
 	t.Helper()
 
@@ -87,9 +82,8 @@ func aQuery() queryrunner.Request {
 	}
 }
 
-// assertRefused checks the call was refused as unauthenticated, that nothing
-// ran, and that no token — the configured one or the one presented — appears
-// in what the caller is told.
+// assertRefused checks the call was refused, nothing ran, and no token leaked
+// into the error.
 func assertRefused(t *testing.T, err error, executor *countingExecutor) {
 	t.Helper()
 	if err == nil {
@@ -130,8 +124,6 @@ func TestARunWithTheWrongTokenIsRefusedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
-// A token that differs only in length must not pass either: the comparison is
-// over the whole value, not a prefix of it.
 func TestAPrefixOfTheTokenIsRefused(t *testing.T) {
 	address, executor, _ := behindTheDoor(t, theToken)
 
@@ -140,9 +132,6 @@ func TestAPrefixOfTheTokenIsRefused(t *testing.T) {
 	assertRefused(t, err, executor)
 }
 
-// The header has to be exactly the scheme and the token. A caller that sends
-// the bare token, or a second value next to the right one, is not the Core
-// API's client.
 func TestAMalformedAuthorizationIsRefused(t *testing.T) {
 	address, executor, _ := behindTheDoor(t, theToken)
 
@@ -186,9 +175,7 @@ func TestARunWithTheTokenIsAnswered(t *testing.T) {
 	}
 }
 
-// The health service shares the server and so shares the door: the container
-// health check runs inside the runner's own container, which holds the token,
-// and an exemption list of method names is one more thing that can drift.
+// No exemption list for health: it would be one more thing that can drift.
 func TestTheHealthCheckCarriesTheTokenAndIsRefusedWithoutIt(t *testing.T) {
 	address, _, _ := behindTheDoor(t, theToken)
 
@@ -209,9 +196,7 @@ func TestTheHealthCheckCarriesTheTokenAndIsRefusedWithoutIt(t *testing.T) {
 	}
 }
 
-// Streaming calls pass through a different interceptor chain from unary ones.
-// Health.Watch is the one stream the server exposes, and an unguarded chain is
-// how a future stream would arrive unauthenticated.
+// Streams pass through a separate interceptor chain from unary calls.
 func TestAStreamWithoutTheTokenIsRefused(t *testing.T) {
 	address, _, _ := behindTheDoor(t, theToken)
 
@@ -230,9 +215,7 @@ func TestAStreamWithoutTheTokenIsRefused(t *testing.T) {
 	}
 }
 
-// Development runs without a token, and says so where an operator will see
-// it, so that a production-shaped deployment that lost its token cannot pass
-// for a working one in the logs.
+// A deployment that lost its token must not pass for a working one in the logs.
 func TestWithoutATokenTheServerAnswersAndSaysSoLoudly(t *testing.T) {
 	address, executor, logged := behindTheDoor(t, "")
 
@@ -250,7 +233,7 @@ func TestWithoutATokenTheServerAnswersAndSaysSoLoudly(t *testing.T) {
 func TestWithATokenTheServerDoesNotWarn(t *testing.T) {
 	_, _, logged := behindTheDoor(t, theToken)
 
-	// Serve logs as it starts; give the goroutine the moment it needs.
+	// Wait for Serve's startup log line.
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(logged.String(), "listening") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -278,11 +261,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// A refused call is somebody on the network who does not hold the token, or a
-// Core API configured with the wrong one — either way an operator must hear of
-// it. Each refusal is counted; the log says so with the running total, at most
-// once per interval so a flood of refusals cannot flood the log, and never
-// with a token in it.
 func TestARefusedCallIsCountedAndLoggedWithoutTheToken(t *testing.T) {
 	address, _, logged := behindTheDoor(t, theToken)
 	client := dialWith(t, address, wrongToken)

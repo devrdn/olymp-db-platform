@@ -17,8 +17,6 @@ func csrfRequest(method, origin string) *http.Request {
 }
 
 func TestSafeMethodsPassWithoutAnOrigin(t *testing.T) {
-	// A GET carries no side effect, and requiring the header would break
-	// ordinary navigation and monitoring.
 	rec := httptest.NewRecorder()
 
 	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodGet, ""))
@@ -39,8 +37,6 @@ func TestMutatingRequestFromTheSameOriginIsAllowed(t *testing.T) {
 }
 
 func TestMutatingRequestFromAnotherOriginIsRejected(t *testing.T) {
-	// This is the request a malicious page makes with the victim's cookie
-	// attached; SameSite is the first line and this is the second.
 	rec := httptest.NewRecorder()
 
 	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "https://evil.example"))
@@ -54,9 +50,6 @@ func TestMutatingRequestFromAnotherOriginIsRejected(t *testing.T) {
 }
 
 func TestMutatingRequestWithNoOriginIsAllowedForNonBrowserClients(t *testing.T) {
-	// curl, a health probe and a server-side integration send no Origin.
-	// Browsers always do on cross-origin writes, which is what this defends
-	// against; rejecting the absent header would break every scripted client.
 	rec := httptest.NewRecorder()
 
 	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, ""))
@@ -67,8 +60,6 @@ func TestMutatingRequestWithNoOriginIsAllowedForNonBrowserClients(t *testing.T) 
 }
 
 func TestOriginWithADifferentSchemeIsRejected(t *testing.T) {
-	// http://host and https://host are different origins; accepting the plain
-	// one would let a downgraded page write.
 	rec := httptest.NewRecorder()
 
 	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "http://contest.university.edu"))
@@ -78,8 +69,7 @@ func TestOriginWithADifferentSchemeIsRejected(t *testing.T) {
 	}
 }
 
-// forwardedRequest is a plain-HTTP write that says it was HTTPS at the edge,
-// as it arrives from remoteAddr.
+// forwardedRequest is a plain-HTTP write that says it was HTTPS at the edge.
 func forwardedRequest(remoteAddr string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "http://contest.university.edu/api/v1/users", nil)
 	req.Host = "contest.university.edu"
@@ -90,9 +80,6 @@ func forwardedRequest(remoteAddr string) *http.Request {
 }
 
 func TestOriginIsComparedAgainstTheSchemeATrustedProxyForwarded(t *testing.T) {
-	// Behind the reverse proxy the request arrives over plain HTTP while the
-	// browser saw HTTPS, so the comparison has to use the forwarded scheme —
-	// and it may, because the peer is the proxy TRUSTED_PROXIES names.
 	rec := httptest.NewRecorder()
 	req := forwardedRequest("172.28.0.10:52000")
 
@@ -103,16 +90,8 @@ func TestOriginIsComparedAgainstTheSchemeATrustedProxyForwarded(t *testing.T) {
 	}
 }
 
-// The rule this file had backwards. X-Forwarded-Proto is written by whoever
-// spoke to the socket, and requestScheme turns it into the scheme half of "is
-// this Origin our own site" — so a caller that is not a trusted proxy could
-// send one header and have a cross-scheme Origin read as same-site. CLAUDE.md
-// rule 9 in as many words: a spoofed forwarded value may only ever make a
-// request stricter, never looser.
-//
-// Same request, same headers, three peers: the configured proxy is believed
-// (above), a direct caller is not, and neither is a peer that merely sits on
-// the compose network without being named.
+// A spoofed forwarded value may only make a request stricter (CLAUDE.md rule
+// 9): neither a direct caller nor an unnamed peer on the network is believed.
 func TestASpoofedForwardedProtoCannotWidenTheOriginCheck(t *testing.T) {
 	for _, peer := range []string{"203.0.113.7:41000", "172.28.0.99:41000"} {
 		rec := httptest.NewRecorder()
@@ -128,9 +107,6 @@ func TestASpoofedForwardedProtoCannotWidenTheOriginCheck(t *testing.T) {
 	}
 }
 
-// And with no resolver in front at all — the shape every other test in this
-// file uses — the header still counts for nothing. There is nobody to have
-// vouched for it.
 func TestAForwardedProtoIsIgnoredWhenNoResolverVouchedForThePeer(t *testing.T) {
 	rec := httptest.NewRecorder()
 
@@ -151,21 +127,8 @@ func TestMalformedOriginIsRejected(t *testing.T) {
 	}
 }
 
-// The one request in this product that a *browser* makes directly to the API
-// is a chunk of an uploaded dump: everything else that changes state goes
-// through a Next server action, which is server-to-server and carries no
-// Origin at all. So this rule had never met a real browser write until the
-// upload existed, and the first one failed.
-//
-// Behind the reverse proxy the two agree — Caddy passes the browser's Host
-// through, so Origin's host is the request's host. A development stack has no
-// Caddy: the browser is on :3000, Next's rewrite forwards /api/* to :8080 and
-// replaces Host on the way, and the comparison sees localhost:3000 against
-// localhost:8080. The same split is a legitimate production shape too, where
-// the interface and the API answer on different names.
-//
-// A deployment that has that split names its own front origin. Nothing else
-// changes: an origin nobody configured is still refused.
+// A dev stack sends Origin localhost:3000 to an API on localhost:8080; a
+// deployment with that split names its front origin.
 func TestAConfiguredFrontOriginIsAcceptedOnADifferentHost(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "http://localhost:8080/api/v1/x", nil)

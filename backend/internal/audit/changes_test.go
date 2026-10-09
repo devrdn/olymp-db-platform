@@ -26,8 +26,6 @@ func TestAChangedFieldIsRecordedWithBothValues(t *testing.T) {
 }
 
 func TestAFieldThatDidNotChangeIsNotRecorded(t *testing.T) {
-	// A form sends every field. Recording all of them makes each save look
-	// like a rewrite of the contest, which is the opposite of readable.
 	changes := NewChanges()
 	changes.Set("timing", "fixed", "fixed")
 
@@ -37,8 +35,6 @@ func TestAFieldThatDidNotChangeIsNotRecorded(t *testing.T) {
 }
 
 func TestSavingWithNoChangesIsItselfARecord(t *testing.T) {
-	// An empty set is a fact — "saved, nothing moved" — and it must not be
-	// indistinguishable from a real edit, so the payload still says so.
 	changes := NewChanges()
 	changes.Set("timing", "fixed", "fixed")
 
@@ -53,9 +49,6 @@ func TestSavingWithNoChangesIsItselfARecord(t *testing.T) {
 }
 
 func TestTheSameInstantInAnotherZoneIsNotAChange(t *testing.T) {
-	// time.Time carries a location and a monotonic reading, so two values for
-	// one instant are not equal as Go structs. Comparing them raw would report
-	// a schedule change every time a contest was saved.
 	moscow := time.FixedZone("MSK", 3*60*60)
 	before := time.Date(2026, 11, 8, 21, 0, 0, 0, time.UTC)
 	after := before.In(moscow)
@@ -81,8 +74,6 @@ func TestATimeIsRecordedInTheOneFormatTheAPISpeaks(t *testing.T) {
 }
 
 func TestSettingAnEmptyValueIsAChange(t *testing.T) {
-	// Clearing the network restriction is exactly the kind of edit somebody
-	// asks about afterwards; it must not vanish for being an absence.
 	var none *time.Time
 	at := time.Date(2026, 11, 8, 21, 0, 0, 0, time.UTC)
 
@@ -114,8 +105,6 @@ func TestListsAreComparedByTheirContents(t *testing.T) {
 }
 
 func TestTheRecordIsPlainMapsSoRedactionCanWalkIt(t *testing.T) {
-	// Redaction removes password-shaped keys at any depth, and it walks maps.
-	// A struct here would be a hole in it, so the shape is deliberate.
 	changes := NewChanges()
 	changes.Set("enrollment", "invite_only", "open")
 
@@ -133,9 +122,6 @@ func TestTheRecordIsPlainMapsSoRedactionCanWalkIt(t *testing.T) {
 }
 
 func TestAnOversizedValueIsNotedRatherThanStored(t *testing.T) {
-	// The trail is kept for a year and read in a browser. One entry must not
-	// be able to grow until the page stops opening — and silently truncating
-	// a value would put a half-value in a record people rely on.
 	long := make([]string, 400)
 	for i := range long {
 		long[i] = "10.20.30.40/32"
@@ -168,8 +154,6 @@ func TestTheNumberOfFieldsIsBounded(t *testing.T) {
 }
 
 func TestBetweenRecordsOnlyWhatDiffers(t *testing.T) {
-	// The call site should say "these two shapes" once, not repeat the list of
-	// fields it is comparing — the list belongs next to the type it describes.
 	changes := Between(
 		map[string]any{"enrollment": "invite_only", "timing": "fixed", "points": 5},
 		map[string]any{"enrollment": "open", "timing": "fixed", "points": 5},
@@ -197,9 +181,6 @@ func TestBetweenTwoIdenticalShapesRecordsNothing(t *testing.T) {
 }
 
 func TestBetweenTreatsAFieldOnOneSideOnlyAsAChange(t *testing.T) {
-	// The two shapes come from one function, so this should not happen — and
-	// when it does, silently ignoring the field would hide the very edit
-	// somebody is looking for.
 	changes := Between(
 		map[string]any{"points": 5},
 		map[string]any{"points": 5, "max_attempts": 3},

@@ -1,7 +1,6 @@
-// Package userstest provides an in-memory users.Repository for tests.
-//
-// It exists so authentication and account rules are exercised against real
-// behaviour rather than assertions on mock calls, and without a database.
+// Package userstest provides an in-memory users.Repository for tests, so
+// account and authentication rules run against real behaviour without a
+// database. It is not for production use.
 package userstest
 
 import (
@@ -15,22 +14,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// Repository is an in-memory users.Repository.
 type Repository struct {
-	mu sync.Mutex
-	// byID holds the accounts, keyed by id.
-	byID map[uuid.UUID]users.User
-	// permissions maps a role code to the permissions it grants.
+	mu          sync.Mutex
+	byID        map[uuid.UUID]users.User
 	permissions map[string][]string
-	// Err, when set, is returned by every method, to exercise failure paths.
-	Err error
-	// CountActiveWithRoleCalls counts invocations, so a test can assert the
-	// administrator budget was asked at most once for a whole selection —
-	// or never, when laziness means it was never needed at all.
+	// Err, when set, is returned by every method.
+	Err                      error
 	CountActiveWithRoleCalls int
 }
 
-// New returns an empty repository whose roles grant no permissions.
 func New() *Repository {
 	return &Repository{
 		byID:        map[uuid.UUID]users.User{},
@@ -38,14 +30,12 @@ func New() *Repository {
 	}
 }
 
-// GrantRole declares which permissions a role code carries.
 func (r *Repository) GrantRole(roleCode string, permissions ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.permissions[roleCode] = permissions
 }
 
-// Add stores an account, assigning an id when it has none.
 func (r *Repository) Add(u users.User) users.User {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -63,7 +53,6 @@ func (r *Repository) Add(u users.User) users.User {
 	return u
 }
 
-// Get returns the stored account, for assertions after an operation.
 func (r *Repository) Get(id uuid.UUID) (users.User, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,12 +67,7 @@ func (r *Repository) ByLogin(_ context.Context, login string) (users.User, error
 	if r.Err != nil {
 		return users.User{}, r.Err
 	}
-	// The real repository resolves this through the partial unique index on
-	// lower(login), which guarantees at most one non-deleted row per login: a
-	// deleted account has released it. Map iteration order is undefined, so
-	// once a login has been deleted and recreated this must prefer the live
-	// row deliberately rather than by whichever row the range happens to visit
-	// first.
+	// Prefer the live row explicitly; map order is undefined.
 	for _, u := range r.byID {
 		if u.Status != users.StatusDeleted && strings.EqualFold(u.Login, login) {
 			return r.withPermissions(u), nil
@@ -111,8 +95,7 @@ func (r *Repository) ByID(_ context.Context, id uuid.UUID) (users.User, error) {
 	return r.withPermissions(u), nil
 }
 
-// ByIDs mirrors the real repository's ANY($1): a repeated id in ids returns
-// that account once, and a missing one is simply absent rather than an error.
+// ByIDs mirrors ANY($1): a repeated id returns once, a missing one is absent.
 func (r *Repository) ByIDs(_ context.Context, ids []uuid.UUID) ([]users.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -140,8 +123,7 @@ func (r *Repository) Create(_ context.Context, u users.User) (users.User, error)
 	if r.Err != nil {
 		return users.User{}, r.Err
 	}
-	// A deleted account does not hold its login hostage; mirrors the partial
-	// unique index in internal/postgres/users.go.
+	// Mirrors the partial unique index: a deleted account releases its login.
 	for _, existing := range r.byID {
 		if existing.Status != users.StatusDeleted && strings.EqualFold(existing.Login, u.Login) {
 			return users.User{}, users.ErrLoginTaken
@@ -168,9 +150,7 @@ func (r *Repository) List(_ context.Context, f users.Filter) ([]users.User, int,
 
 	var matched []users.User
 	for _, u := range r.byID {
-		// An empty status means the register an administrator reads, which is
-		// not "every row": a deleted account appears only when asked for by
-		// name. Mirrors the WHERE clause in internal/postgres/users.go.
+		// An empty status excludes deleted accounts, as the real query does.
 		if f.Status == "" {
 			if u.Status == users.StatusDeleted {
 				continue
@@ -193,14 +173,8 @@ func (r *Repository) List(_ context.Context, f users.Filter) ([]users.User, int,
 	return matched[f.Offset:end], total, nil
 }
 
-// Search resolves accounts whose login, full name or email contains query
-// (case-insensitively), mirroring the real repository's picker query: only an
-// active account comes back, not a deleted or a blocked one — the latter can
-// never sign in, so offering it to a picker would let staff appoint or enrol
-// somebody who can never act on it. Results are ordered by login and cut to
-// limit, the same as the real query's `ORDER BY u.login LIMIT`, so a test
-// asserting which page came back is not at the mercy of Go's unspecified map
-// iteration order.
+// Search mirrors the picker query: active accounts whose login, full name or
+// email contains query (case-insensitively), ordered by login, cut to limit.
 func (r *Repository) Search(_ context.Context, query string, limit int) ([]users.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -261,8 +235,7 @@ func (r *Repository) SetPassword(_ context.Context, id uuid.UUID, hash string, m
 	})
 }
 
-// SetPasswordMany mirrors the real repository: a missing account is skipped
-// rather than reported.
+// SetPasswordMany skips a missing account, as the real one does.
 func (r *Repository) SetPasswordMany(_ context.Context, creds []users.Credential) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -301,8 +274,7 @@ func (r *Repository) BumpSessionGeneration(_ context.Context, id uuid.UUID) (int
 	return u.SessionGeneration, nil
 }
 
-// BumpSessionGenerationMany mirrors the real repository: a missing account is
-// skipped rather than reported.
+// BumpSessionGenerationMany skips a missing account, as the real one does.
 func (r *Repository) BumpSessionGenerationMany(_ context.Context, ids []uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -326,9 +298,6 @@ func (r *Repository) RecordLogin(_ context.Context, id uuid.UUID, at time.Time) 
 	return r.mutate(id, func(u *users.User) { u.LastLoginAt = &at })
 }
 
-// TakenAmong mirrors the real repository's restore-conflict check: a deleted
-// account among ids whose login or email a live account now holds, saying
-// which of the two each one hit.
 func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]users.TakenConflict, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -367,7 +336,6 @@ func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]users.Tak
 	return taken, nil
 }
 
-// CountActiveWithRole counts the accounts holding the role that can sign in.
 func (r *Repository) CountActiveWithRole(_ context.Context, roleCode string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,7 +350,7 @@ func (r *Repository) CountActiveWithRole(_ context.Context, roleCode string) (in
 	return count, nil
 }
 
-// Roles lists the roles GrantRole has defined, ordered like the real one.
+// Roles lists the roles GrantRole defined, ordered like the real one.
 func (r *Repository) Roles(_ context.Context) ([]users.Role, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -407,8 +375,7 @@ func (r *Repository) ReplaceRoles(_ context.Context, id uuid.UUID, roleCodes []s
 	})
 }
 
-// ReplaceRolesMany mirrors the real repository: a missing account is skipped
-// rather than reported.
+// ReplaceRolesMany skips a missing account, as the real one does.
 func (r *Repository) ReplaceRolesMany(_ context.Context, ids []uuid.UUID, roleCodes []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -428,8 +395,8 @@ func (r *Repository) ReplaceRolesMany(_ context.Context, ids []uuid.UUID, roleCo
 	return nil
 }
 
-// withPermissions mirrors the production repository: permissions arrive with
-// the account. Callers hold the lock.
+// withPermissions attaches permissions as the real repository does. Callers
+// hold the lock.
 func (r *Repository) withPermissions(u users.User) users.User {
 	seen := map[string]struct{}{}
 	u.Permissions = nil
@@ -465,12 +432,10 @@ func containsFold(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
 }
 
-// SpyUnitOfWork is a pass-through storage.UnitOfWork that counts invocations,
-// so tests can assert an operation ran under exactly one unit of work.
+// SpyUnitOfWork is a pass-through storage.UnitOfWork that counts invocations.
 type SpyUnitOfWork struct {
 	Calls int
-	// Err, when set, is returned instead of running the function.
-	Err error
+	Err   error
 }
 
 func (s *SpyUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {

@@ -13,12 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// GameInstances is the record of which database belongs to whom.
-//
-// A spare copy and a participant's instance are one row apart: the spare has
-// no registration. That is what lets a copy be claimed with a single statement
-// instead of a delete and an insert, which matters when two late registrations
-// reach for the last one at the same moment.
+// GameInstances records which database belongs to whom. A spare copy is a row
+// with no registration, so claiming one is a single UPDATE rather than a
+// delete and an insert.
 type GameInstances struct{ pool *pgxpool.Pool }
 
 var _ provisioning.Repository = (*GameInstances)(nil)
@@ -30,14 +27,10 @@ func (r *GameInstances) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// ClaimSpare hands one free copy to a registration, or reports there is none.
-//
-// `FOR UPDATE SKIP LOCKED` is the whole trick. Two claimants arriving together
-// do not queue behind one row and then find it taken — the second skips past
-// it to the next free copy, so N claimants take N different databases in one
-// round trip each. Without SKIP LOCKED the second would block, wake, and have
-// to discover its row was claimed; without the lock at all, both would take
-// the same one.
+// ClaimSpare hands one free copy to a registration, or returns
+// provisioning.ErrNoSpare. FOR UPDATE SKIP LOCKED lets concurrent claimants
+// take different copies without blocking; without the lock two claimants
+// could take the same one.
 func (r *GameInstances) ClaimSpare(ctx context.Context, contest, registration uuid.UUID, version int) (string, error) {
 	var database string
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -77,8 +70,8 @@ func (r *GameInstances) AddSpare(ctx context.Context, contest uuid.UUID, databas
 	return nil
 }
 
-// Assign records a database created for one participant directly, which is
-// what happens when the pool was empty.
+// Assign records a database created directly for one participant, when the
+// pool was empty.
 func (r *GameInstances) Assign(ctx context.Context, contest, registration uuid.UUID, database string, version int) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO game_instances (contest_id, registration_id, db_name, template_version, status)
@@ -112,11 +105,8 @@ func (r *GameInstances) Of(ctx context.Context, registration uuid.UUID) (provisi
 	return instance, nil
 }
 
-// Stale lists the databases of a contest that came from an older template.
-//
-// Both the claimed and the free ones: a participant must not play on old data
-// or old grants, and a spare copy of the old version is a trap waiting for the
-// next person to register.
+// Stale lists a contest's claimed and spare databases that came from an older
+// template.
 func (r *GameInstances) Stale(ctx context.Context, contest uuid.UUID, version int) ([]provisioning.Stale, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT db_name, registration_id
@@ -151,9 +141,8 @@ func (r *GameInstances) Forget(ctx context.Context, database string) error {
 	return nil
 }
 
-// SpareCount is how deep the pool is for one version of a contest's template.
-// It is a metric with an alert on it (section 9), and the number the top-up
-// works towards.
+// SpareCount is how many ready spare copies exist for one version of a
+// contest's template.
 func (r *GameInstances) SpareCount(ctx context.Context, contest uuid.UUID, version int) (int, error) {
 	var spare int
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -166,23 +155,10 @@ func (r *GameInstances) SpareCount(ctx context.Context, contest uuid.UUID, versi
 	return spare, nil
 }
 
-// AllCurrent reports whether every instance of a contest came from the current
-// template. Section 4.2 makes it a precondition for starting.
-// WaitingParticipants counts the registrations of one contest that hold no
-// current copy — the number of people who would queue for CREATE DATABASE if
-// they all arrived now.
-//
-// This is what the pool's depth has to be sized from. A flat depth is a bet
-// that no more than that many people turn up, and losing that bet does not
-// degrade gracefully: every participant past it waits for a database to be
-// copied inside their own page load, through a maintenance pool of ten
-// connections, at the one moment three hundred of them arrive at once.
-//
-// "Current" is the same pair of conditions Ensure uses to decide it can hand
-// an existing copy back: not dropped, and made from a template at least as
-// new as the contest's. A stale copy is one Invalidate is about to remove, so
-// counting it as provisioned would size the pool for a database that is
-// already going away.
+// WaitingParticipants counts a contest's non-disqualified registrations that
+// hold no current copy (one not dropped and built from template version
+// `version` or later); the pool depth is sized from it. A stale copy does not
+// count, since Invalidate is about to remove it.
 func (r *GameInstances) WaitingParticipants(ctx context.Context, contest uuid.UUID, version int) (int, error) {
 	var waiting int
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -202,6 +178,8 @@ func (r *GameInstances) WaitingParticipants(ctx context.Context, contest uuid.UU
 	return waiting, nil
 }
 
+// AllCurrent reports whether every instance of a contest came from the current
+// template, a precondition for starting it.
 func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, version int) (bool, error) {
 	var behind int
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -214,14 +192,10 @@ func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, versi
 	return behind == 0, nil
 }
 
-// policyProjectionColumns is the coalesced SQL for one contest's SQL policy —
-// mode, writable_tables, allow_create_view, allow_own_tables,
-// allow_temp_tables, allow_catalog, disk_quota_ratio — read from a LEFT JOIN
-// against contest_sql_policies p. A contest that never configured one has no
-// row there, and coalesce is what gives it the read-only default rather than
-// no restrictions at all; every query that reads a contest's game (Game,
-// Live, and queryproxy's combined Registrations.ForRun) shares this one
-// projection so that default can never drift between them.
+// policyProjectionColumns reads a contest's SQL policy from a LEFT JOIN on
+// contest_sql_policies p. coalesce gives a contest with no policy row the
+// read-only default rather than no restrictions. Every query that reads a
+// contest's game shares it so the default cannot drift.
 const policyProjectionColumns = `
 	coalesce(p.mode, 'read_only'),
 	coalesce(p.writable_tables, '{}')::text[],
@@ -231,22 +205,15 @@ const policyProjectionColumns = `
 	coalesce(p.allow_catalog, true),
 	coalesce(p.disk_quota_ratio, 5)`
 
-// policyScanTargets is where policyProjectionColumns lands, in the same
-// order: the mode as text into mode, which the caller converts once the row
-// is read, and every other field into p directly. Paired with the projection
-// so that the columns and the targets cannot fall out of step.
+// policyScanTargets matches policyProjectionColumns in order. The mode lands
+// as text in mode for the caller to convert.
 func policyScanTargets(p *sqlpolicy.Policy, mode *string) []any {
 	return []any{mode, &p.WritableTables, &p.AllowCreateView, &p.AllowOwnTables,
 		&p.AllowTempTables, &p.AllowCatalog, &p.DiskQuotaRatio}
 }
 
-// Game returns one contest's game: which template it plays on, at what version,
-// under which policy.
-//
-// The same shape Live returns, for the one contest a participant is asking
-// about. A template that is still building or has failed is no game yet, which
-// is a different answer from "no such contest" and reads differently to the
-// person waiting.
+// Game returns one contest's template, version and policy. A template that is
+// not ready yet gives provisioning.ErrNoGame.
 func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisioning.Contest, error) {
 	var c provisioning.Contest
 	var mode string
@@ -269,11 +236,8 @@ func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisio
 	return c, nil
 }
 
-// Live lists the contests whose pool is worth keeping stocked.
-//
-// Published or running, and only with a template that finished building: a
-// draft has nobody to provision for, and a template still building or failed
-// would have copies made of a database that is not a contest.
+// Live lists the published or running contests with a ready template, whose
+// pool is worth keeping stocked.
 func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT c.id, t.template_db, t.version,
@@ -304,23 +268,11 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 	return out, nil
 }
 
-// reclaimDeadline is the SQL fragment both Reclaimable and ReclaimableTemplates
-// share: the moment a contest's own grace period runs out, computed from its
-// finish (or archiving) moment rather than from a value this process
-// computes. SetStatus and AdvanceFinished (contests.go) both set updated_at
-// in the same statement that moves status to finished, and archiving a
-// contest is itself an update of the same row, so updated_at is later still
-// — the same clock DueToStart and AdvanceFinished already trust for "has
-// enough time passed" (their own reasoning about replica clock skew applies
-// here too — now() is this database's own).
-//
-// A contest's settings.grace_period_min governs it when set; a contest that
-// never configured one (the JSON key absent, coalesce's 0) defers to
-// installationGraceMin — provisioning.Service.Reclaim's own caller supplies
-// the installation's configured default, the same "contest overrides,
-// installation is the fallback" convention queryproxy.effectiveRateLimit
-// documents for QueryRateLimitPerMin. $1 is installationGraceMin in both
-// callers below.
+// reclaimDeadline is when a finished or archived contest's grace period runs
+// out, measured from updated_at, which the move to finished or archived sets
+// in the same statement. It uses the database clock, not this process's.
+// settings.grace_period_min wins when set; otherwise $1, the installation's
+// default, applies.
 const reclaimDeadline = `c.updated_at + make_interval(mins => CASE
 	        WHEN coalesce((c.settings->>'grace_period_min')::int, 0) > 0
 	          THEN (c.settings->>'grace_period_min')::int
@@ -329,27 +281,11 @@ const reclaimDeadline = `c.updated_at + make_interval(mins => CASE
 
 // Reclaimable lists up to limit not-yet-dropped instances of a contest that
 // reached 'finished' or 'archived' longer ago than its grace period allows.
+// Archived counts too, or archiving a finished contest would exempt its
+// instances from the sweep forever.
 //
-// Both statuses, not only 'finished': contests.allowedTransitions lets an
-// organizer move a finished contest straight to 'archived', and archiving is
-// the ordinary "put this away" action, not a reason to exempt a contest's
-// instances from the sweep forever — the leak this whole pass exists to
-// close. updated_at at the moment of archiving is later than the finish
-// moment reclaimDeadline is built from either way, so the same grace still
-// protects a contest that was archived the instant it finished exactly as it
-// would have unarchived.
-//
-// limit is what keeps a fresh deployment's first tick from issuing one DROP
-// DATABASE per contest that finished before this sweep existed — see
-// provisioning.ReclaimBatchLimit's own doc for the number and why. The
-// ordering — by deadline, oldest debt first, contest_id and created_at only
-// to break an exact tie deterministically — is what keeps that limit fair
-// across contests: contest_id is a UUID, so ordering by it first would let
-// whichever contest happens to sort first monopolise every tick's whole
-// batch until it drains, leaving every other contest's overdue instances
-// waiting behind it for hours. Ordering by deadline instead means the limit
-// is spent on whoever has been owed a drop the longest, not on an accident
-// of UUID generation.
+// Ordering by deadline first spends the limit on the oldest debt; ordering by
+// contest_id first would let one contest take every batch until it drains.
 func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, limit int) ([]provisioning.ReclaimCandidate, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH candidates AS (
@@ -384,9 +320,8 @@ func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, l
 	return out, nil
 }
 
-// MarkDropped moves one instance to the terminal 'dropped' status. An update
-// rather than Forget's delete: the row is what an organizer's audit search
-// still has to point to once the database itself is gone from the cluster.
+// MarkDropped moves one instance to the terminal 'dropped' status. It updates
+// rather than deletes so the audit trail can still point at the row.
 func (r *GameInstances) MarkDropped(ctx context.Context, database string) error {
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE game_instances SET status = 'dropped', updated_at = now() WHERE db_name = $1`, database); err != nil {
@@ -396,19 +331,10 @@ func (r *GameInstances) MarkDropped(ctx context.Context, database string) error 
 }
 
 // ReclaimableTemplates lists up to limit contest templates that may be
-// dropped: the contest reached 'finished' or 'archived' longer ago than its
-// grace period, its template is a built database ('ready' — a template still
-// 'pending', 'building' or already 'failed' has nothing on disk this could
-// remove), and every instance ever copied from it is already gone.
-//
-// That last condition — the NOT EXISTS below — is what makes the ordering
-// against Reclaimable safe: a template is never offered while a live
-// instance could still need the copy it was made from, so
-// provisioning.Service.Reclaim calling this after it has finished dropping
-// instances is what lets a contest whose very last instance was just
-// dropped this same tick have its template reclaimed in the same tick too,
-// rather than waiting for a tick where the NOT EXISTS has already gone stale
-// in this query's favour.
+// dropped: the contest is past its grace period as in Reclaimable, the
+// template is 'ready' (anything else has nothing on disk), and every instance
+// copied from it is already dropped. Called after the instances are dropped,
+// it can reclaim a template in the same tick as its last instance.
 func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGraceMin, limit int) ([]provisioning.TemplateCandidate, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH candidates AS (
@@ -447,15 +373,9 @@ func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGr
 	return out, nil
 }
 
-// instanceColumns is the shape both Instances and InstanceNamed return, and
-// the one join both need. Written once so the list an organizer reads and the
-// row a drop is decided on cannot disagree about what a row says.
-//
-// Two LEFT JOINs, not inner ones. registration_id is null for a spare copy,
-// and an inner join would silently drop exactly the rows the pool is made of;
-// the account behind a registration can also have been deleted, and the row
-// outlives it. coalesce is what turns both absences into the empty strings
-// InstanceRecord documents rather than a null the scan would have to carry.
+// instanceColumns is the query Instances and InstanceNamed share. The joins
+// are LEFT because a spare copy has no registration and a registration's
+// account may have been deleted; coalesce turns both into empty strings.
 const instanceColumns = `
 	SELECT i.db_name, i.registration_id, i.template_version, i.status,
 	       i.created_at, i.updated_at,
@@ -464,7 +384,6 @@ const instanceColumns = `
 	LEFT JOIN registrations r ON r.id = i.registration_id
 	LEFT JOIN users u ON u.id = r.user_id`
 
-// scanInstance reads one row of instanceColumns.
 func scanInstance(row pgx.Row) (provisioning.InstanceRecord, error) {
 	var r provisioning.InstanceRecord
 	err := row.Scan(&r.Database, &r.Registration, &r.TemplateVersion, &r.Status,
@@ -472,18 +391,10 @@ func scanInstance(row pgx.Row) (provisioning.InstanceRecord, error) {
 	return r, err
 }
 
-// Instances lists up to limit of one contest's databases, oldest first.
-//
-// Every row, including the ones already dropped: the row is what an
-// organizer's audit search points at once the database is gone
-// (MarkDropped's own doc), and a screen that hid them would answer "no such
-// database" to the very person trying to find out what happened to it.
-//
-// The filter is `contest_id = $1`, which game_instances_contest_version_idx
-// (migration 12, on (contest_id, template_version)) already serves by its
-// leading column — CLAUDE.md rule 7 wants the index in the same change as the
-// query, and here the change is that an existing index acquired a second
-// reader rather than that a new predicate arrived unserved.
+// Instances lists up to limit of one contest's databases, oldest first,
+// including dropped ones so an organizer can see what happened to them.
+// game_instances_contest_version_idx serves the filter by its leading column
+// (CLAUDE.md rule 7).
 func (r *GameInstances) Instances(ctx context.Context, contest uuid.UUID, limit int) ([]provisioning.InstanceRecord, error) {
 	rows, err := r.querier(ctx).Query(ctx, instanceColumns+`
 		WHERE i.contest_id = $1
@@ -508,13 +419,10 @@ func (r *GameInstances) Instances(ctx context.Context, contest uuid.UUID, limit 
 	return out, nil
 }
 
-// InstanceNamed reads one of a contest's rows by database name.
-//
-// Both the contest and the name are in the WHERE clause even though db_name
-// is unique on its own. That is the authorisation boundary rather than a
-// redundancy: the caller holds a permission over one contest, and a lookup by
-// name alone would let it decide a destructive action about a database
-// belonging to somebody else's olympiad.
+// InstanceNamed reads one of a contest's rows by database name. The contest
+// stays in the WHERE clause although db_name is unique: the caller's
+// permission covers one contest, and a lookup by name alone would let it act
+// on another contest's database.
 func (r *GameInstances) InstanceNamed(ctx context.Context, contest uuid.UUID, database string) (provisioning.InstanceRecord, error) {
 	record, err := scanInstance(r.querier(ctx).QueryRow(ctx, instanceColumns+`
 		WHERE i.contest_id = $1 AND i.db_name = $2`, contest, database))
@@ -528,23 +436,12 @@ func (r *GameInstances) InstanceNamed(ctx context.Context, contest uuid.UUID, da
 	return record, nil
 }
 
-// RecordedDatabases is everything the core database believes about the game
-// cluster: every instance row and every template row, with the status each
-// one carries.
+// RecordedDatabases lists every instance and template row with its status,
+// instances first, by name within each.
 //
-// Deliberately unbounded, unlike every other list in this file. The one
-// caller is the operator's orphan sweep (provisioning.OrphanSweeper, run from
-// cmd/gameorphans), which decides whether a database may be destroyed by
-// checking that *no* row still calls it live — and a truncated answer would
-// answer that question wrongly in the dangerous direction: the row saying
-// 'dropped' inside the limit, the row saying 'ready' outside it, and a live
-// database offered for removal. A LIMIT here would be a bound bought with the
-// guarantee it exists to protect. The table holds one row per database the
-// installation has ever provisioned, and this runs by hand, off the request
-// path.
-//
-// Instances and templates in one result, in that order and by name within
-// each, so an operator reading the plan twice reads the same plan.
+// It is unbounded on purpose. The orphan sweep destroys a database only when
+// no row calls it live, so a truncated list could offer a live database for
+// removal. It runs by hand, off the request path.
 func (r *GameInstances) RecordedDatabases(ctx context.Context) ([]provisioning.DatabaseRecord, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT db_name, status, contest_id, false AS is_template FROM game_instances
@@ -571,9 +468,7 @@ func (r *GameInstances) RecordedDatabases(ctx context.Context) ([]provisioning.D
 }
 
 // MarkTemplateDropped moves one contest's template to the terminal 'dropped'
-// status — MarkDropped's own convention, kept for the same reason: the row
-// is what an organizer's audit search still has to point to once the
-// database itself is gone.
+// status, keeping the row as MarkDropped does.
 func (r *GameInstances) MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE game_templates SET status = 'dropped', updated_at = now() WHERE contest_id = $1`, contestID); err != nil {

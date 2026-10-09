@@ -13,33 +13,24 @@ import (
 	"github.com/google/uuid"
 )
 
-// MaxUploadFilenameBytes bounds the one free-text field an upload carries
-// (CLAUDE.md rule 2): the name a browser's file picker reported, kept only
-// for an organiser's own screen and never used as a path — migration 24's
-// own CHECK enforces the same bound in the schema.
+// MaxUploadFilenameBytes bounds an upload's filename (CLAUDE.md rule 2). The
+// name is only shown to the organiser, never used as a path. A CHECK in
+// migration 24 enforces the same bound.
 const MaxUploadFilenameBytes = 255
 
 // validUploadFilename reports whether a name may be stored and shown.
 //
-// Length is not the only bound this field needs. The column is `text`, and
-// PostgreSQL refuses a NUL byte in one with SQLSTATE 22021 — so a name
-// carrying one turns BeginUpload's INSERT into an internal error *after*
-// Store.Begin has already created the file, which is a 500 for the organiser
-// and an orphan for the janitor, where a named refusal was available for free
-// (CLAUDE.md rule 1). NUL is not special-cased: no control character belongs
-// in a name a person typed into a file picker, and one that reaches a log
-// line or a console can forge either. Everything else — every alphabet, every
-// space, every punctuation mark — is left alone: this name is never a path
-// (MaxUploadFilenameBytes' own doc), so there is nothing else to sanitise it
-// against.
+// Control characters are refused. PostgreSQL rejects a NUL in text, which
+// would make BeginUpload's INSERT a 500 after the file already exists
+// (CLAUDE.md rule 1), and other control characters can forge log lines. The
+// name is never a path, so nothing else needs sanitising.
 func validUploadFilename(name string) bool {
 	if name == "" || len(name) > MaxUploadFilenameBytes {
 		return false
 	}
 	for _, r := range name {
-		// unicode.IsControl over the decoded rune, so this also rejects
-		// U+0085 and the C1 block, and never mistakes a byte inside a
-		// multi-byte rune for one.
+		// Checked on the decoded rune, so U+0085 and the C1 block are refused
+		// too, and a byte inside a multi-byte rune is never mistaken for one.
 		if unicode.IsControl(r) {
 			return false
 		}
@@ -51,19 +42,18 @@ func validUploadFilename(name string) bool {
 type UploadStatus string
 
 const (
-	// UploadReceiving is an upload still taking chunks — or waiting between
-	// them, since a chunked upload spans more than one request.
+	// UploadReceiving is an upload still taking chunks, or waiting between
+	// them.
 	UploadReceiving UploadStatus = "receiving"
 	// UploadComplete is a sealed upload that became a contest's game.
 	UploadComplete UploadStatus = "complete"
-	// UploadAborted is an upload cancelled — by an organiser, or by the
-	// abandoned-upload janitor — before it ever became anybody's game.
+	// UploadAborted is an upload cancelled, by an organiser or by the
+	// janitor, before it became a game.
 	UploadAborted UploadStatus = "aborted"
 )
 
-// Upload is one organiser's file-based game, as far as the database's own
-// bookkeeping goes. Its bytes are never here — internal/gamefile.Store
-// holds those, addressed by this row's own ID.
+// Upload is the database's record of one file-based game upload. Its bytes
+// live in gamefile.Store, under the row's ID.
 type Upload struct {
 	ID            uuid.UUID
 	ContestID     uuid.UUID
@@ -77,28 +67,25 @@ type Upload struct {
 	UpdatedAt     time.Time
 }
 
-// UploadSummary is what Store.Complete measured, carried from Games into the
-// repository so the two do not have to agree on gamefile.Summary's own shape.
+// UploadSummary is what Store.Complete measured, carried into the repository
+// without depending on gamefile.Summary's shape.
 type UploadSummary struct {
 	Bytes  int64
 	SHA256 string
 	Lines  int64
 }
 
-// Why an upload could not be received, completed or read back. Named so a
-// handler's fail switch can map each to its own status rather than serving
-// "internal error" for a file too large or a chunk sent out of order
-// (CLAUDE.md rule 1).
+// Why an upload could not be received, completed or read back (CLAUDE.md
+// rule 1).
 var (
-	// ErrUploadsDisabled is every upload method's answer on an installation
-	// with no GAME_UPLOAD_DIR configured — Games was never given WithUploads.
+	// ErrUploadsDisabled is every upload method's answer when no
+	// GAME_UPLOAD_DIR is configured (Games was never given WithUploads).
 	ErrUploadsDisabled = errors.New("file uploads are not configured on this installation")
 	// ErrUploadFilenameInvalid is an empty filename, one past
 	// MaxUploadFilenameBytes, or one carrying a control character.
 	ErrUploadFilenameInvalid = errors.New("the upload's filename is invalid")
-	// ErrUploadTooLarge is a declared length past the configured
-	// MaxFileBytes, or one Store.Append refused for the same reason once
-	// actual bytes exceeded it.
+	// ErrUploadTooLarge is a declared length past MaxFileBytes, or actual
+	// bytes that exceeded it in Store.Append.
 	ErrUploadTooLarge = errors.New("the upload exceeds the maximum file size")
 	// ErrUploadStoreFull is the upload directory already holding its
 	// configured MaxDirBytes of other uploads.
@@ -108,24 +95,17 @@ var (
 	ErrUploadChunkOutOfOrder = errors.New("the chunk does not continue where the upload left off")
 	// ErrUploadChunkTooLarge is one chunk past the configured MaxChunkBytes.
 	ErrUploadChunkTooLarge = errors.New("the chunk exceeds the maximum chunk size")
-	// ErrUploadChunkIncomplete is a chunk whose body stopped arriving before
-	// the store had all of it: a dropped connection, or a read deadline that
-	// expired mid-body. Nothing of the chunk was kept (gamefile.
-	// ErrChunkIncomplete's own doc), so the answer to it is to send the same
-	// chunk again — which is the whole reason it is a sentinel and not the
-	// internal error a wrapped I/O failure would have become. On a route
-	// whose body is megabytes over whatever uplink an organiser has, an
-	// interrupted transfer is an ordinary event, not a fault of ours.
+	// ErrUploadChunkIncomplete is a chunk body cut off before the store had
+	// all of it (a dropped connection, an expired read deadline). Nothing of
+	// the chunk was kept, so the client sends the same chunk again.
 	ErrUploadChunkIncomplete = errors.New("the chunk body was not received in full")
 	// ErrUploadLengthMismatch is Complete finding that what actually landed
 	// on disk does not match what the browser declared at Begin.
 	ErrUploadLengthMismatch = errors.New("the received bytes do not match the declared length")
-	// ErrUploadNotFound is an id that names no upload of this contest — or of
-	// any contest at all.
+	// ErrUploadNotFound is an id that names no upload of this contest.
 	ErrUploadNotFound = errors.New("no such upload")
-	// ErrUploadInProgress is a second Begin for a contest that already has
-	// one upload 'receiving' — game_uploads_one_receiving_idx's own refusal,
-	// not a check this package makes ahead of it (migration 24's own doc).
+	// ErrUploadInProgress is a second Begin for a contest that already has an
+	// upload 'receiving', refused by the game_uploads_one_receiving_idx index.
 	ErrUploadInProgress = errors.New("this contest already has an upload in progress")
 	// ErrUploadAlreadyComplete is an Append, Complete or Abort against an
 	// upload no longer 'receiving' — sealed already, or already cancelled.
@@ -134,34 +114,18 @@ var (
 	// sealed yet — there is no line index to read.
 	ErrUploadIncomplete = errors.New("the upload has not been completed yet")
 	// ErrUploadIndexCorrupt is a completed upload whose line index no longer
-	// describes the file next to it: a truncated write, a damaged disk, or a
-	// file substituted underneath the volume (gamefile.ErrCorruptIndex's own
-	// doc).
-	//
-	// A sentinel of its own rather than the internal error it used to become,
-	// because it is one of the few failures on this route the organiser can
-	// actually act on: the bytes on the API host cannot be trusted to page
-	// through any more, so the file has to be uploaded again. Nothing about
-	// it is a fault of theirs, and nothing about it is fixed by retrying the
-	// same read.
+	// matches its file (a truncated write, a damaged disk). The organiser has
+	// to upload the file again; retrying the read does not help.
 	ErrUploadIndexCorrupt = errors.New("the upload's line index is damaged")
-	// ErrUploadWindowUnreachable is a preview page whose first line is
-	// further past the file's nearest index mark than one read may walk
-	// (gamefile.ErrWindowUnreachable's own doc).
-	//
-	// Named rather than left as an internal error because the request was
-	// right and the organiser has moves: page from a line nearer a mark, or
-	// look at the file some other way. It is a fact about a dump whose lines
-	// are megabytes long, not a fault of theirs and not a failure of ours.
+	// ErrUploadWindowUnreachable is a preview page that starts further past
+	// the nearest index mark than one read may walk. The request was valid;
+	// the organiser can page from a line nearer a mark.
 	ErrUploadWindowUnreachable = errors.New("that line is too far into a file with lines this long to preview")
 )
 
-// wrapGamefileErr turns one of internal/gamefile's own sentinels into the
-// domain's — the handler that eventually serves these must not know that
-// package exists (migration 24's brief, in as many words). Anything
-// unrecognised is wrapped with context instead of passed through bare: it is
-// either a bug in this mapping or a disk failure, and either way it is not
-// something an organiser's own fail switch has a branch for.
+// wrapGamefileErr maps internal/gamefile's sentinels to this package's, so
+// the HTTP layer never needs to know gamefile. Anything unrecognised is a bug
+// or a disk failure and is wrapped with context.
 func wrapGamefileErr(err error) error {
 	switch {
 	case errors.Is(err, gamefile.ErrNotFound), errors.Is(err, gamefile.ErrBadUploadID):
@@ -183,13 +147,9 @@ func wrapGamefileErr(err error) error {
 	case errors.Is(err, gamefile.ErrChunkTooLarge):
 		return ErrUploadChunkTooLarge
 	case errors.Is(err, gamefile.ErrChunkIncomplete):
-		// The one case that wraps rather than replaces. What interrupted the
-		// body is usually the transport's own doing, and the HTTP layer that
-		// created that reader has its own name for it (http.MaxBytesError,
-		// which internal/api's appendChunk answers as "chunk too large"
-		// rather than "send it again"). Replacing the error with a bare
-		// sentinel here would throw that away and leave a client being told
-		// to retry, for ever, a chunk that is simply too big.
+		// Wrapped, not replaced: the cause may be an http.MaxBytesError, which
+		// internal/api answers as "chunk too large". A bare sentinel would tell
+		// the client to retry, for ever, a chunk that is simply too big.
 		return fmt.Errorf("%w: %w", ErrUploadChunkIncomplete, err)
 	case errors.Is(err, gamefile.ErrLengthMismatch):
 		return ErrUploadLengthMismatch
@@ -200,20 +160,12 @@ func wrapGamefileErr(err error) error {
 
 // BeginUpload reserves a new upload for a contest's game.
 //
-// Editability is checked here, not only at CompleteUpload: starting to
-// receive gigabytes into a contest that is already running is time and disk
-// nobody can get back, found out only at the very end (migration 24's own
-// brief). declaredBytes is checked against the configured MaxFileBytes for
-// the same reason Store.Append checks it again on every chunk — CLAUDE.md
-// rule 12 wants the bound at the moment the bytes (or here, the promise of
-// them) arrive, not after a reservation was already made on disk.
-//
-// The reservation on disk happens before the database row: Store.Begin first,
-// then BeginUpload's own INSERT, so that a database refusal (most often
-// ErrUploadInProgress, from game_uploads_one_receiving_idx) leaves at worst
-// an empty file with no row — exactly what the janitor's orphan-file sweep
-// exists to find (sweepOrphanFiles below), rather than a row with nothing
-// behind it on disk.
+// Editability and declaredBytes are checked before anything is reserved, so a
+// running contest or an oversized file is refused at the start rather than
+// after the transfer (CLAUDE.md rule 12). The file is reserved before the
+// database row: a refused INSERT (most often ErrUploadInProgress) leaves at
+// worst a file with no row, which sweepOrphanFiles finds, rather than a row
+// with nothing on disk.
 func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (Upload, error) {
 	if g.files == nil {
 		return Upload{}, ErrUploadsDisabled
@@ -230,27 +182,18 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 	}
 
 	id := uuid.New()
-	// declaredBytes travels on into the store, which is the only thing that
-	// knows what the directory has left: the check above is about one file's
-	// ceiling, and Store.Begin's is about whether the volume can hold this
-	// upload at all — a promise refused now instead of a transfer cut off at
-	// its 129th chunk (Store.Begin's own doc, CLAUDE.md rule 11).
+	// Store.Begin checks declaredBytes against what the directory has left, so
+	// a full volume refuses now rather than mid-transfer (CLAUDE.md rule 11).
 	if err := g.files.Begin(id.String(), declaredBytes); err != nil {
 		return Upload{}, wrapGamefileErr(err)
 	}
 
 	upload, err := g.repo.BeginUpload(ctx, id, contestID, filename, declaredBytes)
 	if err != nil {
-		// The reservation this call made is nobody's now, and it is not the
-		// file alone: Store.Begin also counts declaredBytes against the
-		// directory until the upload completes or is aborted
-		// (committedBytes' own doc). Left behind, four refused begins of a
-		// gibibyte each spend the whole volume's budget — for every contest
-		// on the installation, not only this one — until the janitor's own
-		// sweep, which is fifteen minutes of grace plus a tick away. The
-		// removal is the same one bootstrapTableRow makes on the identical
-		// refusal, and best effort for the same reason: the janitor is still
-		// behind it, this only stops the wait.
+		// Release the reservation now: Store.Begin counts declaredBytes against
+		// the directory until the upload ends, so a few refused begins would
+		// spend the volume's budget for every contest until the janitor runs.
+		// Best effort, since the janitor is still behind it.
 		_ = g.retireUploadFile(id)
 		if errors.Is(err, ErrUploadInProgress) {
 			return Upload{}, ErrUploadInProgress
@@ -260,14 +203,9 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 	return upload, nil
 }
 
-// currentContestUpload reads uploadID and checks it actually belongs to
-// contestID — the same contest-scoping InstanceNamed's own doc explains:
-// db_name (there) and an upload's id (here) are both unique on their own,
-// and checking the contest anyway is the authorisation boundary, not a
-// redundancy. A row that exists but names another contest answers
-// ErrUploadNotFound, identically to a row that does not exist at all — to
-// the caller it is the same fact, and the difference would only leak that
-// somebody else's upload exists.
+// currentContestUpload reads uploadID and checks it belongs to contestID,
+// which is the authorisation boundary. An upload of another contest answers
+// ErrUploadNotFound, so its existence does not leak.
 func (g *Games) currentContestUpload(ctx context.Context, contestID, uploadID uuid.UUID) (Upload, error) {
 	upload, err := g.repo.Upload(ctx, uploadID)
 	if err != nil {
@@ -297,9 +235,8 @@ func (g *Games) AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, 
 		return received, wrapGamefileErr(err)
 	}
 	if received == upload.ReceivedBytes {
-		// Store.Append's own idempotent-skip path: a retried chunk the
-		// server already had. Writing the same number back would be exactly
-		// the reasonless write CLAUDE.md rule 6 asks a hot path to skip.
+		// A retried chunk the store already had: nothing to record
+		// (CLAUDE.md rule 6).
 		return received, nil
 	}
 	if err := g.repo.UpdateReceived(ctx, uploadID, received); err != nil {
@@ -309,34 +246,20 @@ func (g *Games) AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, 
 }
 
 // CurrentUpload reads a contest's one upload still 'receiving', or
-// ErrUploadNotFound when there is none — which lets a page reload find an
-// upload already in progress and offer to resume it rather than refuse a
-// second Begin with no way to explain why.
+// ErrUploadNotFound when there is none, so a reloaded page can resume it.
 func (g *Games) CurrentUpload(ctx context.Context, contestID uuid.UUID) (Upload, error) {
 	return g.repo.CurrentUpload(ctx, contestID)
 }
 
-// Upload reads one upload of this contest by id, whatever its status —
-// currentContestUpload already does exactly this internally, exposed here so
-// a caller can resolve the row a file-sourced Template.UploadID names.
-//
-// This is what lets GET /contests/{id}/game describe the file a file-sourced
-// game came from (internal/api's gameResponse.Upload) without a second copy
-// of the upload's own bookkeeping: the filename, the length, the line count
-// all already live on this row, and CLAUDE.md rule 11 is the value that
-// decided this — Template only ever kept UploadID, the row it points at is
-// where the rest of the fact already lived, so the API layer reads it from
-// here rather than this package growing a duplicate field to carry it.
-//
-// Unlike CurrentUpload, not limited to 'receiving': a file-sourced game's own
-// upload is 'complete' by the time anything asks for it this way, and
-// currentContestUpload never filtered on status to begin with.
+// Upload reads one upload of this contest by id, whatever its status. The API
+// reads a file-sourced game's filename, length and line count from here
+// rather than Template carrying a copy (CLAUDE.md rule 11).
 func (g *Games) Upload(ctx context.Context, contestID, uploadID uuid.UUID) (Upload, error) {
 	return g.currentContestUpload(ctx, contestID, uploadID)
 }
 
-// UploadWindow reads a slice of a completed upload's lines — the console's
-// own preview of a script it will not run yet (Build's own doc, above).
+// UploadWindow reads a slice of a completed upload's lines, for the console's
+// preview of a script it will not run yet.
 func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error) {
 	if g.files == nil {
 		return gamefile.Window{}, ErrUploadsDisabled
@@ -344,9 +267,7 @@ func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID,
 	if _, err := g.currentContestUpload(ctx, contestID, uploadID); err != nil {
 		return gamefile.Window{}, err
 	}
-	// ctx travels into the store, which is what lets a console page the
-	// organiser navigated away from stop the read it started rather than
-	// leaving a goroutine walking a multi-gigabyte file for nobody.
+	// ctx lets a page the organiser left stop its read of a large file.
 	window, err := g.files.Window(ctx, uploadID.String(), fromLine, maxLines, maxBytes)
 	if err != nil {
 		return gamefile.Window{}, wrapGamefileErr(err)
@@ -354,16 +275,9 @@ func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID,
 	return window, nil
 }
 
-// retireUploadFile removes one upload's file from disk, tolerating one that
-// is already gone.
-//
-// Idempotent on purpose: this runs for an organiser's own cancel, for the
-// upload a replacement game displaces, and for the janitor's own sweep, and
-// any of them can be asked to retire the same id twice — a retried request, or
-// the janitor catching what a crash left half done on either side of the row
-// being marked. A second call finding gamefile.ErrNotFound must read as
-// "already retired", the same idempotency Store.Append documents for a
-// repeated chunk, not as a failure.
+// retireUploadFile removes one upload's file from disk. It is idempotent: a
+// cancel, a displacement and the janitor can each retire the same id twice (a
+// retried request, or a crash half way), so gamefile.ErrNotFound is success.
 func (g *Games) retireUploadFile(id uuid.UUID) error {
 	if err := g.files.Abort(id.String()); err != nil && !errors.Is(err, gamefile.ErrNotFound) {
 		return wrapGamefileErr(err)
@@ -374,16 +288,10 @@ func (g *Games) retireUploadFile(id uuid.UUID) error {
 // displacedUpload names the upload whose file this contest's next game will
 // leave behind: the current game's own, when that game is file-sourced.
 //
-// nil when there is nothing to retire — the contest has no game yet, its game
-// was written in the editor, the game already names the very upload that is
-// replacing it (keeping, non-nil only for CompleteUpload), or this
-// installation has no upload volume at all, in which case there is no file to
-// speak of and nothing this service could remove. ErrNoGame is one of those
-// answers rather than a failure.
-//
-// Read before the game is written, because afterwards the row no longer says
-// which upload it came from — SaveScript and CompleteUpload both overwrite
-// upload_id in the same statement.
+// It is nil when there is nothing to retire: no game yet (ErrNoGame), a game
+// written in the editor, a game that already names keeping, or no upload
+// volume. Call it before the game is written, since SaveScript and
+// CompleteUpload overwrite upload_id.
 func (g *Games) displacedUpload(ctx context.Context, contestID uuid.UUID, keeping *uuid.UUID) (*uuid.UUID, error) {
 	if g.files == nil {
 		return nil, nil
@@ -406,27 +314,14 @@ func (g *Games) displacedUpload(ctx context.Context, contestID uuid.UUID, keepin
 	return existing.UploadID, nil
 }
 
-// CompleteUpload finishes an upload begun with BeginUpload: seals it on
-// disk, replaces the contest's game with it, and retires whichever upload
-// this one displaces.
+// CompleteUpload seals an upload begun with BeginUpload, replaces the
+// contest's game with it, and retires whichever upload it displaces.
 //
-// The heavy work — hashing and indexing up to MaxFileBytes of an organiser's
-// SQL, Store.Complete's own one sequential pass — happens before any
-// database transaction opens. A core-database transaction is not something
-// to hold open across the seconds (or, at the configured ceiling, longer)
-// that takes; only the row updates below run inside one, through
-// replaceGame, the same shape SetScript uses. This is the "same path as
-// SetScript" migration 24's own brief asks for: one transaction, one
-// GameEditable check, one audit write, not a second parallel one that could
-// drift from it.
-//
-// Displacing the previous upload happens the other way round from
-// Instances.DropInstance's "the real object goes first": the row is written
-// first and the file removed after the transaction commits. See replaceGame,
-// which does the removal, for why this one is the exception — the removal
-// here is conditional on a commit that has not happened yet, and this method
-// deliberately leaves a window (the hashing and indexing of an organiser's
-// whole file) in which the contest can start and the replacement be refused.
+// Hashing and indexing the file (Store.Complete) runs before any transaction
+// opens, so no core-database transaction is held for that long; only the row
+// updates run inside one, through replaceGame, as SetScript does. The contest
+// can start during the hashing and the replacement then be refused, so the
+// displaced file is removed only after the commit (see replaceGame).
 func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (Template, error) {
 	if g.files == nil {
 		return Template{}, ErrUploadsDisabled
@@ -449,10 +344,8 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 		return Template{}, wrapGamefileErr(err)
 	}
 
-	// Whichever upload this one displaces — this contest's current game, only
-	// if it is itself file-sourced and is a different upload. Its row is
-	// retired inside the transaction below and its file after that one
-	// commits; nothing about it is touched if the transaction is refused.
+	// The displaced upload's row is retired inside the transaction below and
+	// its file after the commit; a refused transaction touches neither.
 	previous, err := g.displacedUpload(ctx, contestID, &uploadID)
 	if err != nil {
 		return Template{}, err
@@ -466,8 +359,7 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 			return g.repo.CompleteUpload(ctx, contestID, uploadID, database, storedSummary, previous)
 		},
 		func(saved Template) audit.Entry {
-			// Never the content — only what identifies which file this was
-			// and how it measured (migration 24's own brief).
+			// Never the content: only what identifies the file and how it measured.
 			return audit.Entry{
 				ActorID: &actorID, Action: audit.ActionGameUploadComplete,
 				Entity: "contest", EntityID: contestID.String(),
@@ -480,11 +372,8 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 	)
 }
 
-// abortUpload cancels one upload: removes its file from disk, then marks the
-// row 'aborted'. actor is nil for the janitor's own sweep (SweepUploads
-// below) — a system event nobody asked for, the same convention
-// reclaimEntry uses for a database the grace period took rather than an
-// organiser.
+// abortUpload removes one upload's file, then marks the row 'aborted'. actor
+// is nil for the janitor's sweep, a system event.
 func (g *Games) abortUpload(ctx context.Context, actor *uuid.UUID, upload Upload) (Upload, error) {
 	mark := func(ctx context.Context) error {
 		if err := g.repo.AbortUpload(ctx, upload.ID); err != nil {
@@ -509,10 +398,9 @@ func (g *Games) abortUpload(ctx context.Context, actor *uuid.UUID, upload Upload
 	return upload, nil
 }
 
-// AbortUpload cancels an organiser's own upload before it was completed. It
-// never touches game_templates — an aborted upload never became anybody's
-// game, so there is nothing to replace and nothing GameEditable needs to
-// gate.
+// AbortUpload cancels an organiser's upload before it completes. It never
+// touches game_templates: an aborted upload never became a game, so there is
+// nothing for GameEditable to gate.
 func (g *Games) AbortUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (Upload, error) {
 	if g.files == nil {
 		return Upload{}, ErrUploadsDisabled
@@ -527,38 +415,24 @@ func (g *Games) AbortUpload(ctx context.Context, actorID, contestID, uploadID uu
 	return g.abortUpload(ctx, &actorID, upload)
 }
 
-// UploadCleanupResult is one pass of the janitor's own two sweeps, run for
-// both kinds of file this package now owns: a whole dump (upload.go) and
-// one table's own CSV (tabledata.go). Two independent gamefile.Store
-// directories, so the counts below are summed across both rather than one
-// field secretly meaning "whichever kind happened to be found" — the same
-// distinction TableData vs Upload already draws everywhere else.
+// UploadCleanupResult is one janitor pass, summed over both upload stores:
+// whole dumps and per-table CSVs (tabledata.go).
 type UploadCleanupResult struct {
-	// Abandoned counts uploads left 'receiving' past their grace period —
-	// nobody appended to them, and nobody is coming back to.
+	// Abandoned counts uploads left 'receiving' past their grace period.
 	Abandoned int
-	// OrphanFiles counts files on the volume nothing needs any more — no row
-	// names them, or the row is there but no contest's game is built from it
-	// — the sweep's own doc (SweepUploads below) explains why these are the
-	// more dangerous half.
+	// OrphanFiles counts files on the volume nothing needs any more (see
+	// sweepOrphanFiles).
 	OrphanFiles int
 }
 
 // SweepUploads is the abandoned-upload janitor: every 'receiving' row older
-// than olderThan is aborted, and every file on the volume nothing needs any
-// more is removed.
+// than olderThan is aborted, and every file nothing needs any more is
+// removed.
 //
-// Two different leaks, and the second is the more dangerous one. An
-// abandoned row at least says so — a contest an organiser can find, an
-// updated_at anybody can read. A file nothing points at is invisible to every
-// other query this package makes: Instances, Reclaim, the orphan-database
-// sweep (orphans.go) all start from a database row and ask whether the
-// object behind it still exists; nothing here ever asks the volume what it
-// holds and works backwards. Without this second half, a crash between
-// Store.Begin succeeding and BeginUpload's own INSERT, a crash between
-// replaceGame's commit and the removal that follows it, or any other gap this
-// package's own comments already call out, leaves bytes nobody will ever find
-// again — and on this platform one of them is a multi-gigabyte dump.
+// The file sweep matters more. Every other query in this package starts from
+// a database row, so a file no row needs (left by a crash between Store.Begin
+// and the INSERT, or between replaceGame's commit and its removal) is found
+// by nothing else, and may be a multi-gigabyte dump.
 func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (UploadCleanupResult, error) {
 	var result UploadCleanupResult
 	var failures []error
@@ -583,11 +457,8 @@ func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (Uplo
 		}
 	}
 
-	// The table builder's own per-table files (tabledata.go) live on a
-	// second, independent gamefile.Store — see WithTableData's own doc for
-	// why — but they leak the identical two ways a dump does, so the same
-	// janitor sweeps both rather than internal/app growing a second
-	// scheduled task nobody remembers to add when this feature was wired in.
+	// The table builder's files live in a second gamefile.Store (WithTableData)
+	// and leak the same two ways, so the same janitor sweeps them.
 	if g.tableFiles != nil {
 		abandoned, err := g.sweepAbandonedTableData(ctx, olderThan)
 		result.Abandoned += abandoned
@@ -605,50 +476,25 @@ func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (Uplo
 	return result, errors.Join(failures...)
 }
 
-// abandonedUploadBatchLimit bounds one sweep the same way
-// ReclaimBatchLimit bounds Reclaim's: a fresh deployment's first tick must
-// not try to abort every upload ever left behind in one pass. Uploads are
-// rarer than instances by construction — one per contest at a time, at
-// most — so a smaller batch is still generous against anything this
-// platform's own numbers describe.
+// abandonedUploadBatchLimit bounds one sweep, as ReclaimBatchLimit bounds
+// Reclaim, so a fresh deployment's first tick does not abort every upload
+// ever left behind in one pass.
 const abandonedUploadBatchLimit = 100
 
-// orphanFileGrace is how young a file on the volume may be and still be left
-// alone by the sweep below.
-//
-// BeginUpload reserves the file before it writes the row, deliberately — its
-// own doc says why — which means there is always an instant in which the
-// volume holds a file no row names yet. Without a floor on the file's age the
-// sweep does not merely fail to clean that up, it *causes* the damage: a
-// ReadDir that catches the reservation and a UploadInUse that lands before the
-// INSERT commits delete the bytes of an upload whose id is at that moment
-// being handed back to the organiser, and the first chunk then answers "no
-// such upload" against a 'receiving' row that blocks every retry.
-//
-// Fifteen minutes is many orders of magnitude past the one INSERT that window
-// is, and short enough that a file genuinely left behind is not held for long
-// — the sweep runs every ten minutes (internal/app.abandonedUploads), so
-// nothing waits more than a tick or two past the grace.
+// orphanFileGrace is how old a file must be before the orphan sweep considers
+// it. BeginUpload reserves the file before it writes the row, so a younger
+// file may belong to an upload whose INSERT has not committed yet; removing
+// it would break an upload just handed to the organiser. The sweep runs
+// every ten minutes (internal/app.abandonedUploads).
 const orphanFileGrace = 15 * time.Minute
 
-// sweepOrphanFiles removes every upload on the volume that nothing needs any
-// more: no row in game_uploads names it at all, or the row is there but the
-// upload is neither still receiving chunks nor the one a contest's game is
-// built from (TemplateRepository.UploadInUse asks exactly that).
+// sweepOrphanFiles removes every upload file older than orphanFileGrace that
+// nothing needs: no game_uploads row names it, or the row is neither still
+// receiving nor the one a contest's game is built from (UploadInUse).
 //
-// The second half is what makes this a backstop rather than a formality. A
-// completed upload stops being needed the moment its game stops naming it —
-// a second upload displaced it, or an organiser went back to writing a script
-// in the editor — and both of those are followed by a removal that can be
-// interrupted: replaceGame removes the file after its transaction commits, so
-// a process that dies in between leaves a row and gigabytes of bytes nothing
-// will ever ask for again. Asking only whether a row existed answered "keep"
-// for every one of those.
-//
-// Only files older than orphanFileGrace are considered, and the list of ids
-// comes from gamefile.Store.UploadIDs rather than this package reading the
-// directory itself: which files make up one upload, and how many of them there
-// are, is gamefile's own layout to know.
+// The second case catches a displaced upload whose removal after
+// replaceGame's commit was interrupted. The ids come from
+// gamefile.Store.UploadIDs because the file layout is gamefile's to know.
 func (g *Games) sweepOrphanFiles(ctx context.Context) (int, error) {
 	ids, err := g.files.UploadIDs(g.now().Add(-orphanFileGrace))
 	if err != nil {

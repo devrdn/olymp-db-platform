@@ -10,20 +10,15 @@ import (
 
 // Rank orders entries and gives them places under the contest's scoring mode.
 //
-// Points: more points first, then whoever reached their score earlier, with
-// the same score at the same moment sharing a place (1, 1, 3). Nobody who
-// scored nothing is ahead of anybody else who scored nothing.
+// Points: more points first, then whoever reached their score earlier; the
+// same score at the same moment shares a place (1, 1, 3). All zero scores
+// share a place.
 //
-// Winner: one place, for the earliest correct final answer; everybody else is
-// listed in points order without a place, because "there is only a winner"
-// (§6.1.1) is exactly one place.
+// Winner: one place, for the earliest correct final answer; everybody else
+// is listed in points order without a place.
 //
-// ICPC is ranked by RankICPC, which needs the grid storage computed beside
-// the entries. Rank panics when given it: that is a programmer error, and
-// ranking an ICPC table by points would quietly serve a table of zeros.
-//
-// The registration id is the last key only so that the order of equal rows
-// does not change between two reads; a place never depends on it.
+// ICPC needs RankICPC; Rank panics on it rather than serve a table of zeros.
+// The registration id is the last key only for a stable order.
 func Rank(scoring string, entries []Entry) []Row {
 	if scoring == contests.ScoringICPC {
 		panic("leaderboard: Rank called for icpc scoring; use RankICPC")
@@ -61,24 +56,19 @@ func Rank(scoring string, entries []Entry) []Row {
 	return rows
 }
 
-// RankICPC orders ICPC entries and gives them places: more questions solved
-// first, then less penalty time, the two equal sharing a place (1, 1, 3).
-// Rows sharing a place are listed by their last solve, then by registration
-// id, only for a stable order. Points, zero in this mode, are not read.
+// RankICPC orders ICPC entries: more solved first, then less penalty, equal
+// rows sharing a place (1, 1, 3) and listed by last solve, then registration
+// id. Points are not read.
 //
-// A cell is marked first when it is solved at exactly the moment the grid
-// names as its question's earliest solve, and its row is not disqualified.
-// The moment comes from storage, computed over every registration that is not
-// disqualified — never from the rows at hand, which the row bound may have
-// cut the real first solver from, and which on the staff table include the
-// disqualified. Two solves in the same instant are both first: neither was
-// earlier. The cells are cut off already, so a frozen table marks by the
-// answers before the freeze only.
+// A cell is marked first when its row is not disqualified and it was solved
+// at the grid's earliest solve for that question. That moment comes from
+// storage over the whole contest, not the rows at hand, which the row bound
+// may have cut. Simultaneous solves are both first.
 func RankICPC(entries []Entry, grid Grid) []Row {
 	rows := make([]Row, len(entries))
 	for i, e := range entries {
 		rows[i] = Row{Entry: e}
-		// Copied, so the mark is never written into the entries given.
+		// Copied, so the mark is never written into the given entries.
 		rows[i].Cells = slices.Clone(e.Cells)
 		if e.Disqualified {
 			continue
@@ -114,9 +104,8 @@ func compareICPC(a, b Entry) int {
 	return bytes.Compare(a.Registration[:], b.Registration[:])
 }
 
-// compareFinal orders two correct final answers: the earlier one wins, and two
-// in the same instant are decided by the registration id so that the winner
-// does not change between two reads.
+// compareFinal orders two correct final answers, earlier first; a tie goes by
+// registration id so the winner is stable between reads.
 func compareFinal(a, b Entry) int {
 	if c := a.FinalAt.Compare(*b.FinalAt); c != 0 {
 		return c

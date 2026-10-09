@@ -11,10 +11,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/profile"
 )
 
-// Whether a contest is over for the caller is the participation gate's
-// answer, so a Service cannot be assembled without the gate: with none, it
-// would have to pick a grace of its own, and results could open while the
-// play screen still admits the participant.
 func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -37,9 +33,6 @@ func TestOpenAdmitsAContestThatHasEndedForTheCaller(t *testing.T) {
 	}
 }
 
-// Every refusal is the same one: a contest that does not exist, one somebody
-// else is in, and one that has not ended for this participant. The profile
-// never says which (design §2.2).
 func TestOpenRefusesEverythingThatIsNotTheCallersFinishedContest(t *testing.T) {
 	cases := map[string]func(t *testing.T, r *rig) (uuid.UUID, uuid.UUID){
 		"a contest that does not exist": func(_ *testing.T, r *rig) (uuid.UUID, uuid.UUID) {
@@ -76,9 +69,6 @@ func TestOpenRefusesEverythingThatIsNotTheCallersFinishedContest(t *testing.T) {
 	}
 }
 
-// The three ways a contest ends for one participant (design §3): the contest
-// itself, their own deadline under an individual timer, and their
-// registration being finished or disqualified.
 func TestOpenAdmitsOnEveryWayAContestEndsForOneParticipant(t *testing.T) {
 	t.Run("the individual deadline has passed while the contest runs", func(t *testing.T) {
 		r := newRig(t)
@@ -111,9 +101,6 @@ func TestOpenAdmitsOnEveryWayAContestEndsForOneParticipant(t *testing.T) {
 	}
 }
 
-// An individual participant who never started is not "finished" while the
-// contest's window is still open: they may yet start, and nothing of theirs
-// has run out.
 func TestOpenRefusesAnIndividualParticipantWhoNeverStarted(t *testing.T) {
 	r := newRig(t)
 	r.now = start.Add(time.Hour)
@@ -143,10 +130,6 @@ func TestSummaryIsOneRead(t *testing.T) {
 	}
 }
 
-// The profile opens a contest's results exactly when the play screen closes
-// it: at the participant's deadline plus the grace, the instant the
-// participation gate refuses them at. At the deadline itself they may still
-// be answering, and play and results are never open at once.
 func TestOpenWaitsForTheGraceAfterTheDeadline(t *testing.T) {
 	for name, given := range map[string]struct {
 		now  time.Time
@@ -168,9 +151,6 @@ func TestOpenWaitsForTheGraceAfterTheDeadline(t *testing.T) {
 	}
 }
 
-// An individual participant who never started, in a contest that is still
-// running, can no longer start once the contest's own window has closed: the
-// contest is over for them, and its report opens, at ends_at.
 func TestOpenAdmitsAnIndividualParticipantWhoNeverStartedOnceTheWindowCloses(t *testing.T) {
 	r := newRig(t)
 	r.now = end
@@ -184,9 +164,6 @@ func TestOpenAdmitsAnIndividualParticipantWhoNeverStartedOnceTheWindowCloses(t *
 	}
 }
 
-// A contest that never ran is not over by its calendar. A published contest
-// whose fixed ends_at has gone by without it being started, or one in a
-// status this build does not know, is over once it finishes, not before.
 func TestOpenRefusesAContestThatNeverRanHoweverLate(t *testing.T) {
 	for _, status := range []string{contests.StatusPublished, "paused"} {
 		t.Run(status, func(t *testing.T) {

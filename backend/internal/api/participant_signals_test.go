@@ -42,7 +42,6 @@ func (s *signalStore) stored() []monitor.Event {
 	return all
 }
 
-// signalsBody wraps events into the request body.
 func signalsBody(events ...string) string {
 	return `{"events":[` + strings.Join(events, ",") + `]}`
 }
@@ -94,10 +93,9 @@ func TestSignalsAreStoredForTheAdmittedRegistration(t *testing.T) {
 	}
 }
 
-// A paste is recorded whatever it held. Text with a NUL character cannot be
-// stored as it is, but refusing the batch for it would let a participant hide
-// a paste by pasting one, so the character is dropped (monitor.Paste) and the
-// paste kept — the events travel as raw JSON past the body's own NUL check.
+// Refusing a batch for a NUL would let a participant hide a paste by pasting
+// one, so monitor.Paste drops the character and keeps the paste. The events
+// travel as raw JSON past the body's own NUL check.
 func TestAPasteHoldingANULIsKeptNotRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -116,8 +114,6 @@ func TestAPasteHoldingANULIsKeptNotRefused(t *testing.T) {
 	}
 }
 
-// One bad signal must not cost the browser the good ones: every per-event
-// problem is a drop, and the batch still answers 204.
 func TestBadSignalsAreDroppedNotRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -178,9 +174,7 @@ func TestSignalFieldsAreBounded(t *testing.T) {
 	}
 }
 
-// The server stamps its own time; the browser's is kept as a claim only when
-// it is within a day of the server's, and a claim that is not a time at all
-// is ignored rather than costing the event.
+// A claim that is not a time at all is ignored rather than costing the event.
 func TestAClaimedTimeIsKeptOnlyWithinADay(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -257,7 +251,6 @@ func TestAMalformedSignalsBodyIsRefused(t *testing.T) {
 		http.StatusBadRequest, "invalid_contest_id")
 }
 
-// Signals are admitted exactly like the rest of /play.
 func TestSignalsAreAdmittedLikeThePlayScreen(t *testing.T) {
 	for _, tc := range []struct {
 		err    error

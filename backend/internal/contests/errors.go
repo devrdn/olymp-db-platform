@@ -1,21 +1,12 @@
 package contests
 
-// Errors is every error this package hands to a caller that has to answer a
-// request with it: the organiser's refusals (a contest, question, story,
-// participant or staff member that is not there; a change the contest's status
-// or schedule does not allow; a roster, a search or a package out of bounds),
-// the enrolment refusals, what a participant meets at the participation gate
-// (Gate.StandingOf), and what a participant meets submitting an answer.
-// internal/api answers each from a table of its own, and a test there walks
-// this list so that none can reach a client as "internal error"; a test here
-// reads the package's source so that none can be declared and left off it.
+// Errors is every error this package hands to the HTTP layer (CLAUDE.md
+// rule 1). internal/api answers each from its error table; tests keep the
+// source, this list and the table in step.
 //
-// ErrNotPublishable is on the list although the publish gate returns it as a
-// *NotPublishableError: the handler answers that with the list of problems
-// attached, and the table holds the answer for the sentinel itself.
-//
-// Not everything is here. ErrAttemptConflict is declared beside these and
-// named in TestEveryExportedErrorIsListed, with the reason.
+// ErrNotPublishable arrives wrapped in *NotPublishableError; the table answers
+// the sentinel. ErrAttemptConflict is internal and left off, as
+// TestEveryExportedErrorIsListed records.
 func Errors() []error {
 	return []error{
 		ErrNotFound, ErrQuestionNotFound, ErrStoryNotFound,

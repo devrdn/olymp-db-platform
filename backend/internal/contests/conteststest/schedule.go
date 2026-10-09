@@ -9,63 +9,51 @@ import (
 	"github.com/google/uuid"
 )
 
-// Schedule is an in-memory contests.ScheduleRepository, for the scheduler's
-// own tests (contests/schedule_test.go), held to the same answers as
-// postgres.Contests by ScheduleRepositoryContract, which both run.
-//
-// It reads and moves the contests in its Contests store, the way
-// postgres.Contests answers both interfaces from one table: a test stages a
-// due or overdue contest by storing it in that status and window, and finds
-// out what a tick did by reading the store back, so a contest DueToStart
-// could never return cannot be handed to the scheduler as due.
+// Schedule is an in-memory contests.ScheduleRepository that reads and moves
+// the contests in its Contests store, as postgres.Contests answers both
+// interfaces from one table. A test stages a contest in the store and reads
+// back what a tick did, so the scheduler is never handed a contest
+// DueToStart could not return.
 type Schedule struct {
-	// Contests is the store the schedule reads and moves. Its Clock is the
-	// schedule's clock as well, the one the database's now() stands for:
-	// whether a start or an end has arrived is decided by it, and a move
-	// stamps UpdatedAt with it. NewSchedule sets it to FixtureNow.
+	// Contests is the store the schedule reads and moves. Its Clock stands
+	// for the database's now(): it decides whether a window has arrived and
+	// stamps UpdatedAt.
 	Contests *Contests
 
-	// Acquired is TryLock's own answer, true unless a test stages otherwise
-	// to stand for a losing replica in this tick's race for the lock.
+	// Acquired is TryLock's answer; false stands for a replica that lost the
+	// lock.
 	Acquired bool
 	LockErr  error
 
-	// DueErr, SetStatusErr and FinishedErr, when set, are what DueToStart,
-	// SetStatus and AdvanceFinished return instead of reading or moving
-	// anything: an infrastructure failure rather than a race any particular
-	// contest lost. A race is staged on the store itself, with
-	// Contests.SetStatusRaces.
+	// DueErr, SetStatusErr and FinishedErr stand for infrastructure
+	// failures. A race is staged with Contests.SetStatusRaces instead.
 	DueErr       error
 	SetStatusErr error
 	FinishedErr  error
 
-	// Moved collects the ids SetStatus actually moved, in call order, so a
-	// test can check which contests a tick started without re-deriving
-	// CheckPublishable itself.
+	// Moved lists the ids SetStatus moved, in call order.
 	Moved []uuid.UUID
-	// GraceSeen records the grace Advance actually passed to AdvanceFinished
-	// on the last call, so a test can prove Scheduler threads its own
-	// configured grace through rather than comparing ends_at bare.
+	// GraceSeen is the grace the last AdvanceFinished received, so a test can
+	// prove the Scheduler passes its configured grace through.
 	GraceSeen time.Duration
 
-	// LockCalls, DueCalls, SetStatusCalls and FinishedCalls count how many
-	// times each was asked, so a test can prove a lost lock stops the tick
-	// before any of the others ever run.
+	// The call counters let a test prove a lost lock stops the tick before
+	// anything else runs.
 	LockCalls, DueCalls, SetStatusCalls, FinishedCalls int
 }
 
 var _ contests.ScheduleRepository = (*Schedule)(nil)
 
-// NewSchedule returns a fake that wins the lock, over an empty contest store
-// whose clock reads FixtureNow.
+// NewSchedule returns a fake that wins the lock, over an empty store whose
+// clock reads FixtureNow.
 func NewSchedule() *Schedule {
 	store := NewContests()
 	store.Clock = func() time.Time { return FixtureNow }
 	return &Schedule{Contests: store, Acquired: true}
 }
 
-// now is the store's clock. Without one there is no telling whether a window
-// has opened, so it is an error rather than a guess.
+// now is an error without a clock: there is no telling whether a window has
+// opened.
 func (s *Schedule) now() (time.Time, error) {
 	if s.Contests.Clock == nil {
 		return time.Time{}, errors.New("the schedule's contest store has no clock")
@@ -78,8 +66,8 @@ func (s *Schedule) TryLock(context.Context) (bool, error) {
 	return s.Acquired, s.LockErr
 }
 
-// DueToStart returns every published contest whose start is at or before the
-// clock, as ByID would read it, and changes nothing.
+// DueToStart returns published contests whose start is at or before the
+// clock, and changes nothing.
 func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
 	s.DueCalls++
 	if s.DueErr != nil {
@@ -99,8 +87,8 @@ func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
 	return due, nil
 }
 
-// SetStatus is the store's own, as postgres.Contests uses one method for
-// both interfaces.
+// SetStatus is the store's, as postgres.Contests uses one method for both
+// interfaces.
 func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
 	s.SetStatusCalls++
 	if s.SetStatusErr != nil {
@@ -113,9 +101,8 @@ func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 	return nil
 }
 
-// AdvanceFinished finishes every running contest whose end plus grace is at
-// or before the clock, stamping UpdatedAt with it, and returns their ids. A
-// contest with no end never matches.
+// AdvanceFinished finishes running contests whose end plus grace is at or
+// before the clock. A contest with no end never matches.
 func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uuid.UUID, error) {
 	s.FinishedCalls++
 	s.GraceSeen = grace

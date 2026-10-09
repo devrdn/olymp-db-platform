@@ -12,8 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// stubPlan is a sweep that has already decided what it found, and records
-// whether anything asked it to act.
 type stubPlan struct {
 	found    []provisioning.Orphan
 	removed  []provisioning.Orphan
@@ -40,9 +38,6 @@ func twoOrphans() []provisioning.Orphan {
 	}
 }
 
-// The default, and the reason this is a command rather than a background job:
-// it says what it would do and does nothing. Not "removes less", not "asks
-// first" — Remove is never called at all.
 func TestTheDefaultRunRemovesNothing(t *testing.T) {
 	found := twoOrphans()
 	stub := &stubPlan{found: found}
@@ -67,8 +62,6 @@ func TestTheDefaultRunRemovesNothing(t *testing.T) {
 	}
 }
 
-// With -apply, exactly the list that was printed is the list that is removed:
-// the plan is not drawn up a second time between the two.
 func TestApplyRemovesTheListItPrinted(t *testing.T) {
 	found := twoOrphans()
 	stub := &stubPlan{found: found, outcome: provisioning.OrphanSweepResult{Removed: 2, FreedBytes: 15 << 20}}
@@ -90,8 +83,6 @@ func TestApplyRemovesTheListItPrinted(t *testing.T) {
 	}
 }
 
-// A healthy installation runs this and is told so, without being offered
-// anything to approve — and nothing is called even with -apply given.
 func TestNothingFoundRemovesNothingEvenWithApply(t *testing.T) {
 	stub := &stubPlan{}
 	var out bytes.Buffer
@@ -107,8 +98,6 @@ func TestNothingFoundRemovesNothingEvenWithApply(t *testing.T) {
 	}
 }
 
-// The report has to be readable by whoever decides: a size in bytes is not
-// what anybody weighs a database in.
 func TestSizesAreReportedInUnitsAnOperatorReads(t *testing.T) {
 	for _, c := range []struct {
 		size int64
@@ -124,8 +113,6 @@ func TestSizesAreReportedInUnitsAnOperatorReads(t *testing.T) {
 	}
 }
 
-// stubCovers is the cover-file sweep with its plan already drawn up, and the
-// same question asked of it: was it asked to act at all?
 type stubCovers struct {
 	found    []covers.OrphanFile
 	removed  []covers.OrphanFile
@@ -152,9 +139,6 @@ func twoCoverFiles() []covers.OrphanFile {
 	}
 }
 
-// The same default as the databases, and for the same reason: deleting a file
-// cannot be undone, so the run that was not asked to delete anything calls
-// Remove not at all.
 func TestTheDefaultCoverRunRemovesNothing(t *testing.T) {
 	found := twoCoverFiles()
 	stub := &stubCovers{found: found}
@@ -179,7 +163,6 @@ func TestTheDefaultCoverRunRemovesNothing(t *testing.T) {
 	}
 }
 
-// With -apply, exactly the list that was printed is the list that is removed.
 func TestApplyRemovesTheCoverFilesItPrinted(t *testing.T) {
 	found := twoCoverFiles()
 	stub := &stubCovers{found: found, outcome: covers.OrphanSweepResult{Removed: 2, FreedBytes: 390 << 10}}
@@ -201,8 +184,6 @@ func TestApplyRemovesTheCoverFilesItPrinted(t *testing.T) {
 	}
 }
 
-// A volume with nothing to collect is reported as such, and nothing is called
-// even with -apply given.
 func TestNoCoverFilesFoundRemovesNothingEvenWithApply(t *testing.T) {
 	stub := &stubCovers{}
 	var out bytes.Buffer
@@ -218,9 +199,7 @@ func TestNoCoverFilesFoundRemovesNothingEvenWithApply(t *testing.T) {
 	}
 }
 
-// A sweep that could not draw up its plan removes nothing and says why. It is
-// the one failure that must not be quiet: the plan is empty for both a clean
-// volume and an unreadable database, and only one of those is good news.
+// An empty plan from an error must not read like a clean volume.
 func TestACoverSweepThatCannotPlanRemovesNothing(t *testing.T) {
 	stub := &stubCovers{findFail: errors.New("the volume is not mounted")}
 	var out bytes.Buffer

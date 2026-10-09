@@ -33,10 +33,6 @@ func TestBeginningTableDataCreatesARowInReceiving(t *testing.T) {
 	})
 }
 
-// The guarantee migration 27's own partial index gives, at the finer grain
-// of one table: two uploads 'receiving' at once for the *same* table of the
-// *same* contest are refused by the database, never by a check-then-insert
-// in Go.
 func TestASecondTableUploadForTheSameTableWhileOneIsReceivingIsRejectedByTheDatabase(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -45,12 +41,8 @@ func TestASecondTableUploadForTheSameTableWhileOneIsReceivingIsRejectedByTheData
 		if _, err := repo.BeginTableData(ctx, uuid.New(), contest, "suspects", 1024); err != nil {
 			t.Fatalf("first begin: %v", err)
 		}
-		// A different table of the same contest is untouched — the index is
-		// scoped to (contest_id, lower(table_name)), not to the contest alone.
-		// Checked *before* the conflict below: a unique violation leaves the
-		// whole test transaction unusable for anything that follows it
-		// (PostgreSQL's own "current transaction is aborted" rule), so the
-		// statement that is meant to succeed has to run first.
+		// The index is per (contest_id, lower(table_name)). This runs before
+		// the conflict below, which aborts the test transaction.
 		if _, err := repo.BeginTableData(ctx, uuid.New(), contest, "sightings", 1024); err != nil {
 			t.Fatalf("begin for a different table of the same contest: %v", err)
 		}
@@ -103,9 +95,6 @@ func TestCompletingTableDataMarksItCompleteAndDisplacesThePrevious(t *testing.T)
 	})
 }
 
-// CreateReadyTableData is the bootstrap path (AppendTableRow's own doc): a
-// file that starts life already 'complete'. The one-ready-file-per-table
-// index refuses a second bootstrap racing the first.
 func TestCreateReadyTableDataBootstrapsAndTheCompleteIndexRefusesASecondOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -146,18 +135,9 @@ func TestAppendTableDataRowUpdatesBytesAndLinesTogether(t *testing.T) {
 	})
 }
 
-// TestAppendTableDataRowNeverMovesTheFileBackwards is the statement's own
-// half of what keeps two forms adding a row to the same table at once from
-// losing one of them (provisioning.Games.AppendTableRow's own doc). The two
-// callers reach this statement in whatever order the database happens to run
-// them, which is not the order they read the row in — so the one working
-// from the older snapshot must not be able to write its own smaller length
-// and row count over the newer one, leaving the bookkeeping describing a
-// shorter file than the one on disk.
-//
-// Run against the real statement, not a stand-in for it: GREATEST is the
-// guarantee, and a fake agreeing with the service about it would prove
-// nothing about the SQL (CLAUDE.md rule 10).
+// TestAppendTableDataRowNeverMovesTheFileBackwards: a caller with an older
+// snapshot that runs last must not write a smaller length and row count over
+// the newer ones. GREATEST in the SQL is the guarantee (CLAUDE.md rule 10).
 func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -180,8 +160,7 @@ func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
 			t.Fatalf("data = %+v, want the file still described as 40 bytes and 3 rows", stale)
 		}
 
-		// And a row that is no longer the table's current file — the game was
-		// replaced under the call — is told so rather than answered success.
+		// A row no longer current (the game was replaced) is refused.
 		if err := repo.AbortTableData(ctx, id); err != nil {
 			t.Fatalf("abort: %v", err)
 		}
@@ -191,12 +170,9 @@ func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
 	})
 }
 
-// TestDiscardTableDataRetiresEveryFileTheContestStillHas is what a game
-// leaving the table builder does to the data it described
-// (provisioning.Games.replaceGame): both the table's current file and any
-// upload still receiving one are retired, their ids handed back so their
-// bytes can be removed, and a row already 'aborted' is not retired a second
-// time — an id returned twice would be a file removed twice.
+// TestDiscardTableDataRetiresEveryFileTheContestStillHas: a row already
+// 'aborted' is not returned again, since an id returned twice would be a file
+// removed twice.
 func TestDiscardTableDataRetiresEveryFileTheContestStillHas(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -275,10 +251,6 @@ func TestAbortingTableDataMarksItAborted(t *testing.T) {
 	})
 }
 
-// DeleteTableDataRow's own three cases: a fresh delete succeeds, deleting
-// the same row twice is told apart from the first, and — the real boundary
-// migration 27's own CHECK enforces — a table already at MaxTableDeletedRows
-// refuses a delete past it rather than growing the array without limit.
 func TestDeleteTableDataRowTombstonesAndRefusesADuplicateOrAnOverflow(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -304,9 +276,7 @@ func TestDeleteTableDataRowTombstonesAndRefusesADuplicateOrAnOverflow(t *testing
 			t.Fatalf("deleting row 2 again = %v, want ErrTableRowAlreadyDeleted", err)
 		}
 
-		// Seed the array up to migration 27's own bound directly in SQL —
-		// generate_series is far cheaper than 10,000 round trips through
-		// this repository — then ask this method to add one more.
+		// Seed the array to the bound in SQL, cheaper than one call per row.
 		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
 			`UPDATE game_table_data
 			 SET deleted_rows = (SELECT array_agg(x) FROM generate_series(1000, 1000 + $2 - 1) x)
@@ -355,8 +325,6 @@ func TestAbandonedTableDataListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T
 	})
 }
 
-// The question the janitor's orphan sweep asks of a table-data file it found
-// on the volume — TableDataInUse's own doc, UploadInUse's own shape.
 func TestTableDataInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)

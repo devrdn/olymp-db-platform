@@ -8,10 +8,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 )
 
-// The instants every row of the table is written against: a contest that
-// runs from nine to noon, a participant's own hour when they start at ten,
-// and the network allowance an already-working participant is given past
-// their deadline.
+// A contest from nine to noon, a participant who starts at ten, and the
+// grace a working participant gets past their deadline.
 var (
 	standingStarts = time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	standingEnds   = time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -23,8 +21,6 @@ var (
 
 const standingGrace = 5 * time.Second
 
-// fixedContest is a fixed-timing contest in the given status, held on the lab
-// network.
 func fixedContest(status string) contests.Contest {
 	return contests.Contest{
 		Status: status, Timing: contests.TimingFixed,
@@ -33,8 +29,6 @@ func fixedContest(status string) contests.Contest {
 	}
 }
 
-// individualContest is an individual-timing contest of sixty minutes per
-// participant in the given status, held on the lab network.
 func individualContest(status string) contests.Contest {
 	c := fixedContest(status)
 	c.Timing, c.DurationMin = contests.TimingIndividual, duration(60)
@@ -54,9 +48,7 @@ func withStatus(p contests.Participant, status string) contests.Participant {
 	return p
 }
 
-// standingRow is one participant in one contest at one instant, and what the
-// gate must say about them. Every expectation is written out rather than
-// derived, so the table reads as the rule.
+// Expectations are written out, not derived, so the table reads as the rule.
 type standingRow struct {
 	name        string
 	contest     contests.Contest
@@ -185,7 +177,6 @@ func standingRows() []standingRow {
 			contest: unknownTiming, participant: registered(), now: standingTen, addr: inTheLab,
 			refusal: contests.ErrContestNotRunning},
 
-		// The contest's own status.
 		{name: "draft",
 			contest: fixedContest(contests.StatusDraft), participant: registered(), now: standingTen, addr: inTheLab,
 			refusal: contests.ErrContestNotRunning},
@@ -204,9 +195,7 @@ func standingRows() []standingRow {
 		{name: "a status this build does not know",
 			contest: fixedContest("paused"), participant: registered(), now: standingTen, addr: inTheLab,
 			refusal: contests.ErrContestNotRunning},
-		// An ended contest is named as ended, not as "not running": the one
-		// will never open again, the other may, and the play screen has to
-		// tell a participant which.
+		// Ended is distinct from "not running": it will never open again.
 		{name: "finished",
 			contest: fixedContest(contests.StatusFinished), participant: registered(), now: standingTen, addr: inTheLab,
 			over: true, refusal: contests.ErrContestEnded},
@@ -248,8 +237,6 @@ func standingRows() []standingRow {
 	}
 }
 
-// Every boundary of the one participation rule, at the instant either side
-// of it.
 func TestStandingOf(t *testing.T) {
 	for _, row := range standingRows() {
 		t.Run(row.name, func(t *testing.T) {
@@ -263,8 +250,7 @@ func TestStandingOf(t *testing.T) {
 			if got := s.Over(); got != row.over {
 				t.Errorf("Over() = %v, want %v", got, row.over)
 			}
-			// The sentinel itself, not something wrapping it: the HTTP layer
-			// answers each from a row of its own.
+			// The bare sentinel: the HTTP layer has a row for each.
 			if got := s.Refusal(); got != row.refusal {
 				t.Errorf("Refusal() = %v, want %v", got, row.refusal)
 			}
@@ -272,10 +258,7 @@ func TestStandingOf(t *testing.T) {
 	}
 }
 
-// The grace a gate was built with, and no other, decides where a working
-// participant's time is up: the row "fixed, at exactly ends_at plus grace the
-// time is up" moves with it, to the nanosecond, and a zero grace is no grace
-// at all rather than a default.
+// A zero grace is no grace, not a default.
 func TestAGateClosesAtTheDeadlinePlusItsOwnGrace(t *testing.T) {
 	for _, grace := range []time.Duration{0, 2 * time.Second, 5 * time.Second} {
 		t.Run(grace.String(), func(t *testing.T) {
@@ -294,10 +277,7 @@ func TestAGateClosesAtTheDeadlinePlusItsOwnGrace(t *testing.T) {
 	}
 }
 
-// A negative grace would close every participant's window before their own
-// deadline. config.Load refuses DEADLINE_GRACE below zero, so a caller
-// passing one is a bug in the wiring, and the gate says so at construction
-// rather than quietly admitting less than the deadline promises.
+// config.Load refuses a negative DEADLINE_GRACE, so one here is a wiring bug.
 func TestNewGateRefusesANegativeGrace(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -307,9 +287,8 @@ func TestNewGateRefusesANegativeGrace(t *testing.T) {
 	contests.NewGate(-time.Second)
 }
 
-// The three answers can never contradict each other, whatever the inputs: a
-// participant for whom it is over may neither act nor wait, one who may act
-// may wait, and a refusal is given exactly when acting is not allowed.
+// Over implies neither act nor wait; act implies wait; a refusal is given
+// exactly when acting is not allowed.
 func TestStandingAnswersAgreeWithEachOther(t *testing.T) {
 	for _, row := range standingRows() {
 		t.Run(row.name, func(t *testing.T) {
@@ -327,8 +306,7 @@ func TestStandingAnswersAgreeWithEachOther(t *testing.T) {
 	}
 }
 
-// A Standing nobody computed refuses everything, and does not claim the
-// contest is over for anybody.
+// The zero Standing refuses as not running and is not Over.
 func TestTheZeroStandingRefusesEverything(t *testing.T) {
 	var s contests.Standing
 	if s.MayAct() || s.MayWait() || s.Over() {

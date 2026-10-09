@@ -9,9 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestTriggerWakesTheChannel is Tender's basic promise: a caller that changed
-// a contest's roster can ask for a tend soon, and the background loop
-// listening on C sees it.
 func TestTriggerWakesTheChannel(t *testing.T) {
 	tender := provisioning.NewTender()
 	tender.Trigger(uuid.New())
@@ -23,11 +20,6 @@ func TestTriggerWakesTheChannel(t *testing.T) {
 	}
 }
 
-// TestManyTriggersCoalesceIntoOnePendingWake is the resolution's own
-// requirement: a burst of registrations for one contest — or several
-// contests at once — must not queue one wake per event. Tend always walks
-// every live contest in a single pass, so collapsing every trigger since the
-// last wake into the one already pending loses nothing.
 func TestManyTriggersCoalesceIntoOnePendingWake(t *testing.T) {
 	tender := provisioning.NewTender()
 
@@ -48,13 +40,7 @@ func TestManyTriggersCoalesceIntoOnePendingWake(t *testing.T) {
 	}
 }
 
-// TestTriggerNeverBlocksEvenWhenNobodyIsListening is what makes Trigger safe
-// to call from a request handler or from inside a transaction's commit path:
-// it must return immediately whether or not a background loop is currently
-// reading from C. A concurrent burst of callers proves it: a version that
-// blocked on a full channel would hang this test rather than return within
-// its own deadline; run with -race, the same burst also confirms Trigger's
-// internal state is safe for many goroutines to reach at once.
+// Under -race the concurrent burst also checks Trigger is goroutine-safe.
 func TestTriggerNeverBlocksEvenWhenNobodyIsListening(t *testing.T) {
 	tender := provisioning.NewTender()
 
@@ -80,8 +66,7 @@ func TestTriggerNeverBlocksEvenWhenNobodyIsListening(t *testing.T) {
 		t.Fatal("200 concurrent triggers with nobody reading C did not return — Trigger blocked")
 	}
 
-	// Exactly one wake is left pending, the same coalescing guarantee under
-	// concurrency that the sequential test above proves without it.
+	// One wake is left pending.
 	select {
 	case <-tender.C():
 	default:

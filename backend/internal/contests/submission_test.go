@@ -12,8 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// runningFixedContest is a contest whose window is already open and stays
-// open for the rest of the test's clock.
 func runningFixedContest(f *conteststest.Fixture) contests.Contest {
 	starts := conteststest.FixtureNow.Add(-time.Hour)
 	ends := conteststest.FixtureNow.Add(time.Hour)
@@ -23,9 +21,6 @@ func runningFixedContest(f *conteststest.Fixture) contests.Contest {
 	})
 }
 
-// sequentialContest is a running, multi-question contest with progression
-// set to sequential (§6.1.1) — the one combination Submit's own order check
-// ever consults.
 func sequentialContest(f *conteststest.Fixture) contests.Contest {
 	starts := conteststest.FixtureNow.Add(-time.Hour)
 	ends := conteststest.FixtureNow.Add(time.Hour)
@@ -36,12 +31,8 @@ func sequentialContest(f *conteststest.Fixture) contests.Contest {
 	})
 }
 
-// §6.1.1: the penalty is worked out at the moment of answering and written
-// once to points_awarded; it must never be recomputed from whatever the
-// setting reads afterwards. One wrong attempt at 50% of a 10-point question
-// leaves 10 - 1*5 = 5 for a correct second try — and once the organizer
-// raises the penalty afterwards, the score already on the books must not
-// move.
+// §6.1.1: the penalty is written once to points_awarded and never recomputed
+// from the current setting.
 func TestSubmitAppliesThePenaltyAtAnswerTimeAndKeepsItAfterASettingChange(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -79,10 +70,7 @@ func TestSubmitAppliesThePenaltyAtAnswerTimeAndKeepsItAfterASettingChange(t *tes
 		t.Fatalf("TotalScore = %d, want 5", stored.TotalScore)
 	}
 
-	// The organizer raises the penalty well after the fact. The row already
-	// written, and the total already derived from it, must not move — a
-	// live recomputation would let this single edit rewrite every score
-	// already earned on this question.
+	// Neither the row nor the total derived from it may move.
 	q.PenaltyPct = 100
 	f.Questions.Put(q)
 
@@ -98,8 +86,7 @@ func TestSubmitAppliesThePenaltyAtAnswerTimeAndKeepsItAfterASettingChange(t *tes
 	}
 }
 
-// §6.1.1's floor: a question can never take a participant below zero, even
-// when the penalty configured would mathematically demand it.
+// §6.1.1.
 func TestSubmitPenaltyNeverGoesBelowZero(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -118,8 +105,7 @@ func TestSubmitPenaltyNeverGoesBelowZero(t *testing.T) {
 		}
 	}
 
-	// Two wrong attempts at 100% of 10 each would demand -10; the third,
-	// correct attempt must floor at zero rather than go negative.
+	// Two wrong attempts at 100% of 10 each would demand -10.
 	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
 		Participant: p, Contest: c, QuestionID: q.ID, Value: "yes",
 	})
@@ -139,9 +125,7 @@ func TestSubmitPenaltyNeverGoesBelowZero(t *testing.T) {
 	}
 }
 
-// §6.1.1: once the penalty has already zeroed a question, the remaining
-// attempts must stay usable rather than being refused early — the point of
-// further attempts is reaching the answer, not paying for trying again.
+// §6.1.1: further attempts are for reaching the answer, not for paying.
 func TestSubmitLeavesRemainingAttemptsFreeOnceThePenaltyZeroesTheQuestion(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -152,9 +136,7 @@ func TestSubmitLeavesRemainingAttemptsFreeOnceThePenaltyZeroesTheQuestion(t *tes
 		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
 	})
 
-	// The first wrong attempt alone already demands the full 10 points back;
-	// every attempt after it is "free" in the sense that matters here — none
-	// of them may be refused as if the question had already closed.
+	// The first wrong attempt alone demands the full 10 points back.
 	for i := 0; i < 3; i++ {
 		outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
 			Participant: p, Contest: c, QuestionID: q.ID, Value: "no",
@@ -178,9 +160,8 @@ func TestSubmitLeavesRemainingAttemptsFreeOnceThePenaltyZeroesTheQuestion(t *tes
 	}
 }
 
-// §6.1.1: in winner mode the penalty is not applied — not forbidden by
-// configuration, because the contest's scoring mode may change back, but
-// simply skipped while it is in force.
+// §6.1.1: skipped rather than forbidden, since the scoring mode may change
+// back.
 func TestSubmitIgnoresThePenaltyInWinnerMode(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -213,11 +194,8 @@ func TestSubmitIgnoresThePenaltyInWinnerMode(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
-// a question carries no points in this mode — place is decided by how many
-// questions are solved and by penalty time, not by points — so a correct
-// answer must write points_awarded = 0 and leave total_score at 0, exactly
-// as if the question were worth nothing to begin with.
+// ICPC ranks by questions solved and penalty time, so a correct answer
+// writes points_awarded = 0 (docs/ARCHITECTURE.md §6.1.1).
 func TestSubmitAwardsNoPointsInICPCMode(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -254,10 +232,7 @@ func TestSubmitAwardsNoPointsInICPCMode(t *testing.T) {
 	}
 }
 
-// §6.1.1: sequential progression refuses an answer to a question ordered
-// after one that is not closed yet — proven here by a direct Submit call, not
-// by anything the interface would have hidden, since the server is what
-// enforces this.
+// §6.1.1. A direct Submit call: the server enforces this, not the interface.
 func TestSubmitRefusesAnUnopenedQuestionInASequentialContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := sequentialContest(f)
@@ -273,10 +248,7 @@ func TestSubmitRefusesAnUnopenedQuestionInASequentialContest(t *testing.T) {
 	}
 }
 
-// §6.1.1: the second condition of "closed" — every attempt spent — is what
-// opens the next question just as a correct answer would. Without it a
-// participant stuck on the first question would be locked out of the rest of
-// the contest for good.
+// §6.1.1: closed also means every attempt spent.
 func TestSubmitOpensTheNextQuestionOnceAttemptsAreExhausted(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := sequentialContest(f)
@@ -301,8 +273,7 @@ func TestSubmitOpensTheNextQuestionOnceAttemptsAreExhausted(t *testing.T) {
 	}
 }
 
-// §6.1.1: hidden questions count in the sequence exactly as visible ones do —
-// "not shown" and "not answerable" are different decisions.
+// §6.1.1: "not shown" and "not answerable" are different decisions.
 func TestSubmitSequenceCountsAHiddenQuestion(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := sequentialContest(f)
@@ -320,10 +291,7 @@ func TestSubmitSequenceCountsAHiddenQuestion(t *testing.T) {
 		t.Fatalf("error = %v, want ErrQuestionNotOpen — the hidden question 1 is not closed yet", err)
 	}
 
-	// Closing the hidden question the ordinary way — a correct answer — is
-	// what §6.1 already proves gradable for a hidden question
-	// (TestSubmitGradesAHiddenQuestion); here it is also what unblocks
-	// question 2.
+	// A correct answer to the hidden question unblocks question 2.
 	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
 		Participant: p, Contest: c, QuestionID: q1.ID, Value: "correct",
 	}); err != nil {
@@ -396,9 +364,7 @@ func TestSubmitDoesNotScoreAWrongAnswer(t *testing.T) {
 	}
 }
 
-// §6.1: a hidden question exists fully and is answerable — "not shown" and
-// "not answerable" are different decisions, and Submit only ever makes the
-// second one.
+// §6.1.
 func TestSubmitGradesAHiddenQuestion(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -419,10 +385,8 @@ func TestSubmitGradesAHiddenQuestion(t *testing.T) {
 	}
 }
 
-// A question naming another contest must be refused as not found, the same
-// answer as a question that does not exist at all — its existence elsewhere
-// is not this caller's business, and answering differently would let one
-// contest's question set be probed through another's endpoint.
+// Refused as not found, or one contest's questions could be probed through
+// another's endpoint.
 func TestSubmitRefusesAQuestionFromAnotherContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -452,10 +416,8 @@ func TestSubmitRefusesAnOverlongAnswer(t *testing.T) {
 	}
 }
 
-// A choice question is answered by picking one of its options, so a value
-// that is not exactly one of its choice ids is refused before it is graded
-// and before anything is written: it costs no attempt, starts no clock, and
-// the question still takes one of its options afterwards.
+// Refused before grading and before any write: no attempt spent, no clock
+// started.
 func TestSubmitRefusesAValueThatIsNotOneOfTheChoices(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -506,9 +468,7 @@ func TestSubmitRefusesAValueThatIsNotOneOfTheChoices(t *testing.T) {
 	}
 }
 
-// The hole this closes: an unanchored regex reference answer "b" matches any
-// string containing b, so submitting "abc" solved the question on its first
-// attempt without choosing anything — in every scoring mode.
+// An unanchored regex "b" would accept "abc" without any choice being made.
 func TestSubmitRefusesAStringThatWouldMatchAChoiceRegex(t *testing.T) {
 	for _, scoring := range []string{contests.ScoringPoints, contests.ScoringICPC} {
 		t.Run(scoring, func(t *testing.T) {
@@ -545,8 +505,6 @@ func TestSubmitRefusesAStringThatWouldMatchAChoiceRegex(t *testing.T) {
 	}
 }
 
-// Only a choice question has options to be one of: a text or final question
-// still takes free text, whatever it is.
 func TestSubmitTakesFreeTextForTextAndFinalQuestions(t *testing.T) {
 	for _, kind := range []string{contests.KindText, contests.KindFinal} {
 		t.Run(kind, func(t *testing.T) {
@@ -568,9 +526,7 @@ func TestSubmitTakesFreeTextForTextAndFinalQuestions(t *testing.T) {
 	}
 }
 
-// Once a question is answered correctly, a further attempt is refused even
-// though attempts remain — scoring it twice is exactly what this guards
-// against.
+// Refused even though attempts remain, so it cannot be scored twice.
 func TestSubmitRefusesAQuestionAlreadyAnsweredCorrectly(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -628,9 +584,7 @@ func TestSubmitRefusesOnceMaxAttemptsIsSpent(t *testing.T) {
 	}
 }
 
-// §8: the deadline check compares the core database's own clock, not the
-// application server's — proven by giving the two a different answer and
-// checking which one Submit actually obeyed.
+// §8: the database's clock decides, not the application server's.
 func TestSubmitRefusesAfterTheDeadlineByTheDatabasesOwnClock(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -642,8 +596,7 @@ func TestSubmitRefusesAfterTheDeadlineByTheDatabasesOwnClock(t *testing.T) {
 	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
 	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
 
-	// The application clock still reads before the deadline; only the core
-	// database's own clock has moved past it (plus grace).
+	// Only the database clock has passed the deadline plus grace.
 	f.Submissions.Clock = func() time.Time { return ends.Add(time.Hour) }
 
 	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
@@ -654,10 +607,8 @@ func TestSubmitRefusesAfterTheDeadlineByTheDatabasesOwnClock(t *testing.T) {
 	}
 }
 
-// §8, finding 2: an individual participant's first answer starts their own
-// clock through the very same seam queryproxy.Service.Run uses
-// (RegistrationRepository.Start) — not a second implementation of "when did
-// this participant begin".
+// §8: through RegistrationRepository.Start, the same seam
+// queryproxy.Service.Run uses.
 func TestSubmitStartsAnIndividualParticipantsClockOnFirstAnswer(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -692,11 +643,8 @@ func TestSubmitStartsAnIndividualParticipantsClockOnFirstAnswer(t *testing.T) {
 	}
 }
 
-// A regex reference answer describes the whole answer, not a fragment of it.
-// Matched as a substring, one value listing every candidate — or every
-// number — would contain the right one and be graded correct on its first
-// attempt. Each case is a fresh fixture, so no attempt spent by one case
-// closes the question for the next.
+// As a substring match, one value listing every candidate would be graded
+// correct. Each case gets a fresh fixture so attempts do not carry over.
 func TestSubmitMatchesARegexAgainstTheWholeAnswer(t *testing.T) {
 	for name, given := range map[string]struct {
 		pattern string
@@ -736,10 +684,8 @@ func TestSubmitMatchesARegexAgainstTheWholeAnswer(t *testing.T) {
 	}
 }
 
-// A reference answer whose regex does not compile must never fail the
-// request or crash grading — it is treated as never matching. Answer.Validate
-// already refuses this at authoring time; this is the defence-in-depth path
-// for a row that reached storage some other way.
+// Answer.Validate refuses this at authoring time; this covers a row that
+// reached storage some other way.
 func TestSubmitTreatsAMalformedRegexAsNeverMatching(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -760,8 +706,6 @@ func TestSubmitTreatsAMalformedRegexAsNeverMatching(t *testing.T) {
 	}
 }
 
-// Finding 3: losing the attempt-number race is retried transparently rather
-// than surfaced to the caller.
 func TestSubmitRetriesAfterLosingTheAttemptRace(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -781,12 +725,8 @@ func TestSubmitRetriesAfterLosingTheAttemptRace(t *testing.T) {
 	}
 }
 
-// A repository that keeps conflicting fails loudly rather than retrying
-// forever, and what Submit hands back is the participant-facing sentinel
-// (finding 1: ErrTooManyAttemptConflicts, mapped to a 409 by
-// internal/api/participant_handler.go) — the internal ErrAttemptConflict is
-// still in the chain for anyone reading it with errors.Is, but it is not
-// what the caller is meant to switch on.
+// Callers switch on ErrTooManyAttemptConflicts; ErrAttemptConflict stays in
+// the chain as its cause.
 func TestSubmitGivesUpAfterTooManyConflicts(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -809,9 +749,7 @@ func TestSubmitGivesUpAfterTooManyConflicts(t *testing.T) {
 	}
 }
 
-// Exactly one transaction for a correct answer that earns something: the
-// insert and the score update are one atomic unit, not two separate ones a
-// crash could tear apart.
+// The insert and the score update must not be torn apart by a crash.
 func TestSubmitRunsInsideOneTransactionWhenItScores(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -831,11 +769,8 @@ func TestSubmitRunsInsideOneTransactionWhenItScores(t *testing.T) {
 	}
 }
 
-// Finding 5: a wrong answer needs no transaction at all — the deadline check
-// and the attempt-number arithmetic are folded into Insert's own single
-// statement (§8), which is atomic on its own, and there is no score update to
-// share it with. Opening one anyway would be a write with no reason
-// (CLAUDE.md rule 6, applied to a transaction rather than a single write).
+// Insert is a single atomic statement (§8) and there is no score update to
+// share a transaction with (CLAUDE.md rule 6).
 func TestSubmitNeedsNoTransactionForAWrongAnswer(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -855,9 +790,7 @@ func TestSubmitNeedsNoTransactionForAWrongAnswer(t *testing.T) {
 	}
 }
 
-// A correct answer worth zero points needs no transaction either: nothing
-// about "correct" itself requires atomicity, only a score update does, and
-// this question's own Points is zero.
+// Only a score update requires atomicity.
 func TestSubmitNeedsNoTransactionForACorrectAnswerWorthNoPoints(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -881,11 +814,7 @@ func TestSubmitNeedsNoTransactionForACorrectAnswerWorthNoPoints(t *testing.T) {
 	}
 }
 
-// Finding 2: a deliberately configured zero grace must be honoured exactly
-// as the console honours it, not silently substituted back to five seconds
-// because contests.NewService used to read zero as "unset" rather than as the
-// deliberate choice it is. The grace now arrives in the gate, which every
-// consumer shares, so there is no field left to read as "unset".
+// Zero is a real setting, not "unset"; the console honours it too.
 func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	registrations := conteststest.NewRegistrations()
 	questions := conteststest.NewQuestions()
@@ -898,8 +827,7 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	p := registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
 	q := questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
 
-	// Two seconds past the deadline: inside the five-second default grace,
-	// but past a deliberately configured zero one.
+	// Inside a five-second grace, past a zero one.
 	submissions.Clock = func() time.Time { return ends.Add(2 * time.Second) }
 
 	svc := contests.NewService(contests.ServiceConfig{
@@ -918,10 +846,8 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	}
 }
 
-// Submit asks the participation gate (Gate.StandingOf) itself, before it reads
-// the question and before it starts anybody's clock: the answer route admits
-// first too, but Submit is the method that writes, and any other caller of it
-// must meet the same rule. A refused answer starts nothing and writes nothing.
+// Submit writes, so it asks the gate itself rather than rely on the answer
+// route; a refusal starts no clock and writes nothing.
 func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
 	duration := 30
 	for name, given := range map[string]struct {
@@ -954,8 +880,7 @@ func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
 			participant: contests.Participant{Status: contests.RegistrationRegistered},
 			want:        contests.ErrContestNotRunning,
 		},
-		// The address is the caller's own, handed in by whoever called: an
-		// individual participant on the wrong network starts no clock.
+		// An individual participant on the wrong network starts no clock.
 		"address the contest does not allow": {
 			contest: func(now time.Time) contests.Contest {
 				starts, ends := now.Add(-time.Hour), now.Add(time.Hour)
@@ -968,8 +893,7 @@ func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
 			address:     netip.MustParseAddr("192.0.2.1"),
 			want:        contests.ErrAddressNotAllowed,
 		},
-		// Starting has no grace: at exactly ends_at it is too late to begin,
-		// and the clock is not started only to be refused at the write.
+		// Starting has no grace: at exactly ends_at it is too late to begin.
 		"unstarted at exactly ends_at": {
 			contest: func(now time.Time) contests.Contest {
 				starts, ends := now.Add(-time.Hour), now
@@ -981,8 +905,7 @@ func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
 			participant: contests.Participant{Status: contests.RegistrationRegistered},
 			want:        contests.ErrDeadlinePassed,
 		},
-		// No deadline can be computed from a fixed contest with no end: that
-		// is broken data, and the gate refuses it as not running.
+		// A fixed contest with no end has no deadline; refused as not running.
 		"broken timing data": {
 			contest: func(time.Time) contests.Contest {
 				return contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed}
@@ -1021,8 +944,7 @@ func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
 	}
 }
 
-// The gate comes before the question is looked up: a participant who may not
-// act is told so, and learns nothing about which questions exist.
+// A refused participant learns nothing about which questions exist.
 func TestSubmitAsksTheGateBeforeLookingTheQuestionUp(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
@@ -1036,11 +958,8 @@ func TestSubmitAsksTheGateBeforeLookingTheQuestionUp(t *testing.T) {
 	}
 }
 
-// The deadline Insert checks at the moment of the write is the participant's
-// own deadline plus the grace — the instant the gate refuses at too, so the
-// gate never admits what the write will refuse, nor refuses what it would
-// take. For a participant already at work, and for one this very answer
-// started.
+// Insert must check the same instant the gate refuses at, both for a
+// participant already at work and for one this answer started.
 func TestSubmitHandsInsertTheDeadlinePlusGrace(t *testing.T) {
 	const grace = 5 * time.Second
 	duration := 30
@@ -1110,10 +1029,8 @@ func TestSubmitHandsInsertTheDeadlinePlusGrace(t *testing.T) {
 	}
 }
 
-// The gate is asked again once Submit has started the clock, of the
-// participant Start handed back: a request that lost the race to an earlier
-// start is handed that start, and its time can already be up. Refused before
-// the write, so Insert is never handed a deadline already behind it.
+// A request that lost the start race is handed the earlier start, whose time
+// can already be up; the gate is asked again before the write.
 func TestSubmitAsksTheGateAgainAfterStartingTheClock(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts, ends := f.Now.Add(-3*time.Hour), f.Now.Add(3*time.Hour)
@@ -1126,8 +1043,7 @@ func TestSubmitAsksTheGateAgainAfterStartingTheClock(t *testing.T) {
 	stored := f.Registrations.Put(contests.Participant{
 		ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &longAgo,
 	})
-	// The request still holds the registration as it was before the other
-	// request started the clock.
+	// The registration as this request read it, before the other one started.
 	unstarted := stored
 	unstarted.Status, unstarted.StartedAt = contests.RegistrationRegistered, nil
 	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
@@ -1143,10 +1059,8 @@ func TestSubmitAsksTheGateAgainAfterStartingTheClock(t *testing.T) {
 	}
 }
 
-// A registration disqualified between the first gate and the start is one
-// Start does not move: its clock is still pending when it comes back. What
-// the participant is told is the gate's answer for who they now are, not a
-// broken start.
+// Start does not move a disqualified registration; the participant gets the
+// gate's answer, not a broken start.
 func TestSubmitRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
@@ -1171,12 +1085,9 @@ func TestSubmitRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *testing.
 	}
 }
 
-// A Start that reports success and hands back a clock still pending broke its
-// own contract: taken at its word, the gate would let the participant start
-// forever with no deadline running. Submit fails closed instead, as the gate
-// does on any registration no deadline can be computed for, and writes
-// nothing. (An active registration with no start time is the state that makes
-// the store's Start change nothing, as the real statement does.)
+// A Start that succeeds but leaves the clock pending broke its contract;
+// trusting it would mean no deadline ever runs. (An active registration with
+// no start time makes the fake's Start change nothing, as the real one does.)
 func TestSubmitFailsClosedWhenStartLeavesTheClockPending(t *testing.T) {
 	f := conteststest.NewFixture()
 	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)

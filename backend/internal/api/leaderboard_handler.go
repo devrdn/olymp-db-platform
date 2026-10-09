@@ -18,13 +18,12 @@ import (
 
 // Request budgets for the two reads anybody outside the staff can make.
 const (
-	// LeaderboardPublicPerMinute is per address. Generous, because a
-	// university network can put a hundred students behind one address and a
-	// page polls every fifteen seconds; the shared computation in
-	// leaderboard.Service is what bounds the database, this bounds the API.
+	// LeaderboardPublicPerMinute is per address, generous because a university
+	// network puts a hundred students behind one address and a page polls every
+	// fifteen seconds. leaderboard.Service's shared computation protects the
+	// database; this protects the API.
 	LeaderboardPublicPerMinute = 120
-	// leaderboardParticipantPerMinute is per account, which one person with a
-	// few tabs open does not approach.
+	// leaderboardParticipantPerMinute is per account.
 	leaderboardParticipantPerMinute = 60
 	leaderboardWindow               = time.Minute
 )
@@ -46,12 +45,9 @@ func NewLeaderboardHandler(service *leaderboard.Service, limiter *auth.Limiter, 
 	return &LeaderboardHandler{service: service, limiter: limiter, mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
-// Mount registers the routes.
-//
-// The public table sits outside authentication on purpose: the page it
-// serves is open to anybody with the link (the design's decision 5). The
-// participant's copy is the same table plus which row is theirs, and the
-// staff's is the live one.
+// Mount registers the routes. The public table needs no authentication: the
+// page is open to anyone with the link. The participant's copy marks their own
+// row; the staff's is the live one.
 func (h *LeaderboardHandler) Mount(r chi.Router) {
 	r.Get("/contests/{"+contestIDParam+"}/leaderboard", h.public)
 
@@ -70,7 +66,7 @@ func (h *LeaderboardHandler) Mount(r chi.Router) {
 }
 
 // leaderboardRow is one row as anybody outside the staff sees it: no
-// identifier of any kind, and one label, never both.
+// identifier, and one label, never both.
 type leaderboardRow struct {
 	// Place is null for an unplaced row (winner mode, not the winner).
 	Place        *int   `json:"place"`
@@ -86,12 +82,11 @@ type leaderboardRow struct {
 	Cells   []leaderboardCell `json:"cells,omitzero"`
 }
 
-// leaderboardCell is one question on a row of the ICPC grid, carrying exactly
-// what its state means: a solve's attempt, minute and first-solver mark; a
-// failure's wrong attempts; a pending cell's attempts since the freeze and,
-// when there were any, the wrong ones before it; nothing for an untried
-// question. It names no question
-// — the position is the response's questions list.
+// leaderboardCell is one question on an ICPC row, carrying what its state
+// means: a solve's attempt, minute and first-solver mark; a failure's wrong
+// attempts; a pending cell's attempts since the freeze and any wrong ones
+// before it; nothing for an untried question. Its position in the row names the
+// question.
 type leaderboardCell struct {
 	State    string `json:"state"`
 	Attempts *int   `json:"attempts,omitempty"`
@@ -106,23 +101,21 @@ type leaderboardResponse struct {
 	Title   string `json:"title"`
 	// FrozenAt is set while the table is frozen.
 	FrozenAt string `json:"frozen_at,omitempty"`
-	// EndsAt lets a frozen table say whether the contest is still going. The
-	// window is not a secret: the contest lists already show it.
+	// EndsAt lets a frozen table say whether the contest is still going; the
+	// window is already public.
 	EndsAt string `json:"ends_at,omitempty"`
-	// GeneratedAt is when the table was computed, never when anybody last
-	// answered: during a freeze the second would say that something changed.
+	// GeneratedAt is when the table was computed, never the last answer: during
+	// a freeze that would reveal that something changed.
 	GeneratedAt string `json:"generated_at"`
 	Truncated   bool   `json:"truncated"`
-	// Questions names the ICPC grid's columns by letter; absent in every
-	// other mode.
+	// Questions names the ICPC grid's columns by letter; absent in other modes.
 	Questions []string         `json:"questions,omitzero"`
 	Rows      []leaderboardRow `json:"rows"`
 }
 
-// public is the table anybody may read.
 func (h *LeaderboardHandler) public(w http.ResponseWriter, r *http.Request) {
-	// Before the identifier is even parsed: a refused caller still spends its
-	// own budget, and nothing past this line costs a database read for free.
+	// Before the identifier is parsed: a refused caller still spends its
+	// budget, and nothing below reads the database for free.
 	if !h.admit(w, r, "leaderboard:ip:"+addressKey(r), LeaderboardPublicPerMinute) {
 		return
 	}
@@ -140,7 +133,6 @@ func (h *LeaderboardHandler) public(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, h.toResponse(r, view, uuid.Nil))
 }
 
-// participant is the public table plus which row is the caller's.
 func (h *LeaderboardHandler) participant(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	if !h.admit(w, r, "leaderboard:user:"+identity.UserID.String(), leaderboardParticipantPerMinute) {
@@ -170,23 +162,21 @@ type staffRow struct {
 	Solved       int    `json:"solved"`
 	LastScoredAt string `json:"last_scored_at,omitempty"`
 	Winner       bool   `json:"winner,omitempty"`
-	// The ICPC fields, as on leaderboardRow. Cut off now, the staff's cells
-	// are never pending.
+	// The ICPC fields, as on leaderboardRow. The staff view is not frozen, so
+	// its cells are never pending.
 	Penalty *int              `json:"penalty,omitempty"`
 	Cells   []leaderboardCell `json:"cells,omitzero"`
 }
 
 type staffLeaderboardResponse struct {
-	// Shown is what everybody but the staff sees right now.
+	// Shown is what everyone but the staff sees now.
 	Shown struct {
 		State    string `json:"state"`
 		FrozenAt string `json:"frozen_at,omitempty"`
 	} `json:"shown"`
-	// Status is the contest's own status (running, finished, …), not the
-	// table's — Shown.State can sit on "frozen" straight through a contest
-	// finishing, since the freeze persists past the end, so this is the one
-	// field that tells the interface a running contest has actually ended
-	// (and, with it, that revealing may now be possible).
+	// Status is the contest's status, not the table's: Shown.State can stay
+	// "frozen" past the contest's end, so this is what tells the interface the
+	// contest finished and revealing may be possible.
 	Status      string     `json:"status"`
 	Scoring     string     `json:"scoring"`
 	FreezeMin   *int       `json:"freeze_min"`
@@ -198,7 +188,6 @@ type staffLeaderboardResponse struct {
 	Rows        []staffRow `json:"rows"`
 }
 
-// live is the staff table.
 func (h *LeaderboardHandler) live(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
@@ -236,7 +225,6 @@ type revealResponse struct {
 	RevealedAt string `json:"revealed_at"`
 }
 
-// reveal opens a frozen table's result.
 func (h *LeaderboardHandler) reveal(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
@@ -262,7 +250,6 @@ func (h *LeaderboardHandler) toResponse(r *http.Request, view leaderboard.View, 
 		Truncated:   view.Truncated, Questions: questionLetters(c.Scoring, view.Questions),
 		Rows: make([]leaderboardRow, 0, len(view.Rows)),
 	}
-	// The rows are the shared cached computation: read, never written.
 	for _, row := range view.Rows {
 		penalty, cells := icpcRow(c.Scoring, row)
 		out.Rows = append(out.Rows, leaderboardRow{
@@ -275,8 +262,8 @@ func (h *LeaderboardHandler) toResponse(r *http.Request, view leaderboard.View, 
 	return out
 }
 
-// questionLetters names the ICPC grid's columns; nil, and so absent from the
-// response, in every other mode.
+// questionLetters names the ICPC grid's columns; nil, so absent, in other
+// modes.
 func questionLetters(scoring string, n int) []string {
 	if scoring != contests.ScoringICPC {
 		return nil
@@ -288,8 +275,7 @@ func questionLetters(scoring string, n int) []string {
 	return letters
 }
 
-// icpcRow is a row's penalty and grid; nil for both, and so absent from the
-// response, in every other mode.
+// icpcRow is a row's penalty and grid; nil for both, so absent, in other modes.
 func icpcRow(scoring string, row leaderboard.Row) (*int, []leaderboardCell) {
 	if scoring != contests.ScoringICPC {
 		return nil, nil
@@ -308,8 +294,8 @@ func icpcRow(scoring string, row leaderboard.Row) (*int, []leaderboardCell) {
 		case leaderboard.CellPending:
 			pending := c.Pending
 			cell.Pending = &pending
-			// The wrong attempts before the freeze are sent only when there
-			// were any; absent reads as none.
+			// Wrong attempts before the freeze are sent only when there were
+			// any.
 			if c.Wrong > 0 {
 				wrong := c.Wrong
 				cell.Attempts = &wrong
@@ -328,7 +314,6 @@ func place(row leaderboard.Row) *int {
 	return &p
 }
 
-// admit spends one request of subject's budget.
 func (h *LeaderboardHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int) bool {
 	allowed, err := h.limiter.Allow(r.Context(), subject, limit, leaderboardWindow)
 	if err != nil {
@@ -345,8 +330,8 @@ func (h *LeaderboardHandler) admit(w http.ResponseWriter, r *http.Request, subje
 }
 
 // addressKey is the caller's address as a rate-limit subject (an IPv6 /64 is
-// one caller), or one shared bucket when none can be read: an unreadable
-// address must not become a way around the limit.
+// one caller), or one shared bucket when unreadable, so an unreadable address
+// is no way around the limit.
 func addressKey(r *http.Request) string {
 	if addr := httpx.ClientSubject(r); addr != "" {
 		return addr

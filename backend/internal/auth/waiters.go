@@ -2,28 +2,17 @@ package auth
 
 import "sync"
 
-// maxWaitingAddresses bounds how many addresses the waiting counts track at
-// once. Each entry stands for at least one request blocked on a hashing slot,
-// so reaching it takes that many concurrent sign-ins from distinct addresses.
+// maxWaitingAddresses bounds how many addresses are tracked at once; each
+// entry is at least one request blocked on a hashing slot.
 const maxWaitingAddresses = 4096
 
 // waitingQueue caps how many sign-in attempts from one address may wait for a
-// hashing slot at the same time.
+// hashing slot at once. The address budget bounds attempts per window, not at
+// once, so without this one address could fill the queue and starve everyone
+// else past their wait.
 //
-// The hasher's queue is first come, first served, and before an attempt joins
-// it the attempt has paid only its address budget, which is hundreds a window
-// so that a lecture hall behind one NAT address is not refused. That budget
-// bounds how many attempts an address makes, not how many it makes at once:
-// hundreds arriving together would sit in front of a handful of slots, and
-// every other sign-in would outlast its wait behind them. A cap on each
-// address's share of the queue keeps the queue short enough for everybody
-// else to be served within the wait.
-//
-// It is a fairness bound, not the memory bound — the hasher's slots are that —
-// so when the table of addresses is full it lets an attempt through
-// uncounted rather than refusing every address it has not seen: a full table
-// already means thousands of concurrent sign-ins from distinct addresses, a
-// load the cap per address could not have prevented anyway.
+// It is a fairness bound, not the memory bound, so a full address table lets
+// an attempt through uncounted rather than refusing unseen addresses.
 type waitingQueue struct {
 	limit int
 
@@ -35,9 +24,8 @@ func newWaitingQueue(limit int) *waitingQueue {
 	return &waitingQueue{limit: limit, waiting: make(map[string]int)}
 }
 
-// join admits one more waiting attempt for subject. It reports false when the
-// subject already has its limit waiting; otherwise the caller must call the
-// returned leave exactly once when it stops waiting.
+// join admits one more waiting attempt for subject, or reports false at its
+// limit. Otherwise the caller must call leave exactly once.
 func (q *waitingQueue) join(subject string) (leave func(), ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -58,8 +46,7 @@ func (q *waitingQueue) join(subject string) (leave func(), ok bool) {
 func (q *waitingQueue) leave(subject string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	// An address with nobody waiting holds no entry, so the table is only as
-	// large as the set of addresses waiting right now.
+	// An address with nobody waiting holds no entry.
 	if q.waiting[subject] <= 1 {
 		delete(q.waiting, subject)
 		return

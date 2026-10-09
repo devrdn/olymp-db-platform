@@ -11,25 +11,19 @@ import (
 
 // ErrFull reports a store that has no room for a new counter.
 //
-// Only counters see it. A value (a session) makes room by evicting the least
-// recently used one, because losing a session costs a re-login. A counter is
-// the brute-force limit itself: evicting one would let an attacker reset a
-// victim's window simply by attempting logins against many other names, and
-// nothing would record that it had happened. Limiter.Allow reads an error as
-// "the protection is not in place" and refuses, which turns a silent bypass
-// into a visible refusal.
+// Only counters see it. A value (a session) evicts the least recently used
+// one, since losing a session costs a re-login. Evicting a counter would let
+// an attacker reset a victim's brute-force window by trying many other names;
+// Limiter.Allow refuses on this error instead, so the bypass becomes a
+// visible refusal.
 var ErrFull = errors.New("cache is full")
 
-// defaultCapacity bounds the in-process store. Keys are derived from user
-// input (session ids, rate-limit subjects), so an unbounded map would be a way
-// to grow the process until the host kills it.
+// defaultCapacity bounds the in-process store, whose keys derive from user
+// input.
 const defaultCapacity = 100_000
 
 // Memory is an in-process cache with per-entry TTL and least-recently-used
-// eviction.
-//
-// It is the fallback backend: correct for one instance, wrong for several,
-// because nothing is shared between them.
+// eviction. It is the fallback backend: correct for one instance only.
 type Memory struct {
 	capacity int
 
@@ -44,7 +38,6 @@ type entry struct {
 	expiresAt time.Time
 }
 
-// NewMemory returns an in-process cache holding at most capacity entries.
 func NewMemory(capacity int) *Memory {
 	if capacity <= 0 {
 		capacity = defaultCapacity
@@ -56,7 +49,6 @@ func NewMemory(capacity int) *Memory {
 	}
 }
 
-// Get returns the value if present and not expired.
 func (m *Memory) Get(_ context.Context, key string) ([]byte, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -74,13 +66,12 @@ func (m *Memory) Get(_ context.Context, key string) ([]byte, bool, error) {
 
 	m.order.MoveToFront(el)
 
-	// Copy: the caller must not be able to mutate what is still stored.
+	// Copy, so the caller cannot mutate what is stored.
 	out := make([]byte, len(e.value))
 	copy(out, e.value)
 	return out, true, nil
 }
 
-// Set stores a value for ttl.
 func (m *Memory) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -92,7 +83,6 @@ func (m *Memory) Set(_ context.Context, key string, value []byte, ttl time.Durat
 	return nil
 }
 
-// Delete removes a key, whether or not it was present.
 func (m *Memory) Delete(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -104,9 +94,8 @@ func (m *Memory) Delete(_ context.Context, key string) error {
 }
 
 // Incr increments a counter, starting a fresh window when the key is absent or
-// expired. The TTL is set once per window and not extended by later increments,
-// which is what makes it a fixed rate-limit window rather than a sliding one
-// that never resets under continuous load.
+// expired. The TTL is set once per window and not extended, so the window is
+// fixed rather than sliding and resets even under continuous load.
 func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,9 +115,8 @@ func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, 
 		m.removeElement(el)
 	}
 
-	// A new window needs a slot of its own, and it may not take one from a
-	// counter that is still running. Windows that have already passed are not
-	// holding their place on merit, so they are reclaimed first.
+	// A new window may not evict a running counter; expired ones are
+	// reclaimed first.
 	if len(m.entries) >= m.capacity {
 		m.reclaimExpired()
 		if len(m.entries) >= m.capacity {
@@ -140,24 +128,15 @@ func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, 
 	return 1, nil
 }
 
-// reclaimScan bounds how many entries one reclaim examines.
-//
-// The list is ordered by use and not by expiry, so there is no point at which
-// a walk can stop knowing the rest is live — and a walk of the whole store
-// (a hundred thousand entries by default) happens under the one lock every
-// session read and every rate-limit check also takes. That is one caller's
-// flood becoming everybody's stall. Sixty-four is enough to keep the refusal
-// rare in practice, because the tail is where the untouched windows sit, and
-// small enough that the walk is never what makes a request slow.
+// reclaimScan bounds how many entries one reclaim examines. The walk runs
+// under the lock every session read and rate-limit check takes, so a walk of
+// the whole store would turn one caller's flood into everybody's stall. The
+// untouched windows sit in the tail, so a short walk keeps refusals rare.
 const reclaimScan = 64
 
-// reclaimExpired drops entries whose time has passed, from the least recently
-// used end. Callers hold the lock.
-//
-// It examines at most reclaimScan entries and removes every lapsed one it
-// meets, rather than stopping at the first live entry: a live entry in the
-// tail is ordinary — the list is ordered by use — and stopping there would
-// leave the expired windows behind it in place.
+// reclaimExpired drops lapsed entries among the reclaimScan least recently
+// used. It does not stop at the first live one: the list is ordered by use,
+// not expiry. Callers hold the lock.
 func (m *Memory) reclaimExpired() {
 	now := time.Now()
 
@@ -174,7 +153,6 @@ func (m *Memory) reclaimExpired() {
 // Ping always succeeds: the store is this process.
 func (m *Memory) Ping(context.Context) error { return nil }
 
-// Close releases the entries.
 func (m *Memory) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

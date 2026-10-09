@@ -12,8 +12,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 )
 
-// ownEntries is a small table: the caller in the middle, somebody ahead of
-// them and a disqualified row that must not shift anybody's place.
 func ownEntries(caller uuid.UUID) []leaderboard.Entry {
 	scored := start.Add(time.Hour)
 	return []leaderboard.Entry{
@@ -37,7 +35,6 @@ func TestOwnCarriesThePlaceOfAnOpenTable(t *testing.T) {
 	if !own.Open || own.State != leaderboard.StateFinal {
 		t.Fatalf("Own() = %+v, want an open final table", own)
 	}
-	// Second of the three on the table; the disqualified row is on none of it.
 	if own.Place != 2 || own.Participants != 3 {
 		t.Errorf("place %d of %d, want 2 of 3", own.Place, own.Participants)
 	}
@@ -46,8 +43,6 @@ func TestOwnCarriesThePlaceOfAnOpenTable(t *testing.T) {
 	}
 }
 
-// The freeze is not walked round: a participant whose contest has ended sees
-// their own numbers as of now, and no place at all.
 func TestOwnHidesThePlaceWhileTheTableIsFrozen(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, minutes(30))
@@ -67,14 +62,12 @@ func TestOwnHidesThePlaceWhileTheTableIsFrozen(t *testing.T) {
 	if own.Row.Points != 20 || own.Row.Solved != 2 {
 		t.Errorf("row = %+v, want the caller's own numbers regardless of the freeze", own.Row)
 	}
-	// Cut off now, not at the freeze: the participant's own result is whole.
 	last := r.standings.queries[len(r.standings.queries)-1]
 	if !last.Cutoff.Equal(r.now) {
 		t.Errorf("cutoff %v, want now (%v)", last.Cutoff, r.now)
 	}
 }
 
-// A disqualified participant is on no open table, and still sees their own.
 func TestOwnAnswersADisqualifiedParticipantWithTheirOwnNumbers(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, nil)
@@ -105,8 +98,6 @@ func TestOwnRefusesSomebodyWhoIsNotOnTheContest(t *testing.T) {
 	}
 }
 
-// The same computation the table itself is served from, so the report and the
-// leaderboard can never disagree about the caller's result.
 func TestOwnReadsTheSameTableTheContestServes(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, nil)
@@ -137,9 +128,6 @@ func TestOwnReadsTheSameTableTheContestServes(t *testing.T) {
 	t.Fatal("the caller is not on the table at all")
 }
 
-// Winner mode has exactly one place (§6.1.1), so everybody else is on the
-// table with no place at all. Own must report that as no place rather than
-// as nought, and must say which of the two the caller is.
 func TestOwnInWinnerModeReportsOnlyTheWinnersPlace(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, nil)
@@ -173,8 +161,6 @@ func TestOwnInWinnerModeReportsOnlyTheWinnersPlace(t *testing.T) {
 	}
 }
 
-// A frozen winner-mode table tells nobody they won: that is the result
-// itself, and the freeze is not walked round.
 func TestOwnInWinnerModeSaysNothingWhileTheTableIsFrozen(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, minutes(30))

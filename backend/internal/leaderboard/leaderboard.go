@@ -1,14 +1,10 @@
 // Package leaderboard answers "who is where" in a contest, as each audience
-// is allowed to see it: the table's state (live, frozen, final), the moment
-// its answers are cut off at, and the order and places of the people on it.
+// may see it: the table's state (live, frozen, final), its cutoff, and the
+// order and places of the rows.
 //
-// It does not record results — a submission's points are decided and fixed
-// by internal/contests at the moment of answering, and are never recomputed —
-// and it does not decide who may call it: the HTTP layer applies permissions,
-// rate limits and the network boundary. It contains no SQL; the storage it
-// needs is declared here and implemented in internal/postgres.
-//
-// The design is docs/ARCHITECTURE.md §10.
+// It does not record results (internal/contests fixes a submission's points
+// when it is answered) and does not decide who may call it; the HTTP layer
+// applies permissions and rate limits.
 package leaderboard
 
 import (
@@ -23,49 +19,36 @@ import (
 
 // The table's states.
 const (
-	// StateNotStarted is a published contest whose window has not opened:
-	// there is nothing to rank, and not even the roster is shown.
+	// StateNotStarted is a published contest whose window has not opened;
+	// not even the roster is shown.
 	StateNotStarted = "not_started"
-	// StateLive is a running contest before any freeze: the table as of now.
-	StateLive = "live"
-	// StateFrozen is the table as it stood at the freeze, which lasts past the
+	StateLive       = "live"
+	// StateFrozen is the table as it stood at the freeze, lasting past the
 	// finish until an organiser reveals the result.
 	StateFrozen = "frozen"
-	// StateFinal is a finished contest that was never frozen, or one whose
-	// result has been revealed.
-	StateFinal = "final"
+	StateFinal  = "final"
 )
 
-// Errors the package reports.
 var (
-	// ErrNotFound is a contest that does not exist or has no table for anybody
-	// outside its staff yet (a draft). One error for both, so the table is not
-	// a way to learn which contests exist.
-	ErrNotFound = errors.New("leaderboard not found")
-	// ErrNotAParticipant is a signed-in account with no registration in the
-	// contest asking for the participant's own view of the table.
+	// ErrNotFound is a missing contest or a draft. One error for both, so
+	// the table does not reveal which contests exist.
+	ErrNotFound        = errors.New("leaderboard not found")
 	ErrNotAParticipant = errors.New("not a participant of this contest")
-	// ErrNotRevealable is a reveal the contest cannot take: it has not
-	// finished, or it was never frozen and so has nothing to reveal.
+	// ErrNotRevealable is a contest not finished, or never frozen.
 	ErrNotRevealable = errors.New("the leaderboard cannot be revealed")
 )
 
-// Decision is what the table shows at a moment and where it is cut off.
 type Decision struct {
 	State string
-	// Cutoff is the moment answers are counted up to, exclusive: an answer
-	// submitted exactly at the cutoff is not on the table.
-	Cutoff time.Time
-	// FrozenAt is set while the table is frozen.
+	// Cutoff is exclusive: an answer submitted exactly at it is not counted.
+	Cutoff   time.Time
 	FrozenAt *time.Time
 }
 
 // Decide reports the table's state for everybody but the contest's staff.
 //
-// The cutoff for a final table is now rather than ends_at: an answer sent in
-// the last second is accepted with the network allowance (DEADLINE_GRACE) and
-// can carry a submitted_at just past ends_at. Nothing is accepted after that,
-// so now is the result.
+// A final table is cut off now rather than at ends_at: an answer accepted
+// within DEADLINE_GRACE can carry a submitted_at just past ends_at.
 func Decide(c contests.Contest, now time.Time) (Decision, error) {
 	freezeAt, frozen := c.FreezeAt()
 
@@ -87,7 +70,6 @@ func Decide(c contests.Contest, now time.Time) (Decision, error) {
 	}
 }
 
-// Entry is one registration's aggregate up to a cutoff, as storage returns it.
 type Entry struct {
 	Registration   uuid.UUID
 	Login          string
@@ -98,82 +80,62 @@ type Entry struct {
 	// answered correctly.
 	Points int
 	Solved int
-	// LastScoredAt is the latest answer that earned points: when the current
-	// score was reached, and the tie-break between equal scores.
+	// LastScoredAt is when the current score was reached: the tie-break
+	// between equal scores.
 	LastScoredAt *time.Time
-	// FinalAt is the first correct answer to a final question, which decides
-	// the winner in winner mode.
+	// FinalAt is the first correct final answer, which decides winner mode.
 	FinalAt *time.Time
 
-	// The rest is ICPC's (contests.ScoringICPC) and zero in every other mode,
-	// where Solved still counts every question but here counts only the
-	// visible ones the grid shows.
+	// The rest is ICPC's and zero in other modes. Under ICPC, Solved counts
+	// only the visible questions the grid shows.
 	//
-	// Penalty is the minutes the solved questions cost: each one's solving
-	// minute plus the contest's penalty for every wrong attempt before it.
+	// Penalty is the sum of Cell.Penalty over solved cells.
 	Penalty int
-	// LastSolvedAt is the latest solve, which orders rows sharing a place.
+	// LastSolvedAt orders rows sharing a place.
 	LastSolvedAt *time.Time
-	// Cells hold one cell per visible question, in the questions' order.
-	Cells []Cell
+	Cells        []Cell
 }
 
-// Grid is what one ICPC computation knows beside its rows, taken from the
-// same statement so that the two always agree.
+// Grid is what one ICPC computation knows beside its rows, from the same
+// statement so the two agree.
 type Grid struct {
-	// Questions is the number of visible questions: the grid's width, and the
-	// length of every row's Cells.
+	// Questions is the grid's width and the length of every row's Cells.
 	Questions int
-	// FirstSolves holds, per visible question in the questions' order, the
-	// earliest solve before the cutoff among the registrations that are not
-	// disqualified and were made before the cutoff — over the whole contest,
-	// not only the rows returned. Nil where nobody has solved the question.
+	// FirstSolves holds, per visible question, the earliest solve before the
+	// cutoff among non-disqualified registrations over the whole contest,
+	// not only the rows returned. Nil where nobody has solved it.
 	FirstSolves []*time.Time
 }
 
-// The states of a cell on the ICPC grid.
 const (
-	// CellSolved is a question answered correctly before the cutoff.
 	CellSolved = "solved"
-	// CellFailed is a question with only wrong attempts before the cutoff.
 	CellFailed = "failed"
-	// CellPending is a frozen table's question that was not solved before the
-	// freeze and has been attempted since. It tells how many attempts there
-	// were and nothing about them.
+	// CellPending is a question unsolved at the freeze and attempted since;
+	// it tells how many attempts, nothing about them.
 	CellPending = "pending"
-	// CellUntried is a question with nothing to show.
 	CellUntried = "untried"
 )
 
-// Cell is one registration's record on one visible question.
 type Cell struct {
-	// QuestionID is the visible question this cell stands for. The grid is
-	// read by position and names its columns by letter, so nothing on the
-	// table needs this; a report that has to say what one question cost does.
+	// QuestionID is for reports; the table itself reads cells by position.
 	QuestionID uuid.UUID
-	// SolvedAt is the first correct answer before the cutoff.
-	SolvedAt *time.Time
-	// Minute is the whole minutes, rounded down, from the registration's start
-	// to SolvedAt. Zero when the question is not solved.
+	SolvedAt   *time.Time
+	// Minute is whole minutes, rounded down, from the registration's start to
+	// SolvedAt; zero when unsolved.
 	Minute int
-	// Wrong counts the wrong attempts before the cutoff — only those before
-	// SolvedAt when the question is solved, since nothing after a solve costs.
+	// Wrong counts wrong attempts before the cutoff, and before SolvedAt
+	// when solved.
 	Wrong int
-	// Pending counts the attempts inside Query.Pending. Storage fills it only
-	// when the query asked, and only for a question not solved before the
-	// cutoff.
+	// Pending counts attempts inside Query.Pending, only for a question not
+	// solved before the cutoff.
 	Pending int
-	// First marks the earliest solve of this question among the rows that are
-	// not disqualified. Rank sets it; storage never does.
+	// First marks the question's earliest non-disqualified solve. Rank sets
+	// it, never storage.
 	First bool
 }
 
-// State names what the cell shows.
-//
-// A solve is checked first because a cell cut off at the freeze carries a
-// pending count only when the question was not solved by then; pending comes
-// before failed because a frozen table must not say that attempts made since
-// the freeze were wrong — the wrong count before the freeze travels with it.
+// State names what the cell shows. Pending is checked before failed, so a
+// frozen table never calls attempts made since the freeze wrong.
 func (c Cell) State() string {
 	switch {
 	case c.SolvedAt != nil:
@@ -187,23 +149,15 @@ func (c Cell) State() string {
 	}
 }
 
-// SolvedOnAttempt is the attempt a solved question was solved with: every
-// attempt before the first correct one was wrong.
 func (c Cell) SolvedOnAttempt() int {
 	return c.Wrong + 1
 }
 
-// Penalty is what this cell costs its row, in minutes: the minute it was
-// solved on plus perWrong for every wrong attempt before the solve. A
-// question that was never solved costs nothing — neither its wrong attempts
-// nor the ones waiting behind a freeze — which is why a row's Penalty sums
-// the solved cells and no others.
+// Penalty is what this cell costs its row, in minutes: the solving minute
+// plus perWrong per wrong attempt. An unsolved question costs nothing.
 //
-// The same arithmetic the standings statement performs
-// (`SUM(minute + icpc_penalty_min * wrong) FILTER (WHERE solved_at IS NOT
-// NULL)`), written once here so a screen that needs one question's share can
-// ask for it instead of deriving a second version of the rule.
-// TestICPCCellPenaltiesAddUpToTheRowsOwn holds the two to each other.
+// It must match the standings statement's arithmetic; the test
+// TestICPCCellPenaltiesAddUpToTheRowsOwn holds the two together.
 func (c Cell) Penalty(perWrong int) int {
 	if c.SolvedAt == nil {
 		return 0
@@ -211,9 +165,8 @@ func (c Cell) Penalty(perWrong int) int {
 	return c.Minute + perWrong*c.Wrong
 }
 
-// QuestionLetter names a visible question by its zero-based position among
-// the visible questions: A, B, … Z, then AA, AB, … as a spreadsheet names
-// its columns. A question on the table is never named by its identifier.
+// QuestionLetter names a visible question by its zero-based position: A, B,
+// … Z, then AA, AB, … like spreadsheet columns.
 func QuestionLetter(position int) string {
 	var name []byte
 	for n := position + 1; n > 0; n = (n - 1) / 26 {
@@ -222,19 +175,17 @@ func QuestionLetter(position int) string {
 	return string(name)
 }
 
-// Row is an entry with its place.
 type Row struct {
 	Entry
-	// Place is 1-based and shared by equal results. Zero means unplaced: in
-	// winner mode only the winner has a place.
+	// Place is 1-based and shared by equal results. Zero means unplaced (in
+	// winner mode, everyone but the winner).
 	Place  int
 	Winner bool
 }
 
 // Label is how the row is named under the contest's choice. A deleted
-// account has no label: its login is freed and may belong to somebody else by
-// now, and the old result must not read as theirs. A full name falls back to
-// the login when the account never had one.
+// account has no label, since its login may now belong to somebody else. A
+// missing full name falls back to the login.
 func (r Row) Label(names string) string {
 	switch {
 	case r.AccountDeleted:

@@ -10,12 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The people around a contest: the staff who run it and the participants who
-// take part.
-//
-// The two are separate permissions on purpose — running a contest does not
-// include appointing who else may run it, and managing a roster includes
-// neither.
+// The people around a contest: staff and participants. Separate permissions:
+// running a contest does not include appointing who else runs it, and managing
+// a roster includes neither.
 
 // ManagerResponse is one member of a contest's staff.
 type ManagerResponse struct {
@@ -73,9 +70,8 @@ func (h *ContestsHandler) grantManager(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	// Manager is the only role this endpoint exists to hand out, so an
-	// unstated one means that; anything else, including "owner", is passed
-	// through and refused by the service.
+	// An unstated role means manager, the only one this endpoint hands out;
+	// anything else, "owner" included, is refused by the service.
 	role := rbac.ContestRole(req.Role)
 	if role == "" {
 		role = rbac.RoleManager
@@ -110,7 +106,7 @@ func (h *ContestsHandler) revokeManager(w http.ResponseWriter, r *http.Request) 
 // ParticipantResponse is one person's involvement in a contest.
 type ParticipantResponse struct {
 	// RegistrationID is what submissions, game instances and the query journal
-	// all hang off; the client needs it everywhere but on this screen.
+	// reference.
 	RegistrationID string `json:"registration_id"`
 	UserID         string `json:"user_id"`
 	Login          string `json:"login"`
@@ -163,18 +159,15 @@ func (h *ContestsHandler) listParticipants(w http.ResponseWriter, r *http.Reques
 	httpx.JSON(w, r, http.StatusOK, participantListResponse{Items: items, Total: total})
 }
 
-// addParticipantsRequest is a roster: identifiers, logins, or both.
-//
-// Logins because the practical input is pasted out of a spreadsheet, where
-// what an organizer has is student numbers rather than internal identifiers.
+// addParticipantsRequest is a roster of identifiers, logins, or both. Logins
+// because rosters are pasted from spreadsheets of student numbers.
 type addParticipantsRequest struct {
 	UserIDs []string `json:"user_ids"`
 	Logins  []string `json:"logins"`
 }
 
-// importResponse reports a partial success honestly: one mistyped login must
-// not reject the other three hundred rows, and the importer has to see which
-// ones did not go in and why.
+// importResponse reports partial success: one mistyped login must not reject
+// the other rows, and the importer must see which failed and why.
 type importResponse struct {
 	Added   int              `json:"added"`
 	Skipped []skippedPayload `json:"skipped"`
@@ -226,25 +219,15 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 	httpx.JSON(w, r, http.StatusOK, importResponse{Added: result.Added, Skipped: skipped})
 }
 
-// PersonResponse is what a picker needs to tell two accounts apart: a name
-// to show, a login and now an email to read, plus the identifier the grant
-// and add endpoints act on.
+// PersonResponse is what a picker needs to tell two accounts apart: name,
+// login, email and the identifier the grant and add endpoints take. Not
+// UserResponse: no status, roles or password state.
 //
-// Deliberately still not UserResponse (users_handler.go) — no status, no
-// roles, no password state. The email used to be withheld for the same
-// reason those still are: this search runs behind participant.manage rather
-// than users.manage, reachable by every contest's staff, so returning it
-// here reaches every account in the installation from a permission scoped to
-// one contest, not only the administrator screens users.manage was built
-// for. A security review named that cost explicitly, and the owner accepted
-// it anyway: a login is unique but not something a person recognises at a
-// glance, and a full name is the opposite, so neither alone reliably tells
-// two "Ivanov"s apart — an email does. See contests.Person for the fuller
-// reasoning behind the trade.
-//
-// Email is `omitempty`: an account that never set one must come back with
-// the key simply absent, not `"email": ""` — a value that reads as an
-// address looked up and found blank, rather than one nobody ever gave.
+// The email is an accepted trade-off: this search runs under
+// participant.manage, so any contest's staff can see every account's email, but
+// neither a login nor a full name alone reliably tells two people apart (see
+// contests.Person). Email is omitted when the account has none, so a missing
+// address is not read as a blank one.
 type PersonResponse struct {
 	UserID   string `json:"user_id"`
 	Login    string `json:"login"`
@@ -260,15 +243,10 @@ type directoryResponse struct {
 	Items []PersonResponse `json:"items"`
 }
 
-// directorySearch is the picker behind both the staff form and the
-// participant form: type a few characters of a login, a name or an email,
-// get back who might be meant. One endpoint for both, since both forms are
-// looking for the same kind of thing — a person, not yet the account object
-// the administrator screens need.
-//
-// Not scoped by the contest in the URL beyond the permission check the route
-// already carries (RequireContestPermission, in Mount): every account in the
-// installation is a candidate for staffing or joining any contest.
+// directorySearch is the picker behind the staff and participant forms: a few
+// characters of a login, name or email find the person meant. Not scoped to the
+// URL's contest beyond the route's permission check: any account may be staffed
+// on or join any contest.
 func (h *ContestsHandler) directorySearch(w http.ResponseWriter, r *http.Request) {
 	found, err := h.service.SearchPeople(r.Context(), r.URL.Query().Get("q"), intParam(r, "limit"))
 	if err != nil {
@@ -319,11 +297,8 @@ func (h *ContestsHandler) disqualifyParticipant(w http.ResponseWriter, r *http.R
 	httpx.NoContent(w, r)
 }
 
-// enroll is a student signing themselves up.
-//
-// Open to any authenticated account: whether it is allowed is the contest's
-// own decision — its enrollment type, its schedule and its network
-// restriction — rather than a permission somebody has to be granted.
+// enroll signs the caller up. Open to any authenticated account; the contest's
+// enrollment type, schedule and network restriction decide.
 func (h *ContestsHandler) enroll(w http.ResponseWriter, r *http.Request) {
 	id, ok := contestIDFrom(w, r)
 	if !ok {

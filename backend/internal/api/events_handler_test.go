@@ -28,10 +28,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// eventsFixture mounts the events endpoint behind a session, with a fake
-// Access — the same fakeAccess participant_handler_test.go declares, reused
-// here rather than a second implementation of "answer Access with whatever a
-// test staged".
+// eventsFixture reuses fakeAccess from participant_handler_test.go.
 type eventsFixture struct {
 	router   http.Handler
 	handler  *api.EventsHandler
@@ -78,10 +75,8 @@ func newEventsFixture(t *testing.T) *eventsFixture {
 	}
 }
 
-// syncedBody serialises reads and writes so a test can inspect the
-// recorder's buffer from the main goroutine while the handler under test is
-// still writing to it from its own — httptest.ResponseRecorder's embedded
-// bytes.Buffer is not otherwise safe for that.
+// syncedRecorder serialises reads and writes, so a test can read the buffer
+// while the handler still writes from its own goroutine.
 type syncedRecorder struct {
 	*httptest.ResponseRecorder
 	mu sync.Mutex
@@ -121,9 +116,8 @@ func (r *syncedRecorder) Result() *http.Response {
 	return r.ResponseRecorder.Result()
 }
 
-// request builds a GET to the events endpoint, signed in, over a cancellable
-// context so a test can end the connection the way a client disconnecting
-// would.
+// request builds a signed-in GET to the events endpoint over a cancellable
+// context, so a test can disconnect the client.
 func (f *eventsFixture) request(contestID uuid.UUID) (*http.Request, context.CancelFunc) {
 	req := httptest.NewRequest(http.MethodGet, "/contests/"+contestID.String()+"/events", nil)
 	req.AddCookie(f.cookie)
@@ -131,9 +125,8 @@ func (f *eventsFixture) request(contestID uuid.UUID) (*http.Request, context.Can
 	return req.WithContext(ctx), cancel
 }
 
-// serve runs the handler in its own goroutine against a synced recorder and
-// returns a channel closed once ServeHTTP itself has returned — the signal
-// every test below waits on before it is safe to inspect the response.
+// serve runs the handler in its own goroutine and returns a channel closed once
+// ServeHTTP returns; only then is the response safe to inspect.
 func (f *eventsFixture) serve(req *http.Request) (*syncedRecorder, <-chan struct{}) {
 	rec := newSyncedRecorder()
 	done := make(chan struct{})
@@ -167,14 +160,7 @@ func TestEventsRequiresAuthentication(t *testing.T) {
 	}
 }
 
-// The same admission table participant_handler_test.go proves for the
-// read endpoints, driven through this one: this is not a fourth
-// implementation of "may this student be here", so a refusal from the same
-// façade must become the same status and code here too.
-//
-// The mapping itself is one table (errortable.go, walked by
-// TestEveryQueryproxyErrorHasItsAnswer); what this proves is that the channel
-// hands its refusal to that table, so one representative refusal is enough.
+// One representative refusal: the mapping is one table (errortable.go).
 func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
 	f := newEventsFixture(t)
 	f.access.err = contests.ErrAddressNotAllowed
@@ -195,9 +181,6 @@ func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
 	}
 }
 
-// Finding 3's own rule, proven here the way
-// TestARateLimitRefusalIsA429AndNeverReachesAccess proves it for the read
-// endpoints: a caller over budget is refused before Access ever runs.
 func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	f := newEventsFixture(t)
 	f.access.admitReadErr = queryrunner.ErrTooManyQueries
@@ -221,9 +204,7 @@ func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	}
 }
 
-// The one thing the check this task ends with asks first: does a connection
-// carry this participant's own deadline and nothing else, computed by
-// contests.Deadline and not by a second formula.
+// The deadline comes from contests.Deadline, not a second formula.
 func TestEventsSendsServerNowAndTheParticipantsOwnDeadlineOnConnect(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -259,9 +240,7 @@ func TestEventsSendsServerNowAndTheParticipantsOwnDeadlineOnConnect(t *testing.T
 	}
 }
 
-// An individual-timing participant who has not started yet has no deadline
-// for contests.Deadline to compute (its own doc): the field must be absent
-// rather than a synthetic value standing in for "not started".
+// Absent, not a synthetic value meaning "not started".
 func TestEventsOmitsTheDeadlineWhenThereIsNoneYet(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -280,10 +259,6 @@ func TestEventsOmitsTheDeadlineWhenThereIsNoneYet(t *testing.T) {
 	}
 }
 
-// Nothing about another participant may cross this channel: the response
-// must never carry a second registration id, a second contest id or
-// anything shaped like somebody else's business — only what this
-// participant's own Access call resolved.
 func TestEventsCarriesNothingButThisParticipantsOwnState(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -305,9 +280,6 @@ func TestEventsCarriesNothingButThisParticipantsOwnState(t *testing.T) {
 	}
 }
 
-// The resync loop itself: more than one sync event arrives on one
-// connection, spaced by the configured interval rather than only once on
-// connect.
 func TestEventsResyncsOnEveryTick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -324,11 +296,8 @@ func TestEventsResyncsOnEveryTick(t *testing.T) {
 	waitDone(t, done)
 }
 
-// The channel closes itself with a contest_finished event once the
-// participant's Standing is over: the status caught up, their registration
-// finished, or their own time ran out while the connection was open. Each
-// case is staged as the state that produces it and decided by the real gate
-// (fakeAccess.AccessForEvents), not by a sentinel picked to match.
+// Each case is staged as the state that produces it and decided by the real
+// gate, not a sentinel picked to match.
 func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	for name, given := range map[string]struct {
@@ -391,19 +360,14 @@ func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *tes
 	}
 }
 
-// A refusal that does not mean the contest is over for this participant
-// closes the channel without claiming it finished — that would be a
-// different, wrong fact: a published contest taken back to draft while they
-// wait for it, or an address that stopped being allowed, may yet let them
-// back in. A disqualified participant
-// is over, and still closes without it: the channel ends as not_a_participant
-// always has, telling a disqualified caller nothing a stranger would not be
-// told. A lookup that finds nobody knows nothing, and closes the same way.
+// A contest taken back to draft or an address no longer allowed may yet let
+// them back in, so the channel must not claim the contest finished. A
+// disqualified participant is over but closes as not_a_participant, learning
+// nothing a stranger would not; a lookup that finds nobody closes the same way.
 func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified(t *testing.T) {
 	for name, given := range map[string]struct {
-		// waiting opens the channel on a published contest rather than a
-		// running one: the only status a contest can be taken back to draft
-		// from (allowedTransitions).
+		// waiting opens on a published contest: the only status that can go
+		// back to draft (allowedTransitions).
 		waiting     bool
 		contest     func(id uuid.UUID) contests.Contest
 		participant func(p contests.Participant) contests.Participant
@@ -469,10 +433,6 @@ func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified
 	}
 }
 
-// Disconnect: cancelling the request context (the standard library's own
-// signal that the client is gone) ends the handler and gives back its
-// connection-limit slot, rather than leaving a goroutine running for a
-// client that left.
 func TestEventsReleasesItsSlotOnDisconnect(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -498,10 +458,7 @@ func TestEventsReleasesItsSlotOnDisconnect(t *testing.T) {
 	}
 }
 
-// Shutdown: closing the channel passed to NewEventsHandler ends every open
-// connection promptly, the same way a client disconnecting does, so a
-// process shutdown does not wait out an SSE stream that would otherwise
-// never end on its own.
+// Shutdown must not wait on streams that never end.
 func TestEventsEndOnShutdown(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -524,10 +481,8 @@ func TestEventsEndOnShutdown(t *testing.T) {
 	waitDone(t, done)
 }
 
-// The check this task ends with, first clause: a participant may not hold
-// unbounded connections. Counted, not raced: two connections held open
-// exhaust a limit of two, and a third is refused with 429 without ever
-// touching the two already open.
+// Counted, not raced: a third connection is refused without touching the two
+// open.
 func TestEventsEnforcesTheConnectionLimitByCounting(t *testing.T) {
 	f := newEventsFixture(t)
 	f.handler.WithMaxConnections(2).WithResyncInterval(time.Hour)
@@ -570,8 +525,8 @@ func TestEventsEnforcesTheConnectionLimitByCounting(t *testing.T) {
 	}
 }
 
-// Once a connection closes, its slot is free for another — the limit bounds
-// how many are open at once, not how many an account may ever open.
+// The limit bounds how many are open at once, not how many an account may ever
+// open.
 func TestEventsFreesASlotForAnotherConnectionAfterOneCloses(t *testing.T) {
 	f := newEventsFixture(t)
 	f.handler.WithMaxConnections(1).WithResyncInterval(time.Hour)
@@ -605,8 +560,6 @@ func TestEventsFreesASlotForAnotherConnectionAfterOneCloses(t *testing.T) {
 	waitDone(t, done3)
 }
 
-// Finding 6: nothing asserted the response actually announces itself as an
-// event stream.
 func TestEventsSetsTheEventStreamContentType(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -626,11 +579,7 @@ func TestEventsSetsTheEventStreamContentType(t *testing.T) {
 	}
 }
 
-// Finding 5: a connection held open for the length of a contest must not
-// silently rejoin the shared request-duration histogram just because nothing
-// wired MarkStreaming into this handler — routed through the real
-// metrics.Middleware, not a fake, since what is under test is the wiring
-// itself.
+// Routed through the real metrics.Middleware: the wiring is what is under test.
 func TestEventsMarksItselfStreamingForMetrics(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -664,8 +613,7 @@ func TestEventsMarksItselfStreamingForMetrics(t *testing.T) {
 	}
 }
 
-// Finding 3: the stream must pace a client that does reconnect, rather than
-// leaving it on EventSource's own undeclared three-second default.
+// Rather than EventSource's undeclared three-second default.
 func TestEventsSendsARetryFieldToPaceReconnects(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -685,10 +633,8 @@ func TestEventsSendsARetryFieldToPaceReconnects(t *testing.T) {
 	}
 }
 
-// Finding 3: a store that is briefly away must not close a connection an
-// honest, still-enrolled participant did nothing to lose — closing on the
-// first blip is exactly what turns a flaky link into a reconnect storm that
-// spends the SQL console's own budget.
+// Closing on the first blip turns a flaky link into a reconnect storm that
+// spends the SQL console's budget.
 func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -720,10 +666,7 @@ func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
 	}
 }
 
-// Finding 4: an enrolled participant may hold the channel for a contest that
-// is published and not yet started, so the published → running transition
-// can be announced on it instead of a waiting client having nothing to do
-// but poll.
+// So the transition to running is announced, not polled for.
 func TestEventsHoldsOpenForAPublishedContestAndAnnouncesTheTransitionOnATick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
@@ -752,14 +695,10 @@ func TestEventsHoldsOpenForAPublishedContestAndAnnouncesTheTransitionOnATick(t *
 	}
 }
 
-// stalledWriter simulates a client that completed the SSE handshake and then
-// stopped reading (finding 2): the first stallAfter writes succeed
-// immediately, standing for whatever the client actually read before it went
-// silent, and every write after that blocks until the deadline most recently
-// set via SetWriteDeadline, then fails — exactly what a real socket with a
-// zero receive window does once a write deadline finally catches up with it,
-// compressed to a test-sized interval via EventsHandler.WithWriteTimeout so
-// the test does not wait out ten real seconds.
+// stalledWriter is a client that stopped reading after the handshake: the first
+// stallAfter writes succeed, and every later one blocks until the last
+// SetWriteDeadline deadline and then fails, as a socket with a zero receive
+// window does. EventsHandler.WithWriteTimeout shortens the deadline for tests.
 type stalledWriter struct {
 	header http.Header
 
@@ -795,9 +734,8 @@ func (w *stalledWriter) Write(b []byte) (int, error) {
 		return len(b), nil
 	}
 	if deadline.IsZero() {
-		// No deadline was ever set: block forever, the same as a write to a
-		// real socket whose peer stopped reading when nothing ever bounds
-		// how long that write may take.
+		// No deadline set: block forever, like a write to a peer that stopped
+		// reading.
 		select {}
 	}
 	if wait := time.Until(deadline); wait > 0 {
@@ -806,9 +744,8 @@ func (w *stalledWriter) Write(b []byte) (int, error) {
 	return 0, os.ErrDeadlineExceeded
 }
 
-// Finding 2: a client that completes the handshake and then never reads
-// again must not hold this handler's goroutine — and the connection-limit
-// slot, and shutdown's own responsiveness — for the rest of the process.
+// A client that stops reading after the handshake must not hold the goroutine,
+// the connection-limit slot or shutdown.
 func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
 	f := newEventsFixture(t)
 	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(20 * time.Millisecond)
@@ -821,10 +758,8 @@ func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
 	req, cancel := f.request(contestID)
 	defer cancel()
 
-	// The connect sequence writes retry, sync and contest_started — three
-	// writes — before the first Flush; let those through so the handler
-	// gets past connecting at all, and stall everything after, the way a
-	// client that goes silent right after the handshake would.
+	// Let through the three connect writes (retry, sync, contest_started) and
+	// stall everything after.
 	w := newStalledWriter(3)
 	done := make(chan struct{})
 	go func() {
@@ -843,15 +778,8 @@ func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
 	}
 }
 
-// deadlineAwareWriter enforces the deadline it is given the way a real
-// net.Conn does: a Write attempted after that deadline has already elapsed
-// fails immediately with a timeout, whatever the peer is actually doing —
-// finding 2's own failure mode, when a deadline is armed before a slow
-// lookup rather than before the write it is meant to bound, and is already
-// spent by the time that write is attempted. Unlike stalledWriter above, a
-// write here never blocks and never fails once its deadline has not yet
-// passed: this fake exists to show a healthy write surviving a slow lookup,
-// not a genuinely stalled client being reclaimed.
+// deadlineAwareWriter fails a write only once its deadline has passed, as a
+// real net.Conn does.
 type deadlineAwareWriter struct {
 	header http.Header
 
@@ -884,13 +812,9 @@ func (w *deadlineAwareWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
-// TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem is finding
-// 2's own regression test. AccessForEvents is a database round trip, and the
-// deadline this handler arms exists to bound the write that follows, not the
-// wait for its own storage. A resync tick whose lookups alone take longer
-// than writeTimeout must not disconnect an otherwise-healthy client just
-// because the deadline was set before those lookups started rather than
-// after they returned.
+// AccessForEvents is a database round trip, and the write deadline bounds the
+// write, so it must be armed after the lookups or a slow tick would disconnect
+// a healthy client.
 func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing.T) {
 	f := newEventsFixture(t)
 	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(10 * time.Millisecond)
@@ -898,9 +822,8 @@ func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing
 	ends := time.Now().Add(time.Hour)
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
 	f.access.participant = contests.Participant{ID: uuid.New()}
-	// Longer than writeTimeout on its own: with the deadline armed before
-	// this lookup, it would already be spent by the time the write that
-	// follows is even attempted.
+	// Longer than writeTimeout: a deadline armed before the lookup would be
+	// spent before the write.
 	f.access.setDelay(40 * time.Millisecond)
 
 	req, cancel := f.request(contestID)
@@ -921,12 +844,9 @@ func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing
 	waitDone(t, done)
 }
 
-// noFlushRecorder is a ResponseWriter that supports neither Flush nor a write
-// deadline — standing in for a reverse proxy or test harness exposing
-// neither optional interface. http.ResponseController.Flush then returns
-// http.ErrNotSupported, and this proves the handler treats that exactly like
-// a write failure: return after the one flush attempt it could still make,
-// rather than loop forever assuming a future flush will succeed (finding 6).
+// noFlushRecorder supports neither Flush nor a write deadline, like a proxy
+// exposing neither. ResponseController.Flush then returns http.ErrNotSupported,
+// which the handler must treat as a write failure and return rather than loop.
 type noFlushRecorder struct {
 	header http.Header
 	body   bytes.Buffer
@@ -961,9 +881,6 @@ func TestEventsReturnsAfterOneFlushAttemptWhenTheResponseWriterCannotFlush(t *te
 	}
 }
 
-// waitForSubstring polls rec's buffer until it contains want, or fails the
-// test — a connection's handler goroutine writes asynchronously, so this is
-// the synchronisation a test uses instead of a fixed sleep.
 func waitForSubstring(t *testing.T, rec *syncedRecorder, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -976,7 +893,6 @@ func waitForSubstring(t *testing.T, rec *syncedRecorder, want string) {
 	t.Fatalf("timed out waiting for %q in the stream: %s", want, rec.String())
 }
 
-// waitForCount polls until rec's buffer contains want at least n times.
 func waitForCount(t *testing.T, rec *syncedRecorder, want string, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -989,9 +905,6 @@ func waitForCount(t *testing.T, rec *syncedRecorder, want string, n int) {
 	t.Fatalf("timed out waiting for %d occurrences of %q: %s", n, want, rec.String())
 }
 
-// waitForActiveConnections polls ActiveConnections instead of sleeping a
-// fixed amount, so the test is not flaky under load and not slow when it
-// does not need to be.
 func waitForActiveConnections(t *testing.T, h *api.EventsHandler, id uuid.UUID, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

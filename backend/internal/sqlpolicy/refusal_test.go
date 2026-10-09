@@ -8,9 +8,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
 
-// Codes() is walked by the HTTP layer's own test, so it has to be the whole
-// list rather than most of it. Read off the source, because a constant added
-// without being listed is exactly the omission that matters.
+// Read off the source, because a constant added without being listed is the
+// omission that matters.
 func TestEveryRefusalCodeIsListed(t *testing.T) {
 	source := readSource(t, "refusal.go")
 

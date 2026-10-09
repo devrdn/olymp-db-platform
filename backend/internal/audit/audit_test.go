@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// recordingSink captures entries instead of writing them to a database.
 type recordingSink struct {
 	entries []Entry
 	err     error
@@ -59,7 +58,6 @@ func TestRecordStoresTheAction(t *testing.T) {
 }
 
 func TestRecordAcceptsASystemEntryWithoutAnActor(t *testing.T) {
-	// Scheduled transitions and provisioning have no human behind them.
 	sink := &recordingSink{}
 
 	err := New(sink).Record(context.Background(), Entry{Action: "contest.auto_finished"})
@@ -73,8 +71,6 @@ func TestRecordAcceptsASystemEntryWithoutAnActor(t *testing.T) {
 }
 
 func TestRecordRejectsAnEntryWithoutAnAction(t *testing.T) {
-	// An entry that does not say what happened is worse than none: it looks
-	// like coverage while carrying nothing.
 	sink := &recordingSink{}
 
 	err := New(sink).Record(context.Background(), Entry{Entity: "user"})
@@ -88,8 +84,6 @@ func TestRecordRejectsAnEntryWithoutAnAction(t *testing.T) {
 }
 
 func TestRecordStripsSensitiveFieldsFromThePayload(t *testing.T) {
-	// Handlers pass request data through; a stray password or token must never
-	// reach a table that is kept for a year and read by administrators.
 	sink := &recordingSink{}
 
 	_ = New(sink).Record(context.Background(), Entry{
@@ -135,8 +129,6 @@ func TestRecordRedactsNestedSensitiveFields(t *testing.T) {
 }
 
 func TestRecordPropagatesAStorageFailure(t *testing.T) {
-	// The caller decides what a failed audit write means; for anything
-	// security-relevant it must fail the whole action.
 	sink := &recordingSink{err: context.DeadlineExceeded}
 
 	err := New(sink).Record(context.Background(), Entry{Action: "user.block"})
@@ -147,9 +139,6 @@ func TestRecordPropagatesAStorageFailure(t *testing.T) {
 }
 
 func TestRecordFillsOriginFromTheRequestContext(t *testing.T) {
-	// Handlers pass ctx everywhere already; carrying the origin in it means
-	// every audit write — including future ones — names where the action came
-	// from without each call site remembering to.
 	sink := &recordingSink{}
 	ctx := WithRequestMeta(context.Background(), "203.0.113.7", "Mozilla/5.0")
 
@@ -165,8 +154,6 @@ func TestRecordFillsOriginFromTheRequestContext(t *testing.T) {
 }
 
 func TestExplicitOriginWinsOverTheContext(t *testing.T) {
-	// The login flow resolves its own origin before the session exists; an
-	// explicit value must not be overwritten by ambient data.
 	sink := &recordingSink{}
 	ctx := WithRequestMeta(context.Background(), "10.0.0.1", "ctx-agent")
 
@@ -179,9 +166,6 @@ func TestExplicitOriginWinsOverTheContext(t *testing.T) {
 }
 
 func TestTheUserAgentIsStorableAndBoundedWhereverItCameFrom(t *testing.T) {
-	// The header is the client's. Bytes that are not UTF-8, or a cut through
-	// the middle of a character, made the insert fail (SQLSTATE 22021): an
-	// audited write answered 500, and a sign-in's entry silently vanished.
 	long := strings.Repeat("я", 300) // 600 bytes, two per character
 	for name, ctx := range map[string]context.Context{
 		"from the request": WithRequestMeta(context.Background(), "203.0.113.7", long),
@@ -209,9 +193,6 @@ func TestTheUserAgentIsStorableAndBoundedWhereverItCameFrom(t *testing.T) {
 }
 
 func TestFilterClampsThePageSize(t *testing.T) {
-	// The trail is the largest table in the core database and it is kept for a
-	// year. A client asking for all of it would be asking the server to hold
-	// all of it in memory.
 	got := Filter{Limit: 100000, Offset: -5}.Normalize()
 
 	if got.Limit > 200 {
@@ -257,9 +238,6 @@ func TestRecordManyDoesNothingForNoEntries(t *testing.T) {
 }
 
 func TestRecordManyRejectsAnEntryWithoutAnAction(t *testing.T) {
-	// One bad entry in a batch must fail the batch, the same way one bad
-	// entry fails Record — a partially-written trail for one operation is
-	// worse than none.
 	sink := &recordingSink{}
 
 	err := New(sink).RecordMany(context.Background(), []Entry{
@@ -276,10 +254,6 @@ func TestRecordManyRejectsAnEntryWithoutAnAction(t *testing.T) {
 }
 
 func TestRecordManyRedactsAndFillsOriginLikeRecord(t *testing.T) {
-	// Record and RecordMany share their per-entry preparation; this exercises
-	// the batch path against the same behaviour TestRecordFillsOriginFromThe-
-	// RequestContext and TestRecordStripsSensitiveFieldsFromThePayload assert
-	// for the single-entry path, so the two cannot quietly drift apart.
 	sink := &recordingSink{}
 	ctx := WithRequestMeta(context.Background(), "203.0.113.7", "Mozilla/5.0")
 
@@ -309,24 +283,8 @@ func TestRecordManyPropagatesAStorageFailure(t *testing.T) {
 	}
 }
 
-// TestEveryActionIsListed parses every non-test source file of this package
-// and checks each `ActionXxx = "..."` constant it declares against Actions().
-//
-// A test that instead repeated the 30-odd strings by hand would prove
-// nothing: it would drift the same way Actions() itself could, and the two
-// hand-kept lists would agree right up until the day a reviewer approved a
-// change that touched only one of them. Parsing the source is what makes a
-// constant declared and not enumerated a build failure instead of a support
-// ticket — which is exactly the gap that left `user.delete` and
-// `user.restore` reaching the trail with no wording and no way for the
-// filter to find them.
-//
-// This reads the whole package directory, not one named file. An earlier
-// version read audit.go by name, which happened to work only because every
-// Action constant lived there — a constant declared in another file of this
-// package, or a rename of this one, would have passed both directions of the
-// check while staying unlisted. Depending on the package rather than a
-// filename is what closes that.
+// TestEveryActionIsListed parses the package source, rather than repeating
+// the strings by hand, so a constant missing from Actions() fails the build.
 func TestEveryActionIsListed(t *testing.T) {
 	declared := declaredActionConstants(t)
 
@@ -342,10 +300,6 @@ func TestEveryActionIsListed(t *testing.T) {
 	}
 }
 
-// TestActionsHasNoStrayEntry is the other direction: everything Actions()
-// returns is backed by a real constant, somewhere in the package. Without it,
-// a typo or a removed constant left behind in the actions slice would
-// validate an ?action= filter for a code the trail can never actually carry.
 func TestActionsHasNoStrayEntry(t *testing.T) {
 	declared := make(map[string]bool)
 	for _, value := range declaredActionConstants(t) {
@@ -373,15 +327,8 @@ func TestIsActionAcceptsEveryDeclaredActionAndNothingElse(t *testing.T) {
 	}
 }
 
-// declaredActionConstants parses every non-test .go file in this package's
-// own directory and returns each top-level `ActionXxx = "..."` constant it
-// finds, keyed by the constant's name.
-//
-// go/parser rather than a scan of one file's text: a directory holds every
-// source file of the package regardless of what any of them is named, so a
-// constant declared in changes.go — or a file added tomorrow — is found the
-// same way one in audit.go is. Test files are excluded on purpose; a
-// constant declared only for a test would not be a real action.
+// declaredActionConstants returns each top-level ActionXxx constant declared
+// in the package's non-test files, keyed by name.
 func declaredActionConstants(t *testing.T) map[string]string {
 	t.Helper()
 

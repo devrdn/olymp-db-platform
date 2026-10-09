@@ -11,46 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// LoadTableData copies data into one table of an already-built template,
-// through COPY ... FROM STDIN WITH (FORMAT csv) — the same protocol path an
-// uploaded dump's own rows go through (runScript's CopyFrom call), never a
-// row-at-a-time INSERT. Called once per table with data, after BuildTemplate
-// has returned with no error (provisioning.Games.loadTableData, at the seam
-// finishDefinitionBuild's own doc names).
+// LoadTableData copies CSV rows into one table of an already-built template
+// with COPY ... FROM STDIN. It runs once per table after BuildTemplate
+// succeeds.
 //
-// It connects as the provisioning role itself (p.base.User), not as
-// RoleAuthor: by the time this runs, BuildTemplate's own fill has already
-// withdrawn every privilege game_author was lent to build the schema
-// (takeTheTemplateBackFromTheAuthor), including CONNECT — a second
-// connection authenticated as game_author would simply be refused a login.
-// The provisioning role is the one this package already trusts with
-// database-wide DDL (CREATE DATABASE, the grants in grants.go, hardening in
-// database.go), so it is also the one still able to reach a template between
-// the schema build finishing and the game being marked ready.
+// It connects as the provisioning role, because by now the template has been
+// taken back from game_author, CONNECT included.
 //
-// data is expected to be exactly the rows PostgreSQL's own CSV COPY format
-// wants — no header line, and whatever filtering the caller's own storage
-// needed (a header row skipped, a deleted row's line left out) already done
-// before this is called; this package knows nothing about either.
+// data must be exactly what CSV COPY expects: no header line, any filtering
+// already done by the caller.
 func (p *Provisioner) LoadTableData(ctx context.Context, database, table string, columns []string, data io.Reader) error {
 	if !sqlpolicy.PlainIdentifier(database) || !sqlpolicy.PlainIdentifier(table) {
 		return fmt.Errorf("%w: %q or %q", ErrBadName, database, table)
 	}
 	if p.authorPassword == "" {
-		// Not actually used to authenticate this call (see the doc above),
-		// but its absence means this Provisioner was built for maintenance
-		// only (NewProvisioner's own doc: DropIdle-style commands pass "").
-		// Refusing here rather than reaching PostgreSQL with a role that was
-		// never meant to build anything keeps the same guarantee
-		// BuildTemplate's own check gives.
+		// Not used to authenticate here, but its absence marks a
+		// maintenance-only Provisioner, which must not build anything.
 		return ErrNoAuthorCredential
 	}
 
-	// The same statement_timeout discipline runScript applies to the schema
-	// build (CLAUDE.md rule 15): a whole table's worth of rows can plausibly
-	// be most of a build's own time, so the bound has to be at least as
-	// generous as the build's own deadline, and there is no smaller
-	// principled number to give it instead.
+	// One table can take most of a build, so it gets the build's own
+	// deadline (CLAUDE.md rule 15).
 	ctx, cancel := context.WithTimeout(ctx, p.buildTimeout)
 	defer cancel()
 
@@ -78,22 +59,15 @@ func (p *Provisioner) LoadTableData(ctx context.Context, database, table string,
 	return nil
 }
 
-// TableDataError is PostgreSQL's own verdict on one table's data — a
-// constraint COPY found violated, a value that did not fit its column after
-// all. Its own type beside ScriptError rather than reused, because it names
-// a table rather than a line of a script: the two failures are located
-// differently, and provisioning.Games.loadTableData's own caller
-// (finishDefinitionBuild) has no script line to report here at all.
+// TableDataError is PostgreSQL's verdict on one table's data, such as a
+// violated constraint. Unlike ScriptError it names a table, not a script line.
 type TableDataError struct {
 	Table   string
 	Message string
 	Detail  string
 	Hint    string
-	// Where is PostgreSQL's own CONTEXT for a COPY failure — typically
-	// "COPY <table>, line N, column <name>: ..." — which is where the row
-	// number organiser-facing text comes from; not reconstructed by this
-	// package, because PostgreSQL already knows exactly which of the rows it
-	// was reading when it refused one.
+	// Where is PostgreSQL's CONTEXT, e.g. "COPY <table>, line N, column
+	// <name>: ...", the source of the row number shown to the organiser.
 	Where string
 }
 
@@ -112,17 +86,12 @@ func (e *TableDataError) Error() string {
 	return b.String()
 }
 
-// ScriptRejection satisfies provisioning.ScriptFailure — see that
-// interface's own doc for why this is opted into rather than discovered by a
-// type switch.
+// ScriptRejection satisfies provisioning.ScriptFailure.
 func (e *TableDataError) ScriptRejection() string { return e.Error() }
 
-// tableDataFailure classifies a COPY failure the same way scriptFailure
-// classifies a script's own: PostgreSQL's verdict on the data becomes a
-// TableDataError the organiser may read, and everything else — a connection
-// that never opened, a driver failure of ours — is wrapped instead, so
-// finishDefinitionBuild reports it as BuildFailedInternally rather than
-// putting our own infrastructure in front of the person who uploaded a CSV.
+// tableDataFailure turns PostgreSQL's verdict on the data into a
+// TableDataError the organiser may read. Anything else (a failed connection, a
+// driver error) is wrapped, so it is reported as an internal failure.
 func tableDataFailure(table string, err error) error {
 	var connect *pgconn.ConnectError
 	if errors.As(err, &connect) {

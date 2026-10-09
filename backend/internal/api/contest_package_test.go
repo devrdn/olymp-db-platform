@@ -61,9 +61,8 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type = %q", got)
 	}
-	// Offered as a file, not rendered in the browser: it is a download, and
-	// `nosniff` plus an attachment disposition is how every other download
-	// this service serves is handed over.
+	// A download, not a page: nosniff and an attachment disposition, like every
+	// other download here.
 	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") {
 		t.Errorf("Content-Disposition = %q, want an attachment", got)
 	}
@@ -141,12 +140,10 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 }
 
 func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
-	// The package is for authoring a contest again, not for restoring one.
-	// Identifiers a new installation would have to mint itself, the status it
-	// happens to be in and the window it ran in are all facts about last
-	// year — carrying them makes the file look like a backup, which is a
-	// different promise and one this does not keep (no roster, no
-	// submissions, no query log).
+	// The package is for authoring a contest again, not restoring one.
+	// Identifiers, status and the run window describe the old run and would
+	// make the file look like a backup, which it is not (no roster, submissions
+	// or query log).
 	f := newContestFixture(t, rbac.PermissionContestAdminAll)
 	c := seedPackagedContest(t, f)
 
@@ -167,9 +164,7 @@ func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
 			t.Errorf("the package carries %q, which is not part of authoring a contest", absent)
 		}
 	}
-	// The questions carry no identifiers either, for the same reason: an
-	// importer mints its own, and a stale uuid in a file is an invitation to
-	// write one that does not.
+	// Questions carry no identifiers either: an importer mints its own.
 	questions, _ := body["questions"].([]any)
 	first, _ := questions[0].(map[string]any)
 	if _, present := first["id"]; present {
@@ -178,15 +173,11 @@ func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
 }
 
 func TestTheContestPackageIsBehindContestEditRatherThanContestView(t *testing.T) {
-	// The package is a full answer key, so it sits behind the permission that
-	// means "may author the answers" rather than the one that means "may look
-	// at this contest" (docs/ARCHITECTURE.md §15, item 12).
-	//
-	// Asserted against what the route actually asked the authorizer, because
-	// no outcome could tell the two apart: rbac's managerPermissions grants a
-	// manager contest.view and contest.edit together, so every caller who
-	// passes one passes the other, and a 403 or a 200 would look identical
-	// under either wiring.
+	// The package is a full answer key, so it needs the permission to author
+	// answers, not to view (docs/ARCHITECTURE.md §15, item 12). Asserted on
+	// what the route asked the authorizer: rbac grants managers contest.view
+	// and contest.edit together, so no status code could tell the two wirings
+	// apart.
 	spy := &spyAuthorizer{allow: true}
 	f := newContestFixtureWith(t, spy)
 	c := seedPackagedContest(t, f)
@@ -203,9 +194,9 @@ func TestTheContestPackageIsBehindContestEditRatherThanContestView(t *testing.T)
 }
 
 func TestAParticipantCannotReachTheAnswerKey(t *testing.T) {
-	// An account with no permission at all and no standing in the contest —
-	// which is what taking part in one is (a registration is not a contest
-	// role). The refusal must carry nothing of the package with it.
+	// No permission and no contest role, which is what a participant has (a
+	// registration is not a role). The refusal must carry nothing of the
+	// package.
 	f := newContestFixture(t)
 	c := seedPackagedContest(t, f)
 
@@ -240,10 +231,8 @@ func TestAContestWithMoreQuestionsThanThePackageHoldsIsRefusedWithItsOwnCode(t *
 	}
 }
 
-// spyAuthorizer records what a route asked of it. It satisfies
-// auth.Authorizer, which is the interface the middleware holds precisely so
-// that the permission a route demands can be asserted rather than inferred
-// from a status code that several permissions would produce alike.
+// spyAuthorizer records what a route asked of it, so the permission a route
+// demands can be asserted rather than inferred from a status code.
 type spyAuthorizer struct {
 	asked []string
 	scope uuid.UUID
@@ -260,8 +249,7 @@ func (s *spyAuthorizer) Authorize(_ context.Context, _ rbac.Identity, permission
 }
 
 // newContestFixtureWith mounts the contest endpoints against a supplied
-// authorizer, for the tests that assert which permission a route demands
-// rather than what the real rules make of it.
+// authorizer.
 func newContestFixtureWith(t *testing.T, authorizer auth.Authorizer) *contestFixture {
 	t.Helper()
 
@@ -298,13 +286,9 @@ func newContestFixtureWith(t *testing.T, authorizer auth.Authorizer) *contestFix
 	}
 }
 
-// Both export routes hang off /contests/{id}, and they are registered by two
-// different modules: the package inside ContestsHandler's own r.Route
-// subtree, the CSV as a flat path ParticipantHandler adds beside it. chi does
-// not fail to build when two modules claim overlapping paths — it silently
-// lets one win, which is how GET /contests/{id}/story once stopped answering
-// as the staff endpoint at all (ParticipantHandler.Mount's own doc). So the
-// assembled router is probed rather than reasoned about.
+// The two export routes are registered by different modules (ContestsHandler's
+// subtree and a flat ParticipantHandler path), and chi silently lets one of two
+// overlapping paths win instead of failing, so the assembled router is probed.
 func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 	stores := conteststest.NewFixture()
 	actor := stores.Users.Add(users.User{

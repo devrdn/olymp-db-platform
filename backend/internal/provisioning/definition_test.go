@@ -8,14 +8,10 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
-// aColumn is the smallest valid ColumnDefinition, named for readability at
-// the call site rather than repeated inline in every test below.
 func aColumn(name string, typ provisioning.ColumnType) provisioning.ColumnDefinition {
 	return provisioning.ColumnDefinition{Name: name, Type: typ}
 }
 
-// A small, valid game — the shape a detective olympiad actually needs: who
-// the suspects are, and a primary key to tell them apart.
 func TestAValidDefinitionPasses(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -60,11 +56,8 @@ func TestADefinitionWithNoTablesIsRefused(t *testing.T) {
 	}
 }
 
-// tablesOf builds n minimal one-column tables, named t0..t(n-1). Minimal on
-// purpose: this is what lets the table-count boundary be tested without also
-// brushing against MaxDefinitionBytes, which a name-padded or column-heavy
-// definition would (TestADefinitionPastTheByteBoundIsRefused tests that bound
-// on its own, deliberately).
+// tablesOf builds n minimal one-column tables, small enough that the count
+// bound is reached long before MaxDefinitionBytes.
 func tablesOf(n int) []provisioning.TableDefinition {
 	tables := make([]provisioning.TableDefinition, n)
 	for i := range tables {
@@ -76,7 +69,6 @@ func tablesOf(n int) []provisioning.TableDefinition {
 	return tables
 }
 
-// itoa avoids importing strconv for one call site.
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
@@ -89,9 +81,6 @@ func itoa(i int) string {
 	return digits
 }
 
-// Exactly MaxDefinitionTables must pass and MaxDefinitionTables+1 must be
-// refused — the boundary test CLAUDE.md rule 2 asks for beside every bound
-// this package declares.
 func TestTooManyTablesIsRefusedExactlyAtTheBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -106,7 +95,6 @@ func TestTooManyTablesIsRefusedExactlyAtTheBoundary(t *testing.T) {
 	}
 }
 
-// columnsOf builds n minimal integer columns, named c0..c(n-1).
 func columnsOf(n int) []provisioning.ColumnDefinition {
 	columns := make([]provisioning.ColumnDefinition, n)
 	for i := range columns {
@@ -115,7 +103,6 @@ func columnsOf(n int) []provisioning.ColumnDefinition {
 	return columns
 }
 
-// The same boundary, for MaxDefinitionTableColumns.
 func TestTooManyColumnsIsRefusedExactlyAtTheBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -134,13 +121,8 @@ func TestTooManyColumnsIsRefusedExactlyAtTheBoundary(t *testing.T) {
 	}
 }
 
-// A definition within the count bounds can still be too large once encoded
-// — the backstop MaxDefinitionBytes's own doc describes. Long, distinct
-// names (each itself a valid plain identifier, up to PostgreSQL's own
-// 63-character limit) are what gets a definition well past 64 KiB without
-// ever touching MaxDefinitionTables or MaxDefinitionTableColumns, which is
-// the point: this is a genuinely separate bound, not a restatement of the
-// other two.
+// Long, distinct, valid names push the document past 64 KiB while staying
+// within both count bounds.
 func TestADefinitionPastTheByteBoundIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -149,9 +131,7 @@ func TestADefinitionPastTheByteBoundIsRefused(t *testing.T) {
 	for i := range tables {
 		columns := make([]provisioning.ColumnDefinition, provisioning.MaxDefinitionTableColumns)
 		for j := range columns {
-			// Each column name padded and suffixed to stay unique and under
-			// 63 characters, and every one nullable so the "nullable" key is
-			// on the wire too — the point is bytes, not columns.
+			// Unique and under 63 characters; nullable adds bytes to the JSON.
 			columns[j] = provisioning.ColumnDefinition{
 				Name: long[:60] + itoa(j%10) + itoa(j/10%10) + itoa(j/100%10), Type: provisioning.ColumnNumeric, Nullable: true,
 			}
@@ -195,9 +175,6 @@ func TestAColumnNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
 	}
 }
 
-// Folded the way PostgreSQL folds an unquoted identifier: "Suspects" and
-// "suspects" collide in the database this definition is meant to build, so
-// they must collide here too.
 func TestDuplicateTableNamesAreRefusedCaseInsensitively(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -222,9 +199,6 @@ func TestDuplicateColumnNamesWithinATableAreRefusedCaseInsensitively(t *testing.
 	}
 }
 
-// `CREATE TABLE t ()` is not valid PostgreSQL, so a table with no columns is
-// refused here rather than becoming a build failure the organiser cannot
-// see coming.
 func TestATableWithNoColumnsIsRefused(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{{Name: "t"}}}
@@ -271,14 +245,8 @@ func TestAPrimaryKeyListingTheSameColumnTwiceIsRefused(t *testing.T) {
 	}
 }
 
-// TestAPrimaryKeySpelledInAnotherCaseThanItsColumnIsRefused is the mismatch
-// between what Validate checked and what createTableStatement generates: the
-// key was compared against the column names folded to lower case, and then
-// interpolated into PRIMARY KEY (...) exactly as it was spelled, quoted. A
-// definition PostgreSQL answers `column "ID" named in key column list does
-// not exist` to must not be one this package called valid — the organiser
-// sees `id` in both places on their own screen and has no way to tell what
-// the build is complaining about.
+// The key is quoted in PRIMARY KEY (...), so "ID" would not match column "id"
+// at build time.
 func TestAPrimaryKeySpelledInAnotherCaseThanItsColumnIsRefused(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -293,9 +261,6 @@ func TestAPrimaryKeySpelledInAnotherCaseThanItsColumnIsRefused(t *testing.T) {
 	}
 }
 
-// A composite primary key — more than one column identifying a row
-// together — is an ordinary shape (an evidence log keyed by case and item
-// number, say) and must not be refused just for having more than one name.
 func TestACompositePrimaryKeyIsAccepted(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -313,11 +278,6 @@ func TestACompositePrimaryKeyIsAccepted(t *testing.T) {
 	}
 }
 
-// A definition with no tables cannot be saved (TestADefinitionWithNoTablesIsRefused,
-// above) — but SQL is the generator finishDefinitionBuild calls on whatever
-// a row actually holds, and a row that somehow got there empty must refuse
-// there too, plainly, rather than hand back an empty script that would build
-// a database with none of the organiser's tables in it silently.
 func TestSQLOfAnEmptyDefinitionIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := (provisioning.Definition{}).SQL()
@@ -326,22 +286,8 @@ func TestSQLOfAnEmptyDefinitionIsRefused(t *testing.T) {
 	}
 }
 
-// Every declared type maps to the literal PostgreSQL keyword this platform
-// chose for it — never the organiser's own string interpolated back in
-// (CLAUDE.md rule 14), which this proves by using a ColumnType whose Go
-// constant and PostgreSQL keyword actually differ (ColumnNumeric ->
-// "numeric" is the only one that doesn't just restate itself, so it is not
-// the only case worth having, but it is the one a copy-the-string bug would
-// not be caught by).
-//
-// The whole column line is compared, not a substring of it. A `Contains`
-// check on the keyword alone cannot tell `timestamp`, `timestamp without
-// time zone` and `timestamptz` apart, and those are three different columns
-// to a participant's own query: values the domain validated as naive local
-// times would be reinterpreted in the server's time zone by the third. The
-// one test whose entire job is this mapping has to see the whole of what it
-// produced — which is how it was missed that the mapping already spelled the
-// timestamp out in full while this expected the bare word.
+// The whole statement is compared, because a substring check cannot tell
+// "timestamp" from "timestamptz", which would reinterpret naive local times.
 func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -370,17 +316,11 @@ func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
 			}
 		})
 	}
-	// Nothing outside the six may reach the generator: a type Validate has
-	// let through that this switch does not know is refused loudly rather
-	// than emitting a column of some type nobody declared.
 	if len(provisioning.ColumnTypes) != 6 {
 		t.Fatalf("ColumnTypes lists %d types; this table has to grow with it", len(provisioning.ColumnTypes))
 	}
 }
 
-// A column not marked nullable gets NOT NULL; one that is marked nullable
-// does not — Nullable's own doc says false is the stricter default, and this
-// is where that default actually reaches the database.
 func TestSQLAddsNotNullExactlyWhereTheColumnIsNotNullable(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -404,9 +344,6 @@ func TestSQLAddsNotNullExactlyWhereTheColumnIsNotNullable(t *testing.T) {
 	}
 }
 
-// A composite primary key generates one PRIMARY KEY clause naming every
-// column, in the order the definition gave them — the order a participant's
-// own query plan and an organiser's own reading of the table both depend on.
 func TestSQLGeneratesTheCompositePrimaryKeyInDeclaredOrder(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -428,9 +365,6 @@ func TestSQLGeneratesTheCompositePrimaryKeyInDeclaredOrder(t *testing.T) {
 	}
 }
 
-// A table declaring no primary key at all gets no PRIMARY KEY clause — the
-// field is optional (TableDefinition's own doc), and a clause naming nothing
-// is not valid PostgreSQL.
 func TestSQLOmitsThePrimaryKeyClauseWhenNoneWasDeclared(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -445,24 +379,9 @@ func TestSQLOmitsThePrimaryKeyClauseWhenNoneWasDeclared(t *testing.T) {
 	}
 }
 
-// The output, in full, for a definition of two tables — which is what "byte
-// for byte identical from the same definition" (SQL's own doc) actually
-// requires, and what the threat to it looks like.
-//
-// Comparing two calls of the current code with each other could not fail:
-// the path walks ordered slices only, so there is nothing for two calls to
-// disagree about, and the test sat in the place where the real threat — the
-// day somebody builds the column or table order out of a map — would have
-// been caught. An exact text catches that whichever shape it takes: a bare
-// range over a map fails here as soon as Go's randomised iteration differs
-// from the organiser's order, and the tidier version of the same mistake —
-// a map ranged and then sorted by name, which is deterministic and would
-// satisfy any two-calls-agree check for ever — fails every run, because
-// none of the tables below is written in alphabetical order.
-//
-// Both calls are still made and compared, which costs nothing and keeps the
-// second half of the claim; the assertion that does the work is the exact
-// text.
+// The exact text is what catches a map in the generator: tables and columns
+// are not in alphabetical order, so neither random iteration nor sorting by
+// name can reproduce it.
 func TestSQLIsTheSameTextEveryTimeForTheSameDefinition(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
@@ -475,11 +394,7 @@ func TestSQLIsTheSameTextEveryTimeForTheSameDefinition(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		},
 		{
-			// Wider than the smallest example that reads well, and out of
-			// alphabetical order on purpose: the more columns there are, the
-			// less often a randomised map iteration happens to agree, and the
-			// unsorted order is what makes a sorting mistake fail outright
-			// rather than by luck.
+			// Many columns, unsorted, so a map iteration rarely matches.
 			Name: "witnesses",
 			Columns: []provisioning.ColumnDefinition{
 				aColumn("statement", provisioning.ColumnText),
@@ -498,12 +413,8 @@ func TestSQLIsTheSameTextEveryTimeForTheSameDefinition(t *testing.T) {
 		},
 	}}
 
-	// The organiser's own order, table by table and column by column, and
-	// nothing else in it: no timestamp, no generated id, no reordering.
-	// The blank line between the two statements is Definition.SQL's own join:
-	// each statement already ends in a newline and they are joined with one
-	// more. Written out rather than trimmed, because this is the text that
-	// reaches BuildTemplate.
+	// Each statement ends in a newline and SQL joins them with one more,
+	// hence the blank lines.
 	const want = `CREATE TABLE public."suspects" (
     "id" integer NOT NULL,
     "name" text NOT NULL,
@@ -540,13 +451,8 @@ CREATE TABLE public."alibis" (
 	}
 }
 
-// A name that is a valid plain identifier (sqlpolicy.PlainIdentifier allows
-// both cases and does not know PostgreSQL's own reserved words) can still
-// need quoting to mean what the organiser wrote — mixed case, which an
-// unquoted identifier would fold to lowercase, and a bare reserved word,
-// which an unquoted CREATE TABLE would fail to parse as a table name at
-// all. Both are exactly what CLAUDE.md rule 14 and QuoteIdentifier's own doc
-// are for: quoted unconditionally, so neither case is special-cased here.
+// Plain identifiers can still need quotes: mixed case would fold, and a
+// reserved word would not parse.
 func TestSQLQuotesANameThatWouldOtherwiseNeedIt(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{

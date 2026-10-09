@@ -5,21 +5,12 @@ import (
 	"strings"
 )
 
-// The system catalogs split in two, and the split is a policy decision rather
-// than a technical one.
-//
-// Structural catalogs describe the shape of the data: which tables exist and
-// what columns they have. Reading them is part of the exercise — a detective
-// looks at the filing cabinet before opening a drawer — so they are readable
-// by default and Policy.AllowCatalog turns them off for a contest that wants
-// the schema discovered some other way.
-//
-// Sensitive catalogs describe the *installation*: other databases, other
-// people's sessions, roles, settings. None of that is the participant's game,
-// and pg_stat_activity in particular shows the queries other participants are
-// running, which in an olympiad is simply the answers. These are refused
-// whatever the policy says, and REVOKE'd in the template as well: two layers,
-// because the checker is the one that can have a bug.
+// Structural catalogs (tables, columns) are part of the exercise and readable
+// unless Policy.AllowCatalog is off. Sensitive catalogs describe the
+// installation: other databases, sessions, roles, settings; pg_stat_activity
+// shows other participants' queries, which are the answers. Those are refused
+// whatever the policy says and also REVOKE'd in the template, in case the
+// checker has a bug.
 var (
 	sensitiveCatalogs = map[string]struct{}{
 		// Who exists.
@@ -30,13 +21,8 @@ var (
 		"pg_authid":          {},
 		"pg_auth_members":    {},
 		"pg_db_role_setting": {},
-		// What everybody else is doing. pg_stat_activity is the obvious one,
-		// but the others below name other databases or other sessions just as
-		// plainly: pg_stat_database lists every database's name with its
-		// traffic, pg_locks lists every session's locks with its pid, and
-		// pg_prepared_xacts lists transactions by database. A participant
-		// refused pg_database who could read pg_stat_database would have the
-		// same list by another name.
+		// What everybody else is doing. Each of these names other databases
+		// or sessions, so refusing pg_database alone would not hide them.
 		"pg_stat_activity":              {},
 		"pg_stat_database":              {},
 		"pg_stat_database_conflicts":    {},
@@ -71,16 +57,9 @@ var (
 	}
 )
 
-// ClassifyRelation decides what a table reference in the query is.
-//
-// Exported because the checker next door consults it and the catalogue list it
-// reads lives here, with the REVOKEs that make the same decision in the
-// database.
-//
-// Both the schema and the bare name are considered: `pg_catalog.pg_database`
-// and an unqualified `pg_database` are the same table, because pg_catalog is
-// on the search path implicitly. Refusing only the qualified spelling would
-// be a check anyone gets past by deleting eleven characters.
+// ClassifyRelation decides what a table reference in the query is. The bare
+// name is checked as well as the schema, because pg_catalog is implicitly on
+// the search path and an unqualified `pg_database` is the same table.
 func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 	schema, name = strings.ToLower(schema), strings.ToLower(name)
 
@@ -90,9 +69,8 @@ func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 	if _, yes := catalogSchemas[schema]; yes {
 		return false, true
 	}
-	// The pg_ prefix covers the rest of the catalog without listing it: any
-	// pg_* relation is PostgreSQL's, not the game's. Unknown ones land on the
-	// stricter side, which is the direction an allow-list should fail in.
+	// Any other pg_* relation is PostgreSQL's, not the game's: unknown names
+	// fail toward the stricter side.
 	if strings.HasPrefix(name, "pg_") {
 		return false, true
 	}
@@ -100,12 +78,8 @@ func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 }
 
 // SensitiveCatalogs names the relations that must never be readable, sorted.
-//
-// Exported because the same list has to reach the database as REVOKEs
-// (internal/gamedb): the architecture's rule is that the validator and the
-// privileges are built from one description so they cannot drift, and two
-// hand-kept lists drift the moment one of them is edited. A test in gamedb
-// asserts that every name here is actually revoked.
+// internal/gamedb REVOKEs the same list, so the checker and the privileges
+// come from one description; a gamedb test asserts each is revoked.
 func SensitiveCatalogs() []string {
 	out := make([]string, 0, len(sensitiveCatalogs))
 	for name := range sensitiveCatalogs {

@@ -9,9 +9,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
 
-// Why a definition could not be saved. Named so a handler's fail switch can
-// map each to its own status rather than serving "internal error" for what
-// is, in every case, a mistake in what an organiser typed (CLAUDE.md rule 1).
+// Why a definition could not be saved: always the organiser's mistake, so
+// each maps to its own status (CLAUDE.md rule 1).
 var (
 	// ErrDefinitionEmpty is a definition with no tables at all.
 	ErrDefinitionEmpty = errors.New("the game definition has no tables")
@@ -20,20 +19,15 @@ var (
 	// MaxDefinitionBytes once encoded.
 	ErrDefinitionTooLarge = errors.New("the game definition is larger than this platform allows")
 	// ErrDefinitionInvalidName is a table or column name that is not a plain
-	// PostgreSQL identifier (sqlpolicy.PlainIdentifier) — checked here,
-	// before anything is stored, because the name is destined to be
-	// interpolated into a CREATE TABLE statement by the SQL-generation task
-	// that follows this one, and SQL has no parameter binding for an
-	// identifier.
+	// PostgreSQL identifier (sqlpolicy.PlainIdentifier). Names end up in
+	// CREATE TABLE, and SQL cannot bind an identifier as a parameter.
 	ErrDefinitionInvalidName = errors.New("a table or column name is not a plain identifier")
 	// ErrDefinitionDuplicateName is a table named twice, or a column named
-	// twice within one table — folded the way PostgreSQL folds an unquoted
-	// identifier, so `Guests` and `guests` collide exactly as they would in
-	// the database this definition is meant to build.
+	// twice within one table, compared case-folded as PostgreSQL folds an
+	// unquoted identifier.
 	ErrDefinitionDuplicateName = errors.New("the game definition names the same table or column twice")
-	// ErrDefinitionTableEmpty is a table with no columns. `CREATE TABLE t ()`
-	// is not valid PostgreSQL, so a table with nothing in it is refused here
-	// rather than becoming a build failure the organiser cannot see coming.
+	// ErrDefinitionTableEmpty is a table with no columns, which PostgreSQL
+	// would refuse at build time.
 	ErrDefinitionTableEmpty = errors.New("a table has no columns")
 	// ErrDefinitionInvalidType is a column whose type is not one of the
 	// closed set ColumnType declares.
@@ -44,98 +38,40 @@ var (
 	// ErrDefinitionTableLocked is a definition that would change the name,
 	// columns or primary key of a table that already holds data.
 	//
-	// # Why this exists
-	//
-	// A table's own data lands as a CSV file whose first line names the
-	// table's columns, in order (tabledata.go's own header check,
-	// validateHeader). SetDefinition used to replace the whole description
-	// in one write with no check against that file at all. Renaming a
-	// column, or deleting one, does eventually surface — the next build's
-	// own header check refuses it (a mismatched field count or name) — but
-	// changing a column's *type* does not, because the header names
-	// columns, never their types: a value that still happens to parse under
-	// the new type (an integer column's own digits read back as numeric,
-	// say) loads silently, and a participant's database ends up with a
-	// column whose name promises one thing and whose bytes were validated
-	// against another. In the best case this is a build failure days after
-	// the fact; in the worst case it is not caught at all.
-	//
-	// # Why the whole table freezes rather than only the field that changed
-	//
-	// The narrower fix — refuse only a rename, a type change or a column's
-	// removal, and let anything else through (adding a column, say, or
-	// touching only the primary key) — does not hold up once the file
-	// itself is considered: validateHeader compares a column's name *and*
-	// its position, so adding a column shifts every later one out of place
-	// against a file that was never asked to grow to match, which is the
-	// identical silent-drift risk this sentinel exists to close, reopened
-	// through a fourth kind of edit. Freezing the whole table — its name,
-	// every column, and the primary key — once it holds a single row is
-	// what this codebase already asks an organiser to accept: the table
-	// builder's own screen already disables exactly those three controls
-	// the moment a table's row count is above zero (`game-builder.tsx`'s
-	// own doc, "Why a table with data locks its own structure") and,
-	// before this sentinel, had no rule on this side backing it — a client
-	// could be bypassed by talking to the API directly, and the screen's
-	// own explanation of "the server does not check this" was itself the
-	// defect. This is that rule, finally enforced where a client cannot
-	// route around it.
-	//
-	// A table with zero rows is not locked, even once a 'complete' file
-	// exists for it (a header with nothing under it): loadTableData's own
-	// copy reader skips the header line unconditionally, whatever it says
-	// (tableDataCopyReader.advance), so nothing a build would ever read
-	// disagrees with a new structure while the table is still empty.
+	// The table's CSV header names its columns by name and position, never by
+	// type, so a type change or an added column could load existing rows
+	// silently against the wrong structure. The whole table freezes, matching
+	// what the builder screen already disables. A table with zero rows is not
+	// locked: the build skips the header, so nothing it reads can disagree.
 	ErrDefinitionTableLocked = errors.New("a table that already holds data may not have its structure changed")
 )
 
 // ColumnType is the closed set of column types the table builder may
-// describe. A value from this set, never a string interpolated into SQL —
-// the point of it being a distinct type rather than plain text, and the
-// reason Validate refuses anything outside it before a definition is ever
-// stored.
-//
-// Deliberately small for a first version: what a detective game needs to
-// hold a suspect's name, the time a witness saw them, and whether the alibi
-// checks out. Widened later, the same way sqlpolicy.Mode's own closed set
-// could be — a value this platform never emits, in a column nothing yet
-// reads, adds nothing a wider set would not have covered from the start.
+// describe. It maps to a fixed SQL keyword and is never interpolated as text.
 type ColumnType string
 
 const (
-	// ColumnInteger is a whole number — a suspect's age, an evidence tag's
-	// sequence number.
+	// ColumnInteger is a whole number.
 	ColumnInteger ColumnType = "integer"
-	// ColumnText is free text of unbounded length — a name, a statement, an
-	// address.
+	// ColumnText is free text of unbounded length.
 	ColumnText ColumnType = "text"
-	// ColumnDate is a calendar date with no time of day — a birth date, the
-	// date a case was opened.
+	// ColumnDate is a calendar date with no time of day.
 	ColumnDate ColumnType = "date"
-	// ColumnTimestamp is a date and time together — when a witness says they
-	// saw something, down to the minute.
+	// ColumnTimestamp is a date and time without a time zone.
 	ColumnTimestamp ColumnType = "timestamp"
-	// ColumnNumeric is an exact decimal number — an amount of money, a
-	// measurement — where floating-point rounding would be the wrong
-	// arithmetic for a participant's query to hit.
+	// ColumnNumeric is an exact decimal number, for values such as money
+	// where floating-point rounding would be wrong.
 	ColumnNumeric ColumnType = "numeric"
-	// ColumnBoolean is a two-valued flag — whether an alibi was confirmed.
+	// ColumnBoolean is a two-valued flag.
 	ColumnBoolean ColumnType = "boolean"
 )
 
-// ColumnTypes lists every value of the closed set above, in the order they
-// are declared. This is what internal/api's builder-limits response walks
-// to tell a browser which types exist (CLAUDE.md rule 11): the alternative
-// is a client keeping its own literal list of "the six types this platform
-// accepts", which is exactly the second copy of a fact rule 11 exists to
-// rule out — this is the one place that set is written down as data.
+// ColumnTypes lists every ColumnType in declaration order. The API serves it
+// so a client never keeps its own copy of the set (CLAUDE.md rule 11).
 var ColumnTypes = []ColumnType{
 	ColumnInteger, ColumnText, ColumnDate, ColumnTimestamp, ColumnNumeric, ColumnBoolean,
 }
 
-// valid reports whether t is one of the closed set above. Unexported: the
-// set itself is the public contract (Validate is where a caller learns a
-// type was rejected), not a membership test callers should be branching on.
 func (t ColumnType) valid() bool {
 	switch t {
 	case ColumnInteger, ColumnText, ColumnDate, ColumnTimestamp, ColumnNumeric, ColumnBoolean:
@@ -148,10 +84,8 @@ func (t ColumnType) valid() bool {
 type ColumnDefinition struct {
 	Name string     `json:"name"`
 	Type ColumnType `json:"type"`
-	// Nullable says whether the generated column may hold NULL. False is the
-	// stricter default: a detective game's own tables are usually facts that
-	// are either known or the row would not exist, and an organiser has to
-	// opt into NULL rather than get it by omission.
+	// Nullable says whether the generated column may hold NULL. False by
+	// default: an organiser opts into NULL rather than getting it by omission.
 	Nullable bool `json:"nullable,omitempty"`
 }
 
@@ -159,89 +93,37 @@ type ColumnDefinition struct {
 type TableDefinition struct {
 	Name    string             `json:"name"`
 	Columns []ColumnDefinition `json:"columns"`
-	// PrimaryKey names the columns that together identify a row, in the
-	// order they will appear in the generated PRIMARY KEY clause. Every name
-	// in it must also appear in Columns — Validate is what checks that a
-	// definition may not otherwise say without contradicting itself.
+	// PrimaryKey names the key columns in PRIMARY KEY order; each must also
+	// appear in Columns.
 	PrimaryKey []string `json:"primary_key,omitempty"`
 }
 
-// Definition is a contest's game, described as tables rather than as SQL —
-// the third way a game may be built (migration 26 / TemplateSource.
-// SourceBuilder), alongside the editor (SourceEditor) and an uploaded dump
-// (SourceFile). What SQL it turns into is a later task's own work: this type
-// only says what may be saved, and Validate says what may not.
+// Definition is a contest's game described as tables rather than as SQL, the
+// builder source beside the editor script and an uploaded dump.
 //
-// Deliberately not Schema (schema.go), even though the two shapes look
-// alike. Schema is read back from a real database after a build — it
-// carries a foreign key's own target because the catalogue already knows
-// it, and it is bounded for what a jsonb cache and a participant's browser
-// can hold. Definition is written before any database exists, describes
-// intent rather than fact, and is bounded for a staff member's own screen.
-// Confusing the two would have the console showing an organiser's typo as
-// if PostgreSQL had already accepted it.
-//
-// Foreign keys between the game's own tables are deliberately not part of
-// this version. A foreign key naming another table in the same definition
-// needs two things checked before it means anything — that the target table
-// and column exist, and that the two columns' types are compatible — and
-// both questions can only be answered against the *whole* definition, not
-// one table read in isolation the way everything else here validates. That
-// is buildable, but it is not this task's own scope, and half-validating a
-// foreign key (accepting the field, checking neither property) would be
-// worse than refusing it: the SQL-generation task that follows this one
-// would then have to decide whether to trust a field this layer never
-// actually checked. Left out entirely, so the next task plans its
-// generation around a definition that has no field meaning something this
-// layer did not verify.
+// It is not Schema: Schema is read back from a built database, while a
+// Definition is the organiser's intent before any database exists. Foreign
+// keys are not supported, since checking one needs the whole definition and
+// a half-checked field would be worse than none.
 type Definition struct {
 	Tables []TableDefinition `json:"tables"`
 }
 
 // MaxDefinitionTables and MaxDefinitionTableColumns bound the definition
-// (CLAUDE.md rule 2). The definition is written once by a staff member
-// setting up an olympiad, not by a participant, but rule 2 is not about an
-// adversary here either: a jsonb column has no ceiling of its own, and
-// nothing else stops a definition from growing without limit if a person
-// mis-clicks "add table" in a loop.
-//
-// Fifty of each is far above the design's own example game (seven tables) and
-// far above anything a detective story needs — a contest with fifty tables of
-// fifty columns is not a puzzle a participant can hold in their head during a
-// timed round — while staying generous enough that no genuine game plan is
-// ever the one refused.
+// (CLAUDE.md rule 2), far above what a real game needs.
 const (
 	MaxDefinitionTables       = 50
 	MaxDefinitionTableColumns = 50
 )
 
 // MaxDefinitionBytes bounds the whole document once encoded (CLAUDE.md rule
-// 2), the same way MaxScriptBytes bounds an editor's own script and
-// MaxUploadFilenameBytes bounds a filename: the column behind it is an
-// unbounded jsonb, and the request body limit bounds the request that
-// carries a definition in, not this field once it is decoded.
-//
-// Sixty-four kibibytes is "the tens of kilobytes" this feature was scoped
-// for: MaxDefinitionTables × MaxDefinitionTableColumns is 2,500 columns at
-// the absolute ceiling, and even a verbose column name and type leave that
-// document at a small fraction of this bound — so the byte bound is not
-// expected to be the one an organiser ever actually hits; it exists as the
-// backstop for whichever of the two counts above turns out to have been set
-// too generously.
+// 2). The two counts above should be hit first; this is the backstop.
 const MaxDefinitionBytes = 64 << 10
 
-// Validate reports whether the definition describes a game the table
-// builder can act on: every table and column name a plain identifier, no
-// name repeated, every column a type from the closed set, every primary key
-// column actually declared on its own table, and the whole document within
-// bound.
-//
-// Checked here, the moment an organiser saves it, rather than when a
-// background build eventually turns it into SQL (a later task's own work) —
-// the same reason SetScript refuses an empty or oversized script before
-// anything is asked, rather than inside Build. A mistake belongs to whoever
-// made it at the moment they made it, not ten minutes later out of a queue
-// they are no longer watching.
+// Validate reports whether the definition describes a game the table builder
+// can act on: plain, unique identifiers, known column types, primary key
+// columns declared on their table, and the document within bounds. It runs on
+// save, so the organiser sees a mistake at once rather than from a later build.
 func (d Definition) Validate() error {
 	if len(d.Tables) == 0 {
 		return ErrDefinitionEmpty
@@ -269,14 +151,9 @@ func (d Definition) Validate() error {
 				ErrDefinitionTooLarge, table.Name, len(table.Columns), MaxDefinitionTableColumns)
 		}
 
-		// Two sets, because they answer two different questions. Uniqueness is
-		// folded: PostgreSQL folds an unquoted identifier, so `Guests` and
-		// `guests` would collide in the database this definition builds.
-		// Membership, for the primary key below, is exact — createTableStatement
-		// quotes every name it interpolates, so a key spelled in another case
-		// than its own column generates PRIMARY KEY ("ID") beside a column
-		// "id", and the build stops at `column "ID" named in key column list
-		// does not exist` for a definition this method called valid.
+		// Uniqueness is case-folded, as PostgreSQL folds unquoted names.
+		// Primary key membership is exact, because createTableStatement quotes
+		// every name: a key "ID" would not match a column "id".
 		seenColumns := make(map[string]struct{}, len(table.Columns))
 		columnNames := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
@@ -309,9 +186,6 @@ func (d Definition) Validate() error {
 		}
 	}
 
-	// The byte bound is checked last and against the whole document, because
-	// it is the backstop for the two counts above rather than a
-	// per-table rule — see MaxDefinitionBytes's own doc.
 	document, err := json.Marshal(d)
 	if err != nil {
 		return fmt.Errorf("encode the game definition: %w", err)
@@ -322,19 +196,9 @@ func (d Definition) Validate() error {
 	return nil
 }
 
-// postgresType names the PostgreSQL type ColumnType generates.
-//
-// A closed switch, never the value round-tripped as a string: CLAUDE.md rule
-// 14 is about cutting SQL where the parser says a statement ends, and the
-// same reasoning applies one level up — an organiser's JSON says "text", and
-// what reaches CREATE TABLE is the literal keyword this switch chose for it,
-// not their string spliced in. ErrDefinitionInvalidType guards a value
-// outside the six Validate already accepts; SQL's own caller
-// (Games.finishDefinitionBuild) only ever hands this a definition that
-// passed Validate, so reaching the default case would mean a row was stored
-// before this switch knew about a type Validate had already let through —
-// worth refusing loudly rather than emitting a column of some type nobody
-// declared.
+// postgresType names the PostgreSQL type ColumnType generates. It is a closed
+// switch, so CREATE TABLE only ever receives a keyword chosen here, never the
+// organiser's string.
 func (t ColumnType) postgresType() (string, error) {
 	switch t {
 	case ColumnInteger:
@@ -344,9 +208,8 @@ func (t ColumnType) postgresType() (string, error) {
 	case ColumnDate:
 		return "date", nil
 	case ColumnTimestamp:
-		// Spelled out, the way pg_dump spells it: an organiser comparing a
-		// generated schema against a dumped one should not have to know that
-		// the bare word means the same thing.
+		// Spelled as pg_dump spells it, so a generated schema reads like a
+		// dumped one.
 		return "timestamp without time zone", nil
 	case ColumnNumeric:
 		return "numeric", nil
@@ -356,50 +219,12 @@ func (t ColumnType) postgresType() (string, error) {
 	return "", fmt.Errorf("%w: %q", ErrDefinitionInvalidType, t)
 }
 
-// SQL turns the definition into the CREATE TABLE statements that build it —
-// the table builder's own answer to the SQL an editor's game already has, or
-// an uploaded dump's own bytes: gamedb.Provisioner.BuildTemplate cannot tell
-// the three apart, and does not need to (Games.finishDefinitionBuild feeds
-// this straight into the same BuildTemplate an editor-sourced script runs
-// through, wrapped in strings.NewReader exactly as claimed.Script already
-// is).
-//
-// Deterministic, byte for byte, for the same Definition. There is nothing
-// here for two calls to disagree about: Tables and TableDefinition.Columns
-// are ordered slices an organiser arranged, never a map, and this walks them
-// in that order and nothing else varies the output — no timestamp, no
-// generated id, no map iteration.
-//
-// Schema-qualified as `public.<name>`, the schema an uploaded dump's own
-// COPY blocks already name (see the dump examples in
-// game_integration_test.go) — so a table built this way sits exactly where
-// one written by hand or restored from a file would.
-//
-// Every name — table or column — goes through sqlpolicy.QuoteIdentifier
-// unconditionally (CLAUDE.md rule 14: SQL is not assembled by splicing
-// user-chosen text into it as-is). Validate already refused anything that is
-// not a plain identifier before a definition could be saved, but quoting
-// does not become conditional on that: an organiser's "Suspects" or
-// "order" — both valid identifiers, both needing quotes to keep their case
-// or to be usable as a table name at all — is exactly the case this
-// protects, and quoting an identifier that never needed it costs nothing.
-//
-// ErrDefinitionEmpty guards a definition with no tables reaching here at
-// all. Validate refuses that before a save takes hold (its own doc explains
-// why), so this is a build-time backstop for a row that should not exist
-// rather than a path an organiser can hit through the ordinary form — but
-// finishDefinitionBuild must still refuse with this sentinel rather than
-// silently building an empty database that answers every question "no such
-// table" (CLAUDE.md rule 1): the mistake is the definition's, not this
-// installation's, so it belongs on the organiser's own screen, worded
-// plainly, and not behind BuildFailedInternally.
-//
-// What this does not do: load a single row. Every table it creates is
-// empty. A table builder's own data lands as CSV files on a volume
-// (internal/gamefile, tabledata.go) and is loaded separately at the seam
-// named in finishDefinitionBuild's own doc, at the one point after these
-// statements have run where the tables exist and nothing has been marked
-// ready yet — a table nobody uploaded data for simply stays empty.
+// SQL turns the definition into the CREATE TABLE statements that build it, in
+// the public schema, deterministic for the same Definition. Every name is
+// quoted, since a valid identifier such as "Suspects" or "order" still needs
+// quotes to keep its case or to be usable at all. A definition with no tables
+// returns ErrDefinitionEmpty rather than an empty database. The tables are
+// created empty; their rows are loaded separately from CSV (tabledata.go).
 func (d Definition) SQL() (string, error) {
 	if len(d.Tables) == 0 {
 		return "", ErrDefinitionEmpty
@@ -416,16 +241,9 @@ func (d Definition) SQL() (string, error) {
 	return strings.Join(statements, "\n"), nil
 }
 
-// sameStructure reports whether t and other describe the same table for the
-// purpose of ErrDefinitionTableLocked: the identical columns, in the
-// identical order, each with the identical name, type and nullability, and
-// the identical set of primary-key columns (order within the primary key
-// itself does not matter — PRIMARY KEY (a, b) and PRIMARY KEY (b, a) name
-// the same constraint).
-//
-// This is the one place two TableDefinitions are compared against each
-// other rather than one validated on its own — checkTableDataCompatibility
-// (tabledata.go) is its only caller.
+// sameStructure reports whether t and other describe the same table for
+// ErrDefinitionTableLocked: identical columns in identical order, and the same
+// set of primary key columns in any order.
 func (t TableDefinition) sameStructure(other TableDefinition) bool {
 	if len(t.Columns) != len(other.Columns) {
 		return false
@@ -438,16 +256,9 @@ func (t TableDefinition) sameStructure(other TableDefinition) bool {
 	return sameNameSet(t.PrimaryKey, other.PrimaryKey)
 }
 
-// sameNameSet reports whether a and b name the same identifiers, spelled
-// exactly the same way, regardless of order.
-//
-// Exact and not folded, unlike Validate's own uniqueness check: these names
-// are interpolated into PRIMARY KEY (...) quoted, so `("ID")` and `("id")`
-// are two different constraints on two different columns, and a structure
-// lock that called them one would let a table with data be rebuilt against a
-// key it was never validated for. Validate refuses a key that does not match
-// a column exactly, so the two sides of this comparison agree on which
-// spelling is the real one.
+// sameNameSet reports whether a and b name the same identifiers regardless of
+// order. Spelling is compared exactly, not folded, because the names are
+// quoted in PRIMARY KEY (...), where "ID" and "id" are different columns.
 func sameNameSet(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -464,12 +275,7 @@ func sameNameSet(a, b []string) bool {
 	return true
 }
 
-// createTableStatement is one table's own CREATE TABLE — the helper SQL
-// above calls once per table, kept on TableDefinition rather than inlined
-// into that loop because a single table's statement is what a future
-// foreign-key or data-loading change would need to touch (Definition's own
-// doc explains why neither is this task's scope), and a method with a name
-// of its own is where that change would look first.
+// createTableStatement is one table's CREATE TABLE statement.
 func (t TableDefinition) createTableStatement() (string, error) {
 	lines := make([]string, 0, len(t.Columns)+1)
 	for _, column := range t.Columns {

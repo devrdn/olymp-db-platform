@@ -1,18 +1,8 @@
-// Command queryrunner runs the DB Contest Query Runner.
-//
-// The one component that is a separate service (architecture, section 2.3),
-// and this is the process it becomes. Two reasons it is not part of the Core
-// API, and the first is the one that matters:
-//
-//   - It links PostgreSQL's own parser through cgo, in order to check a query
-//     before running it. That is C code reading text an adversary chooses, and
-//     a crash in it ends the process rather than raising something a recover
-//     can catch. Inside the Core API, a crafted query would be a repeatable
-//     way to end sign-in, the timer and the submission of answers.
-//   - Only this process holds the game cluster's credentials.
-//
-// It is stateless and holds no core database connection: what it knows about a
-// request is what the request carries.
+// Command queryrunner runs the DB Contest Query Runner. It is a separate
+// service because it links PostgreSQL's parser through cgo, C code reading
+// adversary text whose crash a recover cannot catch, and because only it
+// holds the game cluster's credentials. It is stateless and has no core
+// database connection.
 package main
 
 import (
@@ -31,20 +21,17 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// version is stamped at build time with -ldflags.
+// version is set at build time with -ldflags.
 var version = "dev"
 
 func main() {
-	// Self-check mode for the container health check: the runtime image has no
-	// shell and no grpc probe, so the binary dials its own listener.
+	// The runtime image has no shell or grpc probe, so the binary dials itself.
 	healthcheck := flag.Bool("healthcheck", false, "probe the service and exit")
 	flag.Parse()
 
 	if *healthcheck {
-		// Only the listen address and the token are read, so a missing
-		// database DSN cannot make the health check fail for the wrong reason.
-		// The health service is behind the same token as everything else, and
-		// this runs inside the runner's own container, which holds it.
+		// Only the address and the token are read; the health service needs
+		// the token like everything else.
 		address := rpc.ProbeAddress(os.Getenv("QUERY_RUNNER_ADDR"))
 		if err := rpc.Probe(context.Background(), address, os.Getenv("QUERY_RUNNER_TOKEN")); err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
@@ -54,8 +41,7 @@ func main() {
 	}
 
 	if err := run(); err != nil {
-		// The logger may not exist yet when configuration fails, so startup
-		// errors go to stderr directly.
+		// No logger exists yet.
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
@@ -75,22 +61,17 @@ func run() error {
 	}
 
 	limits := queryrunner.Limits{
-		Deadline:   cfg.Deadline,
-		MaxRows:    cfg.MaxRows,
-		MaxBytes:   cfg.MaxBytes,
-		Concurrent: cfg.Concurrent,
-		QueueDepth: cfg.QueueDepth,
-		PerMinute:  cfg.PerMinute,
-		// Kept connections count against Concurrent (see queryrunner's pool),
-		// so this changes how many handshakes the cluster pays, not how many
-		// backends it holds.
+		Deadline:    cfg.Deadline,
+		MaxRows:     cfg.MaxRows,
+		MaxBytes:    cfg.MaxBytes,
+		Concurrent:  cfg.Concurrent,
+		QueueDepth:  cfg.QueueDepth,
+		PerMinute:   cfg.PerMinute,
 		IdleTimeout: cfg.IdleConnTimeout,
 	}
 
-	// A result budget larger than what the transport will carry produces the
-	// worst kind of failure: a valid answer arriving as a transport error,
-	// which reads as the service being down. Refusing at startup is the only
-	// place the two numbers can be compared before a participant meets them.
+	// A result budget past what the transport carries would turn a valid
+	// answer into a transport error, so it is refused at startup.
 	if limits.MaxBytes >= rpc.MaxPayloadBytes {
 		return fmt.Errorf(
 			"QUERY_MAX_BYTES is %d, which does not leave room inside the %d byte message limit",
@@ -98,13 +79,9 @@ func run() error {
 	}
 
 	runner := queryrunner.New(cluster, checker.NewChecker(cfg.ExtraFunctions...), limits)
-	// After the server has stopped taking queries: the connections kept for a
-	// participant's next query are closed rather than left to the server to
-	// notice.
+	// After the server stops, close the kept connections.
 	defer runner.Close()
 
-	// Shut down on SIGINT/SIGTERM: the container runtime sends SIGTERM and
-	// waits before killing the process.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

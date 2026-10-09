@@ -2,25 +2,13 @@ package postgres
 
 import "strings"
 
-// escapeLike makes a search string literal inside a LIKE or ILIKE pattern.
+// escapeLike makes a search string literal inside a LIKE or ILIKE pattern
+// (CLAUDE.md rule 3). An unescaped '%' matches every row and a trailing
+// backslash fails the statement. Backslash is Postgres's default escape
+// character, so the queries need no ESCAPE clause.
 //
-// Every free-text filter in this package — an account search, a contest title,
-// a participant's name — is typed by a person and lands in a pattern. The
-// value travels as a parameter, so it cannot become SQL; what it can do is
-// change what the pattern means. An unescaped '%' matches every row, '_'
-// matches any single character, and a trailing backslash is a malformed
-// pattern that Postgres surfaces as a 500. None of those is what somebody
-// searching for "50%" or "under_score" asked for, so the metacharacters are
-// neutralised here, and every repository that builds a pattern goes through
-// this one function rather than remembering to.
-//
-// Postgres reads a backslash as the default escape character, which is why
-// this does not spell out ESCAPE in the queries.
-//
-// What no stored text can contain — a NUL byte, bytes that are not UTF-8 —
-// is dropped first (see storableText): PostgreSQL would refuse the pattern by
-// failing the statement, a 500 for one pasted control character, and no row
-// could have matched it anyway.
+// NUL bytes and invalid UTF-8 are dropped first: PostgreSQL would fail the
+// statement on them (see storableText), and no stored row can contain them.
 func escapeLike(s string) string {
 	s = strings.ReplaceAll(strings.ToValidUTF8(s, ""), "\x00", "")
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)

@@ -34,10 +34,6 @@ func TestTheContractNamesEveryDeclaredCode(t *testing.T) {
 }
 
 func TestTheCommittedContractIsCurrent(t *testing.T) {
-	// The file is what the interface is checked against, and it is committed
-	// so a split repository could consume it without building the server. A
-	// stale copy would let the two sides agree on something the API no longer
-	// says.
 	generated, err := contract()
 	if err != nil {
 		t.Fatalf("contract() = %v", err)

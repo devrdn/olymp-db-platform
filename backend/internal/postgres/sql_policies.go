@@ -29,11 +29,8 @@ func (r *SQLPolicies) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// ByContest returns the contest's policy.
-//
-// A contest that was never configured reports the read-only default rather
-// than an error: the absence of a policy row must never read as "no
-// restrictions".
+// ByContest returns the contest's policy, or the read-only default when none
+// was saved: a missing row must never mean "no restrictions".
 func (r *SQLPolicies) ByContest(ctx context.Context, contestID uuid.UUID) (contests.SQLPolicy, error) {
 	var p contests.SQLPolicy
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -72,8 +69,7 @@ func (r *SQLPolicies) Save(ctx context.Context, p contests.SQLPolicy) error {
 		p.ContestID, p.Mode, stringList(p.WritableTables), p.AllowCreateView,
 		p.AllowOwnTables, p.AllowTempTables, p.AllowCatalog, p.DiskQuotaRatio, p.UpdatedBy)
 	if err != nil {
-		// A contest deleted since the caller read it is refused here, by
-		// the foreign key.
+		// The foreign key refuses a contest deleted since it was read.
 		return fmt.Errorf("save sql policy: %w", missingParent(err, map[string]error{
 			"contest_sql_policies_contest_id_fkey": contests.ErrNotFound,
 		}))

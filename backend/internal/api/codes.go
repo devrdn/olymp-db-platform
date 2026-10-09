@@ -2,17 +2,14 @@ package api
 
 import "github.com/devrdn/db-contest/backend/internal/platform/httpx"
 
-// The machine codes this API answers with, declared in one place and published
-// as its contract (docs/api/error-codes.json).
+// The machine codes this API answers with, published as its contract
+// (docs/api/error-codes.json).
 //
-// A client switches on the code and shows its own message; the English text
-// beside it on the wire is for whoever reads a log or writes that client, and
-// is never displayed to a user. That is what keeps the server from needing to
-// know which language anybody reads (see docs/ARCHITECTURE.md §6.2).
-//
-// Codes shared with the layers below — unauthenticated, forbidden,
-// internal_error — are declared there and reused, so there is exactly one
-// spelling and one meaning of each.
+// A client switches on the code and shows its own message; the English text on
+// the wire is for logs and client authors, never shown to users, so the server
+// need not know anyone's language (docs/ARCHITECTURE.md §6.2). Codes shared
+// with lower layers (unauthenticated, forbidden, internal_error) are declared
+// there and reused.
 var (
 	// --- Request shape ------------------------------------------------------
 
@@ -28,24 +25,13 @@ var (
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 
 	// --- Installation pictures ----------------------------------------------
-	//
-	// Three codes rather than one, because the interface has to say which of
-	// them happened. Under a single `invalid_request` a picture that was too
-	// heavy, one in a format this installation does not store and one with too
-	// many pixels all read as the same sentence, and the person uploading has
-	// no way to tell what to change.
+	// Separate codes so the uploader learns what to change.
 	codeImageTooLarge = httpx.NewCode("image_too_large",
 		"The picture is heavier than an installation image may be, or has more pixels on a side than one may have.")
 	// --- The SQL console -----------------------------------------------------
-	//
-	// One code per reason, because each is a different sentence to a
-	// participant mid-contest and most of them tell them what to change. A
-	// shared `invalid_request` here would be the same defect the picture
-	// upload had, in the place where it costs a competitor their time.
-	//
-	// Prefixed, because these live in a catalogue shared with the rest of the
-	// API: "too long" alone will mean something else the first time another
-	// endpoint needs it.
+	// One code per reason: each is a different sentence to a participant
+	// mid-contest, and most say what to change. Prefixed, because the catalogue
+	// is shared with the rest of the API.
 	codeNotAParticipant = httpx.NewCode("not_a_participant",
 		"The caller is not taking part in this contest. The same answer whether they never registered or were disqualified: telling those apart would say whether an account is on a roster.")
 	codeContestNotRunning = httpx.NewCode("contest_not_running",
@@ -78,11 +64,8 @@ var (
 		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
 
 	// --- The game's uploaded dump --------------------------------------------
-	//
-	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1) —
-	// thirteen of them, none collapsed into invalid_request, because each names
-	// a different thing an organiser or their browser did and most of them
-	// say what to do next: retry the chunk, wait, or pick a different file.
+	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1): most
+	// say what to do next.
 	codeGameUploadsDisabled = httpx.NewCode("game_uploads_disabled",
 		"This installation has no upload directory configured, so a game can only be written in the editor. The message names nothing about the deployment beyond that fact.")
 	codeGameUploadFilenameInvalid = httpx.NewCode("game_upload_filename_invalid",
@@ -115,11 +98,9 @@ var (
 		"Too many uploads have been started from this address or for this contest in a short time. Wait before starting another.")
 
 	// --- The table builder: its structural description --------------------
-	//
 	// One code per provisioning.Definition.Validate sentinel (CLAUDE.md rule
-	// 1). The message on the wire is the sentinel's own err.Error(), which
-	// already names the table or column at fault — repeating that as a
-	// second, fixed sentence here would only let the two drift.
+	// 1). The message on the wire is the sentinel's own text, which names the
+	// table or column.
 	codeGameDefinitionEmpty = httpx.NewCode("game_definition_empty",
 		"The game definition has no tables. An empty definition builds an empty database.")
 	codeGameDefinitionTooLarge = httpx.NewCode("game_definition_too_large",
@@ -138,11 +119,7 @@ var (
 		"A table named in this definition already holds data, and the save would have changed its name, its columns or its primary key. Remove the table's data first, or leave that table's structure exactly as it was. The message names the table.")
 
 	// --- The table builder: one table's own CSV data -----------------------
-	//
-	// One code per sentinel in provisioning/tabledata.go and the CSV parsing
-	// it drives (provisioning/tablecsv.go) — the third way a game is built,
-	// alongside the editor and an uploaded dump, mirrored here the same way
-	// the dump's own thirteen codes mirror provisioning/upload.go's.
+	// One code per sentinel in provisioning/tabledata.go and tablecsv.go.
 	codeGameTableDataDisabled = httpx.NewCode("game_table_data_disabled",
 		"This installation has no table-data volume configured, so a table builder's own CSV cannot be uploaded. The message names nothing about the deployment beyond that fact.")
 	codeGameTableUnknown = httpx.NewCode("game_table_unknown",
@@ -335,11 +312,7 @@ var (
 		"This participant already holds as many live event channels for this contest as this installation allows open at once. Close one of the others — another tab, a stale connection — and try again.")
 
 	// --- CSV downloads --------------------------------------------------------
-	//
-	// One code for every export this API serves — the participant's own query
-	// log from the play screen and from their profile, and the organiser's
-	// participant and contest feeds — because the thing that ran out is the
-	// same thing in all four cases, and it belongs to none of them.
+	// One code for every export, because what ran out is shared by all of them.
 	codeTooManyExports = httpx.NewCode("too_many_exports",
 		"As many downloads are being written at once as this installation allows, and this one was not started: nothing was read and nothing was recorded. A statement about the service's load rather than about the caller, who is inside every budget of their own — `Retry-After` is the longest a download in progress may still run, so a client that waits it out finds a place free.")
 
@@ -361,12 +334,9 @@ var (
 		"The contest answers questions in sequence and a question ordered before this one is not closed yet — not answered correctly, and not out of attempts. Answer the earlier one first.")
 
 	// --- The participant's workspace ----------------------------------------
-	//
-	// One code per workspace.Service refusal (CLAUDE.md rule 1). The
-	// interface autosaves, so each of these decides what it does next: wait
-	// and retry, or tell the participant what to shorten. A contest that has
-	// ended is not one of them: the workspace answers contest_ended or
-	// contest_finished like the rest of /play.
+	// One code per workspace.Service refusal (CLAUDE.md rule 1); the autosaving
+	// interface decides by code whether to retry or ask the participant to
+	// shorten. A finished contest answers like the rest of /play.
 	codeWorkspaceTooOften = httpx.NewCode("workspace_too_often",
 		"This participant has saved their notes and tabs more often this minute than the installation allows, refused saves included. Nothing was saved; `Retry-After` says how long to wait at most.")
 	codeWorkspaceTabLimit = httpx.NewCode("workspace_tab_limit",
@@ -387,10 +357,8 @@ var (
 		"A new tab order must name every tab of the participant's workspace exactly once, and nothing else. Reload the tabs and try again.")
 
 	// --- The participant's browser signals ------------------------------------
-	//
 	// One code per monitor.Signals refusal (CLAUDE.md rule 1). A bad event
-	// inside a batch is not one of them: it is dropped and the batch answers
-	// 204 (participant_signals.go).
+	// inside a batch is dropped, not refused.
 	codeSignalsTooOften = httpx.NewCode("signals_too_often",
 		"This participant's browser has sent more signal batches this minute than the installation allows, refused batches included. Nothing was stored; keep the batch and send it again after `Retry-After`.")
 	codeSignalsBatchTooLarge = httpx.NewCode("signals_batch_too_large",
@@ -399,8 +367,7 @@ var (
 		"This participant has stored as many browser signals as the installation keeps for one registration. Nothing in this batch was stored, and nothing stored before it was lost; sending the batch again will not help.")
 
 	// --- Watching participants -------------------------------------------------
-	//
-	// One code per monitor.WatchService refusal (CLAUDE.md rule 1), and the
+	// One code per monitor.WatchService refusal (CLAUDE.md rule 1), plus the
 	// organiser's read budget.
 	codeMonitorTooOften = httpx.NewCode("monitor_too_often",
 		"This account has made more monitoring reads this minute than the installation allows, refused reads included. Wait `Retry-After` seconds and ask again.")
@@ -414,14 +381,8 @@ var (
 		"A monitoring filter is not acceptable: an unknown event kind or query status, a search longer than 200 characters, a time that is not RFC 3339, a range that ends before it starts, or after and before together. The message names which.")
 
 	// --- A contest's cover picture --------------------------------------------
-	//
-	// One code per covers.Service refusal (CLAUDE.md rule 1), and the
-	// uploader's own budget. Five rather than one, because each names
-	// something different to change: the file is heavy, the file is not a
-	// picture we take, the picture has too many pixels, the credit line is
-	// missing, the credit line is too long. Under a single `invalid_request`
-	// an organiser is told only that something was wrong with a photograph
-	// they cannot see inside.
+	// One code per covers.Service refusal (CLAUDE.md rule 1), plus the
+	// uploader's budget: each names something different to change.
 	codeCoverTooOften = httpx.NewCode("cover_too_often",
 		"This account has uploaded covers more often this minute than the installation allows, refused uploads included. Nothing was stored; wait `Retry-After` seconds and try again.")
 	codeCoverTooLarge = httpx.NewCode("cover_too_large",
@@ -436,12 +397,9 @@ var (
 		"The attribution is longer than a credit line may be. The message names the limit in characters.")
 
 	// --- The participant's own profile ----------------------------------------
-	//
-	// One code per profile.Service refusal (CLAUDE.md rule 1), and the
-	// caller's own read budget. Separate from the monitoring codes beside
-	// them although two of them read alike: these reach a participant's own
-	// screen rather than an organiser's, and a message about "monitoring
-	// pages" would be the wrong sentence in the wrong place.
+	// One code per profile.Service refusal (CLAUDE.md rule 1), plus the read
+	// budget. Separate from the monitoring codes because they reach the
+	// participant's own screen.
 	codeProfileTooOften = httpx.NewCode("profile_too_often",
 		"This account has made more reads of its own profile this minute than the installation allows, refused reads included — or a download of the same query log is already running. Wait `Retry-After` seconds and ask again.")
 	codeProfileContestNotFound = httpx.NewCode("profile_contest_not_found",

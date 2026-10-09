@@ -113,10 +113,6 @@ func TestErrorAnswersWithTheDeclaredCode(t *testing.T) {
 }
 
 func TestErrorWithDetailsKeepsTheErrorObjectAndAddsBesideIt(t *testing.T) {
-	// The publish gate answers with a code and the list of what is missing.
-	// Writing that envelope by hand is how a code once reached clients without
-	// ever being declared; this is the one way to send more than the error
-	// object.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -142,9 +138,6 @@ func TestErrorWithDetailsKeepsTheErrorObjectAndAddsBesideIt(t *testing.T) {
 }
 
 func TestDetailsCannotOverwriteTheErrorObject(t *testing.T) {
-	// A caller passing "error" would replace the very thing every client
-	// parses, and the code would vanish from a response that still looked
-	// well formed.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 

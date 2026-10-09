@@ -9,37 +9,24 @@ import (
 	"github.com/google/uuid"
 )
 
-// AttemptTarget is what one case of the contract runs against: a store with
-// nothing recorded yet, and the repositories that write what it reads. The
-// real store derives its answer from the submissions table, so the contract
-// arranges state the way production does — a question through
-// QuestionRepository.Create, an answer through SubmissionRepository.Insert —
-// and never through anything only a fake could offer.
+// AttemptTarget is a store with nothing recorded yet, and the repositories
+// that write what it reads. State is arranged only through those
+// repositories, as in production, never through anything only a fake offers.
 type AttemptTarget struct {
-	Store       contests.AttemptStore
-	Questions   contests.QuestionRepository
-	Submissions contests.SubmissionRepository
-	// ContestID is the contest questions are created in, and RegistrationID
-	// a participant registered for it.
-	ContestID      uuid.UUID
-	RegistrationID uuid.UUID
-	// NewRegistration registers another participant for the same contest
-	// and returns the registration.
+	Store           contests.AttemptStore
+	Questions       contests.QuestionRepository
+	Submissions     contests.SubmissionRepository
+	ContestID       uuid.UUID
+	RegistrationID  uuid.UUID
 	NewRegistration func() uuid.UUID
-	// Now is what the submission store's clock reads, which is what an
-	// answer's deadline is checked against.
+	// Now is the submission store's clock, which deadlines are checked
+	// against.
 	Now func() time.Time
 }
 
-// AttemptStoreContract is what every contests.AttemptStore must do, run as
-// subtests against one implementation. Both the in-memory Attempts and
-// postgres.Attempts run it, so the store the service tests trust and the store
-// production uses are held to the same answers: a rule the fake got wrong
-// would otherwise pass every service test and fail only in a contest.
-//
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repositories with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here.
+// AttemptStoreContract is what every contests.AttemptStore must do; both the
+// in-memory Attempts and postgres.Attempts run it. each prepares a fresh
+// target for one case, calls run with it, and cleans up.
 func AttemptStoreContract(t *testing.T, each func(t *testing.T, run func(context.Context, AttemptTarget))) {
 	question := func(t *testing.T, ctx context.Context, target AttemptTarget) contests.Question {
 		t.Helper()
@@ -49,9 +36,7 @@ func AttemptStoreContract(t *testing.T, each func(t *testing.T, run func(context
 		}
 		return q
 	}
-	// answer records one answer the way Submit does. A correct one is worth
-	// points, less penalty for each attempt already made; a wrong one earns
-	// nothing, whatever points it carries.
+	// answer records one answer the way Submit does.
 	answer := func(t *testing.T, ctx context.Context, target AttemptTarget, registration, questionID uuid.UUID, correct bool, points, penalty int) {
 		t.Helper()
 		if _, err := target.Submissions.Insert(ctx, contests.SubmissionRequest{
@@ -113,8 +98,7 @@ func AttemptStoreContract(t *testing.T, each func(t *testing.T, run func(context
 			got := read(t, ctx, target, target.RegistrationID)
 			expect(t, got, map[uuid.UUID]contests.AttemptStats{
 				missed.ID: {Attempts: 2, Correct: false, PointsAwarded: 0},
-				// The winning attempt's own award, 10 less one wrong
-				// attempt's penalty of 2.
+				// 10 less one wrong attempt's penalty of 2.
 				retried.ID: {Attempts: 2, Correct: true, PointsAwarded: 8},
 				first.ID:   {Attempts: 1, Correct: true, PointsAwarded: 5},
 			}, "the participant")

@@ -24,7 +24,7 @@ func (s *metaSink) AppendMany(_ context.Context, entries []audit.Entry) error {
 }
 
 // recordDuring serves one request through the middleware and returns the audit
-// entry the handler wrote from the request context.
+// entry the handler wrote.
 func recordDuring(t *testing.T, req *http.Request) audit.Entry {
 	t.Helper()
 	sink := &metaSink{}
@@ -44,8 +44,6 @@ func recordDuring(t *testing.T, req *http.Request) audit.Entry {
 }
 
 func TestRequestMetaStampsTheRequestOrigin(t *testing.T) {
-	// The finding this guards: admin actions were audited with a NULL ip,
-	// because nothing carried the request origin into the service layer.
 	req := httptest.NewRequest(http.MethodPost, "/users/x/block", nil)
 	req.RemoteAddr = "203.0.113.7:41000"
 	req.Header.Set("User-Agent", "Admin/1.0")

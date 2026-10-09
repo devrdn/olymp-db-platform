@@ -1,22 +1,11 @@
-// Package workspace answers "what has this participant written down for
-// themselves in this olympiad": their notes and their SQL editor tabs, kept
-// per registration so a reload, a crashed browser or a different computer in
-// the lab loses nothing.
+// Package workspace keeps a participant's notes and SQL editor tabs per
+// registration, so a reload or another computer loses nothing. It owns the
+// limits and the tab rules: at least one tab, untitled tabs named after the
+// smallest free number, a new order naming every tab once.
 //
-// It owns the limits (how long, how many, how often) and the rules of the tab
-// set: there is always at least one tab, a new tab without a title is named
-// after the smallest free number, and a new order names every tab exactly
-// once.
-//
-// It does not decide whether the participant may read or write at all — that
-// is queryproxy's admission, asked by the HTTP layer before a Session exists,
-// and the workspace closes with the contest like the rest of the play screen
-// — and it never runs the SQL a tab holds: a tab is text, and running
-// it is the console's business. It is not private: the contest's organisers
-// see it and its history (the monitoring design, §2.4), which the repository
-// records with every write — a revision per save, an event per change in a
-// tab's life — and the participant is told so on the play screen. Storage is
-// declared here as Repository and implemented in internal/postgres.
+// It does not decide whether the participant may read or write (queryproxy's
+// admission does) and never runs a tab's SQL. It is not private: organisers
+// see it and its history, which the repository records with every write.
 package workspace
 
 import (
@@ -34,31 +23,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// The limits of one workspace (CLAUDE.md rule 2): every string and every list
-// a request carries is bounded here, whatever the request body limit allows.
+// The limits of one workspace (CLAUDE.md rule 2).
 const (
-	// MaxNotesRunes is how many characters the notes may hold. Characters,
-	// not bytes: a participant writing in Cyrillic gets the same room as one
-	// writing in Latin.
+	// MaxNotesRunes counts characters, not bytes, so Cyrillic gets the same
+	// room as Latin.
 	MaxNotesRunes = 20000
-	// MaxTabs is how many SQL tabs one participant may keep.
-	MaxTabs = 10
-	// MaxTitleRunes is the longest a tab title may be, after trimming.
+	MaxTabs       = 10
+	// MaxTitleRunes applies after trimming.
 	MaxTitleRunes = 40
-	// MaxTabBodyBytes is how much SQL one tab may hold: exactly what the
-	// console would accept as a query, so any tab can be run as it stands.
+	// MaxTabBodyBytes matches what the console accepts, so any tab can run as
+	// it stands.
 	MaxTabBodyBytes = sqlpolicy.MaxQueryBytes
-	// WritesPerMinute is how many writes one participant may make a minute,
-	// notes and tabs together, refused ones included (AdmitWrite). Autosave at a pause of
-	// a second and a half stays under forty even during continuous typing.
+	// WritesPerMinute counts notes and tabs together, refused writes included.
+	// Autosave after a 1.5 s pause stays under forty even while typing.
 	WritesPerMinute = 60
 )
 
-// writeWindow is the write throttle's fixed window.
 const writeWindow = time.Minute
 
-// Why a workspace call was refused. Each is a different thing to tell the
-// participant, and the HTTP layer maps every one of them (CLAUDE.md rule 1).
+// Why a workspace call was refused (CLAUDE.md rule 1).
 var (
 	ErrNotesTooLong    = fmt.Errorf("the notes are longer than %d characters", MaxNotesRunes)
 	ErrTooManyTabs     = fmt.Errorf("a participant may keep at most %d tabs", MaxTabs)
@@ -66,25 +49,20 @@ var (
 	ErrTabBodyTooLong  = fmt.Errorf("a tab holds at most %d bytes of SQL", MaxTabBodyBytes)
 	ErrTextInvalid     = errors.New("the text contains a NUL character or is not valid UTF-8")
 	ErrNothingToChange = errors.New("the change names neither a title nor a body")
-	// ErrTabNotFound is also the answer for another participant's tab: that
-	// it exists is not this caller's business.
-	ErrTabNotFound = errors.New("no such tab in this workspace")
-	// ErrLastTab keeps the editor from ever having nothing to show.
-	ErrLastTab = errors.New("the last tab cannot be deleted")
-	// ErrOrderMismatch is a new order that does not name every tab of the
-	// workspace exactly once.
+	// ErrTabNotFound is also the answer for another participant's tab.
+	ErrTabNotFound   = errors.New("no such tab in this workspace")
+	ErrLastTab       = errors.New("the last tab cannot be deleted")
 	ErrOrderMismatch = errors.New("the order must name every tab exactly once")
 	ErrTooOften      = errors.New("too many workspace writes this minute")
 )
 
-// Notes is the participant's free text. UpdatedAt is nil until it is first
-// saved.
+// Notes is the participant's free text. UpdatedAt is nil until first saved.
 type Notes struct {
 	Body      string
 	UpdatedAt *time.Time
 }
 
-// Tab is one SQL editor tab. Position orders the tabs, starting at zero.
+// Tab is one SQL editor tab. Position starts at zero.
 type Tab struct {
 	ID        uuid.UUID
 	Title     string
@@ -93,29 +71,26 @@ type Tab struct {
 	UpdatedAt time.Time
 }
 
-// TabPatch is a change to one tab: a nil field is left as it is.
+// TabPatch is a change to one tab; a nil field is left as it is.
 type TabPatch struct {
 	Title *string
 	Body  *string
 }
 
-// Workspace is everything the participant's screen restores.
 type Workspace struct {
 	Notes Notes
-	// Tabs are in position order, and never empty.
+	// Tabs are in position order and never empty.
 	Tabs []Tab
 }
 
-// Session is whose workspace a call works in, once the caller's admission
-// has let the participant in, and which language a tab the server names
-// should be named in.
+// Session is whose workspace a call works in, after admission, and the
+// language for server-named tabs.
 type Session struct {
 	Registration uuid.UUID
 	Lang         string
 }
 
-// Repository is the storage this service needs. Implemented in
-// internal/postgres.
+// Repository is the storage this service needs.
 type Repository interface {
 	// Load returns the workspace, first creating a tab titled firstTitle if it
 	// has none. Two concurrent first loads create one tab, not two.
@@ -123,25 +98,21 @@ type Repository interface {
 	// SaveNotes replaces the notes and returns when they were saved, recording
 	// the save in the notes' revisions in the same transaction.
 	SaveNotes(ctx context.Context, registration uuid.UUID, body string) (time.Time, error)
-	// CreateTab appends a tab, refusing with ErrTooManyTabs when the
-	// workspace already holds limit of them. title is called with the titles
-	// already taken, under the same lock that counts them. The creation is
-	// recorded as a tab_created event in the same transaction, as is the
-	// first tab Load creates.
+	// CreateTab appends a tab, refusing with ErrTooManyTabs at limit. title
+	// is called with the taken titles under the lock that counts them. The
+	// creation is recorded as a tab_created event in the same transaction, as
+	// is the first tab Load creates.
 	CreateTab(ctx context.Context, registration uuid.UUID, limit int, title func(taken []string) string) (Tab, error)
-	// UpdateTab applies patch and returns when it was applied, or
-	// ErrTabNotFound for a tab that is not this registration's. A changed
-	// title is recorded as a tab_renamed event and new text as a revision of
-	// the tab, in the same transaction.
+	// UpdateTab applies patch, or returns ErrTabNotFound for a tab that is not
+	// this registration's. A new title is recorded as a tab_renamed event and
+	// new text as a revision, in the same transaction.
 	UpdateTab(ctx context.Context, registration, id uuid.UUID, patch TabPatch) (time.Time, error)
-	// DeleteTab removes a tab and closes the gap in positions. ErrTabNotFound
-	// for a tab that is not this registration's, ErrLastTab for the only one.
-	// The deletion is recorded as a tab_deleted event; the tab's revisions
-	// stay.
+	// DeleteTab removes a tab and closes the gap in positions, recording a
+	// tab_deleted event; the tab's revisions stay. ErrTabNotFound for another
+	// registration's tab, ErrLastTab for the only one.
 	DeleteTab(ctx context.Context, registration, id uuid.UUID) error
-	// ReorderTabs gives each tab its index in ids as its position, in one
-	// transaction, or refuses with ErrOrderMismatch when ids is not exactly
-	// the workspace's set of tabs.
+	// ReorderTabs gives each tab its index in ids as its position, or refuses
+	// with ErrOrderMismatch when ids is not exactly the workspace's tabs.
 	ReorderTabs(ctx context.Context, registration uuid.UUID, ids []uuid.UUID) error
 }
 
@@ -152,24 +123,20 @@ type Limiter interface {
 
 // Service applies the workspace's rules over a Repository.
 //
-// Every write method assumes its caller has already spent the write through
-// AdmitWrite: the throttle has to run before the caller's own lookups, which
-// happen before a Session exists to hand to a write.
+// Every write method assumes the caller already spent the write through
+// AdmitWrite, which must run before the lookups that produce a Session.
 type Service struct {
 	repo    Repository
 	limiter Limiter
 }
 
-// NewService returns a workspace service.
 func NewService(repo Repository, limiter Limiter) *Service {
 	return &Service{repo: repo, limiter: limiter}
 }
 
-// Get returns the participant's workspace, creating the first tab — named in
-// the session's language — if there is none yet.
-//
-// Not throttled here: the caller's read admission already charged for it,
-// and a reload must not spend the budget autosave needs.
+// Get returns the participant's workspace, creating the first tab if there is
+// none. It is not throttled: read admission already charged for it, and a
+// reload must not spend the budget autosave needs.
 func (s *Service) Get(ctx context.Context, session Session) (Workspace, error) {
 	notes, tabs, err := s.repo.Load(ctx, session.Registration, defaultTitle(session.Lang, 1))
 	if err != nil {
@@ -178,7 +145,6 @@ func (s *Service) Get(ctx context.Context, session Session) (Workspace, error) {
 	return Workspace{Notes: notes, Tabs: tabs}, nil
 }
 
-// SaveNotes replaces the notes.
 func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (time.Time, error) {
 	if err := checkText(body); err != nil {
 		return time.Time{}, err
@@ -193,8 +159,8 @@ func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (
 	return at, nil
 }
 
-// CreateTab appends an empty tab. A nil title names it after the smallest
-// number no tab of the workspace is already named after.
+// CreateTab appends an empty tab. A nil title names it after the smallest free
+// number.
 func (s *Service) CreateTab(ctx context.Context, session Session, title *string) (Tab, error) {
 	name := func(taken []string) string { return freeTitle(session.Lang, taken) }
 	if title != nil {
@@ -214,7 +180,6 @@ func (s *Service) CreateTab(ctx context.Context, session Session, title *string)
 	return tab, nil
 }
 
-// UpdateTab renames a tab, replaces its text, or both.
 func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, patch TabPatch) (time.Time, error) {
 	if patch.Title == nil && patch.Body == nil {
 		return time.Time{}, ErrNothingToChange
@@ -244,7 +209,6 @@ func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, 
 	return at, nil
 }
 
-// DeleteTab removes a tab, unless it is the last one.
 func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) error {
 	if err := s.repo.DeleteTab(ctx, session.Registration, id); err != nil {
 		if errors.Is(err, ErrTabNotFound) || errors.Is(err, ErrLastTab) {
@@ -255,11 +219,10 @@ func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) 
 	return nil
 }
 
-// ReorderTabs puts the tabs in the order ids names them. ids must be the
-// workspace's tabs, each exactly once.
+// ReorderTabs puts the tabs in the order ids names them.
 func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.UUID) error {
-	// The shape is checked here, before a transaction is opened for it; the
-	// set itself can only be compared under the repository's lock.
+	// The shape is checked before a transaction opens; the set itself can only
+	// be compared under the repository's lock.
 	if len(ids) == 0 || len(ids) > MaxTabs {
 		return ErrOrderMismatch
 	}
@@ -279,26 +242,18 @@ func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.U
 	return nil
 }
 
-// AdmitWrite spends one write of the account's budget, and refuses with
-// ErrTooOften once the budget for this minute is spent. The caller asks it
-// before anything else about a write — before the participant and the
-// contest are looked up, before the body is read — so every attempt is
-// counted, a refused one included (CLAUDE.md rule 13).
+// AdmitWrite spends one write of the account's budget, refusing with
+// ErrTooOften once this minute's budget is spent. The caller asks it before
+// any lookup or body read, so every attempt counts (CLAUDE.md rule 13).
 //
-// Its own budget, not the read budget queryproxy.Service.AdmitRead spends:
-// that one is shared with the SQL console, and autosave during continuous
-// typing would otherwise take the participant's queries away from them.
-//
-// Keyed by the account rather than the registration, because the account is
-// what is known before those lookups; it is just as bounded — one key per
-// account, assigned at sign-in and never named by the request (CLAUDE.md
-// rule 5). A person taking part in two running contests at once would share
-// one budget between them, which is not a case an olympiad has.
+// It is a budget separate from the read budget, which the SQL console shares,
+// so autosave cannot starve the participant's queries. It is keyed by the
+// account, known before the lookups and never named by the request (CLAUDE.md
+// rule 5).
 func (s *Service) AdmitWrite(ctx context.Context, account uuid.UUID) error {
 	allowed, err := s.limiter.Allow(ctx, "workspace:user:"+account.String(), WritesPerMinute, writeWindow)
 	if err != nil {
-		// A counter that cannot be kept refuses: writing unthrottled is what
-		// this exists to prevent. Not ErrTooOften — nobody asked too often.
+		// A counter that cannot be kept refuses, but not with ErrTooOften.
 		return fmt.Errorf("check the workspace write rate: %w", err)
 	}
 	if !allowed {
@@ -307,8 +262,8 @@ func (s *Service) AdmitWrite(ctx context.Context, account uuid.UUID) error {
 	return nil
 }
 
-// RetryAfter is how long a caller refused with ErrTooOften should wait at
-// most: the whole window, since the window's start is not known here.
+// RetryAfter is the longest a caller refused with ErrTooOften should wait:
+// the whole window, since its start is not known here.
 func RetryAfter() time.Duration { return writeWindow }
 
 // checkText refuses what PostgreSQL's text type cannot store: a NUL, which
@@ -320,7 +275,6 @@ func checkText(text string) error {
 	return nil
 }
 
-// cleanTitle trims a title and checks it against the title rules.
 func cleanTitle(title string) (string, error) {
 	if !utf8.ValidString(title) {
 		return "", ErrTitleInvalid
@@ -336,17 +290,16 @@ func cleanTitle(title string) (string, error) {
 	return clean, nil
 }
 
-// titleWords is the word a server-named tab is named with, per language the
-// platform serves. Stored data, not interface text: the tab keeps the name
-// it was given in whatever language the screen later shows.
+// titleWords names server-named tabs per language. It is stored data, not
+// interface text: the tab keeps its name whatever language is shown later.
 var titleWords = map[string]string{
 	"en": "Query",
 	"ru": "Запрос",
 	"ro": "Interogare",
 }
 
-// defaultTitle is the name of the n-th server-named tab in lang, in English
-// for a language the platform has no word for.
+// defaultTitle names the n-th server-named tab in lang, falling back to
+// English.
 func defaultTitle(lang string, n int) string {
 	word, ok := titleWords[lang]
 	if !ok {
@@ -355,9 +308,8 @@ func defaultTitle(lang string, n int) string {
 	return word + " " + strconv.Itoa(n)
 }
 
-// freeTitle is the default title with the smallest number no title in taken
-// already uses. At most MaxTabs titles are taken, so the loop ends within
-// MaxTabs+1 steps.
+// freeTitle is the default title with the smallest number not in taken. At
+// most MaxTabs titles are taken, so the loop ends within MaxTabs+1 steps.
 func freeTitle(lang string, taken []string) string {
 	for n := 1; ; n++ {
 		candidate := defaultTitle(lang, n)

@@ -18,10 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
-// Every failure the runner can produce has to survive the wire as the same
-// failure. The two directions are separate code, and the enum is a third list
-// again — this is what keeps the three in step, and it is the same class of
-// mistake as a Go status the query_log column would have rejected.
+// Keeps the two mapping directions and the wire enum in step.
 func TestEveryFailureSurvivesTheWireAsItself(t *testing.T) {
 	for name, given := range map[string]struct {
 		err  error
@@ -32,15 +29,12 @@ func TestEveryFailureSurvivesTheWireAsItself(t *testing.T) {
 		"one at a time":   {queryrunner.ErrAlreadyRunning, queryrunner.ErrAlreadyRunning},
 		"a timeout":       {queryrunner.ErrTimeout, queryrunner.ErrTimeout},
 		"a deadline":      {context.DeadlineExceeded, queryrunner.ErrTimeout},
-		// A caller that left is not a query that ran too long. Conflating them
-		// here would put back the difference the runner just took out.
+		// A caller that left is not a query that ran too long.
 		"a caller that left":  {queryrunner.ErrCanceled, queryrunner.ErrCanceled},
 		"a cancelled context": {context.Canceled, queryrunner.ErrCanceled},
 		"asking too fast":     {queryrunner.ErrTooManyQueries, queryrunner.ErrTooManyQueries},
 		"a full disk":         {queryrunner.ErrDiskFull, queryrunner.ErrDiskFull},
-		// PostgreSQL's own error, which is what a database error is. A bare
-		// errors.New here would be a test of the default branch wearing the
-		// name of this one.
+		// A bare errors.New would exercise the default branch instead.
 		"a database error": {&pgconn.PgError{
 			Severity: "ERROR", Code: "42P01", Message: `relation "nope" does not exist`,
 		}, nil},
@@ -57,10 +51,7 @@ func TestEveryFailureSurvivesTheWireAsItself(t *testing.T) {
 	}
 }
 
-// A refusal is the one failure the interface has to act on rather than merely
-// report: the code chooses which sentence the participant is shown, in their
-// own language. Losing it across the wire would leave the interface with an
-// English string and nothing to translate.
+// The code picks the translated sentence the participant is shown.
 func TestARefusalKeepsItsCodeAndSubject(t *testing.T) {
 	original := &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotReadable, Subject: "pg_stat_activity"}
 
@@ -73,14 +64,8 @@ func TestARefusalKeepsItsCodeAndSubject(t *testing.T) {
 	}
 }
 
-// The position is the other half of what makes a refusal actionable, and it
-// was the half with no field on the contract: the checker set it, the console
-// read it, and in every deployed arrangement it was zero between the two.
-//
-// Both directions and both values, because "no position" is a real answer —
-// every refusal but a parse error has one, and a wire that invented an offset
-// for them would have the console underline the first character of a query
-// whose whole statement was refused.
+// Zero is a real answer too: an invented offset would underline the first
+// character of a query refused as a whole (CLAUDE.md rule 11).
 func TestARefusalKeepsThePositionItWasRefusedAt(t *testing.T) {
 	for name, given := range map[string]struct {
 		refusal *sqlpolicy.Refusal
@@ -114,19 +99,14 @@ func TestSuccessCarriesNoFailure(t *testing.T) {
 	}
 }
 
-// A kind this build has never heard of still means the query did not run.
-// Treating an unfamiliar enum as success would turn a newer runner into
-// silently wrong answers rather than a visible incompatibility.
 func TestAnUnknownKindIsStillAFailure(t *testing.T) {
 	if err := errorFor(&pb.Failure{Kind: pb.Failure_Kind(99).Enum(), Message: ptr("from the future")}); err == nil {
 		t.Fatal("an unknown failure kind came back as success")
 	}
 }
 
-// The policy decides what a participant may do, and it crosses the wire on
-// every request. A field that fails to travel is a contest running under a
-// policy nobody chose — most dangerously the writable tables, where the
-// difference between "empty" and "lost" is invisible at the far end.
+// A field that fails to travel is a contest running under a policy nobody
+// chose; for writable tables, "empty" and "lost" look the same.
 func TestThePolicyCrossesWholeInBothDirections(t *testing.T) {
 	original := sqlpolicy.Policy{
 		Mode:            sqlpolicy.ModeReadWrite,
@@ -149,8 +129,7 @@ func TestThePolicyCrossesWholeInBothDirections(t *testing.T) {
 		t.Fatalf("a permission was lost: %+v", back)
 	}
 
-	// And the restrictive one stays restrictive, which is the direction that
-	// matters if a field ever stops travelling.
+	// The restrictive policy must stay restrictive.
 	strict := policyFrom(policyProto(sqlpolicy.ReadOnly()))
 	if strict.Mode != sqlpolicy.ModeReadOnly || len(strict.WritableTables) != 0 {
 		t.Fatalf("read-only did not survive: %+v", strict)
@@ -160,8 +139,6 @@ func TestThePolicyCrossesWholeInBothDirections(t *testing.T) {
 	}
 }
 
-// A timeout and a cancellation must not collapse into each other on the way
-// across, in either direction.
 func TestATimeoutAndACancellationStayDistinct(t *testing.T) {
 	timeout := errorFor(failureFor(queryrunner.ErrTimeout))
 	cancelled := errorFor(failureFor(queryrunner.ErrCanceled))
@@ -174,21 +151,9 @@ func TestATimeoutAndACancellationStayDistinct(t *testing.T) {
 	}
 }
 
-// A connection that never opened is not the database refusing anything: the
-// database never saw the query.
-//
-// This is the failure that was actually served to a participant — the Query
-// Runner could not reach the game cluster, and the classification here called
-// it a database error, so the console answered "check the fields you filled
-// in" with the cluster's host, port, role name and the participant's own
-// database name attached.
-//
-// The refusal is provoked rather than described, because the shape of the
-// error is the whole point: pgx reports a rejected login as a
-// *pgconn.ConnectError whose chain *contains* a *pgconn.PgError, so a rule
-// that only asks "is there a PgError in here" answers yes for a connection
-// failure and hands the connection string back as though PostgreSQL had said
-// it about the query.
+// The refusal is provoked rather than built by hand, because the error's
+// shape is the point: pgx wraps the login's PgError in a ConnectError that
+// carries the cluster's address and role.
 func TestAConnectionThatNeverOpenedIsNotTheDatabaseRefusingTheQuery(t *testing.T) {
 	err := fmt.Errorf("connecting to the game database: %w", refusedLogin(t))
 
@@ -197,8 +162,7 @@ func TestAConnectionThatNeverOpenedIsNotTheDatabaseRefusingTheQuery(t *testing.T
 		t.Fatalf("kind = %v, want KIND_INTERNAL", got)
 	}
 
-	// The journal still gets the whole thing: it is the only place the
-	// address and the role that failed are of any use.
+	// The journal still gets the full detail.
 	if !strings.Contains(failure.GetMessage(), "game_reader") {
 		t.Fatalf("the message the journal reads lost the detail: %q", failure.GetMessage())
 	}
@@ -213,9 +177,6 @@ func TestAConnectionThatNeverOpenedIsNotTheDatabaseRefusingTheQuery(t *testing.T
 	}
 }
 
-// PostgreSQL refusing the query is the one thing here that is about the
-// query, and its words are the useful ones — "relation \"guests\" does not
-// exist" is the sentence a participant can act on.
 func TestTheDatabasesOwnRefusalCrossesAsTheDatabasesOwn(t *testing.T) {
 	pgErr := &pgconn.PgError{Severity: "ERROR", Code: "42P01", Message: `relation "guests" does not exist`}
 
@@ -233,8 +194,6 @@ func TestTheDatabasesOwnRefusalCrossesAsTheDatabasesOwn(t *testing.T) {
 	}
 }
 
-// Anything unrecognised is ours until it proves otherwise. A bug of ours must
-// not be reported to a participant as the database's answer to their SQL.
 func TestAnUnrecognisedFailureIsOursAndNotTheDatabases(t *testing.T) {
 	failure := failureFor(errors.New("the runner is holding it wrong"))
 	if got := failure.GetKind(); got != pb.Failure_KIND_INTERNAL {
@@ -252,12 +211,7 @@ func TestAnUnrecognisedFailureIsOursAndNotTheDatabases(t *testing.T) {
 }
 
 // refusedLogin returns the error pgx produces when a cluster refuses the
-// login — the second half of what the participant was shown.
-//
-// A listener that speaks the two messages of the protocol this needs, rather
-// than a real cluster: the error's *shape* is what is under test, and a test
-// that skips without a database is a test that does not run on the machine
-// where somebody breaks this.
+// login. A fake listener rather than a real cluster, so the test never skips.
 func refusedLogin(t *testing.T) error {
 	t.Helper()
 
@@ -300,15 +254,6 @@ func refusedLogin(t *testing.T) error {
 	return err
 }
 
-// A position that could not fit the wire must not arrive as a negative one.
-//
-// `Refusal.Position` is an `int`, the field is an `int32`, and a bare
-// conversion wraps: on a 64-bit build a value past 2^31 becomes a negative
-// offset, which the console would hand to CodeMirror as a document position.
-// The comment that used to stand here argued the value cannot get that large
-// because a statement is bounded — true today, and an argument about a
-// different package's constant rather than about this line. gosec was right
-// to keep flagging it.
 func TestAPositionTooLargeForTheWireArrivesAsNoPositionAtAll(t *testing.T) {
 	for _, tc := range []struct {
 		name string

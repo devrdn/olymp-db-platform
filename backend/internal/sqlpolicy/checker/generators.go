@@ -12,45 +12,21 @@ import (
 	pg "github.com/pganalyze/pg_query_go/v6"
 )
 
-// MaxGeneratedLength is the length above which a string-building function —
-// repeat, lpad, rpad — is refused when the length is written in the query as a
-// constant.
-//
-// This is a first line, not the bound. The bound is a per-process memory limit
-// on the game cluster's backends (deploy/docker-compose.yml, ulimits.data): a
-// query that over-allocates fails with PostgreSQL's own "out of memory" ERROR
-// in that one backend, and the postmaster does not restart. What this constant
-// buys is a clear, immediate refusal for the obvious case — a constant length
-// nobody could mean — rather than making a participant wait for the query to
-// run and fail. Anything the checker cannot read as a constant (a column, a
-// subquery, an aggregate, arithmetic, a value-changing cast) is admitted and
-// left to the memory limit; that is deliberate, so an ordinary query like
-// repeat('#', count(*)::int) is not refused for a size the checker cannot know.
-//
-// Ten thousand leaves room for every legitimate use (a line of dashes, a
-// padded identifier, an aligned column are tens of characters) while refusing
-// a constant that is plainly abusive.
+// MaxGeneratedLength is the constant length above which repeat, lpad and rpad
+// are refused. It only gives an early, clear refusal for an obviously abusive
+// constant; the real bound is the game cluster's per-process memory limit
+// (deploy/docker-compose.yml, ulimits.data), which fails one backend with
+// "out of memory". A non-constant length such as count(*)::int is admitted.
 const MaxGeneratedLength = 10_000
 
-// MaxSeriesLength is the number of values above which generate_series is
-// refused when its bounds are written in the query as constants. The same
-// first-line reasoning as MaxGeneratedLength: a series whose bounds are a
-// column or a subquery — generate_series(1, (SELECT max(id) FROM t)) — is
-// admitted, because the checker cannot know the count without running the
-// query. What bounds an admitted runaway is not this constant but the layers
-// below: the runner's deadline and its cancellation of the server backend, and
-// the per-process memory cap if the series feeds something that allocates.
+// MaxSeriesLength is the number of values above which generate_series with
+// constant bounds is refused. Non-constant bounds are admitted and left to the
+// runner's deadline and the memory limit.
 const MaxSeriesLength = 100_000
 
-// sizeAllowed is the first-line check on the functions that build a value, or
-// a series of rows, from a size. It refuses only what it can prove abusive
-// from constants written in the query; everything else it admits, leaving the
-// game cluster's per-process memory limit as the real bound.
-//
-// Only the functions whose output size is a plain multiple of a number are
-// here. Functions that multiply their input another way — replace,
-// regexp_replace, and the like — are not: bounding them would be a growing
-// list of special cases, and the memory limit already covers them.
+// sizeAllowed refuses a value or row generator only when constants in the
+// query prove its size abusive. Functions that grow their input another way
+// (replace, regexp_replace) are left to the memory limit.
 func sizeAllowed(name string, call *pg.FuncCall) error {
 	switch name {
 	case "repeat", "lpad", "rpad":
@@ -61,13 +37,10 @@ func sizeAllowed(name string, call *pg.FuncCall) error {
 	return nil
 }
 
-// lengthAllowed refuses repeat, lpad and rpad when their length argument is a
-// constant above MaxGeneratedLength. The length is the second argument of all
-// three.
+// lengthAllowed checks the length, which is the second argument of all three.
 func lengthAllowed(name string, call *pg.FuncCall) error {
 	args := call.GetArgs()
-	// A VARIADIC array or a named argument cannot be read by position; those
-	// are admitted and left to the memory limit rather than guessed at.
+	// A VARIADIC array or a named argument cannot be read by position.
 	if call.GetFuncVariadic() || len(args) < 2 || args[1].GetNamedArgExpr() != nil {
 		return nil
 	}
@@ -87,10 +60,8 @@ func lengthAllowed(name string, call *pg.FuncCall) error {
 	}
 }
 
-// seriesAllowed refuses generate_series when its bounds and step are constants
-// whose span holds more than MaxSeriesLength values. Only the numeric form is
-// read; a date or timestamp series, and any form with a non-constant argument,
-// is admitted and left to the memory limit.
+// seriesAllowed reads only the numeric form; a date or timestamp series is
+// admitted.
 func seriesAllowed(call *pg.FuncCall) error {
 	args := call.GetArgs()
 	if call.GetFuncVariadic() || len(args) < 2 || len(args) > 3 {
@@ -112,8 +83,7 @@ func seriesAllowed(call *pg.FuncCall) error {
 	}
 	step := 1.0
 	if len(args) == 3 {
-		// A step of zero is a runtime error in PostgreSQL, not a count this
-		// can read; admitted and left to fail there.
+		// A zero step is a runtime error in PostgreSQL; left to fail there.
 		if step, ok = constantNumber(args[2]); !ok || step == 0 {
 			return nil
 		}
@@ -135,10 +105,8 @@ func seriesAllowed(call *pg.FuncCall) error {
 	}
 }
 
-// seriesCount is how many values generate_series(start, stop, step) yields:
-// none when the step points away from the stop, one more than the whole steps
-// between them otherwise. Non-finite inputs (a constant like 1e400) count as
-// over any bound.
+// seriesCount is how many values generate_series(start, stop, step) yields.
+// Non-finite inputs (a constant like 1e400) count as over any bound.
 func seriesCount(start, stop, step float64) float64 {
 	steps := (stop - start) / step
 	if math.IsInf(steps, 0) || math.IsNaN(steps) {
@@ -151,15 +119,9 @@ func seriesCount(start, stop, step float64) float64 {
 }
 
 // constantNumber reads a number written in the query as a constant: an integer
-// or decimal literal, negated, or cast to a numeric type — nothing else.
-//
-// A cast is followed only when its target is a numeric type (integer, numeric
-// or floating point), because those preserve the value the checker is reading.
-// A cast to any other type is not followed: (-173741824)::bit(30)::int reads,
-// at runtime, as 900000000 — the bit(30) reinterprets the bits — so following
-// it and taking the inner literal would read a size the query does not use.
-// Such a cast makes the argument one the checker cannot know, which is admitted
-// and left to the memory limit, not read as its inner literal.
+// or decimal literal, negated, or cast to a numeric type. Other casts change
+// the value ((-173741824)::bit(30)::int is 900000000), so they make the
+// argument unknown rather than being read through.
 func constantNumber(node *pg.Node) (float64, bool) {
 	switch {
 	case node.GetAConst() != nil:
@@ -168,12 +130,8 @@ func constantNumber(node *pg.Node) (float64, bool) {
 		case c.GetIval() != nil:
 			return float64(c.GetIval().GetIval()), true
 		case c.GetFval() != nil:
-			// A constant too large for a float64 (1e400) parses to infinity
-			// with an ErrRange error. It is still a constant the participant
-			// wrote, and one plainly above any bound, so it is kept and
-			// refused — not read as unreadable and admitted. Only a genuinely
-			// unparseable value (which the grammar should never produce for a
-			// numeric literal) is treated as not a constant.
+			// 1e400 parses to infinity with ErrRange: still a constant, and
+			// over any bound, so it is kept rather than treated as unknown.
 			v, err := strconv.ParseFloat(c.GetFval().GetFval(), 64)
 			if math.IsNaN(v) || (err != nil && !errors.Is(err, strconv.ErrRange)) {
 				return 0, false
@@ -187,9 +145,8 @@ func constantNumber(node *pg.Node) (float64, bool) {
 		}
 		return constantNumber(node.GetTypeCast().GetArg())
 	case node.GetAExpr() != nil:
-		// The grammar folds a minus sign into the constant it precedes, so a
-		// bare negative literal never reaches here; this catches a minus in
-		// front of something else, such as a cast.
+		// A minus before a non-literal, such as a cast; the grammar folds it
+		// into a bare literal.
 		e := node.GetAExpr()
 		if e.GetKind() != pg.A_Expr_Kind_AEXPR_OP || e.GetLexpr() != nil || len(e.GetName()) != 1 ||
 			e.GetName()[0].GetString_().GetSval() != "-" {
@@ -201,14 +158,12 @@ func constantNumber(node *pg.Node) (float64, bool) {
 	return 0, false
 }
 
-// numericTypes are PostgreSQL's own names for the integer, numeric and
-// floating-point types, which is what the parser normalises every spelling to:
-// smallint to int2, integer and int to int4, bigint to int8, decimal to
-// numeric, real to float4, double precision to float8.
+// numericTypes are the names the parser normalises every numeric type
+// spelling to (integer to int4, double precision to float8, ...).
 var numericTypes = names("int2", "int4", "int8", "numeric", "float4", "float8")
 
 // numericTypeName reports whether a cast target is one of those, bare or
-// qualified with pg_catalog (both spell the same type).
+// pg_catalog-qualified.
 func numericTypeName(tn *pg.TypeName) bool {
 	parts := tn.GetNames()
 	if len(parts) == 0 || tn.GetArrayBounds() != nil {
@@ -230,11 +185,7 @@ func numericTypeName(tn *pg.TypeName) bool {
 	return ok
 }
 
-// formatSize prints a finite constant the way it was written, as a whole
-// number where it is one and with no exponent where it is not, so the refusal
-// names the value the participant typed rather than a float's scientific form.
-// The out-of-range case is handled by the refusals above, which read as a
-// sentence rather than substituting a phrase for a number.
+// formatSize prints a finite constant without an exponent, as typed.
 func formatSize(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }

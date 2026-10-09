@@ -9,9 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// markedSuspects is a suspects file long enough to hold several row marks —
-// tableRowMarkInterval is 500, so this covers two full intervals and part of a
-// third, which is what puts a page boundary on both sides of a mark.
+// markedSuspects builds a suspects CSV with the given number of rows; with the
+// mark interval at 500, the tests' sizes put page boundaries on both sides of
+// a mark.
 func markedSuspects(rows int) string {
 	var b strings.Builder
 	b.WriteString("id,name,nickname\n")
@@ -21,8 +21,8 @@ func markedSuspects(rows int) string {
 	return b.String()
 }
 
-// readWindows pages through a table a hundred rows at a time and returns every
-// row number it was shown, in the order it was shown them.
+// readWindows pages through a table 100 rows at a time and returns the row
+// numbers shown, in order.
 func readWindows(t *testing.T, service *provisioning.Games, contest uuid.UUID, table string, total int64) []int64 {
 	t.Helper()
 
@@ -39,12 +39,7 @@ func readWindows(t *testing.T, service *provisioning.Games, contest uuid.UUID, t
 	return seen
 }
 
-// Paging through a table no longer walks from the first row every time: the
-// offsets of every five-hundredth row are kept as they are passed, and the
-// next page seeks to the nearest one. The rows a caller is shown must not
-// change because of it — this pages the whole file twice, once with no marks
-// at all and once with every mark the first pass recorded, and insists on the
-// same answer both times.
+// The first pass runs with no marks and records them; the second seeks to them.
 func TestPagingATableGivesTheSameRowsWarmAsCold(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -76,9 +71,7 @@ func TestPagingATableGivesTheSameRowsWarmAsCold(t *testing.T) {
 	}
 }
 
-// A deep page must show the same rows whether or not anything walked past them
-// first. Asked for straight away it is a cold read with no mark to start from;
-// asked for again it seeks to the mark the first read left behind.
+// The first read is cold; later ones seek to the mark it left.
 func TestADeepPageIsTheSameRowsOnEveryReading(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -110,10 +103,8 @@ func TestADeepPageIsTheSameRowsOnEveryReading(t *testing.T) {
 	}
 }
 
-// A table's file is written to again by every row a form adds, which is the
-// whole reason gamefile's own sealed index cannot serve this read. Marks taken
-// before an append have to keep pointing at the rows they were taken for, and
-// the rows added after them have to be reachable.
+// Marks taken before an append must still point at their rows, and the
+// appended row must be reachable.
 func TestMarksSurviveRowsBeingAppended(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)

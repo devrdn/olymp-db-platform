@@ -6,48 +6,31 @@ import (
 	"time"
 )
 
-// The bounds one record may not exceed.
-//
-// The trail is kept for a year and read in a browser. A single entry must not
-// be able to grow until the page stops opening — and a value is noted rather
-// than truncated, because half a value in a record people rely on is worse
-// than an honest gap.
+// The bounds one record may not exceed. An oversized value is replaced by a
+// note of its size rather than truncated.
 const (
 	maxChangedFields = 50
 	maxChangeValue   = 512
 )
 
-// Changes is the set of fields an update actually altered.
+// Changes is the set of fields an update actually altered, since a form sends
+// every field. An empty set is recorded as such.
 //
-// Recorded instead of the new state, because a form sends every field: writing
-// all of them makes each save look like a rewrite of the whole contest, and
-// buries the one line that moved. An empty set is itself a fact — "saved,
-// nothing changed" — and the payload says so rather than leaving it
-// indistinguishable from a real edit.
-//
-// Fields are named by the caller and never derived from a struct. That is a
-// boundary rather than a style: reference answers are recorded as a count
-// precisely so the trail cannot become somewhere to look them up, and a diff
-// that walked a value with reflection would hand back exactly what was left
-// out on purpose (see docs/ARCHITECTURE.md §9.2).
+// Fields are named by the caller, never derived from a struct by reflection:
+// reference answers are recorded only as a count, and a reflective diff would
+// leak them into the trail.
 type Changes struct {
 	fields map[string]any
-	// counted is every field offered, so the bound is applied to what was
-	// asked for rather than to what happened to fit.
+	// counted is every field offered, so the bound applies to what was asked.
 	counted int
 }
 
-// NewChanges returns an empty change set.
 func NewChanges() *Changes {
 	return &Changes{fields: map[string]any{}}
 }
 
-// Set records a field, if it moved.
-//
-// Values are normalised to what would be stored before they are compared, so
-// the question answered is "would the record differ", not "are these the same
-// Go value". That is what keeps one instant expressed in two time zones from
-// reporting a schedule change on every save.
+// Set records a field if it moved. Values are compared as they would be
+// stored, so one instant in two time zones is not a change.
 func (c *Changes) Set(field string, before, after any) {
 	from, to := normalise(before), normalise(after)
 	if reflect.DeepEqual(from, to) {
@@ -61,20 +44,12 @@ func (c *Changes) Set(field string, before, after any) {
 	c.fields[field] = map[string]any{"from": bounded(from), "to": bounded(to)}
 }
 
-// Between records what differs between two shapes of the same thing.
-//
-// The call site says "these two", once, instead of repeating the list of
-// fields it compares — that list belongs beside the type it describes, where
-// it reads as a decision about what may be recorded rather than as
-// boilerplate. It is still a hand-written map, so the boundary holds: a field
-// that is not named cannot be recorded, and nothing walks a value with
-// reflection (see docs/ARCHITECTURE.md §9.2).
+// Between records what differs between two hand-written maps of the same
+// thing; a field not named in them cannot be recorded.
 func Between(before, after map[string]any) *Changes {
 	changes := NewChanges()
 
-	// The union, not just one side. Both maps normally come from one function
-	// and carry the same keys; when they do not, ignoring the odd field would
-	// hide the very edit somebody is looking for.
+	// The union of keys, so a field present on one side only is not lost.
 	for field, value := range after {
 		changes.Set(field, before[field], value)
 	}
@@ -86,14 +61,10 @@ func Between(before, after map[string]any) *Changes {
 	return changes
 }
 
-// Empty reports whether anything moved.
 func (c *Changes) Empty() bool { return len(c.fields) == 0 }
 
-// Payload is the audit entry's body.
-//
-// Plain maps all the way down, so redaction — which removes password-shaped
-// keys at any depth by walking maps — reaches into it. A struct here would be
-// a hole in that.
+// Payload is the audit entry's body: plain maps all the way down, so
+// redaction, which walks maps, reaches into it.
 func (c *Changes) Payload() map[string]any {
 	if c.Empty() {
 		return map[string]any{"changed": false}
@@ -101,11 +72,8 @@ func (c *Changes) Payload() map[string]any {
 	return map[string]any{"changes": c.fields}
 }
 
-// normalise turns a value into the shape it would be stored in.
-//
-// Pointers are followed so that setting and clearing a field reads as a value
-// against nil, and times become the one instant format the API speaks — both
-// so they compare correctly and so the record is readable a year later.
+// normalise turns a value into the shape it would be stored in: pointers are
+// followed and times become the API's instant format.
 func normalise(value any) any {
 	if value == nil {
 		return nil
@@ -131,7 +99,6 @@ func normalise(value any) any {
 	return value
 }
 
-// bounded replaces a value too large to keep with a note of its size.
 func bounded(value any) any {
 	if value == nil {
 		return nil

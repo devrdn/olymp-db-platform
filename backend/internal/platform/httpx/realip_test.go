@@ -25,9 +25,6 @@ func request(remoteAddr, xff string) *http.Request {
 }
 
 func TestDirectClientHeaderIsIgnored(t *testing.T) {
-	// A client talking to us directly can write any X-Forwarded-For it likes;
-	// believing it would let anyone spoof the address that rate limiting and
-	// the audit trail record.
 	p := resolver(t, "172.28.0.0/16")
 
 	got := p.Resolve(request("203.0.113.7:41000", "10.0.0.1"))
@@ -49,8 +46,7 @@ func TestTrustedProxyYieldsTheForwardedClient(t *testing.T) {
 
 func TestClientPrependedSpoofIsNotTrusted(t *testing.T) {
 	// The client sent "X-Forwarded-For: 10.9.9.9" and Caddy appended the real
-	// peer: the rightmost untrusted entry is the client, everything left of it
-	// is client-controlled noise.
+	// peer.
 	p := resolver(t, "172.28.0.0/16")
 
 	got := p.Resolve(request("172.28.0.5:41000", "10.9.9.9, 203.0.113.7"))
@@ -81,7 +77,6 @@ func TestAllForwardedEntriesTrustedFallsBackToPeer(t *testing.T) {
 }
 
 func TestMalformedForwardedEntryFallsBackToPeer(t *testing.T) {
-	// Garbage in the header must never become the recorded address.
 	p := resolver(t, "172.28.0.0/16")
 
 	got := p.Resolve(request("172.28.0.5:41000", "not-an-ip"))
@@ -112,7 +107,6 @@ func TestBareIPInTrustListIsAccepted(t *testing.T) {
 }
 
 func TestInvalidTrustEntryIsRejectedAtConstruction(t *testing.T) {
-	// A typo in TRUSTED_PROXIES must fail startup, not silently trust nobody.
 	if _, err := NewIPResolver([]string{"not-a-cidr"}); err == nil {
 		t.Error("NewIPResolver accepted an unparseable entry")
 	}
@@ -133,7 +127,6 @@ func TestMiddlewareStoresTheResolvedAddressForClientIP(t *testing.T) {
 }
 
 func TestClientIPWithoutMiddlewareStillReturnsThePeer(t *testing.T) {
-	// Handlers must not break in tests or setups that skip the middleware.
 	got := ClientIP(request("203.0.113.7:41000", ""))
 
 	if got != "203.0.113.7" {

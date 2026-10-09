@@ -11,9 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// profileFixture is one account with contests of its own and, beside every
-// one of them, another account's registration in the same contest: what the
-// reads must never pick up is present in the data, not merely absent from it.
+// profileFixture is one account with contests of its own, plus a stranger
+// registered in each, so rows the reads must skip are present in the data.
 type profileFixture struct {
 	t        *testing.T
 	ctx      context.Context
@@ -37,9 +36,8 @@ func (f *profileFixture) exec(sql string, args ...any) {
 	}
 }
 
-// contest stores a contest of the given status, starting at base+offset, and
-// enrols both accounts in it. It returns the contest and the caller's own
-// registration.
+// contest stores a contest starting at base+offset and enrols both accounts.
+// It returns the contest and the caller's own registration.
 func (f *profileFixture) contest(status string, offset time.Duration) (uuid.UUID, uuid.UUID) {
 	f.t.Helper()
 	contest := makeContest(f.t, f.ctx, f.user)
@@ -97,7 +95,6 @@ func TestProfileSummaryCountsOnlyTheCallersOwnWork(t *testing.T) {
 		f.answer(mine, question, 1, false, f.base)
 		f.answer(mine, question, 2, true, f.base.Add(time.Minute))
 		f.answer(mine, second, 1, true, f.base.Add(2*time.Minute))
-		// The stranger's own work, in the same contests.
 		strangerReg := f.strangerIn(finished)
 		f.query(strangerReg, "ok", f.base)
 		f.answer(strangerReg, question, 1, true, f.base)
@@ -113,8 +110,6 @@ func TestProfileSummaryCountsOnlyTheCallersOwnWork(t *testing.T) {
 	})
 }
 
-// strangerIn finds the other account's registration in a contest, so a test
-// can put work under it.
 func (f *profileFixture) strangerIn(contest uuid.UUID) uuid.UUID {
 	f.t.Helper()
 	var id uuid.UUID
@@ -160,16 +155,11 @@ func TestProfileEnrolmentsReadTheCallersOwnContestsNewestFirst(t *testing.T) {
 	})
 }
 
-// The page is picked before anything is counted, so a limit cuts the rows
-// the newest-first order puts at the top and the result columns are computed
-// for those rows only.
 func TestProfileEnrolmentsStopAtTheLimitAtTheTopOfTheOrder(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
 		var newest []uuid.UUID
 		for i := range 5 {
-			// The first is the newest; each one after it started an hour
-			// earlier.
 			contest, _ := f.contest(contests.StatusFinished, -time.Duration(i+1)*time.Hour)
 			if i < 2 {
 				newest = append(newest, contest)
@@ -187,11 +177,8 @@ func TestProfileEnrolmentsStopAtTheLimitAtTheTopOfTheOrder(t *testing.T) {
 	})
 }
 
-// The list carries the participant's own numbers, counted from their own
-// submissions and nobody else's, and agreeing with the table the contest is
-// judged by: the same points and the same solved count postgres.Leaderboard
-// computes for the same registration. Two statements compute these numbers
-// and this is what keeps them one answer.
+// Profile and Leaderboard compute these numbers in separate statements; this
+// keeps them in agreement.
 func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
@@ -203,8 +190,6 @@ func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T
 		f.answer(mine, first, 2, true, f.base.Add(10*time.Minute))
 		f.answer(mine, second, 1, true, f.base.Add(20*time.Minute))
 		_ = untried
-		// The stranger scores more, in the same contest, on the same
-		// questions.
 		f.answer(stranger, first, 1, true, f.base)
 		f.answer(stranger, second, 1, true, f.base)
 
@@ -218,8 +203,7 @@ func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T
 		}
 
 		entries, err := NewLeaderboard(testPool).Standings(ctx, leaderboard.Query{
-			// Past the registrations too: a row made after the cutoff is on no
-			// table, and these were made a moment ago.
+			// After the fixture's rows, which were created just now.
 			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringPoints, Limit: 10,
 		})
 		if err != nil {
@@ -239,21 +223,13 @@ func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T
 	})
 }
 
-// A draft contest is on no profile, in the list or in the four numbers.
-//
-// A roster may be filled while a contest is still being written, so a
-// registration in a draft exists long before anybody is meant to know the
-// contest does. The catalogue already refuses to show one (Contests.List: a
-// draft is nobody's business but its authors'), and the profile refuses for
-// the same reason — otherwise a member of the roster would read its title,
-// its status and its schedule here before it is published. Both reads exclude
-// it, so the header's numbers count exactly the rows the list shows.
+// A roster may be filled while the contest is still a draft, and the profile
+// must not reveal it before publication.
 func TestProfileReadsLeaveADraftContestOut(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
 		published, _ := f.contest(contests.StatusPublished, 24*time.Hour)
-		// Newer than the published one, so an unfiltered read would put it
-		// first rather than merely include it.
+		// Newer, so an unfiltered read would put it first.
 		draft, draftReg := f.contest(contests.StatusDraft, 48*time.Hour)
 		question := f.question(draft, 1)
 		f.query(draftReg, "ok", f.base)
@@ -277,9 +253,6 @@ func TestProfileReadsLeaveADraftContestOut(t *testing.T) {
 	})
 }
 
-// Archived contests stay: a profile is a history view, and archiving is how a
-// finished olympiad is put away, not how it is taken from the people who sat
-// it.
 func TestProfileReadsKeepAnArchivedContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
@@ -302,11 +275,8 @@ func TestProfileReadsKeepAnArchivedContest(t *testing.T) {
 	})
 }
 
-// The ICPC row is the one with a formula worth pinning: solved counts the
-// visible questions solved, and the penalty is each solve's minute from the
-// start plus the contest's penalty for every wrong attempt before it. Both
-// are checked against postgres.Leaderboard's own ICPC computation on the
-// same data.
+// The penalty is each solve's minute from the start plus the contest's
+// penalty for every earlier wrong attempt.
 func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
@@ -322,8 +292,7 @@ func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.
 		f.answer(mine, first, 2, true, f.base.Add(30*time.Minute))
 		// A clean solve 10 minutes in: 10.
 		f.answer(mine, second, 1, true, f.base.Add(10*time.Minute))
-		// A hidden question is on no ICPC grid, so it costs and counts
-		// nothing.
+		// A hidden question costs and counts nothing.
 		f.answer(mine, hidden, 1, true, f.base.Add(90*time.Minute))
 		f.answer(stranger, first, 1, true, f.base)
 
@@ -335,9 +304,6 @@ func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.
 		if got.Scoring != contests.ScoringICPC || got.Solved != 2 || got.Penalty != 60 {
 			t.Fatalf("result = %+v, want 2 solved and 60 penalty minutes", got)
 		}
-		// An ICPC contest has no points: Submit writes points_awarded = 0 in
-		// that mode, and the table reports none, so the list must not add up
-		// whatever a contest switched out of icpc left behind.
 		if got.Points != 0 {
 			t.Errorf("result = %+v, want no points in icpc scoring", got)
 		}
@@ -362,9 +328,8 @@ func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.
 	})
 }
 
-// Under an individual timer a solve's minute is counted from the
-// participant's own start, not the contest's — the branch of the penalty
-// arithmetic most likely to drift between the two statements that carry it.
+// Under an individual timer a solve's minute counts from the participant's
+// own start.
 func TestProfileEnrolmentsCarryTheICPCResultUnderAnIndividualTimer(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
@@ -451,21 +416,15 @@ func TestProfileActivityOfARegistrationThatDidNothing(t *testing.T) {
 	})
 }
 
-// Every read a profile makes runs against a database holding a
-// representative year — four hundred participants and their journals beside
-// the caller's own handful of rows — and none of them may scan a journal:
-// query_log and submissions are the largest tables there are, and a profile
-// is a page anybody signed in may open (the same guarantee
-// TestWatchReadsScanNoJournal makes of the organiser's reads).
+// Against a representative year of data, no profile read may scan query_log
+// or submissions: any signed-in user may open a profile.
 func TestProfileReadsScanNoJournal(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		q := storage.QuerierFrom(ctx, testPool)
 		f := newProfileFixture(t, ctx)
 		_, mine := f.contest(contests.StatusFinished, -24*time.Hour)
-		// More registrations than one page carries, so the plan has to pick
-		// the page before it counts anything: the result columns are an
-		// aggregate per row, and paying for all of them to return fifty is
-		// what the page subquery exists to prevent.
+		// More registrations than one page, so the plan must pick the page
+		// before aggregating.
 		for i := range 60 {
 			f.contest(contests.StatusFinished, -time.Duration(i+2)*time.Hour)
 		}

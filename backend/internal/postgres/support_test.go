@@ -17,26 +17,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// errRollback ends a test transaction. Every integration test below runs
-// inside one and leaves nothing behind: the alternative — creating rows and
-// deleting them afterwards — leaks whenever a test fails, and a failed test is
-// exactly when the next run needs a clean database.
+// errRollback ends a test transaction. Tests roll back rather than clean up,
+// because cleanup leaks whenever a test fails.
 var errRollback = errors.New("rolling back the test transaction")
 
-// testPool is opened once for the whole package; opening a pool per test would
-// spend more time connecting than querying.
 var testPool *pgxpool.Pool
 
-// TestMain connects to the database named by CORE_DB_DSN, if there is one.
-//
-// Without it the package's tests still run: what they skip is the part that
-// needs a server, and what stays is the constraint mapping, which is pure. A
-// developer with no PostgreSQL to hand should not be stopped from running the
-// suite — but nor should the SQL go unverified, so CI sets the variable.
-//
-// Through storagetest, which refuses any database that is not a test
-// database: `make test-db` used to point this at the one `make run` serves
-// the product from, and every run left its fixtures there.
+// TestMain connects through storagetest to the test database named by
+// CORE_DB_DSN. Without it the database tests skip and the pure ones still
+// run; CI sets the variable.
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -57,10 +46,7 @@ func TestMain(m *testing.M) {
 }
 
 // withTx runs body inside a transaction that is always rolled back.
-//
-// The repositories pick the transaction up from the context through
-// storage.QuerierFrom, which is the same path a real request takes, so what is
-// exercised here is the production code path and not a test-only variant.
+// Repositories pick it up through storage.QuerierFrom, as in production.
 func withTx(t *testing.T, body func(ctx context.Context)) {
 	t.Helper()
 	if testPool == nil {
@@ -76,13 +62,9 @@ func withTx(t *testing.T, body func(ctx context.Context)) {
 	}
 }
 
-// txNow is the database clock as a contract runner states times against it.
-//
-// Inside one transaction now() is its start time, so it is exactly the value
-// that column defaults (created_at, updated_at, granted_at) and the clock
-// comparisons a repository makes (deadlines, DueToStart) read. It is read
-// through the transaction, as the repository reads it: the pool itself is
-// another session, with a clock of its own.
+// txNow reads now() through the test transaction: its start time, which
+// column defaults and repository clock comparisons use. The pool is another
+// session with a different now().
 func txNow(t *testing.T, ctx context.Context) time.Time {
 	t.Helper()
 
@@ -93,7 +75,6 @@ func txNow(t *testing.T, ctx context.Context) time.Time {
 	return now
 }
 
-// makeUser stores an account the contest fixtures can hang off.
 func makeUser(t *testing.T, ctx context.Context, login string) users.User {
 	t.Helper()
 
@@ -109,9 +90,6 @@ func makeUser(t *testing.T, ctx context.Context, login string) users.User {
 	return created
 }
 
-// makeContest stores a draft contest owned by author.
-// makeRegistration enrols a user in a contest, which is what the query log is
-// keyed by: the same person in two contests is two participants.
 func makeRegistration(t *testing.T, ctx context.Context, contest, user uuid.UUID) uuid.UUID {
 	t.Helper()
 
@@ -125,6 +103,7 @@ func makeRegistration(t *testing.T, ctx context.Context, contest, user uuid.UUID
 	return id
 }
 
+// makeContest stores a draft contest owned by author.
 func makeContest(t *testing.T, ctx context.Context, author uuid.UUID) uuid.UUID {
 	t.Helper()
 
@@ -137,13 +116,10 @@ func makeContest(t *testing.T, ctx context.Context, author uuid.UUID) uuid.UUID 
 	return id
 }
 
-// contestRow inserts a user and a contest committed for real, with a
-// t.Cleanup that deletes both — provisioning's own contestFor's shape
-// (support_test.go:491), for a test that cannot run inside withTx because it
-// needs its own commits visible to a second claim (ClaimBuild's SKIP LOCKED
-// only ever sees committed rows). The contest's cascade
-// (000003_game_and_registrations.up.sql) takes game_templates and
-// game_table_data with it, so nothing else needs its own cleanup.
+// contestRow commits a user and a contest and deletes both in t.Cleanup, for
+// tests that cannot use withTx because ClaimBuild's SKIP LOCKED sees only
+// committed rows. The contest's cascade removes game_templates and
+// game_table_data.
 func contestRow(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	if testPool == nil {
@@ -173,8 +149,7 @@ func contestRow(t *testing.T, ctx context.Context) uuid.UUID {
 	return id
 }
 
-// countingQuerier counts the round trips a read makes: every statement, and
-// every batch as the one round trip it is.
+// countingQuerier counts round trips; a batch counts as one.
 type countingQuerier struct {
 	storage.Querier
 	trips *int

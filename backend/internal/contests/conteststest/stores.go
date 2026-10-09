@@ -1,19 +1,9 @@
-// Package conteststest provides in-memory implementations of the storage the
-// contests package declares, plus a fixture that assembles a service from
-// them.
+// Package conteststest provides in-memory implementations of the contests
+// package's storage, a fixture that assembles the real service from them, and
+// the contracts (*_contract.go) every implementation must pass. internal/postgres
+// runs the same contracts, which keeps these fakes honest about production.
 //
-// It also publishes the contracts every implementation of those interfaces
-// answers to (the *_contract.go files): the in-memory stores here run them, and
-// so does internal/postgres against the real repositories, which is what keeps
-// the stores the service tests trust honest about what production does.
-//
-// It exists so the contest rules — the lifecycle, the publish gate, the
-// enrollment and staffing rules — are exercised against real behaviour rather
-// than assertions on mock calls, and without a database. The HTTP handlers use
-// the same fixture, so what they are tested against is the real service.
-//
-// None of these types is safe for concurrent use: a fixture belongs to one
-// test.
+// None of these types is safe for concurrent use: a fixture belongs to one test.
 package conteststest
 
 import (
@@ -31,53 +21,42 @@ import (
 	"github.com/google/uuid"
 )
 
-// Contests is an in-memory contests.Repository, held to the same answers as
-// postgres.Contests by ContestRepositoryContract, which both run.
+// Contests is an in-memory contests.Repository.
 type Contests struct {
 	byID map[uuid.UUID]contests.Contest
-	// order preserves insertion order, so listings are deterministic.
-	order []uuid.UUID
-	// racesTo stages one concurrent status change; see SetStatusRaces.
+	// order is insertion order, so listings are deterministic.
+	order   []uuid.UUID
 	racesTo string
-	// Clock is what Create stamps CreatedAt and UpdatedAt with, and what
-	// Update and SetStatus stamp UpdatedAt with, the way the table's default
-	// and the statements stamp them with the database's own now(). Nil leaves
-	// them as they are.
+	// Clock stands in for the database's now() in Create, Update and
+	// SetStatus. Nil leaves the timestamps as they are.
 	Clock func() time.Time
-	// managers and registrations answer the two filters that depend on other
-	// tables, Filter.ManagedBy and Filter.VisibleTo; see Rosters.
+	// managers and registrations back Filter.ManagedBy and Filter.VisibleTo;
+	// see Rosters.
 	managers      *Managers
 	registrations *Registrations
 }
 
 var _ contests.Repository = (*Contests)(nil)
 
-// NewContests returns an empty contest store.
 func NewContests() *Contests {
 	return &Contests{byID: map[uuid.UUID]contests.Contest{}}
 }
 
-// Rosters tells List where to look up who staffs a contest and who is
-// registered for it, which the real listing joins from the managers and the
-// registrations tables. Until it is called nobody staffs anything and
-// nobody is registered, so a ManagedBy listing is empty and a VisibleTo
-// listing holds only the open contests.
+// Rosters wires the stores List joins for Filter.ManagedBy and
+// Filter.VisibleTo. Until it is called, a ManagedBy listing is empty and a
+// VisibleTo listing holds only the open contests.
 func (r *Contests) Rosters(managers *Managers, registrations *Registrations) {
 	r.managers, r.registrations = managers, registrations
 }
 
-// Count reports how many contests are stored.
 func (r *Contests) Count() int { return len(r.byID) }
 
-// Exists reports whether the contest is stored: what the stores of the rows
-// that hang off a contest ask in place of the real schema's foreign key.
+// Exists stands in for the foreign key the rows that hang off a contest carry.
 func (r *Contests) Exists(id uuid.UUID) bool {
 	_, ok := r.byID[id]
 	return ok
 }
 
-// store keeps a copy of the contest, so nothing the caller does to its own
-// value afterwards reaches the stored one.
 func (r *Contests) store(c contests.Contest) {
 	if _, exists := r.byID[c.ID]; !exists {
 		r.order = append(r.order, c.ID)
@@ -97,14 +76,11 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
 	}
-	// The column's own default (migration 30), so a seed that predates the
-	// leaderboard reads back the way a stored row does.
+	// The column defaults, so a seed that omits them reads back like a
+	// stored row.
 	if c.LeaderboardNames == "" {
 		c.LeaderboardNames = contests.LeaderboardNamesLogin
 	}
-	// Same reasoning, for the column migration 31 adds: a seed that never
-	// mentions the ICPC penalty reads back the way a stored row does, with
-	// the column's own default of 20 rather than a bare Go zero value.
 	if c.ICPCPenaltyMin == 0 {
 		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
 	}
@@ -112,10 +88,9 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	return c
 }
 
-// cloneContest copies everything a caller could write to through a contest.
-// The real repository hands out rows it has just read and keeps nothing of
-// what it is given, so a caller editing a contest it holds has not changed
-// the stored one until it saves.
+// cloneContest copies everything held by reference. The real repository
+// shares nothing with its callers, so editing a held contest must not change
+// the stored one until it is saved.
 func cloneContest(c contests.Contest) contests.Contest {
 	c.DurationMin = clonePointer(c.DurationMin)
 	c.StartsAt = clonePointer(c.StartsAt)
@@ -143,9 +118,8 @@ func clonePointer[T any](p *T) *T {
 	return &v
 }
 
-// served is what a read hands out: a copy of the stored contest with its
-// languages in the order the real projection gives them, the default first
-// and the rest by code.
+// served is what a read hands out: a copy with its languages in the real
+// projection's order, the default first and the rest by code.
 func served(c contests.Contest) contests.Contest {
 	c = cloneContest(c)
 	slices.SortFunc(c.Languages, func(a, b contests.ContestLanguage) int {
@@ -160,11 +134,9 @@ func served(c contests.Contest) contests.Contest {
 	return c
 }
 
-// Create stores the contest's own columns only: its identity and timestamps
-// are assigned here, and its languages and titles have operations of their
-// own, so whatever the caller's value carries of either is dropped, as the
-// real insert does not write it. The defaults Put applies for a seed are not
-// applied either: a stored zero is a zero.
+// Create writes only the contest's own columns, as the real insert does: the
+// identity and timestamps are assigned here, languages and titles are dropped,
+// and Put's seed defaults are not applied.
 func (r *Contests) Create(_ context.Context, c contests.Contest) (contests.Contest, error) {
 	c.ID = uuid.New()
 	c.Languages, c.Translations = nil, nil
@@ -186,14 +158,12 @@ func (r *Contests) ByID(_ context.Context, id uuid.UUID) (contests.Contest, erro
 	return served(c), nil
 }
 
-// List filters the way the real query does: the title search, the status, the
-// contests a user staffs, and what a participant may see. Newest start first,
-// contests with no start last, and the most recently created first among those
-// that start together.
+// List orders like the real query: newest start first, no start last, and
+// the most recently created first among those that start together.
 func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Contest, int, error) {
 	var matched []contests.Contest
-	// Walked newest first, so that the stable sort below leaves the later
-	// insertion first among contests it cannot tell apart.
+	// Walked newest first, so the stable sort leaves the later insertion
+	// first among ties.
 	for _, id := range slices.Backward(r.order) {
 		c := r.byID[id]
 		if f.Status != "" && c.Status != f.Status {
@@ -233,7 +203,6 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 	return matched[f.Offset:end], total, nil
 }
 
-// staffs reports whether the user owns or manages the contest.
 func (r *Contests) staffs(user, contest uuid.UUID) bool {
 	if r.managers == nil {
 		return false
@@ -241,8 +210,7 @@ func (r *Contests) staffs(user, contest uuid.UUID) bool {
 	return slices.ContainsFunc(r.managers.byContest[contest], func(m contests.Manager) bool { return m.UserID == user })
 }
 
-// registered reports whether the user is registered for the contest, in any
-// status of the contest and of the registration.
+// registered ignores the status of both the contest and the registration.
 func (r *Contests) registered(user, contest uuid.UUID) bool {
 	if r.registrations == nil || user == uuid.Nil {
 		return false
@@ -255,9 +223,8 @@ func (r *Contests) registered(user, contest uuid.UUID) bool {
 	return false
 }
 
-// visibleTo is what a participant may see: the contests they are on, once
-// those are no longer drafts, plus open ones still taking signups. A draft
-// is nobody's business but its authors'.
+// visibleTo is what a participant may see: non-draft contests they are on,
+// plus open ones still taking signups.
 func (r *Contests) visibleTo(user uuid.UUID, c contests.Contest) bool {
 	switch c.Status {
 	case contests.StatusPublished, contests.StatusRunning:
@@ -277,10 +244,9 @@ func matchesTitle(c contests.Contest, query string) bool {
 	return false
 }
 
-// Update saves the contest's own columns and nothing else: its status moves
-// through SetStatus, its languages and titles have operations of their own,
-// and its author, its creation time and the moment a leaderboard was revealed
-// are not the caller's to rewrite.
+// Update saves the contest's own columns only: status moves through
+// SetStatus, languages and titles have their own operations, and the author,
+// creation time and reveal time are not the caller's to rewrite.
 func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	stored, ok := r.byID[c.ID]
 	if !ok {
@@ -301,8 +267,8 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 }
 
 func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) error {
-	// The race, staged. Set by SetStatusRaces, it stands for a concurrent
-	// request that committed between the caller's read and this write.
+	// A staged race: a concurrent request committed between the caller's
+	// read and this write.
 	if r.racesTo != "" {
 		c, ok := r.byID[id]
 		if ok {
@@ -328,8 +294,7 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) e
 }
 
 // SetStatusRaces makes the next SetStatus find the contest already moved to
-// status, as a concurrent writer would have left it. One shot: the point is to
-// stage the collision, not to keep the store lying.
+// status, as a concurrent writer would have left it. It fires once.
 func (r *Contests) SetStatusRaces(status string) { r.racesTo = status }
 
 func (r *Contests) Delete(_ context.Context, id uuid.UUID) error {
@@ -364,12 +329,10 @@ func (r *Contests) ReplaceTranslations(_ context.Context, id uuid.UUID, translat
 	return nil
 }
 
-// LockContest is a no-op beyond refusing to run outside a unit of work, as
-// the real one does, and checking the contest exists: the real cross-session
-// locking this stands in for is exercised against a real database
-// (internal/postgres/contests_test.go), and this fixture's UnitOfWork already
-// runs every call sequentially in one goroutine, so there is no concurrent
-// second caller for an in-memory lock to matter against.
+// LockContest only refuses to run outside a transaction, as the real one
+// does, and checks the contest exists. The fixture runs every call in one
+// goroutine, so there is nothing to lock against; the real locking is tested
+// in internal/postgres/contests_test.go.
 func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	if !inTx(ctx) {
 		return errors.New("locking a contest must run inside a transaction")
@@ -380,22 +343,18 @@ func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Stories is an in-memory contests.StoryRepository, held to the same answers
-// as postgres.Stories by StoryRepositoryContract, which both run.
+// Stories is an in-memory contests.StoryRepository.
 type Stories struct {
 	byContest map[uuid.UUID]contests.Story
-	// Clock is what Save stamps UpdatedAt with, the way the table stamps it
-	// with the database's own now(). Nil leaves it as it is.
+	// Clock stands in for the database's now() in Save. Nil leaves UpdatedAt
+	// as it is.
 	Clock func() time.Time
-	// Err, when set, is what ByContest returns instead of a lookup — a
-	// database away, which a caller must propagate, not mistake for a
-	// contest that simply has no story yet. Save reads its result back
-	// through ByContest, as the real one does, so Save returns it too, after
-	// storing the story.
+	// Err, when set, is what ByContest returns: a database away, which a
+	// caller must not mistake for a missing story. Save reads back through
+	// ByContest, so it returns Err too, after storing.
 	Err error
-	// ContestExists is what Save asks about the contest a story belongs to,
-	// standing in for the real table's foreign key. Nil takes every contest
-	// as there: a story store standing alone in a test has nothing to ask.
+	// ContestExists stands in for the foreign key on the contest. Nil accepts
+	// every contest.
 	ContestExists func(id uuid.UUID) bool
 }
 
@@ -404,7 +363,6 @@ var (
 	_ contests.StoryText       = (*Stories)(nil)
 )
 
-// NewStories returns an empty story store.
 func NewStories() *Stories {
 	return &Stories{byContest: map[uuid.UUID]contests.Story{}}
 }
@@ -417,7 +375,7 @@ func (r *Stories) ByContest(_ context.Context, contestID uuid.UUID) (contests.St
 	if !ok {
 		return contests.Story{}, contests.ErrStoryNotFound
 	}
-	// The text is the caller's to keep, as a row decoded afresh is.
+	// A copy, as a freshly decoded row is.
 	story.Bodies = maps(story.Bodies)
 	return story, nil
 }
@@ -458,10 +416,8 @@ func (r *Stories) Delete(_ context.Context, contestID uuid.UUID) error {
 // Questions is an in-memory contests.QuestionRepository.
 type Questions struct {
 	byID map[uuid.UUID]contests.Question
-	// ContestExists is what Create asks about the contest a question is
-	// added to, standing in for the real insert finding the contest row it
-	// locks. Nil takes every contest as there: a question store standing
-	// alone in a test has no contests to ask.
+	// ContestExists stands in for the real insert finding the contest row it
+	// locks. Nil accepts every contest.
 	ContestExists func(id uuid.UUID) bool
 }
 
@@ -470,7 +426,6 @@ var (
 	_ contests.VisibleQuestionRepository = (*Questions)(nil)
 )
 
-// NewQuestions returns an empty question store.
 func NewQuestions() *Questions {
 	return &Questions{byID: map[uuid.UUID]contests.Question{}}
 }
@@ -484,11 +439,8 @@ func (r *Questions) Put(q contests.Question) contests.Question {
 	return q
 }
 
-// cloneQuestion copies everything a caller could write to through a
-// question. The real repository hands out rows it has just read and keeps
-// nothing of what it is given, so a caller editing a question it holds has
-// not changed the stored one until it saves; sharing maps and slices with
-// the store would make a test see an edit that production never would.
+// cloneQuestion copies everything held by reference, for the same reason as
+// cloneContest.
 func cloneQuestion(q contests.Question) contests.Question {
 	if q.MaxAttempts != nil {
 		attempts := *q.MaxAttempts
@@ -523,10 +475,9 @@ func (r *Questions) List(_ context.Context, contestID uuid.UUID) ([]contests.Que
 	return found, nil
 }
 
-// ForContest implements contests.VisibleQuestionRepository the same way the
-// real repository's query does: only is_visible questions, in display order,
-// and only those carrying a body in lang — a missing translation drops the
-// question from the result rather than serving an empty one.
+// ForContest mirrors the real query: visible questions in display order,
+// and only those with a body in lang. A missing translation drops the
+// question rather than serving it empty.
 func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
 	all, err := r.List(ctx, contestID)
 	if err != nil {
@@ -558,13 +509,11 @@ func (r *Questions) ByID(_ context.Context, questionID uuid.UUID) (contests.Ques
 	return cloneQuestion(q), nil
 }
 
-// Create stores the question's own fields only: its position and identifier
-// are assigned here, and its text and answers have operations of their own,
-// so whatever the caller's value carries of either is dropped, as the real
-// insert does not write it.
+// Create writes only the question's own fields, as the real insert does: the
+// identity and position are assigned here, and texts and answers are dropped.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
-	// The real insert locks the contest row first, which only holds inside a
-	// transaction, so it refuses to run outside one.
+	// The real insert locks the contest row, which only holds inside a
+	// transaction.
 	if !inTx(ctx) {
 		return contests.Question{}, errors.New("adding a question must run inside a transaction")
 	}
@@ -583,8 +532,7 @@ func (r *Questions) Update(_ context.Context, q contests.Question) error {
 	if !ok {
 		return contests.ErrQuestionNotFound
 	}
-	// Position, contest, text and answers are not Update's to change,
-	// exactly as in the real repository.
+	// Position, contest, texts and answers are not Update's to change.
 	q.ContestID, q.Ord, q.Texts, q.Answers = stored.ContestID, stored.Ord, stored.Texts, stored.Answers
 	r.byID[q.ID] = cloneQuestion(q)
 	return nil
@@ -597,7 +545,7 @@ func (r *Questions) Delete(ctx context.Context, questionID uuid.UUID) error {
 	}
 	delete(r.byID, questionID)
 
-	// Close the gap, so positions stay 1..n as the real repository keeps them.
+	// Close the gap: the real repository keeps positions 1..n.
 	remaining, _ := r.List(ctx, q.ContestID)
 	for i, other := range remaining {
 		other.Ord = i + 1
@@ -607,8 +555,8 @@ func (r *Questions) Delete(ctx context.Context, questionID uuid.UUID) error {
 }
 
 func (r *Questions) Reorder(ctx context.Context, contestID uuid.UUID, ordered []uuid.UUID) error {
-	// The real reorder defers its uniqueness check to the end of the
-	// transaction, which it cannot do outside one, so it refuses first.
+	// The real reorder defers its uniqueness check to commit, which needs a
+	// transaction.
 	if !inTx(ctx) {
 		return errors.New("reordering questions must run inside a transaction")
 	}
@@ -638,10 +586,9 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 	if !ok {
 		return contests.ErrQuestionNotFound
 	}
-	// Each answer gets an identity of its own and belongs to this question,
-	// and they are kept in the order of their values. The real query orders
-	// by the database's collation; byte order agrees with it for the
-	// lower-case ASCII values the contract uses, not in general.
+	// Ordered by value. The real query uses the database collation; byte
+	// order agrees with it only for the lower-case ASCII values the contract
+	// uses.
 	stored := make([]contests.Answer, len(answers))
 	for i, a := range answers {
 		a.ID, a.QuestionID = uuid.New(), questionID
@@ -653,33 +600,26 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 	return nil
 }
 
-// Managers is an in-memory contests.ManagerRepository, held to the same
-// answers as postgres.ContestManagers by ManagerRepositoryContract, which both
-// run.
+// Managers is an in-memory contests.ManagerRepository.
 type Managers struct {
 	byContest map[uuid.UUID][]contests.Manager
-	// Accounts resolves the login and name carried on every staff entry, the
-	// way the real repository joins them in at read time. Nil leaves what the
-	// entry was stored with.
+	// Accounts stands in for the join that names each entry at read time.
+	// Nil leaves what the entry was stored with.
 	Accounts AccountLookup
-	// Clock is what Grant stamps GrantedAt with, the way the table's default
-	// stamps it with the database's own now(), whatever time the caller
-	// carries. Nil keeps the time the caller carries.
+	// Clock stands in for the column default now() and overrides the
+	// caller's GrantedAt. Nil keeps the caller's time.
 	Clock func() time.Time
-	// Lookups counts Get and List calls, so a test can tell how many staff
-	// lookups a bulk operation made.
+	// Lookups counts Get and List calls, so a test can bound the lookups a
+	// bulk operation makes.
 	Lookups int
 }
 
 var _ contests.ManagerRepository = (*Managers)(nil)
 
-// NewManagers returns an empty staff store.
 func NewManagers() *Managers {
 	return &Managers{byContest: map[uuid.UUID][]contests.Manager{}}
 }
 
-// named returns the entry as a read presents it: with the account's own login
-// and name when the store can find them.
 func (r *Managers) named(ctx context.Context, m contests.Manager) contests.Manager {
 	if r.Accounts != nil {
 		m.Login, m.FullName = r.Accounts(ctx, m.UserID)
@@ -741,62 +681,45 @@ func (r *Managers) Revoke(_ context.Context, contestID, userID uuid.UUID) error 
 	return nil
 }
 
-// AccountLookup names an account, standing in for the join the real
-// repository does. Without it a participant or a staff entry would come back
-// with an empty login, which is not what the endpoint returns and not what a
-// test should be allowed to pass against.
+// AccountLookup stands in for the join that names an account. Without it an
+// entry comes back with an empty login, which the endpoint never returns.
 type AccountLookup func(ctx context.Context, id uuid.UUID) (login, fullName string)
 
-// PermissionLookup reports what an account may do, standing in for the join
-// the real repository makes through the role tables. Without it every account
-// reads as holding nothing, which would let a test pass a publish gate the
+// PermissionLookup stands in for the join through the role tables. Without it
+// every account holds nothing, which would let a test pass a publish gate the
 // real one refuses.
 type PermissionLookup func(ctx context.Context, id uuid.UUID) []string
 
-// Registrations is an in-memory contests.RegistrationRepository, held to the
-// same answers as postgres.Registrations by RegistrationRepositoryContract,
-// which both run.
+// Registrations is an in-memory contests.RegistrationRepository.
 type Registrations struct {
-	byID map[uuid.UUID]contests.Participant
-	// Accounts resolves the login and name carried on every participant.
-	Accounts AccountLookup
-	// Permissions resolves what a participant's account may do, for
-	// RegisteredWithPermission.
+	byID        map[uuid.UUID]contests.Participant
+	Accounts    AccountLookup
 	Permissions PermissionLookup
-	// Clock is what Add stamps CreatedAt with, the way the table's default
-	// stamps it with the database's own now(). Nil leaves CreatedAt zero.
+	// Clock stands in for the column default now() in Add. Nil leaves
+	// CreatedAt zero.
 	Clock func() time.Time
-	// ContestExists and UserExists are what Add asks about the contest and
-	// the account it registers, standing in for the real table's foreign
-	// keys. Nil takes every contest, or every account, as there: a
-	// registration store standing alone in a test has nothing to ask, and
-	// the fixture asks only about the contest (see NewFixture).
+	// ContestExists and UserExists stand in for the foreign keys Add meets.
+	// Nil accepts everything; the fixture sets only ContestExists.
 	ContestExists func(id uuid.UUID) bool
 	UserExists    func(id uuid.UUID) bool
-	// work holds the registrations the store reports as having a record
-	// behind them (PutWork).
-	work map[uuid.UUID]bool
-	// HasWorkInTx records whether the last HasWork call ran inside the
-	// fixture's unit of work. A deletion that asks whether a registration has
-	// a record behind it, and then opens a transaction to delete it, decided
-	// on a state that is no longer the one it writes against.
+	work          map[uuid.UUID]bool
+	// HasWorkInTx records whether the last HasWork ran inside a transaction.
+	// A deletion that checks outside one decides on a state it no longer
+	// writes against.
 	HasWorkInTx bool
-	// MissLookups makes ByUser report "not found" even when the row is there,
-	// which is what a caller sees when a concurrent writer registered the same
-	// person between the lookup and the write. It exists so that path can be
-	// exercised without two goroutines.
+	// MissLookups makes ByUser miss an existing row, as when a concurrent
+	// writer registers the same person between lookup and write, without
+	// needing two goroutines.
 	MissLookups bool
 }
 
 var _ contests.RegistrationRepository = (*Registrations)(nil)
 
-// NewRegistrations returns an empty registration store.
 func NewRegistrations() *Registrations {
 	return &Registrations{byID: map[uuid.UUID]contests.Participant{}, work: map[uuid.UUID]bool{}}
 }
 
-// Put stores a participation as given, naming the account when it can, so a
-// seeded participant reads the same as one that went through Add.
+// Put stores a participation as given, naming the account as Add does.
 func (r *Registrations) Put(p contests.Participant) contests.Participant {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
@@ -809,7 +732,7 @@ func (r *Registrations) Put(p contests.Participant) contests.Participant {
 }
 
 // PutWork marks a registration as having queries, answers, notes or signals
-// behind it — what HasWork reports and what removing one would destroy.
+// behind it, which HasWork then reports.
 func (r *Registrations) PutWork(registrationID uuid.UUID) {
 	r.work[registrationID] = true
 }
@@ -819,9 +742,8 @@ func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (
 	return r.work[registrationID], nil
 }
 
-// RegisteredWithPermission names this contest's participants whose account
-// holds the permission, ordered by login and bounded the same way the real
-// repository bounds it.
+// RegisteredWithPermission is ordered by login and capped at
+// contests.MaxReportedStaff, as the real one is.
 func (r *Registrations) RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error) {
 	if r.Permissions == nil {
 		return nil, nil
@@ -864,10 +786,8 @@ func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.
 	return matched[f.Offset:end], total, nil
 }
 
-// matchesQuery reports whether the search names the participant's login or
-// full name, ignoring case, as the real repository's ILIKE does. The text is
-// a substring and nothing more: a percent sign or an underscore in it means
-// itself.
+// matchesQuery mirrors the real escaped ILIKE on login or full name: a plain
+// case-insensitive substring, where % and _ match themselves.
 func matchesQuery(p contests.Participant, query string) bool {
 	query = strings.ToLower(query)
 	return strings.Contains(strings.ToLower(p.Login), query) ||
@@ -893,9 +813,8 @@ func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (c
 	if r.UserExists != nil && !r.UserExists(userID) {
 		return contests.Participant{}, users.ErrNotFound
 	}
-	// Checked against the stored rows rather than through ByUser: the real
-	// guarantee is a unique index, and it does not stop holding because a
-	// lookup missed.
+	// Checked against the stored rows, not through ByUser: the real guarantee
+	// is a unique index, which holds even when a lookup missed.
 	for _, existing := range r.byID {
 		if existing.ContestID == contestID && existing.UserID == userID {
 			return contests.Participant{}, contests.ErrAlreadyEnrolled
@@ -924,11 +843,8 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 	return nil
 }
 
-// EnrolledIn reports which of the named contests the user is registered for.
-//
-// Only the ones asked about: the map is a lookup for a page of rows, not a
-// dump of everything the person is on, and a caller that read it as one would
-// be reading somebody else's list into their own screen.
+// EnrolledIn reports which of the named contests, and only those, the user is
+// registered for.
 func (r *Registrations) EnrolledIn(_ context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	wanted := make(map[uuid.UUID]struct{}, len(contestIDs))
 	for _, id := range contestIDs {
@@ -957,11 +873,9 @@ func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, s
 	return nil
 }
 
-// Start mirrors postgres.Registrations.Start: it sets StartedAt and moves the
-// status to active together, and only the first call for a registration has
-// any effect — a second one reads back what the first wrote instead of
-// moving the clock. A registration whose status is anything but registered
-// (disqualified, say) is read back as it is: starting it would undo that.
+// Start mirrors postgres.Registrations.Start: it sets StartedAt and the
+// active status together, once; a repeat call reads back the first. A
+// registration in any other status (disqualified, say) is returned unchanged.
 func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
 	p, ok := r.byID[registrationID]
 	if !ok {
@@ -987,22 +901,19 @@ func (r *Registrations) AddScore(_ context.Context, registrationID uuid.UUID, de
 	return nil
 }
 
-// Policies is an in-memory contests.PolicyStore, held to the same answers as
-// postgres.SQLPolicies by PolicyStoreContract, which both run.
+// Policies is an in-memory contests.PolicyStore.
 type Policies struct {
 	byContest map[uuid.UUID]contests.SQLPolicy
-	// Clock is what Save stamps UpdatedAt with, the way the statement stamps it
-	// with the database's own now(). Nil leaves it as it is.
+	// Clock stands in for the database's now() in Save. Nil leaves UpdatedAt
+	// as it is.
 	Clock func() time.Time
-	// ContestExists is what Save asks about the contest a policy belongs to,
-	// standing in for the real table's foreign key. Nil takes every contest
-	// as there: a policy store standing alone in a test has nothing to ask.
+	// ContestExists stands in for the foreign key on the contest. Nil accepts
+	// every contest.
 	ContestExists func(id uuid.UUID) bool
 }
 
 var _ contests.PolicyStore = (*Policies)(nil)
 
-// NewPolicies returns an empty policy store.
 func NewPolicies() *Policies {
 	return &Policies{byContest: map[uuid.UUID]contests.SQLPolicy{}}
 }
@@ -1010,8 +921,7 @@ func NewPolicies() *Policies {
 func (r *Policies) ByContest(_ context.Context, contestID uuid.UUID) (contests.SQLPolicy, error) {
 	p, ok := r.byContest[contestID]
 	if !ok {
-		// A contest nobody configured is read-only, exactly as in the real
-		// store.
+		// An unconfigured contest is read-only, as in the real store.
 		return contests.DefaultSQLPolicy(contestID), nil
 	}
 	return clonePolicy(p), nil
@@ -1029,9 +939,8 @@ func (r *Policies) Save(_ context.Context, p contests.SQLPolicy) error {
 	return nil
 }
 
-// clonePolicy copies what a policy holds by reference, so neither the caller
-// of Save nor the caller of ByContest shares it with the store, and gives an
-// unset list the empty one a stored array reads back as.
+// clonePolicy shares nothing with the store, and turns a nil list into the
+// empty one a stored array reads back as.
 func clonePolicy(p contests.SQLPolicy) contests.SQLPolicy {
 	p.WritableTables = append([]string{}, p.WritableTables...)
 	if p.UpdatedBy != nil {
@@ -1041,27 +950,20 @@ func clonePolicy(p contests.SQLPolicy) contests.SQLPolicy {
 	return p
 }
 
-// Attempts is an in-memory contests.AttemptStore, derived from the submission
-// store the way the real one reads the submissions table, so an answer a test
-// records through Insert is what it reads back here, as in production — held
-// to the same answers as postgres.Attempts by AttemptStoreContract, which both
-// run. It has no store of its own for a test to stage stats in: every state a
-// participant can be in is one Insert can produce, and a staged one could say
-// what no sequence of submissions ever would.
+// Attempts is an in-memory contests.AttemptStore derived from the submission
+// store, as the real one reads the submissions table. It has no state of its
+// own, so a test cannot stage stats no sequence of submissions could produce.
 type Attempts struct {
 	submissions *Submissions
 }
 
 var _ contests.AttemptStore = (*Attempts)(nil)
 
-// NewAttempts derives attempt stats from the given submission store.
 func NewAttempts(submissions *Submissions) *Attempts {
 	return &Attempts{submissions: submissions}
 }
 
-// ForRegistration mirrors postgres.Attempts.ForRegistration: per question the
-// registration answered, how many submissions it made, whether any was
-// correct, and the sum of what they were awarded.
+// ForRegistration mirrors postgres.Attempts.ForRegistration.
 func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) (map[uuid.UUID]contests.AttemptStats, error) {
 	out := map[uuid.UUID]contests.AttemptStats{}
 	for key, recorded := range r.submissions.byKey {
@@ -1078,34 +980,23 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 	return out, nil
 }
 
-// Submissions is an in-memory contests.SubmissionRepository.
+// Submissions is an in-memory contests.SubmissionRepository mirroring the
+// real single INSERT: it refuses with ErrDeadlinePassed once the clock
+// reaches req.Deadline, with ErrQuestionClosed once the question is solved or
+// out of attempts, and otherwise takes the next attempt number.
 //
-// It mirrors what the real repository's one INSERT statement guarantees
-// (postgres.Submissions.Insert): a submission is refused with
-// ErrDeadlinePassed once the clock has reached req.Deadline, or with
-// ErrQuestionClosed once the question is already answered correctly or every
-// attempt is spent, and otherwise takes the next attempt number — held to the
-// same answers as the real one by SubmissionRepositoryContract, which both
-// run. It does not reproduce the real repository's concurrency guarantee — a
-// Go map has no analogue of the table's own UNIQUE constraint racing two
-// transactions — so the genuine race (finding 3) is proven where it can
-// actually happen, against PostgreSQL (internal/postgres/submissions_test.go),
-// not here. ConflictsRemaining exists so a Service-level test can still
-// exercise Submit's own retry loop deterministically, without a second
-// goroutine.
+// It cannot reproduce the unique-constraint race between two transactions;
+// that is tested in internal/postgres/submissions_test.go. ConflictsRemaining
+// drives Submit's retry loop without a second goroutine.
 type Submissions struct {
 	byKey map[submissionKey][]contests.Submission
-	// Clock answers what Insert checks req.Deadline against; nil defaults to
-	// the real wall clock so a test that never sets it still gets a moving
-	// clock rather than the zero value.
+	// Clock is what Insert checks req.Deadline against; nil is the wall clock.
 	Clock func() time.Time
-	// ConflictsRemaining makes the next this-many Insert calls return
-	// ErrAttemptConflict instead of writing anything, simulating a
-	// submission that lost the attempt-number race and must be retried.
+	// ConflictsRemaining makes the next n Insert calls return
+	// ErrAttemptConflict without writing, as if they lost the attempt-number
+	// race.
 	ConflictsRemaining int
-	// Requests is every request Insert was handed, in order, whatever it
-	// answered: what a test reads to prove the deadline Submit wrote with, or
-	// that a refused answer never reached the write at all.
+	// Requests is every request Insert received, in order, refused or not.
 	Requests []contests.SubmissionRequest
 }
 
@@ -1116,7 +1007,6 @@ type submissionKey struct {
 
 var _ contests.SubmissionRepository = (*Submissions)(nil)
 
-// NewSubmissions returns an empty submission store.
 func NewSubmissions() *Submissions {
 	return &Submissions{byKey: map[submissionKey][]contests.Submission{}}
 }
@@ -1136,10 +1026,7 @@ func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) 
 	}
 
 	now := r.now()
-	// The deadline, checked here against this call's own clock reading,
-	// takes priority over "closed" — the same order the real statement's
-	// HAVING clause and its own fallback query resolve it in
-	// (postgres.Submissions.Insert).
+	// The deadline takes priority over "closed", as in the real statement.
 	if !now.Before(req.Deadline) {
 		return contests.Submission{}, contests.ErrDeadlinePassed
 	}
@@ -1163,22 +1050,15 @@ func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) 
 		AttemptNo:      len(existing) + 1,
 		Value:          req.Value,
 		IsCorrect:      req.IsCorrect,
-		// Mirrors the real statement's own computation (§6.1.1,
-		// postgres.Submissions.Insert): the question's face value minus the
-		// per-attempt penalty times however many attempts are already
-		// committed (len(existing), the same count used for AttemptNo above),
-		// floored at zero, and only when this attempt is itself correct.
-		PointsAwarded: pointsAwarded(req, len(existing)),
-		SubmittedAt:   now,
+		PointsAwarded:  pointsAwarded(req, len(existing)),
+		SubmittedAt:    now,
 	}
 	r.byKey[key] = append(existing, s)
 	return s, nil
 }
 
-// pointsAwarded computes what one attempt earns, the same way the real
-// statement does (§6.1.1): nothing for a wrong answer, and for a correct one
-// the face value minus the penalty already run up by priorAttempts, never
-// below zero.
+// pointsAwarded mirrors the real statement: nothing for a wrong answer, else
+// the face value minus the penalty for priorAttempts, floored at zero.
 func pointsAwarded(req contests.SubmissionRequest, priorAttempts int) int {
 	if !req.IsCorrect {
 		return 0
@@ -1190,12 +1070,8 @@ func pointsAwarded(req contests.SubmissionRequest, priorAttempts int) int {
 	return awarded
 }
 
-// SequentialProgress is an in-memory contests.SequentialGate, derived from
-// the same two stores Submit itself consults in production — which questions
-// exist and in what order, and what a registration has already submitted to
-// each — rather than a store of its own a test could forget to keep in sync
-// with what Submit actually wrote. It is held to the same answers as
-// postgres.Sequence by SequentialGateContract, which both run.
+// SequentialProgress is an in-memory contests.SequentialGate derived from the
+// question and submission stores, so it cannot drift from what Submit wrote.
 type SequentialProgress struct {
 	questions   *Questions
 	submissions *Submissions
@@ -1203,15 +1079,12 @@ type SequentialProgress struct {
 
 var _ contests.SequentialGate = (*SequentialProgress)(nil)
 
-// NewSequentialProgress derives sequential-progression state from the given
-// question and submission stores.
 func NewSequentialProgress(questions *Questions, submissions *Submissions) *SequentialProgress {
 	return &SequentialProgress{questions: questions, submissions: submissions}
 }
 
-// Open mirrors postgres.Sequence.Open: every question of contestID ordered
-// strictly before ord must be closed — answered correctly, or every attempt
-// spent — for registrationID.
+// Open mirrors postgres.Sequence.Open: every question ordered before ord must
+// be closed (solved, or out of attempts).
 func (g *SequentialProgress) Open(ctx context.Context, contestID, registrationID uuid.UUID, ord int) (bool, error) {
 	all, err := g.questions.List(ctx, contestID)
 	if err != nil {
@@ -1239,9 +1112,8 @@ func (g *SequentialProgress) Open(ctx context.Context, contestID, registrationID
 	return true, nil
 }
 
-// Frontier mirrors postgres.Sequence.Frontier: the question of contestID
-// lowest in display order that is not yet closed for registrationID, or
-// uuid.Nil once every question is closed.
+// Frontier mirrors postgres.Sequence.Frontier: the lowest-ordered question
+// not yet closed, or uuid.Nil once all are.
 func (g *SequentialProgress) Frontier(ctx context.Context, contestID, registrationID uuid.UUID) (uuid.UUID, error) {
 	all, err := g.questions.List(ctx, contestID)
 	if err != nil {
@@ -1275,15 +1147,13 @@ func (g *SequentialProgress) Frontier(ctx context.Context, contestID, registrati
 	return frontier, nil
 }
 
-// All lists every submission stored for this registration and question, in
-// the order they were inserted, so a test can inspect exactly what was
-// written.
+// All lists the stored submissions for a registration and question, in
+// insertion order.
 func (r *Submissions) All(registrationID, questionID uuid.UUID) []contests.Submission {
 	return append([]contests.Submission(nil), r.byKey[submissionKey{registrationID, questionID}]...)
 }
 
-// Languages is an in-memory contests.LanguageCatalog, held to the same answers
-// as postgres.Languages by LanguageCatalogContract, which both run.
+// Languages is an in-memory contests.LanguageCatalog.
 type Languages struct {
 	Available []contests.Language
 }
@@ -1299,8 +1169,7 @@ func NewLanguages() *Languages {
 	}}
 }
 
-// Active lists the active languages in display order: by sort order, ties
-// broken by code, as the table is read.
+// Active orders by sort order, then code, as the table is read.
 func (r *Languages) Active(context.Context) ([]contests.Language, error) {
 	var active []contests.Language
 	for _, l := range r.Available {
@@ -1318,25 +1187,19 @@ func (r *Languages) Active(context.Context) ([]contests.Language, error) {
 // left a trail.
 type Sink struct {
 	Entries []audit.Entry
-	// Loose holds the entries appended with no transaction open.
-	//
-	// Almost every action must record inside one: an entry written after the
-	// change commits can be lost while the change survives, and one written
-	// before it can outlive a rollback. Either way the trail stops being
-	// evidence. Refusals are the exception — there is nothing to be atomic
-	// with — so this is a list rather than a flag, and a test names which
-	// entries it expects to find in it.
+	// Loose holds the entries appended with no transaction open. An entry
+	// must be written inside the change's transaction, or it can be lost or
+	// outlive a rollback. Refusals have nothing to be atomic with, so a test
+	// names which entries it expects here.
 	Loose []audit.Entry
-	// AppendManyErr, when set, is what AppendMany returns instead of
-	// recording anything — a test's way of standing for the trail itself
-	// failing (a full disk, a database that is away) so a caller relying on
-	// RecordMany can prove it does not swallow that failure.
+	// AppendManyErr, when set, is what AppendMany returns without recording:
+	// the trail itself failing, so a test can prove the caller does not
+	// swallow it.
 	AppendManyErr error
 }
 
 var _ audit.Sink = (*Sink)(nil)
 
-// NewSink returns an empty audit sink.
 func NewSink() *Sink { return &Sink{} }
 
 func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
@@ -1347,12 +1210,8 @@ func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
 	return nil
 }
 
-// LatestStartBlocked implements the narrow read contests.Scheduler's own
-// dedup check needs (finding 1) directly off Entries: the same in-memory log
-// Append and AppendMany already build stands in for the one real audit_log
-// table postgres.AuditSink writes and postgres.AuditTrail reads, so "the
-// newest entry on file for this contest" is simply the last matching one in
-// append order — no separate fake to keep in sync with this one.
+// LatestStartBlocked reads Entries as postgres.AuditTrail reads audit_log:
+// the newest entry for the contest decides.
 func (s *Sink) LatestStartBlocked(_ context.Context, contestID uuid.UUID) ([]string, bool, error) {
 	for i := len(s.Entries) - 1; i >= 0; i-- {
 		e := s.Entries[i]
@@ -1368,8 +1227,6 @@ func (s *Sink) LatestStartBlocked(_ context.Context, contestID uuid.UUID) ([]str
 	return nil, false, nil
 }
 
-// AppendMany appends every entry the same way Append does, one at a time:
-// what a test asserts on is the resulting state, not the round trips it took.
 func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {
 	if s.AppendManyErr != nil {
 		return s.AppendManyErr
@@ -1382,7 +1239,6 @@ func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {
 	return nil
 }
 
-// Recorded reports whether an entry with that action was written.
 func (s *Sink) Recorded(action string) bool {
 	return slices.Contains(s.Actions(), action)
 }
@@ -1396,36 +1252,30 @@ func (s *Sink) Actions() []string {
 	return actions
 }
 
-// Games is an in-memory contests.GameSource: the SQL an organizer wrote as
-// one contest's game, without any of the template lifecycle that lives in
-// internal/provisioning.
+// Games is an in-memory contests.GameSource, without the template lifecycle
+// of internal/provisioning.
 type Games struct {
 	byContest map[uuid.UUID]string
-	// files holds the contests whose game came from an uploaded dump — a
-	// game that exists and whose SQL a package cannot carry
-	// (provisioning.SourceFile). Kept apart from byContest rather than as an
-	// empty string in it, because an empty string in byContest is precisely
-	// the confusion this fake has to be able to reproduce.
+	// files marks games built from an uploaded dump (PutFile). They are kept
+	// apart from byContest because an empty script there is a distinct case
+	// this fake must be able to reproduce.
 	files map[uuid.UUID]bool
-	// Err, when set, is what Script returns instead of a script — a test's
-	// way of standing for the game's own storage being away.
+	// Err, when set, is what Script returns: the game storage being away.
 	Err error
 }
 
 var _ contests.GameSource = (*Games)(nil)
 
-// NewGames returns an empty game store.
 func NewGames() *Games {
 	return &Games{byContest: map[uuid.UUID]string{}, files: map[uuid.UUID]bool{}}
 }
 
-// Put stores the script one contest's game is built from.
 func (r *Games) Put(contestID uuid.UUID, script string) {
 	r.byContest[contestID] = script
 }
 
-// PutFile gives the contest a game built from an uploaded dump: one that
-// exists and whose SQL no package can carry.
+// PutFile gives the contest a game built from an uploaded dump, whose SQL no
+// package can carry (provisioning.SourceFile).
 func (r *Games) PutFile(contestID uuid.UUID) {
 	r.files[contestID] = true
 }
@@ -1441,8 +1291,6 @@ func (r *Games) Script(_ context.Context, contestID uuid.UUID) (string, bool, bo
 	return script, ok, false, nil
 }
 
-// maps copies a map so a stored value cannot be mutated through the caller's
-// reference.
 func maps(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
@@ -1451,30 +1299,22 @@ func maps(in map[string]string) map[string]string {
 	return out
 }
 
-// Covers is the uploaded covers of contests, in memory: the one question the
-// publish gate asks about a contest's picture.
-//
-// Deliberately not a covers.Repository — the gate's own narrow interface is
-// one method, and this fake stands for that method rather than for a store
-// the contests package has never heard of.
+// Covers answers the publish gate's one question about a contest's cover. It
+// fakes that narrow interface, not a covers.Repository.
 type Covers struct {
 	byContest map[uuid.UUID]string
-	// Err, when set, is what Attribution returns instead of an answer: a
-	// test's way of standing for the covers table being away.
+	// Err, when set, is what Attribution returns: the covers table being away.
 	Err error
 }
 
-// NewCovers returns an empty cover store.
 func NewCovers() *Covers { return &Covers{byContest: map[uuid.UUID]string{}} }
 
 // Put gives the contest an uploaded cover with that credit line. An empty one
-// is exactly the state the publish gate exists to refuse.
+// is the state the publish gate refuses.
 func (r *Covers) Put(contestID uuid.UUID, attribution string) {
 	r.byContest[contestID] = attribution
 }
 
-// Attribution answers whether the contest has an uploaded cover, and whose it
-// is.
 func (r *Covers) Attribution(_ context.Context, contestID uuid.UUID) (string, bool, error) {
 	if r.Err != nil {
 		return "", false, r.Err

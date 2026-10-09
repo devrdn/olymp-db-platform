@@ -13,8 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// pngOf returns a real PNG of that size, so the tests exercise the decoder
-// rather than a byte string that happens to start correctly.
+// pngOf returns a real PNG, so the tests exercise the decoder.
 func pngOf(t *testing.T, width, height int) []byte {
 	t.Helper()
 
@@ -49,8 +48,6 @@ func TestAPictureIsStoredWithWhatWasReadOutOfIt(t *testing.T) {
 }
 
 func TestWhatTheUploadCallsItselfIsIgnored(t *testing.T) {
-	// The declared type and the filename are written by whoever is uploading.
-	// What decides is the result of decoding the bytes.
 	f := newFixture()
 
 	saved, err := f.service.SaveImage(context.Background(), uuid.New(),
@@ -81,10 +78,6 @@ func TestSomethingThatIsNotAPictureIsRefused(t *testing.T) {
 }
 
 func TestSVGIsRefusedEvenWhenItIsHarmless(t *testing.T) {
-	// Not because this one carries a script — because the format can, and an
-	// SVG served from this origin is a cross-site script with an
-	// administrator's reach. Declining the format declines the whole class,
-	// with nothing to keep getting right afterwards.
 	f := newFixture()
 
 	_, err := f.service.SaveImage(context.Background(), uuid.New(), settings.ImageLogo,
@@ -98,8 +91,7 @@ func TestSVGIsRefusedEvenWhenItIsHarmless(t *testing.T) {
 func TestAPictureTooBigOnDiskIsRefused(t *testing.T) {
 	f := newFixture()
 
-	// Incompressible noise, so the file is genuinely large rather than a large
-	// canvas that encodes small.
+	// Incompressible noise, so the file itself is large.
 	huge := make([]byte, 600<<10)
 	for i := range huge {
 		huge[i] = byte(i * 7)
@@ -114,8 +106,7 @@ func TestAPictureTooBigOnDiskIsRefused(t *testing.T) {
 }
 
 func TestAPictureTooBigWhenDecodedIsRefused(t *testing.T) {
-	// A decompression bomb: small on the wire, enormous once decoded. The
-	// process pays for the pixels, not for the bytes.
+	// A decompression bomb: small on the wire, enormous once decoded.
 	f := newFixture()
 	data := pngOf(t, 5000, 10)
 
@@ -137,8 +128,6 @@ func TestAnImageSlotNothingReadsIsRefused(t *testing.T) {
 }
 
 func TestReplacingAnImageLeavesOneInTheSlot(t *testing.T) {
-	// One row per purpose. A gallery of abandoned uploads is a thing somebody
-	// has to clean up, and nothing here would ever read them.
 	ctx := context.Background()
 	f := newFixture()
 
@@ -158,7 +147,6 @@ func TestReplacingAnImageLeavesOneInTheSlot(t *testing.T) {
 }
 
 func TestUploadingAnImageIsRecorded(t *testing.T) {
-	// Replacing what the whole installation looks like is worth a line.
 	ctx := context.Background()
 	f := newFixture()
 

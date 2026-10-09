@@ -15,22 +15,16 @@ import (
 )
 
 // ErrUnreachable is the Query Runner failing to answer at all, as opposed to
-// answering that the query was refused.
-//
-// The distinction is the whole reason a Failure travels in the response rather
-// than as a gRPC status: without it, a service that is down and a query that
-// was refused reach the participant as the same sentence.
+// answering that the query was refused. That distinction is why a Failure
+// travels in the response rather than as a gRPC status.
 var ErrUnreachable = errors.New("the query service could not answer")
 
-// requestIDHeader carries the correlation identifier across the two
-// processes. Lower case because gRPC metadata keys are.
+// requestIDHeader carries the correlation identifier. Lower case because gRPC
+// metadata keys are.
 const requestIDHeader = "x-request-id"
 
-// Client calls the Query Runner service.
-//
-// It satisfies queryrunner.Executor, which is the whole point: the Core API
-// journals and calls the same shape whether the runner is across a socket or
-// in this process, so which one it is becomes a line in the composition root.
+// Client calls the Query Runner service. It satisfies queryrunner.Executor, so
+// a remote or in-process runner is a choice made in the composition root.
 type Client struct {
 	conn    *grpc.ClientConn
 	service pb.QueryRunnerClient
@@ -40,24 +34,15 @@ var _ queryrunner.Executor = (*Client)(nil)
 
 // Dial connects to the Query Runner.
 //
-// Without transport credentials, deliberately: this call never leaves the
-// private compose network, whose only published port belongs to the proxy, and
-// the runner's own port is not published at all. TLS here would be encrypting
-// a link between two containers against an attacker who, to be on it, would
-// already be inside the network — while adding certificates to rotate. If the
-// two are ever split across hosts, that reasoning stops holding and this is
-// the line that has to change.
-//
-// Encryption and authentication are separate questions, though: every call
-// carries token (QUERY_RUNNER_TOKEN), because the runner obeys whatever
-// database and policy a request names and must know the Core API sent it. An
-// empty token sends none, which only a development runner accepts.
+// No TLS: the link never leaves the private compose network and the runner's
+// port is not published. If the two are ever split across hosts, this must
+// change. Every call still carries QUERY_RUNNER_TOKEN, because the runner obeys
+// whatever database and policy a request names. An empty token sends none,
+// which only a development runner accepts.
 func Dial(address, token string) (*Client, error) {
 	options := append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		// gRPC's own default receive limit is 4 MiB, which is smaller than the
-		// result budget the runner enforces. Left alone, a large but valid
-		// answer arrives as ResourceExhausted.
+		// gRPC's default 4 MiB receive limit is below the result budget.
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxPayloadBytes),
 			grpc.MaxCallSendMsgSize(MaxPayloadBytes),
@@ -73,17 +58,11 @@ func Dial(address, token string) (*Client, error) {
 // Close releases the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
-// Run asks the service to execute one query.
-//
-// A gRPC error is the service failing to answer and is returned as it is; a
-// Failure in the response is the answer, and becomes the same Go error a local
+// Run asks the service to execute one query. A gRPC error is returned wrapped
+// in ErrUnreachable; a Failure in the response becomes the same Go error a local
 // runner would have produced.
 func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner.Result, error) {
-	// The request's own identifier travels as metadata rather than as a field
-	// of the contract, because it is not part of the question being asked —
-	// it is how the two processes' logs are joined afterwards. Without it
-	// anything the Query Runner writes about this call is an orphan line in a
-	// different file.
+	// Metadata, not a contract field: it only joins the two processes' logs.
 	if id := logging.RequestIDFrom(ctx); id != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, requestIDHeader, id)
 	}
@@ -105,34 +84,30 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 
 	answer := response.GetResult()
 	if answer == nil {
-		// Neither an answer nor a failure: a runner this build does not
-		// understand. Saying nothing was returned beats an empty result that
-		// looks like a query with no rows.
+		// A runner this build does not understand. An empty result would
+		// look like a query with no rows.
 		return nil, fmt.Errorf("the query service answered with neither a result nor a failure")
 	}
 	result := &queryrunner.Result{
 		Columns:     answer.GetColumns(),
 		ColumnTypes: answer.GetColumnTypes(),
 		Truncated:   answer.GetTruncated(),
-		// The contract carries microseconds; a Duration is nanoseconds. An
-		// older runner that names no duration sends nothing and this stays
-		// zero, which is the same thing the console shows for "not measured".
+		// The contract carries microseconds. A runner that sends none leaves
+		// zero, which the console shows as "not measured".
 		Duration:     time.Duration(answer.GetDurationMicros()) * time.Microsecond,
 		RowsAffected: answer.GetRowsAffected(),
 		Rows:         make([][]any, 0, len(answer.GetRows())),
 	}
-	// Every row's values share one backing array, one allocation for the
-	// whole answer rather than one per row; each row is capped at its own
-	// length, so appending to one can never write into the next.
+	// All rows share one backing array; each row is capped at its own length,
+	// so appending to one can never write into the next.
 	width := 0
 	for _, row := range answer.GetRows() {
 		width += len(row.GetCells())
 	}
 	values := make([]any, 0, width)
 	for _, row := range answer.GetRows() {
-		// Rendered text, and nil where the column was NULL. The console shows
-		// what the database printed; the typed value stayed in the process
-		// that read it, which is the one that had the connection's type map.
+		// Rendered text, nil for NULL: typed values stay with the runner,
+		// which had the connection's type map.
 		start := len(values)
 		for _, cell := range row.GetCells() {
 			if cell.GetIsNull() {

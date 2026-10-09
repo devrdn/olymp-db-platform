@@ -13,15 +13,14 @@ import (
 // Answerable implements queryproxy.Answerable.
 var _ queryproxy.Answerable = (*Answerable)(nil)
 
-// Answerable answers whether a registration still has a question of a contest
-// it could get an answer out of — the one fact the SQL console needs before
-// it takes another query (queryproxy.ErrNothingLeftToAnswer). It reads
-// questions and submissions and writes neither.
+// Answerable answers whether a registration still has a question it could
+// answer, which the SQL console checks before taking another query
+// (queryproxy.ErrNothingLeftToAnswer).
 type Answerable struct {
 	pool *pgxpool.Pool
 }
 
-// NewAnswerable returns the reader behind the console's own closing rule.
+// NewAnswerable returns the Answerable reader.
 func NewAnswerable(pool *pgxpool.Pool) *Answerable {
 	return &Answerable{pool: pool}
 }
@@ -30,49 +29,21 @@ func (r *Answerable) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// AnswerableLeft reports whether any question of contestID is still open to
-// registrationID: not answered correctly, and not out of attempts.
+// AnswerableLeft reports whether any visible question of contestID is still
+// open to registrationID: not answered correctly and, if max_attempts is set,
+// not out of attempts. This must agree with contests.Reader's isClosed and
+// Sequence's predicate.
 //
-// "Closed" here is the same definition the participant's own question list
-// already uses — contests.Reader's isClosed, and the identical predicate
-// inside Sequence.Open and Sequence.Frontier: a correct submission closes a
-// question outright, and otherwise it closes once the submissions already
-// committed reach the question's own max_attempts (a NULL cap never closes
-// this way). The three must agree, because a list that offers an answer while
-// this says there is nothing left would take the console away from a
-// participant with work still in front of them; answerable_test.go pins that
-// agreement against contests.Reader itself rather than against a second copy
-// of its rules.
+// It may only err towards open. Hidden questions are skipped, unlike in
+// Sequence: nobody can submit one, so counting it would keep the console open
+// forever. A visible question without a translation is counted, though the
+// participant's list drops it. A contest with no visible question answers
+// true: closing the console over nothing shown would misreport a configuration
+// gap, or a contest still being authored, as the participant's progress.
 //
-// The one place this is narrower than Sequence's own predicate is is_visible.
-// The sequence counts hidden questions because they take part in the
-// *ordering* (§6.1.1), but a participant is never given a hidden question's
-// identifier, so they can never submit one and it can never close — counting
-// it here would hold the console open forever, in every contest that has one,
-// on the strength of a question nobody can work towards. It is still wider
-// than the participant's own list in the other direction, which is the safe
-// one: the list also drops a visible question with no translation in the
-// reader's language, and this counts it, so the console can only ever stay
-// open longer than the list is empty, never close sooner.
-//
-// A contest with no visible question at all answers true rather than false,
-// which is the second half of that same "wider, never narrower" direction.
-// The refusal this feeds means "you have answered everything you were
-// given"; a contest that showed the participant nothing never gave them
-// anything to finish, and closing their console at minute zero over a
-// question they were never shown would be a configuration mistake reported
-// as their own progress. It is also what keeps a contest still being
-// authored — questions written but not yet made visible — from taking the
-// console away from anybody who reaches it.
-//
-// One statement and one round trip whatever the contest's size: EXISTS
-// short-circuits at the first open question, and every filter is served by an
-// index that already exists (CLAUDE.md rule 7). questions.contest_id is the
-// leading column of the table's own UNIQUE (contest_id, ord); each subquery
-// on submissions is filtered by (registration_id, question_id), the leading
-// two columns of that table's UNIQUE (registration_id, question_id,
-// attempt_no) — the same pair Sequence.Open relies on. Nothing here scales
-// with the number of registrations or contests in the installation.
+// EXISTS stops at the first open question. The filters use the UNIQUE indexes
+// (contest_id, ord) on questions and (registration_id, question_id,
+// attempt_no) on submissions (CLAUDE.md rule 7).
 func (r *Answerable) AnswerableLeft(ctx context.Context, contestID, registrationID uuid.UUID) (bool, error) {
 	var left bool
 	err := r.querier(ctx).QueryRow(ctx, `

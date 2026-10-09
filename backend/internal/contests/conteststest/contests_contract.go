@@ -16,62 +16,37 @@ import (
 	"github.com/google/uuid"
 )
 
-// ContestTarget is what one case of the contract runs against: a repository,
-// and the means to create what a contest hangs off and what a listing is
-// scoped by. A real schema needs an account to exist before a contest can
-// name it as its author, and a staff entry or a registration before a listing
-// can be scoped by one, so each implementation fills these its own way: the
-// in-memory store mints identifiers and records the entries, PostgreSQL
-// inserts rows.
-//
-// The repository may hold other contests already, so a case only ever looks
-// at the contests it created itself, and finds them in a listing by a marker
-// in their titles.
+// ContestTarget is a repository and the means to create the authors, staff
+// and registrations a contest and its listings refer to. The repository may
+// hold other contests, so a case finds its own in a listing by a marker in
+// their titles.
 type ContestTarget struct {
-	Repo contests.Repository
-	// NewUser creates an account and returns its identifier.
-	NewUser func() uuid.UUID
-	// Appoint puts the account on the contest's staff in the role.
-	Appoint func(contest, user uuid.UUID, role rbac.ContestRole)
-	// Register registers the account for the contest as a participant.
+	Repo     contests.Repository
+	NewUser  func() uuid.UUID
+	Appoint  func(contest, user uuid.UUID, role rbac.ContestRole)
 	Register func(contest, user uuid.UUID)
-	// Outside is a context that is not inside a unit of work. The context
-	// every case is run with is inside one.
+	// Outside is a context outside a unit of work; every case otherwise runs
+	// inside one.
 	Outside context.Context
-	// Now is what the store's clock reads when a row is written. A contest's
-	// CreatedAt and UpdatedAt are that clock, so the contract can only state
-	// them in its terms.
+	// Now is the store's clock, which stamps CreatedAt and UpdatedAt.
 	Now func() time.Time
 }
 
-// ContestRepositoryContract is what every contests.Repository must do, run as
-// subtests against one implementation. Both the in-memory Contests and
-// postgres.Contests run it, so the store the service tests trust and the store
-// production uses are held to the same answers: a rule the fake got wrong
-// would otherwise pass every service test and fail only in a contest.
+// ContestRepositoryContract is what every contests.Repository must do; both
+// the in-memory Contests and postgres.Contests run it. each prepares a fresh
+// target for one case, calls run with it, and cleans up. The lock against
+// another transaction, column bounds, cascades and covers are tested against
+// PostgreSQL alone.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. What needs a second
-// transaction or the real database (the lock excluding another transaction,
-// the bounds on a column, the cascade into the rows that hang off a contest,
-// the cover a listing carries) is outside it, and is asked of PostgreSQL alone
-// where a test exists.
+// Languages use "en", "ro" and "ru", which the real schema seeds; being
+// lower-case ASCII, their order does not depend on the collation.
 //
-// Languages use the codes "en", "ro" and "ru", which the real schema seeds,
-// and are lower-case ASCII letters, so that their order does not depend on the
-// database's collation. A contest is told apart from its neighbours by a
-// marker that its title begins with.
-//
-// Some answers are deliberately not pinned. The order of contests that start
-// at the same moment, or have no start, is left open: PostgreSQL breaks the
-// tie by creation time, which a transaction stamps identically on every row
-// it writes. And what a participant is shown of an archived contest is not
-// stated.
+// Not pinned: the order of contests starting together or with no start
+// (PostgreSQL breaks the tie by creation time, identical within one
+// transaction), and what a participant sees of an archived contest.
 func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, ContestTarget))) {
 	at := func(hour int) time.Time { return time.Date(2026, 3, 1, hour, 0, 0, 0, time.UTC) }
 
-	// plain is the ordinary draft the cases build on.
 	plain := func(author uuid.UUID) contests.Contest {
 		return contests.Contest{
 			Status:           contests.StatusDraft,
@@ -85,8 +60,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			CreatedBy:        author,
 		}
 	}
-	// full sets every field the repository writes, to something other than
-	// what plain has.
+	// full sets every field the repository writes, differently from plain.
 	full := func(author uuid.UUID) contests.Contest {
 		minutes, freeze := 90, 20
 		start, end, deadline := at(10), at(13), at(9)
@@ -112,7 +86,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			CreatedBy:            author,
 		}
 	}
-	// other is a second set of the same fields, for an update to change to.
 	other := func(author uuid.UUID) contests.Contest {
 		minutes, freeze := 45, 30
 		start, end, deadline := at(14), at(18), at(12)
@@ -199,8 +172,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		}
 		return ids
 	}
-	// wantListed checks the listing is exactly these contests, in any order,
-	// and that the total counts them.
 	wantListed := func(t *testing.T, found []contests.Contest, total int, want ...uuid.UUID) {
 		t.Helper()
 		got := idsOf(found)
@@ -213,16 +184,14 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 				len(got), total, len(want), got, want)
 		}
 	}
-	// wantOrder checks the listing is exactly these contests, in this order.
 	wantOrder := func(t *testing.T, found []contests.Contest, want ...uuid.UUID) {
 		t.Helper()
 		if got := idsOf(found); !slices.Equal(got, want) {
 			t.Errorf("listed %v, want %v", got, want)
 		}
 	}
-	// seeder returns a marker for the case and a function creating a draft
-	// whose English title is the marker followed by suffix. edit changes the
-	// contest before it is created.
+	// seeder returns the case's marker and a function creating a draft
+	// titled marker+suffix; edit changes it before creation.
 	seeder := func(t *testing.T, ctx context.Context, target ContestTarget) (string, func(suffix string, edit ...func(*contests.Contest)) uuid.UUID) {
 		author := target.NewUser()
 		marker := "c" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -246,12 +215,10 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	startingAt := func(hour int) func(*contests.Contest) {
 		return func(c *contests.Contest) { start := at(hour); c.StartsAt = &start }
 	}
-	// langs is the contest's languages as the caller sees them, in order.
 	langs := func(c contests.Contest) []contests.ContestLanguage { return c.Languages }
 	english := contests.ContestLanguage{Code: "en", IsDefault: true}
 
-	// diff names every field a repository writes that differs between got and
-	// want, so a case reports all of them at once.
+	// diff names every differing field, so a case reports them all at once.
 	diff := func(got, want contests.Contest) []string {
 		var wrong []string
 		check := func(name string, ok bool, got, want any) {
@@ -310,9 +277,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			t.Error(wrong)
 		}
 	}
-	// scribble overwrites everything reachable through a contest that a
-	// caller could write to, to show whether the repository handed it a view
-	// of its own storage.
+	// scribble overwrites everything reachable through a contest, to show
+	// whether the repository shared its own storage.
 	scribble := func(c contests.Contest) {
 		bad := at(23)
 		if c.DurationMin != nil {
@@ -419,8 +385,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("Create stores a penalty of zero as zero", func(t *testing.T) {
-		// Zero is a legal penalty and not the absence of one: the default of
-		// twenty minutes is the service's to apply, not the store's.
+		// Zero is a legal penalty; the default is the service's to apply.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			c := plain(target.NewUser())
 			c.ICPCPenaltyMin = 0
@@ -437,9 +402,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("Create stores no languages, titles or reveal time it is handed", func(t *testing.T) {
-		// Languages and titles have operations of their own, and a reveal
-		// time is set by revealing the leaderboard, not by creating the
-		// contest.
+		// A reveal time is set only by revealing the leaderboard.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			c := plain(target.NewUser())
 			revealed := at(11)
@@ -515,12 +478,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("Update leaves status, author, creation time, languages and titles alone, and writes no reveal time", func(t *testing.T) {
-		// Status moves through SetStatus, which is where the lifecycle rules
-		// are; languages and titles through their own operations, and a
-		// caller holding a contest it read earlier must not undo them by
-		// saving. The author is not the update's to rewrite, and neither is the
-		// reveal time: nothing in this interface sets one, so what is shown is
-		// that an update does not write the one it is handed.
+		// A caller saving a contest it read earlier must not undo status,
+		// language or title changes made since.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author, stranger := target.NewUser(), target.NewUser()
 			created := create(t, ctx, target, plain(author))
@@ -608,9 +567,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("SetStatus refuses a status that moved underneath it", func(t *testing.T) {
-		// The decision and the write are two statements, and a caller whose
-		// decision has gone stale must look again rather than overwrite a
-		// state it never examined.
+		// A caller whose decision has gone stale must look again, not
+		// overwrite a state it never examined.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
 			setStatus(t, ctx, target, created.ID, contests.StatusDraft, contests.StatusPublished)
@@ -627,8 +585,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("SetStatus of a contest that is not there is reported", func(t *testing.T) {
-		// "Nothing matched" has two causes and they are different answers: a
-		// contest that moved can be looked at again, one that is gone cannot.
+		// Distinct from a moved status: a contest that moved can be looked
+		// at again, one that is gone cannot.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusDraft, contests.StatusPublished)
 
@@ -694,8 +652,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("ReplaceLanguages replaces what was there", func(t *testing.T) {
-		// A language quietly left behind would keep the publish gate asking
-		// for a title in something the contest no longer offers.
+		// A leftover language would keep the publish gate asking for a
+		// title in it.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
 			replaceLanguages(t, ctx, target, created.ID, english, contests.ContestLanguage{Code: "ro"})
@@ -755,15 +713,13 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("ReplaceLanguages of a contest that is not there is reported", func(t *testing.T) {
-		// A contest deleted while its languages were being edited: the
-		// organiser is told the contest is gone, not that the store failed.
 		each(t, func(ctx context.Context, target ContestTarget) {
-			// No languages at all write nothing that could name the contest,
-			// and are still an edit of a contest that is not there.
+			// An empty set writes no row that would fail on the missing
+			// contest, and is still refused.
 			notFound(t, target.Repo.ReplaceLanguages(ctx, uuid.New(), nil), "ReplaceLanguages() with none")
 
-			// Last, because a database refuses it by failing the statement,
-			// and a transaction cannot be read from after that.
+			// Last: the database refuses it by failing the statement, which
+			// ends the transaction.
 			notFound(t, target.Repo.ReplaceLanguages(ctx, uuid.New(), []contests.ContestLanguage{english}), "ReplaceLanguages()")
 		})
 	})
@@ -837,21 +793,20 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 
 	t.Run("ReplaceTranslations of a contest that is not there is reported", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
-			// No titles at all write nothing that could name the contest,
-			// and are still an edit of a contest that is not there.
+			// An empty set writes no row that would fail on the missing
+			// contest, and is still refused.
 			notFound(t, target.Repo.ReplaceTranslations(ctx, uuid.New(), nil), "ReplaceTranslations() with none")
 
-			// Last, because a database refuses it by failing the statement,
-			// and a transaction cannot be read from after that.
+			// Last: the database refuses it by failing the statement, which
+			// ends the transaction.
 			notFound(t, target.Repo.ReplaceTranslations(ctx, uuid.New(), []contests.Translation{{Lang: "en", Title: "Gone"}}),
 				"ReplaceTranslations()")
 		})
 	})
 
 	t.Run("a contest handed back is the caller's own copy", func(t *testing.T) {
-		// A caller edits what it is given — the service builds the next
-		// version of a contest from the one it read — and that must not
-		// reach the stored contest until the caller saves it.
+		// The service builds the next version of a contest from the one it
+		// read; that must not reach the store until saved.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, _ := seeder(t, ctx, target)
 			want := full(target.NewUser())
@@ -885,8 +840,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("what the repository was handed is kept as a copy", func(t *testing.T) {
-		// The converse: a caller that goes on editing what it passed in has
-		// not saved anything.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author := target.NewUser()
 			c := full(author)
@@ -918,9 +871,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List carries each contest's languages and titles", func(t *testing.T) {
-		// The publish gate reasons about a contest together with them;
-		// loading them separately would be an extra read per row and a
-		// chance for the two to disagree.
+		// The publish gate needs them; loading them separately costs a read
+		// per row and lets the two disagree.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			id := seed("-library")
@@ -993,8 +945,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List finds a contest by a title in any language, whatever the case", func(t *testing.T) {
-		// The title lives only in the translations, so searching has to
-		// reach them, in whichever language staff think in.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			library := seed("-library")
@@ -1048,9 +998,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List takes the search text literally", func(t *testing.T) {
-		// A percent sign or an underscore means itself, and a backslash at
-		// the end is not a malformed pattern: what a person types in a
-		// search box is a string, not a pattern.
+		// %, _ and a trailing backslash mean themselves: a search is a
+		// string, not a pattern.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			percent, plainRate := seed("%rate"), seed("xrate")
@@ -1124,9 +1073,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 				t.Errorf("total of a page shorter than the limit = %d, want 5", total)
 			}
 
-			// A page past the end is empty, and still says how many there
-			// are: a screen that went one page too far must be able to step
-			// back rather than conclude nothing exists.
+			// Past the end: empty, but still counting, so a screen can step
+			// back.
 			found, total = list(t, ctx, target, contests.Filter{Query: marker, Limit: 2, Offset: 5})
 			wantOrder(t, found)
 			if total != 5 {
@@ -1146,8 +1094,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List limits an organiser to the contests they staff", func(t *testing.T) {
-		// This is what keeps one organiser's list their own without the
-		// repository knowing anything about permissions.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			mine, theirs := target.NewUser(), target.NewUser()
@@ -1177,10 +1123,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List shows a participant their own contests and what is open", func(t *testing.T) {
-		// The rule the participant screens are cut from, and the one that
-		// decides what a student may see at all: the contests they are on
-		// once those are no longer drafts, plus open ones still taking
-		// signups. A draft is nobody's business but its authors'.
+		// Non-draft contests they are on, plus open ones still taking
+		// signups. A draft is visible only to its authors.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			student, someoneElse := target.NewUser(), target.NewUser()
@@ -1208,9 +1152,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("List narrows a participant's contests to the ones they are on", func(t *testing.T) {
-		// What the participant's own screen asks. The two lists answer
-		// different questions, and the one asked under a timer on the day
-		// must not be diluted by the one browsed once a term.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			marker, seed := seeder(t, ctx, target)
 			student := target.NewUser()
@@ -1222,17 +1163,14 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			target.Register(joined, student)
 			target.Register(joinedOpen, student)
 			target.Register(joinedDraft, student)
-			// Somebody else's registration on the open contest does not make
-			// it the student's.
 			target.Register(open, target.NewUser())
 			on, notOn := true, false
 
 			found, total := list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Enrolled: &on, Limit: 20})
 			wantListed(t, found, total, joined, joinedOpen)
 
-			// Narrowing never widens: the contests the student may not see
-			// stay unseen however the flag is set, so asking for "not on"
-			// is not a way to list every invitation-only contest there is.
+			// Narrowing never widens: "not on" must not list every
+			// invitation-only contest.
 			found, total = list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Enrolled: &notOn, Limit: 20})
 			wantListed(t, found, total, open)
 
@@ -1254,17 +1192,16 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 
 	t.Run("LockContest of a contest that is not there is reported", func(t *testing.T) {
-		// A lock taken on nothing protects nothing: the caller would go on to
-		// write against a contest that has gone, believing it held it.
+		// Otherwise the caller writes against a deleted contest, believing
+		// it holds the lock.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			notFound(t, target.Repo.LockContest(ctx, uuid.New()), "LockContest()")
 		})
 	})
 
 	t.Run("LockContest refuses to run outside a unit of work", func(t *testing.T) {
-		// A lock that silently did nothing outside one would be
-		// indistinguishable from a lock that worked, until two requests
-		// actually raced.
+		// A silent no-op would look like a working lock until two requests
+		// raced.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
 

@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// spyCache records the keys it is asked about, so a test can assert on what
-// actually reaches the store.
 type spyCache struct {
 	cache.Cache
 	keys []string
@@ -81,15 +79,13 @@ func TestCreateIssuesAUniqueHighEntropyToken(t *testing.T) {
 	if first == second {
 		t.Error("two sessions received the same token")
 	}
-	// 32 random bytes in base64url; anything shorter would be guessable.
+	// 32 random bytes in base64url.
 	if len(first) < 43 {
 		t.Errorf("token %q is %d characters, too short to resist guessing", first, len(first))
 	}
 }
 
 func TestTokenIsNotStoredVerbatim(t *testing.T) {
-	// Whoever reads the cache — a dump, a misconfigured Redis — must not come
-	// away with usable session tokens.
 	spy := newSpyCache()
 	t.Cleanup(func() { _ = spy.Close() })
 	store := NewSessionStore(spy, time.Hour)
@@ -142,8 +138,6 @@ func TestDeleteEndsTheSession(t *testing.T) {
 }
 
 func TestDeleteIsQuietAboutAnUnknownToken(t *testing.T) {
-	// Logging out twice, or with a stale cookie, is not an error worth
-	// surfacing to the user.
 	store, _ := newTestStore(t)
 
 	if err := store.Delete(context.Background(), "unknown"); err != nil {
@@ -178,8 +172,7 @@ func TestSessionRecordsWhenItWasIssued(t *testing.T) {
 }
 
 func TestTouchLeavesARecentlyRefreshedSessionAlone(t *testing.T) {
-	// Authenticating is one read; it must not become a write as well on every
-	// request when the last write was moments ago.
+	// CLAUDE.md rule 6.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	store := NewSessionStore(c, time.Hour)
@@ -198,8 +191,6 @@ func TestTouchLeavesARecentlyRefreshedSessionAlone(t *testing.T) {
 }
 
 func TestTouchExtendsASessionThatIsDue(t *testing.T) {
-	// The sliding window is still the promise: once the interval has passed,
-	// activity buys a full lifetime again.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	store := NewSessionStore(c, 80*time.Millisecond) // the interval is 8ms
@@ -222,8 +213,7 @@ func TestTouchExtendsASessionThatIsDue(t *testing.T) {
 }
 
 func TestTouchTreatsARecordWithoutARefreshTimeAsDue(t *testing.T) {
-	// Sessions written before the field existed carry no RefreshedAt. They
-	// are extended on their next request rather than left to lapse.
+	// A record without RefreshedAt is extended, not left to lapse.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	store := NewSessionStore(c, time.Hour)
@@ -243,8 +233,7 @@ func TestTouchTreatsARecordWithoutARefreshTimeAsDue(t *testing.T) {
 	}
 }
 
-// ageSession rewrites a stored session as if it had been issued age ago and
-// kept in use ever since — the record a stolen cookie kept warm would have.
+// ageSession rewrites a stored session as if issued age ago and kept in use.
 func ageSession(t *testing.T, c cache.Cache, token string, age time.Duration) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -264,9 +253,6 @@ func ageSession(t *testing.T, c cache.Cache, token string, age time.Duration) {
 }
 
 func TestASessionOlderThanItsMaximumLifetimeIsRefusedAndRemoved(t *testing.T) {
-	// The idle timeout slides on every request, so on its own it never ends a
-	// session somebody keeps using — including somebody using a copied cookie.
-	// The maximum lifetime counts from sign-in and nothing extends it.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	store := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour)
@@ -319,9 +305,6 @@ func TestActivityNeverExtendsASessionPastItsMaximumLifetime(t *testing.T) {
 }
 
 func TestAStoredSessionExpiresFromTheStoreAtItsMaximumLifetime(t *testing.T) {
-	// The record is written with no more time to live than the session has
-	// left, so a session nobody asks about again does not sit in the store
-	// for a full idle timeout past its end.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	store := NewSessionStore(c, time.Hour).WithMaxLifetime(40 * time.Millisecond)
@@ -336,8 +319,6 @@ func TestAStoredSessionExpiresFromTheStoreAtItsMaximumLifetime(t *testing.T) {
 }
 
 func TestTheCookieLivesNoLongerThanTheSessionCan(t *testing.T) {
-	// A cookie that outlives its session is a browser sending a dead token on
-	// every request until the idle timeout it was stamped with runs out.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -349,7 +330,6 @@ func TestTheCookieLivesNoLongerThanTheSessionCan(t *testing.T) {
 	}
 }
 
-// newAliveStore is a session store over a fresh in-process cache.
 func newAliveStore(t *testing.T) (*SessionStore, cache.Cache) {
 	t.Helper()
 	c := cache.NewMemory(100)
@@ -366,9 +346,7 @@ func createSession(t *testing.T, store *SessionStore, p Principal) string {
 	return token
 }
 
-// SessionAlive answers the monitoring trail in its own terms: the tag it
-// keeps is monitor.SessionTag of the token, which must name the same record
-// this store keeps.
+// monitor.SessionTag must name the record this store keeps.
 func TestSessionAliveAnswersForTheMonitoringTag(t *testing.T) {
 	ctx := context.Background()
 	retired := testPrincipal()
@@ -396,9 +374,7 @@ func TestSessionAliveAnswersForTheMonitoringTag(t *testing.T) {
 			},
 			next: testPrincipal(), want: false,
 		},
-		// A password change or "sign out everywhere" retires every older
-		// session without deleting its record; the new sign-in carries the
-		// newer generation.
+		// Retired sessions keep their records; the newer generation decides.
 		"a session retired by a newer generation": {
 			end: func(*testing.T, *SessionStore, cache.Cache, string) {}, next: retired, want: false,
 		},
@@ -417,7 +393,6 @@ func TestSessionAliveAnswersForTheMonitoringTag(t *testing.T) {
 	}
 }
 
-// A tag that is not a digest names nothing: it is never used to build a key.
 func TestSessionAliveRefusesWhatIsNotADigest(t *testing.T) {
 	store, _ := newAliveStore(t)
 	token := createSession(t, store, testPrincipal())
@@ -428,9 +403,6 @@ func TestSessionAliveRefusesWhatIsNotADigest(t *testing.T) {
 	}
 }
 
-// The whole signal over the real store: an honest participant who signs out
-// and back in, or whose session reached its end, is not reported as using a
-// second device; one whose first session is still live is.
 func TestANewSignInIsAParallelSessionOnlyWhileTheOldOneLives(t *testing.T) {
 	for name, given := range map[string]struct {
 		end  func(t *testing.T, store *SessionStore, c cache.Cache, tracked string)
@@ -475,7 +447,6 @@ func TestANewSignInIsAParallelSessionOnlyWhileTheOldOneLives(t *testing.T) {
 	}
 }
 
-// countingEvents counts the events the tracker wrote.
 type countingEvents struct{ count int }
 
 func (e *countingEvents) InsertEvents(_ context.Context, events []monitor.Event) error {

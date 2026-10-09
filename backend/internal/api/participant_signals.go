@@ -16,23 +16,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// The signals a participant's own browser reports from the play screen —
-// leaving the page and pasting text (design §2.2) — sent in batches to
-// POST /contests/{id}/play/signals.
+// Signals the participant's browser reports from the play screen (leaving the
+// page, pasting text), sent in batches to POST /contests/{id}/play/signals.
 //
-// Admitted like the rest of /play (queryproxy.Service.Access), but spending a
-// budget of its own (monitor.Signals.AdmitBatch) rather than the read budget
-// the SQL console shares: a browser reporting that its participant switched
-// windows must not take a query away from them. The budget is spent first,
-// before the body is read or anything is looked up (CLAUDE.md rule 13).
+// Admitted like the rest of /play, but on a budget of its own
+// (monitor.Signals.AdmitBatch), charged before anything is read or looked up
+// (CLAUDE.md rule 13), so reporting a window switch never costs a query.
 //
-// What a browser sends is a claim, and one bad signal must not cost the good
-// ones beside it: an event this handler cannot read, of a kind a browser may
-// not report, or outside its bounds is dropped (monitor.CleanBatch), and the
-// batch still answers 204. The batch itself is refused only when it is too
-// large — more than monitor.MaxBatchEvents events, or a body over
-// maxSignalBodyBytes, which is refused as the bytes arrive, before anything
-// is decoded (rule 12).
+// A browser's report is a claim: an unreadable, disallowed or out-of-bounds
+// event is dropped (monitor.CleanBatch) and the batch still answers 204. Only a
+// batch that is too large is refused, by count or by body size as the bytes
+// arrive (CLAUDE.md rule 12).
 
 // SignalRecorder is the slice of monitor.Signals these endpoints need.
 type SignalRecorder interface {
@@ -40,24 +34,21 @@ type SignalRecorder interface {
 	Record(ctx context.Context, events []monitor.Event) (kept int, err error)
 }
 
-// maxSignalBodyBytes bounds a batch's body. Fifty events of the largest kind —
-// a paste carrying 500 characters, each at most six bytes once JSON-escaped —
-// come to about 160 KiB; anything much beyond that is not a batch the play
-// screen sends.
+// maxSignalBodyBytes bounds a batch's body. Fifty pastes of 500 characters,
+// each at most six bytes JSON-escaped, come to about 160 KiB.
 const maxSignalBodyBytes = 256 << 10
 
 // signalsKeptHeader reports how many of a batch's events were stored, so a
 // client (and a test) can see what was dropped without a body on a 204.
 const signalsKeptHeader = "X-Signals-Kept"
 
-// WithSignals serves the browser-signal endpoint from signals. Without it the
-// route is not mounted at all.
+// WithSignals serves the browser-signal endpoint from signals; without it the
+// route is not mounted.
 func (h *ParticipantHandler) WithSignals(signals SignalRecorder) *ParticipantHandler {
 	h.signals = signals
 	return h
 }
 
-// mountSignals registers the signal route on an authenticated router.
 func (h *ParticipantHandler) mountSignals(r chi.Router) {
 	if h.signals == nil {
 		return
@@ -65,10 +56,9 @@ func (h *ParticipantHandler) mountSignals(r chi.Router) {
 	r.Post("/contests/{"+contestIDParam+"}/play/signals", h.postSignals)
 }
 
-// signalsRequest is the body of POST .../play/signals. Each event is kept
-// raw until the batch's size has been checked, so no event is decoded in a
-// batch that is refused anyway, and so one unreadable event is dropped
-// rather than failing the whole body.
+// signalsRequest is the body of POST .../play/signals. Events stay raw until
+// the batch size is checked, so a refused batch decodes nothing and one
+// unreadable event is dropped without failing the body.
 type signalsRequest struct {
 	Events *[]json.RawMessage `json:"events"`
 }
@@ -84,10 +74,8 @@ type signalEvent struct {
 	Text     string       `json:"text"`
 }
 
-// toEvent reads one raw event into a monitor event of the admitted
-// registration, or reports it unreadable. Only the kinds a browser may send
-// are read at all; anything else is dropped here, before CleanBatch would
-// drop it again.
+// toEvent reads one raw event for the admitted registration, or reports it
+// unreadable. Kinds a browser may not send are dropped here.
 func toEvent(raw json.RawMessage, contest contests.Contest, participant contests.Participant) (monitor.Event, bool) {
 	var in signalEvent
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -102,8 +90,7 @@ func toEvent(raw json.RawMessage, contest contests.Contest, participant contests
 	default:
 		return monitor.Event{}, false
 	}
-	// A claimed time that is not a time is ignored, not a reason to lose the
-	// event: it was only ever a claim.
+	// An unparseable claimed time is ignored; it was only ever a claim.
 	if claimed, err := time.Parse(time.RFC3339Nano, in.ClientAt); err == nil {
 		event.ClientAt = &claimed
 	}
@@ -122,8 +109,8 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// The body is read and its size checked before Access: both are cheap,
-	// and a batch refused for its shape costs no lookup.
+	// Body and size are checked before Access: both are cheap, and a malformed
+	// batch costs no lookup.
 	var req signalsRequest
 	if err := httpx.DecodeJSONWithin(w, r, &req, maxSignalBodyBytes); err != nil {
 		if errors.Is(err, httpx.ErrBodyTooLarge) {
@@ -166,7 +153,6 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 }
 
 // failSignals maps a signal refusal to a response (CLAUDE.md rule 1).
-// Anything else is ours, and an internal error.
 func (h *ParticipantHandler) failSignals(w http.ResponseWriter, r *http.Request, err error) {
 	if monitorErrors.answer(w, r, h.log, err) {
 		return

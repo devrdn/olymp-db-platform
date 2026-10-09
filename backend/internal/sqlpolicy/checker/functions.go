@@ -2,28 +2,14 @@ package checker
 
 import "strings"
 
-// The functions a participant may call, by name.
+// defaultFunctions are the functions a participant may call. An allow-list,
+// because a deny-list would have to keep up with every release: pg_sleep,
+// pg_read_file, dblink and lo_import are refused because nothing unneeded was
+// added. A legitimate function left out is refused by name, and an operator
+// can extend the list (NewChecker).
 //
-// An allow-list, and the reasoning is the same as everywhere else in this
-// package: a deny-list of dangerous functions is a list somebody has to keep
-// complete, against an extension surface that grows with every PostgreSQL
-// release. `pg_sleep`, `pg_read_file`, `dblink`, `lo_import` and the rest are
-// not absent from here because they were considered and rejected — they are
-// absent because nothing was added that was not needed.
-//
-// The cost is real and is paid deliberately: a legitimate function nobody
-// thought of is refused, and the participant sees a refusal for a query that
-// is not their mistake. That is why the refusal names the function, why the
-// journal panel aggregates these refusals (section 9.1), and why the list is
-// extendable at run time by an operator rather than only by a release
-// (NewChecker). Section 14 makes replenishing it after the pilot an explicit
-// step of stage 7.
-//
-// Note what is *not* here and does not need to be: `coalesce`, `nullif`,
-// `greatest`, `least`, `current_date` and casts are not function calls in the
-// parse tree at all — the grammar gives each its own node type, checked as a
-// construct rather than as a name. `now()` is not among them: it looks like
-// those but parses as an ordinary call, so it has to be listed.
+// coalesce, nullif, greatest, least, current_date and casts are their own
+// node kinds, not calls; now() is an ordinary call and has to be listed.
 var defaultFunctions = names(
 	// Arithmetic.
 	"abs", "cbrt", "ceil", "ceiling", "degrees", "div", "exp", "floor", "gcd",
@@ -79,7 +65,6 @@ var defaultFunctions = names(
 	"generate_series", "generate_subscripts",
 )
 
-// names builds a lookup from a list written for reading.
 func names(list ...string) map[string]struct{} {
 	set := make(map[string]struct{}, len(list))
 	for _, name := range list {
@@ -89,14 +74,8 @@ func names(list ...string) map[string]struct{} {
 }
 
 // functionName reduces a parsed function name to the one to look up, and
-// reports whether the call is addressable at all.
-//
-// A call may be written qualified. `pg_catalog.upper(x)` is the same function
-// as `upper(x)`, so the schema is dropped — but only for pg_catalog and the
-// default schema. A call qualified with anything else is reaching for a
-// function somebody installed, which is by definition not on a list of
-// standard ones, and is refused as written rather than silently reduced to
-// its last element.
+// reports whether the call is addressable. Only pg_catalog is dropped as a
+// qualifier; any other schema means an installed function, refused as written.
 func functionName(parts []string) (string, bool) {
 	switch len(parts) {
 	case 1:

@@ -20,32 +20,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// URL parameters. contestIDParam matches what the authorisation middleware
-// reads to scope a permission, so the two cannot drift apart.
+// URL parameters. contestIDParam is also what the authorisation middleware
+// reads to scope a permission.
 const (
 	contestIDParam  = "contestID"
 	questionIDParam = "questionID"
 	memberIDParam   = "userID"
 )
 
-// timeLayout is the timestamp format the API speaks. The one exception is a
-// workspace document's updated_at, which keeps its fractional seconds because
-// the interface compares it for equality — see versionLayout in
-// participant_workspace.go.
+// timeLayout is the API's timestamp format; workspace documents use
+// versionLayout instead.
 const timeLayout = "2006-01-02T15:04:05Z"
 
-// ContestsHandler serves the contest constructor: the contest itself, its
-// content, its staff and its participants.
-//
-// Authorisation is two-level throughout (§7): creating a contest is an
-// installation-wide permission, everything about one contest is scoped to it,
-// so an organizer never reaches somebody else's olympiad.
+// ContestsHandler serves the contest constructor: the contest, its content,
+// staff and participants. Creating a contest is an installation-wide
+// permission; everything about one contest is scoped to it (§7), so an
+// organiser never reaches somebody else's.
 type ContestsHandler struct {
 	service *contests.Service
 	mw      *auth.Middleware
 	log     *slog.Logger
-	// defaultLocale answers when a request expresses no usable preference and
-	// the contest narrows nothing down.
+	// defaultLocale answers when neither the request nor the contest decides
+	// the language.
 	defaultLocale string
 }
 
@@ -62,15 +58,14 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 	r.Route("/contests", func(r chi.Router) {
 		r.Use(h.mw.Authenticate)
 
-		// Listing is scoped inside the handler rather than by a permission:
-		// what a student sees and what staff see are different result sets,
-		// not different rights over the same one.
+		// The listing is scoped inside the handler: students and staff see
+		// different result sets, not different rights.
 		r.Get("/", h.list)
 		r.With(h.mw.RequirePermission(rbac.PermissionContestCreate)).Post("/", h.create)
 
 		r.Route("/{"+contestIDParam+"}", func(r chi.Router) {
-			// Self-signup is the one participant action here, and it is open
-			// to any authenticated account: the contest's own rules decide.
+			// Self-signup is open to any authenticated account; the contest's
+			// own rules decide.
 			r.Post("/enroll", h.enroll)
 
 			r.Group(func(r chi.Router) {
@@ -87,11 +82,9 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 			r.Group(func(r chi.Router) {
 				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestEdit))
 				r.Patch("/", h.update)
-				// Reachable on a finished or archived contest, unlike
-				// everything else in this group — ExtendGrace is the one
-				// exception SettingsEditable itself carves out, and this
-				// route exists so an organizer has more recourse than
-				// hand-written SQL to use it (§2.4).
+				// Unlike the rest of this group, reachable on a finished or
+				// archived contest: extending the grace period is the one
+				// exception SettingsEditable allows (§2.4).
 				r.Patch("/grace", h.extendGrace)
 				r.Delete("/", h.delete)
 				r.Put("/languages", h.setLanguages)
@@ -101,29 +94,24 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				r.Post("/questions", h.addQuestion)
 				r.Put("/questions/order", h.reorderQuestions)
 				r.Patch("/questions/{"+questionIDParam+"}", h.updateQuestion)
-				// The whole question in one request: its fields, its wording
-				// and its reference answers, in one transaction. PATCH edits a
-				// part; PUT replaces the thing.
+				// The whole question in one transaction: fields, wording and
+				// reference answers. PATCH edits a part; PUT replaces it.
 				r.Put("/questions/{"+questionIDParam+"}", h.saveQuestion)
 				r.Delete("/questions/{"+questionIDParam+"}", h.deleteQuestion)
 				r.Put("/questions/{"+questionIDParam+"}/texts", h.setQuestionTexts)
 				r.Put("/questions/{"+questionIDParam+"}/answers", h.setAnswers)
 
-				// The contest as a file (contest_package.go). In this group
-				// and not the contest.view one above, deliberately: the
-				// package carries the reference answers, so it belongs to the
-				// permission that means "may write those answers" rather than
-				// the one that means "may look at this contest"
-				// (docs/ARCHITECTURE.md §15, item 12). A GET among writes is
-				// what that decision costs, and it is the cheaper of the two
-				// prices.
+				// The contest as a file (contest_package.go). Under
+				// contest.edit, not contest.view, because the package carries
+				// the reference answers (docs/ARCHITECTURE.md §15, item 12).
 				r.Get("/export", h.exportPackage)
 			})
 
-			// Appointing staff is the owner's alone.
+			// Publishing and starting need contest.publish, not contest.edit.
 			r.With(h.mw.RequireContestPermission(rbac.PermissionContestPublish)).
 				Post("/status", h.setStatus)
 
+			// Appointing staff is the owner's alone.
 			r.Group(func(r chi.Router) {
 				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestManage))
 				r.Put("/managers/{"+memberIDParam+"}", h.grantManager)
@@ -137,39 +125,31 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				r.Delete("/participants/{"+memberIDParam+"}", h.removeParticipant)
 				r.Post("/participants/{"+memberIDParam+"}/disqualify", h.disqualifyParticipant)
 
-				// Behind participant.manage rather than a permission of its own:
-				// every contest role that may see this screen's staff and
-				// participants already carries it (rbac's managerPermissions
-				// grants contest.view and participant.manage together), so this
-				// is not a wider door than the people screen itself.
+				// Behind participant.manage: every role that may see the people
+				// screen already holds it, so this opens nothing wider.
 				r.Get("/people/directory", h.directorySearch)
 			})
 		})
 	})
 }
 
-// ContestResponse is a contest as its staff see it.
-//
-// A dedicated type rather than the domain object, for the same reason accounts
-// have one: direct serialisation publishes whatever field is added next.
+// ContestResponse is a contest as its staff see it. A dedicated type, so a
+// field added to the domain object is not published automatically.
 type ContestResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
 	Enrollment   string `json:"enrollment"`
 	QuestionMode string `json:"question_mode"`
-	// Progression decides the order questions may be answered in (§6.1.1):
-	// contests.ProgressionFree or contests.ProgressionSequential.
+	// Progression decides the order questions may be answered in (§6.1.1).
 	Progression string `json:"progression"`
-	// Scoring decides how a result is derived from submissions (§6.1.1):
-	// contests.ScoringPoints, contests.ScoringWinner or contests.ScoringICPC.
+	// Scoring decides how a result is derived from submissions (§6.1.1).
 	Scoring     string `json:"scoring"`
 	Timing      string `json:"timing"`
 	DurationMin *int   `json:"duration_min,omitempty"`
 	StartsAt    string `json:"starts_at,omitempty"`
 	EndsAt      string `json:"ends_at,omitempty"`
-	// ICPCPenaltyMin is the per-attempt penalty, in minutes, ICPC scoring
-	// applies to a solved question — meaningless in every other mode, but
-	// always present (docs/ARCHITECTURE.md §6.1.1).
+	// ICPCPenaltyMin is ICPC's per-attempt penalty in minutes, always present
+	// even in other modes (§6.1.1).
 	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       SettingsResponse               `json:"settings"`
@@ -178,33 +158,28 @@ type ContestResponse struct {
 	Translations   map[string]TranslationResponse `json:"translations"`
 	CreatedAt      string                         `json:"created_at"`
 	UpdatedAt      string                         `json:"updated_at"`
-	// MayMonitor says whether the caller holds contest.monitor on this
-	// contest, decided by rbac as the monitoring routes decide it, so the
-	// workspace offers its monitoring tab without restating the rule. Sent
-	// only by GET /contests/{id}; the writes answer without it.
+	// MayMonitor says whether the caller holds contest.monitor here, so the
+	// workspace can offer its monitoring tab without restating the rule. Sent
+	// only by GET /contests/{id}.
 	MayMonitor *bool `json:"may_monitor,omitempty"`
 }
 
-// LeaderboardSettingsResponse is how the contest's table is shown.
-//
-// FreezeMin is sent as null rather than omitted when there is no freeze, so a
-// client reads "no freeze" instead of guessing at a missing key.
+// LeaderboardSettingsResponse is how the contest's table is shown. FreezeMin is
+// null, not omitted, when there is no freeze.
 type LeaderboardSettingsResponse struct {
 	FreezeMin  *int   `json:"freeze_min"`
 	Names      string `json:"names"`
 	RevealedAt string `json:"revealed_at,omitempty"`
 }
 
-// leaderboardRequest changes the table's settings. Present means "set these";
-// the whole object absent means "leave them alone". Inside it, freeze_min
-// distinguishes three things a *int cannot: a number sets the freeze, null
-// removes it, and no key leaves it as it was.
+// leaderboardRequest changes the table's settings; absent means leave them
+// alone. freeze_min has three states a *int cannot hold: a number sets the
+// freeze, null removes it, no key leaves it.
 type leaderboardRequest struct {
 	FreezeMin json.RawMessage `json:"freeze_min"`
 	Names     string          `json:"names"`
 }
 
-// apply writes the request onto cmd.
 func (req *leaderboardRequest) apply(cmd *contests.UpdateCommand) error {
 	cmd.LeaderboardNames = req.Names
 	switch raw := bytes.TrimSpace(req.FreezeMin); {
@@ -240,16 +215,15 @@ type TranslationResponse struct {
 	Description string `json:"description,omitempty"`
 }
 
-// ContestSummary is a contest in a listing: one negotiated title rather than
-// every translation, plus the language it was actually served in.
+// ContestSummary is a contest in a listing: one negotiated title and the
+// language it was served in.
 type ContestSummary struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
 	Enrollment   string `json:"enrollment"`
 	QuestionMode string `json:"question_mode"`
-	// Scoring and ICPCPenaltyMin let the game screen tell ICPC scoring apart
-	// from points and winner before it renders a question (design doc: no
-	// points shown, a penalty note under the question list).
+	// Scoring and ICPCPenaltyMin let the game screen render ICPC differently
+	// before showing a question.
 	Scoring        string `json:"scoring"`
 	ICPCPenaltyMin int    `json:"icpc_penalty_min"`
 	Lang           string `json:"lang"`
@@ -257,19 +231,14 @@ type ContestSummary struct {
 	Description    string `json:"description,omitempty"`
 	StartsAt       string `json:"starts_at,omitempty"`
 	EndsAt         string `json:"ends_at,omitempty"`
-	// Enrolled says whether the caller is registered for this contest, and
-	// only ever about the caller: it is filled from the authenticated
-	// identity, never from anything the request carries. Without it a
-	// catalogue cannot tell "join" from "you are already in", and offering the
-	// button anyway turns an ordinary state into an error message.
+	// Enrolled says whether the caller is registered for this contest. It comes
+	// from the authenticated identity only, never from the request.
 	Enrolled bool `json:"enrolled"`
-	// CoverHash names the picture this contest wears, and is absent for one
-	// wearing a drawn cover. It travels on the listing because the screen
-	// that shows a picture above a story (design spec §10) already reads
-	// this listing and opens under a timer — see contests.Contest.CoverHash.
+	// CoverHash names this contest's picture, absent for a drawn cover. It
+	// travels on the listing because the story screen already reads it
+	// (docs/design/SPEC.md §10).
 	CoverHash string `json:"cover_hash,omitempty"`
-	// CoverAttribution credits whoever made that picture; a drawn cover has
-	// nobody to credit, and the field is absent there too.
+	// CoverAttribution credits the picture's author; absent for a drawn cover.
 	CoverAttribution string `json:"cover_attribution,omitempty"`
 }
 
@@ -335,15 +304,12 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 	}
 }
 
-// negotiate picks the language to answer in.
-//
-// A thin wrapper over negotiateLang, which every language-dependent handler
-// in this package shares — see its doc for the resolution order (§6.2).
+// negotiate picks the language to answer in (negotiateLang, §6.2).
 func (h *ContestsHandler) negotiate(r *http.Request, c contests.Contest) string {
 	available := c.LanguageCodes()
 	if len(available) == 0 {
-		// A contest that has not chosen its languages yet still has authored
-		// text; answering from what exists beats answering with nothing.
+		// A contest with no languages chosen yet still has authored text;
+		// answer from what exists.
 		available = translationCodes(c)
 	}
 	return negotiateLang(r, available, c.DefaultLanguage(), h.defaultLocale)
@@ -362,18 +328,15 @@ type contestListResponse struct {
 	Total int              `json:"total"`
 }
 
-// list returns the contests the caller may see.
-//
-// Two different result sets, not two different rights: staff see the contests
-// they run, everybody sees the ones they take part in and the open ones. An
-// installation administrator sees all of them.
+// list returns the contests the caller may see: staff see those they run,
+// everyone sees those they take part in and the open ones, and an installation
+// administrator sees all.
 func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
 	enrolled, err := boolParam(r, "enrolled")
 	if err != nil {
-		// Refused rather than dropped: ignoring it would answer a different
-		// question from the one asked, and the screen would quietly show the
+		// Refused rather than ignored, so the screen never silently shows the
 		// wrong list.
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
@@ -396,14 +359,9 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		filter.VisibleTo = identity.UserID
 	}
 
-	// The narrowing into "mine" and "the rest of what is open to me" — the
-	// participant's two screens. It only ever narrows what the scope above
-	// already allows, so it cannot become a way to see more.
-	//
-	// Outside a participant scope there is no "me" for it to be about: an
-	// organizer's register answers "what do I run". Applied there it would
-	// compare against a null identity and quietly return nothing, which is the
-	// same sin as ignoring a value that could not be parsed.
+	// The participant's "mine" and "the rest open to me". It only narrows the
+	// scope above. Outside a participant scope there is no "me", and it would
+	// silently return nothing, so it is refused.
 	if enrolled != nil {
 		if filter.VisibleTo == uuid.Nil {
 			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
@@ -419,9 +377,8 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which of this page the caller is on. One query for the page, and about
-	// the caller alone: the identity comes from the session the middleware
-	// authenticated, so no parameter can point it at anybody else.
+	// Which contests on this page the caller is on, from the session's identity
+	// only.
 	ids := make([]uuid.UUID, 0, len(found))
 	for _, c := range found {
 		ids = append(ids, c.ID)
@@ -441,10 +398,8 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, contestListResponse{Items: items, Total: total})
 }
 
-// boolParam reads an optional true/false query parameter.
-//
-// Absent is nil, which is a third answer and not the same as false: "every
-// contest I may see" and "the ones I am not on" are different questions.
+// boolParam reads an optional true/false query parameter. Absent is nil, a
+// third answer distinct from false.
 func boolParam(r *http.Request, name string) (*bool, error) {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {
@@ -460,20 +415,16 @@ func boolParam(r *http.Request, name string) (*bool, error) {
 type contestRequest struct {
 	Enrollment   string `json:"enrollment"`
 	QuestionMode string `json:"question_mode"`
-	// Progression and Scoring follow Enrollment/QuestionMode's own rule: an
-	// empty string on update means "leave it alone" (see UpdateCommand's
-	// doc), and on create means "use the domain's default" (see
-	// CreateCommand's doc) — neither is a value an organizer can mean to set.
+	// Progression and Scoring: an empty string means "leave it" on update and
+	// "the domain default" on create.
 	Progression string  `json:"progression"`
 	Scoring     string  `json:"scoring"`
 	Timing      string  `json:"timing"`
 	DurationMin *int    `json:"duration_min"`
 	StartsAt    *string `json:"starts_at"`
 	EndsAt      *string `json:"ends_at"`
-	// ICPCPenaltyMin follows DurationMin's own rule: nil on update means
-	// "leave it alone", and nil on create means "use the domain's default"
-	// (contests.DefaultICPCPenaltyMin) — a whole number of minutes is the
-	// only value an organizer can mean to set.
+	// ICPCPenaltyMin: nil means "leave it" on update and
+	// contests.DefaultICPCPenaltyMin on create.
 	ICPCPenaltyMin *int                           `json:"icpc_penalty_min"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       *SettingsResponse              `json:"settings"`
@@ -503,8 +454,8 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
-	// The same decoding as update, so the two cannot disagree about what a
-	// freeze of null means; on create "clear" and "absent" are both no freeze.
+	// The same decoding as update, so the two agree on what a null freeze
+	// means.
 	var board contests.UpdateCommand
 	if req.Leaderboard != nil {
 		if err := req.Leaderboard.apply(&board); err != nil {
@@ -550,18 +501,15 @@ func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	// A second authorisation after the one that admitted the request: the
-	// middleware keeps no decision to reuse, and the lookup is one indexed
-	// row. It only decides whether a tab is offered, so a failure to decide
-	// is logged and answered as "no" rather than costing the whole page —
-	// the monitoring routes make their own decision anyway.
+	// A second authorisation, since the middleware keeps no decision to reuse.
+	// It only decides whether a tab is offered, so a failure is logged and
+	// treated as "no".
 	may, err := h.mw.MayOnContest(r, rbac.PermissionContestMonitor, id)
 	if err != nil {
 		h.log.WarnContext(r.Context(), "could not decide whether the caller may monitor the contest", "error", err)
 		may = false
 	}
-	// Every translation, not the negotiated one: staff are authoring them, and
-	// showing only one would make the others invisible in the editor.
+	// Every translation, not the negotiated one: staff are editing all of them.
 	out := toContestResponse(c)
 	out.MayMonitor = &may
 	httpx.JSON(w, r, http.StatusOK, out)
@@ -626,17 +574,14 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
 }
 
-// graceRequest carries the one field extendGrace may change — a narrow body
-// for a narrow endpoint, rather than routing it through contestRequest's
-// full settings object, which would read as though the rest of settings were
-// negotiable here too.
+// graceRequest carries the one field extendGrace may change, so the endpoint
+// does not look as if other settings were negotiable.
 type graceRequest struct {
 	GracePeriodMin int `json:"grace_period_min"`
 }
 
-// extendGrace lengthens a finished (or archived) contest's game-database
-// grace period (§2.4, contests.Service.ExtendGrace) — the one exception to a
-// finished contest's otherwise-frozen settings.
+// extendGrace lengthens a finished or archived contest's game-database grace
+// period (§2.4), the one exception to its frozen settings.
 func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
 	id, ok := contestIDFrom(w, r)
 	if !ok {
@@ -675,8 +620,6 @@ type statusRequest struct {
 	Status string `json:"status"`
 }
 
-// setStatus is mounted separately from editing: publishing and starting are
-// the contest.publish permission, not contest.edit.
 func (h *ContestsHandler) setStatus(w http.ResponseWriter, r *http.Request) {
 	id, ok := contestIDFrom(w, r)
 	if !ok {
@@ -702,7 +645,6 @@ func (h *ContestsHandler) setStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, toContestResponse(c))
 }
 
-// publishCheckResponse reports the remaining work.
 type publishCheckResponse struct {
 	Ready    bool             `json:"ready"`
 	Problems []problemPayload `json:"problems"`
@@ -726,7 +668,7 @@ func (h *ContestsHandler) publishCheck(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		httpx.JSON(w, r, http.StatusOK, publishCheckResponse{Ready: true, Problems: []problemPayload{}})
 	case errors.Is(err, contests.ErrNotPublishable):
-		// 200, not an error: being asked what is left is not a failure.
+		// 200, not an error: asking what is left is not a failure.
 		httpx.JSON(w, r, http.StatusOK, publishCheckResponse{
 			Ready: false, Problems: problemsOf(err),
 		})
@@ -868,10 +810,8 @@ func toPolicyResponse(p contests.SQLPolicy) PolicyResponse {
 	return out
 }
 
-// contestIDFrom reads and validates the contest in the URL, answering 400
-// invalid_contest_id itself when it does not parse. One definition for every
-// handler that answers that way; GameHandler keeps its own because its routes
-// have always answered invalid_request instead.
+// contestIDFrom reads the contest in the URL, answering 400 invalid_contest_id
+// itself. GameHandler keeps its own because its routes answer invalid_request.
 func contestIDFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
@@ -881,7 +821,6 @@ func contestIDFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// memberID reads the account named in the URL of a staff or participant route.
 func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, memberIDParam))
 	if err != nil {
@@ -891,32 +830,26 @@ func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid
 	return id, true
 }
 
-// contestUserErrors is usersErrors with the one answer the contest routes give
-// differently: a missing account is user_not_found here — a code of its own,
-// on routes whose URL names a contest as well — where the account screens say
-// the generic not_found. Clients read both codes, so neither can change.
+// contestUserErrors is usersErrors except that a missing account is
+// user_not_found here, where the account screens say not_found. Clients read
+// both codes, so neither can change.
 var contestUserErrors = usersErrors.with(
 	errorRow{err: users.ErrNotFound, status: http.StatusNotFound, code: codeUserNotFound,
 		message: "User not found"},
 )
 
-// fail maps a domain error onto a response.
-//
-// The mapping is the API's contract, and lives in contestsErrors
-// (errortable.go); what is left here is the answer that carries details, and
-// the 500 for everything no table knows.
+// fail maps a domain error to a response. The mapping lives in contestsErrors
+// (errortable.go); this adds the answer that carries details and the 500
+// fallback.
 func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	// Appointing an account to the staff meets the account's own refusals.
-	// Checked first: no contests error wraps a users one (GrantManager and
-	// Enroll return users.Err… bare), so nothing contestsErrors recognises can
-	// also match here.
+	// Checked first: no contests error wraps a users one, so the order cannot
+	// change an answer.
 	if contestUserErrors.answer(w, r, h.log, err) {
 		return
 	}
-	// The gate's refusal carries the whole list of what is missing; the table
-	// holds the same answer without it. The gate returns the typed error on
-	// its own, never wrapped around another sentinel, so asking for it first
-	// changes nothing for the rest.
+	// The publish gate's refusal carries the list of what is missing. It is
+	// never wrapped around another sentinel, so checking it first changes
+	// nothing else.
 	var notReady *contests.NotPublishableError
 	if errors.As(err, &notReady) {
 		httpx.ErrorWithDetails(w, r, http.StatusUnprocessableEntity,
@@ -931,7 +864,6 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
 
-// window parses the schedule out of a request.
 func (req contestRequest) window() (*time.Time, *time.Time, error) {
 	starts, err := parseTime(req.StartsAt)
 	if err != nil {
@@ -978,10 +910,9 @@ func formatTime(t *time.Time) string {
 	return t.UTC().Format(timeLayout)
 }
 
-// parseCIDRs turns the request's networks into prefixes.
-//
-// A nil list means "leave the restriction alone" and an empty one means "clear
-// it", which is why the empty slice is returned non-nil.
+// parseCIDRs turns the request's networks into prefixes. nil means "leave the
+// restriction alone" and empty means "clear it", so an empty list returns a
+// non-nil slice.
 func parseCIDRs(values []string) ([]netip.Prefix, error) {
 	if values == nil {
 		return nil, nil

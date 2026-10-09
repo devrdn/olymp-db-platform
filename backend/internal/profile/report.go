@@ -12,44 +12,33 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 )
 
-// The report of one finished contest (design §2.2, the "result" tab): the
-// participant's own result, what their session cost them in queries and
-// time, and question by question what they did — all of it things they
-// already know about themselves, gathered in one place.
-
 // Result is the participant's own standing, as the profile may show it.
 type Result struct {
-	// Scoring is the contest's mode, so a reader knows whether Points or
-	// Solved and Penalty is the result.
 	Scoring string
 	Points  int
 	Solved  int
-	// Penalty is ICPC's penalty minutes, and zero in every other mode.
+	// Penalty is ICPC penalty minutes, zero in other modes.
 	Penalty int
 	// State is the table's state (leaderboard.Decide), so the interface can
-	// say why a place is missing rather than merely leaving a gap.
+	// say why a place is missing.
 	State string
-	// PlaceOpen says the table is open, so a place is a thing that exists to
-	// be shown. While a freeze is in force it is false and everything below
-	// is zero: the profile does not walk round it (design §1).
+	// PlaceOpen says the table is open. During a freeze it is false and
+	// everything below is zero.
 	PlaceOpen bool
-	// Place is zero for a row the table gives no place to — which is not the
-	// same as a place of nought. In winner mode only the winner has one
-	// (leaderboard.Rank), so everybody else is on an open table, with their
-	// own numbers, unplaced.
+	// Place is zero for a row the table gives no place to; in winner mode
+	// only the winner has one.
 	Place        int
 	Participants int
-	// Winner marks the one registration that won a winner-mode contest. It
-	// is a result, so it travels only with an open table.
+	// Winner marks the winner of a winner-mode contest, only on an open
+	// table.
 	Winner bool
 	// Truncated says the table was cut at the leaderboard's row bound, so
 	// Participants counts its rows rather than everybody on the contest.
 	Truncated bool
 }
 
-// resultOf is the leaderboard's answer as the profile carries it. The place
-// travels only with PlaceOpen, so there is one place in this package that
-// can decide to show one.
+// resultOf is the only place in this package that decides to show a place:
+// only with PlaceOpen.
 func resultOf(own leaderboard.Own) *Result {
 	r := Result{Scoring: own.Scoring, Points: own.Row.Points, Solved: own.Row.Solved,
 		Penalty: own.Row.Penalty, State: own.State}
@@ -60,65 +49,46 @@ func resultOf(own leaderboard.Own) *Result {
 	return &r
 }
 
-// Activity is what the journals say about one registration's session.
 type Activity struct {
-	// Queries is every query the registration ran, Successful those that
-	// finished without a refusal or an error.
+	// Successful counts queries that finished without a refusal or error.
 	Queries    int
 	Successful int
-	// LastAnswerAt is the registration's last submission, which is where the
-	// time worked stops.
+	// LastAnswerAt is the last submission, where the time worked stops.
 	LastAnswerAt *time.Time
 }
 
-// QuestionResult is one question on the report.
 type QuestionResult struct {
 	QuestionID uuid.UUID
-	// Ord is the question's place in the contest; zero for a question that
-	// has since been deleted.
+	// Ord is zero for a question since deleted.
 	Ord      int
 	Attempts int
 	Solved   bool
-	// SolvedAt is the first correct answer, absent when there was none.
 	SolvedAt *time.Time
-	// Points is what the attempts earned, the penalty for wrong ones
-	// included: the number the contest recorded, never one derived again.
+	// Points is what the contest recorded, wrong-answer penalties included.
 	Points int
-	// Penalty is this question's share of an ICPC row's penalty minutes, and
-	// zero in every other mode — nothing else charges minutes. It is
-	// leaderboard.Cell.Penalty over the cell the table already computed, not
-	// arithmetic of this package's own.
-	//
-	// It is a field of its own rather than Points under another name: in ICPC
-	// scoring the server writes points_awarded = 0 on every submission, so a
-	// reader shown Points there would be told nought for a question that cost
-	// fifty minutes.
+	// Penalty is this question's share of an ICPC row's penalty minutes
+	// (leaderboard.Cell.Penalty), zero in other modes. ICPC writes
+	// points_awarded = 0, so Points alone would show nought there.
 	Penalty int
 }
 
-// Report is the result tab of one contest.
 type Report struct {
 	Contest     contests.Contest
 	Participant contests.Participant
-	// Result is nil when the table carries no row for this registration, and
-	// is not a zeroed Result: a zeroed one has an empty scoring and an empty
-	// state, which name no mode and no table and read as a result of nought.
-	// The table is bounded (leaderboard.DefaultMaxRows), so every participant
-	// of a large contest below the cut arrives here, as does one disqualified
-	// before it was computed. What they are owed is the rest of their report
-	// and a line saying their row is outside the published table.
+	// Result is nil, not zeroed, when the table has no row for this
+	// registration: below the leaderboard's row bound, or disqualified before
+	// it was computed. A zeroed Result would read as a result of nought.
 	Result    *Result
 	Activity  Activity
 	Questions []QuestionResult
 	// Truncated says the participant made more attempts than one read of the
-	// answers tab carries, so the questions below describe the first of them.
+	// answers tab carries, so Questions describe the first of them.
 	Truncated bool
 }
 
-// Worked is how long the participant was at it: from their clock starting to
-// their last answer. ok is false when either end is missing — a participant
-// who never started, or never answered, worked for no stretch of time this
-// can name, which is a different thing from having worked for none.
+// Worked is the time from the participant's clock starting to their last
+// answer. ok is false when either end is missing, which is not the same as
+// zero.
 func (r Report) Worked() (time.Duration, bool) {
 	if r.Participant.StartedAt == nil || r.Activity.LastAnswerAt == nil {
 		return 0, false
@@ -130,13 +100,9 @@ func (r Report) Worked() (time.Duration, bool) {
 	return worked, true
 }
 
-// Report gathers one contest's report for an admitted caller.
-//
-// Three reads, none of them a formula of this package's own: the standing
-// from the leaderboard, the attempts from the same answers tab a contest's
-// staff read, and the counters from the journals. A caller the leaderboard
-// has no row for — below the table's row bound, or disqualified before it was
-// computed — still gets their report, with Result left nil.
+// Report gathers one contest's report for an admitted caller from the
+// leaderboard, the answers tab and the journals. A caller with no leaderboard
+// row still gets a report, with Result nil.
 func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 	report := Report{Contest: access.Contest, Participant: access.Participant}
 
@@ -148,9 +114,8 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 		return Report{}, fmt.Errorf("read the standing: %w", err)
 	default:
 		report.Result = resultOf(own)
-		// One cell per visible question, in ICPC scoring only. A question
-		// that is not on the grid — hidden, or since deleted — has none, and
-		// costs the row nothing, which is the same nothing it is shown.
+		// ICPC only. A hidden or deleted question has no cell and costs
+		// nothing.
 		cells = make(map[uuid.UUID]leaderboard.Cell, len(own.Row.Cells))
 		for _, cell := range own.Row.Cells {
 			cells[cell.QuestionID] = cell
@@ -172,8 +137,7 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 			if !attempt.Correct || question.Solved {
 				continue
 			}
-			// The first correct answer, which is the one that counts: a
-			// question is solved once, and anything after it is not a solve.
+			// Only the first correct answer counts.
 			at := attempt.At
 			question.Solved, question.SolvedAt = true, &at
 		}

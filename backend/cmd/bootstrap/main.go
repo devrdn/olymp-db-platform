@@ -1,12 +1,7 @@
-// Command bootstrap creates the first administrator account.
-//
-// A freshly migrated installation has no accounts, so nobody can sign in and
-// nobody can create anyone. This closes that gap from the command line rather
-// than through an HTTP endpoint: an unauthenticated route that mints
-// administrators would remain a liability long after it was needed once.
-//
-// It is idempotent — running it again on an installation that already has the
-// account reports so and changes nothing, in particular not the password.
+// Command bootstrap creates the first administrator account, from the command
+// line rather than through an unauthenticated HTTP endpoint that would stay a
+// liability. It is idempotent: a second run changes nothing, not even the
+// password.
 //
 // Usage:
 //
@@ -55,14 +50,10 @@ func run() error {
 	defer pool.Close()
 
 	log := logging.New("info", os.Stderr)
-	// The service runs every multi-write operation — account plus audit entry —
-	// inside its own unit of work.
 	service := users.NewService(
 		postgres.NewUsers(pool),
 		audit.New(postgres.NewAuditSink(pool)),
 		storage.NewUnitOfWork(pool),
-		// A one-shot command hashing one password: its own hasher with the
-		// defaults, since there is no server process to share one with.
 		password.NewHasher(password.HasherConfig{}),
 	)
 
@@ -76,10 +67,8 @@ func run() error {
 		return nil
 	}
 
-	// The password goes to stdout so an attached run shows it and a script can
-	// capture it. Inside a container, stdout is the container log — which is
-	// why the compose job runs with `logging: driver: none`: the password must
-	// not be persisted by Docker or shipped to Loki.
+	// The password goes to stdout. The compose job runs with `logging: driver:
+	// none` so it is not persisted by Docker or shipped to Loki.
 	log.Info("administrator created", "login", result.User.Login)
 	fmt.Println(result.OneTimePassword)
 	log.Warn("this password is shown once and must be changed at first sign-in")

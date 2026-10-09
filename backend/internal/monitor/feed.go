@@ -15,39 +15,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// The feed (design §4): everything a contest's participants did, merged from
-// every journal that records it, in time order. Nothing is copied into a
-// feed table; each source is read as its own index range past a cursor and
-// the pieces are merged here.
+// The feed is everything a contest's participants did, in time order. Each
+// journal is read as its own index range past a cursor and merged here;
+// nothing is copied into a feed table.
 
-// Source is the journal a feed item was read from. Its order is the tiebreak
-// between items of the same instant, after the time and before the id, so a
-// cursor names one position in the merged order and never two.
+// Source is the journal a feed item was read from. It breaks ties after the
+// time and before the id, so a cursor names exactly one position.
 type Source int
 
 const (
 	// SourceAudit: sign-ins, sign-outs, failed sign-ins and
-	// disqualifications, from audit_log. Id: the trail's bigint id.
+	// disqualifications from audit_log (bigint id).
 	SourceAudit Source = iota
-	// SourceStart: a participant's clock starting (registrations.started_at).
-	// Id: the registration.
+	// SourceStart: registrations.started_at (registration id).
 	SourceStart
-	// SourceEvent: participant_events. Id: the event's bigint id.
+	// SourceEvent: participant_events (bigint id).
 	SourceEvent
-	// SourceQuery: query_log. Id: the row's bigint id.
+	// SourceQuery: query_log (bigint id).
 	SourceQuery
-	// SourceAnswer: submissions. Id: the submission's uuid.
+	// SourceAnswer: submissions (uuid).
 	SourceAnswer
-	// SourceFinish: a participant finishing (registrations.finished_at). Id:
-	// the registration.
+	// SourceFinish: registrations.finished_at (registration id).
 	SourceFinish
 	sourceCount
 )
 
-// sourceCodes spell the sources inside a cursor.
 var sourceCodes = [sourceCount]string{"a", "s", "e", "q", "n", "f"}
 
-// numericID reports whether the source's ids are bigints rather than uuids.
 func (s Source) numericID() bool {
 	return s == SourceAudit || s == SourceEvent || s == SourceQuery
 }
@@ -64,7 +58,6 @@ const (
 	FeedKindAnswer   = "answer"
 )
 
-// feedKinds maps every kind a filter may name to the source it is read from.
 var feedKinds = map[string]Source{
 	FeedSignIn: SourceAudit, FeedSignOut: SourceAudit, FeedSignInFailed: SourceAudit, FeedDisqualified: SourceAudit,
 	FeedStarted: SourceStart, FeedFinished: SourceFinish,
@@ -76,73 +69,52 @@ var feedKinds = map[string]Source{
 
 // The bounds of a feed page (CLAUDE.md rule 2).
 const (
-	// MaxFeedPage is the most items one page carries (design §4).
-	MaxFeedPage = 200
-	// DefaultFeedPage is the page size when the caller names none.
+	MaxFeedPage     = 200
 	DefaultFeedPage = 100
-	// MaxFeedKinds bounds the kind filter: there are no more kinds than this.
-	MaxFeedKinds = 16
-	// maxCursorLength bounds what ParseCursor will even try to decode.
+	MaxFeedKinds    = 16
 	maxCursorLength = 128
 )
 
-// FeedSettle is how much of the newest time a forward read (FeedQuery.After)
-// leaves for the next one. Every journal stamps its rows with the time their
-// transaction started, and transactions do not commit in that order: a query
-// journalled at 10:00:00.9 can become visible after an event stamped
-// 10:00:01.0 was already delivered, and a poll that had moved its cursor past
-// 10:00:01.0 would never see it. Two seconds is far past how long a
-// journalling transaction stays open, and costs the live screen two seconds
-// of delay.
+// FeedSettle is how much of the newest time a forward read leaves for the
+// next one. Rows are stamped with their transaction's start time but commit
+// out of order, so a cursor moved past a row's time could miss it forever.
+// Two seconds is far past how long a journalling transaction stays open.
 const FeedSettle = 2 * time.Second
 
-// SignInGrace is how long past the contest's end — or past the participant's
-// own finish, when they finished first — their sign-ins are still the
-// contest's business: signing back in to read a result belongs to it, the
-// next week's lecture does not. It bounds them from below the same way:
-// from this long before the contest's start (or, when the contest has none,
-// the participant's own), and never before their registration — signing in to
-// check the machine works belongs to the contest, the weeks between an
-// early enrolment and the day do not.
+// SignInGrace is how far around a contest a participant's sign-ins still
+// belong to its feed: from this long before the contest's start (or the
+// participant's own, without one), never before their registration, until
+// this long after the contest's end or their own earlier finish.
 const SignInGrace = time.Hour
 
-// The feed's refusals (CLAUDE.md rule 1).
 var (
-	// ErrInvalidCursor: a cursor this service did not issue.
 	ErrInvalidCursor = errors.New("the feed cursor is not valid")
-	// ErrExportTooWide: a contest with more registrations than a
-	// contest-wide stream reads one at a time (MaxRosterRows).
+	// ErrExportTooWide: more registrations than a contest-wide stream reads
+	// (MaxRosterRows).
 	ErrExportTooWide = fmt.Errorf("a contest of more than %d registrations is too large to export whole", MaxRosterRows)
 	// ErrInvalidFeedFilter: an unknown kind, too many kinds, a time range
 	// that ends before it starts, or both directions at once.
 	ErrInvalidFeedFilter = errors.New("the feed filter is not valid")
 )
 
-// The range of times a cursor may name. A cursor is the client's to send
-// back, and a time PostgreSQL cannot hold (or one pgx wraps on the way) would
-// otherwise reach the database as a 500 rather than a refusal. Nothing the
-// feed shows is older than the first bound or newer than the second.
+// The range of times a cursor may name, so a client-sent time PostgreSQL
+// cannot hold is refused rather than a 500.
 var (
 	EarliestCursorTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	LatestCursorTime   = time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
 )
 
-// Cursor is one position in the merged feed: the time, the source and the
-// id of an item.
 type Cursor struct {
 	At     time.Time
 	Source Source
 	ID     string
 }
 
-// Encode spells the cursor opaquely, for a client to hand back.
 func (c Cursor) Encode() string {
 	raw := strconv.FormatInt(c.At.UnixMicro(), 10) + "." + sourceCodes[c.Source] + "." + c.ID
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
-// ParseCursor reads a cursor Encode produced, or refuses it with
-// ErrInvalidCursor.
 func ParseCursor(text string) (Cursor, error) {
 	if text == "" || len(text) > maxCursorLength {
 		return Cursor{}, ErrInvalidCursor
@@ -175,9 +147,8 @@ func ParseCursor(text string) (Cursor, error) {
 }
 
 // Compare orders two cursors as the feed does: by time to the microsecond
-// (what the database keeps), then source, then id — numerically for bigint
-// ids, and for uuids by their canonical text, which orders as their bytes do
-// and as PostgreSQL compares uuid.
+// (what the database keeps), then source, then id. Uuids compare by their
+// canonical text, which orders as PostgreSQL compares uuid.
 func (c Cursor) Compare(other Cursor) int {
 	if a, b := c.At.UnixMicro(), other.At.UnixMicro(); a != b {
 		return cmp.Compare(a, b)
@@ -193,30 +164,25 @@ func (c Cursor) Compare(other Cursor) int {
 	return strings.Compare(c.ID, other.ID)
 }
 
-// FeedQuery asks for one page of the feed.
 type FeedQuery struct {
 	Contest uuid.UUID
-	// Registration narrows the feed to one participant; uuid.Nil is the
-	// whole contest.
+	// Registration uuid.Nil is the whole contest.
 	Registration uuid.UUID
-	// Kinds narrows the feed to these kinds; empty is every kind.
+	// Kinds empty is every kind.
 	Kinds []string
 	// From and Until bound the time, [From, Until); zero is unbounded.
 	From  time.Time
 	Until time.Time
-	// After asks for the items after this position, oldest first — the live
-	// feed polling for what is new. Before asks for the items before it,
-	// newest first — scrolling back. Neither is the newest page.
+	// After reads forward from a position, oldest first (live polling);
+	// Before reads back, newest first. Neither is the newest page.
 	After  *Cursor
 	Before *Cursor
-	// Limit is the page size, 1..MaxFeedPage; zero is DefaultFeedPage.
+	// Limit is 1..MaxFeedPage; zero is DefaultFeedPage.
 	Limit int
 }
 
-// Ascending reports whether the page is read forwards in time.
 func (q FeedQuery) Ascending() bool { return q.After != nil }
 
-// Normalize checks the query and fills its defaults.
 func (q FeedQuery) Normalize() (FeedQuery, error) {
 	if q.After != nil && q.Before != nil {
 		return q, fmt.Errorf("%w: after and before together", ErrInvalidFeedFilter)
@@ -241,7 +207,6 @@ func (q FeedQuery) Normalize() (FeedQuery, error) {
 	return q, nil
 }
 
-// Reads reports whether the page needs the source at all.
 func (q FeedQuery) Reads(source Source) bool {
 	if len(q.Kinds) == 0 {
 		return true
@@ -254,8 +219,7 @@ func (q FeedQuery) Reads(source Source) bool {
 	return false
 }
 
-// KindsOf lists the kinds of the filter that are read from source; nil when
-// the filter names none, which is every kind of it.
+// KindsOf lists the filter's kinds read from source; nil means every kind.
 func (q FeedQuery) KindsOf(source Source) []string {
 	var kinds []string
 	for _, kind := range q.Kinds {
@@ -266,7 +230,6 @@ func (q FeedQuery) KindsOf(source Source) []string {
 	return kinds
 }
 
-// FeedItem is one thing a participant did.
 type FeedItem struct {
 	Source       Source
 	ID           string
@@ -280,10 +243,8 @@ type FeedItem struct {
 	Data any
 }
 
-// Cursor is the item's position in the feed.
 func (i FeedItem) Cursor() Cursor { return Cursor{At: i.At, Source: i.Source, ID: i.ID} }
 
-// QueryData is a query in the feed or the queries tab.
 type QueryData struct {
 	ID           int64  `json:"id"`
 	SQL          string `json:"sql"`
@@ -295,7 +256,6 @@ type QueryData struct {
 	IP           string `json:"ip,omitempty"`
 }
 
-// AnswerData is an attempt in the feed.
 type AnswerData struct {
 	ID            uuid.UUID `json:"id"`
 	QuestionID    uuid.UUID `json:"question_id"`
@@ -306,33 +266,24 @@ type AnswerData struct {
 	PointsAwarded int       `json:"points_awarded"`
 }
 
-// AuditData is a sign-in, a sign-out, a failed sign-in or a
-// disqualification.
 type AuditData struct {
 	IP        string `json:"ip,omitempty"`
 	UserAgent string `json:"user_agent,omitempty"`
-	// Reason is why a sign-in failed.
-	Reason string `json:"reason,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
-// FeedPage is one page of the feed, oldest item first whichever way it was
-// read.
+// FeedPage is one page of the feed, oldest first whichever way it was read.
 type FeedPage struct {
 	Items []FeedItem
-	// More says there are more items past the page in the direction it was
-	// read: older ones for a Before or newest page, newer ones for After.
+	// More says there are more items in the direction the page was read.
 	More bool
 }
 
-// MergeFeed merges what each source returned for q into one page.
-//
-// Each source was read as its own range past the cursor, in the page's
-// direction, with at most q.Limit+1 rows; the first q.Limit of the merged
-// order are therefore exactly the first q.Limit of the whole feed, and one
-// more item anywhere says there are more. Items at or behind the cursor are
-// dropped rather than trusted not to be there, so a boundary can neither
-// repeat an item nor, since every source is read strictly past the same
-// position, skip one.
+// MergeFeed merges what each source returned for q into one page. Each
+// source read at most q.Limit+1 rows past the cursor, so the first q.Limit
+// merged items are exactly the feed's and one more means there are more.
+// Items at or behind the cursor are dropped, so a boundary never repeats or
+// skips an item.
 func MergeFeed(q FeedQuery, items []FeedItem) FeedPage {
 	kept := items[:0:0]
 	for _, item := range items {
@@ -360,46 +311,34 @@ func MergeFeed(q FeedQuery, items []FeedItem) FeedPage {
 	return page
 }
 
-// encodeRaw encodes an arbitrary cursor text, for tests of ParseCursor.
+// encodeRaw encodes arbitrary cursor text, for tests.
 func (Cursor) encodeRaw(raw string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
-// FeedSourceReader reads one source of the feed forwards: the items of that
-// source after q.After, oldest first, at most q.Limit+1 of them, named. And
-// the registrations of a contest, which a contest-wide stream reads its
-// per-registration sources by. Implemented by internal/postgres.Watch.
+// FeedSourceReader reads one source forwards (after q.After, oldest first, at
+// most q.Limit+1 items) and lists a contest's registrations for a
+// contest-wide stream.
 type FeedSourceReader interface {
 	FeedSource(ctx context.Context, q FeedQuery, source Source) ([]FeedItem, error)
 	FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uuid.UUID, error)
 }
 
-// streamPage is the page one stream of StreamFeed reads at a time from a
-// source of one registration. Small, because a contest-wide stream holds one
-// page of each of its registrations' sources at once.
+// streamPage is small because a contest-wide stream holds one page per
+// registration source at once.
 const streamPage = 50
 
 // perRegistration are the sources a contest-wide stream reads one
-// registration at a time. They are the ones stored per registration and
-// read as a range per registration (query_log, submissions, and the
-// participant's own trail in audit_log); read for the whole contest, each
-// page would re-read every registration's range up to the page's limit.
+// registration at a time, since they are indexed per registration.
 var perRegistration = map[Source]bool{SourceAudit: true, SourceQuery: true, SourceAnswer: true}
 
-// StreamFeed hands every item of the feed after q.After (or from the
-// beginning) to yield, oldest first, until the feed ends or yield refuses.
+// StreamFeed hands every item after q.After (or from the start) to yield,
+// oldest first, until the feed ends or yield refuses.
 //
-// A k-way merge: every stream is read forwards from its own position, a page
-// at a time in its own index order, and the oldest head among them is handed
-// over next, so every row is read once and the cost grows with what is
-// exported, never with its square. For the whole contest, the sources stored
-// per registration are one stream per registration (perRegistration), each
-// its own index range; the others are one stream for the contest. What is
-// held in memory is one page per stream: at most registrations ×
-// streamPage × 3 items for a contest.
-//
-// The stream ends at now − FeedSettle, fixed once when it starts, so every
-// source ends at the same instant and nothing still settling is exported.
+// It is a k-way merge over streams read a page at a time, so every row is
+// read once. Memory is one page per stream: at most registrations ×
+// streamPage × 3 items. The stream ends at now − FeedSettle, fixed at the
+// start, so nothing still settling is exported.
 func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.Time, yield func(FeedItem) error) error {
 	q, err := q.Normalize()
 	if err != nil {
@@ -447,8 +386,7 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 		if err != nil {
 			return err
 		}
-		// A page shorter than it could have been is the source's last: the
-		// stream's end (q.Until) is fixed, so nothing can join it later.
+		// A short page is the source's last, since q.Until is fixed.
 		last := len(items) <= page.Limit
 		kept := items[:0]
 		for _, item := range items {
@@ -460,8 +398,6 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 		s.buf, s.done = kept, last || len(kept) == 0
 		return nil
 	}
-	// The streams with an item in hand, ordered by that item: the next item
-	// of the feed is always the top one's head.
 	ready := &streamHeap{}
 	for _, s := range streams {
 		if err := fill(s); err != nil {
@@ -492,8 +428,6 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 	return nil
 }
 
-// stream is one source (of one registration, or of the contest) that
-// StreamFeed reads forwards a page at a time.
 type stream struct {
 	source Source
 	query  FeedQuery
@@ -502,9 +436,8 @@ type stream struct {
 	done   bool
 }
 
-// streamHeap orders streams by the item each has in hand (container/heap):
-// picking the next item of a contest-wide export among thousands of streams
-// is a logarithm, not a scan of them all.
+// streamHeap orders streams by their head item, so picking the next among
+// thousands is logarithmic.
 type streamHeap struct {
 	items []*stream
 	head  func(*stream) Cursor

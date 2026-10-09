@@ -9,9 +9,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// overBound asserts the query is refused because a generating function's
-// constant size is above the checker's first-line limit, and that the refusal
-// names the function.
+// overBound asserts a CodeArgumentNotBounded refusal naming function.
 func overBound(t *testing.T, sql, function string, p sqlpolicy.Policy) {
 	t.Helper()
 
@@ -24,8 +22,6 @@ func overBound(t *testing.T, sql, function string, p sqlpolicy.Policy) {
 	}
 }
 
-// The ordinary uses of the functions that build something from a number stay
-// available: a size written small, or a size the checker cannot read at all.
 func TestGeneratorsWithASmallConstantStayAvailable(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT repeat('-', 20)`,
@@ -46,12 +42,8 @@ func TestGeneratorsWithASmallConstantStayAvailable(t *testing.T) {
 	}
 }
 
-// The redesign's central point: a size the checker cannot read as a constant
-// is admitted, not refused. These are ordinary detective queries — a bar chart
-// as wide as a count, a series to the largest id, a calendar between the first
-// and last sighting — and the game cluster's memory limit, not the validator,
-// is what stops one that turns out to be abusive. A value-changing cast is
-// among them: it makes the size one the checker cannot know.
+// These are ordinary queries; the game cluster's memory limit, not the
+// checker, stops one that turns out abusive.
 func TestANonConstantSizeIsAdmitted(t *testing.T) {
 	for name, sql := range map[string]string{
 		"repeat over a column":           `SELECT repeat('x', age) FROM suspects`,
@@ -67,9 +59,7 @@ func TestANonConstantSizeIsAdmitted(t *testing.T) {
 		"series over columns":            `SELECT generate_series(1, n) FROM suspects`,
 		"series over arithmetic":         `SELECT * FROM generate_series(1, 2 * 100000)`,
 		"date series between subqueries": `SELECT g::date FROM generate_series((SELECT min(seen_at) FROM sightings)::date, (SELECT max(seen_at) FROM sightings)::date, '1 day') AS g`,
-		// A value-changing cast: the checker cannot read the size, so it is
-		// admitted and the memory limit is what bounds it — not read as its
-		// inner literal, which is the bypass this closes.
+		// Admitted as unknown, not read as its inner literal.
 		"repeat behind a bit cast":  `SELECT repeat('x', (-173741824)::bit(30)::int)`,
 		"repeat behind a text cast": `SELECT repeat('x', ('9'||'9')::int)`,
 	} {
@@ -77,8 +67,7 @@ func TestANonConstantSizeIsAdmitted(t *testing.T) {
 	}
 }
 
-// A constant above the limit is the one thing refused, and the edge is
-// inclusive.
+// The limit itself is allowed.
 func TestAConstantOverTheLimitIsRefused(t *testing.T) {
 	length := strconv.Itoa(checker.MaxGeneratedLength)
 	past := strconv.Itoa(checker.MaxGeneratedLength + 1)
@@ -100,9 +89,8 @@ func TestAConstantOverTheLimitIsRefused(t *testing.T) {
 		t.Run(sql, func(t *testing.T) { overBound(t, sql, "", sqlpolicy.ReadOnly()) })
 	}
 
-	// A constant too large for a float64 is a constant all the same, and one
-	// plainly over the bound — refused, not admitted as unreadable, with a
-	// subject that reads as a sentence rather than printing an infinity.
+	// Too large for a float64 is still a constant over the bound, and the
+	// subject must not print an infinity.
 	rInf := refusal(t, `SELECT repeat('x', 1e400)`, sqlpolicy.ReadOnly())
 	if rInf.Code != sqlpolicy.CodeArgumentNotBounded || !strings.Contains(rInf.Subject, "not a real number") {
 		t.Fatalf("repeat 1e400 subject = %q", rInf.Subject)
@@ -118,14 +106,11 @@ func TestAConstantOverTheLimitIsRefused(t *testing.T) {
 	overBound(t, `SELECT count(*) FROM generate_series(1, `+strconv.Itoa(checker.MaxSeriesLength+1)+`)`,
 		"generate_series", sqlpolicy.ReadOnly())
 	overBound(t, `SELECT count(*) FROM generate_series(0, `+series+`)`, "generate_series", sqlpolicy.ReadOnly())
-	// The step divides the span: a million with a step of ten is a hundred
-	// thousand values, and with a step of nine it is more.
+	// The step divides the span.
 	allow(t, `SELECT count(*) FROM generate_series(1, 1000000, 10)`, sqlpolicy.ReadOnly())
 	overBound(t, `SELECT count(*) FROM generate_series(1, 1000000, 9)`, "generate_series", sqlpolicy.ReadOnly())
 }
 
-// A constant above the limit is refused wherever it sits, because the check
-// runs on every call the walk reaches, not only the ones in the select list.
 func TestAConstantOverTheLimitIsFoundWhereverItHides(t *testing.T) {
 	for name, sql := range map[string]string{
 		"inside string_agg":   `SELECT string_agg(repeat('x', 1000000), ',') FROM suspects`,
@@ -153,8 +138,6 @@ func TestAConstantOverTheLimitIsFoundWhereverItHides(t *testing.T) {
 	})
 }
 
-// The subject names what the participant wrote and what it exceeded, so they
-// can rewrite the call without guessing — not a bland "at most N".
 func TestARefusalNamesTheConstantAndTheLimit(t *testing.T) {
 	for sql, want := range map[string]string{
 		`SELECT repeat('x', 900000000)`:             "repeat length 900000000 exceeds the " + strconv.Itoa(checker.MaxGeneratedLength) + " limit",
@@ -167,17 +150,12 @@ func TestARefusalNamesTheConstantAndTheLimit(t *testing.T) {
 	}
 }
 
-// An operator extending the allow-list keeps the first line on the functions
-// already on it.
 func TestAnExtendedListKeepsTheFirstLine(t *testing.T) {
 	if err := checker.NewChecker("soundex").Check(`SELECT repeat('x', 900000000)`, sqlpolicy.ReadOnly()); err == nil {
 		t.Fatal("an extended checker allowed a repeat with a plainly abusive constant")
 	}
 }
 
-// Aggregates over the game's own rows are the contest's ordinary material and
-// stay allowed: what bounds them is the data the organiser loaded and the
-// cluster's per-process memory, not the checker.
 func TestAggregatesOverRealRowsStayAllowed(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT string_agg(name, ', ' ORDER BY name) FROM suspects`,

@@ -17,8 +17,6 @@ func TestMiddlewareCountsRequestsByRoutePattern(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Two different contest ids must collapse into one time series, otherwise
-	// every identifier would create its own metric.
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/contests/aaa", nil))
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/contests/bbb", nil))
 
@@ -75,7 +73,6 @@ func TestUnmatchedRouteIsLabelledAsUnknown(t *testing.T) {
 	m := NewPrometheus()
 	router := chi.NewRouter()
 	router.Use(Middleware(m))
-	// A router always serves something; the request below matches none of it.
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {})
 
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/no/such/route", nil))
@@ -89,9 +86,6 @@ func TestUnmatchedRouteIsLabelledAsUnknown(t *testing.T) {
 	}
 }
 
-// The method is as much a client's invention as the path above: HTTP allows
-// any token there, so a series per method is a series per string an
-// unauthenticated caller makes up.
 func TestAnInventedMethodIsLabelledAsOther(t *testing.T) {
 	m := NewPrometheus()
 	router := chi.NewRouter()
@@ -109,7 +103,6 @@ func TestAnInventedMethodIsLabelledAsOther(t *testing.T) {
 	}
 }
 
-// scrape renders the current metrics exposition.
 func scrape(t *testing.T, m *Prometheus) string {
 	t.Helper()
 	rec := httptest.NewRecorder()

@@ -318,8 +318,7 @@ func TestByIDReportsWhoAndWhyForAStatusChangeAndNothingForAFreshAccount(t *testi
 		t.Errorf("status_changed_by = %q, want the blocking administrator %q", body.StatusChangedBy, f.admin.ID.String())
 	}
 
-	// An account nobody has ever blocked or deleted has nothing to account
-	// for — the response must not carry an empty history for it to render.
+	// An account never blocked or deleted carries no empty history.
 	rec = f.do(http.MethodGet, "/users/"+fresh.ID.String(), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -349,11 +348,8 @@ func TestMalformedAccountIDIsRejected(t *testing.T) {
 	}
 }
 
-// TestSingleAccountOperationsRefuseADeletedAccount closes the gap the bulk
-// endpoints already closed: bulk role changes and bulk password resets both
-// skip a deleted account (SkipDeleted), so the single-account endpoints for
-// the identical operations must answer the same way rather than silently
-// applying a change nobody can use.
+// TestSingleAccountOperationsRefuseADeletedAccount matches the bulk endpoints,
+// which skip a deleted account (SkipDeleted).
 func TestSingleAccountOperationsRefuseADeletedAccount(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "gone", FullName: "Gone Petrov", Status: users.StatusDeleted})
@@ -398,9 +394,8 @@ func TestRolesEndpointReplacesTheSet(t *testing.T) {
 }
 
 func TestImportEndpointReturnsAPasswordForEveryAccountItCreated(t *testing.T) {
-	// The passwords are shown once, here. An import that created accounts and
-	// did not return them would leave thirty people unable to sign in and no
-	// way to find out what their password was.
+	// The passwords are shown once, here; an import that did not return them
+	// would leave its accounts unusable.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodPost, "/users/import", `{
@@ -492,12 +487,8 @@ type UserRef struct {
 }
 
 func TestRolesEndpointPublishesTheRoleCatalogue(t *testing.T) {
-	// The interface has to offer roles when creating an account, and the codes
-	// are rows in a table rather than an enum — the whole point of the
-	// permission model is that a new role is data (section 11). Hard-coding
-	// "student, organizer, admin" in the frontend would quietly undo that: the
-	// day somebody adds a role, one of the two lists is wrong and neither says
-	// so.
+	// Role codes are table rows, not an enum: a new role is data. A list
+	// hard-coded in the frontend would go silently wrong the day one is added.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodGet, "/roles", "")
@@ -525,8 +516,8 @@ func TestRolesEndpointPublishesTheRoleCatalogue(t *testing.T) {
 }
 
 func TestRolesEndpointIsClosedToAnAccountThatCannotManageAccounts(t *testing.T) {
-	// Which roles exist is a description of how this installation is
-	// organised. It goes with the screen that uses it and with nothing else.
+	// Which roles exist describes how the installation is organised; it goes
+	// only with the screen that uses it.
 	f := newAPIFixture(t)
 
 	rec := f.do(http.MethodGet, "/roles", "")
@@ -537,12 +528,9 @@ func TestRolesEndpointIsClosedToAnAccountThatCannotManageAccounts(t *testing.T) 
 }
 
 func TestAnUnknownAccountStatusIsRefusedRatherThanIgnored(t *testing.T) {
-	// The listing filters by an exact status, so an unreadable one matches
-	// nothing and the screen shows an empty register — "no account matches",
-	// which is a true answer to a question nobody asked. The contest listing
-	// already refuses an unreadable `enrolled` for exactly this reason, and
-	// two endpoints answering the same mistake differently is worse than
-	// either choice.
+	// The listing filters by exact status, so an unreadable one would show an
+	// empty register as if nothing matched. The contest listing refuses an
+	// unreadable `enrolled` the same way.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodGet, "/users?status=banished", "")
@@ -564,8 +552,7 @@ func TestTheStatusesTheRegisterActuallyOffersAreAccepted(t *testing.T) {
 }
 
 func TestCreateEndpointAnswersABadRequestForUnusableDetails(t *testing.T) {
-	// An empty login is the client's mistake and is told so; it used to come
-	// back as a 500 because the error had no name the handler could map.
+	// An empty login is the client's mistake, not a 500.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodPost, "/users", `{"login":"","full_name":"Nobody"}`)
@@ -576,9 +563,9 @@ func TestCreateEndpointAnswersABadRequestForUnusableDetails(t *testing.T) {
 }
 
 func TestCreateEndpointReportsBusyHashingWith503(t *testing.T) {
-	// Issuing a password waits for a hashing slot far longer than a sign-in
-	// does, but not past the request: once the caller's own deadline passes,
-	// the answer is the declared "busy", never a 500.
+	// Issuing a password waits for a hashing slot longer than a sign-in does,
+	// but once the caller's deadline passes the answer is the declared "busy",
+	// never a 500.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	for range 4 { // passwordtest.NewHasher's concurrency
 		slot, err := f.hasher.Hold(context.Background())
@@ -605,8 +592,7 @@ func TestCreateEndpointReportsBusyHashingWith503(t *testing.T) {
 	}
 }
 
-// recordingUnlocker stands in for auth.Service's UnlockSignIn: it remembers
-// what it was asked and answers with err.
+// recordingUnlocker stands in for auth.Service's UnlockSignIn.
 type recordingUnlocker struct {
 	actor, user uuid.UUID
 	calls       int
@@ -689,11 +675,9 @@ func (r *slotTakingUsers) Create(ctx context.Context, u users.User) (users.User,
 }
 
 func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) {
-	// The accounts created before the hasher ran out of room exist, and their
-	// one-time passwords are shown here or never. A bare 503 would leave those
-	// people with accounts nobody can hand over; the answer carries them, and
-	// names the rows that were never tried and why, so the rest can be
-	// imported again.
+	// Accounts created before the hasher ran out exist, and their one-time
+	// passwords are shown here or never. The answer carries them and names the
+	// rows never tried, so those can be imported again.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
 	repo := &slotTakingUsers{Repository: f.repo, hasher: hasher, t: t}

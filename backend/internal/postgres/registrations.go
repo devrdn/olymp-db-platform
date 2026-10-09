@@ -20,13 +20,11 @@ import (
 // Registrations implements contests.RegistrationRepository.
 var _ contests.RegistrationRepository = (*Registrations)(nil)
 
-// Registrations also answers queryproxy's combined lookups (see ForRun and
-// ForAccess below): the SQL console's hot path and every participant-facing
-// read cost one round trip where they used to cost several.
+// Registrations also answers queryproxy's combined lookups, one round trip
+// each.
 var _ queryproxy.Lookup = (*Registrations)(nil)
 
-// participantColumns joins the account for the same reason the staff list
-// does: a roster of identifiers is unreadable.
+// participantColumns joins the account so a roster shows logins and names.
 const participantColumns = `
 	r.id, r.contest_id, r.user_id, u.login, u.full_name, r.status,
 	r.started_at, r.finished_at, r.total_score, r.created_at`
@@ -45,9 +43,8 @@ func (r *Registrations) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// participantScanTargets returns pointers matching participantColumns' own
-// column order, so a wider projection (ForRun below) can share this list
-// with scanParticipant instead of repeating it.
+// participantScanTargets returns pointers in participantColumns' order, shared
+// with wider projections such as ForRun.
 func participantScanTargets(p *contests.Participant) []any {
 	return []any{&p.ID, &p.ContestID, &p.UserID, &p.Login, &p.FullName, &p.Status,
 		&p.StartedAt, &p.FinishedAt, &p.TotalScore, &p.CreatedAt}
@@ -65,9 +62,8 @@ func scanParticipant(row pgx.Row) (contests.Participant, error) {
 	return p, nil
 }
 
-// participantListFrom selects what Registrations.List answers, with the
-// contest, status and search as $1 to $3. The page and the count past the end
-// both read it, so they cannot disagree about what matches.
+// participantListFrom is Registrations.List's filter, with the contest,
+// status and search as $1 to $3. The page and the count past the end share it.
 const participantListFrom = `
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
@@ -75,12 +71,10 @@ const participantListFrom = `
 		  AND ($2 = '' OR r.status = $2)
 		  AND ($3 = '' OR u.login ILIKE '%' || $3 || '%' OR u.full_name ILIKE '%' || $3 || '%')`
 
-// List returns a page of the contest's participants and the total.
-//
-// The total rides on the page's own rows, so a page past the end has no row
-// to carry it; only then is it counted on its own (Contests.List's own doc).
+// List returns a page of the contest's participants and the total, counted
+// separately only for a page past the end.
 func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {
-	// Typed by a person and used as an ILIKE pattern, so escaped (see like.go).
+	// The search lands in an ILIKE pattern (CLAUDE.md rule 3).
 	args := []any{contestID, f.Status, escapeLike(f.Query)}
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT `+participantColumns+`, COUNT(*) OVER() AS total`+participantListFrom+`
@@ -124,24 +118,15 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID))
 }
 
-// ForRun implements queryproxy.Lookup: the participant, the contest they are
-// asking about, its game and the participant's own copy of it, in one round
-// trip — where Run used to open four, one apiece against registrations,
-// contests, (through GameInstances.Game) contests again and game_instances.
+// ForRun implements queryproxy.Lookup: the participant, the contest, its game
+// and the participant's own copy of it, in one round trip.
 //
-// The INNER JOIN against contests is what keeps "never registered" and "no
-// such contest" one answer rather than two: a registration's own foreign key
-// guarantees the contest it names exists, so there is no separate not-found
-// case to invent for it — the WHERE below simply matches no row for either
-// reason, exactly as the old, separate People.ByUser lookup already did (see
-// lookupParticipant's own doc in queryproxy). The game half is LEFT JOINed
-// rather than INNER, deliberately: a contest with no ready template must
-// still come back with its participant and its own columns populated, only
-// its game reading as absent (provisioning.ErrNoGame) — see
-// queryproxy.LookupResult. The instance is LEFT JOINed for the same reason: a
-// registration with no copy yet reads as provisioning.ErrNoInstance, exactly
-// what GameInstances.Of says of it. registration_id is unique there, so the
-// join cannot multiply the row.
+// A registration's foreign key guarantees its contest exists, so "never
+// registered" and "no such contest" are both ErrParticipantNotFound. The
+// template and instance are LEFT JOINed: a contest with no ready template
+// reads as provisioning.ErrNoGame, a registration with no copy yet as
+// provisioning.ErrNoInstance. registration_id is unique in game_instances, so
+// the join cannot multiply the row.
 func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID) (queryproxy.LookupResult, error) {
 	var (
 		p                                 contests.Participant
@@ -206,10 +191,9 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 	return result, nil
 }
 
-// ForAccess implements queryproxy.Lookup: the participant and the contest
-// they are asking about, in one round trip, for the read endpoints that need
-// no game. The INNER JOIN keeps "never registered" and "no such contest" one
-// answer, for the reason ForRun gives.
+// ForAccess implements queryproxy.Lookup: the participant and the contest in
+// one round trip, for read endpoints that need no game. Not-found is answered
+// as in ForRun.
 func (r *Registrations) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
 	var (
 		p                                 contests.Participant
@@ -237,16 +221,10 @@ func (r *Registrations) ForAccess(ctx context.Context, contestID, userID uuid.UU
 	return p, contest, nil
 }
 
-// EnrolledIn reports which of these contests the user is registered for.
-//
-// One query for a whole page: a catalogue of twenty rows must not become
-// twenty lookups, and `= ANY($2)` keeps the identifiers as parameters rather
-// than building a list into the statement.
-//
-// The user is a parameter the HTTP layer fills from the authenticated
-// identity, never from the request, so this cannot be asked about anybody
-// else. Absent contests simply have no key: a caller reads the map with `[id]`
-// and gets false, which is the right answer for "not registered".
+// EnrolledIn reports which of these contests the user is registered for, in
+// one query for a whole page. Contests the user is not registered for have no
+// key. The HTTP layer passes the authenticated user, never one from the
+// request.
 func (r *Registrations) EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	on := make(map[uuid.UUID]bool, len(contestIDs))
 	if userID == uuid.Nil || len(contestIDs) == 0 {
@@ -274,21 +252,14 @@ func (r *Registrations) EnrolledIn(ctx context.Context, userID uuid.UUID, contes
 	return on, nil
 }
 
-// Add registers a user for a contest.
+// Add registers a user for a contest. A missing contest or account is
+// contests.ErrNotFound or users.ErrNotFound, decided by the foreign keys at
+// the insert.
 //
-// A contest or an account that is not there is contests.ErrNotFound or
-// users.ErrNotFound, decided by the table's foreign keys at the insert
-// itself, so one deleted since the caller read it is answered the same way
-// as one that never existed.
-//
-// Somebody already registered is contests.ErrAlreadyEnrolled, decided by the
-// unique (contest_id, user_id) at the insert — the real guarantee against two
-// staff adding the same student at the same moment — but through ON CONFLICT
-// DO NOTHING rather than by letting the insert fail. A failed statement
-// aborts the caller's transaction, and the roster import treats this answer
-// as one skipped row and goes on to register the next person in the same
-// transaction: a unique violation there used to lose the whole import over
-// one student who was already on it.
+// An existing registration is contests.ErrAlreadyEnrolled, decided by the
+// unique (contest_id, user_id) through ON CONFLICT DO NOTHING rather than a
+// failed insert: a failed statement would abort the caller's transaction, and
+// the roster import skips this row and continues in the same transaction.
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
 	p, err := scanParticipant(r.querier(ctx).QueryRow(ctx, `
 		WITH inserted AS (
@@ -299,10 +270,8 @@ func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (c
 		SELECT `+participantColumns+`
 		FROM inserted r JOIN users u ON u.id = r.user_id`, contestID, userID))
 	if err != nil {
-		// No row and no error can only be the conflict above: the user's
-		// foreign key guarantees the joined account exists, and the join
-		// filters nothing. A filter added to it (say, on the account's
-		// status) would make this misreport a refused join as "already
+		// No row can only be the conflict, as long as the join filters
+		// nothing. A filter added to it would be misreported as "already
 		// enrolled".
 		if errors.Is(err, contests.ErrParticipantNotFound) {
 			return contests.Participant{}, contests.ErrAlreadyEnrolled
@@ -328,53 +297,19 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 	return nil
 }
 
-// Start records now as the participant's first deliberate action against the
-// game, if they have not already begun (finding 1).
+// Start records now as the participant's start, if they have not begun yet.
 //
-// The UPDATE is the whole guarantee for the write: it can only ever set
-// started_at once per row, because its own WHERE re-reads started_at under
-// the row lock it takes, so a second transaction racing for the same
-// registration blocks on that lock and, once the first commits, finds
-// started_at no longer null and updates nothing — no read-then-write gap for
-// either side to land in. Called on every action and a no-op after the
-// first, so an individual participant's later queries pay no further write —
-// the same discipline CLAUDE.md rule 6 asks of a session touch.
+// The UPDATE's WHERE re-reads started_at under the row lock, so of two racing
+// transactions only the first sets it. After the first call it writes
+// nothing (CLAUDE.md rule 6). It also requires status = 'registered', an
+// allow-list, so a participant disqualified before starting, or in a status
+// added later, is not moved to 'active'.
 //
-// The WHERE also requires status = 'registered' (finding 4), not only
-// started_at IS NULL: a registration disqualified before it ever started
-// still has started_at IS NULL — SetStatus never touches that column — and
-// without this second guard a disqualification landing between a caller's
-// lookup of the participant and this call would be silently undone, moving
-// them straight to 'active' as if nothing had happened. 'registered' is the
-// only status this method's own WHERE ever has to match against, because
-// every other status either already has started_at set or, for
-// 'disqualified', must not be reopened by this method at all — an explicit
-// allow-list rather than excluding 'disqualified' by name, so a future status
-// this method was never taught about is refused rather than silently started.
-//
-// A caller who loses the race still has to learn the start time the winner
-// set, and that read must be its own statement, not folded into the same one
-// as the UPDATE: PostgreSQL takes one snapshot per statement under READ
-// COMMITTED, and a plain SELECT sharing the UPDATE's statement would read
-// against the snapshot from before the UPDATE blocked on the row lock — the
-// version with started_at still null — even after the UPDATE itself
-// re-checks the lock and correctly sees the winner's commit. A first version
-// of this method folded both into one statement with a UNION ALL and passed
-// every test run alone; under real concurrency it handed some racers back a
-// participant with no StartedAt at all, silently reintroducing the bug this
-// method exists to close. The fix is the second, separate statement below,
-// which gets a fresh snapshot of its own.
-//
-// This whole argument is specific to READ COMMITTED, which is what the pool
-// this repository shares actually runs at today because nothing in
-// internal/platform/storage ever raises it. Under REPEATABLE READ or
-// SERIALIZABLE a transaction's first statement fixes its snapshot for every
-// statement after it, so a losing racer's second statement would keep
-// reading the pre-UPDATE snapshot rather than picking up the winner's
-// commit — the version with started_at still null — and the guarantee this
-// doc comment argues for would silently stop holding. Anybody changing the
-// pool's isolation level has to re-read this method, not only trust that its
-// tests still pass.
+// The loser reads the winner's start time in a separate statement. Under
+// READ COMMITTED each statement takes its own snapshot; a SELECT folded into
+// the UPDATE's statement would see started_at still null. This relies on the
+// pool running at READ COMMITTED: under REPEATABLE READ or SERIALIZABLE the
+// second statement would also see the old snapshot.
 func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
 	querier := r.querier(ctx)
 	p, err := scanParticipant(querier.QueryRow(ctx, `
@@ -391,9 +326,8 @@ func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now
 	case err == nil:
 		return p, nil
 	case errors.Is(err, contests.ErrParticipantNotFound):
-		// Lost the race, or this is not the first call for this registration.
-		// A fresh statement, so it reads whatever is committed now rather
-		// than what was committed when this call started (see the doc above).
+		// Lost the race or already started: a fresh statement sees the
+		// committed start.
 		return scanParticipant(querier.QueryRow(ctx, `
 			SELECT `+participantColumns+`
 			FROM registrations r JOIN users u ON u.id = r.user_id
@@ -403,13 +337,9 @@ func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now
 	}
 }
 
-// AddScore adds delta to the registration's total_score with a single atomic
-// UPDATE, never a read of the current value followed by a write — two
-// submissions scoring at the same moment (different questions answered
-// concurrently, or submission.go's own retry after losing the attempt race)
-// each issue their own `total_score = total_score + $2`, and PostgreSQL
-// serialises the two statements against the same row rather than letting the
-// second overwrite what the first added.
+// AddScore adds delta to the registration's total_score in one UPDATE, so
+// concurrent submissions serialise on the row instead of overwriting each
+// other's addition.
 func (r *Registrations) AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error {
 	tag, err := r.querier(ctx).Exec(ctx,
 		`UPDATE registrations SET total_score = total_score + $2 WHERE id = $1`, registrationID, delta)
@@ -422,16 +352,9 @@ func (r *Registrations) AddScore(ctx context.Context, registrationID uuid.UUID, 
 	return nil
 }
 
-// HasWork reports whether anything of the participant's own hangs off this
-// registration.
-//
-// Four EXISTS over four indexes, each stopping at the first row it finds:
-// every one of these tables leads its serving index with registration_id
-// (query_log_registration_executed_idx, submissions_registration_submitted_idx,
-// participant_events_registration_time_idx, participant_sql_tabs_registration_idx,
-// and the notes' own primary key), so the whole question costs four index
-// probes however long the contest has been running. It is asked once, when an
-// organiser removes somebody from a roster.
+// HasWork reports whether the participant left any record under this
+// registration. Each table has an index leading with registration_id (the
+// notes their primary key), so each EXISTS is one index probe.
 func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error) {
 	var has bool
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -448,18 +371,9 @@ func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (
 }
 
 // RegisteredWithPermission names this contest's participants whose account
-// holds the permission, for the publish gate.
-//
-// The permission is read through the roles the account actually has, the same
-// derivation userColumns makes (users.go): the question is about an account
-// whose permissions may have changed after it registered, so anything cached
-// on the registration would answer the wrong one. EXISTS rather than a join
-// to the permission rows, so an account in three roles that all carry it
-// still produces one login and the planner can stop at the first match.
-//
-// The roster is reached by registrations_contest_id_idx and the rest is
-// primary-key work per row, so this costs a scan of one contest's roster and
-// no more; it is asked once per publish, never per request.
+// holds the permission through its current roles, for the publish gate.
+// EXISTS rather than a join, so an account with several such roles appears
+// once.
 func (r *Registrations) RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT u.login

@@ -32,52 +32,29 @@ var (
 	ErrEnrollmentClosed    = errors.New("this contest is not accepting signups")
 	ErrAddressNotAllowed   = errors.New("this contest is not available from your network")
 	ErrParticipantNotFound = errors.New("participant not found")
-	// ErrParticipantStarted reports an attempt to delete somebody who has a
-	// record in this contest. Their queries and answers are part of it;
-	// excluding them is disqualification, not deletion.
-	//
-	// "Started" is only half of what it refuses, and the wider half is the
-	// one a shared clock produces: nothing there ever sets started_at, so a
-	// participant who worked for an hour still reads as merely registered,
-	// and what makes their registration undeletable is the journal behind it
-	// (HasWork). The wording says so; the code it maps to
-	// (api.codeParticipantStarted) is left alone, because a published error
-	// code is a name clients match on, not a sentence.
+	// ErrParticipantStarted refuses deleting somebody with a record in this
+	// contest, started or not (see HasWork); excluding them is
+	// disqualification. Its API code still says "started": a published code
+	// is a name clients match on.
 	ErrParticipantStarted = errors.New("this participant has a record in this contest; disqualify instead of removing")
-	// ErrStaffCannotParticipate refuses a contest's own owner or manager a
-	// registration on that same contest (self-enrollment or a staff-side
-	// add): its staff already reads the reference answers (contest.view) and
-	// the unfrozen leaderboard (contest.edit), an advantage no other entrant
-	// has, so competing in it too would not be a fair result. See managers.go's
-	// ErrParticipantCannotBeStaff for the opposite direction.
+	// ErrStaffCannotParticipate refuses a registration to the contest's own
+	// staff, or to an account holding contest.admin_all: they read the
+	// reference answers and the unfrozen leaderboard. ErrParticipantCannotBeStaff
+	// is the opposite direction.
 	ErrStaffCannotParticipate = errors.New("contest staff cannot also register as a participant")
 )
 
-// PoolTrigger asks the background game-pool tender to run again soon for a
-// contest whose roster just changed, rather than waiting out its own
-// periodic interval — a late roster is otherwise only reflected in a spare
-// copy at the next tick, up to a full interval away, and the participant it
-// left short waits for CREATE DATABASE inside their own first request.
+// PoolTrigger wakes the background game-pool tender for a contest whose
+// roster or status just changed, so spare databases are ready before the
+// next periodic tick; otherwise a participant waits for CREATE DATABASE in
+// their first request. Callers trigger after commit.
 //
-// Declared here because this package is where every caller of it lives:
-// Enroll and AddParticipants below, and the scheduler's own published →
-// running transition (schedule.go). provisioning.Tender implements it, wired
-// in by internal/app only where there is a game cluster to keep a pool for —
-// a Service or Scheduler built without one (every test that predates this,
-// and any installation with GAME_PROVISIONER_DSN unset) simply never
-// triggers, which changes nothing else about either type.
-//
-// Trigger must never block the caller and never fail: it only wakes
-// housekeeping that runs later, off the request path and outside of whatever
-// transaction the caller is finishing.
+// Trigger must never block the caller and never fail.
 type PoolTrigger interface {
 	Trigger(contestID uuid.UUID)
 }
 
 // EnrollmentOpenAt reports whether a student may still sign themselves up.
-//
-// Three things have to hold: the contest invites self-signup, it is in a state
-// that accepts registrations, and the deadline (if any) has not passed.
 func (c Contest) EnrollmentOpenAt(now time.Time) error {
 	if c.Enrollment != EnrollmentOpen {
 		return ErrEnrollmentClosed
@@ -86,10 +63,8 @@ func (c Contest) EnrollmentOpenAt(now time.Time) error {
 	switch c.Status {
 	case StatusPublished:
 	case StatusRunning:
-		// A late joiner in a shared window would get less time than everybody
-		// else. Individual timing measures from each participant's own start,
-		// so joining late costs the joiner nothing and takes nothing from
-		// anybody else.
+		// A late joiner in a shared window would get less time; individual
+		// timing starts each participant's own clock.
 		if c.Timing != TimingIndividual {
 			return ErrEnrollmentClosed
 		}
@@ -105,38 +80,26 @@ func (c Contest) EnrollmentOpenAt(now time.Time) error {
 
 // Participant is one person's involvement in one contest.
 type Participant struct {
-	// ID is the registration identifier: what submissions, game instances and
-	// the query journal all hang off.
+	// ID is the registration, not the user.
 	ID        uuid.UUID
 	ContestID uuid.UUID
 	UserID    uuid.UUID
 	Login     string
 	FullName  string
 	Status    string
-	// StartedAt is when the participant opened the contest. With individual
-	// timing it is what their deadline is computed from.
+	// StartedAt is the participant's first action. With individual timing
+	// their deadline is computed from it.
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	TotalScore int
 	CreatedAt  time.Time
 }
 
-// HasStarted reports whether the participant has begun working.
-//
-// StartedAt is the authoritative fact: it is the one value Deadline
-// (deadline.go) can compute an individual participant's window from, so
-// anything this reports as "started" without it would tell queryproxy one
-// thing and the deadline formula another. The status is still consulted
-// because it is a legitimate second reading of the same fact, not a
-// competing one — RegistrationRepository.Start is the only place that ever
-// moves a registration to RegistrationActive, and it always sets StartedAt
-// in that same write (see postgres.Registrations.Start). Nothing in this
-// codebase may set the status alone: a hypothetical caller that did would
-// make this method disagree with Deadline about a participant who has
-// nothing for the formula to add duration_min to, which is exactly the bug
-// finding 1 fixed. Kept as an OR rather than collapsed to the timestamp alone
-// so a registration touched only through SetStatus (RegistrationFinished, by
-// a future path with its own timestamp field) still reads as started here.
+// HasStarted reports whether the participant has begun working. StartedAt
+// is the authoritative fact, the one Deadline computes from; the statuses
+// agree with it because only RegistrationRepository.Start moves a
+// registration to active, setting StartedAt in the same write. Under a
+// shared clock nothing sets either: see HasWork.
 func (p Participant) HasStarted() bool {
 	return p.StartedAt != nil ||
 		p.Status == RegistrationActive ||
@@ -152,8 +115,8 @@ type ParticipantFilter struct {
 	Offset int
 }
 
-// Normalize clamps the page size. The ceiling is higher than for contests: a
-// staff list of a 400-person olympiad is a legitimate single page.
+// Normalize clamps the page size. The ceiling is higher than for contests so
+// a 400-person olympiad fits on one page.
 func (f ParticipantFilter) Normalize() ParticipantFilter {
 	const (
 		defaultLimit = 50
@@ -181,69 +144,30 @@ type RegistrationRepository interface {
 	Add(ctx context.Context, contestID, userID uuid.UUID) (Participant, error)
 	// Remove deletes a registration outright.
 	Remove(ctx context.Context, contestID, userID uuid.UUID) error
-	// SetStatus changes a registration's status.
-	//
-	// Reserved for transitions that carry no timestamp of their own —
-	// disqualification, today. A move to RegistrationActive or
-	// RegistrationFinished must go through Start (or its future finishing
-	// counterpart) instead, so the status and the timestamp that HasStarted
-	// and Deadline both read are never set one without the other.
+	// SetStatus changes a status that carries no timestamp (disqualification).
+	// Moves to active go through Start, so status and StartedAt never diverge.
 	SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error
-	// Start records now as the participant's first deliberate action against
-	// the game — a SQL query today, an answer submission once that path
-	// exists — if they have not already begun. It is the one seam both paths
-	// share, and the only place that ever sets StartedAt or moves a
-	// registration to RegistrationActive: it does both together, atomically,
-	// so HasStarted and Deadline can never be told two different stories.
-	//
-	// Two concurrent first actions must agree on one start time, and a
-	// participant who has already started must never have it moved — an
-	// implementation does this with a single conditional UPDATE keyed on
-	// "started_at IS NULL", never a read followed by a write.
+	// Start records now as the participant's first action if they have not
+	// begun, setting StartedAt and the active status together. Concurrent
+	// first actions must agree on one start time and an existing one must
+	// never move: a single conditional UPDATE on "started_at IS NULL", never
+	// a read then a write.
 	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (Participant, error)
-	// EnrolledIn reports which of these contests the user is registered for.
-	//
-	// One question, one query: a catalogue of twenty rows must not become
-	// twenty lookups. It lives on the registrations repository rather than
-	// becoming a field on Contest, because "am I on this" is a fact about a
-	// viewer and a contest together, not a property of the contest — put on
-	// the domain type it would have to be filled, or left wrong, everywhere a
-	// contest is loaded.
+	// EnrolledIn reports which of these contests the user is registered for,
+	// in one query.
 	EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error)
-	// AddScore adds delta to the registration's total_score — an atomic
-	// increment (`total_score = total_score + delta`), never a read of the
-	// current value followed by a write of a new one. Two answers scoring at
-	// the same moment (different questions, or the retry submission.go's own
-	// attempt-race makes) must not let one increment overwrite the other; an
-	// increment expressed in SQL cannot lose one side of that the way a
-	// read-modify-write in Go could. Called only when delta is positive
-	// (submission.go's own doc explains why a wrong answer never calls this
-	// at all).
+	// AddScore adds delta to total_score as an atomic SQL increment, never a
+	// read-modify-write, so concurrent scoring answers cannot overwrite each
+	// other.
 	AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error
-	// RegisteredWithPermission returns the logins of this contest's
-	// registered participants whose account holds permission, ordered by
-	// login.
-	//
-	// One query rather than a roster read followed by an account lookup per
-	// row: the publish gate asks this of a contest that may carry four
-	// hundred people, and the answer is ordinarily empty. Bounded by
-	// MaxReportedStaff, because the result is a list a person reads and a
-	// payload the audit trail carries — naming the first few is what makes
-	// the refusal actionable, and naming a thousand would only make it
-	// unreadable. An implementation reads the permission through whatever
-	// grants it (roles, today), never a column on the registration: the
-	// point of the check is an account whose permissions changed after it
-	// registered.
+	// RegisteredWithPermission returns, ordered by login and at most
+	// MaxReportedStaff, the logins of registered participants whose account
+	// currently holds permission. One query; the permission is read through
+	// the account's roles, since the point is a grant made after registering.
 	RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error)
-	// HasWork reports whether anything of the participant's own is recorded
-	// against this registration — a query, an answer, a note or a signal.
-	//
-	// It exists because HasStarted cannot answer the question in a contest on
-	// a shared clock: nothing there writes a first action per participant, so
-	// started_at stays null and the status stays "registered" however much
-	// work somebody does. Removing a registration cascades to everything
-	// hanging off it, so the deletion asks the record itself rather than a
-	// field that is only ever filled under individual timing.
+	// HasWork reports whether a query, answer, note or signal is recorded
+	// against this registration. Under a shared clock nothing sets
+	// started_at, so this, not HasStarted, guards a cascading delete.
 	HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error)
 }
 
@@ -251,50 +175,29 @@ type RegistrationRepository interface {
 const (
 	SkipUnknownAccount  = "unknown_account"
 	SkipAlreadyEnrolled = "already_enrolled"
-	// SkipAccountBlocked is a distinct reason from SkipUnknownAccount on
-	// purpose. A deleted account's login is not usably an account at all
-	// from the roster's point of view — the login might as well not exist —
-	// but a blocked one still is somebody with a name, just one who cannot
-	// currently sign in, and that is worth telling the person pasting the
-	// list apart from a plain typo. All three locale dictionaries already
-	// carry workspace.people.import.reason.account_blocked for it.
+	// SkipAccountBlocked is distinct from SkipUnknownAccount: a blocked
+	// account is a real person who cannot sign in, not a typo. A deleted
+	// one reads as unknown.
 	SkipAccountBlocked = "account_blocked"
-	// SkipStaffMember reports a roster entry that names one of the contest's
-	// own owners or managers: staffing and taking part in the same contest
-	// is refused in both directions, and a roster is a bulk operation where
-	// one such entry must be reported and skipped rather than fail the
-	// whole import, the same partial-success shape every other row-level
-	// reason above already gets.
+	// SkipStaffMember is an entry naming the contest's staff (see
+	// ErrStaffCannotParticipate), skipped rather than failing the import.
 	SkipStaffMember = "staff_member"
 )
 
-// maxRosterEntries bounds one import of participants.
-//
-// Every entry is an account lookup, an insert and an audit line, all inside
-// one transaction that holds its locks until the last row. The request body
-// alone would allow tens of thousands of identifiers, which is a way for
-// somebody who legitimately holds participant.manage to pin a database
-// connection for as long as the statement timeout allows. A whole faculty
-// year is a few hundred people, so the bound is far above honest use and far
-// below what turns an import into a lever.
+// maxRosterEntries bounds one import (CLAUDE.md rule 2). Every entry is a
+// lookup, an insert and an audit line inside one transaction holding its
+// locks; a faculty year is a few hundred people.
 const maxRosterEntries = 1000
 
 // ErrRosterTooLarge reports an import above that bound.
 var ErrRosterTooLarge = errors.New("too many entries in one roster")
 
-// MaxReportedStaff bounds RegisteredWithPermission's answer.
-//
-// The list is read by a person and carried in an audit payload, and an
-// installation has a handful of accounts that administer every contest, not a
-// thousand — so any number here is far above the honest case. It exists
-// because the query is a join whose size nothing else constrains, and because
-// a refusal naming four hundred logins is a refusal nobody can act on.
+// MaxReportedStaff bounds RegisteredWithPermission's answer, a join nothing
+// else bounds that ends up in a refusal a person reads and in the audit trail.
 const MaxReportedStaff = 20
 
 // AddParticipantsCommand adds people to a contest on behalf of its staff.
-//
-// Logins as well as identifiers because the practical input is a roster pasted
-// out of a spreadsheet, where what an organizer has is student numbers.
+// Logins are accepted because rosters are pasted from spreadsheets.
 type AddParticipantsCommand struct {
 	ActorID   uuid.UUID
 	ContestID uuid.UUID
@@ -302,11 +205,8 @@ type AddParticipantsCommand struct {
 	Logins    []string
 }
 
-// AddParticipantsResult reports what an import did.
-//
-// Partial success is the honest outcome: one mistyped login must not reject
-// the other three hundred rows, and the person importing has to see which
-// ones did not go in and why.
+// AddParticipantsResult reports what an import did. Partial success: one
+// mistyped login must not reject the other rows.
 type AddParticipantsResult struct {
 	Added   int
 	Skipped []SkippedParticipant
@@ -314,8 +214,7 @@ type AddParticipantsResult struct {
 
 // SkippedParticipant is one entry that produced no registration.
 type SkippedParticipant struct {
-	// Ref is the login or identifier exactly as it was given, so the row can
-	// be found again in the spreadsheet it came from.
+	// Ref is the login or identifier as it was given.
 	Ref    string
 	Reason string
 }
@@ -330,10 +229,7 @@ type EnrollCommand struct {
 }
 
 // EnrolledIn reports which of these contests the user is registered for.
-//
-// The user is always the caller: the HTTP layer passes the identity it
-// authenticated, never a value from the request, so this cannot answer "who
-// else takes part in what".
+// userID must be the authenticated caller, never a value from the request.
 func (s *Service) EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	if userID == uuid.Nil || len(contestIDs) == 0 {
 		return map[uuid.UUID]bool{}, nil
@@ -346,10 +242,8 @@ func (s *Service) Participants(ctx context.Context, contestID uuid.UUID, f Parti
 	return s.registrations.List(ctx, contestID, f.Normalize())
 }
 
-// AddParticipants registers people on behalf of the contest's staff.
-//
-// The network restriction is not applied here: it governs where a participant
-// may work from, not where the organizer sits while preparing the roster.
+// AddParticipants registers people on behalf of the contest's staff. The
+// network restriction does not apply: it governs where participants work.
 func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsCommand) (AddParticipantsResult, error) {
 	if entries := len(cmd.UserIDs) + len(cmd.Logins); entries > maxRosterEntries {
 		return AddParticipantsResult{}, fmt.Errorf("%w: %d entries, at most %d",
@@ -366,20 +260,11 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 
 	var result AddParticipantsResult
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		// Locks the contest row for the whole import, once, rather than once
-		// per row: every addOne call below checks the same contest's staff
-		// list, and the lock is what stops a concurrent GrantManager for the
-		// same contest from landing between one row's check and this
-		// transaction's commit — see managers.go's own comment on the same
-		// lock.
+		// The contest lock keeps a concurrent GrantManager out until commit,
+		// so the staff list is read once and checked in memory per row.
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
-		// The staff list cannot change while the lock is held, so it is read
-		// once here and each row is checked against it in memory. A lookup
-		// per row would be a statement per row of a roster of up to
-		// maxRosterEntries, every one of them lengthening how long the lock
-		// keeps a concurrent staff change or enrolment waiting.
 		staff, err := s.managers.List(ctx, c.ID)
 		if err != nil {
 			return err
@@ -425,41 +310,20 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 		return AddParticipantsResult{}, err
 	}
 
-	// Triggered after the transaction has committed, never inside it: a
-	// contest a roster import actually grew, and only one already taking
-	// part in an olympiad — a draft has no participants querying it yet, and
-	// the ordinary tick before it publishes is plenty. Nothing to trigger for
-	// a roster where every entry was skipped, since the pool's own roster
-	// count did not move.
+	// A draft has nobody querying yet; the periodic tick serves it.
 	if result.Added > 0 && s.poolTrigger != nil && (c.Status == StatusPublished || c.Status == StatusRunning) {
 		s.poolTrigger.Trigger(c.ID)
 	}
 	return result, nil
 }
 
-// addOne registers one resolved account, recording why it was skipped when it
-// was.
+// addOne registers one resolved account, or records why it was skipped.
 //
-// A deleted account is skipped under the same reason as one that was never
-// found: users.Repository.ByLogin deliberately still returns a deleted row
-// when nothing live has reclaimed its login, so a roster entry for a former
-// student would otherwise resolve to an account that can never sign in and
-// be reported as added. From the roster's point of view the login does not
-// resolve to a usable account either way, so it reads the same to whoever
-// pasted it in, and needs no reason of its own in three locales.
-//
-// A blocked account is skipped too, but under its own reason
-// (SkipAccountBlocked) rather than folded into the deleted case above: unlike
-// a deleted account it is still somebody real, and auth.Service.Login and
-// auth.Middleware both refuse it for the same reason this does — enrolling it
-// would put on the roster a participant who can never sign in to sit the
-// contest.
-//
-// Whether the person is already taking part is decided by the write, not by a
-// lookup first: the guarantee is a unique index, and two organizers importing
-// overlapping rosters at the same moment would both pass a lookup. Treating
-// that verdict as an ordinary skip is what keeps one such row from failing the
-// other three hundred.
+// ByLogin still returns a deleted account whose login nobody reclaimed, so a
+// deleted account is skipped as unknown. Whether the person is already
+// enrolled is decided by the write's unique index, not a lookup, so two
+// overlapping imports cannot both pass. staff is the contest's staff, read
+// under the contest lock.
 func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, staff map[uuid.UUID]struct{}, user users.User, result *AddParticipantsResult) error {
 	if user.Status == users.StatusDeleted {
 		result.skip(user.Login, SkipUnknownAccount)
@@ -469,21 +333,10 @@ func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Cont
 		result.skip(user.Login, SkipAccountBlocked)
 		return nil
 	}
-	// The contest's own owner or manager already reads its reference
-	// answers and its unfrozen leaderboard, so registering them as a
-	// participant too would not be a fair result. A roster is a bulk
-	// operation, so this is a skip like every other row-level reason above,
-	// not a refusal of the whole batch. staff is the contest's staff, read
-	// once under the contest's lock by the caller.
 	if _, isStaff := staff[user.ID]; isStaff {
 		result.skip(user.Login, SkipStaffMember)
 		return nil
 	}
-	// And the staff a contest's own list cannot name: an account holding
-	// contest.admin_all exports this contest's question package and reads
-	// its unfrozen table without ever being appointed to it, so registering
-	// it would not be a fair result either. The account carries its
-	// permissions with it (users.User.Permissions), so this costs no lookup.
 	if user.Has(rbac.PermissionContestAdminAll) {
 		result.skip(user.Login, SkipStaffMember)
 		return nil
@@ -518,31 +371,21 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		return Participant{}, err
 	}
 
-	// Checked after the contest is known to accept signups, so the trail
-	// carries real attempts rather than noise about closed contests.
+	// After the signup check, so the trail records only real attempts. A
+	// refusal has nothing to be atomic with, so no unit of work.
 	if !c.AllowsAddress(cmd.Address) {
-		// Recorded outside a unit of work: this is a refusal, there is nothing
-		// to be atomic with, and the attempt is exactly what an administrator
-		// wants to see afterwards.
 		if err := s.recordDenied(ctx, cmd); err != nil {
 			return Participant{}, err
 		}
 		return Participant{}, ErrAddressNotAllowed
 	}
 
-	// Signing up twice is likewise decided by the write: a double-clicked
-	// button sends two requests, and a lookup would let both through.
+	// A double signup is refused by the write, not a lookup.
 	var enrolled Participant
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		// Locks the contest row for the rest of this transaction, serialising
-		// against a concurrent GrantManager for the same account — see
-		// managers.go's own comment on the same lock. Checked here, inside
-		// the lock, rather than before s.uow.Do: a contest's own owner or
-		// manager already reads its reference answers and its unfrozen
-		// leaderboard, so letting them self-enroll would hand them an
-		// advantage no other entrant has, and a check made outside the
-		// transaction is a decision the write below can no longer be sure is
-		// still true.
+		// The staff checks run under the contest lock, which serialises
+		// against a concurrent GrantManager, so they cannot go stale before
+		// the write.
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
@@ -551,10 +394,6 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		} else if !errors.Is(err, ErrManagerNotFound) {
 			return err
 		}
-		// The same exclusion for staff this contest's list cannot name: an
-		// account holding contest.admin_all reads every contest's answers
-		// and unfrozen table. Read inside the lock, like the line above, so
-		// the decision cannot be stale by the time the write lands.
 		self, err := s.users.ByID(ctx, cmd.UserID)
 		if err != nil {
 			return err
@@ -571,10 +410,7 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		return Participant{}, err
 	}
 
-	// EnrollmentOpenAt above already refuses anything but a published or
-	// running contest, so every self-signup that reaches here is one this
-	// trigger belongs on — triggered after commit, never inside the
-	// transaction above.
+	// EnrollmentOpenAt admits only published or running contests.
 	if s.poolTrigger != nil {
 		s.poolTrigger.Trigger(c.ID)
 	}
@@ -590,20 +426,13 @@ func (s *Service) recordDenied(ctx context.Context, cmd EnrollCommand) error {
 	return s.record(ctx, cmd.UserID, audit.ActionContestAccessDenied, cmd.ContestID, payload)
 }
 
-// RemoveParticipant deletes a registration that never turned into work.
+// RemoveParticipant deletes a registration that never turned into work;
+// anyone with a record must be disqualified instead.
 //
-// Somebody who has already started is refused: their queries and answers are
-// part of the record, and excluding them is disqualification.
-//
-// Both refusals are decided inside the transaction that then deletes, not
-// before it. Asked outside, they answer about a moment the write no longer
-// happens in — and the write here cascades: everything hanging off the
-// registration goes with it, so a participant whose first query lands in that
-// window loses it on the strength of a reading that was already stale. The
-// other order is safe without any of this: a query that starts before the
-// delete holds a KEY SHARE lock on the registration row, which the delete
-// waits behind, and once it commits that query's own write is refused by the
-// foreign key rather than quietly thrown away.
+// The checks run inside the deleting transaction because the delete cascades:
+// checked before it, a first query landing in between would be lost. A query
+// that starts first holds a KEY SHARE lock the delete waits behind, and one
+// that starts after is refused by the foreign key.
 func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
 	if _, err := s.mutableContest(ctx, contestID); err != nil {
 		return err
@@ -617,10 +446,7 @@ func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, use
 		if p.HasStarted() {
 			return ErrParticipantStarted
 		}
-		// The same refusal for somebody a shared clock never marked as
-		// started: what makes a registration undeletable is the record behind
-		// it, and in a fixed-timing contest that record is the only thing
-		// that says so.
+		// A shared clock never marks anybody started.
 		work, err := s.registrations.HasWork(ctx, p.ID)
 		if err != nil {
 			return err
@@ -658,10 +484,8 @@ func (s *Service) DisqualifyParticipant(ctx context.Context, actorID, contestID,
 	})
 }
 
-// acceptsRegistrations reports whether staff may still add people.
-//
-// Up to and including a running contest: adding a latecomer who was left off
-// the roster is a normal thing to have to do at the start of an olympiad.
+// acceptsRegistrations reports whether staff may still add people: up to and
+// including a running contest, for latecomers left off the roster.
 func (s *Service) acceptsRegistrations(c Contest) bool {
 	return c.Status == StatusDraft || c.Status == StatusPublished || c.Status == StatusRunning
 }

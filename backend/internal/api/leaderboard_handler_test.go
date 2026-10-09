@@ -28,13 +28,11 @@ import (
 )
 
 // boardStandings answers with the entries whose score was reached before the
-// cutoff, which is what the real aggregate does, so a test can put an answer
-// on either side of a freeze and read the body.
+// cutoff, as the real aggregate does.
 type boardStandings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
-	// icpc answers an ICPC query.
-	icpc *icpcBoard
+	icpc     *icpcBoard
 }
 
 func (s *boardStandings) ICPCStandings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
@@ -72,12 +70,10 @@ func (s *boardStandings) MarkRevealed(ctx context.Context, contestID uuid.UUID, 
 	return at, true, nil
 }
 
-// icpcBoard holds raw ICPC answers and computes rows and a grid from them
-// the way the real query does — the cutoff on solves and wrong counts, the
-// pending window only when asked and only on a question unsolved by the
-// cutoff, each question's earliest solve among the entrants that are not
-// disqualified — so a test can put answers on either side of a freeze and
-// read the body.
+// icpcBoard computes rows and a grid from raw ICPC answers the way the real
+// query does: the cutoff on solves and wrong counts, the pending window only
+// when asked and only on a question unsolved by the cutoff, and each question's
+// earliest solve among entrants not disqualified.
 type icpcBoard struct {
 	questions  int
 	start      time.Time
@@ -98,14 +94,10 @@ type icpcAnswer struct {
 	correct  bool
 }
 
-// standings is a stand-in for the handler tests only: it follows the rules
-// closely enough that a leak through the service or the handler shows in the
-// body, and it ignores what the handler cannot affect (registration times, the
-// row bound, deleted accounts). The real rules are pinned against the database
-// by the TestICPCStandings* tests in internal/postgres/leaderboard_test.go —
-// the minute rounding, the individual start, what a wrong attempt costs,
-// hidden questions, the pending window, the registration cutoff, the earliest
-// solve over the whole contest and the order LIMIT cuts in.
+// standings follows the rules closely enough that a leak shows in the body, and
+// ignores what the handler cannot affect (registration times, the row bound,
+// deleted accounts). The real rules are pinned against the database by
+// TestICPCStandings* in internal/postgres/leaderboard_test.go.
 func (b *icpcBoard) standings(q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid) {
 	grid := leaderboard.Grid{Questions: b.questions, FirstSolves: make([]*time.Time, b.questions)}
 	var out []leaderboard.Entry
@@ -219,7 +211,7 @@ func (f *boardFixture) contest(t *testing.T, status string, freezeMin *int) (con
 	return c, me
 }
 
-// get sends a request as who (uuid.Nil is the stranger; nil pointer is nobody).
+// request sends as who (uuid.Nil is the stranger; a nil pointer is nobody).
 func (f *boardFixture) request(method, path string, who *uuid.UUID, addr string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(""))
 	if addr != "" {
@@ -279,8 +271,8 @@ func TestThePublicTableAnswersTheSameForADraftAMissingContestAndNonsense(t *test
 	}
 }
 
-// Refusals count: a caller that is already refused keeps spending its own
-// budget, and the budget is spent before the contest is looked up.
+// Refusals spend the budget too, and it is spent before the contest is looked
+// up.
 func TestThePublicTableIsLimitedPerAddress(t *testing.T) {
 	f := newBoardFixture(t)
 	c, _ := f.contest(t, contests.StatusRunning, nil)
@@ -348,8 +340,7 @@ func TestAParticipantIsToldWhichRowIsTheirs(t *testing.T) {
 	}
 }
 
-// The freeze is enforced in what leaves the server: a score reached after the
-// freeze is not in the body, in any field.
+// Checked in every field of the body.
 func TestNothingScoredAfterTheFreezeLeavesTheServer(t *testing.T) {
 	f := newBoardFixture(t)
 	freeze := 30
@@ -420,11 +411,9 @@ func TestRevealIsRefusedBeforeTheFinishAndRecordedAfterIt(t *testing.T) {
 	}
 }
 
-// The staff table names the contest's own status, not only the shown
-// decision: a frozen table's shown.state stays "frozen" straight through a
-// contest finishing (the freeze persists past the end), so the interface
-// needs the raw status to notice that transition — in particular, that
-// revealing has become possible — even while shown.state has not moved.
+// A frozen table's shown.state stays "frozen" through the contest finishing, so
+// the interface needs the raw status to notice that revealing has become
+// possible.
 func TestTheLiveTableNamesTheContestsOwnStatus(t *testing.T) {
 	f := newBoardFixture(t)
 	freeze := 30
@@ -443,8 +432,8 @@ func TestTheLiveTableNamesTheContestsOwnStatus(t *testing.T) {
 	}
 }
 
-// The points table's response is byte for byte what it was before ICPC: no
-// questions, no penalty, no cells, and every other field where it was.
+// The points shape must not change with ICPC: no questions, penalty or cells,
+// and every other field where it was.
 func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	f := newBoardFixture(t)
 	c, me := f.contest(t, contests.StatusRunning, nil)
@@ -473,9 +462,8 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	}
 }
 
-// The winner table's response is byte for byte what it was before ICPC, in
-// the shape with the most optional fields: frozen, with a winner, an unplaced
-// row and the caller's own row.
+// The winner shape must not change with ICPC, checked with the most optional
+// fields: frozen, a winner, an unplaced row and the caller's own row.
 func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
 	f := newBoardFixture(t)
 	freeze := 30
@@ -502,8 +490,7 @@ func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
 	}
 }
 
-// An ICPC table with nobody on it still names its questions, and the letters
-// come with the grid rather than being counted from rows.
+// The letters come with the grid rather than being counted from rows.
 func TestAnICPCTableWithNobodyOnItStillNamesItsQuestions(t *testing.T) {
 	f := newBoardFixture(t)
 	freeze := 30
@@ -590,11 +577,10 @@ func decodeICPC(t *testing.T, rec *httptest.ResponseRecorder) icpcBody {
 	return body
 }
 
-// A frozen ICPC table tells how many attempts came after the freeze on a
-// question not solved before it, and nothing else about them: no solve, no
-// minute, no attempt number, no first-solver mark, and no change to solved,
-// penalty or order — even where the attempt was correct. Checked on the body,
-// for the public table and the participant's copy.
+// Only the count of post-freeze attempts on a question unsolved before it
+// shows: no solve, minute, attempt number or first-solver mark, and no change
+// to solved, penalty or order, even for a correct attempt. Checked on the body
+// of the public table and the participant's copy.
 func TestAFrozenICPCTableShowsOnlyHowManyAttemptsCameAfterTheFreeze(t *testing.T) {
 	f := newBoardFixture(t)
 	c, _ := f.icpcContest(t)
@@ -640,12 +626,10 @@ func TestAFrozenICPCTableShowsOnlyHowManyAttemptsCameAfterTheFreeze(t *testing.T
 	}
 }
 
-// Under sequential progression a question opens only once the one before it
-// is closed — solved, or every attempt spent — so a pending attempt on B would
-// say that A was closed after the freeze, and a pending A with attempts left
-// beside it would say A was solved. A frozen sequential ICPC table therefore
-// shows no pending attempts at all: only what was true at the freeze.
-// Checked on the body, for the public table and the participant's copy.
+// Under sequential progression a question opens only once the one before it is
+// closed, so any pending attempt would reveal what happened to an earlier
+// question after the freeze. A frozen sequential table shows only what was true
+// at the freeze.
 func TestAFrozenSequentialICPCTableShowsNoPendingAttempts(t *testing.T) {
 	f := newBoardFixture(t)
 	freeze := 30
@@ -693,8 +677,8 @@ func TestAFrozenSequentialICPCTableShowsNoPendingAttempts(t *testing.T) {
 	}
 }
 
-// The staff table is cut off now: it sees the solves after the freeze, marks
-// the first solver by them, and never says pending.
+// The staff table's cutoff is now, so it sees the solves after the freeze and
+// marks the first solver by them.
 func TestTheLiveICPCTableSeesTheResultsAndNoPending(t *testing.T) {
 	f := newBoardFixture(t)
 	c, _ := f.icpcContest(t)

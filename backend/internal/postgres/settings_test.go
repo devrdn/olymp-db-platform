@@ -35,8 +35,6 @@ func TestSettingsSurviveARoundTrip(t *testing.T) {
 }
 
 func TestSavingASettingTwiceReplacesItRatherThanFailing(t *testing.T) {
-	// The key is the primary key, so a second save is an update. An insert
-	// that collided would make changing a name a one-time operation.
 	withTx(t, func(ctx context.Context) {
 		repo := NewSettings(testPool)
 		admin := makeUser(t, ctx, "settings-twice")
@@ -55,8 +53,6 @@ func TestSavingASettingTwiceReplacesItRatherThanFailing(t *testing.T) {
 }
 
 func TestASystemActorLeavesNoAuthorRatherThanAnInventedOne(t *testing.T) {
-	// The column is nullable on purpose: nobody was signed in, and inventing
-	// an author would make the row claim something untrue.
 	withTx(t, func(ctx context.Context) {
 		repo := NewSettings(testPool)
 
@@ -64,8 +60,7 @@ func TestASystemActorLeavesNoAuthorRatherThanAnInventedOne(t *testing.T) {
 			t.Fatalf("Save() = %v", err)
 		}
 
-		// Through the transaction on the context, not the pool: the row is
-		// not committed yet and the pool cannot see it.
+		// Read through the transaction: the row is not committed yet.
 		var author *uuid.UUID
 		err := storage.QuerierFrom(ctx, testPool).
 			QueryRow(ctx, `SELECT updated_by FROM settings WHERE key = $1`, settings.KeyName).

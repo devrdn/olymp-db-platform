@@ -10,19 +10,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// records is a stand-in for the core database's own account of which
-// databases it believes exist. A fake rather than the real repository here,
-// unlike everywhere else in this package: what these tests are about is the
-// decision taken from those rows, and the rows themselves are checked against
-// real SQL by internal/postgres's own RecordedDatabases test.
+// records fakes the recorded databases; internal/postgres tests the real
+// RecordedDatabases query.
 type records []provisioning.DatabaseRecord
 
 func (r records) RecordedDatabases(context.Context) ([]provisioning.DatabaseRecord, error) {
 	return r, nil
 }
 
-// onCluster is the game cluster as the orphan sweep sees it: a set of
-// databases that exist, and a record of what it was asked to remove.
+// onCluster is a fake OrphanCluster that records what it was asked.
 type onCluster struct {
 	present map[string]int64
 	busy    map[string]bool
@@ -72,7 +68,6 @@ func (c *onCluster) wasAskedToDrop(name string) bool {
 	return false
 }
 
-// instanceRow and templateRow are the two shapes a recorded database takes.
 func instanceRow(contest uuid.UUID, database, status string) provisioning.DatabaseRecord {
 	return provisioning.DatabaseRecord{Database: database, Status: status, ContestID: contest}
 }
@@ -90,10 +85,6 @@ func orphanNamed(found []provisioning.Orphan, database string) (provisioning.Orp
 	return provisioning.Orphan{}, false
 }
 
-// The class this job exists for, and the only one: the row says the database
-// is gone, and the database is still on the cluster. Eleven of these are on
-// the development cluster because a test swept rows a fake cluster only
-// pretended to drop.
 func TestOrphansAreDatabasesTheCoreDatabaseBelievesAreAlreadyGone(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_stranded")
@@ -119,9 +110,6 @@ func TestOrphansAreDatabasesTheCoreDatabaseBelievesAreAlreadyGone(t *testing.T) 
 	}
 }
 
-// A template is the largest single database a contest owns, and it is
-// stranded by the same accident. It has to be found, and reported as what it
-// is: dropping it is not the same event as dropping one participant's copy.
 func TestOrphansIncludeAStrandedTemplate(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_tpl_stranded")
@@ -141,9 +129,6 @@ func TestOrphansIncludeAStrandedTemplate(t *testing.T) {
 	}
 }
 
-// The reverse direction, and the one that must never go wrong: a database the
-// core database still considers live is not this job's business, whatever
-// else is true of it. Not merely "not dropped" — never even asked about.
 func TestALiveDatabaseIsNeverAnOrphan(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_live", "game_tpl_live")
@@ -160,9 +145,7 @@ func TestALiveDatabaseIsNeverAnOrphan(t *testing.T) {
 		t.Fatalf("found = %+v, want nothing — both rows say the databases are live", found)
 	}
 
-	// Not asked about at all, rather than asked about and spared: the plan an
-	// operator reads is built only from names the core database has already
-	// given up on.
+	// Not even asked about, not merely spared.
 	for _, name := range cluster.askedSizesOf {
 		if name == "game_pool_live" || name == "game_tpl_live" {
 			t.Fatalf("the cluster was asked about %s, a database the core database still considers live", name)
@@ -176,11 +159,8 @@ func TestALiveDatabaseIsNeverAnOrphan(t *testing.T) {
 	}
 }
 
-// One name, two rows disagreeing about it. db_name is unique in
-// game_instances and template_db belongs to another table entirely, so this
-// should not happen — which is exactly why the answer must not depend on
-// which row the query happened to return first. Any row saying the database
-// is live settles it.
+// Two rows that disagree should not happen, so the answer must not depend on
+// row order: any live row wins.
 func TestADatabaseIsSparedWhenAnyRowStillCallsItLive(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_disputed")
@@ -198,9 +178,6 @@ func TestADatabaseIsSparedWhenAnyRowStillCallsItLive(t *testing.T) {
 	}
 }
 
-// The ordinary state of a healthy installation: the row says dropped and the
-// database really is gone. Nothing to do, and nothing to report — otherwise
-// every past reclaim would show up as a job for an operator forever.
 func TestARowWhoseDatabaseIsAlreadyGoneIsNotAnOrphan(t *testing.T) {
 	sweeper := provisioning.NewOrphanSweeper(
 		records{instanceRow(uuid.New(), "game_pool_long_gone", "dropped")}, cluster0())
@@ -214,8 +191,6 @@ func TestARowWhoseDatabaseIsAlreadyGoneIsNotAnOrphan(t *testing.T) {
 	}
 }
 
-// Removing them is the job's other half, and it has to be safe to run twice:
-// the second pass finds the database gone and reports nothing left to do.
 func TestRemoveDropsEveryOrphanAndIsSafeToRunTwice(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_stranded", "game_tpl_stranded")
@@ -252,10 +227,6 @@ func TestRemoveDropsEveryOrphanAndIsSafeToRunTwice(t *testing.T) {
 	}
 }
 
-// A database somebody is connected to is left where it is. The core database
-// has given up on it, but a connection has not, and this job cannot tell a
-// forgotten psql from something that matters — the same reasoning DropIdle
-// itself is built on, which is why the sweep is given no forcing drop at all.
 func TestRemoveLeavesABusyDatabaseAlone(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_busy")
@@ -279,9 +250,6 @@ func TestRemoveLeavesABusyDatabaseAlone(t *testing.T) {
 	}
 }
 
-// One cluster refusing must not cost the operator the rest of the run: they
-// came to reclaim disk, and a job that stops at the first awkward database
-// leaves most of it behind.
 func TestRemoveOneFailureDoesNotStopTheRest(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_broken", "game_pool_fine")
@@ -307,10 +275,6 @@ func TestRemoveOneFailureDoesNotStopTheRest(t *testing.T) {
 	}
 }
 
-// The trail is how anybody afterwards finds out where the disk went. The
-// absence of one is what made the eleven stranded databases a piece of
-// detective work rather than a lookup, so a repair that removes them for good
-// says so, with the action code an organizer already searches by.
 func TestRemoveRecordsWhatItDropped(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_stranded", "game_tpl_stranded")
@@ -351,8 +315,6 @@ func TestRemoveRecordsWhatItDropped(t *testing.T) {
 	}
 }
 
-// A database that was never dropped is not audited as though it had been —
-// the trail has to be worth reading.
 func TestRemoveRecordsNothingForADatabaseItLeftAlone(t *testing.T) {
 	contest := uuid.New()
 	cluster := cluster0("game_pool_busy")

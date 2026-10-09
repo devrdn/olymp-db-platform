@@ -20,8 +20,7 @@ func TestANewContestIsReadOnly(t *testing.T) {
 }
 
 func TestReadOnlyPolicyRejectsWritableTables(t *testing.T) {
-	// One of the two halves would have to win silently when the template
-	// grants are generated, which is not a policy but a contradiction.
+	// A contradiction: one half would win silently when grants are generated.
 	p := contests.DefaultSQLPolicy(uuid.New())
 	p.WritableTables = []string{"evidence"}
 
@@ -51,9 +50,8 @@ func TestReadWritePolicyAcceptsAPlainTableName(t *testing.T) {
 }
 
 func TestPolicyRejectsATableNameThatIsNotAnIdentifier(t *testing.T) {
-	// These names become GRANT statements when the game template is built,
-	// where they cannot be passed as parameters. The narrow form is what keeps
-	// that construction safe whatever an organizer types into the form.
+	// These names are spliced into GRANT statements, which cannot take
+	// parameters; the narrow identifier form keeps that safe.
 	for _, name := range []string{
 		"evidence; DROP TABLE users",
 		`"evidence"`,

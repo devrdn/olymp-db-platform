@@ -113,9 +113,6 @@ func TestAPasteTargetIsOneOfThree(t *testing.T) {
 }
 
 func TestTextThatJSONBCannotStoreIsCleaned(t *testing.T) {
-	// jsonb refuses the NUL character outright and a broken UTF-8 sequence
-	// has no text to store: either would be a failed insert for the whole
-	// batch rather than one odd event.
 	got := normalized(t, event(monitor.Paste{Target: monitor.PasteEditor, Text: "a\x00b\xffc"}))
 	text := got.Payload.(monitor.Paste).Text
 	if strings.ContainsRune(text, 0) || !utf8.ValidString(text) {
@@ -188,8 +185,6 @@ func TestOnlyABrowserSignalKeepsTheTimeTheBrowserClaimed(t *testing.T) {
 		t.Fatalf("a server event kept a browser time: %v", got.ClientAt)
 	}
 
-	// A claim no clock could make is dropped rather than stored: the column
-	// cannot hold every time.Time, and a failed insert would lose the batch.
 	absurd := time.Date(300000, 1, 1, 0, 0, 0, 0, time.UTC)
 	wild := event(monitor.PageLeft{AwayMs: 5000})
 	wild.ClientAt = &absurd
@@ -198,8 +193,6 @@ func TestOnlyABrowserSignalKeepsTheTimeTheBrowserClaimed(t *testing.T) {
 	}
 }
 
-// A paste's repeat count is at most a batch's worth, and a count of one is
-// no count at all.
 func TestAPasteRepeatCountIsBounded(t *testing.T) {
 	for given, want := range map[int]int{-3: 0, 1: 0, 2: 2, monitor.MaxBatchEvents + 1: monitor.MaxBatchEvents} {
 		got := normalized(t, event(monitor.Paste{Target: monitor.PasteEditor, Count: given}))

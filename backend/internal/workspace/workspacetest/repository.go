@@ -1,6 +1,5 @@
 // Package workspacetest holds an in-memory workspace.Repository for the tests
-// of internal/workspace and of the HTTP layer that serves it. It is not a
-// second implementation of the storage rules for production use.
+// of internal/workspace and the HTTP layer. It is not for production use.
 package workspacetest
 
 import (
@@ -15,22 +14,16 @@ import (
 
 var _ workspace.Repository = (*Repository)(nil)
 
-// Repository is workspace.Repository in memory: enough of the contract (one
-// workspace per registration, tabs scoped to it, the tab limit checked under
-// the same lock that assigns positions) to test the service's own rules and
-// the HTTP layer's mapping of them. The SQL that keeps the same contract is
-// proven in internal/postgres against a real database.
+// Repository is workspace.Repository in memory, keeping enough of the
+// contract to test the service and the HTTP layer.
 type Repository struct {
 	mu    sync.Mutex
 	notes map[uuid.UUID]workspace.Notes
 	tabs  map[uuid.UUID][]workspace.Tab
 	now   time.Time
-	// calls counts every repository call, so a test can prove a refusal
-	// happened before any storage work.
 	calls int
 }
 
-// NewRepository returns an empty in-memory workspace store.
 func NewRepository() *Repository {
 	return &Repository{
 		notes: map[uuid.UUID]workspace.Notes{},
@@ -46,7 +39,6 @@ func (m *Repository) SetNow(now time.Time) {
 	m.now = now
 }
 
-// Load implements workspace.Repository.
 func (m *Repository) Load(_ context.Context, registration uuid.UUID, firstTitle string) (workspace.Notes, []workspace.Tab, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,7 +49,6 @@ func (m *Repository) Load(_ context.Context, registration uuid.UUID, firstTitle 
 	return m.notes[registration], slices.Clone(m.tabs[registration]), nil
 }
 
-// SaveNotes implements workspace.Repository.
 func (m *Repository) SaveNotes(_ context.Context, registration uuid.UUID, body string) (time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -67,7 +58,6 @@ func (m *Repository) SaveNotes(_ context.Context, registration uuid.UUID, body s
 	return at, nil
 }
 
-// CreateTab implements workspace.Repository.
 func (m *Repository) CreateTab(_ context.Context, registration uuid.UUID, limit int, title func(taken []string) string) (workspace.Tab, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -85,7 +75,6 @@ func (m *Repository) CreateTab(_ context.Context, registration uuid.UUID, limit 
 	return tab, nil
 }
 
-// UpdateTab implements workspace.Repository.
 func (m *Repository) UpdateTab(_ context.Context, registration, id uuid.UUID, patch workspace.TabPatch) (time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,7 +95,6 @@ func (m *Repository) UpdateTab(_ context.Context, registration, id uuid.UUID, pa
 	return time.Time{}, workspace.ErrTabNotFound
 }
 
-// DeleteTab implements workspace.Repository.
 func (m *Repository) DeleteTab(_ context.Context, registration, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -127,7 +115,6 @@ func (m *Repository) DeleteTab(_ context.Context, registration, id uuid.UUID) er
 	return nil
 }
 
-// ReorderTabs implements workspace.Repository.
 func (m *Repository) ReorderTabs(_ context.Context, registration uuid.UUID, ids []uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

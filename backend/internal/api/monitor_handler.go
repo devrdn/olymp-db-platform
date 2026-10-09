@@ -18,34 +18,26 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 )
 
-// The organiser's view of what a contest's participants did (design §4),
-// under /contests/{id}/monitor/…: the participants table with its flags, the
-// live feed, and per participant the timeline, the queries, the answers with
-// the queries that led to them, the workspace with its history, and CSV
+// The organiser's view of what a contest's participants did, under
+// /contests/{id}/monitor/...: the participants table, the live feed,
+// per-participant timeline, queries, answers and workspace history, and CSV
 // exports.
 //
-// Every route is Authenticate, then contest.monitor on the contest in the
-// URL, then the organiser's own read budget (monitorReadsPerMinute per
-// account, refusals counted), in that order: the budget's key is the
-// account, one per person, and nobody without the permission creates one. A
-// registration named in the URL must be this contest's; another contest's
-// and one that does not exist are the same 404, so the routes are not a way
-// to learn what exists elsewhere.
+// Every route runs Authenticate, then contest.monitor, then the read budget, in
+// that order, so only permitted accounts create budget keys. A registration
+// from another contest and one that does not exist are the same 404.
 
-// monitorReadsPerMinute is one organiser's budget across every route here.
-// A monitoring screen polls the feed and the table every five seconds — 24 a
-// minute — and an organiser may keep a few open beside a participant's page;
-// 240 leaves room for that and not for a script walking the journals.
+// monitorReadsPerMinute is one organiser's budget across every route here. A
+// screen polls feed and table every five seconds (24 a minute); 240 allows a
+// few open screens, not a script walking the journals.
 const monitorReadsPerMinute = 240
 
-// monitorWindow is the budget's fixed window.
 const monitorWindow = time.Minute
 
-// monitorTimeLayout keeps milliseconds: the feed orders events inside one
-// second, and a time that says otherwise would make the order look wrong.
+// monitorTimeLayout keeps milliseconds because the feed orders events within
+// one second.
 const monitorTimeLayout = "2006-01-02T15:04:05.000Z"
 
-// registrationIDParam and revisionIDParam name the URL's parameters.
 const (
 	registrationIDParam = "registrationID"
 	revisionIDParam     = "revisionID"
@@ -61,8 +53,8 @@ type MonitorReader interface {
 	Answers(ctx context.Context, contest, registration uuid.UUID) (monitor.Answers, error)
 	Workspace(ctx context.Context, contest, registration uuid.UUID) (monitor.Workspace, error)
 	Revision(ctx context.Context, contest, registration uuid.UUID, id int64) (monitor.RevisionBody, error)
-	// RecordView and RecordExport write the audit trail of watching
-	// (design §7); registration is uuid.Nil for the contest-wide views.
+	// RecordView and RecordExport write the audit trail of watching;
+	// registration is uuid.Nil for contest-wide views.
 	RecordView(ctx context.Context, viewer, contest, registration uuid.UUID) error
 	RecordExport(ctx context.Context, viewer, contest, registration uuid.UUID) error
 }
@@ -78,15 +70,12 @@ type MonitorHandler struct {
 	limiter MonitorLimiter
 	mw      *auth.Middleware
 	log     *slog.Logger
-	// exports keeps one account to one CSV download at a time, for the
-	// reason the participant's own export does (ExportGate). Its own, not
-	// the one the two participant routes share: this file is a whole
-	// contest's feed and is claimed by the account, not by a registration.
+	// exports keeps one account to one CSV download at a time. Not the gate the
+	// participant routes share: this file is a whole contest's feed, claimed
+	// per account.
 	exports ExportGate
-	// exportSlots keeps the whole service to as many downloads at once as the
-	// core pool can spare (ExportSlots). Shared with the participants' own
-	// routes, unlike the gate above: this file's connections come from the
-	// same pool theirs do.
+	// exportSlots is the service-wide download count, shared with the
+	// participant routes because the connections come from one pool.
 	exportSlots *ExportSlots
 	// exportRows and exportBytes bound one CSV download (monitor_export.go).
 	exportRows  int
@@ -99,10 +88,8 @@ func NewMonitorHandler(watch MonitorReader, limiter MonitorLimiter, mw *auth.Mid
 		exportSlots: NewExportSlots(0), exportRows: maxMonitorExportRows, exportBytes: maxMonitorExportBytes}
 }
 
-// WithExportSlots gives this handler the service-wide count of downloads
-// holding a database connection — the same one the participants' own export
-// routes are given, for the reason ExportSlots gives. nil leaves the
-// handler's own in place.
+// WithExportSlots gives this handler the service-wide download count. nil keeps
+// the handler's own.
 func (h *MonitorHandler) WithExportSlots(slots *ExportSlots) *MonitorHandler {
 	if slots != nil {
 		h.exportSlots = slots
@@ -110,8 +97,7 @@ func (h *MonitorHandler) WithExportSlots(slots *ExportSlots) *MonitorHandler {
 	return h
 }
 
-// WithExportLimits replaces the bounds of one CSV download, in rows and in
-// bytes; for tests, which cannot write two hundred thousand rows to see one.
+// WithExportLimits replaces one download's row and byte bounds, for tests.
 func (h *MonitorHandler) WithExportLimits(rows, bytes int) *MonitorHandler {
 	h.exportRows, h.exportBytes = rows, bytes
 	return h
@@ -136,8 +122,8 @@ func (h *MonitorHandler) Mount(r chi.Router) {
 	})
 }
 
-// budget spends one read of the organiser's budget before the route does
-// anything, a refused read included (CLAUDE.md rule 13).
+// budget spends one read of the organiser's budget before anything else,
+// refusals included (CLAUDE.md rule 13).
 func (h *MonitorHandler) budget(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, _ := auth.IdentityFrom(r.Context())
@@ -157,15 +143,15 @@ func (h *MonitorHandler) budget(next http.Handler) http.Handler {
 	})
 }
 
-// monitorContest is the contest in the URL; RequireContestPermission already
-// refused one that does not parse.
+// monitorContest is the contest in the URL; RequireContestPermission has
+// already refused one that does not parse.
 func monitorContest(r *http.Request) uuid.UUID {
 	id, _ := uuid.Parse(chi.URLParam(r, contestIDParam))
 	return id
 }
 
-// registration reads the registration in the URL. One that does not parse is
-// the same answer as one that is not this contest's.
+// registration reads the registration in the URL; one that does not parse gets
+// the same 404 as another contest's.
 func (h *MonitorHandler) registration(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, registrationIDParam))
 	if err != nil {
@@ -175,9 +161,9 @@ func (h *MonitorHandler) registration(w http.ResponseWriter, r *http.Request) (u
 	return id, true
 }
 
-// viewed records the organiser's view before the answer is sent (design
-// §7), and answers the refusal itself when the trail cannot take it: a view
-// the trail does not show is the one thing this must not allow.
+// viewed records the view in the trail before the answer is sent, and refuses
+// when the trail cannot take it: an unrecorded view is what this must never
+// allow.
 func (h *MonitorHandler) viewed(w http.ResponseWriter, r *http.Request, registration uuid.UUID) bool {
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.watch.RecordView(r.Context(), identity.UserID, monitorContest(r), registration); err != nil {
@@ -225,8 +211,8 @@ type monitorRosterResponse struct {
 	Rows        []monitorRosterRow `json:"rows"`
 }
 
-// participants is the table of every participant with their counters and
-// flags, from the three-second cache.
+// participants is every participant with counters and flags, from the
+// three-second cache.
 func (h *MonitorHandler) participants(w http.ResponseWriter, r *http.Request) {
 	roster, err := h.watch.Roster(r.Context(), monitorContest(r))
 	if err != nil {
@@ -261,7 +247,6 @@ type monitorParticipantResponse struct {
 	FinishedAt     *string   `json:"finished_at"`
 }
 
-// participant is who one participant is, for the page's heading.
 func (h *MonitorHandler) participant(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -293,11 +278,10 @@ type monitorFeedItem struct {
 
 type monitorFeedResponse struct {
 	Items []monitorFeedItem `json:"items"`
-	// More says there are more items past the page in the direction it was
-	// read.
+	// More says there are more items past the page in the direction read.
 	More bool `json:"more"`
-	// Newest and Oldest are the cursors to ask after= and before= with next;
-	// absent on an empty page.
+	// Newest and Oldest are the cursors for the next after= and before=; absent
+	// on an empty page.
 	Newest string `json:"newest,omitempty"`
 	Oldest string `json:"oldest,omitempty"`
 }
@@ -319,7 +303,6 @@ func (h *MonitorHandler) feed(w http.ResponseWriter, r *http.Request) {
 	h.serveFeed(w, r, q)
 }
 
-// timeline is one participant's feed.
 func (h *MonitorHandler) timeline(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -333,8 +316,8 @@ func (h *MonitorHandler) timeline(w http.ResponseWriter, r *http.Request) {
 	h.serveFeed(w, r, q)
 }
 
-// feedQuery reads the feed's parameters: after or before (a cursor), kinds
-// (comma-separated), from and until (RFC 3339), limit.
+// feedQuery reads after or before (a cursor), kinds (comma-separated), from and
+// until (RFC 3339), and limit.
 func (h *MonitorHandler) feedQuery(w http.ResponseWriter, r *http.Request) (monitor.FeedQuery, bool) {
 	params := r.URL.Query()
 	q := monitor.FeedQuery{Contest: monitorContest(r), Limit: intParam(r, "limit")}
@@ -349,7 +332,7 @@ func (h *MonitorHandler) feedQuery(w http.ResponseWriter, r *http.Request) (moni
 		}
 	}
 	if raw := params.Get("kinds"); raw != "" {
-		// Bounded before it is split, so a long list costs nothing.
+		// Bounded before splitting.
 		if len(raw) > 512 {
 			h.fail(w, r, monitor.ErrInvalidFeedFilter)
 			return q, false
@@ -391,9 +374,8 @@ func (h *MonitorHandler) serveFeed(w http.ResponseWriter, r *http.Request, q mon
 	httpx.JSON(w, r, http.StatusOK, out)
 }
 
-// feedData is an item's data as the response carries it: an event's stored
-// payload as it is, everything else as its own shape, and an empty object
-// rather than null.
+// feedData is an item's data for the response, an empty object rather than
+// null.
 func feedData(data any) any {
 	if data == nil {
 		return struct{}{}
@@ -420,8 +402,8 @@ func toMonitorQueries(items []monitor.LoggedQuery) []monitorQuery {
 	return out
 }
 
-// queries is one participant's queries, whole, newest first: ?status=,
-// ?q= (a substring, without case), ?cursor= (the last item's), ?limit=.
+// queries is one participant's queries, newest first: ?status=, ?q=
+// (case-insensitive substring), ?cursor= (the last item's), ?limit=.
 func (h *MonitorHandler) queries(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -467,7 +449,6 @@ type monitorAnswersResponse struct {
 	Truncated bool                      `json:"truncated"`
 }
 
-// answers is every attempt, by question, with the queries that led to each.
 func (h *MonitorHandler) answers(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -526,7 +507,6 @@ type monitorWorkspaceResponse struct {
 	Truncated bool              `json:"truncated"`
 }
 
-// workspace is the notes and tabs now and the list of their revisions.
 func (h *MonitorHandler) workspace(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -560,7 +540,6 @@ type monitorRevisionBody struct {
 	Body string `json:"body"`
 }
 
-// revision is one revision, whole.
 func (h *MonitorHandler) revision(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {

@@ -34,18 +34,12 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 // Standings aggregates every registration's submissions up to the cutoff,
 // for points and winner mode; ICPC has ICPCStandings.
 //
-// The cutoff is exclusive and applies to registrations too. The order is the
-// one leaderboard.Rank puts rows in — the winner first in winner mode, then
-// points, then the moment the score was reached, then the id — so LIMIT cuts
-// below the top of the table, never through it. Rank sorts again; this order
-// exists so the cut is right, not so the caller can skip sorting.
-//
-// submissions_registration_submitted_idx (migration 30, with the id added to
-// its key by 33) serves the join and the time filter, and carries the three
-// columns the aggregate reads.
+// The cutoff is exclusive and applies to registrations too. Rows come in
+// leaderboard.Rank's order so LIMIT cuts below the top, never through it;
+// Rank still sorts. submissions_registration_submitted_idx serves the join
+// and time filter and carries the columns the aggregate reads.
 func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
-	// An ICPC table here would come back ordered by points, all zero, with no
-	// grid: refused before the query rather than served wrong.
+	// An ICPC table here would be ordered by points, all zero, with no grid.
 	if q.Scoring == contests.ScoringICPC {
 		return nil, errors.New("icpc standings are read by ICPCStandings, not Standings")
 	}
@@ -98,44 +92,34 @@ func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]lea
 	return entries, nil
 }
 
-// ICPCStandings computes every registration's ICPC row up to the cutoff — a
-// cell per visible question in the questions' order, and from the cells the
-// number solved, the penalty time and the last solve — and, in the same
-// statement, the grid: how many visible questions there are and each one's
+// ICPCStandings computes every registration's ICPC row up to the cutoff (a
+// cell per visible question, solved count, penalty, last solve) and, in the
+// same statement, the grid: the number of visible questions and each one's
 // earliest solve.
 //
-// A cell's solve is the first correct answer before the cutoff; its wrong
-// count is the wrong answers before that solve, or before the cutoff when
-// there is none. The solving minute is floor((solve - start) / 60 s), with the
-// start taken from the contest in the query itself: the window's starts_at,
-// or the participant's own started_at under an individual timer. The penalty
-// and the contest's icpc_penalty_min are read here too, so no caller can pass
-// the wrong one. A minute is never negative: starts_at stays editable while
-// the contest runs, and moving it later must not pay anybody for solving
-// "before" it.
+// A cell's wrong count is the wrong answers before its first correct one, or
+// before the cutoff when unsolved. The solving minute is measured from the
+// contest's starts_at, or the participant's started_at under an individual
+// timer, and is never negative: starts_at stays editable during the contest.
+// icpc_penalty_min is read in the statement, so no caller can pass a wrong
+// one.
 //
-// Pending attempts are counted only when the query asks (q.Pending, a frozen
-// table): answers in [From, Until) on a question with no solve before the
-// cutoff. Nothing else about those answers reaches the row.
+// Pending attempts are counted only for a frozen table (q.Pending): answers
+// in [From, Until) on a question unsolved before the cutoff.
 //
-// A question's earliest solve is taken over every registration made before
-// the cutoff that is not disqualified, whether or not the query includes the
-// disqualified and whatever LIMIT cuts, so a first-solver mark does not
-// depend on which rows are returned. The width comes from the same visible
-// questions the cells are built from, so the letters and the cells cannot
-// disagree even while an organiser toggles a question's visibility.
+// Earliest solves cover every non-disqualified registration before the
+// cutoff, regardless of the filter and LIMIT. The width and the cells come
+// from the same visible questions, so they agree even while visibility is
+// toggled.
 //
-// The order is leaderboard.RankICPC's — solved, penalty, last solve, id — so
-// LIMIT cuts below the top of the table, never through it. The grid rides on
-// the first row; a table with no rows still returns one row, carrying only
-// the grid.
+// Rows come in leaderboard.RankICPC's order so LIMIT cuts below the top. The
+// grid rides on the first row; an empty table still returns one row with the
+// grid only.
 //
-// Indexes: questions_contest_id_ord_key (contest_id, ord) reads the contest's
-// questions in order; submissions_registration_submitted_idx (migration 30)
-// serves both the cutoff and the pending window per registration, and its
-// INCLUDE carries question_id and is_correct, the only other columns read.
-// The attempt a question was solved with is derived from the wrong count
-// rather than read from attempt_no, which the index does not carry.
+// questions_contest_id_ord_key reads questions in order;
+// submissions_registration_submitted_idx serves the cutoff and the pending
+// window and INCLUDEs every other column read, which is why attempt_no is not
+// read.
 func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
 	var pendingFrom, pendingUntil *time.Time
 	if q.Pending != nil {
@@ -259,7 +243,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			first = false
 		}
 		if id == nil {
-			// The grid's own row on a table with nobody on it.
+			// The grid-only row of an empty table.
 			continue
 		}
 		e := leaderboard.Entry{
@@ -280,13 +264,9 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 }
 
 // MarkRevealed sets leaderboard_revealed_at once and reports the moment in
-// force.
-//
-// The update is conditional, so two organisers pressing the button together
-// cannot overwrite each other's moment. It deliberately does not touch
-// updated_at: the reclaim sweep measures a finished contest's grace period
-// from that column (reclaimDeadline), and a reveal must not extend how long a
-// contest's databases are kept.
+// force. The update is conditional, so concurrent reveals cannot overwrite
+// each other. It leaves updated_at alone: the reclaim sweep measures its
+// grace period from it (reclaimDeadline), and a reveal must not extend it.
 func (r *Leaderboard) MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error) {
 	var (
 		revealedAt time.Time

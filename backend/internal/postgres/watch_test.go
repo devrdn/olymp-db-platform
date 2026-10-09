@@ -15,9 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// watchFixture is one contest with its participants, and helpers that write
-// their history at chosen times: inside a test transaction now() is one
-// instant, so every row names its own time.
+// watchFixture writes a contest's history at chosen times: inside a test
+// transaction now() is one instant, so every row names its own time.
 type watchFixture struct {
 	t        *testing.T
 	ctx      context.Context
@@ -61,10 +60,8 @@ func (f *watchFixture) participant(login string) (uuid.UUID, uuid.UUID) {
 	return makeRegistration(f.t, f.ctx, f.contest, user.ID), user.ID
 }
 
-// at is the fixture's base time plus d.
 func (f *watchFixture) at(d time.Duration) time.Time { return f.base.Add(d) }
 
-// query journals one finished query at a time and returns its id.
 func (f *watchFixture) query(reg uuid.UUID, sql, status, ip string, at time.Time) int64 {
 	f.t.Helper()
 	var address any
@@ -84,7 +81,6 @@ func (f *watchFixture) query(reg uuid.UUID, sql, status, ip string, at time.Time
 	return id
 }
 
-// answer records an attempt at a time.
 func (f *watchFixture) answer(reg, question uuid.UUID, attempt int, correct bool, at time.Time) uuid.UUID {
 	f.t.Helper()
 	points := 0
@@ -101,7 +97,6 @@ func (f *watchFixture) answer(reg, question uuid.UUID, attempt int, correct bool
 	return id
 }
 
-// event stores one participant event at a time.
 func (f *watchFixture) event(reg uuid.UUID, payload monitor.Payload, at time.Time) int64 {
 	f.t.Helper()
 	body, err := json.Marshal(payload)
@@ -118,7 +113,6 @@ func (f *watchFixture) event(reg uuid.UUID, payload monitor.Payload, at time.Tim
 	return id
 }
 
-// rosterRow finds one registration's row.
 func rosterRow(t *testing.T, roster monitor.Roster, reg uuid.UUID) monitor.RosterRow {
 	t.Helper()
 	for _, row := range roster.Rows {
@@ -197,21 +191,10 @@ func TestWatchRosterIsBoundedAndSaysSo(t *testing.T) {
 	})
 }
 
-// TestWatchRosterCostsWhatItShows holds the participants table to the size of
-// the table.
-//
-// The screen recomputes it every monitor.RosterCacheTTL for as long as an
-// organiser is looking, so what matters is not that one computation is a range
-// but that the range does not lengthen as the contest goes on. The same
-// participants are measured twice, the second time with several times the
-// history behind them: what the read touches must not have moved, and no
-// journal may be touched at all.
-//
-// The one table the read touches that is derived from a journal is
-// contest_query_fingerprints, which holds a row per registration per distinct
-// statement rather than per query. The five extra rounds below run the same
-// statements again, so they add a quarter of a million journal rows and not
-// one row there — which is the property that makes it safe to read.
+// TestWatchRosterCostsWhatItShows measures the roster twice, the second time
+// with several times the history: the rows it touches must not grow, and it
+// must touch no journal. The extra rounds repeat the same statements, so
+// contest_query_fingerprints must not grow either.
 func TestWatchRosterCostsWhatItShows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -224,8 +207,6 @@ func TestWatchRosterCostsWhatItShows(t *testing.T) {
 		}
 		early, earlyAggregate := measureRows(t, roster), measureAggregate(t, ctx, f.contest)
 
-		// The rest of the contest: the same forty participants, five more
-		// rounds of everything they do.
 		for round := 2; round <= 6; round++ {
 			moreHistory(t, f, round, 50)
 		}
@@ -250,9 +231,8 @@ func TestWatchRosterCostsWhatItShows(t *testing.T) {
 			t.Errorf("the set of statements read %d rows and then %d: repeating a statement has to cost it nothing, "+
 				"or it is the journal by another name", early[set], late[set])
 		}
-		// The aggregate is measured on the same data for the same reason the
-		// oracle above computes it: to say what was wrong with it. It read the
-		// history, so it read more of it as the contest went on.
+		// The old aggregate must grow with history, or the fixture is too
+		// small to show the difference.
 		if total(lateAggregate) <= total(earlyAggregate) {
 			t.Errorf("the aggregate this replaces read %d rows and then %d: the fixture does not grow enough "+
 				"to show what it cost", total(earlyAggregate), total(lateAggregate))
@@ -260,8 +240,8 @@ func TestWatchRosterCostsWhatItShows(t *testing.T) {
 	})
 }
 
-// measureAggregate runs rosterAggregateSQL under EXPLAIN (ANALYZE) and
-// returns how many rows of each relation it really touched.
+// measureAggregate returns how many rows of each relation rosterAggregateSQL
+// touched under EXPLAIN (ANALYZE).
 func measureAggregate(t *testing.T, ctx context.Context, contest uuid.UUID) map[string]int64 {
 	t.Helper()
 	touched := map[string]int64{}
@@ -270,7 +250,6 @@ func measureAggregate(t *testing.T, ctx context.Context, contest uuid.UUID) map[
 	return touched
 }
 
-// total is every row a read touched, whatever it touched.
 func total(rows map[string]int64) int64 {
 	var n int64
 	for _, touched := range rows {
@@ -279,14 +258,9 @@ func total(rows map[string]int64) int64 {
 	return n
 }
 
-// rosterAggregateSQL is the participants table as it was computed before
-// migration 000037: three LATERAL aggregates per registration over the whole
-// of query_log, submissions and participant_events, and the fingerprints more
-// than one of them ran.
-//
-// It is kept here, and only here, as the oracle the counters the journals now
-// keep are checked against: the numbers on the organiser's screen, and so the
-// flags raised on it, must be the same numbers on the same data.
+// rosterAggregateSQL computes the participants table directly from the
+// journals, with LATERAL aggregates per registration. It is the oracle the
+// stored counters are checked against.
 const rosterAggregateSQL = `
 WITH regs AS (
     SELECT r.id, u.login
@@ -360,7 +334,6 @@ SELECT id,
 FROM counted
 ORDER BY login, id`
 
-// aggregatedRow is one row of rosterAggregateSQL.
 type aggregatedRow struct {
 	registration                   uuid.UUID
 	queries, errors, rejected      int
@@ -373,8 +346,6 @@ type aggregatedRow struct {
 	lastActivity                   *time.Time
 }
 
-// aggregateRoster computes the participants table the way it was computed
-// before the journals kept their own counters.
 func aggregateRoster(t *testing.T, ctx context.Context, contest uuid.UUID, limit int) map[uuid.UUID]aggregatedRow {
 	t.Helper()
 	rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx, rosterAggregateSQL,
@@ -399,20 +370,15 @@ func aggregateRoster(t *testing.T, ctx context.Context, contest uuid.UUID, limit
 	return out
 }
 
-// TestWatchRosterAgreesWithTheAggregateItReplaces is the contract: the table
-// the journals now count is the table the read used to compute, column for
-// column, on data holding every counter and every flag — shared fingerprints,
-// a second address, an answer with nothing behind it, a paste over the
-// threshold and one under it, and a query journalled before the answer it led
-// to and completed after it.
+// TestWatchRosterAgreesWithTheAggregateItReplaces compares the stored
+// counters with rosterAggregateSQL column for column, on data that raises
+// every flag.
 func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
-		// A contest going about its business: shared fingerprints across
-		// forty participants, errors, rejections, absences and pastes.
 		loadOlympiadQueries(t, f, 1, 40, 60)
 
-		// And the corners that load does not reach.
+		// Cases the load does not reach.
 		long := "select name, alibi from suspects where city = 'Chisinau' order by name"
 		roaming, _ := f.participant("roaming")
 		f.query(roaming, long, "ok", "192.0.2.1", f.at(time.Minute))
@@ -426,16 +392,14 @@ func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
 		f.event(guessing, monitor.Paste{Target: monitor.PasteAnswer, Chars: monitor.LargePasteChars + 1}, f.at(3*time.Minute))
 		f.event(guessing, monitor.Paste{Target: monitor.PasteNotes, Chars: 9000}, f.at(4*time.Minute))
 
-		// The two-phase write: the row is journalled before the query runs and
-		// completed after the answer was given. Read at any moment after it
-		// completes, that query is what stands behind the answer.
+		// Journalled before the answer and completed after it: the query
+		// still stands behind the answer.
 		patient, _ := f.participant("patient")
 		id := f.query(patient, long, "running", "192.0.2.7", f.at(time.Minute))
 		f.answer(patient, f.question, 1, true, f.at(time.Minute+time.Second))
 		f.exec(`UPDATE query_log SET status = 'ok', completed_at = $2 WHERE id = $1`, id, f.at(2*time.Minute))
 
-		// Enrolled and idle: no summary row exists for them at all, and the
-		// table still has to show them with every counter at nought.
+		// Idle: no summary row, still shown with zero counters.
 		f.participant("idle")
 
 		roster, err := NewWatch(testPool).Roster(ctx, f.contest, monitor.MaxRosterRows)
@@ -471,8 +435,8 @@ func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
 					got.Login, got.PageLeft, got.AwayMs, got.Pastes, got.IPChanges, got.ParallelSessions,
 					got.IdenticalQueries, w.pageLeft, w.awayMs, w.pastes, w.ipChanges, w.parallel, w.identical)
 			}
-			// The largest paste replaced a count of those past the threshold,
-			// so the two meet at the flag rather than at the number.
+			// The table stores the largest paste, the aggregate a count past
+			// the threshold; they can only be compared through the flag.
 			if got.Flags().LargePaste != (w.largePastes > 0) {
 				t.Errorf("%s: large-paste flag %v on a largest paste of %d, and %d pastes past the threshold",
 					got.Login, got.Flags().LargePaste, got.LargestPasteChars, w.largePastes)
@@ -482,8 +446,6 @@ func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
 			}
 			sawFlag = or(sawFlag, got.Flags())
 		}
-		// The data above has to raise every flag, or the agreement is only
-		// about the counters nobody looks at.
 		if sawFlag != (monitor.Flags{MultipleIPs: true, ParallelSessions: true, LongAbsence: true,
 			AnswerWithoutQueries: true, LargePaste: true, IdenticalQueries: true}) {
 			t.Errorf("the fixture raises %+v; every flag has to be exercised for this to prove anything", sawFlag)
@@ -509,8 +471,8 @@ func or(a, b monitor.Flags) monitor.Flags {
 	}
 }
 
-// Each flag is raised exactly past its threshold (design §5): one participant
-// sits on the threshold and does not raise it, the next crosses it.
+// One participant sits on each threshold and does not raise the flag; the
+// next crosses it.
 func TestWatchRosterRaisesEachFlagAtItsThreshold(t *testing.T) {
 	longSQL := "select name, alibi from suspects where city = 'Chisinau' order by name"
 	if len(longSQL) < monitor.IdenticalQueryMinChars {
@@ -653,30 +615,24 @@ func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
 // journals are the tables no organiser's read may scan whole.
 var journals = map[string]bool{"query_log": true, "participant_events": true, "submissions": true, "audit_log": true}
 
-// derived are tables built from a journal and read the same way it is: a range
-// of an index, never a scan. contest_query_fingerprints holds a row per
-// registration per distinct statement across every contest the installation
-// has ever run, so a read of it not confined to one contest is the same
-// mistake as a scan of the journal behind it.
+// derived are tables built from a journal across every contest, so they too
+// must be read as an index range, never scanned.
 var derived = map[string]bool{"contest_query_fingerprints": true}
 
 // explainingQuerier EXPLAINs every statement before running it, and keeps
-// each plan's sequential scans of a journal.
+// each plan's non-range reads of a journal.
 type explainingQuerier struct {
 	storage.Querier
 	t     *testing.T
 	scans *[]string
 	// ordered, when it points at true, also refuses a sort over the query
-	// log: a keyset page must come out of its index in order, or every page
-	// sorts the rest of the registration's range again.
+	// log: a keyset page must come out of its index in order.
 	ordered *bool
 }
 
 // keysetJournals are the journals whose keyset pages must be ordered index
-// scans. The query log is the one a participant fills by the thousand; the
-// answers of one registration are bounded by questions times attempts, a
-// page or two, which a bitmap scan and a sort read whole at no cost that
-// grows (and the export test counts their rows all the same).
+// scans. Only the query log grows large per registration; one registration's
+// answers are a page or two.
 var keysetJournals = map[string]bool{"query_log": true}
 
 func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any) {
@@ -693,15 +649,12 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 	}
 	var walk func(n planNode)
 	walk = func(n planNode) {
-		// A journal — and anything derived from one — is read only through an
-		// index, and only as a range of it: an index scan without a condition
-		// walks the whole index.
+		// An index scan without a condition walks the whole index.
 		if (journals[n.Relation] || derived[n.Relation]) && !rangeReads[n.NodeType] {
 			*q.scans = append(*q.scans, n.NodeType+" of "+n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
 		}
-		// A time bound on the query log belongs in the index condition: left
-		// as a filter, the scan reads the registration's whole history on
-		// that side and throws most of it away.
+		// A time bound on the query log belongs in the index condition; as a
+		// filter, the scan reads and discards the rest of the history.
 		if (n.Relation == "query_log" || strings.HasPrefix(n.Index, "query_log_")) && strings.Contains(n.Filter, "executed_at") {
 			*q.scans = append(*q.scans, n.NodeType+" filters query_log by time in:\n"+sql+"\nplan: "+string(raw))
 		}
@@ -724,11 +677,8 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 	}
 }
 
-// rangeReads are the plan nodes that read a table through an index.
 var rangeReads = map[string]bool{"Index Scan": true, "Index Only Scan": true, "Bitmap Heap Scan": true}
 
-// journalIndex reports whether an index belongs to a journal or to a table
-// derived from one.
 func journalIndex(name string) bool {
 	for _, tables := range []map[string]bool{journals, derived} {
 		for table := range tables {
@@ -759,8 +709,7 @@ func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any
 	return q.Querier.QueryRow(ctx, sql, args...)
 }
 
-// SendBatch explains every statement of the batch, which would otherwise
-// reach the database without passing through Query at all.
+// SendBatch explains every statement of the batch, which bypasses Query.
 func (q explainingQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
 	for _, queued := range b.QueuedQueries {
 		q.explain(ctx, queued.SQL, queued.Arguments...)
@@ -769,12 +718,8 @@ func (q explainingQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.Batc
 }
 
 // measuringQuerier runs every statement under EXPLAIN (ANALYZE) first and
-// adds up how many rows it really touched, per relation.
-//
-// A plan's shape says the read is a range; only the count says how long the
-// range is. A LATERAL that takes a page per registration is an index range in
-// every node and still reads three hundred pages to return one, which is
-// exactly what a plan-shape test cannot see.
+// adds up the rows it touched per relation. A plan's shape shows a range;
+// only the count shows how long it is, e.g. a LATERAL range per registration.
 type measuringQuerier struct {
 	storage.Querier
 	t *testing.T
@@ -783,8 +728,8 @@ type measuringQuerier struct {
 }
 
 // measuredNode is a plan node as EXPLAIN ANALYZE reports it. Rows touched is
-// what the node handed up plus what its own filter threw away, times the
-// number of times it ran: an inner side of a LATERAL runs once per outer row.
+// rows returned plus rows removed by filter, times loops (a LATERAL inner
+// side runs once per outer row).
 type measuredNode struct {
 	Relation string         `json:"Relation Name"`
 	Rows     float64        `json:"Actual Rows"`
@@ -803,8 +748,7 @@ func (q measuringQuerier) QueryRow(ctx context.Context, sql string, args ...any)
 	return q.Querier.QueryRow(ctx, sql, args...)
 }
 
-// SendBatch measures every statement of the batch, for the reason
-// explainingQuerier.SendBatch gives.
+// SendBatch measures every statement of the batch, which bypasses Query.
 func (q measuringQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
 	for _, queued := range b.QueuedQueries {
 		q.measure(ctx, queued.SQL, queued.Arguments...)
@@ -853,18 +797,11 @@ func measureRows(t *testing.T, read func(w *Watch) error) map[string]int64 {
 	return touched
 }
 
-// TestWatchReadsScanNoJournal runs every organiser's read against a database
-// holding a representative olympiad — three contests of forty participants,
-// each with a few hundred queries, events, answers and sign-ins, beside
-// everything else the test database holds — and EXPLAINs each statement
-// exactly as the read sends it: every node that reads query_log,
-// participant_events, submissions or audit_log must be an index scan with an
-// index condition — a range — never a sequential scan or a walk of a whole
-// index (design §9).
-//
-// The planner is left free, not forced off sequential scans: with the
-// statistics ANALYZE gathers on this data, a plan that falls back to a scan
-// is the plan production would run.
+// TestWatchReadsScanNoJournal EXPLAINs every organiser's read on a
+// representative olympiad (three contests of forty participants): every node
+// reading a journal must be an index range, never a sequential scan or a
+// whole-index walk. The planner is not forced off sequential scans, so with
+// ANALYZE statistics the plan is the one production would run.
 func TestWatchReadsScanNoJournal(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		q := storage.QuerierFrom(ctx, testPool)
@@ -872,9 +809,8 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 		for range 3 {
 			contests = append(contests, newWatchFixture(t, ctx))
 		}
-		// The rest of a year: other contests' participants, ten times as
-		// many, so the contest being read is the small part of each journal
-		// it is in production.
+		// Ten times as many participants elsewhere, so the contest read is a
+		// small part of each journal, as in production.
 		history := newWatchFixture(t, ctx)
 		loadOlympiad(t, history, 99, 400)
 		for ci, f := range contests {
@@ -893,13 +829,10 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 		watch.wrap = func(inner storage.Querier) storage.Querier {
 			return explainingQuerier{Querier: inner, t: t, scans: &scans, ordered: &ordered}
 		}
-		// The keyset reads: their query log must come out of the index in
-		// order.
-		//
-		// Only where the range is longer than the page: a page that takes a
-		// registration's whole remaining range is rightly a bitmap scan and a
-		// sort, and so is a page filtered so narrowly that the planner
-		// expects to read the range to fill it.
+		// Keyset reads must take the query log from the index in order, but
+		// only where the range is longer than the page: a page covering the
+		// whole remaining range, or one filtered narrowly, is rightly a
+		// bitmap scan and a sort.
 		keyset := map[string]bool{"export sources": true}
 		middle := monitor.Cursor{At: f.at(20 * time.Minute), Source: monitor.SourceQuery, ID: "1"}
 		reads := map[string]func() error{
@@ -960,8 +893,8 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 	})
 }
 
-// analyzeForPlans gathers the statistics the planner chooses on, so that the
-// plan a test sees is the plan production would run on data of this shape.
+// analyzeForPlans gathers planner statistics so a test sees the plan
+// production would run on data of this shape.
 func analyzeForPlans(t *testing.T, ctx context.Context) {
 	t.Helper()
 	q := storage.QuerierFrom(ctx, testPool)
@@ -973,10 +906,9 @@ func analyzeForPlans(t *testing.T, ctx context.Context) {
 	}
 }
 
-// moreHistory gives every participant already enrolled in f's contest another
-// round of what they do: queries queries, twenty events and one answer to a
-// question of this round, all after everything already there. Rounds are an
-// hour apart, so the times of one never meet another's.
+// moreHistory gives every enrolled participant another round: queries
+// queries, twenty events and one answer to a new question. Rounds are an hour
+// apart and never overlap.
 func moreHistory(t *testing.T, f *watchFixture, round, queries int) {
 	t.Helper()
 	question := f.makeQuestion(round)
@@ -1006,16 +938,14 @@ func moreHistory(t *testing.T, f *watchFixture, round, queries int) {
 		WHERE r.contest_id = $1`, f.contest, question, start)
 }
 
-// loadOlympiad enrols participants in f's contest and gives each three
-// hundred queries, a hundred events, sixty answers, fifty sign-ins, ten
-// failed ones and twenty revisions — written in time order across the
-// participants, as a real olympiad interleaves them on disk.
+// loadOlympiad enrols participants and gives each a few hundred queries,
+// events, answers, sign-ins and revisions, written in time order across
+// participants so they interleave on disk as in a real contest.
 func loadOlympiad(t *testing.T, f *watchFixture, tag, participants int) {
 	t.Helper()
 	loadOlympiadQueries(t, f, tag, participants, 300)
 }
 
-// loadOlympiadQueries is loadOlympiad with queries queries per participant.
 func loadOlympiadQueries(t *testing.T, f *watchFixture, tag, participants, queries int) {
 	t.Helper()
 	f.exec(`

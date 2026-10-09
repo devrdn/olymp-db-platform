@@ -23,9 +23,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/showcase"
 )
 
-// showcaseRepo is the landing page's storage as the handler tests need it:
-// whatever a test put in it, and a count of how often it was asked — a
-// refusal must cost no database work at all.
+// showcaseRepo serves whatever a test put in it and counts reads: a refusal
+// must cost no database work.
 type showcaseRepo struct {
 	numbers  showcase.Numbers
 	contests []showcase.Contest
@@ -61,8 +60,7 @@ func (r *showcaseRepo) wait() {
 type publicFixture struct {
 	router   http.Handler
 	showcase *showcaseRepo
-	// logs is everything the handler wrote, so a test can say what was
-	// reported as an outage and what was not.
+	// logs is what the handler wrote, to tell an outage report from none.
 	logs *lockedBuffer
 }
 
@@ -187,14 +185,10 @@ func TestTheContestListAnswersWithoutASession(t *testing.T) {
 	}
 }
 
-// The page draws cards, so the list has to say which contest has a picture
-// and whose it is.
-//
-// The hash rather than an address: the address is the frontend's to build
-// (lib/api/contests.ts), and it carries the hash so that a replaced cover is
-// a new address rather than a year of somebody's cache. A contest with no
-// uploaded picture says nothing at all — the field is absent, which is what
-// the page reads as "wear the drawn cover".
+// The hash, not an address: the frontend builds the address
+// (lib/api/contests.ts) and includes the hash so a replaced cover gets a new
+// URL instead of a stale cache. A contest with no uploaded picture omits the
+// field, which the page reads as "use the drawn cover".
 func TestTheContestListSaysWhichContestHasAPicture(t *testing.T) {
 	f := newPublicFixture(t)
 	withCover := uuid.New()
@@ -274,10 +268,8 @@ func TestThePublicReadsAreNotIndexed(t *testing.T) {
 	}
 }
 
-// The language preference is bounded like every other field a request
-// carries (CLAUDE.md rule 2): it is matched against each contest's own
-// translations, so an unbounded one is work per row per request on a page
-// nobody has to sign in to load.
+// Bounded (CLAUDE.md rule 2): it is matched against every contest's
+// translations on a page that needs no sign-in.
 func TestAnOversizedLanguagePreferenceIsIgnored(t *testing.T) {
 	f := newPublicFixture(t)
 	f.showcase.contests = []showcase.Contest{{
@@ -285,8 +277,8 @@ func TestAnOversizedLanguagePreferenceIsIgnored(t *testing.T) {
 		Titles: map[string]string{"ro": "Olimpiada", "en": "The Olympiad"},
 	}}
 
-	// Too long to be a language tag, in the parameter and in the header: the
-	// visitor is answered as one who stated no preference at all.
+	// Too long to be a language tag, in the parameter and the header: answered
+	// as no preference.
 	huge := strings.Repeat("e", 4096)
 	if body := f.get("/public/contests?lang=" + huge).Body.String(); !strings.Contains(body, "The Olympiad") {
 		t.Errorf("an oversized ?lang= answered %s, want the installation's default locale", body)
@@ -302,9 +294,8 @@ func TestAnOversizedLanguagePreferenceIsIgnored(t *testing.T) {
 	}
 }
 
-// A visitor who closes the tab is not an outage. The read comes back as that
-// visitor's own cancellation, and the handler must neither report it as the
-// landing page having failed nor answer a connection that has gone.
+// The read fails with the visitor's own cancellation; it must not be logged as
+// a landing-page failure or answered on a closed connection.
 func TestAVisitorWhoLeavesIsNotReportedAsAFailure(t *testing.T) {
 	f := newPublicFixture(t)
 	f.showcase.hold = make(chan struct{})
@@ -321,8 +312,8 @@ func TestAVisitorWhoLeavesIsNotReportedAsAFailure(t *testing.T) {
 		defer close(done)
 		f.router.ServeHTTP(rec, req)
 	}()
-	// Once the read has begun, so that the budget check the handler makes
-	// first is not the thing that fails.
+	// Wait for the read to begin, so the earlier budget check is not what
+	// fails.
 	<-f.showcase.entered
 	cancel()
 	<-done
@@ -335,8 +326,6 @@ func TestAVisitorWhoLeavesIsNotReportedAsAFailure(t *testing.T) {
 	}
 }
 
-// The title follows the visitor, the way every other read of a contest's
-// text does.
 func TestTheListIsTitledInTheVisitorsLanguage(t *testing.T) {
 	f := newPublicFixture(t)
 	f.showcase.contests = []showcase.Contest{{
@@ -347,8 +336,8 @@ func TestTheListIsTitledInTheVisitorsLanguage(t *testing.T) {
 	if body := f.get("/public/contests?lang=en").Body.String(); !strings.Contains(body, "The Olympiad") {
 		t.Errorf("?lang=en answered %s, want the English title", body)
 	}
-	// A language nobody wrote this contest in: its own default title, never
-	// an empty row.
+	// A language nobody wrote this contest in: its default title, never an
+	// empty row.
 	if body := f.get("/public/contests?lang=de").Body.String(); !strings.Contains(body, "Olimpiada") {
 		t.Errorf("?lang=de answered %s, want the contest's own default title", body)
 	}

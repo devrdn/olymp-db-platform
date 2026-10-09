@@ -18,56 +18,41 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 )
 
-// The two budgets this feature spends, and the slack the envelope gets.
+// The two budgets the cover routes spend, and the envelope's slack.
 const (
-	// CoverUploadsPerMinute is per account, and small on purpose. Uploading
-	// a cover is a deliberate act an organiser performs once per olympiad;
-	// the budget exists because the work behind it is a decode and two
-	// resamples of a photograph, which is the most expensive thing a
-	// non-participant can ask this service to do. Refused attempts count
-	// too (CLAUDE.md, security rule 13): a limit that only counts the
-	// successes is a limit on the wrong thing, since a refused upload has
-	// already been read off the socket and sniffed.
+	// CoverUploadsPerMinute is per account. An upload costs a decode and two
+	// resamples, the most expensive thing a non-participant can ask for.
+	// Refused attempts count too (CLAUDE.md rule 13): a refused upload has
+	// already been read and sniffed.
 	CoverUploadsPerMinute = 10
 
-	// PublicCoverReadsPerMinute is per address. Generous, because one visit
-	// to the front page asks for every card's picture at once and a school
-	// puts a hundred browsers behind one address — and because every answer
-	// carries a year of immutable caching, so the second visit asks for
-	// none of them.
+	// PublicCoverReadsPerMinute is per address and generous: one front-page
+	// visit asks for every card's picture, a school puts a hundred browsers
+	// behind one address, and repeat visits hit the immutable cache.
 	PublicCoverReadsPerMinute = 300
 
 	coverWindow = time.Minute
 
-	// coverEnvelopeSlack is what the multipart framing may add on top of the
-	// picture: the boundaries, the part headers and the credit line. The
-	// ceiling on the socket has to be the domain's limit plus this, or a
-	// picture of exactly covers.MaxUploadBytes could never be uploaded at
-	// all.
+	// coverEnvelopeSlack is what the multipart framing adds on top of the
+	// picture. The socket ceiling is the domain limit plus this, or a picture
+	// of exactly covers.MaxUploadBytes could never be uploaded.
 	coverEnvelopeSlack = 64 << 10
 
-	// coverFileField and coverAttributionField are the two parts of the form.
 	coverFileField        = "file"
 	coverAttributionField = "attribution"
 
 	// maxSizeParamLen bounds the `size` query parameter before it is parsed
-	// (CLAUDE.md, security rule 2). It never reaches storage, but it arrives
-	// in a request line bounded only by the server's header limit, and a
-	// four-digit number is every value this service will ever answer to.
+	// (CLAUDE.md rule 2); four digits cover every width this service answers
+	// to.
 	maxSizeParamLen = 8
 )
 
 // CoverStore is the slice of the covers service these endpoints need.
-//
-// Declared here and narrow, as every other handler's store is: internal/api
-// adapts HTTP to the domain and has no business holding methods it never
-// calls.
 type CoverStore interface {
 	Upload(ctx context.Context, contestID uuid.UUID, actorID uuid.UUID, src io.Reader, attribution string) (covers.Cover, error)
 	Remove(ctx context.Context, contestID uuid.UUID) error
 	Public(ctx context.Context, contestID uuid.UUID) (covers.Cover, error)
-	// ByContest is the staff's read: it answers for a draft too, which is
-	// exactly what Public refuses to do.
+	// ByContest is the staff's read: unlike Public, it answers for a draft too.
 	ByContest(ctx context.Context, contestID uuid.UUID) (covers.Cover, error)
 	Read(ctx context.Context, hash string, size int) ([]byte, string, error)
 }
@@ -86,25 +71,16 @@ func NewCoverHandler(store CoverStore, limiter *auth.Limiter, mw *auth.Middlewar
 	return &CoverHandler{covers: store, limiter: limiter, mw: mw, log: log}
 }
 
-// Mount registers the three routes.
-//
-// The public read is under /public/, beside the landing page's other two and
-// away from /contests, whose every other route requires a session: two access
-// rules on one path is the mistake nobody notices later. The writes sit on
-// /contests with the rest of what editing a contest means.
-//
-// The API serves the bytes rather than the reverse proxy publishing the
-// directory (design spec §1): the path to a file is the store's business, and
-// the cache headers and the check that the contest is published are the
-// application's.
+// Mount registers the routes. The public read lives under /public/, away from
+// /contests where every route requires a session, so one path never has two
+// access rules. The API serves the bytes, not the proxy: the cache headers and
+// the published check are the application's.
 func (h *CoverHandler) Mount(r chi.Router) {
 	r.Get("/public/contests/{"+contestIDParam+"}/cover", h.public)
 
-	// Reading is the staff's own view of a contest, which a draft has and the
-	// public route refuses — it refuses everybody, which is what it is for.
-	// An organiser without this reads their own contest blind: the panel
-	// shows the drawn cover over a contest that has a real one, and offers no
-	// way to remove what it cannot see.
+	// The staff read answers for a draft, which the public route refuses;
+	// without it an organiser could not see, or remove, their own contest's
+	// cover.
 	r.Group(func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequireContestPermission(rbac.PermissionContestView))
 		r.Get("/contests/{"+contestIDParam+"}/cover", h.staff)
@@ -118,8 +94,8 @@ func (h *CoverHandler) Mount(r chi.Router) {
 	})
 }
 
-// coverResponse is what an organiser gets back: enough to show the picture
-// they have just uploaded without asking for it again.
+// toCoverResponse is enough for an organiser to show the picture just uploaded
+// without fetching it again.
 func toCoverResponse(cover covers.Cover) coverResponse {
 	return coverResponse{
 		Hash: cover.Hash, Attribution: cover.Attribution,
@@ -134,7 +110,6 @@ type coverResponse struct {
 	Height      int    `json:"height"`
 }
 
-// upload replaces a contest's cover.
 func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
@@ -142,26 +117,23 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
 
-	// Before the body is touched at all. Reading eight mebibytes off the
-	// socket and decoding a photograph in order to then refuse the request is
-	// the work this budget exists to stop.
+	// Before the body is touched: reading and decoding a photograph only to
+	// refuse it is what this budget prevents.
 	if !h.admitUpload(w, r, identity.UserID) {
 		return
 	}
 
-	// The ceiling on the socket, not on a decoded value: the declared length
-	// of a body is the sender's claim, not a fact (CLAUDE.md, security rule
-	// 12). covers.Process bounds the picture inside the envelope as well, and
-	// this bounds the envelope.
+	// The ceiling is on the socket, because a declared length is only a claim
+	// (CLAUDE.md rule 12). This bounds the envelope; covers.Process bounds the
+	// picture inside it.
 	r.Body = http.MaxBytesReader(w, r.Body, covers.MaxUploadBytes+coverEnvelopeSlack)
 	// #nosec G120 -- the body is bounded by the MaxBytesReader above; the
-	// scanner reads this call on its own and cannot see the line before it.
+	// scanner cannot see that line.
 	if err := r.ParseMultipartForm(covers.MaxUploadBytes); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			// The transport's ceiling tripped rather than the domain's. It is
-			// the same thing to the person uploading, and telling the two
-			// apart would mean explaining our two limits.
+			// The transport ceiling tripped; to the uploader it is the same
+			// refusal as the domain's.
 			h.fail(w, r, covers.ErrTooLarge)
 			return
 		}
@@ -169,8 +141,7 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 			"The request is not a multipart form with a "+coverFileField+" and an "+coverAttributionField)
 		return
 	}
-	// The parts are held in memory under the ceiling above, but a form that
-	// spilled anything to disk must not leave it there.
+	// A form that spilled to disk must not leave files behind.
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 	file, _, err := r.FormFile(coverFileField)
@@ -191,10 +162,9 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, toCoverResponse(cover))
 }
 
-// remove takes a contest's cover away, leaving it the drawn one.
-//
-// The files stay on the volume for the sweep (covers.Service.Remove): a file
-// system refusing a delete must not be able to fail this request.
+// remove takes a contest's cover away, leaving the drawn one. The files stay
+// for the sweep (covers.Service.Remove), so a failed delete on disk cannot fail
+// this request.
 func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
@@ -207,7 +177,7 @@ func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// staff answers what cover this contest has, whatever its status.
+// staff answers which cover this contest has, whatever its status.
 func (h *CoverHandler) staff(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
@@ -221,13 +191,10 @@ func (h *CoverHandler) staff(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, toCoverResponse(cover))
 }
 
-// staffFile serves the bytes of that cover to the same reader.
-//
-// Separate from the public route rather than a flag on it: this one answers
-// for a draft, and the two differ in exactly the question they are asked.
-// `private` because the answer belongs to one account — a shared cache must
-// never hold a picture of a contest that has not been published — and a short
-// life because an organiser replacing a cover looks at the result at once.
+// staffFile serves that cover's bytes to staff. Separate from the public route
+// because it answers for a draft. `private`, so a shared cache never holds an
+// unpublished contest's picture; a short max-age, because an organiser checks a
+// replacement at once.
 func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
@@ -249,45 +216,34 @@ func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	// #nosec G705 -- not a document: these bytes are a JPEG this service
-	// encoded itself (covers.Process re-encodes whatever arrived), the type
-	// comes from filestore's closed set of extensions rather than from the
-	// request, and the answer carries nosniff.
+	// #nosec G705 -- not a document: covers.Process re-encoded these bytes as a
+	// JPEG, the type comes from filestore's closed set of extensions, and the
+	// answer carries nosniff.
 	_, _ = w.Write(body)
 }
 
-// public serves one rendition to a visitor with no session.
+// public serves one rendition to a visitor with no session. The address decides
+// the caching:
 //
-// The caching is decided by the address, and the address has two forms:
+//   - with `v=<hash>` it names one exact file, so it is cached immutably for a
+//     year; a replaced cover gets a different address. This is the form the
+//     pages use.
+//   - without it, the address means "this contest's cover", which changes when
+//     an organiser replaces it: a minute, with an ETag to make revalidation
+//     free.
 //
-//   - with `v=<hash>` it names one exact file, so it is answered with a year
-//     of immutable caching — the picture at that address can never change,
-//     and a replaced cover is a different address the page links to instead.
-//     This is the form the pages use, the same way the installation's own
-//     pictures carry their hash (`imageHref`);
-//   - without it, the address is only "this contest's cover", which changes
-//     the moment an organiser replaces the picture. A minute, and an ETag to
-//     make the revalidation free. An earlier version of this handler sent a
-//     year of `immutable` here too, on a comment's word that the address
-//     carried the hash — it does not, and a replaced cover would have stayed
-//     invisible to everybody who had seen the old one.
-//
-// The ETag names the file rather than the cover, and:
-//   - `nosniff`, so a browser uses the type the store named rather than
-//     guessing. Unlike the installation's own pictures, no download
-//     disposition is set: these bytes are always a JPEG this process encoded
-//     (covers.Process re-encodes whatever arrived), so there is no document
-//     here for a browser to render, and a cover is a picture people
-//     legitimately open by its own address.
+// `nosniff` makes the browser use the stored type. No download disposition is
+// set: the bytes are always a JPEG this process encoded, and a cover is
+// legitimately opened by its own address.
 func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
-	// Before the database and before the volume, and counting refusals.
+	// Before the database and the volume, counting refusals.
 	if !h.admitPublic(w, r) {
 		return
 	}
 	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
-		// Not codeInvalidContestID: this route is open to the whole internet
-		// and answers nothing about what does or does not exist.
+		// Not codeInvalidContestID: this public route reveals nothing about
+		// what exists.
 		h.notFound(w, r)
 		return
 	}
@@ -299,21 +255,16 @@ func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
 	}
 
 	size := requestedCoverSize(r)
-	// Read before any header is set. A refusal — a width nothing is stored
-	// at, or a volume that did not answer — must not be the thing that
-	// carries a year of caching, and setting the headers first is how that
-	// happens: the failure is written out with whatever was already on the
-	// response.
+	// Read before setting any header, so a failure is never written out
+	// carrying a year of caching.
 	body, contentType, err := h.covers.Read(r.Context(), cover.Hash, size)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 
-	// The ETag names the exact file, which is the hash and the width
-	// together: the two renditions of one cover are one hash and two
-	// different pictures, and an ETag of the hash alone would let a cache
-	// answer a request for 1600 with the 800 it already has.
+	// The ETag names the hash and the width: two renditions share a hash, and
+	// the hash alone would let a cache answer 1600 with 800.
 	etag := `"` + cover.Hash + "-" + strconv.Itoa(size) + `"`
 	header := w.Header()
 	header.Set("Cache-Control", coverCacheControl(r, cover.Hash))
@@ -327,20 +278,15 @@ func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
 
 	header.Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	// #nosec G705 -- not a document: these bytes are a JPEG this service
-	// encoded itself (covers.Process re-encodes whatever arrived), the type
-	// comes from filestore's closed set of extensions rather than from the
-	// request, and the answer carries nosniff.
+	// #nosec G705 -- not a document: covers.Process re-encoded these bytes as a
+	// JPEG, the type comes from filestore's closed set of extensions, and the
+	// answer carries nosniff.
 	_, _ = w.Write(body)
 }
 
-// coverCacheControl answers how long this address may be kept.
-//
-// An address that names the file — `v=<hash>` — can be kept forever, because
-// nothing at it will ever be different. An address that names only the
-// contest is worth a minute: it is what an organiser's replacement has to
-// travel through, and a picture nobody can refresh is worse than a picture
-// fetched again.
+// coverCacheControl answers how long this address may be kept: forever for
+// `v=<hash>`, which never changes, and a minute for the contest-only address,
+// which a replacement must travel through.
 func coverCacheControl(r *http.Request, hash string) string {
 	if r.URL.Query().Get("v") == hash {
 		return "public, max-age=31536000, immutable"
@@ -348,27 +294,17 @@ func coverCacheControl(r *http.Request, hash string) string {
 	return "public, max-age=60"
 }
 
-// requestedCoverSize is the width the visitor asked for.
-//
-// A missing parameter is the largest rendition: a caller that says nothing
-// about what it can use gets the whole picture rather than the small one. A
-// parameter that is present but is not one of covers.Sizes is passed through
-// unchanged and refused by the service as a file that does not exist, which
-// is what it is — deciding that here as well would be the same rule in two
-// places.
-//
-// A parameter too long to be a width is refused rather than ignored, and the
-// two are different: a caller that asked for something must not be answered
-// with something else. The bound is on the parameter before it is parsed
-// (CLAUDE.md, security rule 2), because the request line it arrives in is
-// bounded only by the server's own header limit.
+// requestedCoverSize is the width the visitor asked for. Missing means the
+// largest rendition. A value not in covers.Sizes passes through and the service
+// refuses it as a missing file, so the rule lives in one place. An overlong
+// value is refused, not ignored, and is bounded before parsing (CLAUDE.md rule
+// 2).
 func requestedCoverSize(r *http.Request) int {
 	raw := r.URL.Query().Get("size")
 	if raw == "" {
 		return covers.Sizes[0]
 	}
-	// -1 is a width nothing is stored at, which is the whole answer for
-	// anything that is not a number this service could have written.
+	// -1 is a width nothing is stored at.
 	if len(raw) > maxSizeParamLen {
 		return -1
 	}
@@ -379,18 +315,14 @@ func requestedCoverSize(r *http.Request) int {
 	return size
 }
 
-// admitUpload spends one upload of the account's budget.
-//
-// Keyed by the account rather than the address, and deliberately so: the
-// route is behind a session and a contest permission, so the caller is a
-// known organiser, and grouping a whole university's staff under one address
-// would let one person's mistake stop their colleagues working.
+// admitUpload spends one upload of the account's budget. Keyed by account, not
+// address: the caller is a known organiser, and an address key would let one
+// person's mistake block a whole university's staff.
 func (h *CoverHandler) admitUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID) bool {
 	return h.admit(w, r, "cover_upload:user:"+userID.String(), CoverUploadsPerMinute, codeCoverTooOften,
 		"This account has uploaded covers too often; wait before trying again")
 }
 
-// admitPublic spends one read of the address's budget.
 func (h *CoverHandler) admitPublic(w http.ResponseWriter, r *http.Request) bool {
 	return h.admit(w, r, "cover_read:ip:"+addressKey(r), PublicCoverReadsPerMinute, codePublicTooOften,
 		"Covers are being asked for too often; wait before asking again")
@@ -415,9 +347,8 @@ func (h *CoverHandler) notFound(w http.ResponseWriter, r *http.Request) {
 	httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Resource not found")
 }
 
-// fail turns one of the domain's sentinels into the code the interface
-// translates (CLAUDE.md, security rule 1). Anything this switch cannot name
-// is the database or the volume, which is a 500 and a line in the log.
+// fail turns the domain's sentinels into codes (CLAUDE.md rule 1). Anything
+// else is the database or the volume: a 500 and a log line.
 func (h *CoverHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, covers.ErrNotFound):
@@ -435,9 +366,8 @@ func (h *CoverHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, codeCoverAttributionTooLong, err.Error())
 	default:
 		if ctxErr := r.Context().Err(); ctxErr != nil {
-			// A visitor who closed the tab before the picture arrived. An
-			// ordinary event on a page people open and close, not an outage,
-			// and there is no longer a connection to write a body to.
+			// A visitor who closed the tab: not an outage, and there is no
+			// connection left to write to.
 			h.log.DebugContext(r.Context(), "the visitor left before the cover was served", "error", ctxErr)
 			return
 		}

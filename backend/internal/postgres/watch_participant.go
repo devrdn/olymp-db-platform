@@ -13,9 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Participant finds one registration of the contest, by primary key. Another
-// contest's registration is the same answer as none at all:
-// monitor.ErrParticipantNotFound.
+// Participant finds one registration of the contest. Another contest's
+// registration is monitor.ErrParticipantNotFound, like a missing one.
 func (w *Watch) Participant(ctx context.Context, contest, registration uuid.UUID) (monitor.Participant, error) {
 	var p monitor.Participant
 	err := w.querier(ctx).QueryRow(ctx, `
@@ -35,14 +34,11 @@ func (w *Watch) Participant(ctx context.Context, contest, registration uuid.UUID
 
 // Queries reads one page of a participant's queries, newest first, whole.
 //
-// One range of query_log (registration_id, executed_at), past the cursor,
-// with the status and the search applied as filters inside it. The search is
-// a substring match without case (ILIKE, the text escaped by escapeLike so a
-// % or _ the organiser typed is text: CLAUDE.md rule 3) rather than the GIN
-// full-text index: the registration's own range is already the narrowest
-// index there is, and a word match would not find "suspects" in
-// "suspects.name". Bounded by the registration's rows and by
-// monitor.MaxQuerySearchRunes.
+// One range of query_log (registration_id, executed_at) past the cursor, with
+// status and search as filters inside it. The search is a case-insensitive
+// substring match (escaped, CLAUDE.md rule 3), not the GIN full-text index:
+// the registration's range is already the narrowest, and a word match would
+// not find "suspects" in "suspects.name".
 func (w *Watch) Queries(ctx context.Context, q monitor.QueriesQuery) (monitor.QueriesPage, error) {
 	q, err := q.Normalize()
 	if err != nil {
@@ -96,17 +92,12 @@ func scanLoggedQuery(row pgx.CollectableRow) (monitor.LoggedQuery, error) {
 }
 
 // Answers reads every attempt of a participant with, for each, at most
-// perAttempt of the queries that led to it (design §3) and how many more
+// perAttempt of the queries since the previous attempt, and how many more
 // there were.
 //
-// One statement. The attempts are the registration's range of submissions
-// (registration_id, submitted_at), each with the time of the one before it
-// on any question; each attempt's window is then a range of query_log
-// (registration_id, executed_at) — counted, and read up to perAttempt rows.
-// The statements are cut to queryrunner.MaxHistorySQLChars as the history
-// page cuts them (the queries tab has them whole), so the bytes that reach
-// this process are bounded by attempts × perAttempt × that (CLAUDE.md rule
-// 12).
+// Both are ranges by registration_id. Statements are cut to
+// queryrunner.MaxHistorySQLChars, so the bytes read are bounded by attempts
+// x perAttempt x that (CLAUDE.md rule 12).
 func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, perAttempt int) (monitor.Answers, error) {
 	rows, err := w.querier(ctx).Query(ctx, `
 		WITH attempts AS (
@@ -192,10 +183,9 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 	return out, nil
 }
 
-// Workspace reads the participant's notes and tabs as they are, and the list
-// of their revisions, newest first, without bodies. Unlike the participant's
-// own load it creates nothing: an organiser looking must not change what they
-// look at.
+// Workspace reads the participant's notes and tabs, and their revisions
+// newest first without bodies. Unlike the participant's own load it creates
+// nothing: looking must not change what is looked at.
 func (w *Watch) Workspace(ctx context.Context, registration uuid.UUID) (monitor.Workspace, error) {
 	querier := w.querier(ctx)
 	var ws monitor.Workspace
@@ -223,9 +213,8 @@ func (w *Watch) Workspace(ctx context.Context, registration uuid.UUID) (monitor.
 		return monitor.Workspace{}, fmt.Errorf("read the tabs of %s: %w", registration, err)
 	}
 
-	// The registration's range of workspace_revisions (registration_id,
-	// document, id), sorted by id: at most two revisions a minute per
-	// document, and cut at MaxRevisionsListed.
+	// A range of workspace_revisions (registration_id, document, id) sorted
+	// by id; at most two revisions a minute per document.
 	rows, err = querier.Query(ctx, `
 		SELECT id, document, COALESCE(title, ''), started_at, updated_at, octet_length(body)
 		FROM workspace_revisions

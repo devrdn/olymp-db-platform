@@ -20,46 +20,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// openWindow is a contest end far enough in the future that no test in this
-// file mistakes it for closed. Every test here is about something other than
-// timing unless it says otherwise — the deadline formula itself is tested in
-// internal/contests, not re-tested against every one of these fakes.
+// openWindow is a contest end no test here mistakes for closed. The deadline
+// formula itself is tested in internal/contests.
 var openWindow = time.Now().Add(24 * time.Hour)
 
-// closedWindow is a contest end far enough in the past, grace and all, that
-// every participant's time is up.
+// closedWindow is past every deadline, grace included.
 var closedWindow = time.Now().Add(-24 * time.Hour)
 
-// fiveSecondGate is the participation gate every Service in this package's
-// tests is built with unless the test builds its own: DEADLINE_GRACE's
-// default of five seconds, the grace New used to assume when nobody wired
-// one.
+// fiveSecondGate uses DEADLINE_GRACE's default.
 var fiveSecondGate = contests.NewGate(5 * time.Second)
 
-// The collaborators are faked because each is tested where it lives: the
-// repositories against a real database, the provisioner against a real
-// cluster, the runner against both. What is under test here is the order of
-// the decisions and what each refusal is called — which is the whole of this
-// package.
+// The collaborators are faked because each is tested where it lives. Under
+// test here is the order of the decisions and what each refusal is called.
 
 type people struct {
 	participant contests.Participant
 	err         error
-	// calls counts how often ByUser was reached, when a test needs to prove a
-	// check upstream of it stopped a request before it got here. A pointer so
-	// the value receiver below can still record into it.
+	// calls counts ByUser calls, to prove an upstream check stopped the
+	// request. A pointer because the receiver is a value.
 	calls *int
-	// starts counts how often Start was reached, and startErr lets a test
-	// simulate the write failing.
+	// starts counts Start calls; startErr makes the write fail.
 	starts   *int
 	startErr error
-	// stored is a start already on the row when Start is reached: what
-	// postgres.Registrations.Start hands back to a request that lost the race
-	// to one that started the clock first. nil starts it at now.
+	// stored is a start already on the row, as postgres.Registrations.Start
+	// returns it to a request that lost the race. nil starts it at now.
 	stored *time.Time
-	// startsNothing makes Start report success and hand back a participant
-	// whose clock is still pending: a store that broke its own contract,
-	// which the façade must not take for a started clock.
+	// startsNothing makes Start succeed but leave the clock pending: a store
+	// breaking its contract.
 	startsNothing bool
 }
 
@@ -70,10 +57,8 @@ func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Particip
 	return p.participant, p.err
 }
 
-// Start mirrors what postgres.Registrations.Start guarantees: it sets
-// StartedAt and moves the status to active together, once, and reports how
-// often it was actually reached so a test can prove an already-started
-// participant costs no further call.
+// Start mirrors postgres.Registrations.Start: it sets StartedAt and the
+// active status together, once.
 func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.Participant, error) {
 	if p.starts != nil {
 		*p.starts++
@@ -96,9 +81,7 @@ func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.P
 type contestStore struct {
 	contest contests.Contest
 	err     error
-	// calls counts how often ByID was reached, so a test can prove
-	// WithLookup really did replace this call rather than merely adding a
-	// second one beside it.
+	// calls proves WithLookup replaced ByID rather than adding a call.
 	calls *int
 }
 
@@ -112,10 +95,7 @@ func (c contestStore) ByID(context.Context, uuid.UUID) (contests.Contest, error)
 type games struct {
 	game provisioning.Contest
 	err  error
-	// calls counts how often Game was reached, so a test can prove a check
-	// placed ahead of the game lookup really did stop the request before it.
-	// A pointer for the same reason people.calls is one: the receiver is a
-	// value.
+	// calls proves a check ahead of the game lookup stopped the request.
 	calls *int
 }
 
@@ -126,17 +106,15 @@ func (g games) Game(context.Context, uuid.UUID) (provisioning.Contest, error) {
 	return g.game, g.err
 }
 
-// lookupFake is the fake behind queryproxy.Lookup: the single round trip
-// WithLookup wires in, standing in for postgres.Registrations. calls counts
-// how often either method was reached, so a test can prove the façade used
-// this one call instead of its own default's separate ones.
+// lookupFake stands in for the single lookup (postgres.Registrations). calls
+// proves the façade used it instead of the default's separate calls.
 type lookupFake struct {
 	participant contests.Participant
 	contest     contests.Contest
 	game        provisioning.Contest
 	gameErr     error
-	// instance is the participant's own copy as the lookup read it; left
-	// zero, the registration has none (provisioning.ErrNoInstance).
+	// instance left zero means the registration has none
+	// (provisioning.ErrNoInstance).
 	instance provisioning.Instance
 	err      error
 	calls    *int
@@ -171,9 +149,8 @@ func (l lookupFake) ForAccess(context.Context, uuid.UUID, uuid.UUID) (contests.P
 	return l.participant, l.contest, l.err
 }
 
-// answerable is the fake behind queryproxy.Answerable: whether this contest
-// still has a question this registration could get an answer out of, plus a
-// counter so a test can prove the question was (or was not) asked at all.
+// answerable is the fake behind queryproxy.Answerable; calls proves whether
+// it was asked.
 type answerable struct {
 	left  bool
 	err   error
@@ -189,20 +166,18 @@ type databases struct {
 	database string
 	quota    int64
 	err      error
-	// asked records what Ensure was called with, and quotaAsked whether the
-	// cluster was consulted about size at all.
+	// asked records what Ensure was called with, and quotaAsked whether size
+	// was consulted.
 	asked      *provisioning.Contest
 	quotaAsked bool
 	lastQuota  int64
 	// existing and existingErr are what EnsureFrom was told of the
-	// registration's copy, so a test can prove the lookup's own read of it
-	// reached provisioning untouched.
+	// registration's copy.
 	existing    provisioning.Instance
 	existingErr error
 }
 
-// Instance answers that the registration has no copy yet; what EnsureFrom
-// does with that is provisioning's business, not this package's.
+// Instance answers that the registration has no copy yet.
 func (d *databases) Instance(context.Context, uuid.UUID) (provisioning.Instance, error) {
 	return provisioning.Instance{}, provisioning.ErrNoInstance
 }
@@ -224,9 +199,8 @@ type runner struct {
 	gotOrigin queryrunner.Origin
 	result    *queryrunner.Result
 	err       error
-	// calls counts how often Run was reached, so a test can prove a check
-	// upstream of the façade's own call to the runner stopped a request
-	// before the journal it wraps was ever written to.
+	// calls proves an upstream check stopped a request before the journal was
+	// written.
 	calls int
 }
 
@@ -279,9 +253,8 @@ func TestAParticipantOfARunningContestGetsAnAnswer(t *testing.T) {
 	}
 }
 
-// The first line of section 5: the query is the participant's, the address is
-// not. A caller cannot name a database, and nothing in the command carries one
-// — it is looked up from the registration every time.
+// A caller cannot name a database: it is looked up from the registration
+// every time.
 func TestTheDatabaseComesFromTheRegistrationAndNeverFromTheRequest(t *testing.T) {
 	service, db, run := fixture(t)
 
@@ -306,13 +279,11 @@ func TestTheRequestIdentifierIsCarriedThrough(t *testing.T) {
 		t.Fatalf("running: %v", err)
 	}
 
-	// The journal ties a row to the same request in the technical logs, which
-	// is what makes "the participant says it failed at 14:02" answerable.
+	// RequestID ties the journal row to the technical logs.
 	if run.gotOrigin.RequestID != cmd.RequestID {
 		t.Fatalf("request id = %s, want %s", run.gotOrigin.RequestID, cmd.RequestID)
 	}
-	// And so is where it came from, for the journal row's ip column
-	// (design §2.3; CLAUDE.md rule 11).
+	// The address reaches the journal row's ip column (CLAUDE.md rule 11).
 	if run.gotOrigin.Address != cmd.Address {
 		t.Fatalf("address = %v, want %v", run.gotOrigin.Address, cmd.Address)
 	}
@@ -321,8 +292,8 @@ func TestTheRequestIdentifierIsCarriedThrough(t *testing.T) {
 	}
 }
 
-// Who may ask, and when. Each of these is a different sentence to the person
-// asking, so each is a different error.
+// Each refusal is its own error because each is a different sentence to the
+// participant.
 func TestWhoMayAskAndWhen(t *testing.T) {
 	for name, given := range map[string]struct {
 		people  people
@@ -362,10 +333,8 @@ func TestWhoMayAskAndWhen(t *testing.T) {
 	}
 }
 
-// The guarantee from docs/ARCHITECTURE.md §8: closing does not depend on the
-// scheduler that flips contests.Status to finished. A fixed contest past its
-// own ends_at must stop taking queries even while a dead or merely slow
-// scheduler has left the status at "running".
+// Closing does not wait for the scheduler: a fixed contest past ends_at stops
+// taking queries while its status still says running.
 func TestAFixedContestStopsAcceptingQueriesAtItsEndEvenIfStatusLagsBehind(t *testing.T) {
 	now := time.Now()
 	past := now.Add(-time.Minute)
@@ -385,13 +354,8 @@ func TestAFixedContestStopsAcceptingQueriesAtItsEndEvenIfStatusLagsBehind(t *tes
 	}
 }
 
-// The defect this task closes: before queryproxy consulted the shared
-// deadline formula, only contests.Status governed whether a query was taken —
-// so an individual-timing participant kept querying for as long as the whole
-// contest's own window stayed open, regardless of the personal duration_min
-// they were actually given. A participant who started an hour ago with a
-// ten-minute session must be refused now, even though the contest's own
-// ends_at is a day away and its status is still "running".
+// An individual participant's own deadline (started_at + duration_min) binds
+// while the contest's window is open and its status is running.
 func TestAnIndividualParticipantsOwnDeadlinePassesEvenThoughTheContestWindowHasNot(t *testing.T) {
 	now := time.Now()
 	startedAnHourAgo := now.Add(-time.Hour)
@@ -416,9 +380,6 @@ func TestAnIndividualParticipantsOwnDeadlinePassesEvenThoughTheContestWindowHasN
 	}
 }
 
-// An individual-timing participant still inside their own window keeps
-// querying normally: the fix above must not have turned every individual
-// contest into a refusal.
 func TestAnIndividualParticipantStillWithinTheirOwnWindowIsUnaffected(t *testing.T) {
 	now := time.Now()
 	startedAMinuteAgo := now.Add(-time.Minute)
@@ -443,13 +404,8 @@ func TestAnIndividualParticipantStillWithinTheirOwnWindowIsUnaffected(t *testing
 	}
 }
 
-// The defect finding 1 closes: nothing ever wrote registrations.started_at,
-// so an individual-timing participant who had not started got ok=false from
-// contests.Deadline forever and was refused on every query, permanently,
-// while the contest and its own status both reported "running". Their first
-// query is now the deliberate action that starts their own clock (§8), and
-// is answered like any other query inside a fresh window rather than
-// refused.
+// A never-started individual participant's first query starts their clock
+// and is answered, not refused.
 func TestAnIndividualParticipantsFirstQueryStartsTheirClock(t *testing.T) {
 	farFuture := time.Now().Add(24 * time.Hour)
 	duration := 30
@@ -476,9 +432,7 @@ func TestAnIndividualParticipantsFirstQueryStartsTheirClock(t *testing.T) {
 	}
 }
 
-// A second query must not restart the clock, or cost a write at all: the
-// façade only calls Start when the participant it already read back carries
-// no StartedAt.
+// The façade calls Start only when the participant it read has no StartedAt.
 func TestASecondQueryDoesNotRestartAnAlreadyStartedParticipant(t *testing.T) {
 	farFuture := time.Now().Add(24 * time.Hour)
 	started := time.Now().Add(-time.Minute)
@@ -506,8 +460,7 @@ func TestASecondQueryDoesNotRestartAnAlreadyStartedParticipant(t *testing.T) {
 	}
 }
 
-// A fixed-timing participant's own clock is never touched: fixed timing
-// shares one window, and Deadline never consults StartedAt for it (§8).
+// Fixed timing shares one window; Deadline never consults StartedAt for it.
 func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
 	starts := 0
 	service := queryproxy.New(
@@ -528,8 +481,6 @@ func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
 	}
 }
 
-// A failure to start the clock is ours, not the participant's query being
-// wrong — the same treatment every other lookup failure in Run gets.
 func TestAFailureToStartTheClockIsMarkedAsOurs(t *testing.T) {
 	farFuture := time.Now().Add(24 * time.Hour)
 	duration := 30
@@ -553,23 +504,16 @@ func TestAFailureToStartTheClockIsMarkedAsOurs(t *testing.T) {
 	}
 }
 
-// Finding 1, the critical scenario: an organiser can flip contests.Status to
-// "running" hours before starts_at — a manual step in their own workflow that
-// says nothing about the wall clock. Before this fix that was the only thing
-// queryproxy checked before starting an individual participant's clock, so a
-// student's exploratory query the evening before a 09:00 contest would set
-// their own started_at to that evening, and their whole duration_min would
-// burn before the olympiad even opened — permanently, since nothing can clear
-// started_at once Start has written it. The fix compares the wall clock to
-// the contest's own window and refuses without writing anything.
+// An organiser may flip status to running hours before starts_at. A first
+// query then must not start the clock: the duration would burn before the
+// contest opens, and started_at cannot be cleared once written.
 func TestAFirstQueryBeforeStartsAtStartsNoClock(t *testing.T) {
 	now := time.Now()
 	opensTomorrowMorning := now.Add(13 * time.Hour)
 	farFuture := now.Add(48 * time.Hour)
 	duration := 120
 	contest := contests.Contest{
-		// An organiser's early flip: Status is already "running", but
-		// starts_at is still hours away.
+		// Status already running, starts_at hours away.
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
 		DurationMin: &duration, StartsAt: &opensTomorrowMorning, EndsAt: &farFuture,
 	}
@@ -592,10 +536,8 @@ func TestAFirstQueryBeforeStartsAtStartsNoClock(t *testing.T) {
 	}
 }
 
-// The same window, checked at its other edge: a dead scheduler that never
-// moved a finished individual contest's status out of "running" must not let
-// a participant who never queried before now start a clock past ends_at
-// either.
+// The other edge: a status stuck at running must not let a first query start
+// a clock past ends_at.
 func TestAFirstQueryAfterEndsAtStartsNoClock(t *testing.T) {
 	now := time.Now()
 	opened := now.Add(-2 * time.Hour)
@@ -624,9 +566,8 @@ func TestAFirstQueryAfterEndsAtStartsNoClock(t *testing.T) {
 	}
 }
 
-// Starting has no grace: the grace is an allowance for a request already on
-// its way from somebody working, not more time to begin. At exactly ends_at a
-// participant who has not started is too late, and nothing is written.
+// Starting has no grace: the grace covers a request already in flight from
+// somebody working, not time to begin.
 func TestAFirstQueryAtExactlyEndsAtIsTooLateToStart(t *testing.T) {
 	opened := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	closes := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -655,9 +596,8 @@ func TestAFirstQueryAtExactlyEndsAtIsTooLateToStart(t *testing.T) {
 	}
 }
 
-// Start hands back the start already on the row when another request got
-// there first, and that start can be one whose time is already up. The query
-// is refused for it after the start, the same as before it, and never run.
+// Start may hand back another request's start whose time is already up; the
+// query is refused and never run.
 func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 	now := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
 	opened := now.Add(-3 * time.Hour)
@@ -683,8 +623,7 @@ func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
 	}
-	// Start was reached: the refusal is the check after it, not the one
-	// before, which had nothing to refuse.
+	// Start was reached: the refusal comes from the check after it.
 	if starts != 1 {
 		t.Fatalf("Start called %d times, want 1", starts)
 	}
@@ -693,9 +632,8 @@ func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 	}
 }
 
-// Start reporting success while the clock is still pending is a store that
-// broke its contract, not a participant who may now query without a
-// deadline: the query is refused as ours and never run.
+// A Start that succeeds but leaves the clock pending is a broken store: the
+// query is refused as ours and never run.
 func TestAFirstQueryWhoseStartLeavesTheClockPendingIsRefusedAsOurs(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -718,11 +656,8 @@ func TestAFirstQueryWhoseStartLeavesTheClockPendingIsRefusedAsOurs(t *testing.T)
 	}
 }
 
-// Finding 2: before this fix, an individual participant's first query started
-// their clock before the address restriction was checked, so a query from
-// outside the contest's own network burned their first minute and was then
-// refused anyway — the same bricking finding 1 closes, milder. The clock must
-// start only once the request is otherwise admitted.
+// The clock starts only once the request is otherwise admitted, so a query
+// from outside the contest's network costs the participant no time.
 func TestADisallowedAddressDoesNotStartTheClock(t *testing.T) {
 	farFuture := time.Now().Add(24 * time.Hour)
 	duration := 30
@@ -810,11 +745,8 @@ func TestANotYetProvisionedContestDoesNotStartTheClock(t *testing.T) {
 	}
 }
 
-// The grace period exists for network latency, applies only to acceptance and
-// never to what a participant is shown — a query that reaches the server a
-// few seconds after the deadline is still honoured, but one that arrives
-// after the grace has also elapsed is not. WithClock pins "now" so the test
-// does not race the deadline it is asserting against.
+// The grace covers network latency: a query a few seconds past the deadline
+// is honoured, one past the grace is not.
 func TestTheGraceWindowAcceptsAQueryArrivingJustAfterTheDeadlineAndNoLater(t *testing.T) {
 	deadline := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	contest := contests.Contest{
@@ -840,9 +772,8 @@ func TestTheGraceWindowAcceptsAQueryArrivingJustAfterTheDeadlineAndNoLater(t *te
 		t.Fatalf("a query one nanosecond before the grace ends was refused: %v", err)
 	}
 
-	// At exactly the deadline plus the grace the core database refuses an
-	// answer written at that instant (now() >= deadline), and the console
-	// closes at the same instant rather than one tick later.
+	// At exactly deadline plus grace the core database refuses an answer
+	// (now() >= deadline), and the console closes at the same instant.
 	atGrace := build(deadline.Add(5 * time.Second))
 	if _, err := atGrace.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("error = %v, want ErrDeadlinePassed for a query at exactly the deadline plus the grace", err)
@@ -880,8 +811,6 @@ func TestAPublishedContestFromADisallowedAddressNamesTheAddress(t *testing.T) {
 	}
 }
 
-// A contest whose template was never built has nothing to give anybody, and
-// saying so is not the same as saying the query was wrong.
 func TestAContestWithNoGameYet(t *testing.T) {
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
@@ -896,10 +825,7 @@ func TestAContestWithNoGameYet(t *testing.T) {
 	}
 }
 
-// A refusal from the validator has to arrive unchanged, because the interface
-// turns its code into a sentence in the participant's own language. Wrapping
-// it in something of this package's own would leave that with nothing to
-// translate.
+// A validator refusal arrives unwrapped: the interface translates its code.
 func TestARefusalPassesThroughUntouched(t *testing.T) {
 	service, _, run := fixture(t)
 	run.err = &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: "pg_sleep"}
@@ -916,9 +842,7 @@ func TestARefusalPassesThroughUntouched(t *testing.T) {
 	}
 }
 
-// A restriction applied once is a restriction somebody walks out of the room
-// with. The contest names the network it is held on, and every query is
-// checked against it — not only the enrolment that happened in the lab.
+// The network restriction is checked on every query, not only at enrolment.
 func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
 	inRoom := netip.MustParsePrefix("10.20.0.0/16")
 	contest := contests.Contest{
@@ -944,9 +868,7 @@ func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 
-	// An address that could not be resolved fails the restriction too: a
-	// contest held on one network cannot be honoured without knowing which
-	// one this is.
+	// An unresolved address fails the restriction too.
 	unknown := command()
 	if _, err := service.Run(t.Context(), unknown); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
@@ -969,11 +891,8 @@ func TestAParticipantWhoHasFinishedIsDone(t *testing.T) {
 	}
 }
 
-// A contest that closes the catalogues means the schema has to be discovered
-// some other way. PostgreSQL's own error names the relation that does not
-// exist — which turns guessing into enumeration and hands back the list the
-// closed catalogue was hiding. In that contest, and only in that one, the
-// database's words are kept back.
+// Where the catalogues are closed, "relation does not exist" would turn
+// guessing names into enumeration, so the database's words are withheld.
 func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -989,9 +908,8 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 		)
 	}
 
-	// The database's own words, named as such — which is how the client
-	// hands them over (rpc.errorFor) and the only shape this may act on: a
-	// failure of ours must not be able to wear them.
+	// The database's words as rpc.errorFor hands them over, the only shape
+	// this acts on.
 	probe := &queryrunner.DatabaseError{Message: `ERROR: relation "salaries" does not exist (SQLSTATE 42P01)`}
 
 	_, err := build(closed, probe).Run(t.Context(), command())
@@ -1002,29 +920,21 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 		t.Fatalf("the name leaked anyway: %v", err)
 	}
 
-	// With the catalogues open the same message is the most useful sentence
-	// there is, and holding it back would only make the contest harder to
-	// learn from.
+	// With the catalogues open the message passes through.
 	_, err = build(sqlpolicy.ReadOnly(), probe).Run(t.Context(), command())
 	if !strings.Contains(err.Error(), "salaries") {
 		t.Fatalf("the database's own words were withheld from an open contest: %v", err)
 	}
 }
 
-// accessFixture builds a Service with only the two collaborators Access
-// touches faked with anything meaningful — games, the database pool and the
-// runner never enter Access at all, and passing them zero values here is
-// itself part of what this file proves about the method.
+// accessFixture fakes only what Access touches; games, databases and the
+// runner are zero values Access must never use.
 func accessFixture(people queryproxy.People, contest contestStore) *queryproxy.Service {
 	return queryproxy.New(people, contest, games{}, &databases{}, &runner{}, fiveSecondGate)
 }
 
-// Access is the admission the participant-facing read endpoints (the story,
-// the questions) require, and it is meant to be exactly what Run already
-// checks before taking a query — minus the rate limit and the SQL-specific
-// work, neither of which a read costs. This is the same table TestWhoMayAskAndWhen
-// drives through Run, driven through Access instead, so the two are proven to
-// agree rather than merely asserted to.
+// Access drives the same table as TestWhoMayAskAndWhen, so the two admissions
+// are proven to agree.
 func TestAccessAgreesWithRunAboutWhoMayAskAndWhen(t *testing.T) {
 	for name, given := range map[string]struct {
 		people  people
@@ -1068,10 +978,8 @@ func TestAccessAgreesWithRunAboutWhoMayAskAndWhen(t *testing.T) {
 	}
 }
 
-// A fixed contest past its own ends_at must refuse a read exactly as it
-// refuses a query (§8): the deadline formula is the one this project has, and
-// a read that used a second one would be readable past the moment writing
-// stops being possible.
+// A read past a fixed contest's ends_at is refused like a query: one deadline
+// formula for both.
 func TestAccessRefusesAFixedContestPastItsDeadline(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	contest := contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &past}
@@ -1125,12 +1033,9 @@ func TestAccessRefusesAnUnstartedIndividualParticipantAtExactlyEndsAt(t *testing
 	}
 }
 
-// An individual participant who has not started yet has nothing for the
-// deadline formula to compute from — the gate (contests.Gate.StandingOf) admits
-// them inside the contest's own window, for Access exactly as for Run before it
-// will ever start a clock, and Access must not start one itself: it also admits
-// the answer endpoint and the query log, and a content read starts the clock
-// separately, once it has succeeded (StartOnRead).
+// The gate admits a never-started individual participant inside the contest
+// window, and Access must not start their clock: it also admits the answer
+// endpoint and the query log. StartOnRead starts it after a successful read.
 func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStartsTheirClock(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	duration := 30
@@ -1169,10 +1074,8 @@ func individualContest() contests.Contest {
 	}
 }
 
-// Under individual timing the story, the questions and the schema are the
-// contest itself: reading them is where the participant's time begins, or
-// the whole window becomes preparation time the duration never counts. The
-// first read starts the clock through the same Start seam Run uses.
+// Under individual timing reading the content is the contest; otherwise the
+// whole window becomes free preparation time.
 func TestStartOnReadStartsAnIndividualParticipantsClock(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -1188,8 +1091,7 @@ func TestStartOnReadStartsAnIndividualParticipantsClock(t *testing.T) {
 	}
 }
 
-// A second read costs no write and moves nothing: the clock already running is
-// the one the participant keeps.
+// A second read costs no write and moves nothing.
 func TestStartOnReadDoesNotMoveAClockAlreadyRunning(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -1209,8 +1111,6 @@ func TestStartOnReadDoesNotMoveAClockAlreadyRunning(t *testing.T) {
 	}
 }
 
-// Fixed timing has one clock for everybody, and nothing a participant reads
-// starts anything.
 func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	starts := 0
@@ -1225,8 +1125,8 @@ func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
 	}
 }
 
-// Outside the contest's own window there is no clock to start: the read is
-// refused the way Run refuses a first query there, and nothing is written.
+// Outside the contest's window the read is refused as a first query would be,
+// and nothing is written.
 func TestStartOnReadOutsideTheWindowStartsNoClock(t *testing.T) {
 	for name, given := range map[string]struct {
 		shift func(*contests.Contest)
@@ -1253,9 +1153,8 @@ func TestStartOnReadOutsideTheWindowStartsNoClock(t *testing.T) {
 	}
 }
 
-// Starting is admitted by the same gate as the read, address included:
-// StartOnRead is not trusted to have been called only after Access, so a
-// caller outside the contest's network starts nothing.
+// StartOnRead asks the gate itself, address included, rather than trust that
+// Access ran first.
 func TestStartOnReadFromADisallowedAddressStartsNoClock(t *testing.T) {
 	contest := individualContest()
 	contest.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
@@ -1300,9 +1199,8 @@ func TestStartOnReadAtExactlyEndsAtStartsNoClock(t *testing.T) {
 	}
 }
 
-// The gate is asked again once the clock has started, of the participant as
-// Start answered them: a request that lost the race to an earlier start is
-// handed that start, and its time can already be up.
+// The gate is asked again after Start: a request that lost the race is handed
+// the earlier start, whose time may be up.
 func TestStartOnReadRefusesAStartWhoseTimeIsAlreadyUp(t *testing.T) {
 	now := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
 	opened := now.Add(-3 * time.Hour)
@@ -1321,16 +1219,14 @@ func TestStartOnReadRefusesAStartWhoseTimeIsAlreadyUp(t *testing.T) {
 	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("StartOnRead() = %v, want ErrDeadlinePassed", err)
 	}
-	// Start was reached: the refusal is the check after it, not the one
-	// before, which had nothing to refuse.
+	// Start was reached: the refusal comes from the check after it.
 	if starts != 1 {
 		t.Fatalf("Start called %d times, want 1", starts)
 	}
 }
 
-// A Start that reports success and hands back a participant whose clock is
-// still pending has not started anything. Taking it at its word would hand
-// the reader content with no deadline running; it is refused as ours.
+// A Start that leaves the clock pending would hand out content with no
+// deadline running; it is refused as ours.
 func TestStartOnReadRefusesAStartThatLeftTheClockPending(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -1345,10 +1241,8 @@ func TestStartOnReadRefusesAStartThatLeftTheClockPending(t *testing.T) {
 	}
 }
 
-// A registration disqualified between the first gate and the start is one
-// Start does not move, so its clock comes back still pending. That is not a
-// store breaking its contract: the participant is told the gate's answer for
-// who they now are, not handed an error of ours.
+// A registration disqualified before Start stays pending: that is the gate's
+// refusal, not a broken store.
 func TestStartOnReadRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -1365,7 +1259,6 @@ func TestStartOnReadRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *tes
 	}
 }
 
-// The write failing is ours, not a refusal of the participant.
 func TestStartOnReadMarksAFailureToStartAsOurs(t *testing.T) {
 	contest := individualContest()
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
@@ -1376,8 +1269,7 @@ func TestStartOnReadMarksAFailureToStartAsOurs(t *testing.T) {
 	}
 }
 
-// Holding the events channel open shows a waiting participant their clock; it
-// is not reading the contest, and must never be what starts it.
+// Holding the events channel open is not reading the contest.
 func TestAccessForEventsNeverStartsTheClock(t *testing.T) {
 	contest := individualContest()
 	starts := 0
@@ -1393,9 +1285,8 @@ func TestAccessForEventsNeverStartsTheClock(t *testing.T) {
 	}
 }
 
-// A query from outside the contest's own network is refused, and Access must
-// refuse a read from the same address the same way — the restriction applies
-// to the participant, not to which endpoint they asked.
+// The address restriction applies to the participant, whichever endpoint
+// they call.
 func TestAccessChecksTheAddressRestriction(t *testing.T) {
 	inRoom := netip.MustParsePrefix("10.20.0.0/16")
 	contest := contests.Contest{
@@ -1412,15 +1303,9 @@ func TestAccessChecksTheAddressRestriction(t *testing.T) {
 	}
 }
 
-// AccessForEvents is Access with exactly one status added to what it admits
-// (finding 4, docs/ARCHITECTURE.md §8): published and not yet started, so the
-// events channel can be held open across the published → running transition
-// instead of refusing a participant until Access itself would succeed.
-//
-// The table below is the same shape TestAccessAgreesWithRunAboutWhoMayAskAndWhen
-// drives through Access, minus the one row this method exists to change: "a
-// contest that has not started" moves from a refusal to an admission, and
-// every other row must refuse exactly as it always did.
+// AccessForEvents admits one case Access refuses, a published contest not yet
+// started, so the channel can wait across the start. Every other row refuses
+// as Access does.
 func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
 	for name, given := range map[string]struct {
 		people  people
@@ -1474,11 +1359,9 @@ func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
 	}
 }
 
-// AccessForEvents hands back the Standing it decided on, refused or not, so
-// the events channel can tell a contest that is over for this participant
-// from one that merely is not open to them now, without a second lookup or a
-// list of sentinels. A lookup that found nobody knows nothing: the zero
-// Standing, which is over for nobody.
+// The Standing is returned refused or not, so the channel can tell "over for
+// them" from "not open now". A lookup that found nobody returns the zero
+// Standing, over for nobody.
 func TestAccessForEventsHandsBackTheStandingItDecidedOn(t *testing.T) {
 	inRoom := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
 	for name, given := range map[string]struct {
@@ -1544,8 +1427,7 @@ func TestAccessForEventsHandsBackTheStandingItDecidedOn(t *testing.T) {
 	}
 }
 
-// The network restriction is not waived just because the contest has not
-// started yet — it applies to the participant, not to the contest's status.
+// The network restriction applies before the contest starts too.
 func TestAccessForEventsStillChecksTheAddressRestrictionForAPublishedContest(t *testing.T) {
 	inRoom := netip.MustParsePrefix("10.20.0.0/16")
 	contest := contests.Contest{Status: contests.StatusPublished, AllowedCIDRs: []netip.Prefix{inRoom}}
@@ -1559,10 +1441,8 @@ func TestAccessForEventsStillChecksTheAddressRestrictionForAPublishedContest(t *
 	}
 }
 
-// What is held back is the database speaking for itself, and nothing else. A
-// refusal and the runner's own outcomes carry codes the interface turns into
-// sentences, and swallowing one would leave a participant with less than the
-// closed catalogue was protecting.
+// Only the database's own words are withheld; our refusals and outcomes carry
+// codes the interface translates.
 func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -1574,11 +1454,7 @@ func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 		"asking too fast": queryrunner.ErrTooManyQueries,
 		"a full disk":     queryrunner.ErrDiskFull,
 		"a huge answer":   queryrunner.ErrResultTooLarge,
-		// The query service failing to answer is the one that used to be
-		// swallowed here: not a refusal, not a timeout, not on any list of
-		// ours this package knew about — so a contest that hides its schema
-		// reported its own outage to the participant as "the database refused
-		// that query", and nobody looking at the console could tell.
+		// On no list of ours, and still not the database refusing the query.
 		"the query service failing": fmt.Errorf("%w: connecting to the game database: dial tcp [::1]:5433: connect: connection refused",
 			rpc.ErrUnreachable),
 	} {
@@ -1599,11 +1475,8 @@ func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 	}
 }
 
-// Our own failing is not the query being wrong.
-//
-// A database that cannot be reached, answered as "your request was bad", tells
-// the client to stop retrying and the participant to fix a query that was
-// fine — with our connection string attached to the explanation.
+// An unreachable database must not read as "your request was bad": the
+// client would stop retrying and the participant would fix a fine query.
 func TestOurOwnFailuresAreMarkedApartFromTheQuerysOwn(t *testing.T) {
 	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
 
@@ -1628,10 +1501,8 @@ func TestOurOwnFailuresAreMarkedApartFromTheQuerysOwn(t *testing.T) {
 	}
 }
 
-// The quota is worked out by asking the game cluster how large the template
-// is. A read-only contest cannot grow its database, so that is a round trip to
-// another server on every query, for every participant, to produce a number
-// nothing will compare against.
+// A read-only database cannot grow, so the quota, a round trip to the game
+// cluster, is never asked for.
 func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
 	db := &databases{database: "x", quota: 1 << 20}
 	service := queryproxy.New(
@@ -1649,8 +1520,8 @@ func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
 		t.Fatal("a read-only contest asked the cluster for a size limit it cannot reach")
 	}
 
-	// And a contest that permits writing still gets one, because there the
-	// number is the only thing between a participant and the cluster's disk.
+	// A writable contest still gets one: it is all that stands between a
+	// participant and the cluster's disk.
 	writing := &databases{database: "x", quota: 1 << 20}
 	service = queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
@@ -1670,10 +1541,8 @@ func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
 	}
 }
 
-// The classification next door asks "is this one of ours?", and the list it
-// asks against lives in the runner. A sentinel added there without being
-// listed would be swallowed as the database speaking — in exactly the contest
-// that withholds the database's words, where nobody would see it happen.
+// No runner outcome is mistaken for the database speaking in a contest that
+// withholds the database's words, where nobody would notice.
 func TestEveryOutcomeTheRunnerReportsIsRecognisedAsOurs(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -1699,9 +1568,8 @@ func TestEveryOutcomeTheRunnerReportsIsRecognisedAsOurs(t *testing.T) {
 	}
 }
 
-// A failure to open the journal row is ours, not the database refusing the
-// participant's SQL — the query never reached it — so even a contest that
-// hides its schema must not swallow this one as ErrDatabaseDeclined.
+// A journal failure never reached the database, so a closed catalogue must
+// not turn it into ErrDatabaseDeclined.
 func TestAJournalFailureIsNotSwallowedByAClosedCatalogue(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -1724,23 +1592,8 @@ func TestAJournalFailureIsNotSwallowedByAClosedCatalogue(t *testing.T) {
 	}
 }
 
-// A megabyte of attacker text must never reach the journal. The true bound
-// lives in the checker (sqlpolicy.MaxQueryBytes), well downstream of the
-// write the façade's caller makes before ever reaching it — this one is
-// enforced first, costs nothing but a comparison, and stops before even the
-// participant is looked up.
-// An oversized query is still refused for its length, but it now costs the
-// same rate-limit accounting an ordinary query does — the participant and the
-// contest are still looked up, because that is what the rate check is keyed
-// and bounded by, and only then is the length compared. What it must never
-// reach is anything downstream of the rate check: a database is not
-// provisioned and the Query Runner is not called for a query this cheap a
-// comparison already refuses.
-//
-// This used to refuse before the participant was ever looked up, which meant
-// an oversized query never called the rate check at all — refused for free,
-// as many times a minute as the network allowed, against no budget
-// (CLAUDE.md rule 13 — a refused query still counts against the rate).
+// An oversized query is refused for its length after the rate check
+// (CLAUDE.md rule 13), and before provisioning or the Query Runner.
 func TestAQueryOverTheLengthBoundIsRefusedAfterTheRateCheckAndBeforeAnythingElse(t *testing.T) {
 	calls := 0
 	db := &databases{database: "x"}
@@ -1776,9 +1629,7 @@ func TestAQueryOverTheLengthBoundIsRefusedAfterTheRateCheckAndBeforeAnythingElse
 	}
 }
 
-// An oversized query still costs its share of the rate budget: it is not a
-// free way to make a participant's real queries meet the limit sooner, but it
-// is not a way to dodge the limit either.
+// An oversized query still spends its share of the rate budget.
 func TestAQueryOverTheLengthBoundStillCountsAgainstTheRate(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -1806,8 +1657,6 @@ func TestAQueryOverTheLengthBoundStillCountsAgainstTheRate(t *testing.T) {
 	}
 }
 
-// A query within the bound is unaffected: the check refuses length and
-// nothing else.
 func TestAQueryWithinTheLengthBoundIsUnaffected(t *testing.T) {
 	service, _, _ := fixture(t)
 	cmd := command()
@@ -1818,11 +1667,8 @@ func TestAQueryWithinTheLengthBoundIsUnaffected(t *testing.T) {
 	}
 }
 
-// A refused query must cost this façade's own rate check, not a row in
-// query_log: the Query Runner's own limiter sits behind the journal write the
-// façade's caller makes before ever reaching it (CLAUDE.md's security rule
-// 13 — a refused query still counts against the rate, and now it is counted
-// before the expensive step rather than after).
+// A query over the rate is refused here, before the journal write in front of
+// the Query Runner's own limiter (CLAUDE.md rule 13).
 func TestAParticipantAskingTooFastIsRefusedBeforeTheRunnerIsReached(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -1854,12 +1700,8 @@ func TestAParticipantAskingTooFastIsRefusedBeforeTheRunnerIsReached(t *testing.T
 	}
 }
 
-// Finding 4: a query refused for the contest's own timing still costs the
-// participant and contest lookups above it, and before this fix the deadline
-// refusal returned before the rate check ever ran — so a participant
-// hammering this endpoint after their own deadline (or before the contest
-// opened) met no limiter at all, indefinitely. The rate check now runs ahead
-// of that refusal, so it is what eventually stops the hammering.
+// A query refused for timing still costs the lookups, so the rate check runs
+// ahead of that refusal.
 func TestARequestRefusedByTheDeadlineStillCountsAgainstTheRate(t *testing.T) {
 	deadline := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	contest := contests.Contest{
@@ -1884,8 +1726,7 @@ func TestARequestRefusedByTheDeadlineStillCountsAgainstTheRate(t *testing.T) {
 	}
 }
 
-// The same defect, on the other refusal the rate check used to sit behind: a
-// contest that has not opened yet.
+// The same, for a contest that has not opened yet.
 func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusPublished,
@@ -1909,17 +1750,10 @@ func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t
 	}
 }
 
-// Finding 3: ErrNotAParticipant, the disqualified refusal and the finished
-// refusal all used to return before either rate check ever ran, so any
-// authenticated caller could loop this endpoint against a random contest
-// identifier forever — each request costing a session read plus this lookup
-// — with nothing counting the attempt. The fix is a check keyed by the
-// authenticated caller (cmd.UserID), bounded because it is one key per
-// account rather than one key per string a caller can invent, and run before
-// the participant is even looked up. These three tests reuse one Command (so
-// cmd.UserID stays fixed across calls, the way one real caller's requests
-// would) and prove the lookup itself is only ever reached once the limiter
-// admits the request.
+// The first rate check is keyed by the account (cmd.UserID), which is bounded
+// where the contest ID is not, and runs before the lookup (CLAUDE.md rule 5).
+// This test and the next two reuse one Command, so UserID stays fixed, and
+// prove the lookup is reached only while the limiter admits the request.
 func TestANeverRegisteredCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
 	calls := 0
 	service := queryproxy.New(
@@ -1992,10 +1826,8 @@ func TestAFinishedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
 	}
 }
 
-// A legitimate participant is unaffected by the new early check: it is keyed
-// by the authenticated caller and set to the installation's own ceiling,
-// which effectiveRateLimit already guarantees no contest-specific check below
-// it will ever be looser than.
+// The early check uses the installation's ceiling, so it never binds before a
+// contest's own limit would.
 func TestALegitimateParticipantIsUnaffectedByTheEarlyRateCheck(t *testing.T) {
 	service, _, _ := fixture(t)
 	cmd := command()
@@ -2007,11 +1839,8 @@ func TestALegitimateParticipantIsUnaffectedByTheEarlyRateCheck(t *testing.T) {
 	}
 }
 
-// Every admission here is the participation gate's, so the façade cannot be
-// assembled without one: it used to fall back to a five-second grace of its
-// own while the answer route and the profile fell back to none, so a
-// deployment that forgot one wiring had its console and its answers disagree
-// about when a participant's time is up.
+// New panics without a gate, so the console and the answer route cannot
+// disagree about when time is up.
 func TestNewRefusesToAssembleWithoutAGate(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -2021,10 +1850,8 @@ func TestNewRefusesToAssembleWithoutAGate(t *testing.T) {
 	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, nil)
 }
 
-// Finding 7: a negative QUERY_PER_MINUTE is refused the way a negative
-// DEADLINE_GRACE is (contests.NewGate). config.Load never produces either, so
-// a caller passing one here is a bug in the wiring, not deployment input to
-// fail closed on quietly.
+// A negative QUERY_PER_MINUTE panics, as a negative DEADLINE_GRACE does in
+// contests.NewGate: config.Load never produces one.
 func TestWithPerMinuteDefaultPanicsOnANegativeValue(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -2034,10 +1861,8 @@ func TestWithPerMinuteDefaultPanicsOnANegativeValue(t *testing.T) {
 	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithPerMinuteDefault(-1)
 }
 
-// query_rate_limit_per_min used to be stored, validated and served without
-// ever reaching anything that checked it — this proves it now does, and that
-// a contest which left it at zero still gets the installation's own default
-// rather than no limit at all.
+// The contest's query_rate_limit_per_min is enforced, and zero falls back to
+// the installation's default rather than no limit.
 func TestTheContestsOwnRateLimitIsEnforced(t *testing.T) {
 	strict := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow, Settings: contests.Settings{QueryRateLimitPerMin: 1}}
 	lenient := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow} // zero: installation default
@@ -2071,9 +1896,8 @@ func TestTheContestsOwnRateLimitIsEnforced(t *testing.T) {
 	}
 }
 
-// WithPerMinuteDefault changes what a contest with no rate of its own falls
-// back to, so the façade's own pre-check can be kept in step with whatever
-// QUERY_PER_MINUTE the Query Runner was actually deployed with.
+// WithPerMinuteDefault keeps the pre-check in step with the Query Runner's
+// QUERY_PER_MINUTE.
 func TestWithPerMinuteDefaultOverridesTheFallback(t *testing.T) {
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
@@ -2091,12 +1915,9 @@ func TestWithPerMinuteDefaultOverridesTheFallback(t *testing.T) {
 	}
 }
 
-// An organiser could previously raise a contest's own rate above the
-// installation's, and the number meant nothing: this façade's pre-check
-// admitted every one of them, each paying the journal write, right up until
-// the Query Runner's own limiter — enforcing the installation's true figure —
-// refused the rest anyway. Measured with the installation at 3 and the
-// contest set to 5: only 3 may pass, not 5.
+// A contest's rate above the installation's is clamped: the Query Runner would
+// refuse the excess anyway, after the journal write. Installation 3, contest
+// 5: only 3 pass.
 func TestAContestCannotSetALooserRateThanTheInstallation(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -2127,9 +1948,6 @@ func TestAContestCannotSetALooserRateThanTheInstallation(t *testing.T) {
 	}
 }
 
-// The reverse direction already worked and must keep working: a contest
-// tightening its own rate below the installation's is exactly what the
-// setting is for.
 func TestAContestMaySetAStricterRateThanTheInstallation(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -2153,10 +1971,8 @@ func TestAContestMaySetAStricterRateThanTheInstallation(t *testing.T) {
 	}
 }
 
-// An installation with no limit of its own (WithPerMinuteDefault(0), the same
-// "no limit" convention config.Runner.PerMinute uses) has no ceiling for a
-// contest's own setting to be clamped against — the contest's own number is
-// what governs, however high it is.
+// With no installation limit (zero) the contest's own number governs, however
+// high.
 func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -2177,11 +1993,8 @@ func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
 	}
 }
 
-// Finding 3: the participant-facing read endpoints (the story, the question
-// list) get a rate check of their own, AdmitRead — and it shares the exact
-// instance and key namespace Run's own pre-lookup check uses, rather than a
-// second limiter that would let a caller alternate between running queries
-// and polling these endpoints to spend two budgets instead of one.
+// AdmitRead shares Run's limiter and keys, so alternating queries and reads
+// spends one budget, not two.
 func TestAdmitReadSharesRunsOwnPerAccountBudget(t *testing.T) {
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
@@ -2204,9 +2017,8 @@ func TestAdmitReadSharesRunsOwnPerAccountBudget(t *testing.T) {
 	}
 }
 
-// The key is bounded because it is the authenticated account, not anything
-// the caller supplies in the request: a fresh account has spent nothing,
-// however many contests, real or invented, the refused account tried first.
+// The key is the account, so a fresh account has spent nothing however many
+// contests another account tried.
 func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
@@ -2231,10 +2043,6 @@ func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
 	}
 }
 
-// The console closes once no question of the contest is still answerable to
-// this participant — every one of them either answered correctly or out of
-// attempts. Running SQL cannot lead to an answer any more, so the endpoint
-// that exists to help them answer stops taking queries.
 func TestAParticipantWithNothingLeftToAnswerIsRefusedTheConsole(t *testing.T) {
 	service, _, run := fixture(t)
 	service.WithAnswerable(&answerable{left: false})
@@ -2247,10 +2055,8 @@ func TestAParticipantWithNothingLeftToAnswerIsRefusedTheConsole(t *testing.T) {
 	}
 }
 
-// The refusal is not the end of the registration: it is narrower than
-// contests.ErrParticipantFinished, which closes the whole play screen.
-// Nothing here writes contests.RegistrationFinished, and the read endpoints that share this
-// service's own admission stay open — the story, the questions, the timer.
+// Narrower than ErrParticipantFinished: no status is written and the read
+// endpoints stay open.
 func TestNothingLeftToAnswerDoesNotCloseTheReadEndpoints(t *testing.T) {
 	service, _, _ := fixture(t)
 	service.WithAnswerable(&answerable{left: false})
@@ -2264,8 +2070,6 @@ func TestNothingLeftToAnswerDoesNotCloseTheReadEndpoints(t *testing.T) {
 	}
 }
 
-// A participant with a question still open is untouched: this must not have
-// turned every console into a refusal.
 func TestAParticipantWithAQuestionStillOpenKeepsTheConsole(t *testing.T) {
 	service, _, run := fixture(t)
 	answers := &answerable{left: true}
@@ -2282,10 +2086,7 @@ func TestAParticipantWithAQuestionStillOpenKeepsTheConsole(t *testing.T) {
 	}
 }
 
-// A build that never wired the reader fails open. A missing wire must not
-// lock every participant out of the console mid-olympiad, which is the
-// direction the schema panel's own missing wire already fails in
-// (WithSchemas).
+// A build without the reader fails open (see WithAnswerable).
 func TestAServiceWithNoAnswerableWiredStillRunsQueries(t *testing.T) {
 	service, _, run := fixture(t)
 
@@ -2297,13 +2098,8 @@ func TestAServiceWithNoAnswerableWiredStillRunsQueries(t *testing.T) {
 	}
 }
 
-// The check is placed ahead of provisioning: a refused query must not create
-// a participant's database. It no longer proves the game was never looked
-// up — s.lookup answers the participant, the contest and the game together,
-// so the game arrives with the same one call the participant and the contest
-// already needed, before this check ever runs; what the merge actually saves
-// is the two separate round trips TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun
-// measures, not this one.
+// A refused query must not provision a database. The game arrives with the
+// same lookup before this check, so only provisioning is asserted.
 func TestNothingLeftToAnswerIsRefusedBeforeAnyDatabaseIsProvisioned(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	db := &databases{database: "game_c1_u1"}
@@ -2323,8 +2119,7 @@ func TestNothingLeftToAnswerIsRefusedBeforeAnyDatabaseIsProvisioned(t *testing.T
 	}
 }
 
-// The reader failing is ours, not the participant's query being wrong — and
-// it must not read as "you have nothing left to do" either.
+// The reader failing is ours, and must not read as "nothing left to do".
 func TestAFailingAnswerableReadsAsUnavailableAndNotAsARefusal(t *testing.T) {
 	service, _, _ := fixture(t)
 	service.WithAnswerable(&answerable{err: errors.New("the core database is down")})
@@ -2338,11 +2133,8 @@ func TestAFailingAnswerableReadsAsUnavailableAndNotAsARefusal(t *testing.T) {
 	}
 }
 
-// TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun is the measurement: New's
-// own default composes LookupResult from three separate calls (participant,
-// contest, game) so every test built against those three fakes keeps
-// exercising Run's own code; WithLookup replaces that default with one call,
-// and none of the three it replaces runs at all.
+// New's default builds LookupResult from three calls; WithLookup replaces it
+// with one, and none of the three runs.
 func TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
@@ -2444,8 +2236,7 @@ func TestAccessUsesTheSingleLookupOnceWired(t *testing.T) {
 	}
 }
 
-// A lookup that could not be read at all must be marked as ours, exactly as
-// a separate People.ByUser or Contests.ByID failure always was.
+// A failed single lookup is ours, like a failed separate read.
 func TestASingleLookupsFailureIsMarkedAsOurs(t *testing.T) {
 	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
 	service := queryproxy.New(
@@ -2458,13 +2249,8 @@ func TestASingleLookupsFailureIsMarkedAsOurs(t *testing.T) {
 	}
 }
 
-// TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint is the claim the
-// whole merge depends on: reading the game together with the participant and
-// the contest must not move when a missing game is actually noticed. A
-// lookup that already knows there is no game must still let the address,
-// length and answerable checks run first — exactly the order the separate
-// calls always had — and only report ErrNoGameYet once nothing else has
-// refused first.
+// Reading the game in the combined lookup must not move where a missing game
+// is noticed: the address, length and answerable checks still refuse first.
 func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
@@ -2473,8 +2259,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
 	lookup := lookupFake{participant: participant, contest: contest, gameErr: provisioning.ErrNoGame}
 
-	// The address restriction is checked well before the game is ever
-	// consulted, so a disallowed address must still win.
+	// The address restriction refuses before the game is consulted.
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
 	service := queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithLookup(lookup)
@@ -2482,9 +2267,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed — the address check comes before the game is looked at", err)
 	}
 
-	// Whether anything is still answerable is checked before the game too:
-	// a participant with nothing left to work towards is refused for that,
-	// never told their contest has no game, even though both are true.
+	// So does nothing left to answer, though both are true.
 	fromRoom := command()
 	fromRoom.Address = netip.MustParseAddr("10.20.3.4")
 	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).
@@ -2493,9 +2276,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 		t.Fatalf("error = %v, want ErrNothingLeftToAnswer — answerable comes before the game is looked at", err)
 	}
 
-	// Nothing else refuses one from the contest's own network with a
-	// question still open: the missing game is what finally answers, exactly
-	// as it would have from a separate Games.Game call.
+	// With nothing else refusing, the missing game answers.
 	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNoGameYet) {
 		t.Fatalf("error = %v, want ErrNoGameYet", err)
@@ -2507,9 +2288,7 @@ type watcher struct{ visits []monitor.Visit }
 
 func (w *watcher) Observe(_ context.Context, visit monitor.Visit) { w.visits = append(w.visits, visit) }
 
-// An admitted query is a request of the registration, and the tracker of
-// address changes and parallel sessions hears of it (design §2.3), with
-// where it came from and from which session.
+// An admitted query is reported to the watcher with its address and session.
 func TestAnAdmittedQueryIsObserved(t *testing.T) {
 	service, _, run := fixture(t)
 	seen := &watcher{}
@@ -2532,9 +2311,7 @@ func TestAnAdmittedQueryIsObserved(t *testing.T) {
 	}
 }
 
-// A query refused at admission is not the registration's request: an
-// address the contest does not allow, or a contest that is over, observes
-// nothing.
+// A query refused at admission is not observed.
 func TestARefusedQueryIsNotObserved(t *testing.T) {
 	seen := &watcher{}
 	service := queryproxy.New(
@@ -2556,9 +2333,8 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 	}
 }
 
-// Errors is how the HTTP layer learns which of this package's errors reach a
-// caller, and so which ones need an answer of their own (internal/api's
-// errorTable). Every exported sentinel in the package's source is on it.
+// Every exported sentinel in the package's source is listed by Errors
+// (CLAUDE.md rule 1).
 func TestEveryExportedErrorIsListed(t *testing.T) {
 	sentineltest.AssertListed(t, ".")
 }

@@ -22,13 +22,10 @@ func aContest(t *testing.T, ctx context.Context) uuid.UUID {
 	return makeContest(t, ctx, author.ID)
 }
 
-// anotherPackagesPendingGame commits, outside the test's own transaction, a
-// pending game belonging to nobody this test knows about — what a package
-// running in parallel against the same database leaves in game_templates —
-// and aged so that an installation-wide claim would reach it before any fresh
-// row. The claim tests must pass with it present: a test that claims such a
-// row fails in its own assertions and, while it holds the row's lock, hides
-// it from the package that owns it. It is removed when the test ends.
+// anotherPackagesPendingGame commits an aged pending game outside the test's
+// transaction, as a package running in parallel would. Claim tests must not
+// take it: holding its lock would hide it from the package that owns it. It is
+// removed when the test ends.
 func anotherPackagesPendingGame(t *testing.T) {
 	t.Helper()
 	if testPool == nil {
@@ -52,9 +49,8 @@ func anotherPackagesPendingGame(t *testing.T) {
 	}
 }
 
-// markBuilding puts this test's own game into 'building', aged by age, the way
-// a claim would have left it — without an installation-wide claim, which
-// could take another package's row instead of this one.
+// markBuilding puts this test's game into 'building', aged by age, without an
+// installation-wide claim that could take another package's row.
 func markBuilding(t *testing.T, ctx context.Context, contest uuid.UUID, age string) {
 	t.Helper()
 	tag, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -89,9 +85,6 @@ func TestSavingAScriptCreatesTheGameAndSavingAgainBumpsItsVersion(t *testing.T) 
 		if err != nil {
 			t.Fatalf("second save: %v", err)
 		}
-		// The version is the whole rebuild mechanism: every instance carries
-		// the one it was copied from, and raising it is what makes the
-		// existing copies stale.
 		if second.Version != 2 {
 			t.Fatalf("second save produced version %d, want 2", second.Version)
 		}
@@ -101,8 +94,6 @@ func TestSavingAScriptCreatesTheGameAndSavingAgainBumpsItsVersion(t *testing.T) 
 	})
 }
 
-// A rebuild replaces the shape, so the cached schema describes a database
-// that no longer exists.
 func TestSavingAScriptClearsTheCachedSchema(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -124,8 +115,6 @@ func TestSavingAScriptClearsTheCachedSchema(t *testing.T) {
 	})
 }
 
-// aDefinition mirrors provisioning_test's own helper of the same name: a
-// small, valid game a detective olympiad might actually use.
 func aDefinition() provisioning.Definition {
 	return provisioning.Definition{Tables: []provisioning.TableDefinition{
 		{
@@ -139,10 +128,6 @@ func aDefinition() provisioning.Definition {
 	}}
 }
 
-// The third source (migration 26) round-trips through the same upsert
-// SaveScript and CompleteUpload use: the definition comes back exactly as
-// it was saved, source reads 'builder', and the columns the other two
-// sources own — the script, the upload id — stay empty and nil.
 func TestSavingADefinitionCreatesTheGameWithSourceBuilder(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -171,12 +156,6 @@ func TestSavingADefinitionCreatesTheGameWithSourceBuilder(t *testing.T) {
 	})
 }
 
-// Saving a script over a builder-sourced game must clear its definition —
-// otherwise the row would carry both a script and a definition that
-// migration 26's own CHECK says may not coexist with 'editor' — and the
-// other direction has to hold too: saving a definition over a script-sourced
-// game must leave nothing of the old script behind for the wrong source to
-// read.
 func TestReplacingAGameClearsWhicheverOfScriptOrDefinitionTheNewSourceDoesNotOwn(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -205,11 +184,8 @@ func TestReplacingAGameClearsWhicheverOfScriptOrDefinitionTheNewSourceDoesNotOwn
 	})
 }
 
-// The schema's own defence, beside Definition.Validate's (CLAUDE.md rule 2's
-// point that a bound the domain enforces is still worth a second, structural
-// guarantee at the boundary storage owns). `source` is a closed list; migration
-// 26 widened it to three values and this is the widened list, checked against
-// the database rather than assumed from the Go side.
+// source is a closed list in the schema; this checks it against the database
+// rather than assuming it from the Go side.
 func TestTheSourceCheckConstraintAcceptsExactlyTheThreeKnownSources(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -243,8 +219,8 @@ func TestTheSourceCheckConstraintAcceptsExactlyTheThreeKnownSources(t *testing.T
 	})
 }
 
-// uploadRowFor creates a game_uploads row so a 'file'-sourced game_templates
-// row under test satisfies its own foreign key, and returns its id.
+// uploadRowFor creates a game_uploads row for a 'file'-sourced template's
+// foreign key and returns its id.
 func uploadRowFor(t *testing.T, ctx context.Context, contest uuid.UUID) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -256,12 +232,9 @@ func uploadRowFor(t *testing.T, ctx context.Context, contest uuid.UUID) uuid.UUI
 	return id
 }
 
-// The pairing CHECK migration 26 adds beside the one migration 24 already
-// had: a 'builder' row must carry a definition, and nothing else may. Tested
-// directly against the schema, not through the repository, because
-// SaveDefinition and SaveScript never produce the contradictory row
-// themselves — this is what stops a future change to either from being able
-// to.
+// A 'builder' row must carry a definition and nothing else may (migration 26).
+// Tested against the schema directly, since the repository never writes the
+// contradictory row.
 func TestTheSourcePairingConstraintTiesBuilderToDefinitionJSON(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -281,22 +254,9 @@ func TestTheSourcePairingConstraintTiesBuilderToDefinitionJSON(t *testing.T) {
 	})
 }
 
-// Two workers ticking at the same moment must not both run CREATE DATABASE
-// against one name.
-//
-// ClaimBuild is installation-wide by design: it takes the oldest pending row
-// anywhere, with no contest to scope it. This used to skip when that row
-// belonged to somebody else — and since any pending game in a developer's
-// own database, or left by an earlier test in the same run, makes that the
-// case, the test reported PASS with a note nobody reads instead of proving
-// anything. A skip that a real installation triggers is not a skip, it is
-// silence.
-//
-// So the row is aged first, which is what makes it the one ClaimBuild
-// reaches: `ORDER BY updated_at LIMIT 1` takes the oldest, and ten years is
-// older than anything an installation holds, or than the other package's row
-// anotherPackagesPendingGame leaves. Nothing else outlives the test — the
-// whole body runs in a transaction withTx rolls back, this UPDATE included.
+// ClaimBuild takes the oldest pending row installation-wide, so the test ages
+// its own row by ten years to make it the one claimed. withTx rolls the
+// change back.
 func TestAClaimTakesTheOldestGameAndLeavesItOutOfReachOfTheNextClaim(t *testing.T) {
 	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
@@ -323,12 +283,8 @@ func TestAClaimTakesTheOldestGameAndLeavesItOutOfReachOfTheNextClaim(t *testing.
 				claimed.ContestID, contest)
 		}
 
-		// Claimed once, it is no longer pending, and the claim restarted its
-		// stale window, so no claim may take it again until that passes.
-		// Asked of the row rather than of a second claim: a second
-		// installation-wide claim would take whatever other package's pending
-		// game comes next, and hold it locked from that package until this
-		// transaction rolls back.
+		// The claim restarted the stale window. Checked on the row rather than
+		// with a second claim, which would lock another package's pending game.
 		var status string
 		var fresh bool
 		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
@@ -342,8 +298,6 @@ func TestAClaimTakesTheOldestGameAndLeavesItOutOfReachOfTheNextClaim(t *testing.
 	})
 }
 
-// An API that died mid-build must not leave an organiser watching a spinner
-// that will never stop.
 func TestAGameStuckBuildingIsClaimedAgainOnceItIsStale(t *testing.T) {
 	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
@@ -352,9 +306,7 @@ func TestAGameStuckBuildingIsClaimedAgainOnceItIsStale(t *testing.T) {
 		if _, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		// Left building by a build that never finished, and aged deliberately
-		// rather than waited for: ten years is older than any other package's
-		// row, which is what makes this the one the claim below reaches.
+		// Aged past any other package's row, so the claim below reaches it.
 		markBuilding(t, ctx, contest, "10 years")
 
 		again, err := repo.ClaimBuild(ctx, time.Hour)
@@ -391,9 +343,6 @@ func TestFinishingABuildRecordsReadyOrTheErrorItFailedWith(t *testing.T) {
 	})
 }
 
-// A script saved while a build ran already bumped the version. The older
-// build's outcome speaks for a script nobody is waiting on any more, and must
-// not mark the new one ready — or fail it with the old one's error.
 func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
 	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
@@ -423,10 +372,8 @@ func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
 	})
 }
 
-// markStatus forces one contest's game to status directly, the way a test
-// that needs a 'ready' or 'failed' row to already exist has to — neither
-// state is reachable through the repository's own calls without a real
-// build running.
+// markStatus forces one contest's game to status, for states only a real
+// build would reach.
 func markStatus(t *testing.T, ctx context.Context, contest uuid.UUID, status string) {
 	t.Helper()
 	tag, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -439,18 +386,8 @@ func markStatus(t *testing.T, ctx context.Context, contest uuid.UUID, status str
 	}
 }
 
-// TestRequestBuildLeavesTheStoredContentUntouched is the guarantee the fake
-// in support_test.go cannot prove: it reimplements RequestBuild's own
-// condition as an if/else, so a wrong column name, a wrong status literal or
-// a missing AND in the real UPDATE would still pass every test that ran
-// against the fake. This one runs the actual SQL.
-//
-// Run once per source, because each owns a different one of the three
-// content columns RequestBuild must leave alone — a script's init_script, a
-// definition's definition_json, an upload's upload_id — and reading them
-// back after the call is what would catch somebody later adding one of them
-// to the UPDATE's own SET list, rather than trusting that list to be
-// complete.
+// Runs the real SQL, which the fake in support_test.go cannot check, once per
+// source because each owns a different content column.
 func TestRequestBuildLeavesTheStoredContentUntouched(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -539,10 +476,6 @@ func TestRequestBuildLeavesTheStoredContentUntouched(t *testing.T) {
 	}
 }
 
-// TestRequestBuildAcceptsAFailedGameToo: a build that ran and did not finish
-// is exactly as buildable again as one that finished cleanly — the organiser
-// pressing the button does not care which of the two states got them there,
-// and RequestBuild's own WHERE clause names both.
 func TestRequestBuildAcceptsAFailedGameToo(t *testing.T) {
 	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
@@ -571,14 +504,8 @@ func TestRequestBuildAcceptsAFailedGameToo(t *testing.T) {
 	})
 }
 
-// TestRequestBuildRefusesAGameNotReadyOrFailed is the race arbiter itself —
-// the assertion the fake in support_test.go cannot make, because the fake's
-// own if/else is what it exists to prove is not the whole story. A game
-// already 'pending' (a build is waiting) or 'building' (one is running) must
-// both be refused: raising the version out from under a build already under
-// way would leave that build's own outcome recorded against a version
-// nobody is waiting on, the same trap TestABuildCannotFinishAVersionThatHas
-// AlreadyBeenReplaced covers from FinishBuild's side.
+// Raising the version under a pending or running build would orphan that
+// build's outcome.
 func TestRequestBuildRefusesAGameNotReadyOrFailed(t *testing.T) {
 	for _, status := range []string{"pending", "building"} {
 		t.Run(status, func(t *testing.T) {
@@ -612,19 +539,9 @@ func TestRequestBuildRefusesAGameNotReadyOrFailed(t *testing.T) {
 	}
 }
 
-// TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress documents the
-// repository's own answer for a contest_id that names no game_templates row
-// at all: the conditional UPDATE matches nothing, the same as it would for a
-// row that exists but is pending or building, so this repository method
-// cannot itself tell "no game" apart from "not buildable right now" — both
-// read back as zero rows changed.
-//
-// It is Games.RequestBuild, one layer up, that tells the two apart: it reads
-// TemplateStatus first and returns ErrNoGame before this method is ever
-// called, so a caller of the service never observes what this test asserts.
-// This is deliberately the deferred minor from the branch review recorded
-// against this method — not something to fix here — stated as the behaviour
-// that exists, so a later change to it is a decision made on purpose.
+// The UPDATE cannot tell a missing row from one that is not buildable.
+// Games.RequestBuild checks TemplateStatus first and returns ErrNoGame, so
+// service callers never see this answer.
 func TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -636,8 +553,7 @@ func TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress(t *testing.T)
 	})
 }
 
-// The first build is the one most likely to get this wrong: the template is
-// not 'ready' yet, so Game() has no row to answer from.
+// Before the first build the template is not ready, so Game has no row.
 func TestThePolicyIsReadableBeforeTheGameIsEverBuilt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -647,17 +563,15 @@ func TestThePolicyIsReadableBeforeTheGameIsEverBuilt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read the policy of an unbuilt game: %v", err)
 		}
-		// A contest with no policy row of its own is read-only with the
-		// catalogues open, the same defaults Game() coalesces to.
+		// With no policy row: read-only, catalogues open.
 		if policy.Mode != sqlpolicy.ModeReadOnly || !policy.AllowCatalog {
 			t.Fatalf("defaults came back as %+v", policy)
 		}
 	})
 }
 
-// The one rule this file spells as SQL rather than asking the contests
-// package for. If the two ever disagree, the game of a running olympiad
-// becomes replaceable — which drops every participant's database at once.
+// If the two disagree, a running contest's game becomes replaceable, which
+// drops every participant's database.
 func TestGameEditableAgreesWithContentEditableForEveryStatus(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -684,12 +598,8 @@ func TestGameEditableAgreesWithContentEditableForEveryStatus(t *testing.T) {
 	})
 }
 
-// The status read is what a console polls twice a second while a build runs,
-// and the only thing it wants from the script is how long it is. It must
-// therefore answer with the length and never with the bytes — a twenty-minute
-// build with two organisers watching is 1200 polls, and a half-mebibyte script
-// read on each of them is six hundred megabytes pulled out of this database,
-// turned into Go strings and thrown away.
+// A console polls the status read twice a second during a build, so it must
+// not fetch the script itself.
 func TestTheStatusReadCarriesTheScriptsLengthAndNotItsBytes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -715,8 +625,6 @@ func TestTheStatusReadCarriesTheScriptsLengthAndNotItsBytes(t *testing.T) {
 		if status.ScriptBytes != len(script) {
 			t.Fatalf("ScriptBytes = %d, want %d", status.ScriptBytes, len(script))
 		}
-		// And the full read agrees about the length, so a caller never has to
-		// know which of the two produced the row it is holding.
 		if saved.ScriptBytes != len(script) {
 			t.Fatalf("the full read reports ScriptBytes = %d, want %d", saved.ScriptBytes, len(script))
 		}
@@ -727,8 +635,6 @@ func TestTheStatusReadCarriesTheScriptsLengthAndNotItsBytes(t *testing.T) {
 	})
 }
 
-// A builder-sourced game's definition is the other column the status read
-// leaves behind — and the one that also cost a json.Unmarshal on every poll.
 func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -753,8 +659,6 @@ func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
 		if status.Source != provisioning.SourceBuilder {
 			t.Fatalf("source = %q, want builder", status.Source)
 		}
-		// The full read still has it, which is what makes the status read a
-		// narrower query rather than a lost column.
 		full, err := repo.Template(ctx, contest)
 		if err != nil {
 			t.Fatalf("Template: %v", err)
@@ -765,26 +669,14 @@ func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
 	})
 }
 
-// claimBuildFor claims builds until it gets contest's own row, putting back
-// any foreign row it picks up along the way. ClaimBuild takes the oldest
-// pending template of any contest, so a package running its tests in parallel
-// — and `make test-db` runs this package and internal/provisioning against
-// one database in a single `go test` — can hand a claim in this file another
-// test's row before it hands over this one's.
+// claimBuildFor claims builds until it gets contest's own row. ClaimBuild is
+// installation-wide, and packages tested in parallel share the database, so
+// it may hand over another test's row first.
 //
-// A foreign row is put back to 'pending', never finished. FinishBuild is how
-// this used to release one, and finishing somebody else's claim as a success
-// set their template 'ready' and cleared their data_changed_at: this helper
-// decided another test's build had succeeded, which is a write to rows it
-// does not own and exactly the kind of damage that makes a concurrent suite
-// fail somewhere else entirely.
-//
-// The stale window is an hour rather than ClaimBuild's production minute so
-// that only a 'pending' row is ever claimed: a row left 'building' belongs to
-// a test still running, and 'pending' is then provably the status the foreign
-// row had before this helper touched it. What is not restored is updated_at,
-// which ClaimBuild moved to now() — it decides the queue's order and nothing
-// else, and its owner's own next claim overwrites it anyway.
+// A foreign row is put back to 'pending', never finished, so this helper does
+// not mark another test's build done. The one-hour stale window means only a
+// pending row is claimed, so 'pending' is its original status. updated_at is
+// not restored; it only orders the queue.
 func claimBuildFor(t *testing.T, repo *GameInstances, contest uuid.UUID) provisioning.Template {
 	t.Helper()
 	ctx := t.Context()
@@ -808,10 +700,8 @@ func claimBuildFor(t *testing.T, repo *GameInstances, contest uuid.UUID) provisi
 	return provisioning.Template{}
 }
 
-// TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild is the
-// half of this feature that a fake cannot prove: two writers — the build
-// finishing and an organiser adding a row — meeting on one row, arbitrated by
-// a comparison PostgreSQL makes.
+// The build finishing and an organiser adding a row meet on one row; only the
+// real database can show how the comparison settles it.
 func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -845,13 +735,8 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 		t.Fatal("the build cleared a mark left by a row added while it ran; that row will never be built")
 	}
 
-	// A second build, with nothing changing under it, does clear the mark.
-	//
-	// FinishBuild only ever leaves a game 'ready' or 'failed', never back to
-	// 'pending', so something has to requeue it. Here it is the way any other
-	// edit does it — saving the definition again — which also proves a save
-	// queues a build that clears the mark; RequestBuild's own requeue is
-	// exercised by the failing build below.
+	// A second build, with nothing changing under it, clears the mark. Saving
+	// the definition again requeues it.
 	requeued, err := repo.SaveDefinition(t.Context(), contest, "game_"+contest.String()[:8], aDefinition())
 	if err != nil {
 		t.Fatalf("save the definition again to queue a second build: %v", err)
@@ -871,11 +756,8 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 		t.Fatalf("the mark survived a build that saw every change: %v", settled.DataChangedAt)
 	}
 
-	// A build that failed leaves the mark, however quiet everything was
-	// underneath it. The data never reached a database — the half-built
-	// template is dropped and the rows are still only on the volume — so the
-	// one record that they are unbuilt has to survive, or an organiser is
-	// left with a 'failed' game and nothing saying what is missing from it.
+	// A failed build leaves the mark: its data never reached a database, and
+	// the mark is the only record of that.
 	if err := repo.MarkTableDataChanged(t.Context(), contest); err != nil {
 		t.Fatalf("mark the data changed before the failing build: %v", err)
 	}

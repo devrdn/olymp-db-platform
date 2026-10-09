@@ -5,11 +5,8 @@ import (
 	"fmt"
 )
 
-// Language is one language the installation offers.
-//
-// The set is data, never a constant: adding a fourth language is an INSERT
-// into `languages`, with no migration, deploy or Go change (see §6.2). Nothing
-// in this package enumerates language codes.
+// Language is one language the installation offers. The set is data in the
+// `languages` table, never a constant (§6.2).
 type Language struct {
 	Code       string
 	Name       string
@@ -25,13 +22,9 @@ type LanguageCatalog interface {
 	Active(ctx context.Context) ([]Language, error)
 }
 
-// checkLanguagesKnown reports an unknown or retired language code.
-//
-// The foreign key would catch an unknown code too, but only as an opaque
-// constraint violation; an organizer who typed "rus" deserves to be told which
-// code was wrong, and to be told before anything is written. A retired
-// language the key would not catch at all: deactivating one is how an
-// installation stops offering it, and a new contest must not pick it up again.
+// checkLanguagesKnown reports an unknown or retired language code. The
+// foreign key catches an unknown code only as an opaque violation, and does
+// not catch a retired one at all.
 func checkLanguagesKnown(known []Language, requested []ContestLanguage) error {
 	active := make(map[string]struct{}, len(known))
 	for _, l := range known {

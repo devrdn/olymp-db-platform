@@ -13,20 +13,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestEveryChangeIsRecordedInsideItsTransaction pins the placement of the
-// audit write.
-//
-// The record sits inside the unit of work on purpose, and it is the one
-// arrangement that makes the trail evidence: written after the commit it can
-// be lost while the change survives, and written before it can outlive a
-// rollback. That placement is a convention repeated at twenty call sites, and
-// nothing about the twenty-first enforces it — so it is asserted here for
-// every operation that changes anything, rather than trusted.
-//
-// The operations run in one sequence against one fixture because that is the
-// only order in which they are all legal: a question cannot be reordered
-// before it exists, and nobody can enroll in a contest that was never
-// published.
+// The audit write must sit inside the unit of work: after the commit it can be
+// lost, before it can outlive a rollback. Nothing enforces that at a new call
+// site, so every mutating operation is asserted here. They run in sequence
+// because that is the only order in which all of them are legal.
 func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 	ctx := context.Background()
 	f := conteststest.NewFixture()
@@ -50,8 +40,7 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			})
 			return err
 		}},
-		// Opened for signup here so that Enroll, far below, has something to
-		// join: the setting cannot be changed once the contest is running.
+		// Opens signup for Enroll below; it cannot change once running.
 		{"Update", func() error {
 			_, err := f.Service.Update(ctx, contests.UpdateCommand{
 				ActorID:    actor,
@@ -176,12 +165,8 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 	}
 }
 
-// TestARefusalIsRecordedWithoutATransaction is the exception the test above
-// allows for, stated so that it is a decision rather than a gap.
-//
-// Turning somebody away changes nothing, so there is nothing for the entry to
-// be atomic with — and the attempt is exactly what an administrator wants to
-// find afterwards, which a rollback-shaped write would be free to lose.
+// A refusal changes nothing to be atomic with, and a rollback must not lose
+// the record of the attempt.
 func TestARefusalIsRecordedWithoutATransaction(t *testing.T) {
 	ctx := context.Background()
 	f := conteststest.NewFixture()
@@ -214,17 +199,9 @@ func TestARefusalIsRecordedWithoutATransaction(t *testing.T) {
 	}
 }
 
-// TestTwoTransitionsRaceAndOnlyOneWins pins the check-then-write that the
-// status change used to be.
-//
-// Transition reads the contest, decides the move is legal, runs the publish
-// gate, and only then writes — and the write said "set the status to running"
-// rather than "set it to running if it is still published". Two organisers
-// pressing Start at the same moment both passed the check against the same
-// old status, and the second wrote over the first. The dangerous version is
-// not the duplicate: it is the sequence where the gate passes against a state
-// that no longer exists by the time the write lands, which is how a contest
-// with no story starts.
+// Transition checks, runs the publish gate, then writes; the write must be
+// conditional on the status it checked, or a gate that passed against a stale
+// state lets a contest with no story start.
 func TestTwoTransitionsRaceAndOnlyOneWins(t *testing.T) {
 	ctx := context.Background()
 	f := conteststest.NewFixture()
@@ -235,9 +212,7 @@ func TestTwoTransitionsRaceAndOnlyOneWins(t *testing.T) {
 		t.Fatalf("Transition() to published = %v", err)
 	}
 
-	// The second caller decided while the contest was still published, which
-	// is what a concurrent request holds: a snapshot taken before the first
-	// one committed.
+	// The second caller holds a snapshot taken before the first committed.
 	f.Contests.SetStatusRaces(contests.StatusRunning)
 
 	err := f.Service.Transition(ctx, actor, c.ID, contests.StatusRunning)
@@ -247,8 +222,6 @@ func TestTwoTransitionsRaceAndOnlyOneWins(t *testing.T) {
 	}
 }
 
-// TestATransitionThatWasNotRacedStillLands is the other half: the guard must
-// refuse the race without refusing the ordinary case.
 func TestATransitionThatWasNotRacedStillLands(t *testing.T) {
 	ctx := context.Background()
 	f := conteststest.NewFixture()

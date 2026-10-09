@@ -17,9 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// fixture is a service over the in-memory repository and the real
-// fixed-window limiter over an in-process cache, so what is counted is what
-// the deployment counts.
+// fixture uses the real fixed-window limiter, so what is counted is what the
+// deployment counts.
 type fixture struct {
 	repo    *workspacetest.Repository
 	service *workspace.Service
@@ -38,7 +37,6 @@ func newFixture(t *testing.T) *fixture {
 	}
 }
 
-// load reads the workspace, which also creates the first tab.
 func (f *fixture) load(t *testing.T) workspace.Workspace {
 	t.Helper()
 	got, err := f.service.Get(t.Context(), f.session)
@@ -55,8 +53,6 @@ func TestTheFirstReadGivesTheWorkspaceATabTitledInTheRequestsLanguage(t *testing
 		"en": "Query 1",
 		"ru": "Запрос 1",
 		"ro": "Interogare 1",
-		// A language the platform has no word for falls back to English
-		// rather than to an empty title the validator would refuse.
 		"de": "Query 1",
 	} {
 		t.Run(lang, func(t *testing.T) {
@@ -74,7 +70,7 @@ func TestTheFirstReadGivesTheWorkspaceATabTitledInTheRequestsLanguage(t *testing
 func TestNotesAreBoundedInCharactersNotBytes(t *testing.T) {
 	f := newFixture(t)
 
-	// Exactly the limit, in a script where a character is two bytes: taken.
+	// Exactly the limit, with two-byte characters: accepted.
 	atLimit := strings.Repeat("ж", workspace.MaxNotesRunes)
 	if _, err := f.service.SaveNotes(t.Context(), f.session, atLimit); err != nil {
 		t.Fatalf("SaveNotes(at the limit) = %v", err)
@@ -98,8 +94,6 @@ func TestATabBodyIsBoundedLikeAQuery(t *testing.T) {
 	}
 }
 
-// PostgreSQL's text cannot hold a NUL, which JSON can carry as an escaped U+0000: stored
-// unchecked it is a 500 rather than the caller's own mistake.
 func TestTextWithANulCharacterIsRefused(t *testing.T) {
 	f := newFixture(t)
 	tab := f.load(t).Tabs[0]
@@ -146,7 +140,6 @@ func TestTitlesAreTrimmedAndBounded(t *testing.T) {
 		})
 	}
 
-	// What is stored is the trimmed title.
 	if _, err := f.service.UpdateTab(t.Context(), f.session, tab.ID, workspace.TabPatch{Title: ptr("  joins  ")}); err != nil {
 		t.Fatalf("UpdateTab() = %v", err)
 	}
@@ -172,7 +165,6 @@ func TestANewTabWithoutATitleTakesTheSmallestFreeNumber(t *testing.T) {
 	if err != nil || second.Title != "Запрос 2" {
 		t.Fatalf("CreateTab() = %+v, %v; want Запрос 2", second, err)
 	}
-	// Renaming the first frees its number, and the next tab takes it.
 	if _, err := f.service.UpdateTab(t.Context(), f.session, first.ID, workspace.TabPatch{Title: ptr("joins")}); err != nil {
 		t.Fatalf("UpdateTab() = %v", err)
 	}
@@ -271,7 +263,6 @@ func TestReorderingMustNameEveryTabExactlyOnce(t *testing.T) {
 	}
 }
 
-// Sixty writes a minute per participant, notes and tabs together.
 func TestWritesPastTheRateAreRefused(t *testing.T) {
 	f := newFixture(t)
 	account := uuid.New()
@@ -287,13 +278,11 @@ func TestWritesPastTheRateAreRefused(t *testing.T) {
 		t.Fatal("admitting a write reached the repository")
 	}
 
-	// Another participant has a budget of their own.
 	if err := f.service.AdmitWrite(t.Context(), uuid.New()); err != nil {
 		t.Fatalf("another account's AdmitWrite() = %v, want it admitted", err)
 	}
 }
 
-// Reading is not a write, and spends nothing of the write budget.
 func TestReadingSpendsNoWriteBudget(t *testing.T) {
 	f := newFixture(t)
 	account := uuid.New()
@@ -311,8 +300,6 @@ func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, 
 	return false, errors.New("cache unreachable")
 }
 
-// A counter that cannot be kept refuses (auth.Limiter's own rule), and the
-// refusal is not a rate refusal: nobody asked too often.
 func TestAWriteIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	service := workspace.NewService(workspacetest.NewRepository(), failingLimiter{})
 	err := service.AdmitWrite(t.Context(), uuid.New())
@@ -321,10 +308,9 @@ func TestAWriteIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	}
 }
 
-// Every save is also a revision, and every tab change an event, stored under
-// monitor's bounds in the same transaction. A workspace bound grown past one
-// of those would make autosave fail on its own history, so each is checked
-// against the other here, where both are in view.
+// Every save is also a revision and every tab change an event, stored under
+// monitor's bounds in the same transaction; a workspace bound past one of
+// those would make autosave fail on its own history.
 func TestEveryWorkspaceBoundFitsTheHistorysBounds(t *testing.T) {
 	if workspace.MaxTitleRunes > monitor.MaxTabTitleRunes {
 		t.Errorf("a tab title may be %d characters, a revision's or an event's only %d",

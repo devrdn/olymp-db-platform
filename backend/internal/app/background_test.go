@@ -33,7 +33,6 @@ func TestAPeriodicJobRunsAgainAndStopsWhenTold(t *testing.T) {
 		})
 	}()
 
-	// Two ticks is the claim: it repeats rather than running once.
 	deadline := time.After(2 * time.Second)
 	for runs.Load() < 2 {
 		select {
@@ -52,8 +51,6 @@ func TestAPeriodicJobRunsAgainAndStopsWhenTold(t *testing.T) {
 	}
 }
 
-// Housekeeping that cannot run because the database is briefly away should try
-// again, not stop for ever — nor take the service down.
 func TestAFailingJobKeepsItsSchedule(t *testing.T) {
 	var runs atomic.Int64
 	ctx, cancel := context.WithCancel(t.Context())
@@ -76,12 +73,6 @@ func TestAFailingJobKeepsItsSchedule(t *testing.T) {
 	}
 }
 
-// advanceContestSchedule wraps whatever contests.Scheduler.Advance answers
-// into a task; the scheduler's own rules (the lock, the two bulk moves, the
-// audit trail) are exercised where they are declared
-// (internal/contests/schedule_test.go), so this only has to prove the
-// wrapping itself: a tick that failed is reported, and one that moved
-// something is not silently unremarkable in the log the operator watches.
 func TestAdvanceContestScheduleReportsFailureAndSilenceOtherwise(t *testing.T) {
 	failure := errors.New("database is away")
 	var buf bytes.Buffer
@@ -97,12 +88,6 @@ func TestAdvanceContestScheduleReportsFailureAndSilenceOtherwise(t *testing.T) {
 	}
 }
 
-// The other half of the name above, and until now the half nothing asserted:
-// a tick that moved something says so. This log line is the only signal an
-// operator gets that contests started or finished on their own — an early
-// return, or a condition narrowed to "started > 0", takes it away and every
-// other test of this job stays green, because they all pass a discarding
-// logger.
 func TestAdvanceContestScheduleLogsWhatMoved(t *testing.T) {
 	var buf bytes.Buffer
 	job := advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
@@ -120,7 +105,6 @@ func TestAdvanceContestScheduleLogsWhatMoved(t *testing.T) {
 		t.Fatalf("the line does not carry both counts: %q", line)
 	}
 
-	// A tick that finished contests and started none still moved something.
 	buf.Reset()
 	job = advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
 		return 0, 1, nil
@@ -142,16 +126,11 @@ func TestAdvanceContestScheduleSucceedsWhenNothingMoved(t *testing.T) {
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v, want nil for a tick that moved nothing", err)
 	}
-	// Silence is the other half of the claim: a line every fifteen seconds
-	// saying nothing happened is a line nobody reads.
 	if buf.Len() != 0 {
 		t.Fatalf("a tick that moved nothing logged %q", buf.String())
 	}
 }
 
-// The sweep is the second half of the two-phase journal: rows are written
-// before a query runs so that a crash leaves evidence, and evidence nobody
-// closes says `running` for ever.
 func TestTheSweepAsksForRowsOlderThanALiveQueryCouldBe(t *testing.T) {
 	var asked time.Duration
 	job := sweepQueryLog(quiet(), func(_ context.Context, older time.Duration) (int64, error) {
@@ -162,26 +141,15 @@ func TestTheSweepAsksForRowsOlderThanALiveQueryCouldBe(t *testing.T) {
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	// The runner's own deadline is five seconds. A cut-off anywhere near it
-	// would mark queries that are merely slow.
 	if asked < time.Minute {
 		t.Fatalf("cut-off is %s, close enough to a live query to catch one", asked)
 	}
 }
 
-// reclaimInstances wraps provisioning.Service.Reclaim into a task; Reclaim's
-// own rules (the grace period, the busy-database skip, one failure not
-// stopping the rest) are exercised where they are declared
-// (internal/provisioning/reclaim_test.go), so this only has to prove the
-// wrapping: the configured grace reaches the call, a failure is reported
-// rather than swallowed, and every count reaches the metrics pair regardless.
 func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T) {
 	failure := errors.New("the game cluster is away")
 	var gotGrace int
-	// The Prometheus backend, not Noop: with Noop every Add is a no-op by
-	// construction, so a tick that never touched the counters at all would
-	// look identical. reclaimCounterTotals below reads them back by the same
-	// names a dashboard scrapes.
+	// Prometheus, not Noop, so untouched counters would show.
 	recorder := metrics.NewPrometheus()
 	counters := metrics.NewGameReclaimCounters(recorder)
 
@@ -196,10 +164,7 @@ func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T)
 	if gotGrace != 90 {
 		t.Fatalf("grace passed to Reclaim = %d, want 90", gotGrace)
 	}
-	// "regardless" is the word this half of the doc has always used and
-	// nothing has ever checked: the tick failed, and the databases it *did*
-	// drop before failing still have to reach the counters, or a dashboard
-	// reads a partially failed sweep as one that did nothing.
+	// The tick failed, but what it dropped first must still be counted.
 	totals := reclaimCounterTotals(t, recorder)
 	for name, want := range map[string]float64{
 		"game_instances_reclaimed_total":      2,
@@ -223,12 +188,6 @@ func TestReclaimInstancesSucceedsWhenNothingWasThere(t *testing.T) {
 	}
 }
 
-// A tick that only skipped busy databases used to report "reclaimed=0
-// failed=0", indistinguishable from nothing being due at all. The claim is
-// that an operator can tell the two apart, so both places the answer reaches
-// them are asserted here — the summary line and the counters — rather than
-// only that the tick returned no error, which a version that logged nothing
-// and counted nothing would also satisfy.
 func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
 	var buf bytes.Buffer
 	recorder := metrics.NewPrometheus()
@@ -260,10 +219,8 @@ func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
 	}
 }
 
-// reclaimCounterTotals reads the reclaim counters back off a Prometheus
-// recorder's own registry, keyed by the metric names a dashboard uses. The
-// counters themselves are unexported in internal/platform/metrics, and going
-// through Gather is the same path a scrape takes.
+// reclaimCounterTotals reads the reclaim counters through Gather, as a
+// scrape would, keyed by metric name.
 func reclaimCounterTotals(t *testing.T, p *metrics.Prometheus) map[string]float64 {
 	t.Helper()
 	families, err := p.Registry().Gather()
@@ -281,19 +238,10 @@ func reclaimCounterTotals(t *testing.T, p *metrics.Prometheus) map[string]float6
 	return totals
 }
 
-// stuckWarningLines counts the "busy long past its grace deadline" warning
-// lines logged so far — the fact finding 3 asks about: one line the first
-// time a database becomes stuck, silence on every following tick where
-// nothing about it changed.
 func stuckWarningLines(buf *bytes.Buffer) int {
 	return strings.Count(buf.String(), "busy long past its grace deadline")
 }
 
-// A database stuck at the same overdue duration tick after tick — the
-// ordinary steady state for as long as something stays connected to it — must
-// warn once, not once every ten minutes (144 lines a day per database before
-// this fix). Crossing another full day overdue is a real change and gets its
-// own line.
 func TestReclaimInstancesWarnsOnceThenOnlyWhenAnotherDayPasses(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
@@ -314,8 +262,7 @@ func TestReclaimInstancesWarnsOnceThenOnlyWhenAnotherDayPasses(t *testing.T) {
 		t.Fatalf("first tick logged %d warnings, want 1", got)
 	}
 
-	// Still the same database, still stuck, ten minutes (one tick) more
-	// overdue — the same day, so no new line.
+	// One tick more overdue, same day: no new line.
 	overdue += 10 * time.Minute
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v", err)
@@ -324,7 +271,6 @@ func TestReclaimInstancesWarnsOnceThenOnlyWhenAnotherDayPasses(t *testing.T) {
 		t.Fatalf("tick with no day crossed logged %d warnings total, want still 1", got)
 	}
 
-	// Now a full day further overdue — worth its own line.
 	overdue += 24 * time.Hour
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v", err)
@@ -334,10 +280,6 @@ func TestReclaimInstancesWarnsOnceThenOnlyWhenAnotherDayPasses(t *testing.T) {
 	}
 }
 
-// A database that stops being stuck (reclaimed, or simply freed up) and later
-// gets stuck again is a new fact, not a continuation of the old one — it must
-// warn again rather than staying silent because this process warned about the
-// same database name once before.
 func TestReclaimInstancesWarnsAgainAfterRecoveringAndGettingStuckAgain(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
@@ -375,13 +317,7 @@ func TestReclaimInstancesWarnsAgainAfterRecoveringAndGettingStuckAgain(t *testin
 	}
 }
 
-// A pool tender that waits out its own ten-minute interval before it does
-// anything is a pool nobody tended for ten minutes — and an API restarted
-// five minutes before a contest opens leaves every participant waiting for
-// CREATE DATABASE inside their own page load.
-//
-// The interval here is an hour, so nothing but the run at startup can make
-// this pass.
+// The interval is an hour, so only the run at startup can make this pass.
 func TestAJobMarkedAtStartRunsBeforeItsFirstTick(t *testing.T) {
 	ran := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -401,9 +337,6 @@ func TestAJobMarkedAtStartRunsBeforeItsFirstTick(t *testing.T) {
 	}
 }
 
-// The opposite claim, and the one that makes atStart a per-job decision
-// rather than a global change: a job that did not ask for it stays on its
-// tick. game-reclaim is the job this protects — its tick drops databases.
 func TestAJobNotMarkedAtStartWaitsForItsFirstTick(t *testing.T) {
 	var runs atomic.Int64
 	ctx, cancel := context.WithCancel(t.Context())
@@ -421,9 +354,6 @@ func TestAJobNotMarkedAtStartWaitsForItsFirstTick(t *testing.T) {
 	}
 }
 
-// A run at startup that failed must not stop the schedule, for the same
-// reason a failed tick does not: the database being briefly away is not a
-// reason to leave the pool untended for the rest of the process's life.
 func TestAJobThatFailsAtStartupKeepsItsSchedule(t *testing.T) {
 	var runs atomic.Int64
 	ctx, cancel := context.WithCancel(t.Context())
@@ -447,10 +377,6 @@ func TestAJobThatFailsAtStartupKeepsItsSchedule(t *testing.T) {
 	}
 }
 
-// Which jobs run at startup is the decision finding 3 is about, and it is a
-// decision per job — so it is asserted per job, here, rather than left to
-// whoever next reads the constructors. The reasoning for each is in its own
-// constructor in background.go.
 func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
 
@@ -501,13 +427,6 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 	}
 }
 
-// The cut-off after which a game still at `building` is taken to belong to a
-// process that died has to outlast the budget the build itself was given.
-// Fifteen minutes was a constant beside a thirty-minute, deployment-settable
-// GAME_BUILD_TIMEOUT, so a build of a multi-gigabyte dump was claimed a second
-// time while the first was still streaming — and the second BuildTemplate
-// begins by dropping the template the first is filling. See staleBuildAfter
-// for what that costs and for why the number is derived rather than declared.
 func TestTheStaleBuildCutOffOutlastsWhateverBudgetABuildWasGiven(t *testing.T) {
 	for _, budget := range []time.Duration{time.Minute, gamedb.DefaultBuildTimeout, 4 * time.Hour} {
 		var asked time.Duration
@@ -526,9 +445,7 @@ func TestTheStaleBuildCutOffOutlastsWhateverBudgetABuildWasGiven(t *testing.T) {
 	}
 }
 
-// A trigger (see provisioning.Tender) is a second way to run a job besides
-// its own tick. The interval here is an hour, so nothing but a send on wake
-// can make this pass before the test's own deadline.
+// The interval is an hour, so only a send on wake can make this pass.
 func TestATriggerRunsTheJobBeforeItsNextTick(t *testing.T) {
 	wake := make(chan struct{}, 1)
 	ran := make(chan struct{}, 1)
@@ -551,9 +468,6 @@ func TestATriggerRunsTheJobBeforeItsNextTick(t *testing.T) {
 	}
 }
 
-// A job that never sets wake (every job but the pool tender) must not be
-// affected by this at all — runPeriodically has to leave a nil channel out
-// of its select without a nil-channel panic or a spurious run.
 func TestAJobWithNoTriggerWiredIsUnaffected(t *testing.T) {
 	var runs atomic.Int64
 	ctx, cancel := context.WithCancel(t.Context())
@@ -571,9 +485,6 @@ func TestAJobWithNoTriggerWiredIsUnaffected(t *testing.T) {
 	}
 }
 
-// The pool tender's cadence is now a minute rather than the ten minutes it
-// used to be — Live already narrows every tick to published or running
-// contests, so the shorter interval costs nothing on any other contest.
 func TestTendPoolsTicksEveryMinute(t *testing.T) {
 	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, nil)
 
@@ -582,11 +493,6 @@ func TestTendPoolsTicksEveryMinute(t *testing.T) {
 	}
 }
 
-// tendPools must wire a tender's own channel through as the task's wake, so
-// runPeriodically's select actually listens for it — the coalescing and
-// non-blocking guarantees are provisioning.Tender's own (see
-// internal/provisioning/tender_test.go); this only has to prove the two are
-// actually connected.
 func TestTendPoolsWiresTheTendersWakeChannel(t *testing.T) {
 	tender := provisioning.NewTender()
 	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, tender)
@@ -600,9 +506,6 @@ func TestTendPoolsWiresTheTendersWakeChannel(t *testing.T) {
 	}
 }
 
-// A pool tender built with no Tender at all (an installation with no game
-// cluster never makes one) must not panic — job.wake is simply nil, which a
-// select never selects.
 func TestTendPoolsWithNoTenderIsUnaffected(t *testing.T) {
 	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, nil)
 

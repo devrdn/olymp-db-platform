@@ -42,7 +42,6 @@ func newBoardFixture(t *testing.T, ctx context.Context) boardFixture {
 	return f
 }
 
-// participant enrols a new account, registered at the given minute.
 func (f boardFixture) participant(t *testing.T, login string, minute int) uuid.UUID {
 	t.Helper()
 	user := makeUser(t, f.ctx, login)
@@ -103,9 +102,7 @@ func TestStandingsAggregateEachRegistrationUpToTheCutoff(t *testing.T) {
 	})
 }
 
-// ICPC standings come from ICPCStandings, with a grid; Standings asked for
-// them is a programmer error refused before any query, so this test needs no
-// database.
+// Refused before any query, so this test needs no database.
 func TestStandingsRefuseICPC(t *testing.T) {
 	entries, err := NewLeaderboard(nil).Standings(context.Background(), leaderboard.Query{
 		ContestID: uuid.New(), Cutoff: boardStart, Scoring: contests.ScoringICPC, Limit: 10,
@@ -115,8 +112,8 @@ func TestStandingsRefuseICPC(t *testing.T) {
 	}
 }
 
-// A registration made after the cutoff is not on a frozen table, or its row
-// would appear with a zero and say that somebody joined during the freeze.
+// A registration after the cutoff would reveal that somebody joined during
+// the freeze.
 func TestStandingsLeaveOutRegistrationsAfterTheCutoffAndTheDisqualified(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newBoardFixture(t, ctx)
@@ -169,9 +166,7 @@ func TestStandingsMarkADeletedAccount(t *testing.T) {
 	})
 }
 
-// Cutting the list must never cut the top of the table: by points normally,
-// and with the winner first in winner mode even when the winner has fewer
-// points than everybody else.
+// In winner mode the winner stays first even with the fewest points.
 func TestStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newBoardFixture(t, ctx)
@@ -228,7 +223,6 @@ func newICPCFixture(t *testing.T, ctx context.Context, penaltyMin int) icpcFixtu
 	return f
 }
 
-// answerAt stores an ICPC answer, which never carries points, at an exact moment.
 func (f icpcFixture) answerAt(t *testing.T, registration, question uuid.UUID, attempt int, correct bool, at time.Time) {
 	t.Helper()
 	exec(t, f.ctx, `
@@ -243,7 +237,6 @@ func (f icpcFixture) standings(t *testing.T, q leaderboard.Query) map[string]lea
 	return byLogin(entries)
 }
 
-// table runs the ICPC query and returns the rows in order and the grid.
 func (f icpcFixture) table(t *testing.T, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid) {
 	t.Helper()
 	q.ContestID, q.Scoring = f.contest, contests.ScoringICPC
@@ -265,8 +258,7 @@ func cellString(c leaderboard.Cell) string {
 	return fmt.Sprintf("{solved %s minute %d wrong %d pending %d}", solved, c.Minute, c.Wrong, c.Pending)
 }
 
-// The solving minute is whole minutes from the start, rounded down: 59 seconds
-// is minute 0 and 60 seconds is minute 1.
+// 59 seconds is minute 0 and 60 seconds is minute 1.
 func TestICPCStandingsRoundTheSolvingMinuteDown(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -285,8 +277,6 @@ func TestICPCStandingsRoundTheSolvingMinuteDown(t *testing.T) {
 	})
 }
 
-// With an individual timer the minute is measured from the participant's own
-// start, not from the window's.
 func TestICPCStandingsMeasureAnIndividualTimerFromTheParticipantsStart(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -302,9 +292,7 @@ func TestICPCStandingsMeasureAnIndividualTimerFromTheParticipantsStart(t *testin
 	})
 }
 
-// Only wrong attempts before the solve cost, at the contest's own penalty: a
-// wrong attempt after the solve and the wrong attempts on an unsolved question
-// cost nothing.
+// Wrong attempts after the solve, or on an unsolved question, cost nothing.
 func TestICPCStandingsChargeOnlyWrongAttemptsBeforeTheSolve(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 7)
@@ -336,22 +324,17 @@ func TestICPCStandingsChargeOnlyWrongAttemptsBeforeTheSolve(t *testing.T) {
 	})
 }
 
-// A cell names the question it stands for, and the cells of a row add up to
-// exactly the penalty the statement computed for that row.
-//
-// This is the guard on the two copies of the ICPC rule: the SQL sums
-// `minute + icpc_penalty_min * wrong` over the solved cells, and
-// leaderboard.Cell.Penalty performs the same arithmetic in Go so that a
-// report can say what one question cost. They must agree on every shape a
-// row can have — a clean solve, a solve after wrong attempts, an unsolved
-// question with wrong attempts, and one nobody touched.
+// The ICPC penalty rule exists twice: summed in SQL and per cell in
+// leaderboard.Cell.Penalty. They must agree on every cell shape: a clean
+// solve, a solve after wrong attempts, an unsolved question with wrong
+// attempts, and an untouched one.
 func TestICPCCellPenaltiesAddUpToTheRowsOwn(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		const perWrong = 7
 		f := newICPCFixture(t, ctx, perWrong)
 		alice := f.participant(t, "icpc-cells", 0)
-		// A: solved at minute 10 after two wrong attempts. B: wrong twice and
-		// never solved. The hidden question is on no grid at all.
+		// A: solved at minute 10 after two wrong attempts. B: wrong twice,
+		// never solved.
 		f.answerAt(t, alice, f.a, 1, false, boardAt(1))
 		f.answerAt(t, alice, f.a, 2, false, boardAt(2))
 		f.answerAt(t, alice, f.a, 3, true, boardAt(10))
@@ -380,11 +363,8 @@ func TestICPCCellPenaltiesAddUpToTheRowsOwn(t *testing.T) {
 				e.Cells[0].Penalty(perWrong), e.Cells[1].Penalty(perWrong), 10+2*perWrong)
 		}
 
-		// The commonest cell on a real table, and the one shape the row above
-		// does not have: a question answered correctly first time, which costs
-		// its minute and nothing else. A rule that multiplied the penalty by
-		// the attempt number rather than by the wrong ones would pass
-		// everything above and fail here.
+		// Correct at the first attempt costs only its minute; a rule that
+		// multiplied the penalty by the attempt number would fail here.
 		bob := f.participant(t, "icpc-clean", 0)
 		f.answerAt(t, bob, f.a, 1, true, boardAt(12))
 
@@ -406,7 +386,6 @@ func TestICPCCellPenaltiesAddUpToTheRowsOwn(t *testing.T) {
 	})
 }
 
-// A hidden question is neither on the grid nor in the count, even solved.
 func TestICPCStandingsLeaveAHiddenQuestionOffTheGrid(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -426,9 +405,9 @@ func TestICPCStandingsLeaveAHiddenQuestionOffTheGrid(t *testing.T) {
 	})
 }
 
-// Pending attempts are counted only when the query asks, over [From, Until),
-// and only on a question not solved before the cutoff; nothing after the
-// cutoff moves solved, penalty or a cell's solve — not even a correct answer.
+// Nothing after the cutoff, not even a correct answer, moves solved, penalty
+// or a cell's solve; it only counts as pending over [From, Until), on a
+// question unsolved before the cutoff, when the query asks.
 func TestICPCStandingsCountPendingAttemptsInTheWindowOnUnsolvedQuestions(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -466,9 +445,8 @@ func TestICPCStandingsCountPendingAttemptsInTheWindowOnUnsolvedQuestions(t *test
 	})
 }
 
-// A registration made after the cutoff is not on a frozen ICPC table, even
-// with attempts inside the pending window: its row would say that somebody
-// joined during the freeze, and its pending count what they did since.
+// A late registration's row would reveal that somebody joined during the
+// freeze.
 func TestICPCStandingsLeaveOutARegistrationAfterTheCutoffWithPendingAttempts(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -489,8 +467,6 @@ func TestICPCStandingsLeaveOutARegistrationAfterTheCutoffWithPendingAttempts(t *
 	})
 }
 
-// The order and the cut match the ranking: more solved first, then less
-// penalty, then the earlier last solve — so LIMIT never cuts the top.
 func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -520,8 +496,6 @@ func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 	})
 }
 
-// A table with nobody on it still knows its grid: the letters and the cells
-// of the first row to arrive must agree, and there is no row to count from.
 func TestICPCStandingsReturnTheGridWithNoRegistrations(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -534,11 +508,10 @@ func TestICPCStandingsReturnTheGridWithNoRegistrations(t *testing.T) {
 	})
 }
 
-// A question's earliest solve is the contest's, not the page's: the first
-// solver is below the row bound here, a disqualified registration solved
-// earlier still, the staff query lists that registration, and an answer
-// after the cutoff is earlier than nothing. Two solves in the same instant
-// both carry the earliest moment.
+// The earliest solve is the contest's, not the page's. Here the first solver
+// is below the row bound, a disqualified registration solved earlier still
+// (the staff query lists it), and an answer after the cutoff does not count.
+// Two solves at the same instant both carry the earliest moment.
 func TestICPCStandingsNameEachQuestionsEarliestSolveOverTheWholeContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newICPCFixture(t, ctx, 20)
@@ -570,9 +543,6 @@ func TestICPCStandingsNameEachQuestionsEarliestSolveOverTheWholeContest(t *testi
 	})
 }
 
-// The reveal is written once, and it does not move updated_at: the reclaim
-// sweep measures a finished contest's grace from that column, and pressing
-// "reveal" must not quietly keep its databases alive for another day.
 func TestMarkRevealedWritesOnceAndLeavesUpdatedAtAlone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newBoardFixture(t, ctx)

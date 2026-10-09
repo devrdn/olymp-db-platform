@@ -16,90 +16,40 @@ type session struct {
 	meter    *readMeter
 	database string
 	write    bool
-	// reused says the connection served an earlier query. A reused connection
-	// may have been severed while it sat idle — a database dropped WITH
-	// (FORCE) under it — which the first statement on it discovers.
+	// reused says the connection served an earlier query, and may have been
+	// severed while idle.
 	reused bool
 }
 
-// errPoolExhausted is the pool at its bound with nothing idle to close.
-//
-// The gate admits no more executions than the pool holds connections, so this
-// is never the ordinary answer to load: it means the two bounds have come
-// apart. It is refused rather than exceeded, because exceeding it is a game
-// cluster holding more backends than its memory is sized for; and it is
-// ErrBusy to everything above, which already knows how to tell a participant
-// to try again.
+// errPoolExhausted is the pool at its bound with nothing idle to close. The
+// gate should make this unreachable; it is refused rather than exceeded,
+// because the game cluster's memory is sized for the bound.
 var errPoolExhausted = fmt.Errorf("%w: every game-database connection the runner may hold is in use", ErrBusy)
 
-// dialer opens a new connection to one database as one of the two roles.
 type dialer func(ctx context.Context, database string, write bool, readBudget int64) (*pgx.Conn, *readMeter, error)
 
-// pool keeps the connection a participant's read finished on, so that their
-// next read skips the connection handshake.
+// pool keeps the connection a participant's read finished on, so their next
+// read skips a TCP and SCRAM handshake and a backend fork (about 5 ms of
+// server CPU per query).
 //
-// # Why it exists
+// It keeps at most one idle connection per database, closed after idleTimeout:
+// an instance database has CONNECTION LIMIT 2, the second slot being headroom
+// for a backend still exiting. It holds at most capacity (QUERY_CONCURRENT)
+// connections in all, idle included, because the game cluster's memory is
+// sized for that many backends; at the bound a new connection first closes the
+// least recently used idle one.
 //
-// Opening a connection is a TCP handshake, a SCRAM-SHA-256 exchange (PBKDF2 on
-// both ends, by design expensive) and a backend fork. Measured on the test
-// cluster that is about five milliseconds of server CPU per query — as much as
-// a typical participant join, and all of a trivial one — spent on the same two
-// cores the queries run on.
+// Only a read that finished cleanly is kept, after DISCARD ALL. A write, a
+// failure, or an abandoned query closes its connection: a reset is not trusted
+// after a write, and an abandoned query may have a cancel in flight. A write
+// also closes the read connection kept for its database, to stay within the
+// connection limit.
 //
-// # What it keeps, and for how long
-//
-// At most one idle connection per database. A participant runs one query at a
-// time, so one is all their next query can use; an instance database carries
-// CONNECTION LIMIT 2, the second slot being headroom for a backend that has
-// not yet exited after its connection was closed (gamedb's
-// instanceConnectionLimit). The schema panel reads as a superuser and is not
-// counted against it.
-// An idle connection is closed after idleTimeout.
-//
-// At most capacity connections in all, idle and in use together, where
-// capacity is QUERY_CONCURRENT. The game cluster's memory is sized for that
-// many participant backends at the per-process cap (config.Runner), and a kept
-// backend may still hold what its last query grew to; so a new connection
-// needed while the runner is at the bound first closes the least recently
-// used idle one. The gate admits at most capacity executions, which is what
-// makes an idle connection always available to close at that point; if none
-// is, the bounds have come apart and the pool refuses (errPoolExhausted)
-// rather than exceed its own.
-//
-// # What it never keeps
-//
-// A write to a database closes the read connection kept for it before dialling
-// its own: a write never takes a kept connection (it runs as the writer), and
-// the runner holding two to one instance would use up its CONNECTION LIMIT 2,
-// leaving no headroom for a backend still exiting.
-//
-// Only a read that finished cleanly returns its connection, and only after
-// the session is reset (release). A write, a query that failed, and one that
-// was abandoned or ran out of time close theirs, exactly as every query did
-// before there was a pool: a write can leave what a reset is not trusted to
-// find, a failure leaves a session nothing here inspects, and an abandoned
-// query may still have a cancel on its way to the server that would land on
-// whatever the backend ran next.
-//
-// # What the reset leaves
-//
-// DISCARD ALL does not make a kept backend indistinguishable from a new one.
-// Two pieces of session state survive it, and both are reachable only through
-// functions the checker does not admit (set_config, current_setting, setseed):
-//
-//   - a custom placeholder setting (a dotted name such as `x.y`) that a read set
-//     with set_config(..., false): the value is rolled back with the read's
-//     transaction and reset by DISCARD ALL, but the placeholder stays defined,
-//     so current_setting('x.y', true) answers ” on the kept backend where a
-//     new one answers NULL;
-//   - the random seed set by setseed, which DISCARD ALL does not touch, so the
-//     next query's random() continues that sequence.
-//
-// Neither carries data between participants — a kept connection only ever
-// serves the database it was opened to, and a database belongs to one
-// participant — and neither is a privilege. Backend-local caches (catalogue,
-// relation) also survive, as they do for any pooled PostgreSQL session; they
-// are not visible to SQL.
+// DISCARD ALL leaves a custom placeholder setting defined and keeps the
+// setseed state. The checker refuses everything that sets either (SET,
+// set_config, setseed) or reads a setting (SHOW, current_setting). Neither is
+// a privilege, and a kept connection only serves its own participant's
+// database.
 type pool struct {
 	dial        dialer
 	capacity    int
@@ -111,20 +61,18 @@ type pool struct {
 	closed bool
 }
 
-// idleConn is a kept connection and the timer that closes it.
 type idleConn struct {
 	session *session
 	since   time.Time
 	timer   *time.Timer
 }
 
-// closeTimeout bounds closing a connection: a Terminate message and a socket
-// close, which should take no time, against a server that has stopped
+// closeTimeout bounds closing a connection against a server that stopped
 // answering.
 const closeTimeout = 5 * time.Second
 
-// resetTimeout bounds the reset that precedes keeping a connection. A reset
-// that takes longer than this means the connection is not worth keeping.
+// resetTimeout bounds the reset before keeping a connection; a slower reset
+// means the connection is not kept.
 const resetTimeout = 2 * time.Second
 
 func newPool(dial dialer, capacity int, idleTimeout time.Duration) *pool {
@@ -145,18 +93,13 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 		delete(p.idle, database)
 		kept.timer.Stop()
 		p.mu.Unlock()
-		// A fresh budget for a fresh answer: the meter belongs to the
-		// connection, the allowance to the query.
 		kept.session.meter.reset(readBudget)
 		kept.session.reused = true
 		return kept.session, nil
 	}
 
-	// A new connection is needed. It takes the place of an idle one when
-	// there is a reason to close one: a write closes the read connection kept
-	// for its own database, and at the bound the least recently used idle
-	// connection goes. Either is closed before the new one is dialled, and
-	// its place in open passes to the new one.
+	// An evicted idle connection is closed before dialling, and its place in
+	// open passes to the new one.
 	var evicted *session
 	switch {
 	case ok: // a write, with a read connection kept for the same database
@@ -188,8 +131,7 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 }
 
 // oldestIdleLocked removes and returns the least recently kept idle
-// connection, or nil when none is idle. The caller holds mu, and the removed
-// connection's place in open passes to the caller.
+// connection, or nil. The caller holds mu and inherits its place in open.
 func (p *pool) oldestIdleLocked() *session {
 	var oldest *idleConn
 	for _, candidate := range p.idle {
@@ -205,16 +147,9 @@ func (p *pool) oldestIdleLocked() *session {
 	return oldest.session
 }
 
-// release takes a connection back. clean is the execution's word that its
-// query finished without error and without its context ending; anything else
-// closes the connection.
-//
-// A clean read's connection is reset and kept. DISCARD ALL is the server's own
-// "make this session like a new one": it resets every setting to the role's
-// and database's defaults, releases session advisory locks, drops temporary
-// tables, deallocates prepared statements and cached plans, and stops
-// listening. The driver keeps no statement cache of its own on these
-// connections (Cluster.connect), so there is nothing on this side to forget.
+// release takes a connection back. clean means the query finished without
+// error and without its context ending; a clean read's connection is reset with
+// DISCARD ALL and kept, anything else is closed.
 func (p *pool) release(ctx context.Context, s *session, clean bool) {
 	keep := clean && !s.write && p.idleTimeout > 0 && !s.conn.IsClosed() &&
 		s.conn.PgConn().TxStatus() == 'I'
@@ -227,10 +162,8 @@ func (p *pool) release(ctx context.Context, s *session, clean bool) {
 
 	if keep {
 		p.mu.Lock()
-		// One idle connection per database. A second can only come from two
-		// executions against the same database at once, which one query per
-		// participant rules out; if it happens anyway, the one already kept
-		// stays and this one goes.
+		// One idle connection per database; if one is already kept, this
+		// one is closed.
 		if _, taken := p.idle[s.database]; !taken && !p.closed {
 			kept := &idleConn{session: s, since: time.Now()}
 			kept.timer = time.AfterFunc(p.idleTimeout, func() { p.expire(kept) })
@@ -258,8 +191,7 @@ func (p *pool) expire(kept *idleConn) {
 	delete(p.idle, kept.session.database)
 	p.mu.Unlock()
 
-	// Closed before its place is given up, as release does: open never counts
-	// fewer connections than the server holds.
+	// Closed before its place is given up, so open never undercounts.
 	closeConn(context.Background(), kept.session.conn)
 	p.mu.Lock()
 	p.open--
@@ -287,9 +219,8 @@ func (p *pool) close() {
 	}
 }
 
-// closeConn closes a connection with a context of its own: the caller's may
-// already be the expired one, and a close that is skipped because a deadline
-// passed is a connection left to the server to notice.
+// closeConn closes a connection with a context of its own, since the caller's
+// may already have expired.
 func closeConn(ctx context.Context, conn *pgx.Conn) {
 	closing, stop := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 	defer stop()

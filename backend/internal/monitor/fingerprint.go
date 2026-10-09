@@ -6,39 +6,22 @@ import (
 	"unicode/utf8"
 )
 
-// Fingerprint is a stable 64-bit hash of a statement's text with case and
-// spacing normalised away, the key "the same query as another participant"
-// (design §5) is counted on.
+// Fingerprint is a stable 64-bit hash of a statement with case and spacing
+// normalised away: the whole text lowercased, literals included, and every
+// whitespace run collapsed to one space. Statements differing in one token
+// do not match.
 //
-// Normalising is lowercasing the whole text and collapsing every run of
-// whitespace to a single space, with none at either end. It is deliberately
-// that and nothing more: two statements that differ only in how they were
-// typed out compare equal, and two that differ in a single token do not —
-// including inside a string literal, which is lowercased along with the rest,
-// because a copied query is copied literals and all.
-//
-// The hash is FNV-1a 64, reinterpreted as a signed integer so it fits a
-// bigint column. The value is stored and compared across processes and
-// releases, so it must depend on nothing but the text: changing the
-// normalisation or the hash leaves every row written before the change
-// incomparable with every row written after.
-//
-// Computed once, in Go, by the insert that journals the query
-// (postgres.QueryLog.Begin), not by the database.
+// It is FNV-1a 64 stored as a signed bigint and compared across releases, so
+// changing the normalisation or the hash makes old rows incomparable with
+// new ones.
 func Fingerprint(sql string) int64 {
 	fingerprint, _ := normalised(sql)
 	return fingerprint
 }
 
-// ComparableFingerprint is the fingerprint the journal stores: the
-// statement's Fingerprint when its normalised text is at least
-// IdenticalQueryMinChars characters long, and nil otherwise.
-//
-// Only a statement that long can raise "the same query as another
-// participant" (design §5) — what everybody types is not a sign of copying —
-// so a shorter one is stored without a fingerprint, and the participants
-// table compares fingerprints without measuring any text. The normalisation
-// is this file's alone; nothing in SQL repeats it.
+// ComparableFingerprint is the fingerprint the journal stores: Fingerprint
+// when the normalised text is at least IdenticalQueryMinChars long, nil
+// otherwise, so short common queries never match.
 func ComparableFingerprint(sql string) *int64 {
 	fingerprint, length := normalised(sql)
 	if length < IdenticalQueryMinChars {
@@ -47,15 +30,11 @@ func ComparableFingerprint(sql string) *int64 {
 	return &fingerprint
 }
 
-// normalised hashes the normalised text and measures it in one pass, so the
-// journal's insert walks a statement once rather than once to measure it and
-// again to hash it. length counts characters of the normalised text: the
-// lowercased fields and the single spaces between them.
+// normalised hashes the normalised text and counts its characters in one
+// pass.
 func normalised(sql string) (fingerprint int64, length int) {
 	hash := fnv.New64a()
-	// strings.Fields splits on every run of Unicode whitespace and drops the
-	// ends; writing the fields back with one space between them is the
-	// collapse. Written piece by piece so no normalised copy is built.
+	// Written field by field, so no normalised copy is built.
 	for i, field := range strings.Fields(sql) {
 		if i > 0 {
 			_, _ = hash.Write([]byte{' '})
@@ -65,7 +44,6 @@ func normalised(sql string) (fingerprint int64, length int) {
 		_, _ = hash.Write([]byte(lower))
 		length += utf8.RuneCountInString(lower)
 	}
-	// Two's-complement reinterpretation of the unsigned sum, not a numeric
-	// conversion: every bit is kept.
+	// A bit-for-bit reinterpretation, not a numeric conversion.
 	return int64(hash.Sum64()), length // #nosec G115 -- the bit pattern is the value; the sign carries no meaning.
 }

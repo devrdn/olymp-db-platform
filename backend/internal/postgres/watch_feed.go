@@ -14,34 +14,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Feed reads one page of the feed (design §4): each source as its own index
-// range past the cursor, in the page's direction, with at most Limit+1 rows,
-// merged by monitor.MergeFeed.
+// Feed reads one page of the feed: each source as its own index range past
+// the cursor, in the page's direction, at most Limit+1 rows, merged by
+// monitor.MergeFeed.
 //
-// The whole contest's query log, answers and events are each one range of one
-// index, on (contest_id, time, id): every journal carries the contest it
-// belongs to, participant_events since migration 000033 and the other two
-// since 000034, so a page of a three-hundred-participant contest reads the
-// page and not a page per participant. One participant's timeline reads their
-// own range instead, on (registration_id, time, id), with the contest checked
-// on the same row — the narrower range of the two, and the same guarantee
-// that another contest's rows can never appear.
-//
-// Sign-ins and sign-outs are the participant's account's own audit entries
-// (audit_log (actor_id, created_at)), failed sign-ins the entries naming its
-// login (audit_log_failed_login_idx), both only within the participant's
-// part in the contest, give or take monitor.SignInGrace, and never before
-// they registered: an account's sign-ins outside it are not the contest's
-// business. Disqualifications are the contest's own entries
-// (audit_log_entity_idx).
+// A contest-wide page reads each journal's (contest_id, time, id) index; one
+// participant's timeline reads (registration_id, time, id) instead. Sign-ins
+// and sign-outs come from audit_log (actor_id, created_at), failed sign-ins
+// from audit_log_failed_login_idx, both limited to the participant's part in
+// the contest; disqualifications from audit_log_entity_idx.
 func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage, error) {
 	q, err := q.Normalize()
 	if err != nil {
 		return monitor.FeedPage{}, err
 	}
-	// The sources are independent reads, so they go as one batch: one round
-	// trip on every poll rather than one per source. Their callbacks run in
-	// the order they were queued, as the loop used to.
+	// One batch, one round trip per poll. Callbacks run in queue order.
 	var (
 		items []monitor.FeedItem
 		batch pgx.Batch
@@ -75,9 +62,8 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 	return page, nil
 }
 
-// FeedSource reads one source of the feed past q's cursor, in q's
-// direction, at most q.Limit+1 items, named: what monitor.StreamFeed merges
-// an export from, one source at a time.
+// FeedSource reads one source of the feed past q's cursor, at most
+// q.Limit+1 named items, for monitor.StreamFeed to merge an export from.
 func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
 	q, err := q.Normalize()
 	if err != nil {
@@ -101,10 +87,9 @@ func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source moni
 	return items, nil
 }
 
-// FeedRegistrations lists the contest's registrations, for a contest-wide
-// stream to read its per-registration sources by. Bounded like the
-// participants table: a contest past monitor.MaxRosterRows is refused rather
-// than streamed with some of its participants missing.
+// FeedRegistrations lists the contest's registrations for a contest-wide
+// stream. A contest past monitor.MaxRosterRows is refused rather than
+// streamed with participants missing.
 func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := w.querier(ctx).Query(ctx, `
 		SELECT id FROM registrations WHERE contest_id = $1 ORDER BY id LIMIT $2`,
@@ -123,10 +108,8 @@ func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uui
 }
 
 // feedStatement is one source's read: the statement, its parameters, and how
-// a row of it becomes a feed item. Built without a database, so Feed can send
-// every source it reads as one batch and FeedSource can send one alone. A
-// zero statement (no sql) reads nothing: the filter left the source no kind
-// to read.
+// a row becomes a feed item. An empty sql reads nothing: the filter left the
+// source no kind to read.
 type feedStatement struct {
 	what string
 	sql  string
@@ -134,7 +117,6 @@ type feedStatement struct {
 	scan func(pgx.CollectableRow) (monitor.FeedItem, error)
 }
 
-// collect reads the statement's rows into feed items.
 func (st feedStatement) collect(rows pgx.Rows) ([]monitor.FeedItem, error) {
 	items, err := pgx.CollectRows(rows, st.scan)
 	if err != nil {
@@ -143,7 +125,6 @@ func (st feedStatement) collect(rows pgx.Rows) ([]monitor.FeedItem, error) {
 	return items, nil
 }
 
-// sourceStatement builds one source's read of its range.
 func sourceStatement(q monitor.FeedQuery, source monitor.Source) (feedStatement, error) {
 	switch source {
 	case monitor.SourceAudit:
@@ -171,11 +152,10 @@ func (a *args) add(value any) string {
 // feedBounds is the WHERE fragment that keeps a source's rows past the
 // cursor and inside the time range, and the ORDER BY direction.
 //
-// Past the cursor (t, s, id) in the page's direction, for a source S: when S
-// is s, the rows past (t, id); when S sorts after s, the rows at t or later
-// (at t they already come after the cursor); when S sorts before s, the rows
-// strictly after t. Mirrored for a page read backwards. Each is a plain range
-// on the time column, so it is an index range.
+// Past the cursor (t, s, id), for a source S: when S is s, the rows past
+// (t, id); when S sorts after s, the rows at t or later; when S sorts before
+// s, the rows strictly after t. Mirrored for a backward page. Each is a plain
+// range on the time column, so it is an index range.
 func feedBounds(a *args, q monitor.FeedQuery, source monitor.Source, timeCol, idCol, idType string) (where, dir string) {
 	var parts []string
 	cursor, ascending := q.Before, false
@@ -198,10 +178,9 @@ func feedBounds(a *args, q monitor.FeedQuery, source monitor.Source, timeCol, id
 		}
 	}
 	if ascending || cursor == nil {
-		// Read forwards, or as the newest page a live screen starts polling
-		// from, the newest monitor.FeedSettle is left for the next read:
-		// rows stamped inside it may still be joined by older stamps that
-		// commit later, and a cursor past them would never see those.
+		// Forwards or on the newest page, leave the last monitor.FeedSettle
+		// for the next read: older stamps may still commit inside it, and a
+		// cursor past them would never see those rows.
 		parts = append(parts, fmt.Sprintf("%s < statement_timestamp() - make_interval(secs => %s)",
 			timeCol, a.add(monitor.FeedSettle.Seconds())))
 	}
@@ -222,7 +201,7 @@ func feedBounds(a *args, q monitor.FeedQuery, source monitor.Source, timeCol, id
 }
 
 // registrationScope narrows the contest's registrations (alias r) to the one
-// the feed is about, if it is about one.
+// the feed is about, if any.
 func registrationScope(a *args, q monitor.FeedQuery) string {
 	scope := "r.contest_id = " + a.add(q.Contest)
 	if q.Registration != uuid.Nil {
@@ -231,17 +210,13 @@ func registrationScope(a *args, q monitor.FeedQuery) string {
 	return scope
 }
 
-// journalScope narrows a journal that carries its own contest (query_log,
-// submissions, participant_events under the given alias) to what the feed is
-// about.
+// journalScope narrows a journal that carries its own contest_id to what the
+// feed is about.
 //
-// A contest-wide page is the contest's range. One participant's timeline is
-// that registration's range, and that the registration is this contest's is
-// asked once, of registrations, rather than of every row of the range: the
-// two columns agree by construction (migration 000034), and a second
-// condition on the row would only tell the planner that the range is less
-// selective than it is — enough for it to give up the ordered index scan the
-// keyset page depends on and read the whole range into a sort.
+// For one participant, the registration's contest is checked once, against
+// registrations, not on every row: the two columns always agree, and a second
+// condition on the row makes the planner underestimate selectivity and swap
+// the ordered index scan the keyset page needs for a sort.
 func journalScope(a *args, q monitor.FeedQuery, alias string) string {
 	if q.Registration != uuid.Nil {
 		registration := a.add(q.Registration)
@@ -287,8 +262,8 @@ func feedAnswers(q monitor.FeedQuery) feedStatement {
 	scope := journalScope(&a, q, "s")
 	bounds, dir := feedBounds(&a, q, monitor.SourceAnswer, "s.submitted_at", "s.id", "uuid")
 	limit := a.add(q.Limit + 1)
-	// The question is named after the page is cut, not before: the join is a
-	// lookup by primary key for the page's own rows.
+	// The question is joined after the page is cut, so it is a primary-key
+	// lookup per page row.
 	st := feedStatement{what: "answers", args: a, sql: `
 		SELECT s.id, s.registration_id, s.submitted_at, s.question_id, COALESCE(qu.ord, 0),
 		       s.attempt_no, s.value, s.is_correct, s.points_awarded
@@ -318,10 +293,6 @@ func feedAnswers(q monitor.FeedQuery) feedStatement {
 
 func feedEvents(q monitor.FeedQuery) feedStatement {
 	var a args
-	// The same narrowing the other two journals get, for the same reason:
-	// participant_events carries both columns and this read is keyset-paged
-	// off participant_events_registration_time_idx exactly as they are off
-	// theirs. Only the kind filter is this source's own.
 	scope := journalScope(&a, q, "e")
 	if kinds := q.KindsOf(monitor.SourceEvent); len(kinds) > 0 {
 		scope += " AND e.kind = ANY(" + a.add(kinds) + "::text[])"
@@ -349,9 +320,8 @@ func feedEvents(q monitor.FeedQuery) feedStatement {
 	return st
 }
 
-// feedClock reads the participants' clock starting or finishing, off
-// registrations. The contest's roster is bounded and has no journal's size,
-// so this is a filter over the contest's registrations.
+// feedClock reads the participants' clock starting or finishing from
+// registrations. The roster is bounded, so a filter over it is enough.
 func feedClock(q monitor.FeedQuery, source monitor.Source) feedStatement {
 	column, kind := "r.started_at", monitor.FeedStarted
 	if source == monitor.SourceFinish {
@@ -378,7 +348,6 @@ func feedClock(q monitor.FeedQuery, source monitor.Source) feedStatement {
 	return st
 }
 
-// auditFeedKinds maps the trail's actions to the feed's kinds.
 var auditFeedKinds = map[string]string{
 	audit.ActionAuthLogin:             monitor.FeedSignIn,
 	audit.ActionAuthLogout:            monitor.FeedSignOut,
@@ -397,27 +366,18 @@ func feedAudit(q monitor.FeedQuery) feedStatement {
 	scope := registrationScope(&a, q)
 	bounds, dir := feedBounds(&a, q, monitor.SourceAudit, "a.created_at", "a.id", "bigint")
 	limit := a.add(q.Limit + 1)
-	// A participant's own sign-ins, sign-outs and failed sign-ins count from
-	// monitor.SignInGrace before the start of their part in the contest to
-	// monitor.SignInGrace past its end.
+	// Sign-ins count from monitor.SignInGrace before the participant's start
+	// to monitor.SignInGrace past their end.
 	//
-	// The start is the contest's own start whenever it has one, in either
-	// timing: under individual timing a participant who starts late signed
-	// in after the window opened for a reason the organiser may want to see.
-	// Without a contest start it is their own start, else their
-	// registration, and it is never earlier than the registration. An
-	// invite-only contest can enrol a student weeks ahead, and those weeks
-	// of sign-ins, addresses and browsers — failed sign-ins carrying
-	// strangers' addresses among them — are not the contest's business.
+	// The start is the contest's start if it has one (a late starter's
+	// sign-ins matter under individual timing too), else their own start,
+	// else their registration, and never earlier than the registration: an
+	// account's sign-ins before it enrolled are not the contest's business.
 	//
-	// The end is their finish; else their own deadline under individual
-	// timing — the start plus the duration, or the contest's end when that
-	// comes first, contests.Deadline's formula — else the contest's end.
-	// With none of them known, up to now. That leaves one case unbounded:
-	// individual timing, a participant who never started, and a contest with
-	// no end. They have no deadline to measure from — and, never having
-	// started, nothing of theirs in the contest but these sign-ins, which is
-	// what an organiser asking why they never began wants to see.
+	// The end is their finish, else their individual deadline (as in
+	// contests.Deadline), else the contest's end, else now. An individual
+	// participant who never started in a contest with no end stays unbounded;
+	// their sign-ins are all they have in the contest.
 	const participantStart = `COALESCE(c.starts_at, r.started_at, r.created_at)`
 	const participantEnd = `COALESCE(r.finished_at,
 		      CASE WHEN c.timing = 'individual'
@@ -460,14 +420,10 @@ func feedAudit(q monitor.FeedQuery) feedStatement {
 		WHERE `+scope)
 	}
 	if all || wanted[monitor.FeedSignInFailed] {
-		// Matched by the login the attempt typed against the account's login
-		// now, since a failed sign-in records no account. Two consequences
-		// follow and are accepted. Anybody mistyping a participant's login is
-		// shown as that participant's failed sign-in, which is what an
-		// organiser watching for a guessed password wants to see. And an
-		// account whose login was changed loses the failed sign-ins typed
-		// under its old one: the trail does not say the two logins were the
-		// same account, and guessing would attribute strangers' attempts.
+		// A failed sign-in records no account, so it is matched by the typed
+		// login against the account's current login. Anyone mistyping a
+		// participant's login shows as theirs, which is what a password-guess
+		// watcher wants; attempts under a former login are not attributed.
 		branches = append(branches, `
 		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM registrations r
@@ -483,8 +439,7 @@ func feedAudit(q monitor.FeedQuery) feedStatement {
 		WHERE `+scope)
 	}
 	if all || wanted[monitor.FeedDisqualified] {
-		// One participant's timeline narrows the contest's disqualifications
-		// to theirs before the limit, or the others' could fill it.
+		// Narrow to the participant before the limit, or others' could fill it.
 		whose := ""
 		if q.Registration != uuid.Nil {
 			whose = ` AND a.payload->>'user_id' = (SELECT user_id::text FROM registrations WHERE id = ` +
@@ -548,8 +503,7 @@ func parenthesize(parts []string) []string {
 	return out
 }
 
-// name fills in the participants' logins and names, in one read by primary
-// key for the whole page.
+// name fills in the participants' logins and names in one read for the page.
 func (w *Watch) name(ctx context.Context, contest uuid.UUID, items []monitor.FeedItem) error {
 	if len(items) == 0 {
 		return nil

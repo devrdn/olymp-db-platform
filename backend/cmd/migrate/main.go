@@ -1,8 +1,5 @@
-// Command migrate applies the core database schema migrations.
-//
-// Migrations run as a deliberate step (a compose job or a CI stage), never as
-// a side effect of the API starting: several API replicas starting at once
-// must not race to alter the schema.
+// Command migrate applies the core database schema migrations, as a separate
+// step so API replicas starting together never race to alter the schema.
 //
 // Usage:
 //
@@ -25,34 +22,20 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 
-	// Registers the pgx driver under the name "pgx" for database/sql, which
-	// golang-migrate needs.
+	// Registers the pgx driver for database/sql, which golang-migrate needs.
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // The timeouts a migration runs under.
 //
-// statement_timeout is cleared: the deployment sets one for the API's own
-// pool, and an index build is long by nature — killed halfway it leaves an
+// statement_timeout is cleared: an index build killed halfway leaves an
 // invalid index and a version that did not move.
 //
-// lock_timeout is deliberately NOT set here, although waiting for a lock is
-// the dangerous thing a migration does: DDL queued for an ACCESS EXCLUSIVE
-// lock makes every request needing the same table queue behind it. It is not
-// set here because it cannot be a property of the connection. `CREATE INDEX
-// CONCURRENTLY` waits for every transaction older than itself by taking that
-// transaction's virtualxid lock, and those waits go through the lock manager
-// too: a connection-wide lock_timeout aborts the build as soon as any
-// ordinary transaction of this service outlives it — an export holds one for
-// up to a minute by design — and leaves an invalid index and a dirty
-// schema_migrations behind, with the API's own start gated on the migration
-// having succeeded.
-//
-// So the timeout belongs to the migration that wants it: a file that takes a
-// heavy lock opens with `SET lock_timeout` of its own, inside the implicit
-// transaction the file already runs in, and a file that builds an index
-// concurrently holds one statement and no timeout at all. migrations_test.go
-// holds both halves of that convention.
+// lock_timeout is not set on the connection: CREATE INDEX CONCURRENTLY waits
+// on the virtualxid locks of older transactions (an export holds one for up
+// to a minute), so a connection-wide timeout would abort it and leave a dirty
+// schema. Instead a file taking a heavy lock sets its own lock_timeout, and a
+// concurrent index build has none; migrations_test.go enforces both.
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -107,8 +90,8 @@ func run(args []string) error {
 	}
 }
 
-// migrationConfig is the connection a migration runs on: whatever it does is
-// not cut short by a timeout the deployment set for serving traffic.
+// migrationConfig is the connection a migration runs on, without the
+// deployment's serving timeouts.
 func migrationConfig(dsn string) (*pgx.ConnConfig, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
@@ -131,10 +114,8 @@ func newMigrator(dsn string) (*migrate.Migrate, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// The registration is process-global and keyed by a name the library
-	// invents; the cleanup below gives it back, so a caller that builds
-	// several migrators in one process (the tests do) does not grow the
-	// library's map with an entry per call.
+	// The registration is process-global; the cleanup releases it so
+	// repeated migrators (in tests) do not grow the library's map.
 	name := stdlib.RegisterConnConfig(cfg)
 	db, err := sql.Open("pgx", name)
 	if err != nil {

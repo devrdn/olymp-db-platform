@@ -14,47 +14,29 @@ import (
 	"github.com/google/uuid"
 )
 
-// RegistrationTarget is what one case of the contract runs against: a
-// repository holding no registrations yet, and the means to create what a
-// registration hangs off. A real schema needs an account and a contest to
-// exist before a registration can name them, so each implementation fills
-// these its own way: the in-memory store mints identifiers and remembers
-// them, PostgreSQL inserts rows.
+// RegistrationTarget is a repository holding no registrations yet, and the
+// means to create the accounts and contests a registration names.
 type RegistrationTarget struct {
 	Repo contests.RegistrationRepository
-	// NewUser creates an account and returns its identifier. The login and
-	// full name are what a participant carries once registered.
-	NewUser func(login, fullName string) uuid.UUID
-	// NewContest creates a contest and returns its identifier.
-	NewContest func() uuid.UUID
-	// GrantAdminAll gives the account rbac.PermissionContestAdminAll, the
-	// way an implementation's own accounts hold a permission.
+	// NewUser's login and full name are what a participant carries.
+	NewUser       func(login, fullName string) uuid.UUID
+	NewContest    func() uuid.UUID
 	GrantAdminAll func(user uuid.UUID)
-	// RecordWork leaves something of the participant's own behind the
-	// registration — a note, a query — so that HasWork has an answer to give.
+	// RecordWork leaves a note or a query behind the registration, for
+	// HasWork to find.
 	RecordWork func(registration uuid.UUID)
-	// Now is what the store's clock reads when a row is written. A
-	// registration's CreatedAt is that clock, so the contract can only state
-	// it in its terms.
+	// Now is the store's clock, which stamps CreatedAt.
 	Now func() time.Time
 }
 
 // RegistrationRepositoryContract is what every
-// contests.RegistrationRepository must do, run as subtests against one
-// implementation. Both the in-memory Registrations and postgres.Registrations
-// run it, so the store the service tests trust and the store production uses
-// are held to the same answers: a rule the fake got wrong would otherwise
-// pass every service test and fail only in a contest.
+// contests.RegistrationRepository must do; both the in-memory Registrations
+// and postgres.Registrations run it. each prepares a fresh target for one
+// case, calls run with it, and cleans up. Two first actions racing for one
+// start time is tested against PostgreSQL alone.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here; two first actions racing for
-// one start time is a property of the real statement and is proven against
-// PostgreSQL alone.
-//
-// Logins are lower-case letters and digits throughout, because the roster is
-// ordered by them and the order of anything else depends on the database's
-// collation.
+// Logins are lower-case letters and digits because the roster is ordered by
+// them, and anything else depends on the collation.
 func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, RegistrationTarget))) {
 	started := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 
@@ -74,7 +56,6 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 		}
 		return p
 	}
-	// enrol creates an account and registers it, returning the registration.
 	enrol := func(t *testing.T, ctx context.Context, target RegistrationTarget, contest uuid.UUID, login string) contests.Participant {
 		t.Helper()
 		return add(t, ctx, target, contest, target.NewUser(login, login))
@@ -166,7 +147,6 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 			user := target.NewUser("alice", "alice")
 			first := add(t, ctx, target, contest, user)
 
-			// The same person in a second contest is a second participant.
 			if second := add(t, ctx, target, other, user); second.ID == first.ID {
 				t.Error("a second contest reused the first registration")
 			}
@@ -175,9 +155,8 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				t.Errorf("Add() twice error = %v, want ErrAlreadyEnrolled", err)
 			}
 
-			// The refusal is an answer, not a failure of the caller's
-			// transaction: a roster import treats it as one skipped row and
-			// goes on to register the next person in the same transaction.
+			// The refusal must not break the transaction: a roster import
+			// skips the row and registers the next person in it.
 			next := target.NewUser("bob", "bob")
 			add(t, ctx, target, contest, next)
 			if got, err := target.Repo.ByUser(ctx, contest, user); err != nil || got.ID != first.ID {
@@ -187,8 +166,6 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 	})
 
 	t.Run("Add for a contest that is not there is reported", func(t *testing.T) {
-		// A contest deleted while somebody was being registered for it: the
-		// caller is told the contest is gone, not that the store failed.
 		each(t, func(ctx context.Context, target RegistrationTarget) {
 			user := target.NewUser("alice", "alice")
 
@@ -199,8 +176,8 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 	})
 
 	t.Run("Add of an account that is not there is reported", func(t *testing.T) {
-		// The account's own package names the refusal, the one the contest
-		// routes already answer for an account that is not there.
+		// The refusal is users.ErrNotFound, which the contest routes
+		// already answer.
 		each(t, func(ctx context.Context, target RegistrationTarget) {
 			contest := target.NewContest()
 
@@ -228,7 +205,6 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 			byUser(t, ctx, target, contest, staying)
 			byUser(t, ctx, target, other, leaving)
 
-			// Gone means free to register again.
 			add(t, ctx, target, contest, leaving)
 		})
 	})
@@ -497,8 +473,8 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				t.Fatalf("RegisteredWithPermission() before the grant = %v, %v, want none", got, err)
 			}
 
-			// Granted after the registration was made: the case the publish
-			// gate exists for.
+			// Granted after registering: the case the publish gate exists
+			// for.
 			target.GrantAdminAll(p.UserID)
 
 			got, err = target.Repo.RegisteredWithPermission(ctx, contest, rbac.PermissionContestAdminAll)
@@ -558,8 +534,7 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 			if err != nil {
 				t.Fatalf("RegisteredWithPermission() = %v", err)
 			}
-			// One more holder than the bound, so the answer is the first
-			// MaxReportedStaff logins in order and not the whole roster.
+			// One more holder than the bound.
 			if want := all[:contests.MaxReportedStaff]; !slices.Equal(got, want) {
 				t.Errorf("logins = %v, want the first %d, %v", got, contests.MaxReportedStaff, want)
 			}
@@ -569,7 +544,7 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 	t.Run("List pages the roster in login order and counts all of it", func(t *testing.T) {
 		each(t, func(ctx context.Context, target RegistrationTarget) {
 			contest := target.NewContest()
-			// Registered out of order, so that the order read is the login's.
+			// Registered out of order, so the order read is the login's.
 			for _, login := range []string{"cy", "ada", "eve", "ben", "dee"} {
 				enrol(t, ctx, target, contest, login)
 			}
@@ -583,8 +558,8 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				{"the first page", contests.ParticipantFilter{Limit: 2}, []string{"ada", "ben"}},
 				{"the second page", contests.ParticipantFilter{Limit: 2, Offset: 2}, []string{"cy", "dee"}},
 				{"a short last page", contests.ParticipantFilter{Limit: 2, Offset: 4}, []string{"eve"}},
-				// Empty, and still counting everyone: a screen that went one
-				// page too far must be able to step back.
+				// Still counting everyone, so a screen one page too far can
+				// step back.
 				{"a page past the end", contests.ParticipantFilter{Limit: 2, Offset: 6}, nil},
 			} {
 				got, total := list(t, ctx, target, contest, tc.filter)

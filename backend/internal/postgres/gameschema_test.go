@@ -10,9 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// aGameWithNoSchemaYet is a contest whose template row exists but whose shape
-// has never been worked out — the state every contest is in until the first
-// participant opens their console.
 func aGameWithNoSchemaYet(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	if testPool == nil {
@@ -57,8 +54,7 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 		if len(got.Tables) != 2 || got.Tables[1].Name != "guests" {
 			t.Fatalf("read back %+v", got.Tables)
 		}
-		// The one field a JSON round trip is most likely to lose, because it
-		// is the only one carrying `omitempty` on a non-obvious default.
+		// The only field with omitempty, so the likeliest to be lost.
 		if got.Tables[1].Columns[1].References != "rooms" {
 			t.Fatalf("the foreign key did not survive the round trip: %+v", got.Tables[1].Columns[1])
 		}
@@ -68,8 +64,6 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 	})
 }
 
-// A rebuild bumps the version, and the pair has to move together — a document
-// from one build labelled with another's number is worse than no cache.
 func TestSavingTheSchemaAgainReplacesBoththeDocumentAndItsVersion(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aGameWithNoSchemaYet(t, ctx)
@@ -93,8 +87,6 @@ func TestSavingTheSchemaAgainReplacesBoththeDocumentAndItsVersion(t *testing.T) 
 	})
 }
 
-// The cache is derived data. A document this build cannot parse must send the
-// caller back to the cluster, not fail their console.
 func TestAnUnreadableCachedSchemaReadsAsNotCached(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aGameWithNoSchemaYet(t, ctx)
@@ -110,8 +102,7 @@ func TestAnUnreadableCachedSchemaReadsAsNotCached(t *testing.T) {
 	})
 }
 
-// The pairing constraint from migration 22: a version with no document, or a
-// document with no version, is a row nothing can reason about.
+// The pairing constraint from migration 22.
 func TestTheSchemaAndItsVersionCannotBeSetApart(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aGameWithNoSchemaYet(t, ctx)

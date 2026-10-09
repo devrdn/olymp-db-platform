@@ -31,31 +31,15 @@ const (
 	MatchRegex   = "regex"
 )
 
-// maxChoices bounds a choice question. Every option is labelled in every
-// language, so an unbounded list is unbounded work for the organizer and an
-// unbounded payload for the participant.
+// maxChoices bounds a choice question's options (CLAUDE.md rule 2).
 const maxChoices = 50
 
-// maxPenaltyPct bounds questions.penalty_pct: a percentage, and CLAUDE.md
-// rule 2 asks for a range rather than "any integer". 100 is the natural
-// ceiling — a wrong attempt can cost at most the question's own face value,
-// never more (§6.1.1's own floor-at-zero rule holds regardless, but a stored
-// value past 100 would misstate what the organizer configured).
+// maxPenaltyPct bounds questions.penalty_pct, a percentage (CLAUDE.md rule 2).
 const maxPenaltyPct = 100
 
-// maxPoints bounds questions.points, an int4 column. points_awarded's own
-// computation (postgres.Submissions.Insert) multiplies a per-attempt penalty
-// derived from this value by the number of attempts already committed to
-// this question — a product this bound does not keep inside int4 by itself.
-// At the 100% penalty this bound still permits, the 215th attempt on a
-// question worth the full ten million already overflows int4 arithmetic
-// (finding 4), which is why that one multiplication is computed in
-// PostgreSQL's own bigint rather than relying on this constant to stay small
-// enough. What this bound actually keeps inside int4 is points_awarded
-// itself: floored at zero and never above a question's own points, the
-// column it lands in never sees more than maxPoints regardless of how many
-// attempts came before it. Ten million is several orders of magnitude past
-// any real question's worth, which is the bound's real job.
+// maxPoints bounds questions.points, an int4 column. It keeps points_awarded
+// inside int4, but not penalty times attempts, which postgres.Submissions
+// computes in bigint for that reason.
 const maxPoints = 10_000_000
 
 // Errors about questions and their answers.
@@ -70,25 +54,20 @@ type Question struct {
 	ID        uuid.UUID
 	ContestID uuid.UUID
 	// Ord is the display position within the contest.
-	Ord  int
-	Kind string
-	// Points awarded for a correct answer.
+	Ord    int
+	Kind   string
 	Points int
 	// MaxAttempts is nil when the participant may keep trying.
 	MaxAttempts *int
-	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1),
-	// 0..100, zero by default meaning no penalty at all — today's behaviour.
-	// Applied once, at the moment of answering, and never recomputed: see
-	// Service.Submit for where the amount is actually worked out and why.
+	// PenaltyPct is the percent of Points a wrong attempt costs (§6.1.1),
+	// 0..100. It is applied when answering and never recomputed.
 	PenaltyPct int
-	// IsVisible decides whether the participant is shown the question text at
-	// all. A hidden question still scores: working out what is being asked is
-	// then part of the puzzle (see §6.1).
+	// IsVisible decides whether the question text is shown. A hidden
+	// question still scores: working out what is asked is part of the
+	// puzzle (§6.1).
 	IsVisible bool
-	// ChoiceIDs are the stable, language-independent identifiers of a choice
-	// question's options ("a", "b", …). A submission carries one of these,
-	// never a label, so grading does not depend on the language the
-	// participant read.
+	// ChoiceIDs are the language-independent option identifiers a
+	// submission carries, never a label.
 	ChoiceIDs []string
 	// Texts hold the authored question per language code.
 	Texts map[string]QuestionText
@@ -103,12 +82,9 @@ type QuestionText struct {
 	Choices map[string]string
 }
 
-// Answer is one accepted response to a question.
-//
-// Several rows per question are normal, and that is how spelling variants are
-// handled: the game database is English, so a translated story that
-// transliterates a name simply adds another accepted spelling. Refusing it
-// would score language rather than detection.
+// Answer is one accepted response to a question. Several per question is how
+// spelling variants are handled, such as a name transliterated in a
+// translated story.
 type Answer struct {
 	ID         uuid.UUID
 	QuestionID uuid.UUID
@@ -124,8 +100,7 @@ func (q Question) Validate() error {
 	if q.Points < 0 || q.Points > maxPoints {
 		return fmt.Errorf("%w: points must be between 0 and %d", ErrInvalidQuestion, maxPoints)
 	}
-	// Zero attempts is a question nobody can answer, which is never what was
-	// meant; "unlimited" is expressed by leaving the field unset.
+	// "Unlimited" is nil; zero would be a question nobody can answer.
 	if q.MaxAttempts != nil && *q.MaxAttempts <= 0 {
 		return fmt.Errorf("%w: the attempt limit must be positive", ErrInvalidQuestion)
 	}
@@ -157,8 +132,6 @@ func (q Question) validateChoices() error {
 			return fmt.Errorf("%w: an option identifier must not be empty", ErrInvalidQuestion)
 		}
 		if _, duplicate := seen[id]; duplicate {
-			// Duplicated identifiers make a submission ambiguous and the label
-			// map lossy.
 			return fmt.Errorf("%w: option %q listed twice", ErrInvalidQuestion, id)
 		}
 		seen[id] = struct{}{}
@@ -171,13 +144,8 @@ func (q Question) HasChoice(id string) bool {
 	return slices.Contains(q.ChoiceIDs, id)
 }
 
-// CorrectChoices counts the options that grade as correct: each option id at
-// most once, however many reference answers accept it. It asks the same
-// matcher Submit grades with, so an option that a case-insensitive answer or
-// a pattern accepts is counted exactly when submitting it would be scored
-// correct — a pattern included, which matches a whole option id and never a
-// fragment of a longer one. A pattern that does not compile matches nothing,
-// as in grading.
+// CorrectChoices counts the options that grade as correct, each at most once,
+// using the same matcher Submit grades with.
 func (q Question) CorrectChoices() int {
 	n := 0
 	for _, id := range q.ChoiceIDs {
@@ -191,25 +159,13 @@ func (q Question) CorrectChoices() int {
 	return n
 }
 
-// Validate checks a reference answer.
-//
-// A regular expression is compiled here, at authoring time, rather than when
-// it is first used. A pattern that fails to compile during a running contest
-// would break grading for everybody who reached that question, at the one
-// moment nobody can fix it.
+// Validate checks a reference answer. A pattern is compiled here, at
+// authoring time, so it cannot break grading during a running contest.
 func (a Answer) Validate() error {
 	if strings.TrimSpace(a.Value) == "" {
 		return fmt.Errorf("%w: the value must not be empty", ErrInvalidAnswer)
 	}
-	// The same bound a submitted answer carries (maxAnswerRunes,
-	// submission.go): a reference answer is a name, a short phrase or a
-	// choice identifier, never more than a sentence, and this is the one
-	// place CLAUDE.md rule 2 asks the bound to live — every column this
-	// value reaches is unbounded text, and nothing before storage otherwise
-	// stops an authored regex pattern from being arbitrarily long (finding
-	// 6). RE2 compiles in time linear in pattern length with no
-	// backtracking blow-up, so this is a bound on storage and on staff
-	// authoring effort, not a defence against a compilation attack.
+	// The same bound a submitted answer carries (CLAUDE.md rule 2).
 	if utf8.RuneCountInString(a.Value) > maxAnswerRunes {
 		return fmt.Errorf("%w: at most %d characters", ErrInvalidAnswer, maxAnswerRunes)
 	}
@@ -224,23 +180,13 @@ func (a Answer) Validate() error {
 	return nil
 }
 
-// compileAnswerPattern compiles a regex reference answer the one way it is
-// ever evaluated: against the whole answer, as if written between ^ and $.
+// compileAnswerPattern compiles a regex reference answer anchored to the
+// whole answer. Matched as a substring, one answer listing every candidate
+// would grade correct. Every caller compiles through here.
 //
-// An organiser writes "john\s+smith" meaning the name, not "any text that
-// contains the name somewhere". Matched as a substring, a single value listing
-// every candidate would be graded correct, so the anchors are added here, at
-// the single point every caller compiles through (grading, the correct-option
-// count, authoring validation), rather than left to whoever writes the
-// pattern. A stored pattern keeps its text; only its meaning is fixed.
-//
-// The pattern is parsed on its own first. Wrapped in a group, text that is not
-// a complete expression by itself — one that closes a parenthesis it never
-// opened and opens another — can still compile while escaping the group and
-// leaving part of the pattern unanchored. Requiring the bare pattern to parse
-// guarantees the group holds all of it. Flags set inside the pattern ((?i),
-// (?m), (?s)) are scoped to that group and cannot change what the outer
-// anchors mean.
+// The bare pattern must parse first: otherwise text like "a)|(b" compiles
+// inside the group while escaping it, leaving part unanchored. Inline flags
+// stay scoped to the group.
 func compileAnswerPattern(pattern string) (*regexp.Regexp, error) {
 	if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
 		return nil, err
@@ -255,9 +201,7 @@ func validateAnswersFor(q Question, answers []Answer) error {
 		if err := a.Validate(); err != nil {
 			return err
 		}
-		// The answer to a choice question is one of its option identifiers.
-		// Anything else authors an answer nobody can submit, and nobody finds
-		// out until the contest is scored.
+		// Anything else is an answer nobody can submit.
 		if q.Kind == KindChoice && !q.HasChoice(a.Value) {
 			return fmt.Errorf("%w: %q is not one of the question's options", ErrInvalidAnswer, a.Value)
 		}
@@ -266,13 +210,8 @@ func validateAnswersFor(q Question, answers []Answer) error {
 }
 
 // QuestionRepository stores questions, their authored text and their reference
-// answers.
-//
-// Every read here is a staff read and carries the reference answers with it.
-// The participant-facing path does not reuse these methods: it asks
-// VisibleQuestionRepository instead, which is a different query — one
-// language, is_visible only, no reference answer selected at all — rather
-// than this one with a flag.
+// answers. Every read is a staff read carrying the answers; participants go
+// through VisibleQuestionRepository, a separate query that never selects them.
 type QuestionRepository interface {
 	// List returns the contest's questions in display order, with their text
 	// and reference answers.
@@ -304,15 +243,10 @@ type QuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1). A
-	// pointer, like IsVisible, but for the opposite reason: zero is a
-	// meaningful value here (no penalty at all), so "not sent" has to be
-	// distinguishable from "set to zero" — nil leaves whatever is already
-	// stored alone on an update, and defaults to no penalty on create.
+	// PenaltyPct is nil to leave the stored penalty alone on update (zero
+	// means no penalty), and no penalty on create.
 	PenaltyPct *int
-	// IsVisible is a pointer so that "not stated" means visible. Hiding a
-	// question is the deliberate choice, and the ordinary case must not depend
-	// on remembering to say so.
+	// IsVisible is nil for visible: hiding a question must be stated.
 	IsVisible *bool
 	ChoiceIDs []string
 	// Texts, when given, replace the question's authored text.
@@ -329,13 +263,9 @@ func (s *Service) Question(ctx context.Context, contestID, questionID uuid.UUID)
 	return s.questionOf(ctx, contestID, questionID)
 }
 
-// questionOf loads a question and proves it belongs to the contest.
-//
-// Permission is granted per contest, so every operation naming a question has
-// to check this: without it, the owner of one contest could reach another's
-// questions by guessing an identifier, and the permission check on the URL
-// would have passed. The answer is "not found" rather than "forbidden", since
-// the existence of another contest's question is itself not their business.
+// questionOf loads a question and proves it belongs to the contest, since
+// permission is granted per contest. Another contest's question is "not
+// found", not "forbidden", so its existence is not disclosed.
 func (s *Service) questionOf(ctx context.Context, contestID, questionID uuid.UUID) (Question, error) {
 	q, err := s.questions.ByID(ctx, questionID)
 	if err != nil {
@@ -409,11 +339,7 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
-	// nil leaves the stored penalty alone. Unlike the fields above, zero is a
-	// meaningful value here (no penalty at all), so this cannot be "always
-	// overwrite" the way Points is — a caller that never learned about
-	// penalties in the first place must not silently reset one it never
-	// mentioned (finding 1).
+	// A caller that does not send a penalty must not reset it.
 	if cmd.PenaltyPct != nil {
 		updated.PenaltyPct = *cmd.PenaltyPct
 	}
@@ -424,15 +350,11 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	if err := updated.Validate(); err != nil {
 		return Question{}, err
 	}
-	// Changing the options out from under the reference answers would leave
-	// answers nobody can submit, which is the same failure the answer check
-	// exists to prevent.
+	// New options must still cover the stored answers.
 	if err := validateAnswersFor(updated, current.Answers); err != nil {
 		return Question{}, err
 	}
 
-	// Which question, and what was done to it. The identifier alone answered
-	// only the first half, which is not the half anybody asks about.
 	payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
 	payload["question_id"] = updated.ID.String()
 
@@ -457,8 +379,7 @@ type SaveQuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	// PenaltyPct: nil leaves the stored penalty alone, see QuestionCommand's
-	// own doc for why this cannot be a plain int.
+	// PenaltyPct is nil to leave the stored penalty alone.
 	PenaltyPct *int
 	IsVisible  *bool
 	ChoiceIDs  []string
@@ -466,25 +387,10 @@ type SaveQuestionCommand struct {
 	Answers    []Answer
 }
 
-// SaveQuestion replaces a question whole, in one transaction.
-//
-// The three narrower operations remain, and each is still useful on its own —
-// fixing a reference answer without reopening the wording, for instance. What
-// they could not do is the change that touches more than one of them at once,
-// and that was not merely awkward:
-//
-// Converting a text question into a choice question was impossible. Updating
-// the question checked the *existing* answers against the *new* kind and
-// refused; saving the answers checked the *new* answers against the *old* kind
-// and refused. Whichever way round an author went, one half of the change
-// rejected the other. Here both halves are known at once, so the answers are
-// checked against the question as it will be.
-//
-// Everything is validated before anything is written, and the writes share one
-// transaction — so a save either lands whole or leaves the question exactly as
-// it was. Three requests from a browser could not promise that: the second was
-// free to fail after the first had committed, leaving a half-saved question
-// under a button that had already said "saved".
+// SaveQuestion replaces a question whole: fields, texts and answers are
+// validated together and written in one transaction. Only this way can a
+// change that touches both, such as turning a text question into a choice
+// one, check the new answers against the new question.
 func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Question, error) {
 	if _, err := s.editableContest(ctx, cmd.ContestID); err != nil {
 		return Question{}, err
@@ -498,7 +404,6 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
-	// Same reason as UpdateQuestion's: absent must not mean "reset to zero".
 	if cmd.PenaltyPct != nil {
 		updated.PenaltyPct = *cmd.PenaltyPct
 	}
@@ -510,7 +415,6 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	if err := updated.Validate(); err != nil {
 		return Question{}, err
 	}
-	// Against the question as it will be, which is the whole point.
 	if err := validateAnswersFor(updated, cmd.Answers); err != nil {
 		return Question{}, err
 	}
@@ -524,8 +428,6 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 		payload["languages"] = textLanguages(cmd.Texts)
 	}
 
-	// Whether the reference answers actually moved. Compared before the write,
-	// because afterwards there is nothing left to compare against.
 	answersMoved := !sameAnswers(current.Answers, cmd.Answers)
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
@@ -551,11 +453,8 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 		if !answersMoved {
 			return nil
 		}
-		// Its own line, in the same transaction. "Who changed the reference
-		// answers after publication" is a question the trail is built to
-		// answer with an indexed filter (section 9), and folding this into the
-		// entry above would take that away. The values never appear — only how
-		// many there are (section 9.2).
+		// A separate entry so answer changes can be filtered by action (§9);
+		// only the count, never the values (§9.2).
 		return s.record(ctx, cmd.ActorID, audit.ActionAnswersChange, cmd.ContestID, map[string]any{
 			"question_id": updated.ID.String(),
 			"count":       len(cmd.Answers),
@@ -568,10 +467,8 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 }
 
 // sameAnswers reports whether two sets of reference answers are the same, in
-// the same order.
-//
-// Order counts because it is what an author sees, and reordering is a change
-// worth a line in the trail even though it scores identically.
+// the same order: a reorder is worth a trail entry even though it scores the
+// same.
 func sameAnswers(before, after []Answer) bool {
 	if len(before) != len(after) {
 		return false
@@ -603,11 +500,8 @@ func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questi
 	})
 }
 
-// ReorderQuestions sets the display order.
-//
-// The list must name every question exactly once: a partial one would leave
-// positions duplicated or missing, and the participant's view is built from
-// exactly that order.
+// ReorderQuestions sets the display order. The list must name every question
+// exactly once, or positions would be duplicated or missing.
 func (s *Service) ReorderQuestions(ctx context.Context, actorID, contestID uuid.UUID, ordered []uuid.UUID) error {
 	if _, err := s.editableContest(ctx, contestID); err != nil {
 		return err
@@ -693,8 +587,7 @@ func (s *Service) SetAnswers(ctx context.Context, actorID, contestID, questionID
 		if err := s.questions.ReplaceAnswers(ctx, questionID, answers); err != nil {
 			return err
 		}
-		// The values are the answers themselves and never reach the trail: an
-		// audit log readable by staff must not be a place to look them up.
+		// Only the count: the trail must not be a place to read answers (§9.2).
 		return s.record(ctx, actorID, audit.ActionAnswersChange, contestID, map[string]any{
 			"question_id": questionID.String(),
 			"count":       len(answers),
@@ -713,9 +606,7 @@ func textLanguages(texts map[string]QuestionText) []string {
 }
 
 // auditFields is the part of a question that may be written to the audit
-// trail. The wording and the reference answers are not in it: the first is
-// authored text, and the second must never become something the trail can be
-// read for (§9.2).
+// trail: neither the wording nor the reference answers (§9.2).
 func (q Question) auditFields() map[string]any {
 	return map[string]any{
 		"kind":         q.Kind,

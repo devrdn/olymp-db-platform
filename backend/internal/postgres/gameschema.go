@@ -11,26 +11,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The cached shape of a contest's game: the schema a participant's console
-// draws its table list from, kept on the game_templates row beside the build
-// it describes (migration 22's own pair of columns).
-//
-// Its own file rather than more of gameinstances.go, and not because that
-// file had grown: this is the one part of GameInstances that answers about
-// *derived* data — a document this package can throw away and read again
-// from the cluster — where everything else there answers about a database
-// that exists or does not. gameschema_test.go is named for this file, and
-// used to be named for a file that did not exist.
+// The cached schema of a contest's game lives on its game_templates row. It is
+// derived data that can be dropped and read again from the cluster.
 
-// CachedSchema reads the shape worked out for this contest's game, and which
-// template build it describes.
-//
-// ErrNoSchema covers both "never worked out" and "the contest has no game
-// row at all": neither is a failure, and both mean the same thing to the
-// caller — ask the cluster. The version comes back beside the document rather
-// than being compared here, because deciding whether a cached build is still
-// the current one is the reader's own rule (provisioning.SchemaReader), and
-// having two places that know it is how the two drift.
+// CachedSchema reads the cached schema and the template version it describes;
+// the caller decides whether that version is current. ErrNoSchema means never
+// cached or no game row.
 func (r *GameInstances) CachedSchema(ctx context.Context, contestID uuid.UUID) (provisioning.Schema, int, error) {
 	var (
 		document []byte
@@ -50,20 +36,16 @@ func (r *GameInstances) CachedSchema(ctx context.Context, contestID uuid.UUID) (
 
 	var schema provisioning.Schema
 	if err := json.Unmarshal(document, &schema); err != nil {
-		// A document this build cannot read is not worth failing over: it is
-		// derived data, and the cluster still knows the truth. Reported as
-		// "not cached" so the caller reads it again and overwrites this.
+		// Unreadable derived data reads as not cached, so the caller fetches
+		// it again and overwrites this.
 		return provisioning.Schema{}, 0, provisioning.ErrNoSchema
 	}
 	return schema, version, nil
 }
 
-// SaveSchema records the shape, against the template build it describes.
-//
-// A plain UPDATE, and deliberately not an upsert: the row belongs to the
-// contest's game and is created when the game is. A contest with no game has
-// no schema to cache, and inventing a game_templates row here would create
-// one with no template_db and no init_script.
+// SaveSchema caches the schema against the template version it describes. It
+// is an UPDATE, not an upsert: a row created here would have no template_db
+// or init_script.
 func (r *GameInstances) SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema provisioning.Schema) error {
 	document, err := json.Marshal(schema)
 	if err != nil {

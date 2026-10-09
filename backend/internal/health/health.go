@@ -1,10 +1,7 @@
 // Package health exposes the liveness and readiness endpoints used by the
-// container runtime and the reverse proxy.
-//
-// The two probes answer different questions. Liveness asks "is this process
-// still working?" — restarting helps only if the answer is no. Readiness asks
-// "can this instance serve traffic right now?", which depends on the database
-// and cache being reachable.
+// container runtime and the reverse proxy. Liveness asks whether the process
+// works (a restart would help); readiness asks whether it can serve traffic,
+// which depends on the database and cache.
 package health
 
 import (
@@ -25,9 +22,7 @@ const (
 
 // Checker probes one dependency of the service.
 type Checker interface {
-	// Name identifies the dependency in the readiness response.
 	Name() string
-	// Check returns nil when the dependency is usable.
 	Check(ctx context.Context) error
 }
 
@@ -44,9 +39,8 @@ func (c CheckerFunc) Check(ctx context.Context) error { return c.Probe(ctx) }
 type response struct {
 	Status string            `json:"status"`
 	Checks map[string]string `json:"checks,omitempty"`
-	// Cache names the active cache backend. A service running on the
-	// in-process fallback behaves normally per instance, so without this the
-	// degradation is invisible from the outside.
+	// Cache names the active cache backend, so a fallback to the in-process
+	// cache is visible from outside.
 	Cache string `json:"cache,omitempty"`
 }
 
@@ -75,20 +69,17 @@ func (o Options) timeout() time.Duration {
 // defaultReadinessTimeout bounds the probes when the caller sets none.
 const defaultReadinessTimeout = 3 * time.Second
 
-// Live reports that the process is running. It deliberately performs no
-// dependency checks, so a database outage does not trigger a restart loop.
+// Live reports that the process is running. It checks no dependency, so a
+// database outage does not trigger a restart loop.
 func Live() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, r, http.StatusOK, response{Status: statusOK})
 	})
 }
 
-// Ready probes every dependency and reports 503 if any of them is unusable.
-// Probes run concurrently under a shared timeout, so one stalled dependency
-// cannot hang the endpoint.
-//
-// Failure details are logged, never returned: this endpoint is reachable from
-// the network and driver errors carry hosts, ports and user names.
+// Ready probes every dependency concurrently under a shared timeout and
+// reports 503 if any is unusable. Failure details are logged, never returned:
+// the endpoint is public and driver errors carry hosts, ports and user names.
 func Ready(opts Options) http.Handler {
 	log := opts.logger()
 	timeout := opts.timeout()

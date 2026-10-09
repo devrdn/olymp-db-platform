@@ -10,44 +10,29 @@ import (
 	"github.com/google/uuid"
 )
 
-// QuestionTarget is what one case of the contract runs against: a repository
-// and the means to create what a question hangs off. Contests are the unit of
-// isolation: the repository may hold other questions already, so a case only
-// ever looks at the contests it created itself. A real schema needs a contest
-// to exist before a question can name it, so each implementation fills
-// NewContest its own way: the in-memory store mints an identifier and
-// remembers it, PostgreSQL inserts a row.
+// QuestionTarget is a repository and the means to create the contest a
+// question hangs off. The repository may hold other questions, so a case
+// looks only at the contests it created.
 type QuestionTarget struct {
 	Repo contests.QuestionRepository
 	// Visible is the participant-facing read over the same questions as
-	// Repo: what Repo wrote is what Visible serves.
-	Visible contests.VisibleQuestionRepository
-	// NewContest creates a contest and returns its identifier.
+	// Repo.
+	Visible    contests.VisibleQuestionRepository
 	NewContest func() uuid.UUID
-	// Outside is a context that is not inside a unit of work. The context
-	// every other case is run with is inside one.
+	// Outside is a context outside a unit of work; every case otherwise runs
+	// inside one.
 	Outside context.Context
 }
 
 // QuestionRepositoryContract is what every contests.QuestionRepository and
-// contests.VisibleQuestionRepository must do, run as subtests against one
-// implementation. Both the in-memory Questions and postgres.Questions run it,
-// so the store the service tests trust and the store production uses are held
-// to the same answers: a rule the fake got wrong would otherwise pass every
-// service test and fail only in a contest.
+// contests.VisibleQuestionRepository must do; both the in-memory Questions and
+// postgres.Questions run it. each prepares a fresh target for one case, calls
+// run with it, and cleans up. Concurrent authors and column bounds are tested
+// against PostgreSQL alone.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. What needs a second
-// transaction or the real database (two authors adding a question at the
-// same moment, the bounds on a column) is outside it, and is asked of
-// PostgreSQL alone where a test exists.
-//
-// Texts use the language codes "en", "ru" and "ro", which the real schema
-// seeds. A question is told apart from its neighbours by its Points, which
-// the cases choose to be distinct.
+// Texts use "en", "ru" and "ro", which the real schema seeds. Questions are
+// told apart by Points, which the cases keep distinct.
 func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, QuestionTarget))) {
-	// textual is the ordinary visible text question the cases build on.
 	textual := func(contest uuid.UUID, points int) contests.Question {
 		return contests.Question{ContestID: contest, Kind: contests.KindText, Points: points, IsVisible: true}
 	}
@@ -75,8 +60,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		}
 		return found
 	}
-	// layout is the contest's questions as (points, position) in the order
-	// List returned them.
+	// layout is the contest's questions as (points, position), in List's
+	// order.
 	layout := func(t *testing.T, ctx context.Context, target QuestionTarget, contest uuid.UUID) (points, positions []int) {
 		t.Helper()
 		for _, q := range list(t, ctx, target, contest) {
@@ -110,8 +95,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			t.Fatalf("ReplaceAnswers() = %v", err)
 		}
 	}
-	// answersOf is what a question accepts as (kind, value) pairs, which is
-	// all the caller chose about an answer.
+	// answersOf is (kind, value) pairs, all the caller chose about an
+	// answer.
 	answersOf := func(q contests.Question) [][2]string {
 		var got [][2]string
 		for _, a := range q.Answers {
@@ -127,9 +112,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		}
 		return found
 	}
-	// scribble overwrites everything reachable through a question that a
-	// caller could write to, to show whether the repository handed it a view
-	// of its own storage.
+	// scribble overwrites everything reachable through a question, to show
+	// whether the repository shared its own storage.
 	scribble := func(q contests.Question) {
 		if q.MaxAttempts != nil {
 			*q.MaxAttempts = 99
@@ -225,8 +209,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Create stores no text or answers it is handed", func(t *testing.T) {
-		// Text and answers have their own operations; a question that
-		// arrives carrying some is stored without them.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			q := textual(contest, 5)
@@ -265,8 +247,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Create in a contest that is not there is reported", func(t *testing.T) {
-		// A contest deleted while a question was being added to it: the
-		// author is told the contest is gone, not that the store failed.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			_, err := target.Repo.Create(ctx, textual(uuid.New(), 10))
 
@@ -426,9 +406,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}})
 			replaceAnswers(t, ctx, target, created.ID, []contests.Answer{{MatchKind: contests.MatchExact, Value: "the butler"}})
 
-			// The values for the fields Update does not own are the ones a
-			// careless caller would send: another contest, another position,
-			// and no text or answers at all.
+			// What a careless caller would send for the fields Update does
+			// not own.
 			err := target.Repo.Update(ctx, contests.Question{
 				ID: created.ID, ContestID: elsewhere, Ord: 7, Kind: contests.KindText, Points: 25, IsVisible: true,
 			})
@@ -466,8 +445,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Delete removes the question and closes the gap", func(t *testing.T) {
-		// Positions are what the participant's view is built from; a hole in
-		// them would show up as a numbering that skips.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			first := create(t, ctx, target, textual(contest, 10))
@@ -517,8 +494,7 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Delete of a question that is not there is reported", func(t *testing.T) {
-		// Silently succeeding would let a stale editor tab report that it
-		// removed something it did not.
+		// Otherwise a stale editor tab reports removing what it did not.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			err := target.Repo.Delete(ctx, uuid.New())
 
@@ -545,8 +521,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Reorder swaps two questions", func(t *testing.T) {
-		// The case the real constraint on positions has to tolerate: halfway
-		// through, two questions would hold the same one.
+		// Halfway through, two questions hold the same position, which the
+		// real constraint must tolerate.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			first := create(t, ctx, target, textual(contest, 10))
@@ -577,8 +553,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Reorder names no question that is not there", func(t *testing.T) {
-		// Nothing is read after the refusal: whether the questions before the
-		// stranger were already moved is the unit of work's to undo.
+		// Nothing is read after the refusal: undoing earlier moves is the
+		// unit of work's job.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			a := create(t, ctx, target, textual(contest, 10))
@@ -603,11 +579,9 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("Create and Reorder refuse to run outside a unit of work", func(t *testing.T) {
-		// Both rely on a transaction for what they promise (the lock that
-		// serialises position allocation, the deferred ordering constraint),
-		// and a silent no-op outside one is a race that only appears under
-		// load. The refusal is a plain error, not a lookup failure: a missing
-		// transaction must not read as a missing question.
+		// Both need a transaction (the lock serialising positions, the
+		// deferred ordering constraint); without one they would race under
+		// load. The refusal must not read as a missing question.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			first := create(t, ctx, target, textual(contest, 10))
@@ -654,8 +628,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ReplaceTexts replaces what was there", func(t *testing.T) {
-		// A language the new set does not name is removed, one it names is
-		// overwritten, and one it adds is added.
+		// Unnamed languages are removed, named ones overwritten, new ones
+		// added.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			created := create(t, ctx, target, textual(target.NewContest(), 10))
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{
@@ -705,15 +679,14 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ReplaceTexts of a question that is not there is reported", func(t *testing.T) {
-		// A question deleted while its text was being edited.
 		each(t, func(ctx context.Context, target QuestionTarget) {
-			// No text at all writes nothing that could name the question,
-			// and is still an edit of a question that is not there.
+			// An empty set writes no row that would fail on the missing
+			// question, and is still refused.
 			notFound(t, target.Repo.ReplaceTexts(ctx, uuid.New(), map[string]contests.QuestionText{}),
 				"ReplaceTexts() of an unknown question with none")
 
-			// Last, because a database refuses it by failing the statement,
-			// and a transaction cannot be read from after that.
+			// Last: the database refuses it by failing the statement, which
+			// ends the transaction.
 			notFound(t, target.Repo.ReplaceTexts(ctx, uuid.New(), map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}}),
 				"ReplaceTexts() of an unknown question")
 		})
@@ -761,9 +734,7 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ReplaceAnswers lists the answers by value", func(t *testing.T) {
-		// Whatever order they were authored in, a question's answers come
-		// back in the order of their values, so a re-read does not reshuffle
-		// what the organizer sees.
+		// So a re-read does not reshuffle what the organizer sees.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			created := create(t, ctx, target, textual(target.NewContest(), 10))
 
@@ -784,8 +755,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ReplaceAnswers removes the old ones", func(t *testing.T) {
-		// A stale reference answer would keep accepting something the
-		// organizer has already decided is wrong.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			created := create(t, ctx, target, textual(target.NewContest(), 10))
 			replaceAnswers(t, ctx, target, created.ID, []contests.Answer{
@@ -835,24 +804,22 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ReplaceAnswers of a question that is not there is reported", func(t *testing.T) {
-		// A question deleted while its answers were being edited.
 		each(t, func(ctx context.Context, target QuestionTarget) {
-			// No answers at all write nothing that could name the question,
-			// and are still an edit of a question that is not there.
+			// An empty set writes no row that would fail on the missing
+			// question, and is still refused.
 			notFound(t, target.Repo.ReplaceAnswers(ctx, uuid.New(), nil),
 				"ReplaceAnswers() of an unknown question with none")
 
-			// Last, because a database refuses it by failing the statement,
-			// and a transaction cannot be read from after that.
+			// Last: the database refuses it by failing the statement, which
+			// ends the transaction.
 			notFound(t, target.Repo.ReplaceAnswers(ctx, uuid.New(), []contests.Answer{{MatchKind: contests.MatchExact, Value: "the butler"}}),
 				"ReplaceAnswers() of an unknown question")
 		})
 	})
 
 	t.Run("a question handed back is the caller's own copy", func(t *testing.T) {
-		// A caller edits what it is given — the service builds the next
-		// version of a question from the one it read — and that must not
-		// reach the stored question until the caller saves it.
+		// The service builds the next version of a question from the one it
+		// read; that must not reach the store until saved.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			attempts := 3
@@ -886,8 +853,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("what the repository was handed is kept as a copy", func(t *testing.T) {
-		// The converse: a caller that goes on editing what it passed in has
-		// not saved anything.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			attempts := 3
@@ -1009,8 +974,6 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("ForContest leaves out a question with no text in the language", func(t *testing.T) {
-		// Served with an empty body it would show an empty page as if that
-		// were the question.
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
 			translated := create(t, ctx, target, textual(contest, 10))

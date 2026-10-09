@@ -9,11 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Publish problem codes.
-//
-// Machine codes rather than sentences: the API already answers in codes and
-// the interface translates them (§6.2), and an admin screen wants to point at
-// the offending language or question, not print a paragraph.
+// Publish problem codes, translated by the interface (§6.2).
 const (
 	ProblemNoLanguages                = "no_languages"
 	ProblemMissingContestTranslation  = "missing_contest_translation"
@@ -25,90 +21,41 @@ const (
 	ProblemMissingChoiceLabel         = "missing_choice_label"
 	ProblemNoReferenceAnswer          = "no_reference_answer"
 	ProblemNoSchedule                 = "no_schedule"
-	// ProblemSequentialNeedsMaxAttempts names a question with no attempt
-	// limit in a sequential contest (§6.1.1): opening only on a correct
-	// answer would trap a participant stuck on it for the rest of the
-	// contest, clock still running, and this is the one moment that trap can
-	// still be caught rather than discovered live.
+	// ProblemSequentialNeedsMaxAttempts names an uncapped question in a
+	// sequential contest (§6.1.1): a participant stuck on it could never
+	// reach the next one.
 	ProblemSequentialNeedsMaxAttempts = "sequential_needs_max_attempts"
-	// ProblemSequentialHidesQuestion names a hidden question (is_visible =
-	// false) that has another question ordered after it in a sequential
-	// contest (§6.1.1). Sequential progression closes a question by a
-	// correct answer or by spending every attempt, and both require a
-	// submission — but a participant is never given a hidden question's
-	// identifier (VisibleQuestionRepository.ForContest never selects one), so
-	// it can never receive a submission and never close. Every question
-	// ordered after it is then unreachable for the rest of the contest: the
-	// same trap ProblemSequentialNeedsMaxAttempts exists to catch, in the one
-	// shape that check misses, since a hidden question can carry a perfectly
-	// good max_attempts and still never be spent. Hidden questions work
-	// exactly as authored in free progression and in single-question mode
-	// (§6.1) — sequential is the one progression where invisibility itself
-	// becomes the lockout, which is why the refusal lives here rather than
-	// forbidding is_visible = false outright.
+	// ProblemSequentialHidesQuestion names a hidden question with another
+	// ordered after it in a sequential contest (§6.1.1). A participant never
+	// gets a hidden question's identifier, so it can never be answered or
+	// spent, and everything after it is unreachable.
 	ProblemSequentialHidesQuestion = "sequential_hides_question"
 	// ProblemWinnerNeedsFinal names a winner-mode contest with no final
-	// question (§6.1.1): the winner is whoever first answers the final
-	// question, so without one the contest ends with nobody placed.
+	// question, which would end with nobody placed (§6.1.1).
 	ProblemWinnerNeedsFinal = "winner_needs_final"
-	// ProblemWinnerFinalNeedsAttemptLimit names a final question with no
-	// attempt limit in a winner-mode contest. There the first correct final
-	// answer wins outright and a wrong one costs nothing (penaltyAmount is
-	// zero in this mode), so without a limit the contest can be won by
-	// trying candidates one after another rather than by solving it — the
-	// answer rate slows that down, only a limit stops it.
+	// ProblemWinnerFinalNeedsAttemptLimit names an uncapped final question in
+	// winner mode, where a wrong answer costs nothing and the contest could
+	// be won by trying candidates.
 	ProblemWinnerFinalNeedsAttemptLimit = "winner_final_needs_attempt_limit"
 	// ProblemLeaderboardFreezeExceedsWindow names a freeze that begins before
 	// the window opens, or one with no ends_at to be measured back from.
 	// Saving refuses the first already, but the window can move afterwards.
 	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
-	// ProblemICPCChoiceNeedsAttemptLimit names a choice question, in ICPC
-	// scoring, with no attempt cap or one above its number of choices less
-	// its number of correct choices — decision 3 of the design doc's own
-	// decisions section: without one, a participant can submit option after
-	// option and solve the question for the mere cost of penalty time, never
-	// actually needing to know the answer.
+	// ProblemICPCChoiceNeedsAttemptLimit names a choice question in ICPC
+	// scoring whose attempt cap is missing or above its choices less its
+	// correct choices, so it can be solved by trying options for penalty time.
 	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
-	// ProblemChoiceNeedsAttemptLimit names the same fault outside ICPC
-	// scoring, where it costs even less: the options are listed in the
-	// participant's own page, so an uncapped choice question is answered by
-	// sending them one after another — and there the prize is the question's
-	// points rather than penalty time.
+	// ProblemChoiceNeedsAttemptLimit is the same fault outside ICPC, where
+	// trying options wins the question's points.
 	ProblemChoiceNeedsAttemptLimit = "choice_needs_attempt_limit"
 	// ProblemStaffRegistered names a registered participant whose account
-	// administers every contest (rbac.PermissionContestAdminAll): it exports
-	// this contest's question package and reads its unfrozen leaderboard
-	// without ever being appointed to it, so competing in it too would not be
-	// a fair result. Both registration paths already refuse such an account
-	// (enrollment.go), but neither can do anything about a registration that
-	// was made before that rule existed, or about an account granted the
-	// permission after it registered — and that registration otherwise keeps
-	// playing and keeps scoring with the answer key in reach. Detail carries
-	// the login, because the organizer's next move is to take that person off
-	// the roster and a count would leave them searching it.
-	//
-	// Checked by the gate rather than by CheckPublishable below: it is a fact
-	// about who is registered, not about what was authored. See
-	// checkPublishable (schedule.go), which both doors into a running contest
-	// go through.
+	// holds contest.admin_all (see ErrStaffCannotParticipate). Registration
+	// refuses one, but not a registration made before the grant. Detail is
+	// the login, so the organizer can remove that person.
 	ProblemStaffRegistered = "staff_registered"
-	// ProblemCoverNeedsAttribution names an uploaded cover with no line
-	// saying whose picture it is (design spec §10.1). A contest with no
-	// uploaded cover wears a drawn one, whose author is us, and is never at
-	// fault here.
-	//
-	// The upload route refuses an empty credit line already, and the column
-	// carries a check of its own, so this is the third lock rather than the
-	// first — and it is the one that holds for a row this build did not
-	// write: a restore from an older dump, a repair made by hand, or a
-	// credit line that is whitespace and therefore passes a length check
-	// while saying nothing. Publication is the right moment for it, because
-	// publication is when the picture starts being shown to people who never
-	// agreed to anything.
-	//
-	// Checked by the gate rather than by CheckPublishable below, for the
-	// same reason ProblemStaffRegistered is: it is a fact in storage, not
-	// one of the three values a caller has in hand.
+	// ProblemCoverNeedsAttribution names an uploaded cover with no credit
+	// line (§10.1). The upload route and the column check it too; this
+	// catches a restored or hand-repaired row, or a whitespace-only credit.
 	ProblemCoverNeedsAttribution = "cover_needs_attribution"
 )
 
@@ -127,10 +74,8 @@ type PublishProblem struct {
 // recognise one with errors.Is without unwrapping the detail.
 var ErrNotPublishable = errors.New("contest is not ready to publish")
 
-// NotPublishableError collects every reason at once.
-//
-// All of them, not the first: an organizer fixing a contest one refusal at a
-// time would need as many round trips as they have missing translations.
+// NotPublishableError collects every reason at once, so an organizer fixes
+// them in one pass.
 type NotPublishableError struct {
 	Problems []PublishProblem
 }
@@ -146,20 +91,12 @@ func (e *NotPublishableError) Error() string {
 // Is makes errors.Is(err, ErrNotPublishable) true for the detailed error.
 func (e *NotPublishableError) Is(target error) bool { return target == ErrNotPublishable }
 
-// CheckPublishable reports everything about a contest's own content that
-// stands between it and its participants.
+// CheckPublishable reports what in a contest's own content stands between it
+// and its participants. The schema does not enforce these, since a draft
+// passes through all of them (§6.1).
 //
-// This is the gate the schema deliberately does not enforce (see §6.1): a
-// contest under construction passes through every one of these states, and a
-// constraint would fight the editor. The invariants only have to hold at the
-// moment of publication, which is here.
-//
-// Content only: the one thing the gate checks that this cannot is the roster
-// (ProblemStaffRegistered), which is a question for storage rather than for
-// three values in hand. The package's own gate — checkPublishable in
-// schedule.go, which both doors into a running contest go through — asks both
-// halves and reports them together, so a caller with a repository should call
-// that one rather than this.
+// Content only: the roster and the cover are checked by checkPublishable,
+// which a caller holding repositories should use instead.
 func CheckPublishable(c Contest, story Story, questions []Question) error {
 	if problems := publishProblems(c, story, questions); len(problems) > 0 {
 		return &NotPublishableError{Problems: problems}
@@ -167,9 +104,6 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 	return nil
 }
 
-// publishProblems is CheckPublishable's own list, returned rather than
-// wrapped, so the gate can add the roster's problems to the same report
-// instead of an organizer fixing one half and then discovering the other.
 func publishProblems(c Contest, story Story, questions []Question) []PublishProblem {
 	var problems []PublishProblem
 	add := func(p PublishProblem) { problems = append(problems, p) }
@@ -179,12 +113,9 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		add(PublishProblem{Code: ProblemNoLanguages})
 	}
 
-	// A contest with no window has nothing to open it and nothing to close
-	// it. An individual one needs an end as much as a fixed one does, for a
-	// reason its own participants never see: nothing else ever moves it out
-	// of "running", so the leaderboard never freezes or finalises and the
-	// game databases behind it are never reclaimed. Each participant's own
-	// timer ends their work; ends_at is what ends the contest.
+	// Individual timing needs ends_at too: nothing else ever finishes the
+	// contest, so its leaderboard would never finalise and its game
+	// databases never be reclaimed.
 	if c.StartsAt == nil || c.EndsAt == nil {
 		add(PublishProblem{Code: ProblemNoSchedule})
 	}
@@ -215,11 +146,7 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		})
 	}
 
-	// The highest display position among this contest's questions — computed
-	// once, rather than assuming questions arrives sorted by Ord, since
-	// CheckPublishable is exported and this is the only thing below that
-	// needs "is anything ordered after this one" rather than a per-question
-	// fact.
+	// questions need not arrive sorted by Ord.
 	maxOrd := 0
 	for _, q := range questions {
 		if q.Ord > maxOrd {
@@ -229,15 +156,9 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 
 	for _, q := range questions {
 		checkQuestionPublishable(q, langs, add)
-		// Decision 3 of the design doc: a choice question must not be
-		// solvable by trying options. With n options of which k are correct,
-		// attempt n-k+1 is sure to hit a correct one, so the cap must be at
-		// most n-k. The rule was written for ICPC, where the brute force
-		// costs penalty time; it holds in every mode, because the options
-		// are in the participant's own page either way and the rate limit
-		// (six answers a minute) is no obstacle to five of them. Two codes
-		// because the two say different things to an organiser: in ICPC the
-		// cost is penalty time, elsewhere it is the question's points.
+		// With n options of which k are correct, attempt n-k+1 is sure to
+		// hit one, so the cap must be at most n-k. The rate limit is no
+		// obstacle to a handful of options.
 		if q.Kind == KindChoice && !choiceCapped(q) {
 			code := ProblemChoiceNeedsAttemptLimit
 			if c.Scoring == ScoringICPC {
@@ -249,25 +170,9 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 			add(PublishProblem{Code: ProblemWinnerFinalNeedsAttemptLimit, QuestionID: q.ID})
 		}
 		if c.Progression == ProgressionSequential {
-			// §6.1.1: sequential progression opens the next question only
-			// once the previous one is closed — answered correctly, or every
-			// attempt spent. A question with no attempt cap can only ever
-			// close the first way, so a participant stuck on it never
-			// reaches anything after it; refusing this at publish is
-			// refusing the one shape of contest that can trap a participant
-			// on the day it costs most.
 			if q.MaxAttempts == nil {
 				add(PublishProblem{Code: ProblemSequentialNeedsMaxAttempts, QuestionID: q.ID})
 			}
-			// A hidden question can never receive a submission (a
-			// participant is never given its identifier), so it can never
-			// close — not by a correct answer, and not by exhausting
-			// max_attempts either, however that field is set. Everything
-			// ordered after it is then unreachable for the rest of the
-			// contest: the same lockout as above, in the one shape that
-			// check does not see. A hidden question with nothing after it is
-			// unaffected — it works exactly as authored, the way it does in
-			// free progression.
 			if !q.IsVisible && q.Ord < maxOrd {
 				add(PublishProblem{Code: ProblemSequentialHidesQuestion, QuestionID: q.ID})
 			}
@@ -287,13 +192,9 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 }
 
 // choiceCapped reports whether a choice question's attempt limit keeps it
-// from being solved by trying options.
-//
-// A question none of whose options is correct is counted as having one: it
-// cannot be brute-forced at all, and holding it to the stricter single-answer
-// bound keeps the rule from loosening for an answer that is broken anyway
-// (ProblemNoReferenceAnswer covers the question with no answer at all). Every
-// option correct leaves no bound to meet: any single attempt solves it.
+// from being solved by trying options. A question with no correct option is
+// treated as having one, so a broken answer key does not loosen the bound.
+// With every option correct, no cap is low enough.
 func choiceCapped(q Question) bool {
 	if q.MaxAttempts == nil {
 		return false
@@ -313,9 +214,7 @@ func checkQuestionPublishable(q Question, langs []string, add func(PublishProble
 
 	for _, lang := range langs {
 		text, ok := q.Texts[lang]
-		// A hidden question is authored in every language too: an organizer
-		// may reveal it later, and the participant-facing payload must not
-		// depend on whether somebody happened to fill it in.
+		// Hidden questions too: an organizer may reveal one later.
 		if !ok || strings.TrimSpace(text.BodyMD) == "" {
 			add(PublishProblem{Code: ProblemMissingQuestionTranslation, Lang: lang, QuestionID: q.ID})
 			continue

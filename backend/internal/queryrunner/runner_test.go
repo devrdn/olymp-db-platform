@@ -35,19 +35,14 @@ func TestItReturnsColumnsAndRows(t *testing.T) {
 	}
 }
 
-// The wrapper that limits a result is string surgery on the participant's own
-// SQL, so the shapes that break string surgery are the ones worth pinning.
+// The limiting wrapper is string surgery on the participant's SQL.
 func TestTheShapesThatBreakAWrapper(t *testing.T) {
 	runner, database := setup(t)
 
 	for name, sql := range map[string]string{
-		// The wrapper's closing bracket has to be on its own line, or a
-		// trailing line comment swallows it and nothing parses.
 		"a trailing line comment": "SELECT 1 AS a -- what I was thinking",
 		"a trailing semicolon":    `SELECT 1 AS a;`,
 		"trailing whitespace":     "SELECT 1 AS a   \n\t ",
-		// Two columns of the same name are legal inside a subquery; a wrapper
-		// that assumed otherwise would refuse an ordinary join.
 		"two columns named alike": `SELECT a.x, b.x FROM (SELECT 1 x) a, (SELECT 2 x) b`,
 		"a LIMIT of its own":      `SELECT id FROM evidence LIMIT 1`,
 		"an ORDER BY of its own":  `SELECT id FROM evidence ORDER BY id DESC`,
@@ -62,9 +57,7 @@ func TestTheShapesThatBreakAWrapper(t *testing.T) {
 	}
 }
 
-// EXPLAIN cannot go inside a subquery, so it is the one shape the wrapper must
-// leave alone. A runner that wrapped it would refuse the only query a
-// participant has for understanding why theirs is slow.
+// EXPLAIN cannot go inside a subquery.
 func TestExplainIsNotWrapped(t *testing.T) {
 	runner, database := setup(t)
 
@@ -92,8 +85,6 @@ func TestALongResultIsCutAndSaysSo(t *testing.T) {
 	}
 }
 
-// Exactly at the limit is the boundary the flag is easiest to get wrong at: a
-// result of exactly MaxRows is complete, not cut.
 func TestAResultExactlyAtTheLimitIsNotCut(t *testing.T) {
 	runner, database := setup(t)
 	limit := queryrunner.DefaultLimits().MaxRows
@@ -111,7 +102,6 @@ func TestAResultExactlyAtTheLimitIsNotCut(t *testing.T) {
 	}
 }
 
-// A thousand rows can still be an enormous answer if each one is a megabyte.
 func TestAHugeResultIsCutByItsSize(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
@@ -130,19 +120,13 @@ func TestAHugeResultIsCutByItsSize(t *testing.T) {
 	}
 }
 
-// The point of the whole component, and the thing the database layer cannot
-// do for itself.
-//
-// statement_timeout is USERSET: SQL that reached the database unchecked turns
-// it off in one statement. The runner's deadline lives on the connection's
-// context, which no SQL can reach. The role's own timeout is five seconds, so
-// a run that ends in well under one proves which of the two bounded it.
+// statement_timeout is USERSET, so SQL can turn it off. The role's timeout is
+// five seconds, so ending well under one proves the runner's deadline did it.
 func TestTheRunnersOwnDeadlineIsWhatBoundsTime(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
-	// pg_sleep is deliberately not on the standard allow-list. Extending the
-	// checker here is what lets this test reach the database at all, and it is
-	// the point: the deadline must hold for a query the validator did not stop.
+	// pg_sleep is not on the standard allow-list; the deadline must hold for a
+	// query the validator did not stop.
 	runner, database := setupWith(t, limits, checker.NewChecker("pg_sleep"))
 
 	started := time.Now()
@@ -160,9 +144,8 @@ func TestTheRunnersOwnDeadlineIsWhatBoundsTime(t *testing.T) {
 	}
 }
 
-// A deadline that only abandons the connection leaves the query running: the
-// slot is free on our side and spent on the server's, which is the failure
-// admission control is meant to prevent.
+// Abandoning the connection alone would free the slot here while the server
+// still spends it.
 func TestATimedOutQueryStopsRunningOnTheServer(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
@@ -200,7 +183,7 @@ func TestARefusedQueryNeverReachesTheDatabase(t *testing.T) {
 		t.Fatalf("error = %v, want a refusal", err)
 	}
 
-	// And the table is still there, which is the part that matters.
+	// The table is still there.
 	result, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`))
 	if err != nil {
 		t.Fatalf("reading back: %v", err)
@@ -210,9 +193,8 @@ func TestARefusedQueryNeverReachesTheDatabase(t *testing.T) {
 	}
 }
 
-// The validator's first line: a constant size plainly too large is refused
-// before the query is sent, so the participant sees it at once rather than
-// after the query runs. These are the shapes the checker can read as constants.
+// The checker refuses a constant size that is plainly too large before the
+// query is sent.
 func TestAConstantOverTheBoundNeverReachesTheCluster(t *testing.T) {
 	runner, database := setup(t)
 
@@ -231,25 +213,17 @@ func TestAConstantOverTheBoundNeverReachesTheCluster(t *testing.T) {
 	}
 }
 
-// The real bound, proved on the deployment's configuration (CLAUDE.md rule 10):
-// the game cluster runs its backends under a per-process memory cap
-// (deploy/docker-compose.dev.yml ulimits.data mirrors pg-game's). A query the
-// validator admits — because its size is not a constant, or is a value-changing
-// cast, or is an aggregate whose state is many bounded values rather than one —
-// but that tries to build a gigabyte-scale amount must fail with PostgreSQL's
-// own "out of memory" ERROR in its own backend, without the postmaster
-// restarting and without other sessions dying. That is what turns an
-// over-allocating query's cluster-wide crash into one participant's failed
-// query.
+// The game cluster's per-process memory cap (deploy/docker-compose.dev.yml
+// ulimits.data mirrors pg-game's) is the real bound, proved on the deployment's
+// configuration (CLAUDE.md rule 10). A query the validator admits but that
+// builds gigabytes must fail with "out of memory" in its own backend, without
+// the postmaster restarting.
 func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	runner, database := setup(t)
 	admin := gamedbtest.Admin(t)
 
-	// A dedicated connection held open across every probe. If the postmaster
-	// restarts — a backend killed by the OOM killer, crash recovery — this
-	// connection's own backend dies with it, so the same pg_backend_pid()
-	// answering afterwards is direct proof the cluster never went down. The
-	// pool would paper over a restart by handing back a fresh connection.
+	// Held open across every probe: a postmaster restart would kill its
+	// backend, which a pool would hide by handing back a fresh connection.
 	watcher, err := admin.Acquire(t.Context())
 	if err != nil {
 		t.Fatalf("acquiring a watcher connection: %v", err)
@@ -261,10 +235,7 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	}
 	startTime := postmasterStart(t, admin)
 
-	// Each is admitted by the validator and each asks a backend for far more
-	// than the cap: a single huge value reached through a value-changing cast
-	// (the bypass), an aggregate over a cross join whose state is a million
-	// bounded values, and two such aggregates in one query.
+	// Each is admitted by the validator and asks for far more than the cap.
 	for name, sql := range map[string]string{
 		"the bit-cast bypass":         `SELECT length(repeat('x', (-173741824)::bit(30)::int))`,
 		"array_agg over a cross join": `SELECT cardinality(array_agg(repeat('x', 10000))) FROM generate_series(1, 100000) a, generate_series(1, 10) b`,
@@ -275,14 +246,13 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 			if err == nil {
 				t.Fatalf("an over-allocating query was allowed to finish: %s", sql)
 			}
-			// Not a validator refusal: the query reached the database, which
-			// declined it on its own terms.
+			// Not a validator refusal: the database declined it.
 			var refusal *sqlpolicy.Refusal
 			if errors.As(err, &refusal) {
 				t.Fatalf("refused by the validator, not the cluster: %v", err)
 			}
-			// The database's own words, and the out-of-memory SQLSTATE — not a
-			// broken connection, which is what a killed backend would give.
+			// An out-of-memory SQLSTATE, not the broken connection a killed
+			// backend would give.
 			var pg *pgconn.PgError
 			if !errors.As(err, &pg) {
 				t.Fatalf("error = %v (%T), want PostgreSQL's own out-of-memory error", err, err)
@@ -293,10 +263,7 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 		})
 	}
 
-	// The postmaster never restarted — the cap kept every failure to the one
-	// backend that asked for too much. Two independent proofs: the start time
-	// is unchanged, and the connection held open throughout is still the same
-	// live backend (a restart would have killed it).
+	// The postmaster never restarted: same start time, same watcher backend.
 	if now := postmasterStart(t, admin); !now.Equal(startTime) {
 		t.Fatalf("the postmaster restarted: %s -> %s; a backend was killed rather than told no", startTime, now)
 	}
@@ -307,39 +274,26 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	if samePID != watcherPID {
 		t.Fatalf("the watcher backend changed pid %d -> %d: the cluster restarted", watcherPID, samePID)
 	}
-	// And an ordinary query still runs: other participants were untouched.
+	// Other participants are untouched.
 	if _, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`)); err != nil {
 		t.Fatalf("the cluster did not serve a normal query after the over-allocating ones: %v", err)
 	}
 }
 
-// A smoke test of the slot bound on the runner's own, graceful path: one
-// participant abandons query after query, and the live participant backends on
-// the cluster must stay at one plus a small tolerance, because the gate holds
-// one query per participant until its connection has been torn down.
-//
-// It is not the proof that an abandoned backend is stopped. On this path the
-// driver always tells the server: the runner's cancel handler sends a
-// CancelRequest, and even without it pgconn sends one when a cancelled context
-// breaks a read mid-query (asyncClose) — so this test passes with either
-// mechanism removed. The case neither covers, a client that vanishes with no
-// cancel at all, is proved in internal/gamedb
+// A smoke test: one participant abandons query after query, and live backends
+// stay at about one. It passes with either cancel mechanism removed; a client
+// that vanishes with no cancel is covered in internal/gamedb
 // (TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval).
 func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	runner, database := setupWith(t, limits, checker.NewChecker())
 	admin := gamedbtest.Admin(t)
 
-	// A long, cheap query: it runs for many seconds without approaching the
-	// memory cap, so what ends it is cancellation, not out-of-memory. Both
-	// series are within the validator's bounds, so it is admitted.
+	// Long and cheap, so cancellation ends it, not out-of-memory.
 	const slow = `SELECT count(*) FROM generate_series(1, 100000) a, generate_series(1, 100000) b`
 
-	// Sample the live participant backends throughout the burst, tracking the
-	// most seen at once.
-	// Sample past the burst: an abandoned backend that is not cancelled lives
-	// until statement_timeout (5s), so the pile-up peaks after the last query
-	// is fired, not during. Cover the burst plus that tail.
+	// Sample the peak through the burst and the 5s statement_timeout tail,
+	// where uncancelled backends would pile up.
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	var peak int64
@@ -363,26 +317,18 @@ func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
 		}
 	}()
 
-	// One participant abandoning query after query: each Run gets a short-lived
-	// context that is cancelled while the query is still running on the server,
-	// exactly as an aborted HTTP request would. They are sequential because the
-	// gate allows one query per participant at a time — the leak, if any, is
-	// backends that outlive the Run that started them.
+	// Each Run's context is cancelled while the query still runs on the
+	// server, like an aborted HTTP request.
 	deadline := time.Now().Add(3 * time.Second)
 	for i := 0; time.Now().Before(deadline); i++ {
 		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
 		_, _ = runner.Run(ctx, request(database, slow))
 		cancel()
 	}
-	// Watch the tail: uncancelled backends would keep piling up here toward
-	// statement_timeout; cancelled ones drain.
 	time.Sleep(6 * time.Second)
 	close(stop)
 	<-done
-	// One participant holds at most one query through the gate, so with
-	// cancellation working the live count stays at one plus a small tolerance
-	// for a backend caught mid-cancellation. Without it, abandoned backends
-	// accumulate toward the number of queries fired.
+	// One plus a small tolerance for a backend caught mid-cancellation.
 	const want = int64(1)
 	tolerance := int64(2)
 	if got := atomic.LoadInt64(&peak); got > want+tolerance {
@@ -391,8 +337,7 @@ func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
 	}
 }
 
-// postmasterStart reads when the cluster's postmaster last started, which
-// changes if and only if it has restarted (a crash and its recovery).
+// postmasterStart reads when the cluster's postmaster last started.
 func postmasterStart(t *testing.T, admin *pgxpool.Pool) time.Time {
 	t.Helper()
 	var started time.Time
@@ -410,12 +355,7 @@ func TestAnUnknownDatabaseFailsWithoutPanicking(t *testing.T) {
 	}
 }
 
-// A caller going away is not a query running too long, and recording it as one
-// inflates the very number capacity decisions are made from.
-//
-// The two are easy to conflate because both cancel the context: the check was
-// `ctx.Err() != nil`, which is true for either. What tells them apart is which
-// error the context carries.
+// Both cancel the context; only the context's error tells them apart.
 func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 30 * time.Second // far longer than this test will wait
@@ -437,9 +377,6 @@ func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
 	}
 }
 
-// The semaphore bounds what is running; this bounds how often one person asks.
-// A thousand cheap queries pass the semaphore one at a time, which is why the
-// two are separate layers rather than one.
 func TestAParticipantMayNotAskFasterThanTheContestAllows(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.PerMinute = 3
@@ -455,8 +392,7 @@ func TestAParticipantMayNotAskFasterThanTheContestAllows(t *testing.T) {
 	}
 }
 
-// The quota is checked before a write and never before a read: a read cannot
-// fill a disk, and the check costs a round trip on every query.
+// A read cannot fill a disk, so it is never checked.
 func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
 	runner, database := setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -469,8 +405,7 @@ func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
 		t.Fatalf("error = %v, want ErrDiskFull", err)
 	}
 
-	// Reading is unaffected, which is the half that matters during a contest:
-	// a participant who has filled their database can still look at it.
+	// A participant who filled their database can still read it.
 	reading := request(database, `SELECT count(*) FROM evidence`)
 	reading.Policy = sqlpolicy.ReadWrite("evidence")
 	reading.DiskQuotaBytes = 1
@@ -479,29 +414,17 @@ func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
 	}
 }
 
-// The size limit is a door, not a wall: at the cap the statements that can
-// only free space are still admitted, and the ones that would grow the
-// database are not.
-//
-// Refusing every write at the cap refuses the ones that make room, and a
-// participant who filled their database with two queries would have no way
-// out of it for the rest of the contest — while the refusal they are shown
-// tells them to free space. The whole round trip on a real database, because
-// the guarantee is about what PostgreSQL does with the pages and no helper of
-// ours can stand in for that: the write that would grow it is refused, the
-// TRUNCATE is not, pg_database_size actually falls, and the write that was
-// refused then goes through.
+// At the cap a growing write is refused, TRUNCATE is not, pg_database_size
+// actually falls, and the refused write then goes through.
 func TestAtTheSizeLimitTheWayOutIsStillOpen(t *testing.T) {
 	runner, database := setup(t)
 	gamedbtest.Run(t, database,
 		`GRANT INSERT, UPDATE, DELETE, TRUNCATE ON evidence TO `+gamedb.RoleWriter,
-		// Enough that removing it moves pg_database_size well past the noise
-		// of a checkpoint: about four mebibytes of rows.
+		// About 4 MiB, well past checkpoint noise in pg_database_size.
 		`INSERT INTO evidence SELECT g, repeat('x', 512) FROM generate_series(10, 8000) g`,
 	)
 
 	policy := sqlpolicy.ReadWrite("evidence")
-	// The cap is where the database stands now, so it is at it.
 	quota := databaseSize(t, database)
 
 	growing := request(database, `INSERT INTO evidence (id, note) VALUES (1, 'one more')`)
@@ -520,15 +443,13 @@ func TestAtTheSizeLimitTheWayOutIsStillOpen(t *testing.T) {
 		t.Fatalf("the database is %d bytes after emptying it, cap %d: nothing was freed", after, quota)
 	}
 
-	// And the way out led somewhere: the write refused above now goes through.
 	if _, err := runner.Run(t.Context(), growing); err != nil {
 		t.Fatalf("a write after freeing space: %v", err)
 	}
 }
 
-// databaseSize is the same figure the quota is compared against, read from
-// outside the runner so that a test asserting the pages came back is not
-// asking the code under test whether they did.
+// databaseSize reads the figure the quota is compared against, from outside
+// the runner.
 func databaseSize(t *testing.T, database string) int64 {
 	t.Helper()
 
@@ -540,26 +461,19 @@ func databaseSize(t *testing.T, database string) int64 {
 	return size
 }
 
-// And a quota nobody set is no quota, which is what a read-only contest wants.
 func TestNoQuotaMeansNoCheck(t *testing.T) {
 	runner, database := setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	writing := request(database, `INSERT INTO evidence (id, note) VALUES (98, 'x')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
 
-	// It fails on privileges, not on size: the writer was granted no INSERT on
-	// the game table in this arrangement.
+	// It fails on privileges (no INSERT grant here), not on size.
 	if _, err := runner.Run(t.Context(), writing); errors.Is(err, queryrunner.ErrDiskFull) {
 		t.Fatal("a database with no quota was refused for its size")
 	}
 }
 
-// The point of a read-write contest: what a participant writes stays written.
-//
-// Both halves of this used to fail. A write was wrapped in the same subquery a
-// read is, which is a syntax error for an INSERT, and had it run, the
-// transaction was rolled back unconditionally. Neither was visible to a test
-// that connected as the reader, whose missing grant refused the write first.
+// Run as the writer, since the reader's missing grant would hide a failure.
 func TestAPermittedWriteIsKept(t *testing.T) {
 	runner, database := setup(t)
 	gamedbtest.Run(t, database, `GRANT INSERT, UPDATE, DELETE ON evidence TO `+gamedb.RoleWriter)
@@ -575,8 +489,7 @@ func TestAPermittedWriteIsKept(t *testing.T) {
 		t.Fatalf("rows affected = %d, want 2", result.RowsAffected)
 	}
 
-	// Read back through the runner, on a fresh connection: what the
-	// transaction committed is what another query sees.
+	// Read back on a fresh connection.
 	reading := request(database, `SELECT count(*) FROM evidence`)
 	reading.Policy = sqlpolicy.ReadWrite("evidence")
 	result, err = runner.Run(t.Context(), reading)
@@ -588,8 +501,6 @@ func TestAPermittedWriteIsKept(t *testing.T) {
 	}
 }
 
-// A write that answers with rows answers with rows: RETURNING is read through
-// the same limits a SELECT is, and its count is the row count.
 func TestAWriteWithReturningAnswersWithRows(t *testing.T) {
 	runner, database := setup(t)
 	gamedbtest.Run(t, database, `GRANT UPDATE ON evidence TO `+gamedb.RoleWriter)
@@ -606,8 +517,6 @@ func TestAWriteWithReturningAnswersWithRows(t *testing.T) {
 	}
 }
 
-// A participant's own table lives in `work`, and making one is a write that
-// has to be committed like any other.
 func TestOwnTablesAreKeptInWork(t *testing.T) {
 	runner, database := setup(t)
 	policy := sqlpolicy.ReadWrite()
@@ -636,18 +545,11 @@ func TestOwnTablesAreKeptInWork(t *testing.T) {
 	}
 }
 
-// Which role a query runs as is the policy's decision, and it has to be: the
-// writer's grants are what make a read-write contest's writes possible, and
-// the reader's lack of them is what keeps a read-only contest read-only by
-// privilege rather than by the transaction's access mode alone.
-//
 // Proven through a table only the writer may read: the same query is refused
-// by the database under one policy and answered under the other, and nothing
-// but the role behind the connection differs.
+// under one policy and answered under the other.
 func TestTheRoleFollowsThePolicy(t *testing.T) {
 	runner, database := setup(t)
-	// Created after the fixture's GRANT … ON ALL TABLES, so neither role can
-	// read it until this says so; only the writer is told.
+	// Created after the fixture's grants; only the writer is granted it.
 	gamedbtest.Run(t, database,
 		`CREATE TABLE writer_only (id int)`,
 		`GRANT SELECT ON writer_only TO `+gamedb.RoleWriter,
@@ -664,9 +566,6 @@ func TestTheRoleFollowsThePolicy(t *testing.T) {
 	}
 }
 
-// Without writer credentials a read-write contest is refused, not quietly run
-// as the reader, whose missing grants would turn every permitted write into
-// "permission denied" and read as a bug in the contest.
 func TestARunnerWithoutAWriterRefusesAReadWriteContest(t *testing.T) {
 	database := gamedbtest.Scratch(t)
 	gamedbtest.Run(t, database,
@@ -687,14 +586,14 @@ func TestARunnerWithoutAWriterRefusesAReadWriteContest(t *testing.T) {
 		t.Fatalf("error = %v, want ErrNoWriter", err)
 	}
 
-	// A read-only contest is unaffected: the reader is all it needs.
+	// A read-only contest is unaffected.
 	if _, err := runner.Run(t.Context(), request(database, `SELECT id FROM evidence`)); err != nil {
 		t.Fatalf("a read-only contest was refused: %v", err)
 	}
 }
 
-// One statement to the parser, a syntax error inside a FROM: the wrapper has
-// to cut where the parser said the statement ended, not where the string does.
+// The wrapper must cut where the parser said the statement ended (CLAUDE.md
+// rule 14).
 func TestAStatementFollowedByACommentStillRuns(t *testing.T) {
 	runner, database := setup(t)
 
@@ -716,36 +615,25 @@ func TestAStatementFollowedByACommentStillRuns(t *testing.T) {
 	}
 }
 
-// The result budget bounds memory, not only what is passed on.
-//
-// The driver reads a whole row before handing any of it over, so a check on
-// the values it decoded comes after the allocation it exists to prevent: one
-// cell of hundreds of megabytes is hundreds of megabytes in this process. The
-// budget is therefore enforced where the bytes arrive. A single cell larger
-// than the whole allowance cannot be shown in part, so it is refused by name.
+// The result budget bounds memory, enforced where the bytes arrive (CLAUDE.md
+// rule 12).
 func TestOneCellLargerThanTheBudgetIsRefusedWithoutBeingRead(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
 	runner, database := setupWith(t, limits, checker.NewChecker())
 
-	// Ten megabytes in one cell — a thousand copies of the longest string the
-	// validator admits, folded into a single value: past the budget and past
-	// its slack, and small enough that reading it whole would not itself fail
-	// the test. What fails the test is reading it at all.
+	// Ten megabytes in one cell: past the budget and its slack.
 	_, err := runner.Run(t.Context(), request(database, `SELECT string_agg(repeat('x', 10000), '') FROM generate_series(1, 1000)`))
 	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
 		t.Fatalf("error = %v, want ErrResultTooLarge", err)
 	}
 
-	// The connection that refused to read is closed with the query; the next
-	// one starts with a fresh budget.
+	// The next query gets a fresh connection and budget.
 	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
 		t.Fatalf("the runner did not recover: %v", err)
 	}
 }
 
-// A database name is the caller's and is checked upstream; the runner still
-// refuses to build a connection string out of anything but a plain name.
 func TestADatabaseNameThatIsNotPlainIsRefused(t *testing.T) {
 	runner, _ := setup(t)
 
@@ -755,9 +643,8 @@ func TestADatabaseNameThatIsNotPlainIsRefused(t *testing.T) {
 	}
 }
 
-// The rate bounds how often the parser is exercised, so a refused query counts
-// too: otherwise refusals would be free, and the parser is C code reading text
-// an adversary chose.
+// The parser is C code reading adversarial text, so refusals are not free
+// (CLAUDE.md rule 13).
 func TestARefusedQueryStillCountsAgainstTheRate(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.PerMinute = 2
@@ -773,11 +660,7 @@ func TestARefusedQueryStillCountsAgainstTheRate(t *testing.T) {
 	}
 }
 
-// The console prints a column's type under its name, beside a schema panel
-// that got its own from format_type(). This is the assertion that the two
-// panels of one screen agree: `timestamp with time zone`, not the driver's
-// `timestamptz`, and resolved from the row description the query already
-// carried rather than from a second trip to the catalogue.
+// Types are spelled as format_type() spells them, as the schema panel shows.
 func TestAResultNamesEachColumnsType(t *testing.T) {
 	runner, database := setup(t)
 
@@ -800,11 +683,8 @@ func TestAResultNamesEachColumnsType(t *testing.T) {
 	}
 }
 
-// The meter under the editor says how long the query took. Two things have to
-// hold for that number to be worth printing: it is not zero, and it is a
-// proper part of the call rather than the whole of it — opening the
-// connection, beginning the transaction and answering over the wire are this
-// platform's costs, not the participant's query's.
+// The duration is non-zero and excludes the platform's costs around the
+// statement.
 func TestAResultSaysHowLongTheStatementTook(t *testing.T) {
 	runner, database := setup(t)
 
@@ -819,13 +699,8 @@ func TestAResultSaysHowLongTheStatementTook(t *testing.T) {
 		t.Fatalf("duration = %v; the statement was not timed at all", result.Duration)
 	}
 
-	// The untimed part of the call has to be the larger half, and that is a
-	// fact about round trips rather than about this machine's speed. Opening
-	// a connection is a TCP handshake, an authentication exchange and a
-	// startup packet — three round trips before any SQL is sent — while
-	// reading two rows out of a two-row table is one. A duration that had the
-	// connection folded into it leaves almost nothing outside itself, which
-	// is the shape this catches.
+	// Connecting takes several round trips and the statement one, so the
+	// untimed part must be the larger half.
 	if outside := whole - result.Duration; outside < result.Duration {
 		t.Fatalf("the statement was timed at %v of a %v call, leaving only %v for "+
 			"opening the connection and beginning the transaction; those are this "+
@@ -834,10 +709,6 @@ func TestAResultSaysHowLongTheStatementTook(t *testing.T) {
 	}
 }
 
-// And it has to be a measurement rather than a constant: a statement that
-// makes the server do real work registers more than a trivial one. Two
-// million rows counted server-side is tens of milliseconds; reading two rows
-// out of a tiny table is well under one.
 func TestTheDurationMeasuresTheStatementAndNotSomethingConstant(t *testing.T) {
 	runner, database := setup(t)
 
@@ -857,17 +728,15 @@ func TestTheDurationMeasuresTheStatementAndNotSomethingConstant(t *testing.T) {
 	}
 }
 
-// A database dropped and created again under the same name — a reset, an
-// organiser's drop and rebuild — is served by a new connection. The drop
-// severs the kept one; BEGIN (Runner.begin) is where the runner notices, and it
-// connects again rather than failing the participant's query.
+// The drop severs the kept connection; BEGIN notices and the runner connects
+// again rather than failing the query.
 func TestARecreatedDatabaseIsNotServedByTheConnectionToTheOldOne(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
 	admin := gamedbtest.Admin(t)
 
 	old := backend(t, runner, database)
 
-	// The way provisioning drops an instance under a participant.
+	// As provisioning drops an instance.
 	if _, err := admin.Exec(t.Context(), `DROP DATABASE `+sqlpolicy.QuoteIdentifier(database)+` WITH (FORCE)`); err != nil {
 		t.Fatalf("dropping with a kept connection: %v", err)
 	}

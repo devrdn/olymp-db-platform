@@ -49,7 +49,6 @@ func TestLimiterBlocksBeyondTheLimit(t *testing.T) {
 }
 
 func TestLimiterCountsSubjectsSeparately(t *testing.T) {
-	// One account being hammered must not lock out everybody else.
 	limiter := newTestLimiter(t)
 	ctx := context.Background()
 	for range 5 {
@@ -79,8 +78,6 @@ func TestLimiterForgetsAfterTheWindow(t *testing.T) {
 }
 
 func TestLimiterResetClearsTheCounter(t *testing.T) {
-	// A successful login clears the failure count, so a user who mistypes twice
-	// and then succeeds starts fresh.
 	limiter := newTestLimiter(t)
 	ctx := context.Background()
 	for range 3 {
@@ -98,8 +95,6 @@ func TestLimiterResetClearsTheCounter(t *testing.T) {
 }
 
 func TestLimiterFailsClosedWhenTheCacheIsBroken(t *testing.T) {
-	// If the counter cannot be read, the brute-force protection is not working;
-	// refusing the attempt is the safe reading.
 	limiter := NewLimiter(brokenCache{})
 
 	allowed, err := limiter.Allow(context.Background(), "login:ivanov", 3, time.Minute)
@@ -112,7 +107,6 @@ func TestLimiterFailsClosedWhenTheCacheIsBroken(t *testing.T) {
 	}
 }
 
-// brokenCache fails every operation.
 type brokenCache struct{ cache.Cache }
 
 func (brokenCache) Incr(context.Context, string, time.Duration) (int64, error) {
@@ -120,9 +114,6 @@ func (brokenCache) Incr(context.Context, string, time.Duration) (int64, error) {
 }
 
 func TestANewGenerationAbandonsEveryCounterDerivedFromTheOldOne(t *testing.T) {
-	// Counters are keyed by whatever a caller typed and whatever address it
-	// came from, so there is no list of them to delete. Folding a generation
-	// into every key and replacing the generation abandons them all at once.
 	limiter := newTestLimiter(t)
 	ctx := context.Background()
 
@@ -154,7 +145,6 @@ func TestANewGenerationAbandonsEveryCounterDerivedFromTheOldOne(t *testing.T) {
 }
 
 func TestGenerationsAreNeverReused(t *testing.T) {
-	// A repeated value would bring back counters abandoned by an earlier one.
 	limiter := newTestLimiter(t)
 	ctx := context.Background()
 	seen := map[string]bool{}
@@ -169,10 +159,6 @@ func TestGenerationsAreNeverReused(t *testing.T) {
 }
 
 func TestAGenerationOutlivesTheWindowItWasSetFor(t *testing.T) {
-	// Kept for two windows: a generation lapsing back to "0" right at the end
-	// of one would meet counters from the window it replaced that have not
-	// quite expired, and a guesser who timed the lapse would get a second
-	// fresh start out of one unlock.
 	limiter := newTestLimiter(t)
 	ctx := context.Background()
 	const window = 60 * time.Millisecond

@@ -20,42 +20,30 @@ import (
 // ErrNotEditable reports a change the contest's current status forbids.
 var ErrNotEditable = errors.New("contest can no longer be edited")
 
-// Errors about a running contest's schedule, both narrower than
-// ErrNotEditable: the contest is still editable in general, only these two
-// particular moves are refused, for a reason specific enough that the
-// generic "it is running" message would leave an organiser guessing.
+// Schedule moves refused on a running contest whose settings may otherwise
+// still change; narrower than ErrNotEditable so the organiser is told why.
 var (
 	// ErrFreezeAlreadyReached refuses moving ends_at earlier once the
-	// contest has reached its leaderboard freeze (see checkRunningChange's
-	// own doc); a later ends_at lengthens the freeze instead.
+	// leaderboard has frozen; a later ends_at lengthens the freeze instead.
 	ErrFreezeAlreadyReached = errors.New("the leaderboard has already frozen, so the end date can only move later")
 	// ErrICPCStartLocked refuses a starts_at change on a running ICPC
-	// contest, whose penalty minutes are counted from starts_at at read
-	// time (see checkRunningChange's own doc).
+	// contest, whose penalty minutes are counted from starts_at.
 	ErrICPCStartLocked = errors.New("the start date cannot change while ICPC scoring is running")
 )
 
-// UserDirectory is the slice of the account repository this package needs:
-// resolving the people it appoints and enrolls, and finding them by a typed
-// search. It is deliberately three methods wide and no more — contests
-// neither create accounts nor change them.
+// UserDirectory is the part of the account repository this package needs;
+// contests neither create accounts nor change them.
 type UserDirectory interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 	ByLogin(ctx context.Context, login string) (users.User, error)
-	// Search resolves accounts by a substring of their login, full name or
-	// email — the picker behind Service.SearchPeople. limit is already
-	// bounded by the caller (see MaxDirectoryQueryLength and
-	// DirectorySearchMaxLimit in directory.go); this method trusts it.
-	// SearchPeople reads only ID, Login and FullName off the result — the
-	// real implementation (internal/postgres/users.go) populates exactly
-	// those and leaves everything else zero rather than running userColumns'
-	// role and permission subqueries for a picker that throws them away.
+	// Search finds accounts by a substring of login, full name or email.
+	// limit is already bounded by the caller. Only ID, Login and FullName
+	// are populated.
 	Search(ctx context.Context, query string, limit int) ([]users.User, error)
 }
 
-// ServiceConfig collects the storage a Service needs. Every field is an
-// interface declared in this package, so the rules below are exercised in
-// tests without a database.
+// ServiceConfig collects the storage a Service needs, as interfaces declared
+// in this package so the rules are testable without a database.
 type ServiceConfig struct {
 	Contests      Repository
 	Stories       StoryRepository
@@ -65,75 +53,36 @@ type ServiceConfig struct {
 	Policies      PolicyStore
 	Languages     LanguageCatalog
 	Users         UserDirectory
-	// Game reads the SQL one contest's game is built from, for
-	// Service.ExportPackage and nothing else. Optional at the type level for
-	// the same reason Submissions is: a deployment with no game cluster wires
-	// none (internal/app builds the game half only when there is a cluster),
-	// and a package from such an installation simply carries no game rather
-	// than failing over a circuit the contest never had.
+	// Game reads the SQL a contest's game is built from, for ExportPackage.
+	// Optional: without a game cluster, a package simply carries no game.
 	Game GameSource
-	// Submissions records participants' answers (submission.go). Optional at
-	// the type level so every existing caller that has nothing to do with
-	// answering questions keeps compiling unchanged; a Service assembled
-	// without one panics the first time Submit is called, the same way a nil
-	// map panics on write rather than silently discarding — Submit is the
-	// only method that ever touches this field, so nothing else is affected
-	// by leaving it unset.
+	// Submissions records answers. Optional; only Submit uses it, and a
+	// Service without one panics there.
 	Submissions SubmissionRepository
-	// Sequence answers whether a question may be answered yet in a sequential
-	// contest (§6.1.1, sequence.go). Optional at the type level for the same
-	// reason Submissions is: only Submit ever reads it, and only when a
-	// contest's progression is actually sequential — a caller with nothing to
-	// do with answering questions, or an installation that never turns this
-	// on, need not supply one.
+	// Sequence answers whether a question may be answered yet in a
+	// sequential contest (§6.1.1). Optional; only Submit uses it.
 	Sequence SequentialGate
-	// Covers answers the publish gate's question about a contest's uploaded
-	// picture: an uploaded cover with nobody credited does not publish
-	// (design spec §10.1, ProblemCoverNeedsAttribution). Optional at the
-	// type level in the same way Game and Submissions are — a Service
-	// assembled without one simply never asks — and internal/app always
-	// supplies one, so a deployment always does.
+	// Covers lets the publish gate refuse an uploaded cover with nobody
+	// credited (§10.1). Optional; without one the gate never asks.
 	Covers     scheduleCovers
 	Audit      *audit.Recorder
 	UnitOfWork storage.UnitOfWork
-	// Now is the clock, injected so the enrollment deadline is testable.
-	Now func() time.Time
-	// Gate is the participation gate Submit admits an answer through and
-	// takes its write deadline from (the participant's deadline plus the
-	// installation's grace, §8). Required: it is the same *Gate the console
-	// and the profile are handed (internal/app builds one), so the answer
-	// route can never hold a grace of its own that disagrees with theirs.
+	Now        func() time.Time
+	// Gate admits answers and gives Submit its write deadline (§8).
+	// Required, and the same *Gate every other consumer holds, so no route
+	// has a grace of its own.
 	Gate *Gate
-	// Logger records the one thing Submit ever has to log rather than fail
-	// on: a reference answer whose regex does not compile (submission.go's
-	// own grade). Defaults to slog.Default() so a caller that never sets it
-	// still gets that anomaly reported somewhere rather than a nil pointer.
+	// Logger reports a reference answer whose regex does not compile.
 	Logger *slog.Logger
-	// Sleep is what Submit waits with between a lost attempt-number race and
-	// its next retry (submission.go's own attemptBackoff). Defaults to
-	// time.Sleep; a test that wants its retries instant sets this to a
-	// no-op instead of waiting on the real clock for a scenario it is
-	// forcing deterministically.
+	// Sleep is the backoff between attempt-number race retries; tests set a
+	// no-op. Defaults to time.Sleep.
 	Sleep func(time.Duration)
-	// DefaultGraceMin is the installation's own default grace period
-	// (config.GameInstanceGraceMin, GAME_INSTANCE_GRACE_MIN) — the grace that
-	// actually governs a contest for as long as its own Settings.GracePeriodMin
-	// reads zero (GracePeriodMin's own doc). Service.ExtendGrace compares an
-	// organizer's requested value against this number, not against the stored
-	// zero, when a contest never set an explicit grace:
-	// internal/postgres/gameinstances.go's reclaimDeadline already falls back
-	// to this same installation default for that same contest, so comparing
-	// against anything else would let ExtendGrace accept a value the sweep does
-	// not actually treat as an extension. Zero (a caller with nothing to do
-	// with reclaim) means ExtendGrace requires nothing more than a positive
-	// value the first time — harmless, since such a caller never constructs a
-	// Service a contest's own game databases are reclaimed through.
+	// DefaultGraceMin is the installation's GAME_INSTANCE_GRACE_MIN, the
+	// grace in force while a contest's Settings.GracePeriodMin is zero.
+	// ExtendGrace compares against it because the reclaim sweep falls back
+	// to the same value.
 	DefaultGraceMin int
-	// PoolTrigger asks the background game-pool tender to run again soon
-	// after a roster changes (see PoolTrigger's own doc). Optional: nil is
-	// the state of a Service with no game cluster behind it, or of a test
-	// with nothing to do with provisioning, and both Enroll and
-	// AddParticipants simply skip the trigger when it is unset.
+	// PoolTrigger wakes the game-pool tender after a roster change. Optional.
 	PoolTrigger PoolTrigger
 }
 
@@ -208,11 +157,9 @@ type CreateCommand struct {
 	ActorID      uuid.UUID
 	Enrollment   string
 	QuestionMode string
-	// Progression decides the order questions may be answered in, empty
-	// defaulting to ProgressionFree (§6.1.1).
+	// Progression empty defaults to ProgressionFree (§6.1.1).
 	Progression string
-	// Scoring decides how a result is derived from submissions, empty
-	// defaulting to ScoringPoints (§6.1.1).
+	// Scoring empty defaults to ScoringPoints (§6.1.1).
 	Scoring      string
 	Timing       string
 	DurationMin  *int
@@ -261,9 +208,8 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		return Contest{}, err
 	}
 
-	// One transaction: a contest without an owner has nobody who may appoint
-	// staff, and a contest without a policy has undefined SQL access. Neither
-	// is a state the installation should ever be able to observe.
+	// One transaction: a contest without an owner or a SQL policy must never
+	// be observable.
 	var created Contest
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -326,15 +272,13 @@ type UpdateCommand struct {
 	// clears it; nil leaves it as it was.
 	AllowedCIDRs []netip.Prefix
 	Settings     *Settings
-	// LeaderboardFreezeMin sets the freeze; ClearLeaderboardFreeze removes it.
-	// Two fields because nil already means "leave it as it was", and "no
-	// freeze" has to be sayable too.
+	// LeaderboardFreezeMin sets the freeze; ClearLeaderboardFreeze removes it,
+	// since nil already means "leave it alone".
 	LeaderboardFreezeMin   *int
 	ClearLeaderboardFreeze bool
 	LeaderboardNames       string
-	// ICPCPenaltyMin sets the ICPC per-attempt penalty, in minutes. Nil means
-	// "leave it alone" — the field's own zero value (no penalty at all) is a
-	// configuration an organizer can mean, so it cannot double as "unset".
+	// ICPCPenaltyMin is the per-attempt penalty in minutes; nil leaves it
+	// alone, because zero (no penalty) is a real setting.
 	ICPCPenaltyMin *int
 }
 
@@ -392,18 +336,14 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		updated.ICPCPenaltyMin = *cmd.ICPCPenaltyMin
 	}
 
-	// The session length belongs to individual timing. Without this the switch
-	// back is unreachable: a client has no way to send "no duration", and a
-	// fixed contest that still carries one does not validate.
+	// A client cannot send "no duration", and a fixed contest with one does
+	// not validate, so switching back to fixed timing clears it here.
 	if updated.Timing == TimingFixed {
 		updated.DurationMin = nil
 	}
 
-	// Runs before Validate: on a running contest it may still rewrite
-	// updated.EndsAt/StartsAt back to the exact stored value, or lengthen
-	// the freeze alongside an extension (see its own doc), and Validate has
-	// to see the value that will actually be written, not the one the
-	// request happened to send.
+	// Before Validate: checkRunningChange may rewrite the schedule and the
+	// freeze, and Validate must see what will be written.
 	if err := checkRunningChange(current, &updated, s.now()); err != nil {
 		return Contest{}, err
 	}
@@ -411,7 +351,6 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		return Contest{}, err
 	}
 
-	// What may be recorded is declared once, on the type (Contest.auditFields).
 	changes := audit.Between(current.auditFields(), updated.auditFields())
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
@@ -427,47 +366,17 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 }
 
 // ExtendGrace lengthens how long a finished or archived contest's game
-// databases survive before the reclaim sweep drops them (§2.4).
+// databases survive before the reclaim sweep drops them (§2.4). It is the
+// one write allowed on an ended contest, not a second door into Update.
 //
-// SettingsEditable is false for both statuses, and everything else about a
-// finished contest stays exactly that immutable — this is the one narrow
-// exception, not a second door into Update. Without it an organizer who
-// discovers, after the contest already finished, that the reports are not
-// done or a dispute is open has no recourse but an installation-wide
-// environment variable and a restart, or hand-written SQL against a
-// database whose only real safety net was the grace period itself.
+// graceMin must exceed the grace in force: the contest's own, or the
+// installation default when it set none, since the sweep falls back to that
+// default too. Comparing against the stored zero would let a small value cut
+// the real default short.
 //
-// graceMin may only grow: refusing to shorten it here is what keeps this
-// method reading as "buy more time" rather than a general settings edit that
-// merely happens to be reachable once finished. The comparison is against
-// the grace actually in force — current.Settings.GracePeriodMin when the
-// contest set one explicitly, s.defaultGraceMin (the installation's own
-// GAME_INSTANCE_GRACE_MIN, threaded through ServiceConfig.DefaultGraceMin)
-// when it did not — never against the stored zero itself. Comparing against
-// the raw zero used to accept any positive graceMin as a contest's "first
-// explicit" grace, including one far below the installation default the
-// reclaim sweep (internal/postgres/gameinstances.go's reclaimDeadline) was
-// actually enforcing: ExtendGrace(…, 60) against a contest that never
-// configured a grace read as an extension, was recorded as one (0 → 60), and
-// in fact cut the real 24-hour default down to one hour, moving the reclaim
-// deadline to minutes away. Comparing against the effective grace instead
-// means a value that does not clear the installation default is refused
-// exactly like a value that does not clear an explicit one.
-//
-// The Update call below still bumps updated_at (internal/postgres/
-// contests.go), and that column is what reclaimDeadline measures from — but
-// that is safe here specifically, and only here: ExtendGrace is the one
-// write this package lets reach a finished or archived contest at all (the
-// status guard just above; the ordinary Update refuses both statuses
-// outright), so no unrelated settings edit can ever piggyback on this same
-// timestamp bump. And because graceMin is now required to strictly exceed
-// the effective grace that was already governing the deadline, resetting
-// the anchor to "now" can only ever push that deadline later than it already
-// was: now >= the contest's own updated_at, and the new grace is larger than
-// the one the old deadline was computed from, so new_deadline = now +
-// graceMin is later than old_deadline = old updated_at + effective grace
-// however long ago the contest actually finished. The method never produces
-// a deadline earlier than the one it replaces.
+// The write bumps updated_at, which the sweep measures from. That can only
+// move the reclaim deadline later: now is after the old updated_at and the
+// new grace is larger than the old one.
 func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID, graceMin int) (Contest, error) {
 	current, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -509,53 +418,23 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 	return updated, nil
 }
 
-// checkRunningChange refuses the fields that must not move mid-flight, and —
-// for the two guarded schedule fields — corrects a same-minute drift in
-// place rather than merely tolerating it.
-//
-// Extending a window or correcting a network range helps participants; the
-// shape of the contest — how many questions it asks, how the clock works —
-// is what they are already answering under. now is the moment the change is
-// being decided at, needed only to tell whether a freeze the contest already
-// carries has actually been reached yet (see the ends_at case below).
-// updated is taken by pointer, unlike every other parameter in this package's
-// service methods, specifically so the two guarded-field cases below can
-// snap a same-minute value back to the one already stored before Update
-// validates and writes it — see their own comments for why leaving updated
-// as the caller's (truncated) value would not be merely tolerating a resend,
-// but silently moving the deadline it names.
+// checkRunningChange refuses changes to a running contest's shape (question
+// mode, clock, scoring), which participants are already answering under, and
+// allows the window and network fixes that help them. updated is a pointer
+// because a same-minute schedule resend is snapped back to the stored value,
+// so a save never moves a deadline by the seconds the form cannot show.
 func checkRunningChange(current Contest, updated *Contest, now time.Time) error {
 	if current.Status != StatusRunning {
 		return nil
 	}
-	// FreezeAt = EndsAt - LeaderboardFreezeMin (contests.go) is recomputed
-	// from EndsAt on every read, with nothing stored for "the freeze already
-	// happened". Moving EndsAt alone after that moment has passed would push
-	// FreezeAt itself later, and leaderboard.Decide would read the new,
-	// not-yet-reached FreezeAt as "still live" — unfreezing a public and
-	// participant board that had already stopped showing new results. Before
-	// the freeze is reached, moving EndsAt is exactly the "extend after a
-	// power cut" operation SettingsEditable exists for.
+	// FreezeAt is recomputed from EndsAt on every read. Moving EndsAt alone
+	// after the freeze would move FreezeAt into the future and unfreeze a
+	// board that had already stopped. So once frozen, an extension moves
+	// EndsAt by whole minutes and grows the freeze by the same minutes,
+	// keeping FreezeAt in place; moving EndsAt earlier is refused.
 	//
-	// After the freeze an extension is still that operation, so it is paired
-	// instead of refused: EndsAt moves later by whole minutes and the freeze
-	// grows by the same minutes in the same write, which leaves FreezeAt
-	// exactly where it was. The settings form cannot send the freeze of a
-	// running contest (the field is locked), so the freeze it leaves unchanged
-	// is lengthened here; a client that sends the already-lengthened value is
-	// asking for the same change. Any other freeze is still refused by the
-	// freeze case below, and moving EndsAt earlier is refused outright: it
-	// would need a shorter freeze reaching back to a moment the table was
-	// still live.
-	//
-	// The settings form only ever sends whole minutes, so "did this change"
-	// is asked at minute precision (sameMinute, not exact equality): a
-	// resend of the value the form was given back — every field but this one
-	// being the actual edit — must never read as "the deadline moved" just
-	// because the stored value happens to carry seconds. A same-minute value
-	// is reset to the exact value already stored, and an extension is applied
-	// to the stored value by whole minutes, so a save never drifts the real
-	// deadline by the up to 59 seconds sameMinute cannot see.
+	// The form sends whole minutes, so a same-minute EndsAt is a resend and
+	// is reset to the exact stored value.
 	freezeLengthened := false
 	if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
 		switch {
@@ -577,16 +456,9 @@ func checkRunningChange(current Contest, updated *Contest, now time.Time) error 
 			return ErrFreezeAlreadyReached
 		}
 	}
-	// ICPC penalty minutes are counted from starts_at at read time
-	// (postgres/leaderboard.go), never stored with a submission — the same
-	// reason the ICPCPenaltyMin case below refuses to move the penalty
-	// itself. Moving starts_at mid-run would retroactively rescore every
-	// fixed-timing participant's penalty for a reason nobody watching the
-	// table could see. Scoped to ICPC: no other scoring mode reads
-	// starts_at at all, so elsewhere this stays the ordinary window
-	// correction SettingsEditable exists for. Minute precision and the
-	// same-minute snap-back, for the same resend-of-an-unchanged-value
-	// reason as the ends_at case above.
+	// ICPC penalty minutes are counted from starts_at when the table is read,
+	// so moving it would rescore everybody. No other scoring reads starts_at.
+	// Same-minute snap-back as for EndsAt.
 	if current.Scoring == ScoringICPC {
 		if !sameMinute(current.StartsAt, updated.StartsAt) {
 			return ErrICPCStartLocked
@@ -597,30 +469,21 @@ func checkRunningChange(current Contest, updated *Contest, now time.Time) error 
 	case current.QuestionMode != updated.QuestionMode:
 		return fmt.Errorf("%w: the question mode cannot change while it runs", ErrNotEditable)
 	case current.Progression != updated.Progression:
-		// Same reasoning as question_mode: a participant already mid-sequence
-		// has answered under one order or the other, and switching it under
-		// them changes which question they are allowed to be looking at.
 		return fmt.Errorf("%w: the progression cannot change while it runs", ErrNotEditable)
 	case current.Scoring != updated.Scoring:
-		// The penalty is applied or skipped per submission, at the moment of
-		// answering (§6.1.1): moving this mid-run would make earlier answers
-		// in the same contest disagree with later ones about whether the
-		// penalty counted, for a reason no participant could see.
+		// The penalty is decided per submission when it is made (§6.1.1), so
+		// earlier and later answers would disagree.
 		return fmt.Errorf("%w: the scoring mode cannot change while it runs", ErrNotEditable)
 	case current.Timing != updated.Timing:
 		return fmt.Errorf("%w: the timing model cannot change while it runs", ErrNotEditable)
 	case !equalDuration(current.DurationMin, updated.DurationMin):
 		return fmt.Errorf("%w: the session length cannot change while it runs", ErrNotEditable)
 	case !freezeLengthened && !equalDuration(current.LeaderboardFreezeMin, updated.LeaderboardFreezeMin):
-		// Moving the freeze mid-run either opens the live table for a moment
-		// or hides a table participants have already seen. The label below
-		// it is free to change: that is a choice about names, not results.
+		// Moving the freeze either reopens the live table or hides one
+		// participants have seen. The names setting may still change.
 		return fmt.Errorf("%w: the leaderboard freeze cannot change while it runs", ErrNotEditable)
 	case current.ICPCPenaltyMin != updated.ICPCPenaltyMin:
-		// The ICPC penalty is not stored with any submission: it is applied
-		// when the table is read, to every wrong attempt at once. Changing it
-		// mid-run would retroactively rescore everybody's penalty time, and
-		// could reorder a table participants have already seen.
+		// Applied when the table is read, so changing it rescores everybody.
 		return fmt.Errorf("%w: the ICPC penalty cannot change while it runs", ErrNotEditable)
 	}
 	return nil
@@ -638,8 +501,7 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Contest, int, error) {
 
 // SetLanguages sets the languages a contest is offered in.
 func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID, langs []ContestLanguage) error {
-	// Adding a language to a running contest would leave everything authored
-	// in it empty for whoever picked it.
+	// A language added to a running contest would have nothing authored in it.
 	c, err := s.editableContest(ctx, contestID)
 	if err != nil {
 		return err
@@ -671,10 +533,8 @@ func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.U
 		return err
 	}
 
-	// The languages, never the titles. Which languages were authored is the
-	// part somebody asks about later; the text itself is content, and keeping
-	// its previous copies here would make the trail a version history it
-	// cannot serve as (§9.2).
+	// The trail records which languages were written, not the text: it is
+	// not a version history (§9.2).
 	written := make([]string, 0, len(translations))
 	for _, t := range translations {
 		written = append(written, t.Lang)
@@ -692,8 +552,7 @@ func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.U
 }
 
 // CheckPublish reports what stands between the contest and publication,
-// without changing anything. The constructor screen calls it to show the
-// remaining work rather than making an organizer discover it by being refused.
+// without changing anything.
 func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 	c, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -702,18 +561,11 @@ func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 	return s.checkPublishable(ctx, c)
 }
 
-// checkPublishable delegates to the package-level function schedule.go's
-// Scheduler shares with this method — the same question, asked from
-// Service's own wider StoryRepository and QuestionRepository.
 func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
 	return checkPublishable(ctx, s.stories, s.questions, s.registrations, s.covers, c)
 }
 
 // Transition moves a contest along its lifecycle.
-//
-// One entry point rather than Publish/Start/Finish/Archive: the rule about
-// which step is legal lives in one table, and the gate hangs off the one step
-// that needs it.
 func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, status string) error {
 	c, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -722,11 +574,8 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 	if err := c.CanTransitionTo(status); err != nil {
 		return err
 	}
-	// Both doors, not only the first. Content stays editable while published
-	// — an organizer publishes to see the contest as participants will, and
-	// may still fix a typo — so "publish, then remove the story, then start"
-	// is a sequence the rules allow. The invariant has to hold at the moment
-	// participants are actually let in.
+	// Checked on start too: content stays editable while published, so the
+	// contest may have lost its story since.
 	if status == StatusPublished || status == StatusRunning {
 		if err := s.checkPublishable(ctx, c); err != nil {
 			return err
@@ -734,13 +583,10 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 	}
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		// c.Status is what the transition rules and the publish gate above
-		// were checked against; the write refuses if it is no longer true.
+		// The write refuses if the status is no longer the one checked above.
 		if err := s.contests.SetStatus(ctx, contestID, c.Status, status); err != nil {
 			return err
 		}
-		// One shape for every change, so the panel can render it without
-		// knowing which action it is looking at.
 		changes := audit.NewChanges()
 		changes.Set("status", c.Status, status)
 		return s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload())
@@ -749,20 +595,15 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 		return err
 	}
 
-	// Published or running is the same moment PoolTrigger exists for,
-	// whether an organizer moves the contest by hand here or the scheduler
-	// does it on its own tick (Scheduler.Advance) — triggered after commit,
-	// never inside the transaction above.
+	// After commit, never inside the transaction.
 	if s.poolTrigger != nil && (status == StatusPublished || status == StatusRunning) {
 		s.poolTrigger.Trigger(contestID)
 	}
 	return nil
 }
 
-// Delete removes a contest that never reached anybody.
-//
-// Only a draft: once it was published, people could see it, and what they saw
-// is a record. Getting rid of one of those is archiving.
+// Delete removes a draft. A contest that was ever published is a record and
+// can only be archived.
 func (s *Service) Delete(ctx context.Context, actorID, contestID uuid.UUID) error {
 	c, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -785,11 +626,9 @@ func (s *Service) Policy(ctx context.Context, contestID uuid.UUID) (SQLPolicy, e
 	return s.policies.ByContest(ctx, contestID)
 }
 
-// SetPolicy changes how much SQL power the contest hands out.
-//
-// Not once it is running: participants would end up with different powers
-// depending on when they connected, and the template grants — built from this
-// row — would no longer match what the validator enforces.
+// SetPolicy changes how much SQL power the contest hands out. Not once it is
+// running: the template grants are built from this row and would stop
+// matching what the validator enforces.
 func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p SQLPolicy) error {
 	c, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -812,8 +651,6 @@ func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p
 	p.UpdatedBy = &actor
 	p.UpdatedAt = s.now()
 
-	// How much power a participant gets, and what it was before: the whole
-	// question after an incident.
 	changes := audit.Between(current.auditFields(), p.auditFields())
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
@@ -836,11 +673,9 @@ func (s *Service) checkLanguages(ctx context.Context, langs []ContestLanguage) e
 	return checkLanguagesKnown(known, langs)
 }
 
-// checkTranslationLanguages applies the same check to authored text.
-//
-// The language need not be one the contest declares: authoring a translation
-// before deciding to offer it is a normal order of work, and the publish gate
-// is what insists on the set being complete.
+// checkTranslationLanguages applies the same check to authored text. The
+// language need not be one the contest declares yet; the publish gate checks
+// the set is complete.
 func (s *Service) checkTranslationLanguages(ctx context.Context, translations []Translation) error {
 	langs := make([]ContestLanguage, 0, len(translations))
 	for _, t := range translations {
@@ -849,12 +684,9 @@ func (s *Service) checkTranslationLanguages(ctx context.Context, translations []
 	return s.checkLanguages(ctx, langs)
 }
 
-// record appends an audit entry for an action on a contest.
-//
-// A failure is returned rather than swallowed: these are privileged
-// operations, and an action nobody can account for afterwards is worse than a
-// failed one. Callers run these inside a unit of work, so the action rolls
-// back with the entry.
+// record appends an audit entry for an action on a contest. Call it inside
+// the action's unit of work: a failure rolls the action back, since an
+// unaccounted privileged action is worse than a failed one.
 func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, contestID uuid.UUID, payload map[string]any) error {
 	var actor *uuid.UUID
 	if actorID != uuid.Nil {
@@ -876,9 +708,8 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// orDefaultInt is orDefault's pointer-typed counterpart, for a setting whose
-// zero value (unlike an empty string) is a configuration an organizer can
-// mean and so cannot itself stand for "not sent" — nil is what says that.
+// orDefaultInt is orDefault for a setting whose zero is meaningful, so nil
+// stands for "not sent".
 func orDefaultInt(value *int, fallback int) int {
 	if value == nil {
 		return fallback
@@ -897,14 +728,8 @@ func equalDuration(a, b *int) bool {
 	}
 }
 
-// sameMinute is equalDuration's counterpart for the two schedule fields
-// (StartsAt, EndsAt), used by checkRunningChange to tell "the form merely
-// resent the value it already had" from an actual move. Truncated to the
-// minute in UTC rather than compared exactly: the settings form has no
-// finer resolution than a minute, so a stored value with seconds on it (set
-// through the API directly, or nudged by a migration) would otherwise make
-// every ordinary resend of an untouched field look like a move of the field
-// itself.
+// sameMinute compares two schedule times to the minute, the settings form's
+// resolution, so resending a stored value that carries seconds is not a move.
 func sameMinute(a, b *time.Time) bool {
 	switch {
 	case a == nil && b == nil:
@@ -955,8 +780,7 @@ func langCodes(byLang map[string]string) []string {
 	return codes
 }
 
-// cidrStrings renders a network list for the trail, where a printed prefix is
-// what somebody reading it a year later can act on.
+// cidrStrings renders a network list for the audit trail.
 func cidrStrings(prefixes []netip.Prefix) []string {
 	out := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {

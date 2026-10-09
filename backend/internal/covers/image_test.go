@@ -54,9 +54,6 @@ func TestTheOutputIsSixteenByNine(t *testing.T) {
 }
 
 func TestEveryDeclaredSizeIsProduced(t *testing.T) {
-	// Both files are written on the one upload, because the card and the page
-	// above the story ask for different ones and neither may discover at read
-	// time that its own was never made.
 	out, err := covers.Process(bytes.NewReader(jpegOf(t, 1920, 1080)))
 	if err != nil {
 		t.Fatalf("Process() = %v", err)
@@ -77,10 +74,6 @@ func TestEveryDeclaredSizeIsProduced(t *testing.T) {
 }
 
 func TestTheHashNamesTheOutputAndNotTheInput(t *testing.T) {
-	// The file's name is the hash of what we wrote, so a browser holding the
-	// old cover holds it at an address nothing links to any more. Two uploads
-	// of the same picture therefore land on the same name, and a different
-	// picture never does.
 	same, err := covers.Process(bytes.NewReader(jpegOf(t, 1000, 1000)))
 	if err != nil {
 		t.Fatalf("Process() = %v", err)
@@ -103,9 +96,6 @@ func TestTheHashNamesTheOutputAndNotTheInput(t *testing.T) {
 }
 
 func TestABodyOverTheCeilingIsRefusedWithoutBeingHeld(t *testing.T) {
-	// The bound is on the socket, not on the decoded value: a reader that
-	// allocates first and measures afterwards has already paid for the bytes
-	// it exists to keep out (CLAUDE.md, security rule 12).
 	oversize := bytes.Repeat([]byte{0xAB}, covers.MaxUploadBytes+1024)
 	copy(oversize, jpegOf(t, 8, 8))
 
@@ -117,8 +107,6 @@ func TestABodyOverTheCeilingIsRefusedWithoutBeingHeld(t *testing.T) {
 }
 
 func TestAFileWhoseExtensionLiesIsJudgedByItsBytes(t *testing.T) {
-	// Nothing about the upload's own claims reaches this function; what
-	// decides is the result of sniffing and decoding.
 	for name, body := range map[string][]byte{
 		"a script":              []byte("<script>alert(1)</script>"),
 		"an empty file":         {},
@@ -130,9 +118,6 @@ func TestAFileWhoseExtensionLiesIsJudgedByItsBytes(t *testing.T) {
 	}
 }
 
-// The side bound alone does not bound the memory: 8000 x 8000 passes it and
-// is 64 megapixels, which decodes to roughly 256 MiB — per upload, with
-// nothing making two of them wait for each other.
 func TestASourceWithinBothSidesCanStillBeTooMuchToDecode(t *testing.T) {
 	src := pngHeaderClaiming(t, 8000, 8000)
 

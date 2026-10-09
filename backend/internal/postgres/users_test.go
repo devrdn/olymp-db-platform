@@ -36,8 +36,6 @@ func TestLoginConstraintMapsToLoginTaken(t *testing.T) {
 }
 
 func TestEmailConstraintMapsToEmailTaken(t *testing.T) {
-	// Before this mapping a duplicate email reported "login already in use":
-	// the admin would retry new logins in vain while the email was the problem.
 	err := mapUserConstraint(uniqueErr("users_email_key"))
 
 	if !errors.Is(err, users.ErrEmailTaken) {
@@ -46,8 +44,6 @@ func TestEmailConstraintMapsToEmailTaken(t *testing.T) {
 }
 
 func TestUnknownConstraintPassesThrough(t *testing.T) {
-	// A violation this mapper does not recognise must surface as itself, not
-	// masquerade as a user-facing conflict.
 	original := uniqueErr("some_future_index")
 
 	err := mapUserConstraint(original)
@@ -66,9 +62,7 @@ func TestNonUniqueErrorPassesThrough(t *testing.T) {
 }
 
 func TestRoleCatalogueCarriesWhatTheMigrationSeeded(t *testing.T) {
-	// The interface offers these, so an empty or misnamed catalogue is a
-	// screen with nothing to pick. They ship as a migration rather than as
-	// optional seed data, which is what makes asserting on them fair.
+	// The roles ship in a migration, not optional seed data.
 	withTx(t, func(ctx context.Context) {
 		catalogue, err := NewUsers(testPool).Roles(ctx)
 		if err != nil {
@@ -88,9 +82,6 @@ func TestRoleCatalogueCarriesWhatTheMigrationSeeded(t *testing.T) {
 }
 
 func TestCountingAdministratorsIgnoresTheOnesWhoCannotSignIn(t *testing.T) {
-	// The count decides whether the installation may lose an administrator.
-	// A blocked one cannot administer, so counting them would let the last
-	// usable account be demoted on the strength of one nobody can use.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 
@@ -116,9 +107,7 @@ func TestCountingAdministratorsIgnoresTheOnesWhoCannotSignIn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CountActiveWithRole() after = %v", err)
 		}
-		// A delta, not an absolute: a real installation already has the
-		// administrator bootstrap created, and a test that assumed an empty
-		// table would pass on a laptop and fail on anything real.
+		// A delta: the database may already hold other administrators.
 		if count != before+1 {
 			t.Errorf("CountActiveWithRole() = %d, want %d: the blocked one must not count",
 				count, before+1)
@@ -137,9 +126,7 @@ func TestListHidesDeletedUnlessAsked(t *testing.T) {
 			t.Fatalf("SetStatus() = %v", err)
 		}
 
-		// The default listing is the register an administrator reads: a deleted
-		// account is not in it. Scoped to these two logins, since a real
-		// installation already has other accounts in it.
+		// The default listing leaves deleted accounts out.
 		found, total, err := repo.List(ctx, users.Filter{Query: "list-hides-deleted"})
 		if err != nil {
 			t.Fatalf("List() = %v", err)
@@ -162,12 +149,6 @@ func TestListHidesDeletedUnlessAsked(t *testing.T) {
 	})
 }
 
-// TestByIDNamesTheActorWhoChangedStatus proves the join that replaced the
-// account card's second GET /users/{id}: the actor's login now comes back on
-// the same row, resolved by the query itself rather than a follow-up
-// request. Run against the real database (make test-db) rather than the
-// in-memory fake, because the LEFT JOIN — and in particular that it is a
-// LEFT and not an INNER join — is exactly the part a fake cannot exercise.
 func TestByIDNamesTheActorWhoChangedStatus(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -190,11 +171,6 @@ func TestByIDNamesTheActorWhoChangedStatus(t *testing.T) {
 	})
 }
 
-// TestByIDReportsNoActorForAFreshAccount is the LEFT JOIN's other half: an
-// account nobody has ever blocked or deleted has NULL in status_changed_by,
-// and an INNER join would have dropped the row's status columns — or the
-// whole row, depending on how the join was written — instead of reporting
-// an empty login.
 func TestByIDReportsNoActorForAFreshAccount(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -222,9 +198,7 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 			t.Fatalf("SetStatus() = %v", err)
 		}
 
-		// The whole point of releasing the login: the same one can be created
-		// again. Status must be given explicitly — Create inserts exactly the
-		// value it is handed rather than relying on the column's default.
+		// Create inserts the status it is given, not the column default.
 		second, err := repo.Create(ctx, users.User{
 			Login: "released-login-ivanov", FullName: "Ivanov", PasswordHash: "x",
 			Status: users.StatusActive,
@@ -239,10 +213,7 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 }
 
 func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testing.T) {
-	// A roster resolves every login in one transaction. PostgreSQL refuses a
-	// NUL byte or bytes that are not UTF-8 by failing the statement, which
-	// aborted that transaction and lost the whole import over one pasted
-	// line; at /login it was a 500 for what is simply no such account.
+	// A failed statement would abort a roster import's transaction.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		for _, login := range []string{"ada\x00lovelace", "\xff\xfe", strings.Repeat("a", 101)} {
@@ -257,17 +228,6 @@ func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testin
 	})
 }
 
-// TestByLoginPrefersTheLiveAccountOverADeletedOne is the guarantee only the
-// real database can prove: the partial unique index on lower(login) (WHERE
-// status <> 'deleted') promises at most one *live* row per login, not one row
-// overall, so once a deleted account's login has been given to a new one, two
-// rows legitimately share lower(login). Before ByLogin ordered its result,
-// a bare SELECT gave no guarantee which of the two a single-row QueryRow
-// returned — sign-in could check a password against the deleted original's
-// hash, and creating the replacement could be refused as a duplicate of an
-// account that no longer holds the login at all. Run against PostgreSQL,
-// never the in-memory fake, because the point being proven is what an
-// unordered SELECT against real rows actually returns.
 func TestByLoginPrefersTheLiveAccountOverADeletedOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -297,13 +257,8 @@ func TestByLoginPrefersTheLiveAccountOverADeletedOne(t *testing.T) {
 	})
 }
 
-// TestByLoginStillFindsAnAccountThatIsOnlyDeleted is ByLogin's other half:
-// when nobody has reclaimed the login, it still resolves to the deleted
-// account rather than reporting ErrNotFound. auth.Service.Login depends on
-// this — it is what lets a deleted account's own former owner be told the
-// account is inaccessible, rather than that no such login ever existed (see
-// auth.TestDeletedAccountIsRejectedEvenWithTheRightPassword, which exercises
-// the same contract through the in-memory fake).
+// auth.Service.Login relies on this to tell a former owner the account is
+// inaccessible.
 func TestByLoginStillFindsAnAccountThatIsOnlyDeleted(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -324,15 +279,6 @@ func TestByLoginStillFindsAnAccountThatIsOnlyDeleted(t *testing.T) {
 	})
 }
 
-// TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency is ByLogin's other
-// guarantee only the real database can prove: a login can be deleted,
-// recreated and deleted again, leaving more than one deleted row sharing
-// lower(login) with nothing live among them. Before status_changed_at was
-// added as a tiebreaker, ORDER BY (u.status = 'deleted') alone left the two
-// deleted rows in whatever order an unordered SELECT happened to return them
-// — undefined, and untested, the same class of bug the live-wins ordering
-// exists to close. This proves the more recently deleted row — the one whose
-// history actually answers "what happened to this login" — wins.
 func TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -368,14 +314,8 @@ func TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency(t *testing.T) {
 	})
 }
 
-// TestRestoreIsRefusedByAReclaimedLogin proves a guarantee that only the real
-// database can prove: the login a deletion releases is held back by a partial
-// unique index (WHERE status <> 'deleted'), not by application code, and a
-// restore that would collide with a live account now holding it is refused
-// before it happens. Run through users.Service — the code a request actually
-// takes, TakenAmong included — rather than by asserting on the repository
-// method alone, and against PostgreSQL rather than the in-memory fake,
-// because an index is exactly the part a fake cannot exercise.
+// Runs through users.Service so TakenAmong and the partial unique index on
+// login are both exercised.
 func TestRestoreIsRefusedByAReclaimedLogin(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -416,9 +356,6 @@ func TestByIDsReturnsWhatExists(t *testing.T) {
 		first := makeUser(t, ctx, "byids-ivanov")
 		second := makeUser(t, ctx, "byids-petrov")
 
-		// A missing id is not an error: telling the caller which of its ids
-		// exist is the whole job, and the bulk path turns the absent ones into
-		// skips.
 		found, err := repo.ByIDs(ctx, []uuid.UUID{first.ID, uuid.New(), second.ID})
 		if err != nil {
 			t.Fatalf("ByIDs() = %v", err)
@@ -437,8 +374,6 @@ func TestByIDsReturnsWhatExists(t *testing.T) {
 }
 
 func TestByIDsCollapsesARepeatedID(t *testing.T) {
-	// ANY($1) is a membership test, not a join: a caller that (accidentally)
-	// repeats an id must not see the account twice.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		u := makeUser(t, ctx, "byids-repeated")
@@ -468,8 +403,7 @@ func TestTakenAmongFindsRestoreConflicts(t *testing.T) {
 		}
 
 		// Restoring this one would collide with the live account that took the
-		// login. Finding that out before the transaction is what keeps the
-		// rest of a bulk restore working.
+		// login.
 		taken, err := repo.TakenAmong(ctx, []uuid.UUID{gone.ID})
 		if err != nil {
 			t.Fatalf("TakenAmong() = %v", err)
@@ -547,9 +481,6 @@ func TestBumpSessionGenerationManyRetiresEverySession(t *testing.T) {
 		first := makeUser(t, ctx, "bump-many-first")
 		second := makeUser(t, ctx, "bump-many-second")
 
-		// A missing id must not fail the rest: the bulk path resolves accounts
-		// first and this only ever sees ones it already checked exist, but the
-		// method itself makes no such assumption.
 		if err := repo.BumpSessionGenerationMany(ctx, []uuid.UUID{first.ID, uuid.New(), second.ID}); err != nil {
 			t.Fatalf("BumpSessionGenerationMany() = %v", err)
 		}
@@ -600,11 +531,6 @@ func TestSetPasswordManyStoresADigestPerAccount(t *testing.T) {
 }
 
 func TestSetPasswordManyRefusesADuplicatedAccount(t *testing.T) {
-	// Two Credentials naming the same account can carry different hashes;
-	// unnest's join has no way to prefer one, so PostgreSQL would apply an
-	// unspecified one with no error. This must be refused, not silently
-	// resolved, or the password handed to the person may not be the one
-	// stored.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		u := makeUser(t, ctx, "setpw-many-dup")
@@ -669,8 +595,6 @@ func TestReplaceRolesManyReportsAnUnknownCode(t *testing.T) {
 }
 
 func TestReplaceRolesManyTreatsARepeatedCodeAsOne(t *testing.T) {
-	// Roles are a set an account holds. A caller-supplied duplicate is not a
-	// second, unknown role — the row-count check must not report it as one.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		first := makeUser(t, ctx, "roles-many-dup-first")
@@ -693,10 +617,6 @@ func TestReplaceRolesManyTreatsARepeatedCodeAsOne(t *testing.T) {
 }
 
 func TestReplaceRolesManyTreatsARepeatedIDAsOne(t *testing.T) {
-	// Unlike SetPasswordMany, a repeated id here is harmless: both copies
-	// want the identical set of roles. Left alone, the CROSS JOIN insert
-	// would produce two identical (user_id, role_id) rows for the repeat and
-	// trip the user_roles primary key instead of being absorbed like this.
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		u := makeUser(t, ctx, "roles-many-dup-id")
@@ -716,11 +636,6 @@ func TestReplaceRolesManyTreatsARepeatedIDAsOne(t *testing.T) {
 	})
 }
 
-// TestSearchMatchesLoginNameOrEmail runs the real ILIKE query behind
-// contests.Service.SearchPeople (internal/contests's UserDirectory.Search)
-// against PostgreSQL, so the claim that it matches a login, a name and an
-// email is proven against the actual SQL rather than only the in-memory
-// fake.
 func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -745,10 +660,6 @@ func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
 	})
 }
 
-// TestSearchReturnsACleanEmptyEmailForAnAccountWithoutOne proves the other
-// half of publishing the email: the column is nullable, and a picker reading
-// a non-empty Email as "worth showing" would be wrong the moment a NULL
-// column scanned back as a literal "<nil>" or similar instead of "".
 func TestSearchReturnsACleanEmptyEmailForAnAccountWithoutOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -767,11 +678,6 @@ func TestSearchReturnsACleanEmptyEmailForAnAccountWithoutOne(t *testing.T) {
 	})
 }
 
-// TestSearchExcludesABlockedAccount proves the picker's own filter on the
-// real database, not only on the in-memory fake contests_test exercises: a
-// blocked account can never sign in (auth.Service.Login and auth.Middleware
-// both refuse it), so it must not come back as a candidate to appoint or
-// enrol.
 func TestSearchExcludesABlockedAccount(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -798,11 +704,7 @@ func TestSearchExcludesABlockedAccount(t *testing.T) {
 	})
 }
 
-// TestSearchEscapesAPercentSoItDoesNotMatchEveryRow guards CLAUDE.md's rule
-// 3: a parameter stops injection, not a change of meaning. An unescaped '%'
-// in the search box is a LIKE wildcard that would match every row in the
-// table — exactly the "meaning" defect escapeLike (like.go) exists to close,
-// now reachable by every contest's staff rather than only users.manage.
+// CLAUDE.md rule 3.
 func TestSearchEscapesAPercentSoItDoesNotMatchEveryRow(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -821,47 +723,15 @@ func TestSearchEscapesAPercentSoItDoesNotMatchEveryRow(t *testing.T) {
 	})
 }
 
-// TestSearchPredicateUsesTheTrigramIndexes proves, on the database itself
-// rather than by reading the SQL, that usersSearchMatch is something the
-// planner can actually serve from migration 000016's trigram indexes.
+// It EXPLAINs usersSearchMatch without the status condition, which a partial
+// index on users could satisfy and so avoid a Seq Scan for the wrong reason.
+// With enable_seqscan off, the planner still picks a Seq Scan when it is the
+// only valid plan, so one non-indexable disjunct shows up as one.
 //
-// It EXPLAINs usersSearchMatch on its own, apart from usersSearchWhere's
-// status condition: the users table carries a partial unique index on email
-// (WHERE status <> 'deleted', from migration 000015) that the planner can use
-// to satisfy the status half of the full predicate on this table's small
-// development row count, without ever touching the trigram indexes for the
-// OR half — which would make this test pass for the wrong reason no matter
-// what usersSearchMatch says, since a plan avoiding a Seq Scan by way of an
-// unrelated index still avoids a Seq Scan. Dropping the status condition
-// removes that escape hatch, so the only way left to avoid scanning the
-// table is to actually use the three trigram indexes this predicate is
-// meant to be served by.
-//
-// The proof does not depend on row counts or ANALYZE statistics otherwise —
-// those only change which plan is *cheapest*, and this test is not about
-// cost. It is about which plans *exist* at all. With sequential scans
-// disabled (SET LOCAL enable_seqscan = off), the planner still falls back to
-// a Seq Scan whenever it is the only valid way to answer the query —
-// disabling a scan type discourages it, it does not forbid it. So if a
-// single disjunct in the OR is not indexable (COALESCE(u.email, "") ILIKE
-// ..., the shape this predicate had before the fix), a Seq Scan is the
-// *only* plan PostgreSQL can produce, penalty or not.
-//
-// Run at two lengths, not one: a long word ("ivanov") proves the predicate is
-// indexable at all, but says nothing about whether
-// contests.MinDirectoryQueryLength is actually short enough to matter — a
-// pattern that is not itself padded (unlike the values pg_trgm indexes,
-// '%needle%' has no fixed start or end to pad against) extracts a complete
-// trigram only from three characters or more. Below that, GIN does not
-// refuse the plan: it answers "no keys extracted" by scanning every entry in
-// its own index rather than falling back to a literal Seq Scan, so the two
-// checks above — no Seq Scan, and the trigram indexes are named in the plan —
-// pass at two characters exactly as they do at six, and would not have caught
-// MinDirectoryQueryLength being set to 2. What does is the cost: scanning
-// every entry costs orders of magnitude more than a genuinely restrictive
-// lookup, so the ratio between the minimum-length query's cost and the long
-// word's is what actually proves the index narrows the search rather than
-// merely being named in the plan.
+// It runs at two lengths. A pattern under three characters has no complete
+// trigram, and GIN then scans its whole index: the plan still names the
+// indexes, so only the cost ratio against a long word shows that
+// contests.MinDirectoryQueryLength is long enough.
 func TestSearchPredicateUsesTheTrigramIndexes(t *testing.T) {
 	queries := []string{"ivanov", strings.Repeat("z", contests.MinDirectoryQueryLength)}
 	costs := make([]float64, len(queries))
@@ -912,12 +782,8 @@ func TestSearchPredicateUsesTheTrigramIndexes(t *testing.T) {
 		})
 	}
 
-	// costRatioCeiling is comfortably above what two genuinely indexed
-	// lookups differ by (the same predicate shape, just different literal
-	// text) and comfortably below the ~300x this repository's development
-	// data showed between a real trigram lookup and GIN's every-entry
-	// fallback for a pattern with no complete trigram — see this test's own
-	// EXPLAIN output for both, captured in the commit that added this check.
+	// Two indexed lookups differ far less than 20x; GIN's full-index fallback
+	// measured about 300x on development data.
 	const costRatioCeiling = 20
 	if ratio := costs[1] / costs[0]; ratio > costRatioCeiling {
 		t.Errorf("the plan at the minimum query length (%q) costs %.0fx the plan for a longer word "+
@@ -927,14 +793,9 @@ func TestSearchPredicateUsesTheTrigramIndexes(t *testing.T) {
 	}
 }
 
-// explainCostPattern reads the total estimated cost off an EXPLAIN plan's
-// first line, of the form "... (cost=0.00..97.80 rows=1 width=16)".
+// explainCostPattern reads the total cost from "(cost=0.00..97.80 rows=1 ...)".
 var explainCostPattern = regexp.MustCompile(`cost=[0-9.]+\.\.([0-9.]+)`)
 
-// topPlanCost extracts the top plan node's total cost, the number
-// TestSearchPredicateUsesTheTrigramIndexes compares between query lengths to
-// tell a genuinely restrictive index lookup from GIN's full-index fallback —
-// both mention the same index names in the plan, so the names alone cannot.
 func topPlanCost(t *testing.T, plan string) float64 {
 	t.Helper()
 	m := explainCostPattern.FindStringSubmatch(plan)
@@ -948,10 +809,7 @@ func topPlanCost(t *testing.T, plan string) float64 {
 	return cost
 }
 
-// queryCounter is a pgx.QueryTracer that only counts: how many statements a
-// connection sent, nothing about their content. TestSearchDoesNotComputeADiscardedCount
-// uses it to prove Search sends exactly one, on the real driver rather than
-// by reading Search's body.
+// queryCounter is a pgx.QueryTracer that counts statements sent.
 type queryCounter struct{ n atomic.Int64 }
 
 func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
@@ -961,24 +819,13 @@ func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.T
 
 func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// TestSearchDoesNotComputeADiscardedCount proves the other half of Finding 1:
-// before this fix, Search called List, and List unconditionally ran a
-// "SELECT count(*)" whose result Search then threw away — two statements
-// sent to PostgreSQL for every debounced keystroke a picker sends, on a path
-// now reachable by every contest's staff. This counts the statements a real
-// connection actually sends for one Search call and fails the moment there
-// is more than the one SELECT the picker needs.
-//
-// It opens its own traced pool rather than instrumenting testPool: testPool
-// is shared by the whole package's test run, so tracing it would count every
-// other test's queries too.
+// It opens its own traced pool, since testPool is shared with other tests.
 func TestSearchDoesNotComputeADiscardedCount(t *testing.T) {
 	counter := &queryCounter{}
 	pool, err := storagetest.OpenCore(context.Background(), func(cfg *pgxpool.Config) {
 		cfg.ConnConfig.Tracer = counter
-		// One connection, so Search reuses the one storagetest already
-		// checked rather than opening another and sending the guard's own
-		// question on it — which the counter would then report as Search's.
+		// One connection, so the guard's query on a new connection is not
+		// counted as Search's.
 		cfg.MaxConns = 1
 	})
 	if err != nil {
@@ -988,7 +835,7 @@ func TestSearchDoesNotComputeADiscardedCount(t *testing.T) {
 		t.Skip("set CORE_DB_DSN to run the database tests")
 	}
 	defer pool.Close()
-	// What was counted so far is the guard asking which database this is.
+	// Discard the guard's query.
 	counter.n.Store(0)
 
 	if _, err := NewUsers(pool).Search(context.Background(), "no-such-account-zzz", 10); err != nil {

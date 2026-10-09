@@ -10,7 +10,6 @@ import (
 )
 
 func TestNewFallsBackToMemoryWhenNoAddressIsConfigured(t *testing.T) {
-	// "No Redis configured" is a supported deployment, not an error.
 	var buf bytes.Buffer
 	c, err := New(context.Background(), "", logging.New("info", &buf))
 	if err != nil {
@@ -24,8 +23,6 @@ func TestNewFallsBackToMemoryWhenNoAddressIsConfigured(t *testing.T) {
 }
 
 func TestMemoryFallbackIsAnnouncedLoudly(t *testing.T) {
-	// A silent downgrade would be the dangerous case: sessions and rate limits
-	// stop being shared, and nothing on screen says so.
 	var buf bytes.Buffer
 	c, err := New(context.Background(), "", logging.New("info", &buf))
 	if err != nil {
@@ -43,8 +40,6 @@ func TestMemoryFallbackIsAnnouncedLoudly(t *testing.T) {
 }
 
 func TestNewFailsWhenConfiguredRedisIsUnreachable(t *testing.T) {
-	// An operator who set an address expects that address to be used. Quietly
-	// swapping in a different store would hide a broken deployment.
 	_, err := New(context.Background(), "127.0.0.1:1", logging.New("error", &bytes.Buffer{}))
 
 	if err == nil {
@@ -61,7 +56,6 @@ func TestNewRejectsMalformedAddress(t *testing.T) {
 }
 
 func TestModeNamesTheActiveBackend(t *testing.T) {
-	// Readiness reports this, so operators can see a degraded install.
 	c, err := New(context.Background(), "", logging.New("error", &bytes.Buffer{}))
 	if err != nil {
 		t.Fatalf("New() returned error: %v", err)

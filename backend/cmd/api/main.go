@@ -16,18 +16,16 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 )
 
-// version is stamped at build time with -ldflags.
+// version is set at build time with -ldflags.
 var version = "dev"
 
 func main() {
-	// Self-check mode for the container health check: the runtime image has no
-	// shell and no curl, so the binary probes its own internal listener.
+	// The runtime image has no shell or curl, so the binary probes itself.
 	healthcheck := flag.Bool("healthcheck", false, "probe the internal health endpoint and exit")
 	flag.Parse()
 
 	if *healthcheck {
-		// Only the listener address is read, so a missing database DSN cannot
-		// make the health check fail for the wrong reason.
+		// Only the listener address is read, so missing config cannot fail it.
 		if err := health.Probe(context.Background(), app.ProbeURL(os.Getenv("INTERNAL_ADDR"))); err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 			os.Exit(1)
@@ -36,8 +34,7 @@ func main() {
 	}
 
 	if err := run(); err != nil {
-		// The logger may not exist yet when configuration fails, so startup
-		// errors go to stderr directly.
+		// No logger exists yet.
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
@@ -49,8 +46,6 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	// Shut down on SIGINT/SIGTERM: the container runtime sends SIGTERM and
-	// waits before killing the process.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

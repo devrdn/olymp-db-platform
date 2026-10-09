@@ -11,10 +11,8 @@ import (
 const probeTimeout = 3 * time.Second
 
 // Probe performs one health request against url and reports whether the
-// service answered with 2xx.
-//
-// It exists so the container image can check itself: the runtime image carries
-// no shell and no curl, so `api -healthcheck` is the health check.
+// service answered with 2xx. The runtime image has no shell or curl, so
+// `api -healthcheck` is the container's health check.
 func Probe(ctx context.Context, url string) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc

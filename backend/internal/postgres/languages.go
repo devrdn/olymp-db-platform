@@ -12,10 +12,8 @@ import (
 // Languages implements contests.LanguageCatalog.
 var _ contests.LanguageCatalog = (*Languages)(nil)
 
-// Languages reads the languages an installation offers.
-//
-// It is a table read rather than a constant precisely so that adding a fourth
-// language is an INSERT: nothing here enumerates codes.
+// Languages reads the languages an installation offers. Adding one is an
+// INSERT; nothing here enumerates codes.
 type Languages struct {
 	pool *pgxpool.Pool
 }

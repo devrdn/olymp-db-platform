@@ -12,8 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// schemaStore is the cache, held in memory so a test can say exactly what is
-// in it and see exactly what was written back.
+// schemaStore is an in-memory schema cache.
 type schemaStore struct {
 	mu       sync.Mutex
 	schema   provisioning.Schema
@@ -24,16 +23,12 @@ type schemaStore struct {
 	readFail error
 
 	// gate, when set, holds the first gateLeft cache reads until all of them
-	// have arrived, and then releases them together. It is what makes the
-	// stampede test deterministic rather than a race the scheduler might
-	// happen to win.
+	// have arrived, then releases them together.
 	gate     chan struct{}
 	gateLeft int
 
-	// park, when set, holds the very first cache read — and only that one —
-	// until the test closes it, with parked closed to say it is being held.
-	// It stands in for a caller the scheduler took away between missing the
-	// cache and acting on the miss.
+	// park, when set, holds only the first cache read until closed; parked is
+	// closed once it is held. It models a caller descheduled after a miss.
 	park     chan struct{}
 	parked   chan struct{}
 	parkOnce sync.Once
@@ -44,13 +39,8 @@ func (s *schemaStore) CachedSchema(context.Context, uuid.UUID) (provisioning.Sch
 	schema, version, present, readFail := s.schema, s.version, s.present, s.readFail
 	s.mu.Unlock()
 
-	// The gate is held *after* this read's answer is decided rather than
-	// before it, and the difference is the whole point. Held before, the
-	// callers released together then queue on this one mutex, a save from
-	// whichever of them got there first barges in between two of the queued
-	// reads, and the rest are told the cache is warm — an unfixed stampede
-	// reads as a cache hit and the test passes for the wrong reason. Held
-	// here, every caller has seen the miss it is about to act on.
+	// Gated after the answer is decided: gated before, an early save could
+	// let later callers see a warm cache and hide an unfixed stampede.
 	s.arrive()
 	s.parkFirst()
 
@@ -63,9 +53,8 @@ func (s *schemaStore) CachedSchema(context.Context, uuid.UUID) (provisioning.Sch
 	return schema, version, nil
 }
 
-// arrive blocks until every caller the gate is waiting for has reached it.
-// Once the gate has opened it never closes again, so reads after the first
-// gateLeft of them pass straight through.
+// arrive blocks until every gated caller has arrived. Once open, the gate
+// stays open.
 func (s *schemaStore) arrive() {
 	s.mu.Lock()
 	gate := s.gate
@@ -83,8 +72,6 @@ func (s *schemaStore) arrive() {
 	<-gate
 }
 
-// parkFirst holds the first cache read — the one that has already decided it
-// missed — until the test lets it go.
 func (s *schemaStore) parkFirst() {
 	if s.park == nil {
 		return
@@ -113,31 +100,24 @@ func (s *schemaStore) SaveSchema(_ context.Context, _ uuid.UUID, version int, sc
 	return nil
 }
 
-// schemaSource stands in for the game cluster: it is asked for one database's
-// shape and records that it was asked.
+// schemaSource is a fake game cluster that records what it was asked.
 type schemaSource struct {
 	mu     sync.Mutex
 	schema provisioning.Schema
 	asked  []string
 	fail   error
 
-	// holdFor names the one database whose read blocks until hold is closed —
-	// empty meaning every read blocks — with entered closed once such a read
-	// is under way and arrivals carrying one token per read that started.
-	// Together they let a test pin catalogue reads open and ask what the rest
-	// of the process can still do while they are, and count how many reads a
-	// stampede really produced rather than how many finished first.
+	// holdFor names the database whose read blocks until hold is closed
+	// (empty: every read). entered is closed once such a read is under way;
+	// arrivals gets one token per read started.
 	holdFor  string
 	hold     chan struct{}
 	entered  chan struct{}
 	arrivals chan struct{}
 	once     sync.Once
 
-	// liveAtCall and deadlineAtCall describe the context the cluster read was
-	// actually handed, sampled while the call is happening. The context itself
-	// would be useless kept: the caller cancels it on the way out, so anything
-	// asked of it afterwards says "cancelled" no matter what was true during
-	// the read.
+	// liveAtCall and deadlineAtCall sample the context during the call; the
+	// context itself is cancelled by the caller on the way out.
 	called         bool
 	liveAtCall     error
 	deadlineAtCall bool
@@ -167,8 +147,6 @@ func (s *schemaSource) ReadSchema(ctx context.Context, database string) (provisi
 	return schema, nil
 }
 
-// contextGiven reports whether the cluster was asked at all, whether the
-// context it was handed was already dead, and whether it carried a deadline.
 func (s *schemaSource) contextGiven() (called bool, live error, deadline bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -181,8 +159,6 @@ func (s *schemaSource) timesAsked() int {
 	return len(s.asked)
 }
 
-// twoTables is the shape the console's panel draws: a table with a foreign
-// key pointing at another one.
 func twoTables() provisioning.Schema {
 	return provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "guests", Columns: []provisioning.Column{
@@ -200,9 +176,6 @@ func game(version int) provisioning.Contest {
 	return provisioning.Contest{ID: uuid.New(), Template: "game_tpl_c1", Version: version}
 }
 
-// The whole reason this cache exists: every instance of a contest is a copy
-// of one template, so hundreds of participants opening the console must cost
-// one catalogue read between them, not one each.
 func TestSchemaReadsTheClusterOnceForEveryoneAfterIt(t *testing.T) {
 	t.Parallel()
 
@@ -236,30 +209,15 @@ func TestSchemaReadsTheClusterOnceForEveryoneAfterIt(t *testing.T) {
 	}
 }
 
-// The moment the cache is worth having is the moment it is empty: three
-// hundred participants opening /play in the same minute, before the first
-// answer has been written back. Every one of those misses opens its own fresh
-// connection to its own instance database on the game cluster and then queues
-// behind one row lock writing the same document back. Concurrent misses for
-// one contest have to collapse into a single read.
-//
-// The property, not the mechanism: N callers, one call to the cluster.
-//
-// Two things make that a real question rather than one the test double
-// answers for us. The store's gate holds every caller until all of them have
-// missed, so nobody is let through on a cache the stampede itself warmed. And
-// the cluster read is held open until the callers have stopped arriving at
-// it, so what is counted is how many reads a stampede *starts* — count only
-// the ones that finish and a fast in-memory double lets the losers find a
-// warm cache and the missing collapse look like a working one.
+// The gate holds every caller until all have missed, and the cluster read is
+// held open while callers arrive, so the test counts reads started, not reads
+// finished before a winner warmed the cache.
 func TestSchemaReadsTheClusterOnceForConcurrentMisses(t *testing.T) {
 	t.Parallel()
 
 	const callers = 32
-	// Long enough that thirty-two goroutines with nothing to do but call one
-	// method have all called it; spent only when there is nothing to wait for,
-	// which is the case this test hopes to be in. A slow machine that spends
-	// it early still counts more than one read and still fails.
+	// Spent in full only when the collapse works; a slow machine that stops
+	// early still fails on a second read.
 	const settle = 250 * time.Millisecond
 
 	store := &schemaStore{gate: make(chan struct{}), gateLeft: callers}
@@ -277,9 +235,7 @@ func TestSchemaReadsTheClusterOnceForConcurrentMisses(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			// Each participant reads their own instance database — every one
-			// of them a byte-for-byte copy of the same template, which is the
-			// whole reason one read can answer all of them.
+			// Each participant reads their own copy of the same template.
 			got, err := reader.Schema(context.Background(), contest, fmt.Sprintf("game_c1_r%d", i))
 			switch {
 			case err != nil:
@@ -315,12 +271,8 @@ counting:
 	}
 }
 
-// A caller that missed the cache and was then taken off the processor must
-// not act on a miss that has since stopped being true. Its flight has already
-// finished by the time it arrives, so there is no one left to dedupe with —
-// and a stale miss acted on is one more connection to the game cluster asking
-// a question that is now answered. The answer is looked for again inside the
-// flight, which is where this caller finds it.
+// The parked caller's flight starts after the other one finished, so only the
+// cache check inside the flight saves a second read.
 func TestSchemaDoesNotActOnAMissThatWasOvertaken(t *testing.T) {
 	t.Parallel()
 
@@ -351,10 +303,7 @@ func TestSchemaDoesNotActOnAMissThatWasOvertaken(t *testing.T) {
 	}
 }
 
-// Collapsing one contest's misses must not serialise the whole installation.
-// Several contests can be running at once, and a catalogue read on a wedged
-// cluster takes as long as its statement timeout allows — behind one
-// process-wide lock that would be every other contest's console, closed.
+// Collapsing one contest's misses must not serialise other contests.
 func TestSchemaLetsAnotherContestThroughWhileOneIsBeingRead(t *testing.T) {
 	t.Parallel()
 
@@ -394,13 +343,8 @@ func TestSchemaLetsAnotherContestThroughWhileOneIsBeingRead(t *testing.T) {
 	}
 }
 
-// The shared read belongs to the contest, not to whichever request happened
-// to arrive first. A browser that navigates away mid-read would otherwise
-// cancel the catalogue read every other participant is waiting behind — the
-// stampede fix turning one abandoned request into two hundred and ninety-nine
-// broken consoles. So the read is detached from the caller's cancellation and
-// carries a deadline of its own instead; the context the cluster is handed is
-// the only place that difference is visible.
+// The shared read drops the caller's cancellation and carries its own
+// deadline, so one abandoned request does not fail everyone waiting on it.
 func TestSchemaReadIsNotCancelledByTheCallerThatStartedIt(t *testing.T) {
 	t.Parallel()
 
@@ -430,8 +374,6 @@ func TestSchemaReadIsNotCancelledByTheCallerThatStartedIt(t *testing.T) {
 	}
 }
 
-// A rebuild bumps the template's version. Serving the shape the old build had
-// would show a participant tables their own database does not have.
 func TestSchemaIsReReadWhenTheTemplateWasRebuilt(t *testing.T) {
 	t.Parallel()
 
@@ -456,8 +398,6 @@ func TestSchemaIsReReadWhenTheTemplateWasRebuilt(t *testing.T) {
 	}
 }
 
-// The cache is an optimisation. A participant whose console cannot open
-// because writing it back failed would be paying for our convenience.
 func TestSchemaIsAnsweredEvenWhenTheCacheCannotBeWritten(t *testing.T) {
 	t.Parallel()
 
@@ -474,7 +414,6 @@ func TestSchemaIsAnsweredEvenWhenTheCacheCannotBeWritten(t *testing.T) {
 	}
 }
 
-// Reading the cache failing is the same case: the cluster still knows.
 func TestSchemaFallsBackToTheClusterWhenTheCacheCannotBeRead(t *testing.T) {
 	t.Parallel()
 
@@ -491,9 +430,6 @@ func TestSchemaFallsBackToTheClusterWhenTheCacheCannotBeRead(t *testing.T) {
 	}
 }
 
-// The cluster failing is the one failure that is real: there is nothing to
-// show, and saying so is better than an empty panel that reads as "this game
-// has no tables".
 func TestSchemaReportsAClusterThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 
@@ -509,10 +445,7 @@ func TestSchemaReportsAClusterThatCannotBeRead(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 2: every list that reaches storage has an explicit bound.
-// The init script is an organiser's own SQL, so the table count is theirs to
-// choose, and this document is both stored as one jsonb value and sent to
-// every participant's browser.
+// CLAUDE.md rule 2.
 func TestSchemaIsBounded(t *testing.T) {
 	t.Parallel()
 

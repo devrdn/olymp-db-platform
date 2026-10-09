@@ -11,10 +11,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 )
 
-// testProcessCapBytes is the cap the test cluster runs with. It comes from
-// GAME_DB_PROCESS_MEMORY_BYTES — the variable the dev overlay interpolates
-// pg-game-test's ulimits.data from — so the tests follow whatever cap the
-// cluster was created with, and 256 MiB (the deploy default) when unset.
+// testProcessCapBytes is the test cluster's cap: GAME_DB_PROCESS_MEMORY_BYTES,
+// from which the dev overlay sets ulimits.data, or 256 MiB when unset.
 func testProcessCapBytes(t *testing.T) int64 {
 	t.Helper()
 	raw := os.Getenv("GAME_DB_PROCESS_MEMORY_BYTES")
@@ -28,11 +26,7 @@ func testProcessCapBytes(t *testing.T) int64 {
 	return v
 }
 
-// The deploy-time self-check passes on a cluster whose per-process cap is in
-// force and matches the configured value: the reported "Max data size" equals
-// the cap, a quarter of the cap allocates, and more than the cap is refused
-// with out_of_memory. This is the guarantee the whole memory story rests on,
-// proved against the deployment's own configuration (CLAUDE.md rule 10).
+// Proved against the deployment's own configuration (CLAUDE.md rule 10).
 func TestVerifyProcessMemoryCapPassesUnderTheRealCap(t *testing.T) {
 	pool := admin(t)
 
@@ -41,10 +35,7 @@ func TestVerifyProcessMemoryCapPassesUnderTheRealCap(t *testing.T) {
 	}
 }
 
-// It fails, and says so, when told a cap that differs from the one the kernel
-// is enforcing — the misconfiguration the /proc check exists to catch (a
-// ulimit that drifted from GAME_DB_PROCESS_MEMORY_BYTES). Both claims are inside
-// the supported range, so the error is the mismatch, not the range.
+// Both claimed caps are in the supported range, so the error is the mismatch.
 func TestVerifyProcessMemoryCapCatchesAMismatchedLimit(t *testing.T) {
 	pool := admin(t)
 	real := testProcessCapBytes(t)
@@ -63,9 +54,6 @@ func TestVerifyProcessMemoryCapCatchesAMismatchedLimit(t *testing.T) {
 	}
 }
 
-// A cap outside the range the check can prove is refused as unsupported before
-// anything is allocated: below it the quarter-cap probe says nothing, above it
-// the probes cannot be built from values PostgreSQL will hold.
 func TestVerifyProcessMemoryCapRefusesAnUnsupportedCap(t *testing.T) {
 	pool := admin(t)
 
@@ -82,9 +70,8 @@ func TestVerifyProcessMemoryCapRefusesAnUnsupportedCap(t *testing.T) {
 	}
 }
 
-// testContainerMemoryBytes is the memory limit the test cluster's container
-// runs with: GAME_DB_MEMORY_BYTES, the variable the dev overlay interpolates
-// pg-game-test's limit from, with the same default as the deployment.
+// testContainerMemoryBytes is the test container's limit: GAME_DB_MEMORY_BYTES,
+// with the deployment's default.
 func testContainerMemoryBytes(t *testing.T) int64 {
 	t.Helper()
 	raw := os.Getenv("GAME_DB_MEMORY_BYTES")
@@ -98,9 +85,6 @@ func testContainerMemoryBytes(t *testing.T) int64 {
 	return v
 }
 
-// The container's real memory limit — read by the backend from its own cgroup
-// — must be the one the Query Runner's arithmetic was checked against. Proved
-// on pg-game-test, whose limit is interpolated from the same variable.
 func TestVerifyContainerMemoryLimitMatchesTheRealLimit(t *testing.T) {
 	pool := admin(t)
 
@@ -109,8 +93,6 @@ func TestVerifyContainerMemoryLimitMatchesTheRealLimit(t *testing.T) {
 	}
 }
 
-// A limit that differs from the configured one — a container created from a
-// different value, or with no limit at all — is refused and named.
 func TestVerifyContainerMemoryLimitCatchesAMismatch(t *testing.T) {
 	pool := admin(t)
 
@@ -126,9 +108,6 @@ func TestVerifyContainerMemoryLimitCatchesAMismatch(t *testing.T) {
 	}
 }
 
-// When the limit cannot be read at all (cgroup v1, no cgroup namespace) the
-// check says so with its own sentinel, so the deploy can fail clearly — or,
-// with the documented opt-out, carry on knowingly.
 func TestVerifyContainerMemoryLimitReportsAnUnreadableLimit(t *testing.T) {
 	pool := admin(t)
 
@@ -138,11 +117,6 @@ func TestVerifyContainerMemoryLimitReportsAnUnreadableLimit(t *testing.T) {
 	}
 }
 
-// The Query Runner sizes the game cluster's memory from constants that restate
-// settings owned elsewhere: how many build sessions the game_author role may
-// hold, and how many parallel and autovacuum workers the cluster runs. The
-// platform layer cannot import this package to share them, so the deploy (and
-// this test, on the prepared test cluster) reads each back and compares.
 func TestVerifyMemorySettingsMatchesTheCluster(t *testing.T) {
 	pool := admin(t)
 
@@ -156,7 +130,6 @@ func TestVerifyMemorySettingsMatchesTheCluster(t *testing.T) {
 	}
 }
 
-// Every drifted setting is named, not only the first.
 func TestVerifyMemorySettingsNamesEveryDrift(t *testing.T) {
 	pool := admin(t)
 

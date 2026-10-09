@@ -17,12 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// What a single caller can observe of the registrations is the contract every
-// contests.RegistrationRepository answers to, the in-memory one the service
-// tests use included (conteststest.RegistrationRepositoryContract). What
-// follows it here is what only the real database can be asked: two first
-// actions racing for one start time, each of the tables that make a registration
-// undeletable, and the combined lookups queryproxy reads.
+// The shared contract covers what a single caller can observe; the tests
+// below cover racing starts, the work tables and queryproxy's combined
+// lookups.
 func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.RegistrationRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.RegistrationTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -41,8 +38,7 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 					return created.ID
 				},
 				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
-				// admin is the seeded role that carries contest.admin_all
-				// (migration 000006).
+				// The seeded admin role carries contest.admin_all.
 				GrantAdminAll: func(user uuid.UUID) {
 					if err := accounts.ReplaceRoles(ctx, user, []string{"admin"}); err != nil {
 						t.Fatalf("ReplaceRoles() = %v", err)
@@ -58,20 +54,10 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 	})
 }
 
-// The guarantee finding 1 asks for, proven under real contention rather than
-// asserted from the SQL alone: two goroutines racing Start on the very same
-// registration, each in its own transaction and its own connection — one
-// shared transaction cannot show what happens between connections, which is
-// the point of a conditional UPDATE at all. Both must read back the exact
-// same start time, and the database row must carry it too: neither
-// goroutine may see the other's write partially, and the second comer must
-// never move the clock its rival already set.
-//
-// Runs outside a rolled-back transaction on purpose (see contestWithSpares'
-// doc in gameinstances_test.go for why): the point is what two separate
-// connections do to one row, which a single enclosing transaction would
-// serialize away before the race ever had a chance to happen. The contest is
-// deleted afterwards, which cascades to the registration.
+// Racers each use their own connection, outside a rolled-back transaction,
+// which would serialise the race away. Every racer and the stored row must
+// agree on one start time. Cleanup deletes the contest, cascading to the
+// registration.
 func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -129,8 +115,6 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 		t.Fatalf("the %d racers saw %d distinct start times, want exactly 1: %v", racers, len(seen), seen)
 	}
 
-	// The row itself agrees with every goroutine's own read: nobody's write
-	// silently lost to a later one they never saw.
 	final, err := repo.ByUser(context.Background(), contestID, student.ID)
 	if err != nil {
 		t.Fatalf("ByUser() = %v", err)
@@ -145,10 +129,8 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 	}
 }
 
-// A registration is undeletable once anything of the participant's own hangs
-// off it, and in a contest on a shared clock that record is the only thing
-// that says so: nothing there ever sets started_at. Each of the five tables
-// is asked on its own, because each is a separate way to have worked.
+// In a contest on a shared clock nothing sets started_at, so these records
+// are the only sign a participant has worked. Each table is checked alone.
 func TestAParticipantWithAnythingRecordedHasWork(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -204,8 +186,6 @@ func TestAParticipantWithAnythingRecordedHasWork(t *testing.T) {
 	}
 }
 
-// putReadyTemplate inserts a ready game_templates row directly, the same row
-// ForRun's game half and GameInstances.Game both read.
 func putReadyTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, database string, version int) {
 	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
@@ -216,7 +196,6 @@ func putReadyTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, data
 	}
 }
 
-// putPolicy inserts a contest's SQL policy directly.
 func putPolicy(t *testing.T, ctx context.Context, contest uuid.UUID, mode string, writable []string) {
 	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
@@ -227,12 +206,7 @@ func putPolicy(t *testing.T, ctx context.Context, contest uuid.UUID, mode string
 	}
 }
 
-// TestForRunReadsTheParticipantContestAndReadyGameTogether is ForRun's own
-// claim: everything queryproxy.Run reads separately through People.ByUser,
-// Contests.ByID and GameInstances.Game comes back from the one call, and
-// neither part is a stale echo of another — the policy ForRun reports is the
-// row this test wrote, not a default GameInstances.Game would have coalesced
-// to.
+// The policy must be the row the test wrote, not a coalesced default.
 func TestForRunReadsTheParticipantContestAndReadyGameTogether(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -271,11 +245,8 @@ func TestForRunReadsTheParticipantContestAndReadyGameTogether(t *testing.T) {
 	})
 }
 
-// TestForRunReportsNoGameForAContestWithoutAReadyTemplate proves the half of
-// ForRun that lets Run use the participant and the contest before ever
-// deciding what a missing game means: both still come back, and only GameErr
-// carries provisioning.ErrNoGame — the same sentinel a separate call to
-// GameInstances.Game would have returned instead of any participant at all.
+// The participant and contest still come back; only GameErr carries
+// provisioning.ErrNoGame.
 func TestForRunReportsNoGameForAContestWithoutAReadyTemplate(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -300,8 +271,7 @@ func TestForRunReportsNoGameForAContestWithoutAReadyTemplate(t *testing.T) {
 	})
 }
 
-// The participant's own copy comes back with the rest, as GameInstances.Of
-// would have read it, so Ensure has nothing left to ask in the common case.
+// The instance must match what GameInstances.Of reads.
 func TestForRunReadsTheParticipantsOwnInstance(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -329,9 +299,6 @@ func TestForRunReadsTheParticipantsOwnInstance(t *testing.T) {
 	})
 }
 
-// ForAccess is ForRun without the game: the same participant and contest,
-// and the same single answer for a stranger and for a contest that does not
-// exist.
 func TestForAccessReadsTheParticipantAndTheContestTogether(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -369,9 +336,6 @@ func TestForAccessReadsTheParticipantAndTheContestTogether(t *testing.T) {
 	})
 }
 
-// A template still building, never having reached 'ready', reads the same
-// way as no template at all — the same WHERE t.status = 'ready' that already
-// governed GameInstances.Game, now joined instead of queried separately.
 func TestForRunReportsNoGameForATemplateStillBuilding(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -395,10 +359,6 @@ func TestForRunReportsNoGameForATemplateStillBuilding(t *testing.T) {
 	})
 }
 
-// TestForRunReportsNotAParticipantForAnUnregisteredUser is the same answer
-// People.ByUser already gives a caller who never registered — ForRun must
-// not invent a different one just because it also reads the contest and the
-// game in the same round trip.
 func TestForRunReportsNotAParticipantForAnUnregisteredUser(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
@@ -412,9 +372,6 @@ func TestForRunReportsNotAParticipantForAnUnregisteredUser(t *testing.T) {
 	})
 }
 
-// A contest id naming nothing at all reads the same way as one nobody
-// registered for: the INNER JOIN against contests means there is no separate
-// "no such contest" case to invent (see ForRun's own doc).
 func TestForRunReportsNotAParticipantForAnUnknownContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)

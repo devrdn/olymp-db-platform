@@ -15,37 +15,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// usage is what one watched thing spent during a run.
 type usage struct {
-	// CPUAvg and CPUMax are in percent of one core, so 250 is two and a half
-	// cores busy.
+	// CPUAvg and CPUMax are in percent of one core.
 	CPUAvg  float64 `json:"cpu_avg_pct"`
 	CPUMax  float64 `json:"cpu_max_pct"`
 	MemMax  int64   `json:"mem_max_bytes"`
 	Samples int     `json:"samples"`
-	// ReadBytes is what a container read from its block devices during the
-	// run — for the game cluster, the part of the data that was not in memory.
+	// ReadBytes is what a container read from block devices during the run.
 	ReadBytes int64 `json:"read_bytes,omitempty"`
 }
 
-// backends is how many queries the game cluster was running for this
-// contest at once, sampled.
 type backends struct {
-	// ActiveMax and ActiveAvg count queries: client connections running a
-	// statement. ConnectMax counts client connections, busy or not.
+	// ActiveMax and ActiveAvg count connections running a statement;
+	// ConnectMax counts all client connections.
 	ActiveMax  int     `json:"active_max"`
 	ActiveAvg  float64 `json:"active_avg"`
 	ConnectMax int     `json:"connections_max"`
-	// WorkersMax counts the parallel workers those queries started on top of
-	// themselves: a query PostgreSQL decides to run in parallel is a leader
-	// and up to max_parallel_workers_per_gather more processes, all wanting a
-	// CPU, and none of them visible to the Query Runner's semaphore.
+	// WorkersMax counts parallel workers, which the Query Runner's semaphore
+	// does not see.
 	WorkersMax int `json:"parallel_workers_max"`
 	Samples    int `json:"samples"`
 }
 
-// sampler watches processes, containers and the game cluster while a run is
-// under way.
 type sampler struct {
 	pids       map[string]int
 	containers map[string]string
@@ -53,7 +44,6 @@ type sampler struct {
 	prefixes   []string
 }
 
-// recording is one run's worth of samples.
 type recording struct {
 	stop func()
 	wg   sync.WaitGroup
@@ -88,7 +78,6 @@ func (a *accumulator) usage() usage {
 	return u
 }
 
-// start begins sampling; the returned recording's finish ends it.
 func (s *sampler) start(parent context.Context) *recording {
 	ctx, cancel := context.WithCancel(parent)
 	r := &recording{
@@ -126,7 +115,6 @@ func (s *sampler) start(parent context.Context) *recording {
 	return r
 }
 
-// finish stops sampling and returns what was seen.
 func (r *recording) finish() (map[string]usage, backends) {
 	r.stop()
 	r.wg.Wait()
@@ -151,9 +139,8 @@ func (r *recording) finish() (map[string]usage, backends) {
 	return out, b
 }
 
-// watchProcess samples a process's CPU time and resident memory every
-// second. CPU is the difference in accumulated CPU time between two samples,
-// which is exact, rather than the decaying average ps prints.
+// watchProcess samples a process every second. CPU is the difference in
+// accumulated CPU time, not ps's decaying average.
 func (s *sampler) watchProcess(ctx context.Context, r *recording, name string, pid int) {
 	const every = time.Second
 	lastCPU, _, err := processTimes(pid)
@@ -183,13 +170,12 @@ func (s *sampler) watchProcess(ctx context.Context, r *recording, name string, p
 	}
 }
 
-// processTimes reads a process's accumulated CPU time and resident memory:
-// from /proc where there is one, and from ps elsewhere (macOS).
+// processTimes reads accumulated CPU time and resident memory from /proc, or
+// from ps elsewhere (macOS).
 func processTimes(pid int) (time.Duration, int64, error) {
 	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
-		// Fields after the command, which is in parentheses and may contain
-		// spaces: utime and stime are the 12th and 13th of those, in clock
-		// ticks; rss is the 22nd, in pages.
+		// After the parenthesised command (which may contain spaces): utime
+		// and stime are fields 12 and 13 in clock ticks, rss is 22 in pages.
 		fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
 		if len(fields) < 22 {
 			return 0, 0, errors.New("short /proc stat")
@@ -201,7 +187,6 @@ func processTimes(pid int) (time.Duration, int64, error) {
 		return time.Duration(utime+stime) * 10 * time.Millisecond, pages * int64(os.Getpagesize()), nil
 	}
 
-	// A fixed program and fixed flags; the one argument is an integer.
 	out, err := exec.Command("ps", "-o", "time=,rss=", "-p", strconv.Itoa(pid)).Output() // #nosec G204
 	if err != nil {
 		return 0, 0, fmt.Errorf("ps: %w", err)
@@ -250,9 +235,8 @@ func parseCPUTime(s string) (time.Duration, error) {
 	return time.Duration(total * float64(time.Second)), nil
 }
 
-// watchContainers samples containers with docker stats, which reports CPU in
-// percent of one core and memory as the container's own cgroup sees it.
-// One call covers every container and takes about two seconds of its own.
+// watchContainers samples containers with docker stats; one call covers all
+// of them and takes about two seconds.
 func (s *sampler) watchContainers(ctx context.Context, r *recording) {
 	byContainer := map[string]string{}
 	args := []string{"stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.BlockIO}}"}
@@ -320,10 +304,8 @@ func parseSize(s string) (int64, error) {
 	return 0, fmt.Errorf("size %q has no unit", s)
 }
 
-// watchBackends counts the game cluster's connections to this contest's
-// databases, and how many of them are running a statement, several times a
-// second. It is the one figure that says how many queries the database was
-// actually working on at once, whatever the limits upstream claim.
+// watchBackends counts, several times a second, the cluster's connections to
+// this contest's databases and how many are running a statement.
 func (s *sampler) watchBackends(ctx context.Context, r *recording) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()

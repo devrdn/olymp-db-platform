@@ -9,19 +9,12 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
 
-// codesScript is a template with one empty table — the state
-// provisioning.Games.finishDefinitionBuild leaves every builder-sourced
-// table in right before this file's own LoadTableData is asked to fill one.
+// codesScript is a template with one empty table, as a build leaves it before
+// LoadTableData fills it.
 const codesScript = `CREATE TABLE codes (id integer PRIMARY KEY, label text NOT NULL);`
 
-// TestLoadTableDataCopiesRowsIntoTheTemplate is the one proof at this
-// package's own level that LoadTableData's COPY really lands rows in a
-// database, over the provisioning role's own connection rather than
-// game_author's (that role's grants are already gone by the time this
-// method may be called — its own doc explains why). The end-to-end proof
-// that this is wired into a real build lives in internal/provisioning's own
-// integration test (game_integration_test.go), which is what
-// `make test-game-build` runs; this is the narrower proof of this one method.
+// The end-to-end build is covered by internal/provisioning's
+// game_integration_test.go.
 func TestLoadTableDataCopiesRowsIntoTheTemplate(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -48,13 +41,6 @@ func TestLoadTableDataCopiesRowsIntoTheTemplate(t *testing.T) {
 	}
 }
 
-// TestLoadTableDataRefusalBecomesATableDataError proves the classification
-// tableDataFailure makes: a constraint COPY itself catches — a NULL for a
-// NOT NULL column, in this case, past whatever this package's own
-// pre-validation already checked — comes back as *gamedb.TableDataError,
-// naming the table, rather than as a bare driver error nobody can show an
-// organiser (CLAUDE.md rule 1, the same distinction ScriptError draws for a
-// script's own statements).
 func TestLoadTableDataRefusalBecomesATableDataError(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -62,11 +48,8 @@ func TestLoadTableDataRefusalBecomesATableDataError(t *testing.T) {
 		t.Fatalf("building the template: %v", err)
 	}
 
-	// An empty, unquoted field is COPY's own NULL — refused by the column's
-	// own NOT NULL, exactly the constraint this package's own pre-validation
-	// (provisioning.validateRow) would have already caught for an organiser;
-	// this test is about what happens when PostgreSQL is the one that catches
-	// it, not about reaching this path past that check.
+	// An empty unquoted field is COPY's NULL. provisioning.validateRow would
+	// catch it first in production; here PostgreSQL does.
 	err := p.LoadTableData(t.Context(), template, "codes", []string{"id", "label"}, strings.NewReader("1,\n"))
 	if err == nil {
 		t.Fatal("a NOT NULL violation was not refused")

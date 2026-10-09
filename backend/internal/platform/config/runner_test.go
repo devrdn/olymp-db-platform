@@ -27,14 +27,9 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 	if cfg.MaxRows != 1000 || cfg.MaxBytes != 5<<20 {
 		t.Fatalf("result limits = %d rows / %d bytes", cfg.MaxRows, cfg.MaxBytes)
 	}
-	// Loopback unless told otherwise: a runner started on a laptop must not be
-	// reachable from the lecture hall's network. The compose file names ":9100"
-	// explicitly, inside a network nothing outside can route into.
 	if cfg.ListenAddr != "127.0.0.1:9100" {
 		t.Fatalf("listen address = %q, want 127.0.0.1:9100", cfg.ListenAddr)
 	}
-	// Running plus waiting covers forty participants, one query each: a
-	// round in which all of them press Run is queued, not refused.
 	if cfg.Concurrent+cfg.QueueDepth < 40 {
 		t.Fatalf("admission = %d running + %d waiting, fewer than the forty participants the olympiad expects",
 			cfg.Concurrent, cfg.QueueDepth)
@@ -42,9 +37,6 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 }
 
 func TestTheGameDatabaseIsRequired(t *testing.T) {
-	// Without it there is nothing to run queries against, and a runner that
-	// starts anyway would fail one participant at a time instead of failing
-	// the deploy.
 	t.Setenv("GAME_DB_DSN", "")
 
 	if _, err := LoadRunner(); err == nil {
@@ -52,11 +44,6 @@ func TestTheGameDatabaseIsRequired(t *testing.T) {
 	}
 }
 
-// Each of these turns a limit into no limit at all, and a mistyped variable is
-// exactly how that happens: `QUERY_MAX_ROWS=` reads as zero, and zero rows
-// would mean every answer is empty while zero concurrency would mean none run.
-// Refusing at startup is the difference between a misconfiguration and an
-// olympiad that quietly has no bounds.
 func TestALimitOfZeroIsRefusedRatherThanTakenLiterally(t *testing.T) {
 	for _, name := range []string{"QUERY_MAX_ROWS", "QUERY_MAX_BYTES", "QUERY_CONCURRENT"} {
 		t.Run(name, func(t *testing.T) {
@@ -79,8 +66,6 @@ func TestALimitOfZeroIsRefusedRatherThanTakenLiterally(t *testing.T) {
 	})
 }
 
-// A queue of nothing is a real choice — refuse rather than wait — so zero is
-// allowed here where it is refused above.
 func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 	setRunnerRequired(t)
 	t.Setenv("QUERY_QUEUE_DEPTH", "0")
@@ -94,10 +79,6 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 	}
 }
 
-// How long a read's connection is kept for the participant's next query. Zero
-// is a real choice — the operator's way back to a connection per query — while
-// a negative value is a typo, and a very long one keeps a backend on a
-// database nobody is using past the point anything waits for it.
 func TestTheIdleConnectionTimeoutHasADefaultAndBounds(t *testing.T) {
 	setRunnerRequired(t)
 	cfg, err := LoadRunner()
@@ -130,18 +111,8 @@ func TestTheIdleConnectionTimeoutHasADefaultAndBounds(t *testing.T) {
 	}
 }
 
-// The game cluster runs in a container whose backends have a per-process
-// memory cap (deploy ulimits.data): a query that over-allocates fails with an
-// "out of memory" ERROR in its own backend instead of tripping the container's
-// cgroup limit and the OOM killer, which would restart every session. That
-// only holds while the container is large enough to hold every backend at the
-// cap at once — QUERY_CONCURRENT queries, each a leader plus its parallel
-// workers. When the container's limit is declared (GAME_DB_MEMORY_BYTES), the
-// runner refuses to start with a concurrency it cannot hold, so the
-// misconfiguration is a failed deploy rather than a cluster that flaps.
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
-	// The arithmetic the check enforces, stated here so the test fails if the
-	// constants drift from what the deployment is sized for.
+	// Stated here so the test fails if the constants drift.
 	const cap = int64(DefaultProcessMemoryBytes)
 	perBudget := func(concurrent int) int64 {
 		return (int64(concurrent)+int64(MaxParallelWorkers)+int64(MaxBuildSessions))*cap + ReservedMemoryBytes
@@ -190,10 +161,7 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	})
 
 	t.Run("an absent or empty limit falls back to the default and is still checked", func(t *testing.T) {
-		// The check is never skipped: GAME_DB_MEMORY_BYTES is also what the
-		// game cluster's container limit is interpolated from, with the same
-		// default, so an unset variable means the default-sized container —
-		// and a concurrency it cannot hold must still be refused.
+		// Unset means the default-sized container, still checked.
 		for _, value := range []string{"", "unset"} {
 			setRunnerRequired(t)
 			t.Setenv("QUERY_CONCURRENT", "64")
@@ -229,10 +197,6 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	})
 }
 
-// The per-process cap the sizing check multiplies comes from the environment —
-// the same GAME_DB_PROCESS_MEMORY_BYTES the compose ulimit and the deploy
-// self-check read — not a constant, so the three cannot drift. A larger cap
-// makes the same concurrency need more memory.
 func TestTheProcessCapIsReadFromTheEnvironment(t *testing.T) {
 	t.Run("default when unset", func(t *testing.T) {
 		setRunnerRequired(t)
@@ -248,8 +212,6 @@ func TestTheProcessCapIsReadFromTheEnvironment(t *testing.T) {
 	t.Run("a larger cap raises the memory the concurrency needs", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
-		// A 512 MiB cap doubles the per-process demand, so the seven gibibytes
-		// that held eight at 256 MiB no longer does.
 		t.Setenv("GAME_DB_PROCESS_MEMORY_BYTES", strconv.FormatInt(512<<20, 10))
 		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(7<<30, 10))
 		if _, err := LoadRunner(); err == nil {
@@ -268,8 +230,6 @@ func TestTheProcessCapIsReadFromTheEnvironment(t *testing.T) {
 
 func TestTheAllowListCanBeExtendedFromTheEnvironment(t *testing.T) {
 	setRunnerRequired(t)
-	// Spacing and a trailing comma are what a person actually types; a stray
-	// empty entry would allow a function named "".
 	t.Setenv("QUERY_EXTRA_FUNCTIONS", " soundex , levenshtein ,")
 
 	cfg, err := LoadRunner()
@@ -282,10 +242,6 @@ func TestTheAllowListCanBeExtendedFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// The Core API may provision databases — the provisioner is one of its
-// modules — but it must never hold a *participant's* credentials. The Query
-// Runner is the only process that connects as game_reader or game_writer, and
-// that is one of the two reasons it is a separate service.
 func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) {
 	setRequired(t)
 	t.Setenv("GAME_DB_DSN", "postgres://game_reader:secret@pg-game:5432/postgres")
@@ -298,12 +254,7 @@ func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) 
 	if cfg.CoreDBDSN == participant || cfg.GameProvisionerDSN == participant {
 		t.Fatal("the core configuration picked up the participant role's DSN")
 	}
-	// And its own provisioning credentials are a separate variable, so the two
-	// cannot be set to the same thing by a deployment that shortens a step.
 	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:other@pg-game:5432/postgres")
-	// A provisioner now also has to name what the game-script role
-	// authenticates with; that is a third credential again, and the subject
-	// of this test is only that none of them is a participant's.
 	t.Setenv("GAME_AUTHOR_PASSWORD", "an-author-password")
 	again, err := Load()
 	if err != nil {
@@ -314,9 +265,6 @@ func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) 
 	}
 }
 
-// The writer's credentials are optional, and their absence has to be a value
-// the runner can act on: a read-write contest is then refused rather than run
-// as the reader.
 func TestRunnerReadsTheOptionalWriterDSN(t *testing.T) {
 	t.Setenv("GAME_DB_DSN", "postgres://game_reader:secret@pg-game:5432/postgres")
 	t.Setenv("GAME_DB_WRITER_DSN", "")
@@ -339,9 +287,6 @@ func TestRunnerReadsTheOptionalWriterDSN(t *testing.T) {
 	}
 }
 
-// The runner obeys the database and policy a request names, so outside
-// development it refuses to start without the token that proves a request came
-// from the Core API.
 func TestTheRunnerRequiresItsTokenOutsideDevelopment(t *testing.T) {
 	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
 	setRunnerRequired(t)
@@ -372,8 +317,6 @@ func TestTheRunnerRequiresItsTokenOutsideDevelopment(t *testing.T) {
 	}
 }
 
-// Any value other than "development" is treated as production, the same rule
-// the API applies to its own secrets: a typo in ENV must not switch a check off.
 func TestAnUnrecognisedEnvironmentIsHeldToProductionsRule(t *testing.T) {
 	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
 	setRunnerRequired(t)
@@ -398,9 +341,6 @@ func TestADevelopmentRunnerMayOmitItsToken(t *testing.T) {
 	}
 }
 
-// The runner's own credentials and its token, held to the same rule as the
-// API's: a "change-me" value from deploy/.env.example is refused outside
-// development, naming the variable and never the value.
 func TestARunnerPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 	for name, value := range map[string]string{
 		"QUERY_RUNNER_TOKEN": "change-me-to-the-output-of-openssl-rand-hex",

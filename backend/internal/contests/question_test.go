@@ -37,11 +37,8 @@ func TestQuestionRejectsNegativePoints(t *testing.T) {
 	}
 }
 
-// Finding 4: points had a floor but no ceiling, and points_awarded's own
-// computation (postgres.Submissions.Insert) multiplies a per-attempt
-// penalty derived from it against Postgres's own int4 arithmetic — an
-// unbounded value turns a wrong attempt into "integer out of range" for the
-// database rather than a scored answer.
+// Scoring multiplies the penalty in int4; an unbounded value makes a wrong
+// attempt fail with "integer out of range".
 func TestQuestionRejectsAnOverlargePointsValue(t *testing.T) {
 	q := contests.Question{Kind: contests.KindText, Points: 10_000_001}
 
@@ -59,8 +56,7 @@ func TestQuestionAcceptsPointsAtTheCeiling(t *testing.T) {
 }
 
 func TestQuestionRejectsAnAttemptLimitOfZero(t *testing.T) {
-	// Zero attempts is a question nobody can answer, which is never what the
-	// organizer meant; "unlimited" is expressed by leaving it unset.
+	// "Unlimited" is expressed by leaving it unset.
 	zero := 0
 	q := contests.Question{Kind: contests.KindText, MaxAttempts: &zero}
 
@@ -78,8 +74,7 @@ func TestChoiceQuestionNeedsAtLeastTwoOptions(t *testing.T) {
 }
 
 func TestChoiceQuestionRejectsDuplicateOptionIdentifiers(t *testing.T) {
-	// Duplicated identifiers make a submission ambiguous and the label map
-	// lossy, so this is a correctness rule rather than tidiness.
+	// Duplicates make a submission ambiguous and the label map lossy.
 	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "a"}}
 
 	if err := q.Validate(); !errors.Is(err, contests.ErrInvalidQuestion) {
@@ -106,9 +101,7 @@ func TestChoiceQuestionKnowsItsOwnOptions(t *testing.T) {
 	}
 }
 
-// An option is counted once however many answers accept it, and by the
-// matcher grading uses, so a case-insensitive answer counts the option it
-// would score.
+// Options are counted by the matcher grading uses.
 func TestCorrectChoicesCountsEachAcceptedOptionOnce(t *testing.T) {
 	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "B", "c", "d"}, Answers: []contests.Answer{
 		{MatchKind: contests.MatchExact, Value: "a"},
@@ -121,9 +114,7 @@ func TestCorrectChoicesCountsEachAcceptedOptionOnce(t *testing.T) {
 	}
 }
 
-// The count the ICPC choice gate relies on asks the same whole-answer
-// question grading does: a pattern "b" accepts the option "b" and not the
-// option "abc" merely because it contains a b.
+// Grading matches the whole answer, so "b" does not accept "abc".
 func TestCorrectChoicesMatchesARegexAgainstTheWholeOption(t *testing.T) {
 	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "b", "abc"}, Answers: []contests.Answer{
 		{MatchKind: contests.MatchRegex, Value: "b"},
@@ -151,9 +142,7 @@ func TestAnswerRejectsAnUnknownMatchKind(t *testing.T) {
 }
 
 func TestAnswerRejectsARegularExpressionThatDoesNotCompile(t *testing.T) {
-	// Compiled at authoring time on purpose: a broken pattern discovered
-	// during a running contest breaks grading for everybody who reached that
-	// question, at the one moment nobody can fix it.
+	// A broken pattern found mid-contest would break grading for everybody.
 	a := contests.Answer{MatchKind: contests.MatchRegex, Value: "the (butler"}
 
 	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
@@ -161,9 +150,8 @@ func TestAnswerRejectsARegularExpressionThatDoesNotCompile(t *testing.T) {
 	}
 }
 
-// A pattern is used wrapped as a whole-answer group, so it must be a complete
-// expression on its own: text that only balances once wrapped would close the
-// group early and leave part of the pattern unanchored.
+// A pattern is wrapped as a whole-answer group; text that balances only once
+// wrapped would close the group early and leave part unanchored.
 func TestAnswerRejectsAPatternThatOnlyCompilesOnceWrapped(t *testing.T) {
 	a := contests.Answer{MatchKind: contests.MatchRegex, Value: "butler)|(?:gardener"}
 
@@ -180,12 +168,8 @@ func TestAnswerAcceptsAWorkingRegularExpression(t *testing.T) {
 	}
 }
 
-// Finding 6: a reference answer carries no length bound of its own, even
-// though every column it reaches is unbounded text and CLAUDE.md rule 2 puts
-// the bound in the domain. 1001 characters is one more than the bound a
-// submitted answer already carries (maxAnswerRunes, submission.go) — the
-// same figure, since a reference answer is never longer than what it is
-// meant to match.
+// CLAUDE.md rule 2. The bound matches maxAnswerRunes: a reference answer is
+// never longer than what it matches.
 func TestAnswerRejectsAnOverlongValue(t *testing.T) {
 	a := contests.Answer{MatchKind: contests.MatchExact, Value: strings.Repeat("a", 1001)}
 
@@ -194,10 +178,6 @@ func TestAnswerRejectsAnOverlongValue(t *testing.T) {
 	}
 }
 
-// The same bound applies to a regex pattern, not only to a plain value: an
-// authored pattern is stored the same way and compiled the same way, and
-// nothing about match_kind = regex exempts it from the limit every other
-// reference answer carries.
 func TestAnswerRejectsAnOverlongRegularExpression(t *testing.T) {
 	a := contests.Answer{MatchKind: contests.MatchRegex, Value: strings.Repeat("a", 1001)}
 
@@ -225,8 +205,6 @@ func TestQuestionsAreAppendedInOrder(t *testing.T) {
 }
 
 func TestANewQuestionIsVisibleUnlessHidingIsAskedFor(t *testing.T) {
-	// Hiding is the deliberate choice; the ordinary case must not depend on
-	// remembering to say so.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -269,9 +247,8 @@ func TestQuestionsCannotBeAddedOnceTheContestIsRunning(t *testing.T) {
 }
 
 func TestAQuestionOfAnotherContestCannotBeReached(t *testing.T) {
-	// Permission is granted per contest, so every operation naming a question
-	// has to prove the question belongs to the contest that was authorised —
-	// otherwise one contest's owner could edit another's by guessing an id.
+	// Permission is per contest, so a guessed id from another contest must
+	// not reach its question.
 	f := conteststest.NewFixture()
 	mine := f.SeedContest(contests.StatusDraft)
 	theirs := f.SeedContest(contests.StatusDraft)
@@ -305,8 +282,7 @@ func TestDeletingAQuestionClosesTheGapInTheOrder(t *testing.T) {
 }
 
 func TestReorderMustNameEveryQuestion(t *testing.T) {
-	// A partial list would leave positions duplicated or missing, and the
-	// participant's view is built from exactly that order.
+	// A partial list would leave positions duplicated or missing.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	first, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
@@ -337,8 +313,7 @@ func TestReorderPutsTheQuestionsInTheGivenOrder(t *testing.T) {
 }
 
 func TestChoiceAnswerMustNameOneOfTheQuestionsOptions(t *testing.T) {
-	// Anything else authors an answer nobody can submit, and nobody finds out
-	// until the contest is scored.
+	// Anything else is an answer nobody can submit.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	cmd := questionCmd(c.ID)
@@ -399,7 +374,6 @@ func TestQuestionTextRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	}
 }
 
-// questionCmd is the smallest valid question command for the contest.
 func questionCmd(contestID uuid.UUID) contests.QuestionCommand {
 	return contests.QuestionCommand{
 		ActorID:   uuid.New(),
@@ -410,8 +384,6 @@ func questionCmd(contestID uuid.UUID) contests.QuestionCommand {
 }
 
 func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
-	// It recorded only which question was touched, which answers nothing: the
-	// point of asking is what was done to it.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	created, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
@@ -454,11 +426,7 @@ func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
 	}
 }
 
-// Finding 1: UpdateQuestion used to assign cmd.PenaltyPct unconditionally, a
-// plain int defaulting to zero — so any PATCH that never mentioned a penalty
-// silently reset one configured out of band back to zero. PenaltyPct is a
-// pointer for exactly this reason: nil must leave the stored value alone,
-// the same way IsVisible's own nil already does for visibility.
+// A nil PenaltyPct leaves the stored value alone, as nil IsVisible does.
 func TestUpdateQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -470,8 +438,7 @@ func TestUpdateQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 		t.Fatalf("AddQuestion() = %v", err)
 	}
 
-	// An edit that only changes the wording's face value — PenaltyPct left
-	// nil, exactly what a client that has never heard of penalties sends.
+	// PenaltyPct nil, as a client unaware of penalties sends.
 	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
 		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
 		Kind: contests.KindText, Points: 12,
@@ -487,8 +454,6 @@ func TestUpdateQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	}
 }
 
-// The penalty can still be changed on purpose — "nil leaves it alone" must
-// not become "it can never move again".
 func TestUpdateQuestionCanChangeThePenalty(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -513,8 +478,6 @@ func TestUpdateQuestionCanChangeThePenalty(t *testing.T) {
 	}
 }
 
-// SaveQuestion (PUT) shares the same rule: it too must not clobber a penalty
-// its own caller never mentioned.
 func TestSaveQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -539,8 +502,7 @@ func TestSaveQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 }
 
 func TestSettingTheAnswersStillRecordsOnlyHowMany(t *testing.T) {
-	// The one place a change set must not reach. The trail is read by
-	// organizers, and it must not become somewhere to look the answers up.
+	// Organizers read the trail; it must not reveal the answers.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	created, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
@@ -567,9 +529,7 @@ func TestSettingTheAnswersStillRecordsOnlyHowMany(t *testing.T) {
 }
 
 func TestSavingAQuestionWholeWritesEveryPart(t *testing.T) {
-	// The author edits one thing. Three requests with three buttons made that
-	// three chances for the second to fail after the first had landed, leaving
-	// a question half saved and a button that had already said "done".
+	// One request, so a question is never left half saved.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -608,12 +568,8 @@ func TestSavingAQuestionWholeWritesEveryPart(t *testing.T) {
 }
 
 func TestAQuestionMayChangeItsKindAndItsAnswersTogether(t *testing.T) {
-	// This was not merely awkward before — it was impossible. Updating the
-	// question checked the *existing* answers against the *new* kind and
-	// refused; saving the answers checked the *new* answers against the *old*
-	// kind and refused. Whichever way round an author tried, one half of the
-	// change rejected the other, and a text question could never become a
-	// choice question.
+	// Saved separately, each half would be checked against the other's old
+	// state and refused.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -644,9 +600,7 @@ func TestAQuestionMayChangeItsKindAndItsAnswersTogether(t *testing.T) {
 }
 
 func TestARefusedSaveLeavesTheQuestionExactlyAsItWas(t *testing.T) {
-	// Everything is checked before anything is written. An answer naming an
-	// option the question does not have must not land after the new points
-	// already have.
+	// Everything is checked before anything is written.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -676,11 +630,8 @@ func TestARefusedSaveLeavesTheQuestionExactlyAsItWas(t *testing.T) {
 }
 
 func TestSavingAQuestionStillNamesTheAnswerChangeOnItsOwn(t *testing.T) {
-	// One action by the author, but "who changed the reference answers after
-	// publication" is a question the trail is built to answer with an indexed
-	// filter (section 9). Folding it into the question's own entry would take
-	// that away, so the answer change keeps its own line — in the same
-	// transaction, so the two cannot disagree.
+	// The trail filters answer changes by action (§9), so they keep their own
+	// entry, in the same transaction.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -706,9 +657,6 @@ func TestSavingAQuestionStillNamesTheAnswerChangeOnItsOwn(t *testing.T) {
 }
 
 func TestSavingAQuestionWithoutTouchingTheAnswersSaysNothingAboutThem(t *testing.T) {
-	// The other half. An entry claiming the reference answers changed, on a
-	// save that only fixed a typo in the wording, would send somebody
-	// investigating a change that never happened.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)

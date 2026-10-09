@@ -9,33 +9,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// These tests exercise tablecsv.go through the exported surface
-// tabledata_test.go already builds against (tableDataGames, withSuspects,
-// beginTableUploadWithContent) — no CORE_DB_DSN needed, the same "parsing
-// and boundaries — without a database" reasoning that file's own doc gives.
-// tablecsv.go's own line scanner, header check and scalar parser are unexported, so they
-// are only reachable this way from outside the package, and this package's
-// own test files are black-box throughout (never `package provisioning`).
+// These tests reach tablecsv.go's unexported parser through the service,
+// with the helpers from tabledata_test.go; no database is needed.
 
-// TestCompleteTableUploadAcceptsCRLFLineEndings is the fix for the CSV a
-// spreadsheet on Windows writes by default: every line ends "\r\n", not
-// just "\n". Before the fix, tableLineScanner.next and firstLineIfComplete
-// each stripped only the trailing "\n", leaving the header's last column
-// read back as `nickname\r` — a byte invisible in the refusal's own text,
-// and enough to fail validateHeader on a file whose columns are otherwise
-// exactly right.
+// A spreadsheet on Windows ends every line "\r\n"; a stray "\r" on the
+// header's last column would fail validateHeader invisibly.
 func TestCompleteTableUploadAcceptsCRLFLineEndings(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
-	// Every line, including the header, ends "\r\n" — exactly what Excel or
-	// Numbers on Windows writes. The third row's last field is quoted and
-	// holds a literal CR that is not a line ending at all: tablecsv.go's
-	// own doc on splitCSVLine says a field's own bytes are never inspected
-	// for a line ending, so this must survive untouched while the CRLF
-	// around it is stripped.
+	// The last row's quoted field holds a literal CR, which must survive while
+	// the CRLF around it is stripped.
 	content := "id,name,nickname\r\n" +
 		"1,Ann,\r\n" +
 		"2,Bob,\"Bo\rbby\"\r\n"
@@ -64,20 +50,8 @@ func TestCompleteTableUploadAcceptsCRLFLineEndings(t *testing.T) {
 	}
 }
 
-// A quote is special to PostgreSQL's CSV reader wherever it appears in a
-// field, not only as its first byte: `CopyReadAttributesCSV` runs a two-state
-// loop, and the quote that opens the quoted state is any quote it meets while
-// outside one. So `1,ab"cd,2` is not a three-field row with a quote in the
-// middle of the second — it opens a quoted field at that quote, swallows the
-// rest of the line looking for its close, and ends the COPY with
-// `unterminated CSV quoted field`.
-//
-// splitCSVLine treated a quote as special only in a field's first byte, so
-// this row passed validation, was counted, and was shown back to the
-// organiser as three good fields — and then failed the build minutes later,
-// as an error about their contest rather than about their file. This
-// validator exists precisely so a bad value is refused with a row number
-// while somebody is still looking at the upload.
+// To COPY, a quote anywhere in a field opens a quoted run, so `1,ab"cd,2`
+// is an unterminated quoted field, not three values.
 func TestCompleteTableUploadRefusesARowPostgreSQLWouldCallAnUnterminatedQuote(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -93,11 +67,8 @@ func TestCompleteTableUploadRefusesARowPostgreSQLWouldCallAnUnterminatedQuote(t 
 	}
 }
 
-// The other half of the same dialect, and the reason the fix is "match
-// PostgreSQL" rather than "refuse anything with a quote in it": a quote that
-// closes and is followed by more bytes is not an error to PostgreSQL either
-// — the loop simply goes back to its unquoted state and keeps appending. So
-// `"Bo"bby` is the single value Bobby, in COPY and here alike.
+// Text after a closing quote is appended, so `"Bo"bby` is the single value
+// Bobby, as in COPY.
 func TestCompleteTableUploadReadsAClosedQuoteFollowedByMoreTextAsOneValue(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -122,8 +93,6 @@ func TestCompleteTableUploadReadsAClosedQuoteFollowedByMoreTextAsOneValue(t *tes
 	}
 }
 
-// witnessTable is a table with a timestamp column — none of tabledata_test.go's
-// own helpers need one, so this test defines its own.
 func witnessTable() provisioning.TableDefinition {
 	return provisioning.TableDefinition{
 		Name: "witnesses",
@@ -135,14 +104,8 @@ func witnessTable() provisioning.TableDefinition {
 	}
 }
 
-// TestAppendTableRowAcceptsATimestampWithNoSecondsField is the fix for
-// <input type="datetime-local" step={1}>: a browser's own picker still
-// serialises that value without a seconds component whenever the organiser
-// never touched the seconds field, "2024-01-01T10:00" rather than
-// "2024-01-01T10:00:00" — regardless of step. validTimestamp's own accepted
-// forms did not include that shape, so choosing a time in the widget and
-// clicking "add row" refused with a message pointing at a form
-// (YYYY-MM-DD HH:MM:SS) the widget cannot be made to send.
+// <input type="datetime-local"> sends "2024-01-01T10:00" when the seconds
+// were never touched, whatever its step.
 func TestAppendTableRowAcceptsATimestampWithNoSecondsField(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -157,31 +120,8 @@ func TestAppendTableRowAcceptsATimestampWithNoSecondsField(t *testing.T) {
 	}
 }
 
-// The bounds and refusals tablecsv.go owns, reached through the exported
-// methods that run them.
-//
-// They used to live in tabledata_test.go, because that is where the method
-// each one calls is declared. But the rule each one is about — the header
-// must name the table's columns, a row's field count must match, a value
-// must parse as its column's type, a field must fit MaxTableFieldBytes, a
-// file must fit MaxTableDataRows — belongs to this file's own source, and
-// somebody changing one of those checks opens this file first (CLAUDE.md Go
-// layout rule 5).
-
-// TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow is
-// the brief's own requirement for the full, end-of-upload pass: a header
-// that does not name the table's own columns is refused, and refused for
-// that reason alone — the row after it, itself invalid for an unrelated
-// reason (a non-numeric id), is never even reached.
-//
-// The content is written straight to the store rather than through
-// service.AppendTableChunk (beginTableUploadWithContent's own helper), the
-// same way TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived
-// does: AppendTableChunk now catches most mismatched headers itself, on the
-// very first chunk (TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk
-// below) — this test is about the fallback for a file that reached the
-// store some other way, so it must not go through the same early check it
-// is not testing.
+// The content is written straight to the store, bypassing AppendTableChunk's
+// early header check, to test the end-of-upload fallback.
 func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *testing.T) {
 	t.Parallel()
 	service, store, _, files := tableDataGames(t, true)
@@ -196,11 +136,8 @@ func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *te
 	if _, err := files.Append(data.ID.String(), 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("append directly: %v", err)
 	}
-	// Written straight to the store rather than through AppendTableChunk, so
-	// the fake repository's own bookkeeping of how many bytes have arrived
-	// is brought up to date by hand — otherwise CompleteTableUpload would
-	// stop at its length check, never reaching the header check this test
-	// is actually about.
+	// Bring the fake's received-bytes count up to date by hand, or
+	// CompleteTableUpload stops at its length check.
 	store.mu.Lock()
 	seeded := store.tableData[data.ID]
 	seeded.ReceivedBytes = int64(len(content))
@@ -216,9 +153,6 @@ func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *te
 	}
 }
 
-// TestCompleteTableUploadNamesTheRowWhoseFieldCountDoesNotMatch is the
-// brief's other named requirement: a row with the wrong field count is
-// refused with its own row number, not silently skipped.
 func TestCompleteTableUploadNamesTheRowWhoseFieldCountDoesNotMatch(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -237,9 +171,6 @@ func TestCompleteTableUploadNamesTheRowWhoseFieldCountDoesNotMatch(t *testing.T)
 	}
 }
 
-// TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse checks
-// the second named refusal: a value that does not fit its column's type
-// names the row and the column, not just "invalid".
 func TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -258,10 +189,7 @@ func TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse(t *test
 	}
 }
 
-// A file saved in a legacy encoding — Excel's "CSV" on a Russian or Romanian
-// Windows writes cp1251 — used to pass the upload, its text columns checked
-// for nothing, and fail minutes later as a game build error. It is refused
-// when the upload completes, naming the row and column and saying what to do.
+// Excel's plain "CSV" on a Russian or Romanian Windows writes cp1251.
 func TestCompleteTableUploadRefusesTextThatIsNotUTF8(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ content, says string }{
@@ -285,10 +213,7 @@ func TestCompleteTableUploadRefusesTextThatIsNotUTF8(t *testing.T) {
 	}
 }
 
-// Excel's "CSV UTF-8" — what the refusal above tells people to save as —
-// starts the file with a byte-order mark. Read as part of the first column's
-// name, it refused the file with a header that looked exactly like the one
-// wanted.
+// Excel's "CSV UTF-8", which the refusal above recommends, starts with a BOM.
 func TestCompleteTableUploadReadsAnExcelUTF8FileWithItsByteOrderMark(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -303,8 +228,7 @@ func TestCompleteTableUploadReadsAnExcelUTF8FileWithItsByteOrderMark(t *testing.
 	}
 }
 
-// The form's own row takes the same check: a NUL reaching the service by any
-// route other than the JSON body (which refuses it first) is refused here.
+// The JSON body refuses a NUL first; this covers any other route.
 func TestAppendTableRowRefusesANULCharacter(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -316,9 +240,6 @@ func TestAppendTableRowRefusesANULCharacter(t *testing.T) {
 	}
 }
 
-// A row that does not match the table's own columns is refused before
-// anything is written — a value with the wrong number of fields, or one
-// that will not parse as its column's type, must not reach the file at all.
 func TestAppendTableRowRefusesAValueThatDoesNotMatchItsColumn(t *testing.T) {
 	t.Parallel()
 	service, _, _, files := tableDataGames(t, true)
@@ -337,26 +258,8 @@ func TestAppendTableRowRefusesAValueThatDoesNotMatchItsColumn(t *testing.T) {
 	}
 }
 
-// TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat is the other
-// defect this package's numeric column check had: a PostgreSQL numeric is an
-// exact decimal of arbitrary precision, and strconv.ParseFloat is not a
-// stand-in for it in either direction.
-//
-//   - "0x1p-2" is a hexadecimal float literal ParseFloat happily parses to
-//     0.25 — and numeric_in has never accepted one (checked against a live
-//     PostgreSQL 16 instance, this platform's own target). A value that
-//     clears this check and only fails inside PostgreSQL's own COPY,
-//     minutes into a build, is exactly the failure this whole pre-check
-//     exists to prevent.
-//   - "1e400" is a value numeric holds exactly, arbitrary precision being
-//     the type's entire point, but ParseFloat reports a range error for it
-//     because it does not fit a 64-bit float — refusing an organiser's
-//     perfectly good row for a limit that belongs to Go's float type, not
-//     to the column's own.
-//   - "NaN", numeric's own special value (and, since PostgreSQL 14,
-//     signed Infinity/Inf, also checked against that live instance), must
-//     keep working now that the check is decimal syntax rather than a
-//     float parse.
+// ParseFloat accepts "0x1p-2", which numeric_in refuses, and refuses
+// "1e400", which numeric holds; NaN and Infinity must still pass.
 func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -390,13 +293,8 @@ func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) 
 	}
 }
 
-// TestAppendTableRowRefusesAFieldPastTheFieldBound is CLAUDE.md rule 2 on
-// the path a form takes: the request body limit bounds the whole request,
-// not one field of it, so without a check here a single value can be sixteen
-// times the max_field_bytes this service publishes to its own clients. Once
-// such a value is in the file, every window read of that table refuses with
-// ErrTableFieldTooLong for ever — the rows cannot be looked at, and the row
-// count the screen shows drops to zero.
+// CLAUDE.md rule 2 on the form's path: the body limit does not bound one
+// field, and an oversized field in the file breaks every later window read.
 func TestAppendTableRowRefusesAFieldPastTheFieldBound(t *testing.T) {
 	t.Parallel()
 	service, _, _, files := tableDataGames(t, true)
@@ -416,18 +314,13 @@ func TestAppendTableRowRefusesAFieldPastTheFieldBound(t *testing.T) {
 		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
 	}
 
-	// Exactly at the bound is still accepted: the refusal is one byte past
-	// it, not near it.
 	atBound := strings.Repeat("x", provisioning.MaxTableFieldBytes)
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", atBound, ""}); err != nil {
 		t.Fatalf("a field of exactly MaxTableFieldBytes was refused: %v", err)
 	}
 }
 
-// TestCompleteTableUploadRefusesOneRowPastMaxTableDataRows is the boundary
-// test for the row-count bound: MaxTableDataRows rows complete, one more is
-// refused. A one-column table keeps the file small enough that both halves
-// of this test run in well under a second.
+// A one-column table keeps the file small enough to run quickly.
 func TestCompleteTableUploadRefusesOneRowPastMaxTableDataRows(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)

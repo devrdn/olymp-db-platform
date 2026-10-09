@@ -14,29 +14,18 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 )
 
-// Profile implements profile.Store: what a participant is shown of their own
-// account.
-//
 // Every statement here starts from the account's own registrations
-// (registrations_user_id_idx) or from one registration of theirs, and reads
-// the journals only as a range of an index on registration_id — query_log
-// (registration_id, executed_at, id) and submissions_registration_submitted_idx,
-// both from migration 33. TestProfileReadsScanNoJournal proves the plans on a
-// database holding a representative year: a profile is a page anybody signed
-// in may open, so it must not be a way to read the largest tables in the
-// installation end to end.
-//
-// It computes no result. Points, solved, penalty and place are
-// leaderboard.Service.Own's, and the report's questions are the answers tab
-// internal/monitor already reads; what is left for storage is the list
-// itself and two counts of a registration's own journal.
+// (registrations_user_id_idx) and reads the journals only as a range of an
+// index on registration_id (query_log and submissions, migration 33). Any
+// signed-in user may open a profile, so it must not scan the largest tables;
+// TestProfileReadsScanNoJournal checks the plans.
 var _ profile.Store = (*Profile)(nil)
 
 // Profile reads a participant's own account.
 type Profile struct {
 	pool *pgxpool.Pool
-	// wrap, when set, wraps every querier these reads use. Only this
-	// package's tests set it, to EXPLAIN exactly the statements sent.
+	// wrap, when set, wraps every querier; tests use it to EXPLAIN the
+	// statements sent.
 	wrap func(storage.Querier) storage.Querier
 }
 
@@ -51,25 +40,13 @@ func (r *Profile) querier(ctx context.Context) storage.Querier {
 	return q
 }
 
-// Summary counts the profile's four numbers in one statement.
+// Summary counts the profile's four numbers in one statement, over the same
+// public contests Enrolments lists.
 //
-// There is no limit here, and that is the choice rather than an oversight.
-// Enrolments takes a page because a list is a page; these four numbers are the
-// account's record, so cutting them at profile.MaxContests would have
-// "contests" mean "contests on this screen" and would shrink a long career's
-// query count as it grew. What bounds the work instead is the account's own
-// rows — one statement over one person's registrations, each counter a lateral
-// aggregate over that registration's own index range — and an account cannot
-// be on more olympiads than the installation has run.
-//
-// The account's registrations are the outer rows — the ones the public
-// admits, so these numbers describe exactly the contests Enrolments lists —
-// and each counter is a lateral aggregate over that one registration's own
-// index range, the way the organiser's roster counts a contest's. Solved
-// counts distinct
-// questions, so two correct attempts at one question are one solved
-// question, and a question answered correctly in two contests counts in
-// both — this is what the account did, not how many questions exist.
+// It has no limit: these numbers are the account's whole record, not one
+// page. The work is bounded by the account's own registrations, each counter
+// a lateral aggregate over one registration's index range. Solved counts
+// distinct questions per registration.
 func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summary, error) {
 	var s profile.Summary
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -94,33 +71,17 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 	return s, nil
 }
 
-// ownResultColumns is the participant's own result in one contest, counted
-// from their own submissions and nothing else.
+// ownResultColumns is the participant's own result in one contest, from their
+// own submissions only.
 //
-// Deliberately the same two expressions postgres.Leaderboard.Standings uses
-// for points and solved, and the same cell arithmetic ICPCStandings uses for
-// the ICPC pair — the list cannot ask the leaderboard for them (that is a
-// whole table per contest, which is the one thing this statement exists to
-// avoid), so what keeps the two answers one answer is a set of tests that run
-// both against the same data and compare:
-// TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith, its ICPC
-// twin, and TestProfileEnrolmentsCarryTheICPCResultUnderAnIndividualTimer,
-// which pins the one branch of the penalty arithmetic a fixed-timing fixture
-// would never reach. A change to either formula fails them.
+// The expressions repeat Leaderboard.Standings and ICPCStandings, since asking
+// the leaderboard would compute a whole table per contest. The
+// TestProfileEnrolmentsCarry... tests compare the two on the same data.
 //
-// Cut off at nothing. A freeze hides other people's progress; it never hides
-// a participant's own work from them once their contest has ended, which is
-// the same choice leaderboard.Service.Own makes for the report.
-//
-// Points are zero in ICPC scoring, as they are on the table: Service.Submit
-// writes points_awarded = 0 in that mode, but a contest switched out of it
-// before it ran can have rows from the mode before, and summing those would
-// have the list report a score the report and the standings both call zero.
-//
-// Both aggregates are one range of submissions_registration_submitted_idx
-// per registration. The ICPC one is joined on the contest's visible
-// questions, because a question off the grid costs and counts nothing, and
-// it is evaluated only for a contest actually scored that way.
+// There is no freeze cut-off: a freeze never hides a participant's own work.
+// Points are forced to zero under ICPC, because a contest switched out of
+// another mode may hold earlier points. The ICPC aggregate counts only
+// visible questions.
 const ownResultColumns = `
 	CASE WHEN c.scoring = 'icpc' THEN 0 ELSE COALESCE(points.points, 0) END::int,
 	CASE WHEN c.scoring = 'icpc' THEN COALESCE(icpc.solved, 0) ELSE COALESCE(points.solved, 0) END::int,
@@ -157,29 +118,12 @@ const ownResultJoins = `
 	    WHERE t.solved_at IS NOT NULL
 	) icpc ON c.scoring = 'icpc'`
 
-// Enrolments reads the account's registrations with their contests and the
-// participant's own result in each, newest first, at most limit of them.
+// Enrolments reads the account's registrations in public contests, with each
+// contest and the participant's own result, newest first, at most limit.
 //
-// Only the public statuses: a draft the account is already on
-// the roster of is left out, as the participant catalogue leaves it out.
-//
-// One statement over every registration of the account, never one per
-// contest (design §4): the contest arrives whole — its languages and its
-// translations included, by the same projection every other contest read
-// uses — so the list can be shown in the caller's own language without a
-// second round trip per row, and the row's own numbers come with it
-// (ownResultColumns) rather than from a table computed per contest.
-//
-// The page is chosen before anything is counted. The result columns are an
-// aggregate per row, and an account may be registered in far more contests
-// than one profile shows: ordering and cutting first means fifty aggregates
-// for fifty rows rather than one per registration the account ever had.
-//
-// Newest first by when the contest was meant to happen, falling back to when
-// it was created for a contest with no schedule yet, and then by the
-// registration, so the order is total and two reads agree. Stated twice —
-// once to pick the page, once to return it in order — because a join over
-// the page does not preserve its order.
+// The page is chosen before anything is aggregated, so the result columns
+// are computed for limit rows only. The ORDER BY is total and appears twice
+// because the join over the page does not preserve its order.
 func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) ([]profile.Enrolment, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH page AS (
@@ -216,8 +160,6 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 			return profile.Enrolment{}, err
 		}
 		e.Contest = contest
-		// The mode travels with the numbers, so nothing downstream has to
-		// look the contest up again to know which of them is the result.
 		e.Result.Scoring = contest.Scoring
 		return e, nil
 	})
@@ -227,12 +169,8 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 	return enrolments, nil
 }
 
-// Activity counts one registration's queries, how many of them succeeded,
-// and when it last answered.
-//
-// One read of the query log's range for the registration rather than two:
-// the successful ones are a filtered count inside the same aggregate, not a
-// second scan of the same range for a second number.
+// Activity counts one registration's queries, how many succeeded, and when it
+// last answered, in one pass over its query log range.
 func (r *Profile) Activity(ctx context.Context, registration uuid.UUID) (profile.Activity, error) {
 	var a profile.Activity
 	err := r.querier(ctx).QueryRow(ctx, `

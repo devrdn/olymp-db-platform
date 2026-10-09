@@ -1,10 +1,7 @@
-// Package app assembles the Core API from its parts and runs it.
-//
-// main used to do all of this inline, which had two costs: the wiring was
-// untestable because it lived in func main, and every new module grew a
-// 90-line run() further. The composition now lives here, where it has a name,
-// an order, and a place for the next module to plug in; main is reduced to
-// flags and exit codes.
+// Package app is the composition root: it assembles the Core API from its
+// parts, runs its listeners and background jobs, and shuts them down. It is
+// the only package that knows about all the others; main keeps only flags and
+// exit codes.
 package app
 
 import (
@@ -55,16 +52,14 @@ type App struct {
 	public   *server.Server
 	internal *server.Server
 
-	// tasks are the periodic jobs, started with Run and stopped with it.
 	tasks []task
 
-	// closers releases resources in reverse assembly order on shutdown.
+	// closers run in reverse assembly order on shutdown.
 	closers []func()
 }
 
-// New builds the service. Construction is fail-fast: an unreachable database,
-// a bad metrics backend or an unparseable proxy list is reported here, before
-// a single request is accepted.
+// New builds the service, failing fast on any unusable dependency or setting
+// before a request is accepted.
 func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	log := logging.New(cfg.LogLevel, os.Stdout)
 	log.Info("starting core api", "version", version, "env", cfg.Env)
@@ -78,112 +73,67 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}
 	}()
 
-	// The core database is the one hard dependency: without it there are no
-	// users, contests or answers to serve. Sized by CoreDBPoolMax when the
-	// deployment set one; zero keeps storage's own default.
 	pool, err := storage.NewPoolWithMaxConns(ctx, cfg.CoreDBDSN, int32(cfg.CoreDBPoolMax)) // #nosec G115 -- config.Load bounds CoreDBPoolMax to [0, maxCoreDBPoolMax], well within int32.
 	if err != nil {
 		return nil, err
 	}
 	a.closers = append(a.closers, pool.Close)
 
-	// The cache is optional: with no address configured the service runs on
-	// the in-process store and says so loudly (see the cache package).
 	cacheBackend, err := cache.New(ctx, cfg.RedisAddr, log)
 	if err != nil {
 		return nil, err
 	}
 	a.closers = append(a.closers, func() { _ = cacheBackend.Close() })
 
-	// Metrics are diagnostics: the backend is pluggable and may be off
-	// entirely, and nothing about serving changes either way.
 	recorder, err := metrics.New(cfg.MetricsBackend, log)
 	if err != nil {
 		return nil, fmt.Errorf("configure metrics: %w", err)
 	}
 	log.Info("metrics backend ready", "backend", cfg.MetricsBackend)
 
-	// A backend that reports on a schedule needs a loop; one that is scraped
-	// or disabled does not.
 	if runner, ok := recorder.(metrics.Runner); ok {
 		stop := make(chan struct{})
 		a.closers = append(a.closers, func() { close(stop) })
 		go runner.Run(stop)
 	}
 
-	// Forwarded headers are believed only from the configured proxies;
-	// everything address-based (throttling, audit) sees the resolution.
+	// Forwarded headers are believed only from configured proxies (CLAUDE.md
+	// rule 9).
 	resolver, err := httpx.NewIPResolver(cfg.TrustedProxies)
 	if err != nil {
 		return nil, fmt.Errorf("configure trusted proxies: %w", err)
 	}
 
-	// Authentication and account management. The repositories are the only
-	// components that know SQL; everything above them works against the
-	// interfaces the domain packages declare.
-	// The second half of the two-phase query journal. A row is written before
-	// its query runs so that a process dying mid-query leaves evidence; this
-	// is what closes the evidence, and without it the guarantee is only
-	// half-built (section 5, point 7).
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
 
-	// Moved ahead of the provisioning block below so the reclaim sweep can be
-	// built WithAudit: an organizer who cannot find a database learns from
-	// this trail what removed it, and the recorder needs to exist before
-	// anything can be handed it.
+	// Built before provisioning so the reclaim sweep can record what it drops.
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))
 
-	// The server's own monitoring signals (design §2.3): one trail per
-	// registration in the shared cache, told of every request participant
-	// admission lets through — the console's queries below and the /play
-	// endpoints further down — so both feed one trail.
-	//
-	// The session store is built here, ahead of its other users below,
-	// because the tracker asks it whether a registration's previous session
-	// still lives before calling a new one a second device.
+	// The session store comes first: the monitoring tracker asks it whether a
+	// registration's previous session still lives before calling a new one a
+	// second device.
 	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL).WithMaxLifetime(cfg.SessionMaxLifetime)
 	participantTracker := monitor.NewTracker(cacheBackend, postgres.NewMonitor(pool), sessions, log)
 
-	// The participation gate (contests.Gate): whether a participant may act
-	// and whether a contest is over for them, with the installation's one
-	// deadline grace (DEADLINE_GRACE, §8). Built once, here, and the same
-	// value handed to everything that asks or depends on it — the console
-	// and the participant reads (queryproxy), the answer route
-	// (contests.Service.Submit), the scheduler that finishes a contest, and
-	// the profile — so no two of them can disagree about when a
-	// participant's time is up. Each refuses to be built without it.
+	// The participation gate, built once and handed to the console, the
+	// answer route, the scheduler and the profile, so none of them can
+	// disagree about when a participant's time is up.
 	gate := contests.NewGate(cfg.DeadlineGrace)
 
-	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
-	// The game's authoring half — the script and the build. Nil in a
-	// deployment with no game cluster configured, where there is nothing to
-	// build a template on; the endpoints are then not mounted, the same way
-	// the console's are not.
+	// console, gameAuthoring and gameDatabases stay nil without a game
+	// cluster, and their endpoints are then not mounted.
 	var gameAuthoring *provisioning.Games
-	// The pool half of the same screen: the databases that already exist for
-	// a contest, and dropping one that has gone wrong. Nil in the same
-	// deployments gameAuthoring is nil in — both are built inside the block
-	// below, so the handler never sees one without the other.
 	var gameDatabases *provisioning.Service
-	// poolTrigger wakes tendPools between its own ticks when a contest starts
-	// or its roster grows (contests.PoolTrigger). Declared through the
-	// interface and left a true nil interface value in a deployment with no
-	// game cluster — assigning a *provisioning.Tender to it only inside the
-	// block below, never a concrete nil, for the same reason packageGames is
-	// spelled this way further down: a typed nil pointer stored in an
-	// interface is not itself nil, and contestService/Scheduler only ever
-	// check the interface.
+	// poolTrigger wakes tendPools early when a contest starts or its roster
+	// grows. It stays a true nil interface without a game cluster: a typed
+	// nil pointer in an interface is not nil.
 	var poolTrigger contests.PoolTrigger
 
-	// Provisioning is optional: a deployment with no game cluster has nothing
-	// to provision, and refusing to start would make the game circuit a
-	// requirement for running an olympiad's registration.
+	// Provisioning is optional, so registration runs without a game cluster.
 	if cfg.GameProvisionerDSN != "" {
-		// Its own statement timeout, not the core API's ten seconds: what this
-		// pool runs is CREATE DATABASE … TEMPLATE, which takes as long as
-		// copying the template takes, and the core timeout would fail
-		// provisioning exactly for the contests large enough to need it.
+		// Its own statement timeout: CREATE DATABASE … TEMPLATE outlasts the
+		// core API's ten seconds (CLAUDE.md rule 15).
 		gamePool, err := storage.NewMaintenancePool(ctx, cfg.GameProvisionerDSN, provisionStatementTimeout)
 		if err != nil {
 			a.close()
@@ -207,19 +157,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		games := postgres.NewGameInstances(pool)
 		databases := provisioning.New(games, cluster).
 			WithWorkers(cfg.ProvisionWorkers).
-			// The same GAME_CLUSTER_MAX_BYTES the pool's own limits carry
-			// below, and deliberately the same variable read once: the budget
-			// bounds the background tender and the participant's own late
-			// registration, and two numbers here would mean a cluster the pool
-			// stopped filling at while participants carried on filling it
-			// (provisioning.Service.roomForOneCopy).
+			// The same budget as the tender's below, so late registrations
+			// cannot keep filling a cluster the tender stopped at.
 			WithClusterBudget(cfg.ClusterMaxBytes).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
-		// Coalesces a burst of registrations or a scheduler start into one
-		// extra tend rather than one per event (provisioning.Tender's own
-		// doc); wired into tendPools below and, further down, into
-		// contestService and the scheduler as the interface both narrow it
-		// to (contests.PoolTrigger).
+		// Coalesces a burst of triggers into one extra tend.
 		tender := provisioning.NewTender()
 		poolTrigger = tender
 		a.tasks = append(a.tasks, tendPools(log, databases, provisioning.PoolLimits{
@@ -227,22 +169,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}, tender))
 		gameDatabases = databases
 
-		// The other half of a contest's game: the script an organiser writes
-		// and the template built from it. `games` is the same
-		// postgres.GameInstances the pool uses — one table, two jobs — and
-		// `cluster` the same provisioner.
 		gameAuthoring = provisioning.NewGames(games, cluster, games).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
-		// The same GAME_BUILD_TIMEOUT the provisioner above was given: it is
-		// what bounds a build, so it is also what decides when a build that has
-		// not finished can only be a dead one (staleBuildAfter).
+		// The build timeout also decides when an unfinished build is dead.
 		a.tasks = append(a.tasks, buildGames(log, gameAuthoring.Build, cfg.GameBuildTimeout))
 
-		// The second way to build a contest's game: upload a finished dump
-		// instead of writing one in the editor. Optional in exactly the way
-		// the console below is — GAME_UPLOAD_DIR empty means no volume was
-		// mounted for it, and gameAuthoring simply never gets WithUploads,
-		// which is what every upload method's ErrUploadsDisabled answers.
+		// Dump uploads are off without GAME_UPLOAD_DIR (ErrUploadsDisabled).
 		if cfg.GameUploadDir != "" {
 			limits := gamefile.Limits{
 				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
@@ -256,26 +188,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			}
 			gameAuthoring = gameAuthoring.WithUploads(uploads, limits)
 
-			// The table builder's own per-table CSV data (feat/game-table-builder's
-			// third task): a second, independent gamefile.Store — never the one
-			// uploads above uses (Games.WithTableData's own doc explains why one
-			// store per directory matters here). Its own subdirectory, not a
-			// sibling one: deploy/docker-compose.yml mounts the volume at exactly
-			// GAME_UPLOAD_DIR, so anywhere outside it is the container's own
-			// ephemeral disk, not the persistent volume both stores are meant to
-			// share.
-			//
-			// MaxFileBytes and MaxChunkBytes are still the dump's own — one CSV
-			// file's size and one chunk's size are each bounded per upload, and
-			// nothing about a table's CSV needs a different ceiling for either.
-			// MaxDirBytes is not shared: usage() (gamefile.Store's own accounting)
-			// walks one directory with os.ReadDir, so it already can't see what
-			// the other store keeps, but two Stores each independently allowed
-			// the same GAME_UPLOAD_MAX_DIR_BYTES would together fit twice what an
-			// operator who sized that variable against the volume itself meant to
-			// allow — the defect this table's own tableLimits fixes, with its own
-			// ceiling (GAME_UPLOAD_TABLE_MAX_DIR_BYTES, config.go's own doc) an
-			// operator sizes separately, against the same volume, alongside it.
+			// The table builder's CSV data gets its own store in a
+			// subdirectory: inside GAME_UPLOAD_DIR because only that path is
+			// the mounted volume. File and chunk limits are the dump's; the
+			// directory budget is its own, so the two stores together do not
+			// double what the operator sized.
 			tableDir := filepath.Join(cfg.GameUploadDir, "tables")
 			tableLimits := gamefile.Limits{
 				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
@@ -291,21 +208,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
 		}
-		// The background half of §2.4: a contest's participant databases
-		// outlive it by exactly its configured grace, never longer, and
-		// never a moment less. GameReclaimCounters degrades to a no-op on
-		// whatever METRICS_BACKEND is not Prometheus — see its own doc.
+		// Participant databases are dropped once their contest's grace period
+		// has passed, never before.
 		a.tasks = append(a.tasks, reclaimInstances(
 			log, databases.Reclaim, cfg.GameInstanceGraceMin, metrics.NewGameReclaimCounters(recorder)))
 
-		// The console needs a Query Runner to talk to. Without one the rest of
-		// provisioning still works — pools are kept stocked — and the endpoint
-		// simply is not mounted, which is the honest state of a deployment
-		// where the runner has not been rolled out yet.
+		// Without a Query Runner, pools are still stocked but the console is
+		// not mounted.
 		if cfg.QueryRunnerAddr != "" {
-			// Configuration refuses a missing token outside development; in
-			// development it is allowed, and said out loud so that a stack
-			// which lost its token cannot pass for a working one.
+			// Allowed only in development, and logged loudly.
 			if cfg.QueryRunnerToken == "" {
 				log.Warn("QUERY_RUNNER_TOKEN is not set: calls to the query runner carry no token, " +
 					"which only a development runner accepts")
@@ -317,10 +228,6 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			}
 			a.closers = append(a.closers, func() { _ = client.Close() })
 
-			// One instance rather than a fresh postgres.NewRegistrations(pool)
-			// for each of the two roles below: People and Lookup are two
-			// different questions Run asks of the same registrations row,
-			// and this type answers both.
 			consoleRegistrations := postgres.NewRegistrations(pool)
 			console = queryproxy.New(
 				consoleRegistrations,
@@ -330,54 +237,28 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
 				gate,
 			).WithPerMinuteDefault(cfg.QueryPerMinute).
-				// Collapses the façade's own lookups — Run's participant,
-				// contest, game and instance, Access's participant and
-				// contest — into one round trip each.
+				// Collapses Run's and Access's lookups into one round trip.
 				WithLookup(consoleRegistrations).
-				// The console's schema panel. Wired here and only here: the
-				// console-less Service built further down for the participant
-				// read endpoints has no game cluster to read a schema from,
-				// and answers ErrSchemaHidden rather than pretending to.
-				//
-				// `games` is both halves of the cache — it is the same
-				// postgres.GameInstances the pool tender already holds — and
-				// `cluster` is the game cluster itself. One catalogue read
-				// per template between every participant of a contest; see
-				// provisioning.SchemaReader.
+				// The schema panel; a console-less Service answers
+				// ErrSchemaHidden.
 				WithSchemas(provisioning.NewSchemaReader(games, cluster)).
-				// The console's own closing rule: once no question of the
-				// contest is still answerable to a participant — every one
-				// answered correctly or out of attempts — running a query
-				// cannot lead to an answer, so Run stops taking them
-				// (queryproxy.ErrNothingLeftToAnswer). Wired only here,
-				// because only Run consults it: the read endpoints below
-				// share this Service and are deliberately left open, so a
-				// participant with nothing left to answer still has their
-				// story, their results and their timer.
+				// Run refuses once nothing is left to answer
+				// (ErrNothingLeftToAnswer); the read endpoints stay open.
 				WithAnswerable(postgres.NewAnswerable(pool)).
 				WithWatcher(participantTracker)
 		}
 	}
 
 	userRepo := postgres.NewUsers(pool)
-	// The one reader of the audit trail, shared by the scheduler's own
-	// dedup check (finding 1, below) and the admin-facing handler further
-	// down: both read the same table through the same narrow type, and there
-	// is no reason to pay for two.
 	auditTrail := postgres.NewAuditTrail(pool)
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
-	// One instance, shared with GameHandler's own BeginUpload throttle
-	// below: a subject string is namespaced by whoever builds it
-	// ("game_upload_begin:" there, "ip:"/accountSubject here), so one cache
-	// and one counter type serve every fixed-window rate limit this service
-	// keeps rather than each feature growing its own.
+	// One limiter serves every fixed-window rate limit; each caller
+	// namespaces its own subjects.
 	limiter := auth.NewLimiter(cacheBackend)
 
-	// The process's one password hasher. Every argon2id computation holds
-	// 64 MiB, so sign-in, password changes and account management share one
-	// bound on how many run at once — two hashers would be two bounds, and
-	// the memory limit in the deployment is sized against exactly one.
+	// The process's one password hasher: the memory limit is sized against
+	// exactly one bound on concurrent argon2id runs.
 	passwords := password.NewHasher(password.HasherConfig{
 		Concurrency: cfg.PasswordHashConcurrency,
 		MaxWait:     cfg.PasswordHashMaxWait,
@@ -389,24 +270,21 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		return nil, fmt.Errorf("device trust: %w", err)
 	}
 	authService := auth.NewService(auth.ServiceConfig{
-		Users:                 userRepo,
-		Sessions:              sessions,
-		Audit:                 auditRecorder,
-		Limiter:               limiter,
-		Logger:                log,
-		Passwords:             passwords,
-		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
-		MaxAttemptsPerAccount: cfg.MaxLoginAttemptsPerAccount,
-		Devices:               devices,
-		MaxAttemptsPerDevice:  cfg.MaxLoginAttemptsPerDevice,
-		// Every trusted browser of one account together.
+		Users:                        userRepo,
+		Sessions:                     sessions,
+		Audit:                        auditRecorder,
+		Limiter:                      limiter,
+		Logger:                       log,
+		Passwords:                    passwords,
+		MaxAttemptsPerAddress:        cfg.MaxLoginAttemptsPerAddress,
+		MaxAttemptsPerAccount:        cfg.MaxLoginAttemptsPerAccount,
+		Devices:                      devices,
+		MaxAttemptsPerDevice:         cfg.MaxLoginAttemptsPerDevice,
 		MaxTrustedAttemptsPerAccount: cfg.MaxTrustedLoginAttemptsPerAccount,
 	})
-	// The account behind a session, cached for a few seconds so an
-	// authenticated request is a cache read rather than a query with two
-	// aggregations. The account service below tells it about every change it
-	// makes, so a block applies on the next request; SessionAccountCacheTTL
-	// bounds whatever it cannot be told about. Zero turns it off.
+	// The account behind a session, cached briefly so authentication is a
+	// cache read. The user service invalidates it on every change, so a block
+	// applies on the next request. A zero TTL turns it off.
 	var accounts *auth.AccountCache
 	if cfg.SessionAccountCacheTTL > 0 {
 		accounts = auth.NewAccountCache(cacheBackend, cfg.SessionAccountCacheTTL, log)
@@ -421,28 +299,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	})
 	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords)
 	if accounts != nil {
-		// Guarded rather than passed through: a nil *AccountCache in the
-		// interface would not be a nil interface.
+		// Guarded: a nil *AccountCache in an interface is not a nil interface.
 		userService.WithAccessCache(accounts)
 	}
 
-	// The game script the contest package carries (contests.GameSource,
-	// Service.ExportPackage). Assigned through a declared interface variable
-	// rather than handed the pointer directly: gameAuthoring is nil in a
-	// deployment with no game cluster, and a nil *provisioning.Games stored
-	// in an interface field is not a nil interface — the export would take
-	// the "there is a game to read" branch and dereference it. Left nil here
-	// instead, the package simply carries no game, which is the honest state
-	// of such an installation.
+	// Assigned only when gameAuthoring exists: a nil *provisioning.Games in
+	// the interface would not be nil, and ExportPackage would dereference it.
 	var packageGames contests.GameSource
 	if gameAuthoring != nil {
 		packageGames = gameAuthoring
 	}
 
-	// The contest module: everything an organizer authors and runs. It is
-	// assembled from the same repositories pattern — the domain declares what
-	// it needs, internal/postgres implements it — so nothing below this line
-	// knows any SQL.
 	contestService := contests.NewService(contests.ServiceConfig{
 		Contests:      postgres.NewContests(pool),
 		Stories:       postgres.NewStories(pool),
@@ -451,52 +318,23 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Registrations: postgres.NewRegistrations(pool),
 		Policies:      postgres.NewSQLPolicies(pool),
 		Languages:     postgres.NewLanguages(pool),
-		// Read only by Service.ExportPackage, and nil where this deployment
-		// has no game cluster at all — see packageGames above.
-		Game: packageGames,
-		// Records answers (submission.go), admitted by the same gate as the
-		// console: §8 names one deadline formula and one grace, not one per
-		// path.
-		Submissions: postgres.NewSubmissions(pool),
-		// Answers whether a question has opened yet in a sequential contest
-		// (§6.1.1); only ever consulted when a contest turns that on.
-		Sequence:   postgres.NewSequence(pool),
-		Gate:       gate,
-		Users:      userRepo,
-		Audit:      auditRecorder,
-		UnitOfWork: storage.NewUnitOfWork(pool),
-		Logger:     log,
-		// The same number reclaimInstances below hands the reclaim sweep
-		// (finding 1): Service.ExtendGrace has to compare an organizer's
-		// requested grace against the grace actually in force, and for a
-		// contest that never set one explicitly that is this installation
-		// default, not zero.
+		Game:          packageGames,
+		Submissions:   postgres.NewSubmissions(pool),
+		Sequence:      postgres.NewSequence(pool),
+		Gate:          gate,
+		Users:         userRepo,
+		Audit:         auditRecorder,
+		UnitOfWork:    storage.NewUnitOfWork(pool),
+		Logger:        log,
+		// The same default the reclaim sweep uses, so ExtendGrace compares
+		// against the grace actually in force.
 		DefaultGraceMin: cfg.GameInstanceGraceMin,
-		// Wakes the pool tender the moment a roster grows on a published or
-		// running contest, instead of waiting out its own interval. nil in a
-		// deployment with no game cluster, which is what leaves Enroll and
-		// AddParticipants exactly as they were before this existed.
-		PoolTrigger: poolTrigger,
+		PoolTrigger:     poolTrigger,
 	})
 
-	// The background half of §8: published → running → finished without an
-	// organizer asking, one advisory-locked tick at a time
-	// (internal/app/background.go's own doc for the interval). Second
-	// postgres.Contests, Stories and Questions values rather than the ones
-	// contestService already holds: all of them wrap the same pool and the
-	// same tables, so this costs nothing beyond the structs themselves, and
-	// Scheduler asks for narrower things than contestService's own
-	// contests.Repository, contests.StoryRepository and
-	// contests.QuestionRepository — easiest to see when it is handed its own
-	// values instead of borrowing fields out of another component. The
-	// story, question and roster reads are what let the scheduler hold the
-	// same publish gate Service.Transition holds before letting a contest
-	// reach running (finding 1): the scheduler is a second door into that
-	// step, and it must not open onto a contest whose story or questions
-	// vanished after publication, or onto one an account that administers
-	// every contest is registered for. auditTrail is what lets it record a
-	// block once rather than once a tick: the same reader the admin handler
-	// uses below.
+	// The scheduler moves contests published → running → finished. It holds
+	// the same publish gate as Service.Transition before starting a contest,
+	// and reads the audit trail to record a blocked start once, not per tick.
 	scheduler := contests.NewScheduler(
 		postgres.NewContests(pool),
 		postgres.NewStories(pool),
@@ -505,19 +343,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),
-		// The same gate, so the scheduler finishes a contest at ends_at plus
-		// the grace the console and Submit admit by (one grace for the
-		// whole installation, §8), never a tick before a late-arriving
-		// answer or query inside that grace would still be admitted.
+		// The same gate, so a contest never finishes while a late answer
+		// inside the grace would still be admitted.
 		gate,
 	).WithPoolTrigger(poolTrigger).WithCovers(postgres.NewCovers(pool))
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
-	// The contest's table, and with it the only source of a result there is.
-	// One service for both audiences: the leaderboard routes serve it to a
-	// contest, and the profile reads one registration's own row out of the
-	// same cached computations (leaderboard.Service.Own), so a participant's
-	// report and the table they were judged by can never disagree.
+	// One leaderboard service for the table and the profile, so a report and
+	// the table can never disagree.
 	standings := leaderboard.NewService(leaderboard.Config{
 		Contests:     postgres.NewContests(pool),
 		Participants: postgres.NewRegistrations(pool),
@@ -525,20 +358,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Audit:        auditRecorder,
 		UnitOfWork:   storage.NewUnitOfWork(pool),
 	})
-	// What a contest's participants did. One WatchService, read by two
-	// handlers: the staff monitoring routes behind contest.monitor, and the
-	// participant's own profile, which asks it for its own registration only
-	// (design §1 — no second implementation of the same three reads).
+	// One WatchService for staff monitoring and the participant's profile.
 	watch := monitor.NewWatchService(monitor.WatchConfig{
 		Store: postgres.NewWatch(pool), Audit: auditRecorder, Marks: cacheBackend,
 	})
 
-	// One count of the CSV downloads holding a connection from the pool
-	// above, shared by every handler that serves one: the participant's query
-	// log from the play screen and from their profile, and the organiser's
-	// participant and contest feeds. They draw on one pool, so the bound on
-	// them is one number and it is decided here, where the pool is
-	// (api.ExportSlots; cfg.ExportConcurrency, EXPORT_CONCURRENCY).
+	// One bound on CSV downloads holding pool connections, shared by every
+	// export handler since they draw on one pool.
 	exportSlots := api.NewExportSlots(cfg.ExportConcurrency)
 
 	modules := []api.Module{
@@ -548,63 +374,28 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
 			authMiddleware, log),
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
-		// The contest's table for its staff, its participants and anybody
-		// with the link. Its own service rather than a corner of
-		// contestService: it records nothing but a reveal, it caches, and
-		// one of its routes is deliberately outside authentication.
 		api.NewLeaderboardHandler(standings, limiter, authMiddleware, log, cfg.DefaultLocale),
-		// The trail is written by every module above; this is the only way
-		// to read it back, and it is behind its own permission.
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
-		// What a contest's participants did, for its staff (design §4):
-		// behind contest.monitor, with its own read budget on the shared
-		// limiter under the "monitor:" namespace.
-		// Every view is audited through the shared cache's marks (design §7).
 		api.NewMonitorHandler(watch, limiter, authMiddleware, log).WithExportSlots(exportSlots),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
 	}
-	// Mounted only where a game cluster is configured: without one there is
-	// nothing to build a template on, and an endpoint that took a script it
-	// could never build would be a worse answer than no endpoint.
 	if gameAuthoring != nil {
 		gameHandler := api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log, limiter)
 		if cfg.GameUploadChunkBytes > 0 {
-			// The socket's ceiling and the domain's are the same number, so
-			// the configured chunk size is the only one that ever decides.
+			// The socket's ceiling equals the domain's chunk limit.
 			gameHandler = gameHandler.WithMaxChunkBody(cfg.GameUploadChunkBytes)
-			// The table builder's own CSV chunk shares this installation's
-			// GAME_UPLOAD_CHUNK_BYTES too — WithTableData's own call above
-			// configures provisioning.Games identically, so the socket's
-			// ceiling for this second, independent store matches its
-			// domain-side one the same way.
 			gameHandler = gameHandler.WithMaxTableChunkBody(cfg.GameUploadChunkBytes)
 		}
 		modules = append(modules, gameHandler)
 	}
 
-	// The participant's own read of a running contest — the story, the
-	// visible questions, and their own query log — needs
-	// queryproxy.Service.Access and .AdmitRead, and neither ever reaches a
-	// game lookup, provisioning or the Query Runner:
-	// those are Run's alone. So this is mounted unconditionally rather than
-	// under "is there a game circuit at all" — a deployment with no game
-	// cluster still runs an olympiad's registration and its participants
-	// still have a story to read, and gating it on the console would give
-	// them a 404 on their own contest for a dependency this endpoint does not
-	// have.
-	//
-	// When there is a console, its Service is reused outright rather than a
-	// second one built here: AdmitRead shares Run's own rate limiter and key
-	// namespace (queryproxy.Service.AdmitRead), so a participant who
-	// alternates between running queries and polling this endpoint spends one
-	// account-wide budget, not two that add together past the installation's
-	// intended rate. Without a console there is no Run to share a budget
-	// with, so a fresh Service is built from the same two repositories the
-	// console would have used (People, Contests) and nils for the three
-	// collaborators only Run calls (Games, Databases, Executor) — Access and
-	// AdmitRead never touch them.
+	// The participant's reads of a running contest use only Access and
+	// AdmitRead, which never touch the game cluster, so they are mounted even
+	// without a console. With a console its Service is reused, so queries and
+	// reads spend one budget; without one, a Service is built with nils for
+	// the collaborators only Run uses.
 	participantAccess := console
 	if participantAccess == nil {
 		registrations := postgres.NewRegistrations(pool)
@@ -613,40 +404,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			nil, nil, nil,
 			gate,
 		).WithPerMinuteDefault(cfg.QueryPerMinute).
-			// Access's participant and contest in one round trip, as the
-			// console's own Service reads them.
 			WithLookup(registrations)
 	}
-	// Sequence is a second instance of the same postgres.Sequence contestService
-	// already holds one of (both are pool-backed, stateless readers): Reader
-	// and Service sit in different packages and neither imports the other's
-	// wiring, so each is handed its own rather than the two sharing a field
-	// that would have to cross that boundary.
 	reader := contests.NewReader(
 		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))
-	// The same postgres.QueryLog the background sweep and (when there is a
-	// console) the journal already use — one type serving both directions of
-	// one table, not a second repository over it.
 	history := postgres.NewQueryLog(pool)
-	// Submit is the same contestService every staff endpoint above already
-	// uses — not a second implementation of the answering rules, and not a
-	// second Submissions repository either.
-	// The answer throttle shares the one fixed-window limiter every other
-	// counter in this service uses, under its own "answer:" namespace.
 	answers := api.AnswerRate{Limiter: limiter, PerMinute: cfg.AnswerRatePerMinute}
-	// The participant's own notes and SQL tabs, throttled by the same shared
-	// limiter under their own "workspace:" namespace.
 	workspaces := workspace.NewService(postgres.NewWorkspace(pool), limiter)
-	// The browser's own signals (design §2.2), throttled by the same shared
-	// limiter under their own "signals:" namespace and stored beside the
-	// server's signals in participant_events.
 	signals := monitor.NewSignals(limiter, postgres.NewMonitor(pool))
-	// One gate over both routes that serve a registration's query log as a
-	// file — the play screen's during the contest and the profile's after it.
-	// Two gates would hold the same bound inside each route while resting, in
-	// aggregate, on the two admission rules never admitting the same
-	// registration at the same moment; this makes it one slot per
-	// registration whichever route asks (api.ExportGate).
+	// One export slot per registration across the play screen and profile
+	// routes that serve its query log.
 	logExports := api.NewExportGate()
 	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
 		WithWorkspace(workspaces).
@@ -654,64 +421,31 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		WithSignals(signals).
 		WithExports(logExports).
 		WithExportSlots(exportSlots))
-	// The SSE channel (§8) shares participantAccess with the endpoints above
-	// for the same reason: one Access, one AdmitRead budget, not a second
-	// admission decision that could drift from the first. ctx.Done() is the
-	// same context main.go cancels on SIGINT/SIGTERM and Run waits on before
-	// draining the servers — passed here, not derived fresh, so an open
-	// connection's next select sees the shutdown at the same instant Run
-	// starts one, rather than after whatever this constructor happened to do
-	// with a context of its own (see EventsHandler's own doc).
+	// The SSE channel shares participantAccess and its budget. ctx.Done() is
+	// the shutdown signal Run waits on, so open streams close as draining
+	// begins.
 	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
-	// The participant's own profile (the participant profile design): their
-	// contests, and for each one that has ended for them their report, their
-	// queries, their answers, their notes and their log as a file. Behind
-	// authentication and nothing else, with its own read budget on the shared
-	// limiter under the "profile:" namespace.
-	//
-	// It is handed the same three collaborators the rest of the service
-	// already uses rather than any of its own: standings above, which is the
-	// only source of a result; watch above, which is the only implementation
-	// of the three per-registration reads; and the same postgres.QueryLog the
-	// play screen streams its CSV from. What is its own is postgres.Profile —
-	// the list, the header's four numbers and a registration's counters.
+	// The profile reuses standings, watch and the query log rather than
+	// reimplementing them.
 	modules = append(modules, api.NewProfileHandler(profile.NewService(profile.Config{
 		Store:        postgres.NewProfile(pool),
 		Contests:     postgres.NewContests(pool),
 		Participants: postgres.NewRegistrations(pool),
 		Results:      standings,
 		Attempts:     watch,
-		// The same gate as the console and the answer route: results open
-		// at the instant it stops letting the participant act, never while
-		// it still does.
+		// Results open the instant the gate stops admitting the participant.
 		Gate: gate,
 	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
 		WithExports(logExports).
 		WithExportSlots(exportSlots))
-	// The landing page's two reads (the landing page design §4): the
-	// installation's numbers and its recent contests, both outside
-	// authentication beside the public leaderboard. No middleware of its own
-	// — there is no caller to authenticate — and the same shared limiter
-	// every other budget uses, here under the "public:" namespace and keyed
-	// by address, since an address is all a visitor has.
+	// The landing page's reads, unauthenticated and rate-limited by address.
 	modules = append(modules, api.NewPublicHandler(
 		showcase.NewService(showcase.Config{Repository: postgres.NewShowcase(pool)}),
 		limiter, log, cfg.DefaultLocale))
 
-	// Where a contest's uploaded cover picture lives (the contest covers
-	// design §1): a directory on a volume, behind a port narrow enough that
-	// moving the pictures to shared storage the day a second replica exists
-	// is one new implementation and no change in the domain.
-	//
-	// Not optional the way the upload directory above is. Every installation
-	// has a front page and every front page shows covers — a contest with no
-	// uploaded picture gets a drawn one, which touches no file at all — so
-	// there is no "covers are off" state to fall back to, and a directory
-	// this process cannot write to is a failed start rather than a failed
-	// upload on the morning of an olympiad. New creates the directory and
-	// proves it is writable by writing; the same probe answers /readyz below,
-	// because a volume that comes back read-only after the process started is
-	// exactly the failure a start-up check cannot see.
+	// Covers are not optional: an unwritable directory fails startup, and the
+	// same write probe answers /readyz, since a volume can turn read-only
+	// later.
 	coverFiles, err := filestore.New(cfg.CoverDir)
 	if err != nil {
 		a.close()
@@ -719,16 +453,6 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	log.Info("cover storage ready", "dir", coverFiles.Dir())
 
-	// The three routes a cover has (the contest covers design §§3 and 4): the
-	// organiser's upload and removal, and the one read a visitor with no
-	// session makes. Appended here rather than beside the other modules above
-	// because this is where the file store it needs comes into existence.
-	//
-	// The service is handed *filestore.Store directly: covers.Files is the
-	// narrow port the domain declares and this store satisfies it
-	// structurally, so neither package imports the other and the day a second
-	// replica needs shared storage is one new implementation here and no
-	// change in the domain at all.
 	modules = append(modules, api.NewCoverHandler(
 		covers.NewService(postgres.NewCovers(pool), coverFiles),
 		limiter, authMiddleware, log))
@@ -743,10 +467,6 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Checkers: []health.Checker{
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),
-			// The covers volume, probed the same way the database and the
-			// cache are. A remount as read-only, or a full disk, is a
-			// failure this instance cannot serve uploads through, and it
-			// happens long after the start-up check has passed.
 			storage.NewChecker("covers", coverFiles),
 		},
 		Modules: modules,
@@ -759,8 +479,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	return a, nil
 }
 
-// Run serves until ctx is cancelled, then drains within the configured
-// shutdown timeout. It always releases the app's resources before returning.
+// Run serves until ctx is cancelled, then drains within the shutdown timeout.
+// It always releases the app's resources before returning.
 func (a *App) Run(ctx context.Context) error {
 	defer a.close()
 
@@ -768,15 +488,12 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("start public server: %w", err)
 	}
 	if err := a.internal.Start(); err != nil {
-		// Stop the listener that already came up, so a failed startup leaves
-		// no half-running process behind.
 		_ = a.public.Shutdown(context.Background())
 		return fmt.Errorf("start internal server: %w", err)
 	}
 
-	// Background jobs get their own cancellation so that shutdown stops them
-	// before the listeners drain: a job writing to the database while the pool
-	// is being closed is a confusing error in the log of an orderly shutdown.
+	// Background jobs stop before the listeners drain, so none writes while
+	// the pool is closing.
 	jobs, stopJobs := context.WithCancel(ctx)
 	var running sync.WaitGroup
 	for _, t := range a.tasks {
@@ -796,8 +513,8 @@ func (a *App) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
 
-	// Stop accepting public traffic first, then operational endpoints, so the
-	// readiness probe keeps answering while requests drain.
+	// Public listener first, so readiness keeps answering while requests
+	// drain.
 	publicErr := a.public.Shutdown(shutdownCtx)
 	internalErr := a.internal.Shutdown(shutdownCtx)
 
@@ -812,7 +529,6 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-// close releases resources in reverse assembly order, once.
 func (a *App) close() {
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
@@ -821,8 +537,7 @@ func (a *App) close() {
 }
 
 // ProbeURL derives the liveness URL for the container self-check from the
-// internal listener address. The empty-address fallback is the same constant
-// config.Load applies, so the healthcheck cannot drift from the real default.
+// internal listener address, defaulting as config.Load does.
 func ProbeURL(internalAddr string) string {
 	addr := internalAddr
 	if addr == "" {

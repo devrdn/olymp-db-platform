@@ -5,10 +5,7 @@ import (
 	"testing"
 )
 
-// What the console's schema panel draws, read from a database that really has
-// this shape rather than from a fake that agrees with the query by
-// construction. The query is the whole of this method; a stand-in for the
-// catalogue would be a stand-in for the thing under test.
+// A real database, because the catalogue query is the whole of the method.
 func TestReadSchemaDescribesTheTablesAndTheirForeignKeys(t *testing.T) {
 	requireCluster(t)
 
@@ -43,8 +40,7 @@ func TestReadSchemaDescribesTheTablesAndTheirForeignKeys(t *testing.T) {
 		}
 	}
 
-	// Declaration order, not alphabetical: the person who wrote the game put
-	// the columns in the order they meant them to be read in.
+	// Declaration order, not alphabetical.
 	want := []string{"id", "full_name", "room_id", "checked_out"}
 	got := byName["guests"]
 	if len(got) != len(want) {
@@ -81,8 +77,6 @@ func TestReadSchemaDescribesTheTablesAndTheirForeignKeys(t *testing.T) {
 	}
 }
 
-// The catalogues themselves are not the game. A panel that listed pg_class
-// would be showing the participant this platform's own furniture.
 func TestReadSchemaShowsOnlyThePublicSchema(t *testing.T) {
 	requireCluster(t)
 

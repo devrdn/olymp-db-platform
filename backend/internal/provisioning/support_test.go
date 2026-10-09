@@ -20,19 +20,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// These run against the real repository, not a stand-in for it. A fake
-// repository would agree with the service about claiming, versions and the
-// composite reference, and every one of those is a property of the SQL — the
-// two would drift the first time one of them was edited.
-//
-// The cluster, on the other hand, is faked: what it does is create and drop
-// databases, which internal/gamedb tests against a real one. Here it is only
-// asked what it was told to do.
+// Service tests use the real repository, since claiming and versioning are
+// properties of the SQL. The cluster is faked; internal/gamedb tests the real one.
 var testPool *pgxpool.Pool
 
 // TestMain opens the pool through storagetest, which refuses any database that
-// is not a test database. These tests commit fixtures, and they used to commit
-// them into the database `make run` serves the product from.
+// is not a test database, since these tests commit fixtures.
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -47,12 +40,8 @@ func TestMain(m *testing.M) {
 	}
 	testPool = pool
 
-	// The standing net under every test in this package, not only the reclaim
-	// ones: whatever a test does, no game database row that was already in the
-	// database may have a different status when the package is done. See
-	// gameRowStatuses below. storagetest now keeps these tests off the
-	// developer's installation altogether; this still catches a test that
-	// damages rows it did not create, which is a defect wherever the rows live.
+	// No game row that existed before the run may change status by the end:
+	// a test must not damage rows it did not create.
 	before := gameRowStatuses(ctx)
 
 	code := m.Run()
@@ -74,29 +63,13 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// settleFor is how recently a row may have been created and still be treated
-// as somebody else's work in progress rather than as part of the
-// installation.
-//
-// `make test-db` runs this package beside internal/postgres and
-// internal/queryproxy against one database, and those packages do commit game
-// rows of their own and then change them — legitimately, because they created
-// them. A row that appeared in the same instant this snapshot was taken could
-// be one of theirs, and calling that damage would be a false alarm on a run
-// that did nothing wrong. Ten seconds is far longer than that overlap and far
-// shorter than the age of anything a developer would recognise as their own
-// data.
+// settleFor is how old a row must be to count as pre-existing. Other packages
+// share the test database and legitimately change rows they just created.
 const settleFor = 10 * time.Second
 
-// gameRowStatuses is the status of every game database row that was already
-// settled in the installation when this package started: instances by
-// db_name, templates by template_db.
-//
-// It is deliberately a whole-installation read. The damage this guards
-// against was invisible precisely because each test only ever asked about its
-// own rows (outcomeOf, entriesFor, stuckEntryFor) — an honest habit that says
-// nothing about the eleven rows the same pass marked 'dropped' on the way
-// past.
+// gameRowStatuses reads the status of every settled game row in the whole
+// database (instances by db_name, templates by template_db), not only rows a
+// test made, because the damage it catches is to other rows.
 func gameRowStatuses(ctx context.Context) map[string]string {
 	rows, err := testPool.Query(ctx, `
 		SELECT db_name, status FROM game_instances WHERE created_at < $1
@@ -125,12 +98,8 @@ func gameRowStatuses(ctx context.Context) map[string]string {
 	return found
 }
 
-// statusesChangedSince names every row of before whose status has moved.
-//
-// A row that has since disappeared is not reported: another package's fixture
-// deleting its own contest is ordinary cleanup, and the failure this exists to
-// catch is a status rewritten in place — the one that strands a database on
-// the cluster with nothing left to reclaim it.
+// statusesChangedSince names every row of before whose status has moved. A
+// row that disappeared is ordinary cleanup and is not reported.
 func statusesChangedSince(before map[string]string) []string {
 	if len(before) == 0 {
 		return nil
@@ -157,61 +126,40 @@ type cluster struct {
 	dropped []string
 	fail    error
 
-	// Creating is what makes the bounded worker pool observable: without a
-	// high-water mark, "at most three at once" is a claim nothing checks.
+	// creating and peak make the worker bound observable.
 	creating, peak int
 	slow           time.Duration
 
-	// busy and failIdleDrop are what the reclaim tests use to control
-	// DropIdle per database: a name in busy comes back "not dropped, no
-	// error" — PostgreSQL refusing a plain DROP DATABASE against a live
-	// connection — and a name in failIdleDrop comes back a real error, the
-	// two outcomes Service.Reclaim has to tell apart.
+	// busy makes DropIdle answer "not dropped, no error" (a live connection);
+	// failIdleDrop makes it answer a real error.
 	busy         map[string]bool
 	failIdleDrop map[string]error
 	idleDropped  []string
 
-	// sized, sizeCalls and sizesFail are how the organizer's database list is
-	// observed: which names the cluster was asked to measure, in how many
-	// calls, and what happens to the list when measuring fails outright.
+	// sized and sizeCalls record DatabaseSizes calls; sizesFail makes it fail.
 	sized     []string
 	sizeCalls int
 	sizesFail error
 
-	// dropFail makes the forcing Drop refuse, which is how the organizer's
-	// own drop is checked for the order it does things in: the row must not
-	// be marked dropped over a database that is still on the cluster.
+	// dropFail makes the forcing Drop refuse.
 	dropFail error
 
-	// idleCalls records every DropIdle call and what it returned, busy and
-	// failed ones included — unlike idleDropped, which only ever grows on a
-	// success. Reclaim is installation-wide (its own doc), so one test's
-	// Reclaim call also processes whatever real reclaimable rows the
-	// development database already holds — withRollback keeps the writes off
-	// them, not the pass away from them — and an aggregate count off
-	// ReclaimResult would then be a claim about that installation rather than
-	// about this test's own row. outcomeOf below is how a test asks what
-	// happened to its own database specifically, regardless of what else this
-	// pass swept.
+	// idleCalls records every DropIdle call and its outcome. Reclaim sweeps
+	// the whole database, so a test asks about its own row (outcomeOf) rather
+	// than trusting aggregate counts.
 	idleCalls []idleCall
 
-	// templateBytes, clusterBytes and clusterBytesFail stage the two
-	// measurements the pool's byte budget is decided on: how large one copy
-	// is, and how much the cluster already holds. clusterReads counts the
-	// calls, because "the budget was consulted at all" is a separate claim
-	// from "it produced the right number".
+	// templateBytes, clusterBytes and clusterBytesFail stage the byte budget's
+	// inputs; clusterReads counts ClusterBytes calls.
 	templateBytes    int64
 	clusterBytes     int64
 	clusterBytesFail error
 	clusterReads     int
-	// templateReads counts DatabaseSize calls. `pg_database_size` walks the
-	// database's own directory, so how often it is asked is the whole of
-	// finding 2 — a test that only checked the number it returned would pass
-	// just as happily against a version asking once per participant request.
+	// templateReads counts DatabaseSize calls, which are expensive on a real
+	// cluster, so tests assert how often they happen.
 	templateReads int
 }
 
-// idleCall is one DropIdle invocation and what the fake told the caller.
 type idleCall struct {
 	name    string
 	dropped bool
@@ -233,8 +181,7 @@ func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpol
 	slow := c.slow
 	c.mu.Unlock()
 
-	// Held open so that concurrent creations overlap; a copy that returned
-	// instantly would never show the pool being bounded.
+	// Held open so concurrent creations overlap.
 	time.Sleep(slow)
 
 	c.mu.Lock()
@@ -256,44 +203,33 @@ func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
 	if c.templateBytes > 0 {
 		return c.templateBytes, nil
 	}
-	// A megabyte, so the quota arithmetic has something to multiply.
 	return 1 << 20, nil
 }
 
-// templateSizeReads is how many times the cluster was asked how large the
-// template is.
 func (c *cluster) templateSizeReads() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.templateReads
 }
 
-// clusterByteReads is how many times the cluster was asked how full it is —
-// zero being the claim a test makes about a deployment with no byte budget,
-// which must pay for no measurement at all.
 func (c *cluster) clusterByteReads() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.clusterReads
 }
 
-// setTemplateBytes is a rebuild changing how large one copy costs.
 func (c *cluster) setTemplateBytes(size int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.templateBytes = size
 }
 
-// fillTo is the cluster filling up between two calls.
 func (c *cluster) fillTo(used int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.clusterBytes = used
 }
 
-// ClusterBytes is how full the fake cluster is. Zero unless a test says
-// otherwise, which is an empty cluster and the case where no byte budget can
-// bind.
 func (c *cluster) ClusterBytes(context.Context) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -304,10 +240,6 @@ func (c *cluster) ClusterBytes(context.Context) (int64, error) {
 	return c.clusterBytes, nil
 }
 
-// DatabaseSizes answers a megabyte for every name it is asked about, unless a
-// test has set sizesFail — the case Service.Instances has to survive without
-// refusing the list, since the rows come from the core database and the sizes
-// come from a second system that can be down while it is fine.
 func (c *cluster) DatabaseSizes(_ context.Context, names []string) (map[string]int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -324,9 +256,6 @@ func (c *cluster) DatabaseSizes(_ context.Context, names []string) (map[string]i
 	return sizes, nil
 }
 
-// sizeReads is every name DatabaseSizes was asked about, and how many calls it
-// took — the second is what proves the list costs one round trip rather than
-// one per database.
 func (c *cluster) sizeReads() (names []string, calls int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -344,10 +273,7 @@ func (c *cluster) Drop(_ context.Context, name string) error {
 	return nil
 }
 
-// droppedByForce reports whether Drop — the forcing one, not DropIdle — was
-// asked to remove name. `dropped` also collects what Invalidate and
-// CreateInstance's own pre-drop did, so a test that cares which of the two
-// paths removed a database asks by name rather than by count.
+// droppedByForce reports whether the forcing Drop, not DropIdle, removed name.
 func droppedByForce(c *cluster, name string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -365,10 +291,8 @@ func (c *cluster) counts() (made, dropped int) {
 	return len(c.made), len(c.dropped)
 }
 
-// DropIdle reports the outcome a test set up for name: busy (not dropped, no
-// error), a configured failure, or an ordinary successful drop — recorded in
-// idleDropped, kept apart from dropped above so a test can tell Reclaim's own
-// drops from whatever Invalidate or TopUp did in the same run.
+// DropIdle records successes in idleDropped, apart from dropped, so Reclaim's
+// drops can be told from Invalidate's.
 func (c *cluster) DropIdle(_ context.Context, name string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -386,10 +310,8 @@ func (c *cluster) DropIdle(_ context.Context, name string) (bool, error) {
 	return true, nil
 }
 
-// outcomeOf returns what DropIdle told the caller the last time it was asked
-// about name, and whether it was ever asked about it at all — the answer a
-// test needs about its own database, independent of every other candidate
-// the same installation-wide pass also happened to process.
+// outcomeOf returns DropIdle's last answer about name, and whether it was
+// asked at all.
 func (c *cluster) outcomeOf(name string) (dropped bool, err error, called bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -425,47 +347,15 @@ func (c *cluster) failIdleDropOf(name string, err error) {
 	c.failIdleDrop[name] = err
 }
 
-// errRollback ends a test transaction — withRollback's own signal, borrowed
-// from internal/postgres/support_test.go, which ends every one of its own
-// database tests the same way.
 var errRollback = errors.New("rolling back the test transaction")
 
 // withRollback runs body inside a core-database transaction that is always
 // rolled back, and hands body that transaction's context.
 //
-// This is the reclaim tests' isolation, and it is not a tidiness measure.
-// Service.Reclaim is installation-wide by design (its own doc): one call
-// sweeps every reclaimable row the database holds, not only the rows the
-// calling test made. Against a developer's own development database — which
-// is what `make test-db` points these tests at — that swept their contests
-// too: the fake cluster only pretended to drop the databases, but the rows
-// were really marked 'dropped', and Reclaimable skips a dropped row for ever
-// after, so the real databases behind them could never be reclaimed again.
-// Eleven of them are on the development game cluster right now for exactly
-// that reason.
-//
-// Every repository call the service makes picks this transaction up from the
-// context through storage.QuerierFrom, which is the path a real request takes
-// too, and markReclaimed's own uow.Do joins it rather than opening a second
-// one (storage.PgxUnitOfWork.Do). So the sweep still sees, and still
-// processes, exactly what it would in production — CLAUDE.md rule 10's point,
-// that the guarantee is proved on the path the deployment uses — while
-// nothing it writes outlives the test, whether the row belonged to the test
-// or to the developer.
-//
-// The two alternatives, and why not:
-//
-//   - A contest id passed to Reclaim, so a test could scope the sweep. An
-//     argument only tests pass is a code path only tests exercise: the
-//     installation-wide pass, the one production actually runs, would become
-//     the untested one — rule 10 again, from the other side.
-//   - Asserting only about rows the test created, which is what outcomeOf
-//     (above) already does. That keeps the assertions honest and does nothing
-//     at all about the damage, because the damage is to the database rather
-//     than to the assertion.
-//
-// TestReclaimLeavesTheInstallationsOwnRowsUntouched (reclaim_test.go) is what
-// holds this to its word.
+// Reclaim sweeps every reclaimable row in the database, not only the test's,
+// and a row wrongly marked 'dropped' is never reclaimed again. The service
+// joins this transaction through storage.QuerierFrom, so the sweep runs the
+// production path (CLAUDE.md rule 10) while none of its writes survive.
 func withRollback(t *testing.T, body func(ctx context.Context)) {
 	t.Helper()
 	if testPool == nil {
@@ -482,12 +372,8 @@ func withRollback(t *testing.T, body func(ctx context.Context)) {
 }
 
 // contestFor sets up a contest and the given number of registrations, removed
-// again when the test ends.
-//
-// Everything it writes goes through storage.QuerierFrom(ctx, testPool) rather
-// than straight to the pool, so a caller inside withRollback gets its fixture
-// on the same transaction as the code under test — and a caller outside one
-// gets the pool, exactly as before.
+// again when the test ends. It writes through storage.QuerierFrom, so inside
+// withRollback the fixture shares the test's transaction.
 func contestFor(t *testing.T, ctx context.Context, registrations int) (provisioning.Contest, []uuid.UUID) {
 	t.Helper()
 
@@ -509,9 +395,7 @@ func contestFor(t *testing.T, ctx context.Context, registrations int) (provision
 		`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author).Scan(&id); err != nil {
 		t.Fatalf("create contest: %v", err)
 	}
-	// Only ever needed by a caller outside a transaction: inside withRollback
-	// the rollback has already removed both by the time this runs, and the
-	// deletes find nothing.
+	// Only does anything outside withRollback.
 	t.Cleanup(func() {
 		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -540,12 +424,8 @@ func contestFor(t *testing.T, ctx context.Context, registrations int) (provision
 	}, people
 }
 
-// markTemplateReady stores a 'ready' template database for contest, directly
-// against the real schema — the same row gamedb.Provisioner.BuildTemplate
-// would leave behind, which nothing in provisioning.Repository creates for a
-// test to reuse (BuildTemplate itself belongs to internal/gamedb, one layer
-// below this package). Cleanup is contestFor's own: game_templates.contest_id
-// cascades on the contest's own delete (migration 3).
+// markTemplateReady stores the 'ready' template row a successful build would
+// leave. It is removed by contestFor's cleanup through the cascade.
 func markTemplateReady(t *testing.T, ctx context.Context, contest uuid.UUID, database string) {
 	t.Helper()
 	if testPool == nil {
@@ -558,19 +438,8 @@ func markTemplateReady(t *testing.T, ctx context.Context, contest uuid.UUID, dat
 	}
 }
 
-// The fakes every test in this package shares — the repository, the cluster,
-// and the small assembler that puts a *provisioning.Games together out of
-// them.
-//
-// Here rather than in template_test.go, where they used to live: they belong
-// to no one source file, and half of what was at the top of that file
-// (BeginTableData and everything under it) is tabledata.go's storage rather
-// than template.go's. A shared fake in a test file named after one source
-// file is a fake nobody looking at any other source file finds (CLAUDE.md
-// Go layout rule 5).
-
-// templateStore is the game's own row, in memory, so a test can say exactly
-// what state it starts in and read exactly what the service left behind.
+// templateStore is the game's row in memory, so a test controls its starting
+// state and reads what the service left behind.
 type templateStore struct {
 	mu       sync.Mutex
 	template provisioning.Template
@@ -578,31 +447,20 @@ type templateStore struct {
 	policy   sqlpolicy.Policy
 	claims   int
 	claimErr error
-	// templateErr, when set, is what Template returns instead of a row — a
-	// storage failure rather than a contest that simply has no game.
+	// templateErr and policyErr, when set, are storage failures returned by
+	// Template and Policy.
 	templateErr error
-	// policyErr, when set, is what Policy returns: the core database refusing
-	// the read the build makes before it touches the cluster.
-	policyErr error
-	finished  []finish
-	// uploads is every upload this fake has ever been told about, by id —
-	// enough to back the TemplateRepository methods migration 24 added
-	// without this file growing a second kind of fake for them.
-	uploads map[uuid.UUID]provisioning.Upload
-	// tableData is the table builder's own per-table files, migration 27's
-	// counterpart to uploads above.
-	tableData map[uuid.UUID]provisioning.TableData
-	// deleteRowErr, when set, is what DeleteTableDataRow answers instead of
-	// tombstoning. This fake does not reimplement migration 27's own CHECK on
-	// deleted_rows — a bound reinvented in Go proves itself and nothing else
-	// (postgres.GameInstances.DeleteTableDataRow is where the real one is
-	// proved) — so a service test that needs to see the database refuse says
-	// so here instead.
+	policyErr   error
+	finished    []finish
+	uploads     map[uuid.UUID]provisioning.Upload
+	tableData   map[uuid.UUID]provisioning.TableData
+	// deleteRowErr, when set, is what DeleteTableDataRow answers. The fake
+	// does not reimplement the database's CHECK on deleted_rows; the postgres
+	// tests prove that one.
 	deleteRowErr error
-	// tableDataReads, when armed, holds every caller of ReadyTableData until
-	// as many of them have arrived as gateTableDataReads was told to expect —
-	// two browser tabs pressing "add row" on the same table at the same
-	// moment, made deterministic rather than left to the scheduler.
+	// tableDataReads, when armed, holds ReadyTableData callers until the
+	// expected number arrive, making two simultaneous "add row" requests
+	// deterministic.
 	tableDataReads *arrivalGate
 }
 
@@ -627,17 +485,13 @@ func (g *arrivalGate) arrive() {
 	<-g.open
 }
 
-// gateTableDataReads arms the gate above for the next n reads of a table's
-// current data.
 func (s *templateStore) gateTableDataReads(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tableDataReads = &arrivalGate{remaining: n, open: make(chan struct{})}
 }
 
-// directly is the unit of work for a test that wants the audit trail wired up
-// without a transaction behind it. Build records outside any transaction
-// anyway (its own doc says why), so this only satisfies the constructor.
+// directly is a unit of work with no transaction behind it.
 type directly struct{}
 
 func (directly) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
@@ -691,10 +545,8 @@ func (s *templateStore) Template(context.Context, uuid.UUID) (provisioning.Templ
 	return s.template, nil
 }
 
-// TemplateStatus answers what the real repository's status query does: the
-// same row with the script's length in place of the script, and no
-// definition — so a test asserting that the status endpoint never reads the
-// content is asserting against the same shape production produces.
+// TemplateStatus matches the real query: the script's length in place of the
+// script, and no definition.
 func (s *templateStore) TemplateStatus(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
 	template, err := s.Template(ctx, contestID)
 	if err != nil {
@@ -724,23 +576,15 @@ func (s *templateStore) FinishBuild(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finished = append(s.finished, finish{version: version, err: buildError})
-	// The real repository's own CASE, condition for condition (postgres/
-	// gametemplates.go): only a build that succeeded clears the mark, and
-	// only when nothing moved it past the claim. A failed build leaves it —
-	// its template is dropped, so the data never reached a database.
+	// Mirrors the real repository: only a successful build clears the mark,
+	// and only when nothing moved it past the claim.
 	if buildError == "" && s.template.DataChangedAt != nil && !s.template.DataChangedAt.After(claimedAt) {
 		s.template.DataChangedAt = nil
 	}
 	return nil
 }
 
-// markBuilt puts the fake's template where FinishBuild leaves a real one when
-// a build succeeds — the state every builder-sourced game is in by the time
-// its screens will let anybody add a row.
-//
-// Here rather than beside its first caller: tabledata_test.go and
-// template_test.go both reach for it, and a helper two files share lives in
-// support_test.go (CLAUDE.md, Go layout rule 5).
+// markBuilt puts the template where a successful build leaves it.
 func markBuilt(store *templateStore) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -912,10 +756,8 @@ func (s *templateStore) BeginTableData(_ context.Context, id, contestID uuid.UUI
 	if s.tableData == nil {
 		s.tableData = map[uuid.UUID]provisioning.TableData{}
 	}
-	// updated_at is stamped here for the same reason migration 27 gives the
-	// column a `DEFAULT now()`: the janitor's cutoff is read off it, and a
-	// zero time would make every row this fake ever held look abandoned —
-	// a sweep test against that would pass without a cutoff existing at all.
+	// Stamped like the column's DEFAULT now(): a zero time would make every
+	// row look abandoned to the janitor.
 	d := provisioning.TableData{
 		ID: id, ContestID: contestID, Table: table, DeclaredBytes: declaredBytes,
 		Status: provisioning.TableDataReceiving, UpdatedAt: time.Now(),
@@ -924,9 +766,7 @@ func (s *templateStore) BeginTableData(_ context.Context, id, contestID uuid.UUI
 	return d, nil
 }
 
-// ageTableData moves one table-data row's updated_at back, so a janitor test
-// can reach a cutoff without waiting for one — the same convention
-// upload_test.go's own sweep test uses against the real column.
+// ageTableData moves one row's updated_at back past a janitor cutoff.
 func (s *templateStore) ageTableData(id uuid.UUID, by time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -968,9 +808,8 @@ func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, t
 	}
 	s.mu.Unlock()
 
-	// Released outside the lock, and after the answer has been taken, so that
-	// every held caller leaves with the same snapshot — which is what two
-	// browser tabs pressing "add row" together actually have.
+	// Released outside the lock, after the answer is taken, so every held
+	// caller leaves with the same snapshot.
 	if gate != nil {
 		gate.arrive()
 	}
@@ -1037,8 +876,7 @@ func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, rece
 	if !ok || d.Status != provisioning.TableDataComplete {
 		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}
-	// GREATEST, the same as the real statement's own (postgres.GameInstances.
-	// AppendTableDataRow): neither figure ever goes backwards.
+	// GREATEST, as in the real statement: neither figure goes backwards.
 	d.ReceivedBytes, d.Lines = max(d.ReceivedBytes, receivedBytes), max(d.Lines, lines)
 	s.tableData[id] = d
 	return d, nil
@@ -1126,23 +964,16 @@ type buildCluster struct {
 	scripts []string
 	policy  sqlpolicy.Policy
 	fail    error
-	// tableData is every LoadTableData call this fake received, keyed
-	// "database.table", and tableDataFail — when set — is what LoadTableData
-	// answers instead of loading anything, for the tests that check a
-	// data-load failure tears the template down the same way a script
-	// failure does.
+	// tableData records LoadTableData calls keyed "database.table";
+	// tableDataFail makes it fail.
 	tableData     map[string]string
 	tableDataFail error
 	dropped       []string
 }
 
 func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
-	// Read in full before recording: TemplateCluster's real implementation
-	// (gamedb.Provisioner.BuildTemplate) streams script rather than holding
-	// it all in memory, but what this fake asserts on is the bytes that
-	// reached it — an editor's script wrapped in strings.NewReader, or an
-	// uploaded file's own contents — so it has to consume the reader the
-	// same way a real build would.
+	// Consumed in full, as a real build would, to record the bytes that
+	// reached it.
 	data, err := io.ReadAll(script)
 	if err != nil {
 		return fmt.Errorf("buildCluster: read script: %w", err)
@@ -1154,10 +985,6 @@ func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.R
 	return c.fail
 }
 
-// LoadTableData records what it was asked to load — the same "read in full"
-// reasoning BuildTemplate's own fake gives, since a filtered reader
-// (provisioning's own tableDataCopyReader) is exactly what this fake has to
-// consume to see what actually reached it.
 func (c *buildCluster) LoadTableData(_ context.Context, database, table string, columns []string, data io.Reader) error {
 	body, err := io.ReadAll(data)
 	if err != nil {

@@ -30,9 +30,7 @@ func TestQueryLogRecordsAQueryInTwoPhases(t *testing.T) {
 			t.Fatalf("begin: %v", err)
 		}
 
-		// Before the result is known, the row already says the query happened.
-		// That is the whole reason for two phases: a process that dies here
-		// leaves evidence rather than nothing.
+		// A process that dies here still leaves a row.
 		if got := statusOf(t, ctx, id); got != "running" {
 			t.Fatalf("status = %q, want running", got)
 		}
@@ -63,18 +61,13 @@ func TestQueryLogRecordsAQueryInTwoPhases(t *testing.T) {
 		if completed == nil {
 			t.Fatal("a completed row has no completion time")
 		}
-		// An empty message must not become an empty string in the column: the
-		// journal panel filters on "has an error", and "" is not one.
+		// The journal panel filters on "has an error", so no error must be NULL.
 		if errorText != nil {
 			t.Fatalf("error_text = %q, want NULL", *errorText)
 		}
 	})
 }
 
-// The row says where the query came from and what it was, normalised, in
-// the same insert that opens it (design §2.3 and §5): the organiser's query
-// tab shows the address, and "the same query as another participant" is
-// counted on the fingerprint.
 func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -102,8 +95,8 @@ func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
 			t.Fatalf("sql_fingerprint = %v, want the fingerprint of the normalised text", fingerprint)
 		}
 
-		// A statement too short to compare with another participant's has no
-		// fingerprint: what everybody types is not a sign of copying.
+		// A short statement gets no fingerprint: what everybody types is not
+		// a sign of copying.
 		short, err := log.Begin(ctx, queryrunner.Entry{Registration: someRegistration(t, ctx), RequestID: uuid.New(),
 			SQL: "SELECT name FROM suspects" + strings.Repeat(" ", 100)})
 		if err != nil {
@@ -119,7 +112,7 @@ func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
 	})
 }
 
-// An address that could not be worked out is no address, not 0.0.0.0.
+// An unknown address is NULL, not 0.0.0.0.
 func TestQueryLogStoresNoAddressWhenThereIsNone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		id := openRow(t, ctx, NewQueryLog(testPool))
@@ -162,9 +155,8 @@ func TestQueryLogKeepsTheReasonAFailureGave(t *testing.T) {
 	})
 }
 
-// Every status the runner can produce has to satisfy the column's check
-// constraint. The two lists are in different languages — Go constants and a
-// SQL CHECK — and nothing but this connects them.
+// Nothing but this test keeps the Go status constants in step with the
+// column's CHECK constraint.
 func TestEveryStatusTheRunnerProducesIsAcceptedByTheColumn(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -183,8 +175,6 @@ func TestEveryStatusTheRunnerProducesIsAcceptedByTheColumn(t *testing.T) {
 	})
 }
 
-// Closing a row that does not exist is a bug in the caller, and a silent
-// no-op would hide it until somebody wondered why the journal had gaps.
 func TestClosingARowThatIsNotThereIsAnError(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		err := NewQueryLog(testPool).Complete(ctx, -1, queryrunner.Outcome{Status: queryrunner.StatusOK})
@@ -194,9 +184,6 @@ func TestClosingARowThatIsNotThereIsAnError(t *testing.T) {
 	})
 }
 
-// A row left at `running` is indistinguishable from a query still in flight,
-// so the sweeper is what turns a crash into a recorded failure — and the
-// cut-off is what keeps it from marking queries that are merely slow.
 func TestTheSweeperClosesAbandonedRowsAndLeavesFreshOnes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -223,10 +210,8 @@ func TestTheSweeperClosesAbandonedRowsAndLeavesFreshOnes(t *testing.T) {
 		if got := statusOf(t, ctx, fresh); got != "running" {
 			t.Fatalf("a query still in flight was marked %q", got)
 		}
-		// The sweeper moves a page of rows in one statement, and what it
-		// moved has to reach the organiser's participants table: a crash is a
-		// failed query there, not a query in flight for ever (migration
-		// 000037).
+		// The sweep must reach the activity counters: a crash is a failed
+		// query, not one in flight for ever.
 		if got := queryErrorsOf(t, ctx, abandoned); got != 1 {
 			t.Errorf("the swept row left the failed-query counter at %d, want 1", got)
 		}
@@ -236,8 +221,7 @@ func TestTheSweeperClosesAbandonedRowsAndLeavesFreshOnes(t *testing.T) {
 	})
 }
 
-// queryErrorsOf is the failed-query counter the journal keeps for the
-// registration that owns row id.
+// queryErrorsOf reads the failed-query counter of the registration owning row id.
 func queryErrorsOf(t *testing.T, ctx context.Context, id int64) int64 {
 	t.Helper()
 	var failures int64
@@ -250,10 +234,6 @@ func queryErrorsOf(t *testing.T, ctx context.Context, id int64) int64 {
 	return failures
 }
 
-// History is the participant's own read of the log this file otherwise only
-// writes to. The one guarantee worth a test of its own: it never returns
-// another registration's rows, which is the whole of what makes this safe to
-// expose to a participant at all.
 func TestHistoryReturnsOnlyThisRegistrationsOwnRows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -276,18 +256,13 @@ func TestHistoryReturnsOnlyThisRegistrationsOwnRows(t *testing.T) {
 	})
 }
 
-// Newest first, and duration_ms/row_count round-trip as the actual numbers
-// Complete recorded — a participant reading their own log is reading the same
-// facts the journal exists to keep.
 func TestHistoryOrdersNewestFirstAndCarriesTheRecordedOutcome(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
 
 		completeRow(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 10, 3)
-		// A distinct executed_at is what newest-first actually orders by; the
-		// two rows would otherwise land in the same instant and the ordering
-		// this test checks would be unproven.
+		// Both rows share one transaction's now(); separate them.
 		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
 			`UPDATE query_log SET executed_at = executed_at - interval '1 minute' WHERE registration_id = $1`,
 			registration); err != nil {
@@ -312,9 +287,6 @@ func TestHistoryOrdersNewestFirstAndCarriesTheRecordedOutcome(t *testing.T) {
 	})
 }
 
-// A row a crashed process never closed is still this registration's own — the
-// participant asked it, and the log says so even while it is stuck at
-// running, with no duration or row count to report yet.
 func TestHistoryCarriesARowStillRunningWithNoDurationOrRowCount(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -338,15 +310,12 @@ func TestHistoryCarriesARowStillRunningWithNoDurationOrRowCount(t *testing.T) {
 	})
 }
 
-// limit and offset actually page: the second page picks up exactly where the
-// first left off, with nothing repeated and nothing skipped.
 func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
 
-		// Inserted oldest to newest, and spaced a minute apart so executed_at
-		// alone (not insertion order) is what History actually orders by.
+		// Spaced a minute apart so the order comes from executed_at.
 		statements := []string{"SELECT 1", "SELECT 2", "SELECT 3"}
 		for i, sql := range statements {
 			completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
@@ -380,12 +349,6 @@ func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 	})
 }
 
-// One page is bounded in rows and has to be bounded in bytes too: two
-// hundred rows of a 64 KiB statement each is a twelve-megabyte answer to a
-// request a participant can repeat as often as their rate budget allows. The
-// cut is made by the SELECT, so those bytes never leave the server, and the
-// row says it was cut rather than handing somebody a silently shortened copy
-// of their own query.
 func TestHistoryCutsAStatementTooLongForOnePageAndSaysSo(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -414,15 +377,12 @@ func TestHistoryCutsAStatementTooLongForOnePageAndSaysSo(t *testing.T) {
 	})
 }
 
-// A statement that fits comes back whole and unflagged. Without this the
-// truncation could be unconditional — every row shortened by a character and
-// every row claiming it was cut — and the test above would not notice.
 func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
 
-		// Exactly the bound: the last statement that is not too long.
+		// Exactly the bound: the longest statement that fits.
 		exact := strings.Repeat("y", queryrunner.MaxHistorySQLChars)
 		completeRow(t, ctx, log, registration, exact, queryrunner.StatusOK, 1, 1)
 
@@ -443,10 +403,6 @@ func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
 	})
 }
 
-// The export is the record, and a record with the statements cut out of it is
-// not one. It streams row by row, so a long statement costs one row's memory
-// rather than a page of them — which is why the bound the page needs is not a
-// bound this needs.
 func TestExportHistoryCarriesEveryStatementWhole(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -475,11 +431,7 @@ func TestExportHistoryCarriesEveryStatementWhole(t *testing.T) {
 	})
 }
 
-// The count is a fact about the log, not a by-product of the page. Computed
-// under the LIMIT it is whatever the returned rows happened to carry, so a
-// page that lands past the last row reports a total of nothing — and the
-// panel, which decides whether to offer "load more" by comparing what it
-// holds against that number, is told the participant has never run a query.
+// A total computed from the page would be zero here.
 func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -502,9 +454,7 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	})
 }
 
-// A registration that has never run a query has no summary row at all
-// (registration_activity is created by the first thing it does), and its
-// history is empty with a total of zero rather than an error.
+// Such a registration has no registration_activity row yet.
 func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		found, total, err := NewQueryLog(testPool).History(ctx, someRegistration(t, ctx), 0, 0)
@@ -517,8 +467,7 @@ func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 	})
 }
 
-// completeRow opens and closes one row in a single call, for tests that only
-// care about the finished result.
+// completeRow opens and closes one row.
 func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
 	t.Helper()
 
@@ -565,12 +514,6 @@ func statusOf(t *testing.T, ctx context.Context, id int64) string {
 	return status
 }
 
-// ExportHistory is the streamed read behind the participant's CSV download.
-// The same guarantee History carries, and the one that makes this endpoint
-// safe to hand a participant at all: it never yields another registration's
-// rows. Asserted here rather than trusted to look right, because the CSV path
-// writes what it is given straight to the socket and there is no page size
-// left to notice a stranger's statement in.
 func TestExportHistoryStreamsOnlyThisRegistrationsOwnRows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -593,8 +536,6 @@ func TestExportHistoryStreamsOnlyThisRegistrationsOwnRows(t *testing.T) {
 	})
 }
 
-// Oldest first, and unpaged: the file is a record of one session, read top to
-// bottom, and every row of it is in there — see ExportHistory's own doc.
 func TestExportHistoryStreamsTheWholeLogOldestFirst(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -625,9 +566,6 @@ func TestExportHistoryStreamsTheWholeLogOldestFirst(t *testing.T) {
 	})
 }
 
-// A yield that fails stops the stream and surfaces: the caller is writing to
-// a socket, and a client that hung up must not have the rest of the log read
-// out of the database on its behalf.
 func TestExportHistoryStopsWhenTheCallerCannotTakeAnotherRow(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -650,14 +588,8 @@ func TestExportHistoryStopsWhenTheCallerCannotTakeAnotherRow(t *testing.T) {
 	})
 }
 
-// committedRegistration enrols somebody for real — outside any transaction —
-// and removes them again when the test ends.
-//
-// Every other test in this file hangs its fixtures off withTx and lets the
-// rollback clean up, which is right for them and useless for a test whose
-// whole subject is what happens when there is no ambient transaction. The
-// deletes cascade: dropping the contest takes the registration, and the
-// registration takes its query_log rows.
+// committedRegistration commits a registration outside any transaction and
+// deletes it at cleanup; the contest delete cascades to its query_log rows.
 func committedRegistration(t *testing.T) (context.Context, uuid.UUID) {
 	t.Helper()
 	if testPool == nil {
@@ -681,18 +613,9 @@ func committedRegistration(t *testing.T) (context.Context, uuid.UUID) {
 	return ctx, registration
 }
 
-// The export on the path the deployment actually uses: no transaction around
-// it (CLAUDE.md rule 10).
-//
-// queryLogCSV calls ExportHistory straight off the request context, and the
-// cursor it reads through can only be declared inside a transaction — so the
-// method opens one when the caller has none. Every other test here runs
-// inside withTx, which hands it a transaction for free and would hide a
-// missing BEGIN completely.
-//
-// The log is deliberately longer than one FETCH (exportFetch rows), and not a
-// whole number of them, so the loop that walks the cursor is walked more than
-// once and the last batch is a short one — the condition that ends it.
+// The deployment calls ExportHistory with no transaction, and withTx would
+// hide a missing BEGIN (CLAUDE.md rule 10). The log spans several FETCHes and
+// ends on a short batch.
 func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	log := NewQueryLog(testPool)
@@ -704,9 +627,7 @@ func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) 
 		want = append(want, sql)
 		completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
 	}
-	// One distinct executed_at per row, ascending in insertion order, so the
-	// order asserted below is a real ordering rather than a tie the rows
-	// happened to come back in.
+	// Distinct executed_at values, ascending in insertion order.
 	if _, err := testPool.Exec(ctx, `
 		UPDATE query_log
 		SET executed_at = now() - make_interval(secs => (SELECT max(id) FROM query_log WHERE registration_id = $1) - id)
@@ -732,13 +653,8 @@ func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) 
 	}
 }
 
-// bulkRows writes count rows for one registration in a single statement, each
-// carrying `bytes` characters of SQL and a distinct executed_at so the
-// export's own ordering is well defined.
-//
-// One INSERT rather than count calls to Begin: the bounds below are only
-// interesting at tens of thousands of rows, and twenty thousand round trips
-// would make the test the slowest thing in the package.
+// bulkRows writes count rows of `bytes` characters each, with distinct
+// executed_at values, in one INSERT to avoid thousands of round trips.
 func bulkRows(t *testing.T, ctx context.Context, registration uuid.UUID, count, bytes int) {
 	t.Helper()
 
@@ -751,10 +667,7 @@ func bulkRows(t *testing.T, ctx context.Context, registration uuid.UUID, count, 
 	}
 }
 
-// The export streams, which was taken to mean it needed no bound; those are
-// different things (CLAUDE.md rule 2). The rows past the bound are never read
-// at all — the LIMIT is inside the cursor's own SELECT — and the caller is
-// told, so the file can say where it stopped.
+// Streaming still needs a bound (CLAUDE.md rule 2).
 func TestExportHistoryStopsAtTheRowBoundAndSaysSo(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -778,9 +691,6 @@ func TestExportHistoryStopsAtTheRowBoundAndSaysSo(t *testing.T) {
 	})
 }
 
-// And a log of exactly the bound is complete, not truncated. The cursor asks
-// for one row more than it will hand over precisely so this case is answered
-// honestly rather than by whichever way the comparison happened to fall.
 func TestExportHistoryOfExactlyTheRowBoundIsNotTruncated(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -801,10 +711,7 @@ func TestExportHistoryOfExactlyTheRowBoundIsNotTruncated(t *testing.T) {
 	})
 }
 
-// The row count alone is half a bound: sqlpolicy.MaxQueryBytes lets one
-// statement be 64 KiB, so twenty thousand rows is more than a gigabyte down
-// one connection. The byte budget is what makes the row count mean something,
-// and it binds first when the statements are large.
+// With large statements the byte budget binds before the row bound.
 func TestExportHistoryStopsAtTheByteBoundBeforeTheRowBound(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -835,9 +742,8 @@ func TestExportHistoryStopsAtTheByteBoundBeforeTheRowBound(t *testing.T) {
 	})
 }
 
-// committedPair is one contest with two participants, committed rather than
-// held in a test transaction: what follows is about two transactions meeting,
-// which one transaction cannot show.
+// committedPair commits one contest with two participants, for tests that
+// need two concurrent transactions.
 func committedPair(t *testing.T) (context.Context, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	if testPool == nil {
@@ -865,8 +771,7 @@ func committedPair(t *testing.T) (context.Context, uuid.UUID, uuid.UUID) {
 	return ctx, a, b
 }
 
-// journalOne writes one row of the query log through q, which may be a
-// transaction of its own.
+// journalOne writes one query_log row through q.
 func journalOne(ctx context.Context, q storage.Querier, registration uuid.UUID, sql, status string) error {
 	_, err := q.Exec(ctx, `
 		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint)
@@ -875,34 +780,21 @@ func journalOne(ctx context.Context, q storage.Querier, registration uuid.UUID, 
 	return err
 }
 
-// Two participants running each other's statements at the same moment are two
-// ordinary journal inserts, and neither may be refused because of the other.
-//
-// The shape is the olympiad's most ordinary one: a room of students pastes the
-// same starter query within the same minute. Each has a query of their own in
-// flight — which is what makes their transaction hold their own row of the
-// counters behind the participants table — and then runs the statement the
-// other has already run. If journalling a query wrote to another
-// registration's row, these two would take the same two rows in opposite
-// orders, and PostgreSQL would refuse one of them with a deadlock whose cause
-// the participant cannot see. Ordering the locks cannot save it either: each
-// transaction's first lock is its own row, and which row that is depends on
-// who is typing.
-//
-// So nothing on this path writes a row belonging to another registration. What
-// participants have in common — which statements more than one of them ran —
-// is worked out when the organiser's table is read, not when a query is
-// journalled.
+// Each transaction holds its own registration_activity row from its first
+// insert. If journalling a query also wrote another registration's row (for
+// example to count shared statements), two participants running each other's
+// statements would lock the same two rows in opposite orders and deadlock;
+// lock ordering cannot help, since the first lock is always one's own row. So
+// the journal writes only its own registration's row, and shared statements
+// are computed when the organiser's table is read.
 func TestTwoParticipantsRunningEachOthersQueriesAreNotRefused(t *testing.T) {
 	ctx, a, b := committedPair(t)
 
-	// Long enough to be compared at all (monitor.IdenticalQueryMinChars), and
-	// different from each other.
+	// Long enough to be compared (monitor.IdenticalQueryMinChars).
 	statementOfA := "select name, alibi from suspects where city = 'Chisinau' order by name"
 	statementOfB := "select title, opened_at from cases where district = 'Botanica' order by title"
 
-	// Each is so far the only one who has run their own statement: the state
-	// in which one more holder is what makes a statement shared.
+	// One more run of either statement would make it shared.
 	if err := journalOne(ctx, testPool, a, statementOfA, "ok"); err != nil {
 		t.Fatalf("A's own statement: %v", err)
 	}
@@ -910,8 +802,7 @@ func TestTwoParticipantsRunningEachOthersQueriesAreNotRefused(t *testing.T) {
 		t.Fatalf("B's own statement: %v", err)
 	}
 
-	// PostgreSQL breaks a deadlock itself after deadlock_timeout, so this
-	// bounds a test that fails rather than one that hangs.
+	// PostgreSQL breaks a deadlock itself; the deadline only guards a hang.
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -926,8 +817,7 @@ func TestTwoParticipantsRunningEachOthersQueriesAreNotRefused(t *testing.T) {
 	}
 	defer txB.Rollback(context.Background())
 
-	// Each opens a query of their own first. The console writes the row before
-	// the query runs, and that write is what takes their own counters.
+	// Opening a query locks each participant's own counters.
 	if err := journalOne(deadline, txA, a, "select 1", "running"); err != nil {
 		t.Fatalf("A opens a query: %v", err)
 	}
@@ -935,7 +825,6 @@ func TestTwoParticipantsRunningEachOthersQueriesAreNotRefused(t *testing.T) {
 		t.Fatalf("B opens a query: %v", err)
 	}
 
-	// And now each runs what the other has already run.
 	crossed := make(chan error, 2)
 	go func() { crossed <- journalOne(deadline, txA, a, statementOfB, "ok") }()
 	go func() { crossed <- journalOne(deadline, txB, b, statementOfA, "ok") }()

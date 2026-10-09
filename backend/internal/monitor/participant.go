@@ -10,11 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// What an organiser reads about one participant (design §4): who they are,
-// their queries, their answers with the queries that led to each, and their
-// notes and SQL tabs with their history.
-
-// Participant is one registration of the contest being watched.
 type Participant struct {
 	Registration uuid.UUID
 	Contest      uuid.UUID
@@ -26,13 +21,11 @@ type Participant struct {
 	FinishedAt   *time.Time
 }
 
-// The per-participant refusals (CLAUDE.md rule 1).
 var (
-	// ErrParticipantNotFound: no such registration in this contest — one
-	// answer whether it does not exist or belongs to another contest.
+	// ErrParticipantNotFound is also the answer for another contest's
+	// registration.
 	ErrParticipantNotFound = errors.New("no such participant in this contest")
-	// ErrRevisionNotFound: no such revision of this participant.
-	ErrRevisionNotFound = errors.New("no such revision")
+	ErrRevisionNotFound    = errors.New("no such revision")
 	// ErrInvalidQueryFilter: an unknown status, a search past its bound, or
 	// a cursor of another kind.
 	ErrInvalidQueryFilter = errors.New("the query filter is not valid")
@@ -40,32 +33,26 @@ var (
 
 // The bounds of the queries tab (CLAUDE.md rule 2).
 const (
-	// MaxQueriesPage is the most queries one page carries. Each carries its
-	// whole statement, up to 64 KiB, so the page is smaller than the feed's.
-	MaxQueriesPage = 50
-	// DefaultQueriesPage is the page size when the caller names none.
-	DefaultQueriesPage = 50
-	// MaxQuerySearchRunes bounds the text searched for.
+	// MaxQueriesPage is smaller than the feed's: each query carries its
+	// whole statement.
+	MaxQueriesPage      = 50
+	DefaultQueriesPage  = 50
 	MaxQuerySearchRunes = 200
 )
 
-// queryStatuses are the statuses a filter may name: query_log's own.
 var queryStatuses = map[string]bool{"running": true, "ok": true, "rejected": true, "error": true, "timeout": true}
 
-// QueriesQuery asks for one page of a participant's queries, newest first.
 type QueriesQuery struct {
 	Contest      uuid.UUID
 	Registration uuid.UUID
-	// Status narrows to one status; empty is every status.
+	// Status empty is every status.
 	Status string
-	// Search narrows to statements containing this text, without case.
+	// Search matches statements containing this text, ignoring case.
 	Search string
-	// Before is the position of the last query of the previous page.
 	Before *Cursor
 	Limit  int
 }
 
-// Normalize checks the query and fills its defaults.
 func (q QueriesQuery) Normalize() (QueriesQuery, error) {
 	if q.Status != "" && !queryStatuses[q.Status] {
 		return q, fmt.Errorf("%w: unknown status %q", ErrInvalidQueryFilter, q.Status)
@@ -85,18 +72,15 @@ func (q QueriesQuery) Normalize() (QueriesQuery, error) {
 	return q, nil
 }
 
-// LoggedQuery is one query of the queries tab, whole.
 type LoggedQuery struct {
 	At time.Time
 	QueryData
 }
 
-// Cursor is the query's position, for the next page.
 func (q LoggedQuery) Cursor() Cursor {
 	return Cursor{At: q.At, Source: SourceQuery, ID: fmt.Sprint(q.ID)}
 }
 
-// QueriesPage is one page of the queries tab, newest first.
 type QueriesPage struct {
 	Items []LoggedQuery
 	More  bool
@@ -104,41 +88,34 @@ type QueriesPage struct {
 
 // The bounds of the answers tab.
 const (
-	// MaxAnswerAttempts bounds the attempts read for one participant: far
-	// past questions times attempts of any contest.
 	MaxAnswerAttempts = 1000
 	// MaxAttemptQueries bounds the queries shown before one attempt; the
-	// rest are counted (Attempt.MoreQueries).
+	// rest are counted.
 	MaxAttemptQueries = 100
 )
 
-// Attempt is one answer with the queries that led to it (design §3): the
-// participant's queries after their previous answer to any question, or
-// from the beginning, and before this one.
+// Attempt is one answer with the queries that led to it: those after the
+// participant's previous answer to any question (or the start) and before
+// this one.
 type Attempt struct {
 	AnswerData
-	At      time.Time
-	Queries []LoggedQuery
-	// MoreQueries is how many queries of the window are not in Queries.
+	At          time.Time
+	Queries     []LoggedQuery
 	MoreQueries int
 }
 
-// QuestionAttempts is every attempt on one question, in order.
 type QuestionAttempts struct {
 	QuestionID  uuid.UUID
 	QuestionOrd int
 	Attempts    []Attempt
 }
 
-// Answers is the answers tab.
 type Answers struct {
 	Questions []QuestionAttempts
-	// Truncated says the participant made more than MaxAnswerAttempts.
 	Truncated bool
 }
 
-// GroupAttempts groups attempts, in time order, by question, in the order
-// of the questions.
+// GroupAttempts groups time-ordered attempts by question, in question order.
 func GroupAttempts(attempts []Attempt) []QuestionAttempts {
 	index := map[uuid.UUID]int{}
 	var out []QuestionAttempts
@@ -151,22 +128,19 @@ func GroupAttempts(attempts []Attempt) []QuestionAttempts {
 		}
 		out[i].Attempts = append(out[i].Attempts, a)
 	}
-	// Stable by ord, so questions of the same ord (a deleted one reads 0)
-	// keep the order of their first attempt.
+	// Stable, so questions of equal ord (a deleted one reads 0) keep the
+	// order of their first attempt.
 	slices.SortStableFunc(out, func(a, b QuestionAttempts) int { return a.QuestionOrd - b.QuestionOrd })
 	return out
 }
 
-// The bound of the revision list.
 const MaxRevisionsListed = 2000
 
-// Notes is the participant's notes as they are now.
 type Notes struct {
 	Body      string     `json:"body"`
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 
-// Tab is one SQL tab as it is now.
 type Tab struct {
 	ID        uuid.UUID `json:"id"`
 	Title     string    `json:"title"`
@@ -175,28 +149,25 @@ type Tab struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// RevisionInfo is one revision without its body.
 type RevisionInfo struct {
 	ID        int64     `json:"id"`
 	Document  string    `json:"document"`
 	Title     string    `json:"title"`
 	StartedAt time.Time `json:"started_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	// Size is the body's length in bytes.
+	// Size is in bytes.
 	Size int `json:"size"`
 }
 
-// Workspace is the participant's notes and tabs now, and the list of their
-// revisions, newest first.
+// Workspace is the participant's notes and tabs now, with their revisions
+// newest first.
 type Workspace struct {
 	Notes     Notes
 	Tabs      []Tab
 	Revisions []RevisionInfo
-	// Truncated says there are more than MaxRevisionsListed revisions.
 	Truncated bool
 }
 
-// RevisionBody is one revision whole.
 type RevisionBody struct {
 	RevisionInfo
 	Body string `json:"body"`

@@ -54,15 +54,10 @@ func answer(t *testing.T, table errorTable, err error) (answered, bool) {
 	}, true
 }
 
-// Every error queryproxy hands to a caller has a row, and each row says what
-// the three handlers that admit a participant — the console, the play screen
-// and the events channel — answered for it before they shared one table. The
-// expected values are written out, not derived: they are the contract the
-// interface already reads codes from.
-//
-// Those are queryproxy's own errors and the participation gate's refusals,
-// which queryproxy hands over as contests declares them: a participant whose
-// time is up meets deadline_passed at the console as at the answer route.
+// The expected values are written out, not derived: they are the contract the
+// interface reads codes from. The participation gate's refusals arrive through
+// queryproxy too, so deadline_passed answers the same at the console as at the
+// answer route.
 func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		contests.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
@@ -113,8 +108,8 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			if got != expected {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
-			// Wrapped, the way the service hands several of them over, it
-			// still finds its row.
+			// Wrapped, as the service hands several over, it still finds its
+			// row.
 			wrapped, ok := answer(t, queryproxyErrors, fmt.Errorf("%w: while admitting", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
@@ -127,10 +122,7 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 	}
 }
 
-// Every outcome the Query Runner reports, and a journal that could not be
-// opened, has a row, with the answer the console gave before the table
-// existed — the sentence for the rate refusal and Retry-After are this
-// table's own additions.
+// A journal that could not be opened has a row too.
 func TestEveryQueryRunnerOutcomeHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		queryrunner.ErrTimeout: {status: http.StatusGatewayTimeout, code: "query_timed_out",
@@ -168,17 +160,13 @@ func TestEveryQueryRunnerOutcomeHasItsAnswer(t *testing.T) {
 	}
 }
 
-// An error the table does not know is left to the handler, rather than
-// answered as something it is not.
 func TestAnErrorTheTableDoesNotKnowIsLeftToTheHandler(t *testing.T) {
 	if _, ok := answer(t, queryproxyErrors, fmt.Errorf("something else entirely")); ok {
 		t.Fatal("the table answered an error it has no row for")
 	}
 }
 
-// Every error users hands to a caller has a row, with the answer the account
-// handlers gave before they shared one table. The one place that answers
-// differently, a contest's staff list, is checked below against its own table.
+// A contest's staff list answers one of these differently, checked below.
 func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		users.ErrNotFound: {status: http.StatusNotFound, code: "not_found",
@@ -256,9 +244,7 @@ func TestAContestAnswersAMissingAccountUnderItsOwnCode(t *testing.T) {
 	}
 }
 
-// An override answers in place of the row for the same error that the table
-// it was derived from holds, the other rows still answer as before, and the
-// base table is left unchanged.
+// The other rows still answer as before, and the base table is unchanged.
 func TestAnOverrideTakesPrecedenceOverTheTableItReplacesARowOf(t *testing.T) {
 	base := errorTable{
 		{err: users.ErrNotFound, status: http.StatusNotFound, code: codeNotFound, message: "base"},
@@ -282,10 +268,7 @@ func TestAnOverrideTakesPrecedenceOverTheTableItReplacesARowOf(t *testing.T) {
 	}
 }
 
-// Every error monitor hands to a caller has a row, with the answer the
-// monitoring handler and the participant's signals route gave before they
-// shared one table. The profile answers three of them under codes of its own,
-// checked below against its own table.
+// The profile answers three of these under its own codes, checked below.
 func TestEveryMonitorErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		monitor.ErrParticipantNotFound: {status: http.StatusNotFound, code: "monitor_participant_not_found",
@@ -337,10 +320,9 @@ func TestEveryMonitorErrorHasItsAnswer(t *testing.T) {
 	}
 }
 
-// The profile reads the same monitoring data under its own codes: a
-// registration the monitoring reads do not recognise is the profile's one
-// answer for a contest that is not the caller's finished one, and the cursor
-// and the filter of the queries tab are profile_ codes.
+// A registration the monitoring reads do not recognise is the profile's answer
+// for a contest that is not the caller's finished one; the queries tab's cursor
+// and filter use profile_ codes.
 func TestTheProfileAnswersTheMonitorsErrorsUnderItsOwnCodes(t *testing.T) {
 	want := map[error]answered{
 		monitor.ErrParticipantNotFound: {status: http.StatusNotFound, code: "profile_contest_not_found",
@@ -358,10 +340,8 @@ func TestTheProfileAnswersTheMonitorsErrorsUnderItsOwnCodes(t *testing.T) {
 	}
 }
 
-// Every error contests hands to a caller has a row, with the answer the
-// contests handler and the participant's answer route gave before they shared
-// one table. A refusal of the request's own shape is invalid_request with the
-// error's own text, as it was; the rest have a code each.
+// A refusal of the request's own shape is invalid_request with the error's
+// text; the rest have a code each.
 func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 	const invalid = "invalid_request"
 	want := map[error]answered{

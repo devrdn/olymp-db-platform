@@ -7,10 +7,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// The console shows a column's type under its name, beside a schema panel that
-// gets its own from PostgreSQL's format_type(). Two spellings of one type
-// across two panels of one screen is a defect, so these pin the vocabulary
-// rather than whatever the driver happens to call things internally.
+// Names must match format_type(), which the schema panel shows, not the
+// driver's internal names.
 func TestATypeIsNamedAsPostgresWouldPrintIt(t *testing.T) {
 	types := pgtype.NewMap()
 
@@ -24,8 +22,7 @@ func TestATypeIsNamedAsPostgresWouldPrintIt(t *testing.T) {
 		"date":  {pgtype.DateOID, "date"},
 		"jsonb": {pgtype.JSONBOID, "jsonb"},
 		"bytea": {pgtype.ByteaOID, "bytea"},
-		// Types format_type() spells out. The driver calls these `timestamptz`,
-		// `int4` and `varchar`; the schema panel calls them what is here.
+		// Types format_type() spells out differently from the driver.
 		"timestamptz": {pgtype.TimestamptzOID, "timestamp with time zone"},
 		"timestamp":   {pgtype.TimestampOID, "timestamp without time zone"},
 		"int4":        {pgtype.Int4OID, "integer"},
@@ -36,8 +33,7 @@ func TestATypeIsNamedAsPostgresWouldPrintIt(t *testing.T) {
 		"varchar":     {pgtype.VarcharOID, "character varying"},
 		"bpchar":      {pgtype.BPCharOID, "character"},
 		"numeric":     {pgtype.NumericOID, "numeric"},
-		// An array. The driver's name for it is `_text`, which is a catalogue
-		// spelling no participant has ever typed.
+		// The driver's name for this is `_text`.
 		"text array": {pgtype.TextArrayOID, "text[]"},
 		"int4 array": {pgtype.Int4ArrayOID, "integer[]"},
 	} {
@@ -49,13 +45,10 @@ func TestATypeIsNamedAsPostgresWouldPrintIt(t *testing.T) {
 	}
 }
 
-// A type the connection's map has never heard of — an enum or a domain an
-// organiser's own init script declared — must cost the participant nothing.
-// Their SELECT ran; not being able to name one of its columns is ours to
-// swallow, and an empty name is what the interface omits.
+// An organiser's enum or domain is unknown to the type map; it gets an empty
+// name and the query still succeeds.
 func TestATypeTheDriverDoesNotKnowIsLeftUnnamed(t *testing.T) {
-	// Well past every OID PostgreSQL hands out to a built-in type, and past
-	// the first user OID too, so nothing registered can answer for it.
+	// Past every built-in OID, so nothing registered answers for it.
 	const inventedByAnOrganiser = 987654
 
 	if got := typeName(inventedByAnOrganiser, pgtype.NewMap()); got != "" {
@@ -63,8 +56,6 @@ func TestATypeTheDriverDoesNotKnowIsLeftUnnamed(t *testing.T) {
 	}
 }
 
-// The two lists are read together — the interface puts the nth type under the
-// nth name — so they have to be the same length, in the same order, always.
 func TestEveryColumnGetsATypeInTheSameOrder(t *testing.T) {
 	fields := []pgconn.FieldDescription{
 		{Name: "full_name", DataTypeOID: pgtype.TextOID},
@@ -85,9 +76,7 @@ func TestEveryColumnGetsATypeInTheSameOrder(t *testing.T) {
 	}
 }
 
-// A result with no columns at all — a write answering with a count — must not
-// produce a list, so that the layers above carry nothing rather than an empty
-// something.
+// A write answering with a count has no columns and gets nil, not an empty list.
 func TestNoColumnsMeansNoTypes(t *testing.T) {
 	if got := columnTypes(nil, pgtype.NewMap()); got != nil {
 		t.Fatalf("columnTypes(nil) = %#v, want nil", got)

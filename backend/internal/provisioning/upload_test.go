@@ -18,19 +18,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// uploadLimits are deliberately small: these tests write real bytes to a
-// real gamefile.Store on a real temp directory, and the point is the
-// behaviour, not the size.
+// uploadLimits are small: these tests write real bytes to a temp directory.
 var uploadLimits = gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 4 << 20, MaxChunkBytes: 256 << 10}
 
-// gamesWithUploads assembles a *provisioning.Games against the real database
-// (this package's own standing pool, testPool) and a real gamefile.Store on
-// a fresh temp directory — never a fake for either. The behaviour these
-// tests exist to prove — the unique partial index, the order a file is
-// removed in, a file the volume holds that no row names — is a property of
-// the real schema and the real disk, and a fake of either would prove
-// nothing about them (the same reasoning instances_test.go's own doc gives
-// for using the real repository rather than a stand-in).
+// gamesWithUploads uses the real database (testPool) and a real
+// gamefile.Store on a temp directory: the unique index, the removal order and
+// orphan files are properties of the real schema and disk.
 func gamesWithUploads(t *testing.T, editable bool) (*provisioning.Games, string) {
 	t.Helper()
 	if testPool == nil {
@@ -46,8 +39,6 @@ func gamesWithUploads(t *testing.T, editable bool) (*provisioning.Games, string)
 	return games, dir
 }
 
-// gamesWithUploadsAndAudit is gamesWithUploads plus the trail wired in, for
-// the tests that check what completing or cancelling an upload records.
 func gamesWithUploadsAndAudit(t *testing.T) (*provisioning.Games, *sink) {
 	t.Helper()
 	games, _ := gamesWithUploads(t, true)
@@ -56,12 +47,8 @@ func gamesWithUploadsAndAudit(t *testing.T) (*provisioning.Games, *sink) {
 	return games, s
 }
 
-// onDisk reports whether id's upload still exists in dir — the ground truth
-// these tests check the database's own bookkeeping against. It asks a fresh
-// gamefile.Store opened on the same directory rather than knowing anything
-// about how that package lays files out on disk: Received answering
-// ErrNotFound is "gone", any other answer is "still there", exactly the
-// distinction gamefile.Store itself draws.
+// onDisk reports whether id's upload still exists in dir, asking a fresh
+// gamefile.Store rather than knowing its file layout.
 func onDisk(t *testing.T, dir string, id uuid.UUID) bool {
 	t.Helper()
 	store, err := gamefile.NewStore(dir, uploadLimits)
@@ -95,10 +82,6 @@ func TestBeginningAnUploadReservesItOnDiskAndInTheDatabase(t *testing.T) {
 	}
 }
 
-// Starting to receive gigabytes into a contest that is already running is
-// time and disk nobody gets back, found out only at the very end — so
-// BeginUpload checks GameEditable itself rather than leaving that to
-// CompleteUpload, and refuses before it ever touches the disk.
 func TestBeginningAnUploadForAContestThatIsNotEditableIsRefusedBeforeTouchingDisk(t *testing.T) {
 	games, dir := gamesWithUploads(t, false)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -116,15 +99,8 @@ func TestBeginningAnUploadForAContestThatIsNotEditableIsRefusedBeforeTouchingDis
 	}
 }
 
-// The filename is the one free-text field an upload carries, it is stored in
-// a `text` column, and a browser is not the only thing that can send it. A
-// NUL byte in it is valid UTF-8 and something PostgreSQL refuses outright
-// with SQLSTATE 22021, so the INSERT fails *after* Store.Begin has already
-// created the file: a 500 for the organiser and an orphan on the volume,
-// where a named 400 was available for free (CLAUDE.md rule 1). The other
-// control characters go the same way rather than being singled out — none of
-// them belongs in a name a person typed, and a newline in one is a log line
-// somebody else's text can forge.
+// A NUL would make the INSERT fail after Store.Begin created the file
+// (see validUploadFilename).
 func TestBeginningAnUploadRefusesAFilenameWithAControlCharacter(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -154,9 +130,7 @@ func TestADeclaredLengthPastTheConfiguredCeilingIsRefused(t *testing.T) {
 	}
 }
 
-// The guarantee migration 24's own unique partial index exists for. A check
-// in Go between reading and writing always leaves room for a second request
-// to land in between; only the database closes that gap for good.
+// Only the unique partial index closes the race a check in Go would leave.
 func TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -175,31 +149,19 @@ func TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode(t *tes
 	}
 }
 
-// A refused INSERT has to give back the reservation Store.Begin made for it,
-// or the directory budget is spent by uploads that will never send a byte.
-//
-// The refusal is the ordinary one — game_uploads_one_receiving_idx, the test
-// above — and it is reachable by anybody holding contest.edit on a single
-// contest, or by a browser that repeats a begin after a timeout. Each attempt
-// promises the whole file; nothing writes the promise off; and because
-// gamefile.Store counts outstanding promises against MaxDirBytes
-// (committedBytes' own doc), a handful of refused begins fill the volume's
-// budget for *every* contest on the installation until the janitor sweeps —
-// fifteen minutes of grace plus a tick. bootstrapTableRow already had the
-// shape this needs: retire the file the moment the row it was for is refused.
+// Store.Begin counts each declared length against MaxDirBytes, so refused
+// begins that kept their reservation would fill the budget for every contest.
 func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	// One receiving upload, so every begin after this one is refused. It
-	// promises a quarter of the directory and sends nothing.
+	// One receiving upload, so every later begin is refused.
 	quarter := uploadLimits.MaxDirBytes / 4
 	if _, err := games.BeginUpload(t.Context(), contest.ID, "first.sql", quarter); err != nil {
 		t.Fatalf("first begin: %v", err)
 	}
 
-	// Three refusals, each promising another quarter. Held, they are the
-	// whole directory.
+	// Three refusals of a quarter each: held, they are the whole directory.
 	for i := 0; i < 3; i++ {
 		if _, err := games.BeginUpload(t.Context(), contest.ID, "again.sql", quarter); !errors.Is(err, provisioning.ErrUploadInProgress) {
 			t.Fatalf("begin %d answered %v, want ErrUploadInProgress", i+2, err)
@@ -214,8 +176,6 @@ func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) 
 		t.Fatalf("the volume holds %d file(s), want only the one upload that has a row", len(entries))
 	}
 
-	// The assertion the whole test is for: another contest can still be given
-	// what the refusals promised and never used.
 	other, _ := contestFor(t, t.Context(), 0)
 	if _, err := games.BeginUpload(t.Context(), other.ID, "elsewhere.sql", quarter); err != nil {
 		t.Fatalf("a second contest's upload was refused %v — the refused begins are still "+
@@ -223,9 +183,8 @@ func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) 
 	}
 }
 
-// beginWithContent begins an upload sized exactly to content and appends all
-// of it in one chunk, leaving it 'receiving' and ready for CompleteUpload —
-// what every test below that needs a specific, known upload starts from.
+// beginWithContent begins an upload sized to content and appends it in one
+// chunk, leaving it ready for CompleteUpload.
 func beginWithContent(t *testing.T, games *provisioning.Games, contest uuid.UUID, filename, content string) provisioning.Upload {
 	t.Helper()
 	upload, err := games.BeginUpload(t.Context(), contest, filename, int64(len(content)))
@@ -238,9 +197,6 @@ func beginWithContent(t *testing.T, games *provisioning.Games, contest uuid.UUID
 	return upload
 }
 
-// Completing an upload is the same event SetScript records for a script an
-// organiser wrote directly: the version bumps and the game is queued to
-// build again.
 func TestCompletingAnUploadBumpsTheVersionAndQueuesTheBuild(t *testing.T) {
 	games, _ := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -261,9 +217,6 @@ func TestCompletingAnUploadBumpsTheVersionAndQueuesTheBuild(t *testing.T) {
 		t.Fatalf("source = %q, want file", template.Source)
 	}
 
-	// A second upload, completed the same way, bumps the version again —
-	// exactly the mechanism a second SetScript call uses, because this is
-	// the same path.
 	second := beginWithContent(t, games, contest.ID, "dump2.sql", "CREATE Y;\n")
 	again, err := games.CompleteUpload(t.Context(), actor, contest.ID, second.ID)
 	if err != nil {
@@ -274,12 +227,8 @@ func TestCompletingAnUploadBumpsTheVersionAndQueuesTheBuild(t *testing.T) {
 	}
 }
 
-// Games.Upload is what internal/api's gameView resolves a file-sourced
-// Template.UploadID through — this is the fact CLAUDE.md rule 11 asks to
-// cross the boundary to the API layer, and this proves the domain side of
-// that crossing actually has it: the completed upload's filename, its final
-// measured length and its line count, read back by the very id the template
-// now carries.
+// The API resolves a file-sourced Template.UploadID through Games.Upload
+// (CLAUDE.md rule 11).
 func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
 	games, _ := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -311,27 +260,15 @@ func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
 		t.Fatalf("status = %q, want complete", resolved.Status)
 	}
 
-	// The same contest-scoping currentContestUpload already enforces
-	// everywhere else: an id that names a real upload of a *different*
-	// contest must answer exactly as "no such upload", not leak that the row
-	// exists.
+	// Another contest's upload answers "no such upload", not leaking the row.
 	other, _ := contestFor(t, t.Context(), 0)
 	if _, err := games.Upload(t.Context(), other.ID, *template.UploadID); !errors.Is(err, provisioning.ErrUploadNotFound) {
 		t.Fatalf("cross-contest Upload() = %v, want ErrUploadNotFound", err)
 	}
 }
 
-// gamefile's declaration block says why every one of its sentinels is
-// named: "so a handler's fail switch can map it … instead of collapsing every
-// reason into 'internal error'". ErrCorruptIndex was the one with no branch
-// in wrapGamefileErr, so it collapsed into exactly that — and the organiser
-// whose index file no longer matches its data was told nothing, when the
-// thing they can do about it is upload the file again (CLAUDE.md rule 1).
-//
-// This is the one test in this file that reaches for gamefile's own layout
-// on disk rather than asking the package (as onDisk above does): damaging an
-// index is not something Store offers a way to do, and a fake store would
-// prove nothing about the mapping the real one's error goes through.
+// The one test that touches gamefile's layout on disk: Store offers no way to
+// damage an index.
 func TestACorruptLineIndexIsNamedRatherThanCollapsedIntoAnInternalError(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -341,8 +278,7 @@ func TestACorruptLineIndexIsNamedRatherThanCollapsedIntoAnInternalError(t *testi
 		t.Fatalf("complete: %v", err)
 	}
 
-	// One byte short of what its own header declares — a truncated write, a
-	// bad sector, a file put there by something else.
+	// One byte short of what its header declares, like a truncated write.
 	index := filepath.Join(dir, upload.ID.String()+".idx")
 	info, err := os.Stat(index)
 	if err != nil {
@@ -358,9 +294,6 @@ func TestACorruptLineIndexIsNamedRatherThanCollapsedIntoAnInternalError(t *testi
 	}
 }
 
-// The order Instances.DropInstance already uses: the real object goes first.
-// A newly completed upload displaces the previous one, and its file is gone
-// from disk once completion succeeds.
 func TestCompletingAReplacementUploadDeletesTheOldFile(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -387,8 +320,6 @@ func TestCompletingAReplacementUploadDeletesTheOldFile(t *testing.T) {
 	}
 }
 
-// An organiser's own cancel removes the file too — the same "real object
-// first" order, and the row records nothing that never existed as a game.
 func TestAbortingAnUploadDeletesTheFileAndLeavesNoGame(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -448,10 +379,6 @@ func TestAbortingAnUploadRecordsFilenameAndLengthNeverContent(t *testing.T) {
 	}
 }
 
-// The janitor's two sweeps: a 'receiving' row nobody has appended to in a
-// while is aborted, and a file the volume holds that no row names at all —
-// the more dangerous half, since nothing else in this package ever asks the
-// volume what it holds — is removed too.
 func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -460,24 +387,19 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	// Aged deliberately rather than waited for, the same convention
-	// gametemplates_test.go's own stale-build test uses.
+	// Aged rather than waited for.
 	if _, err := storage.QuerierFrom(t.Context(), testPool).Exec(t.Context(),
 		`UPDATE game_uploads SET updated_at = now() - interval '2 days' WHERE id = $1`, stale.ID); err != nil {
 		t.Fatalf("age the row: %v", err)
 	}
 
-	// A file with no row at all: gamefile.Store.Begin makes the reservation
-	// directly, bypassing Games so no game_uploads row is ever written for
-	// it — exactly what a crash between the two would leave behind.
+	// A file with no row, as a crash between Store.Begin and the INSERT
+	// would leave.
 	orphanID := uuid.New()
 	if err := storeOn(t, dir).Begin(orphanID.String(), 1<<16); err != nil {
 		t.Fatalf("reserve an orphan file: %v", err)
 	}
-	// Aged past orphanFileGrace, for the same reason the row above is aged
-	// rather than waited for. A file this sweep sees the instant it appears is
-	// deliberately left alone — see
-	// TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan for the race that costs.
+	// Aged past orphanFileGrace.
 	age(t, dir, orphanID, time.Hour)
 
 	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
@@ -506,8 +428,6 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 	}
 }
 
-// A fresh upload — nothing appended in the last few seconds is entirely
-// ordinary — must survive a sweep whose cutoff it has not reached yet.
 func TestSweepUploadsLeavesARecentUploadAlone(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -529,14 +449,8 @@ func TestSweepUploadsLeavesARecentUploadAlone(t *testing.T) {
 	}
 }
 
-// The order proper, not merely its usual outcome: a reordering that marked
-// the row first would only be visible when the file removal that follows it
-// actually fails — the harmless case (nothing fails) looks identical either
-// way. So this forces the removal to fail (a read-only directory refuses the
-// unlink) and checks the one thing "real object first" is actually for: a
-// row that stays 'receiving' — not 'aborted' over a file still on disk —
-// when the disk half did not go through. See Instances.DropInstance's own
-// doc for the same guarantee proved the same way for a database drop.
+// The file goes before the row is marked. Only a failing removal shows the
+// order, so a read-only directory makes the unlink fail.
 func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -546,9 +460,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	// Unlinking a file needs write permission on its directory, not on the
-	// file itself — this is what makes the directory (not the file) the
-	// thing to lock down.
+	// Unlinking needs write permission on the directory, not the file.
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatalf("make the upload directory read-only: %v", err)
 	}
@@ -573,8 +485,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 		t.Fatal("the file is gone even though its removal was made to fail")
 	}
 
-	// And the guarantee is repairable: a retry with the directory writable
-	// again finishes what the first attempt could not.
+	// A retry with the directory writable again finishes the abort.
 	if _, err := games.AbortUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
 		t.Fatalf("retry after restoring permissions: %v", err)
 	}
@@ -583,15 +494,9 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	}
 }
 
-// editableUntil answers GameEditable true for its first calls and false
-// afterwards.
-//
-// What it stands in for is one contest becoming un-editable in the window
-// CompleteUpload leaves open between its own editability check and the one
-// replaceGame makes inside the transaction: the background scheduler moving a
-// published contest to 'running' the moment its window opens. left is the
-// number of "yes" answers before the refusal, so a service built with
-// left: 1 says yes to CompleteUpload's own check and no to replaceGame's.
+// editableUntil answers GameEditable true for its first left calls and false
+// afterwards. With left: 1 a contest starts between CompleteUpload's own
+// check and replaceGame's.
 type editableUntil struct {
 	mu   sync.Mutex
 	left int
@@ -607,8 +512,7 @@ func (e *editableUntil) GameEditable(context.Context, uuid.UUID) (bool, error) {
 	return true, nil
 }
 
-// storeOn opens a second handle on a directory a *provisioning.Games is
-// already using — what a test needs to plant, or look for, a file behind the
+// storeOn opens a second handle on the directory, to plant a file behind the
 // service's back.
 func storeOn(t *testing.T, dir string) *gamefile.Store {
 	t.Helper()
@@ -619,9 +523,7 @@ func storeOn(t *testing.T, dir string) *gamefile.Store {
 	return store
 }
 
-// age moves an upload's file back in time so a sweep whose cut-off is a
-// minimum file age can see it, the same convention the abandoned-row half of
-// this test file uses to age a row rather than wait for one.
+// age backdates an upload's file so the sweep's minimum file age is passed.
 func age(t *testing.T, dir string, id uuid.UUID, by time.Duration) {
 	t.Helper()
 	when := time.Now().Add(-by)
@@ -630,14 +532,8 @@ func age(t *testing.T, dir string, id uuid.UUID, by time.Duration) {
 	}
 }
 
-// Switching a contest's game back to a script written in the editor displaces
-// the uploaded file exactly the way a second upload does — and before this,
-// nothing removed it, ever. SaveScript clears upload_id and leaves the row
-// 'complete', so the janitor's orphan sweep (which skipped every id that had
-// a row at all) walked straight past it. Four such switches exhaust
-// GAME_UPLOAD_MAX_DIR_BYTES, after which every BeginUpload on the whole
-// installation answers game_upload_store_full and no organiser has any way to
-// free anything.
+// A file left behind here fills GAME_UPLOAD_MAX_DIR_BYTES for the whole
+// installation after a few switches.
 func TestSwitchingToTheEditorRetiresTheUploadedFileItReplaces(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -660,18 +556,9 @@ func TestSwitchingToTheEditorRetiresTheUploadedFileItReplaces(t *testing.T) {
 	}
 }
 
-// The displaced file goes only once the transaction that puts its replacement
-// in place has committed.
-//
-// DropInstance's "the real object goes first" is right there because the
-// removal *is* the operation; here it is conditional on a commit that has not
-// happened yet. CompleteUpload checks GameEditable, then hashes and indexes
-// the file — seconds at the configured ceiling — and only then opens the
-// transaction, which checks editability again. A contest that started in that
-// window leaves the game exactly as it was, still file-sourced, still naming
-// the upload whose bytes an unconditional removal had already deleted: every
-// later rebuild opens a file that is not there and stops for good at
-// BuildFailedInternally.
+// The displaced file goes only after the replacing transaction commits. A
+// contest that starts while the file is hashed keeps its old game, which
+// still needs the old file for every rebuild.
 func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -683,8 +570,6 @@ func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *t
 	}
 	second := beginWithContent(t, games, contest.ID, "second.sql", "B;\n")
 
-	// The same database and the same directory, but a contest that stops
-	// being editable after CompleteUpload's own check has already passed.
 	racing := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, &editableUntil{left: 1}).
 		WithUploads(storeOn(t, dir), uploadLimits)
 
@@ -705,11 +590,8 @@ func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *t
 	}
 }
 
-// The janitor's own backstop for the ordering above: a file whose upload row
-// is still there, but which no contest's game names any more, is nobody's —
-// exactly what a crash between the commit and the unlink leaves behind. The
-// sweep used to ask only whether a row existed, which answered "keep" for
-// every one of these.
+// A crash between the commit and the unlink leaves a file whose row exists
+// but which no game names.
 func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -723,9 +605,7 @@ func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 		t.Fatalf("set script: %v", err)
 	}
 
-	// Put the file back exactly as a crash between the commit and the unlink
-	// would have left it: the row says the upload completed, nothing names it
-	// any more, and the bytes are still on the volume.
+	// Put the file back as such a crash would have left it.
 	if err := storeOn(t, dir).Begin(upload.ID.String(), 1<<16); err != nil {
 		t.Fatalf("plant the file a crash would have left: %v", err)
 	}
@@ -743,14 +623,7 @@ func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 	}
 }
 
-// BeginUpload reserves the file before it writes the row — deliberately, so a
-// database refusal leaves an empty file rather than a row with nothing behind
-// it. A sweep with no minimum file age turns that ordering against itself: a
-// ReadDir that sees the reservation and a UploadExists that lands before the
-// INSERT commits delete the file of an upload whose id the organiser is at
-// that moment being told to append to. The first chunk then answers
-// game_upload_not_found, and the 'receiving' row left behind blocks every
-// retry with game_upload_in_progress until somebody cancels it by hand.
+// BeginUpload reserves the file before its row commits; see orphanFileGrace.
 func TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 

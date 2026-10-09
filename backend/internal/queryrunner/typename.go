@@ -5,38 +5,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// This file answers one question: what does the console print under a result
-// column's name?
-//
-// It has to be the same vocabulary the schema panel uses one pane to the left,
-// which reads `format_type(atttypid, atttypmod)` straight out of the catalogue
-// (internal/gamedb.schemaQuery). Two spellings of one type across two panels of
-// one screen — `timestamptz` here and `timestamp with time zone` there — is a
-// defect a participant reads as two different types.
-//
-// The name is resolved from the OID the driver already handed back with the row
-// description, using the connection's own type map. No second round trip: the
-// query has been answered, the participant is waiting, and a catalogue lookup
-// per result would put a query on the game cluster for every query a
-// participant runs.
-//
-// Two things this deliberately does not reproduce:
-//
-//   - Type modifiers. format_type() is given atttypmod as well and prints
-//     `character varying(40)`; a row description carries the modifier but
-//     decoding it means reimplementing every type's own typmodout function.
-//     `character varying` is the truth minus a detail, which beats a wrong
-//     detail.
-//   - Schema qualification. format_type() qualifies a type that is not on the
-//     search path. A participant's own search path is their game database's,
-//     so an unqualified name is what they would have typed.
+// Result column types are named as format_type() names them, to match the
+// schema panel (internal/gamedb.schemaQuery). Names come from the row
+// description's OIDs and the connection's type map, with no catalogue round
+// trip. Type modifiers (the 40 in `character varying(40)`) and schema
+// qualification are not reproduced.
 
-// formatTypeNames is the list of types PostgreSQL's format_type() prints as
-// something other than their catalogue name — its own switch, in Go.
-//
-// Everything absent from this map keeps the name the catalogue has, which is
-// what format_type() falls through to and what the driver's type map already
-// holds: `text`, `uuid`, `date`, `jsonb`, `bytea` and the rest.
+// formatTypeNames lists the types format_type() prints differently from their
+// catalogue name. Any other type keeps its catalogue name.
 var formatTypeNames = map[uint32]string{
 	pgtype.BitOID:         "bit",
 	pgtype.BoolOID:        "boolean",
@@ -56,17 +32,9 @@ var formatTypeNames = map[uint32]string{
 	pgtype.VarcharOID:     "character varying",
 }
 
-// columnTypes names the type of every column, in the order the driver
-// described them.
-//
-// One entry per field and never fewer: the interface reads the two lists
-// together, putting the nth type under the nth name, and a list with a gap
-// removed would mislabel every column after it. A type that cannot be named
-// is an empty entry, which is a hole the interface can leave blank.
-//
-// The allocation is bounded by the column count, which PostgreSQL bounds at
-// 1664 per row and which the runner's own result budget bounds again
-// (CLAUDE.md rule 12).
+// columnTypes names the type of every column, one entry per field so the list
+// stays parallel to the column names; an unnamed type is an empty entry. The
+// column count is bounded by PostgreSQL (1664) and by the result budget.
 func columnTypes(fields []pgconn.FieldDescription, types *pgtype.Map) []string {
 	if len(fields) == 0 {
 		return nil
@@ -78,13 +46,9 @@ func columnTypes(fields []pgconn.FieldDescription, types *pgtype.Map) []string {
 	return names
 }
 
-// typeName is what PostgreSQL would print for one type OID.
-//
-// An OID the map does not know returns the empty string. That is the whole
-// degradation policy and it is deliberate: a participant's SELECT must never
-// fail because we could not name a column's type, and an organiser's init
-// script may declare enums and domains whose OIDs exist only in that one game
-// database. The rows are the answer; the name above them is a courtesy.
+// typeName is what PostgreSQL would print for one type OID, or "" for an OID
+// the map does not know (such as an organiser's enum). A query never fails
+// because a type cannot be named.
 func typeName(oid uint32, types *pgtype.Map) string {
 	if name, special := formatTypeNames[oid]; special {
 		return name
@@ -95,10 +59,8 @@ func typeName(oid uint32, types *pgtype.Map) string {
 		return ""
 	}
 
-	// An array's catalogue name is its element's with an underscore in front —
-	// `_text` — which is a spelling no participant has typed. format_type()
-	// prints the element's name followed by brackets, and the element is
-	// reachable offline through the codec the map already holds.
+	// format_type() prints an array as its element's name plus brackets, not
+	// the catalogue's `_text`.
 	if array, isArray := known.Codec.(*pgtype.ArrayCodec); isArray {
 		element := typeName(array.ElementType.OID, types)
 		if element == "" {

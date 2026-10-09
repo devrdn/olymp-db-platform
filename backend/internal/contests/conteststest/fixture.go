@@ -14,15 +14,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// FixtureNow is the moment every fixture's clock reports, so tests that turn
-// on a deadline can state times relative to something stable.
+// FixtureNow is what every fixture's clock reports.
 var FixtureNow = time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 
-// FixtureDefaultGraceMin is the fixture's stand-in for the installation's own
-// GAME_INSTANCE_GRACE_MIN (config.GameInstanceGraceMin) — the real default is
-// 24 hours (internal/platform/config/config.go), and this mirrors that
-// number so a test can exercise Service.ExtendGrace against a realistic
-// installation default rather than the fixture's own arbitrary zero.
+// FixtureDefaultGraceMin mirrors the installation default of
+// GAME_INSTANCE_GRACE_MIN (24 hours), so Service.ExtendGrace runs against a
+// realistic value.
 const FixtureDefaultGraceMin = 24 * 60
 
 // Fixture is a contest service wired to in-memory storage, with each store
@@ -45,19 +42,13 @@ type Fixture struct {
 	UnitOfWork    *UnitOfWork
 	Now           time.Time
 	// PoolTrigger records every contest Enroll or AddParticipants asked the
-	// pool tender to wake for. Wired in by default so an ordinary test that
-	// never mentions it still gets a real fake rather than a nil interface —
-	// a test about the trigger itself asserts on f.PoolTrigger.Triggered, and
-	// every other test simply never looks.
+	// pool tender to wake for.
 	PoolTrigger *PoolTrigger
-	// Gate is the participation gate Service was assembled with: a zero
-	// grace unless WithGrace says otherwise, so an instant past a deadline is
-	// past it. Exposed so a test wiring another consumer of the gate next to
-	// this Service can hand it the same one, as internal/app does.
+	// Gate is the gate Service was built with (zero grace unless WithGrace),
+	// exposed so another consumer can share it, as internal/app does.
 	Gate *contests.Gate
 
-	// config is what Service was assembled from, kept so WithGrace can
-	// assemble it again over the same stores.
+	// config lets WithGrace rebuild Service over the same stores.
 	config contests.ServiceConfig
 }
 
@@ -81,8 +72,6 @@ func NewFixture() *Fixture {
 		Now:           FixtureNow,
 		PoolTrigger:   NewPoolTrigger(uow),
 	}
-	// Derived from the same question and submission stores above, not a
-	// third store of its own — see SequentialProgress's own doc.
 	f.Sequence = NewSequentialProgress(f.Questions, f.Submissions)
 	// Participants and staff carry the login the real repositories join in.
 	accounts := func(ctx context.Context, id uuid.UUID) (string, string) {
@@ -94,18 +83,15 @@ func NewFixture() *Fixture {
 	}
 	f.Registrations.Accounts = accounts
 	f.Managers.Accounts = accounts
-	// A question, a story, a SQL policy and a registration name a contest
-	// that must be there, the way the real tables' foreign keys demand. The
-	// account a registration names is left unchecked
-	// (Registrations.UserExists is nil): every service path resolves the
-	// account before registering it, and the leaderboard and profile rigs
-	// register accounts they never create.
+	// The contest foreign keys are enforced. Registrations.UserExists stays
+	// nil: service paths resolve the account first, and the leaderboard and
+	// profile rigs register accounts they never create.
 	f.Questions.ContestExists = f.Contests.Exists
 	f.Stories.ContestExists = f.Contests.Exists
 	f.Policies.ContestExists = f.Contests.Exists
 	f.Registrations.ContestExists = f.Contests.Exists
-	// And what that account may do, which is what the publish gate reads to
-	// find a participant who administers every contest.
+	// The publish gate reads these to find a participant who administers
+	// every contest.
 	f.Registrations.Permissions = func(ctx context.Context, id uuid.UUID) []string {
 		user, err := f.Users.ByID(ctx, id)
 		if err != nil {
@@ -113,24 +99,14 @@ func NewFixture() *Fixture {
 		}
 		return user.Permissions
 	}
-	// The submission store's own clock defaults to the same fixture.Now a
-	// test already controls for the application clock — the honest default,
-	// since the two only need to differ when a test is specifically
-	// exercising the gap between them (§8's whole reason for asking the core
-	// database's own clock rather than trusting the caller's).
+	// The stores' clocks stand in for the database's now() and share the
+	// application clock; a test about the gap between them sets its own.
 	f.Submissions.Clock = func() time.Time { return f.Now }
-	// A registration is stamped by the same clock, the way the table stamps
-	// it with the database's own.
 	f.Registrations.Clock = func() time.Time { return f.Now }
-	// And an appointment to the staff, the way its own table stamps it.
 	f.Managers.Clock = func() time.Time { return f.Now }
-	// And a contest by the same one, the way its own table stamps it.
 	f.Contests.Clock = func() time.Time { return f.Now }
-	// And a story and a SQL policy, the way their tables stamp them.
 	f.Stories.Clock = func() time.Time { return f.Now }
 	f.Policies.Clock = func() time.Time { return f.Now }
-	// The listing of a user's contests and of what a participant may see
-	// reads who staffs and who is registered, which are these two stores.
 	f.Contests.Rosters(f.Managers, f.Registrations)
 
 	f.Gate = contests.NewGate(0)
@@ -151,17 +127,10 @@ func NewFixture() *Fixture {
 		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
 		Gate:          f.Gate,
-		// Quiet by default: a test exercising submission.go's own defensive
-		// log line (a malformed reference answer) should not spray a fixed
-		// test suite's output with it.
+		// Quiet, so defensive log lines do not flood test output.
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		// A test that forces the attempt-race retry loop (ConflictsRemaining)
-		// is exercising the loop's own logic, not the real clock — waiting
-		// out attemptBackoff's real jitter on every one of those retries
-		// would make the suite slower for nothing a fixture-backed test
-		// could ever observe.
-		Sleep: func(time.Duration) {},
-		// See FixtureDefaultGraceMin's own doc.
+		// Forced retries (ConflictsRemaining) need no real backoff.
+		Sleep:           func(time.Duration) {},
 		DefaultGraceMin: FixtureDefaultGraceMin,
 		PoolTrigger:     f.PoolTrigger,
 	}
@@ -169,10 +138,8 @@ func NewFixture() *Fixture {
 	return f
 }
 
-// WithGrace reassembles Service over the same stores with a gate of grace
-// as the deadline allowance, for a test about what the grace moves, and
-// replaces Gate with it. Every other fixture has none: an instant past a
-// deadline is past it.
+// WithGrace rebuilds Service and Gate with grace as the deadline allowance.
+// Every other fixture has none: an instant past a deadline is past it.
 func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
 	f.Gate = contests.NewGate(grace)
 	f.config.Gate = f.Gate
@@ -180,21 +147,15 @@ func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
 	return f
 }
 
-// UnitOfWork runs the function directly, and marks the context while it does.
-//
-// It cannot roll back in-memory maps, and no test claims it does: what the
-// fixture exercises is the rules, while the atomicity of the writes is a
-// property of the real transaction runner and is tested there. What it can
-// answer is which writes happened with a transaction open — the fact the
-// trail's guarantee rests on, and the reason for the mark.
+// UnitOfWork runs fn directly and marks the context as inside a transaction.
+// It cannot roll back the maps; atomicity is tested against the real runner.
+// The mark lets the fakes tell which writes happened with a transaction open.
 type UnitOfWork struct {
-	// Calls counts the transactions opened, so a test can assert an operation
-	// took exactly one rather than a transaction per statement.
+	// Calls counts transactions opened, so a test can assert an operation
+	// took exactly one.
 	Calls int
-	// Open is true only while Do is running fn — cleared again before Do
-	// returns, success or failure. A fake that holds the same UnitOfWork (see
-	// PoolTrigger) can check it to prove something happened after the
-	// transaction ended rather than from inside it.
+	// Open is true only while Do runs fn, so a fake sharing this UnitOfWork
+	// (PoolTrigger) can prove it acted after the transaction ended.
 	Open bool
 }
 
@@ -205,12 +166,10 @@ func (u *UnitOfWork) Do(ctx context.Context, fn func(context.Context) error) err
 	return fn(context.WithValue(ctx, txKey{}, true))
 }
 
-// txKey marks a context running inside the fixture's unit of work. The real
-// runner marks its context the same way, with the transaction itself, which is
-// how a repository knows to write through it (storage.QuerierFrom).
+// txKey marks a context inside the fixture's unit of work, as the real runner
+// marks its context with the transaction (storage.QuerierFrom).
 type txKey struct{}
 
-// inTx reports whether ctx is running inside the fixture's unit of work.
 func inTx(ctx context.Context) bool {
 	open, _ := ctx.Value(txKey{}).(bool)
 	return open
@@ -221,12 +180,9 @@ func (f *Fixture) AddUser(login string) users.User {
 	return f.Users.Add(users.User{Login: login, FullName: login, Status: users.StatusActive})
 }
 
-// AddAdministrator stores an active account holding contest.admin_all: staff
-// of every contest without being appointed to any of them.
-//
-// Through a role, because that is the only way an account has a permission —
-// the repository derives Permissions from Roles, as the real one derives them
-// from the role_permissions table.
+// AddAdministrator stores an active account holding contest.admin_all, staff
+// of every contest without an appointment. It goes through a role because
+// Permissions derive from Roles, as role_permissions does in the real schema.
 func (f *Fixture) AddAdministrator(login string) users.User {
 	const role = "administrator"
 	f.Users.GrantRole(role, rbac.PermissionContestAdminAll)

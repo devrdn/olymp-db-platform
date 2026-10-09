@@ -16,19 +16,13 @@ import (
 )
 
 // PasswordChanger is the slice of account management the auth endpoints need.
-// Declaring it here rather than depending on the concrete service keeps the
-// coupling to what is actually used.
 type PasswordChanger interface {
 	ChangePassword(ctx context.Context, cmd users.ChangePasswordCommand) error
 }
 
-// AccountReader is the one method the profile endpoint needs: the descriptive
-// fields an identity does not carry.
-//
-// The identity is assembled for authorisation, and holds what a guard decides
-// on — an id, a login, a permission set. A person's name and roles are not
-// that, and widening the identity to carry them would put display data on the
-// value every middleware in the chain passes around.
+// AccountReader reads the descriptive fields the identity does not carry. The
+// identity holds only what authorisation decides on; display data stays off the
+// value every middleware passes around.
 type AccountReader interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 }
@@ -60,7 +54,6 @@ func (h *AuthHandler) Mount(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/login", h.login)
 
-		// Everything below needs a session.
 		r.Group(func(r chi.Router) {
 			r.Use(h.mw.Authenticate)
 			r.Get("/me", h.me)
@@ -80,26 +73,23 @@ type loginResponse struct {
 	MustChangePassword bool         `json:"must_change_password"`
 }
 
-// login authenticates and starts a session.
-//
-// The session token goes into the cookie only. Returning it in the body would
-// hand it to any script on the page and undo the point of HttpOnly.
+// login authenticates and starts a session. The token goes only into the
+// HttpOnly cookie; returning it in the body would expose it to page scripts.
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
 
-	// The device cookie, when the browser has one: a browser the owner has
-	// signed in from is throttled on its own rather than with the address it
-	// shares. An absent or unreadable cookie is simply no cookie.
+	// A browser the owner has signed in from is throttled on its own, not with
+	// its shared address. A missing or unreadable cookie is no cookie.
 	var deviceToken string
 	if cookie, err := r.Cookie(auth.DeviceCookieName); err == nil {
 		deviceToken = cookie.Value
 	}
 
-	// The session cookie, when the browser is already signed in: a
-	// successful sign-in replaces that session instead of leaving it alive.
+	// A successful sign-in replaces an existing session instead of leaving it
+	// alive.
 	var previousToken string
 	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
 		previousToken = cookie.Value
@@ -148,17 +138,16 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 type meResponse struct {
 	ID    string `json:"id"`
 	Login string `json:"login"`
-	// FullName and Roles are what a profile screen shows. Permissions answer
-	// "may I offer this button"; a name and a role answer "who am I looking
-	// at", and initials taken from a login would read "II" for Ivan Ivanov.
+	// FullName and Roles are for the profile screen: permissions say what to
+	// offer, a name says who this is.
 	FullName    string   `json:"full_name"`
 	Email       string   `json:"email,omitempty"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
 }
 
-// me describes the signed-in account: what it may do, so the interface can hide
-// what it must not offer, and who it is, so a profile can say so.
+// me describes the signed-in account: its permissions, so the interface hides
+// what it must not offer, and who it is.
 func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok {
@@ -170,7 +159,7 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	for permission := range identity.Permissions {
 		permissions = append(permissions, permission)
 	}
-	// Sorted so the response is stable between requests and easy to diff.
+	// Sorted, so the response is stable.
 	slices.Sort(permissions)
 
 	body := meResponse{
@@ -179,10 +168,8 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 		Permissions: permissions,
 	}
 
-	// One indexed lookup, on the endpoint whose whole job is describing the
-	// account. A failure here does not fail the request: routing depends on
-	// the permissions above, and losing a display name must not lock somebody
-	// out of an interface they are entitled to.
+	// A failed lookup does not fail the request: routing depends on the
+	// permissions, and losing a display name must not lock anyone out.
 	if account, err := h.accounts.ByID(r.Context(), identity.UserID); err != nil {
 		h.log.WarnContext(r.Context(), "could not read the account behind the session",
 			"user_id", identity.UserID, "error", err)
@@ -195,7 +182,6 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, body)
 }
 
-// logout ends the session and clears the cookie.
 func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(auth.SessionCookieName)
 	if err == nil {
@@ -215,7 +201,6 @@ type changePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
-// changePassword lets a signed-in user replace their own password.
 func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok {
@@ -228,9 +213,9 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Throttled like a sign-in, because it verifies a password like one. The
-	// session proves possession of a browser, not knowledge of the password,
-	// and this is the endpoint where that difference is tested.
+	// Throttled like a sign-in because it verifies a password (CLAUDE.md rule
+	// 4): a session proves possession of a browser, not knowledge of the
+	// password.
 	switch err := h.service.AllowPasswordChange(r.Context(), identity.UserID); {
 	case err == nil:
 	case errors.Is(err, auth.ErrTooManyAttempts):
@@ -263,16 +248,14 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The session that made the change was retired along with the others, so
-	// the cookie is cleared and the user signs in with the new password.
+	// The change retired every session, this one included, so the cookie is
+	// cleared.
 	h.cookies.Clear(w)
 	httpx.NoContent(w, r)
 }
 
-// busy answers a request whose password work found every hashing slot taken.
-// 503 rather than 429: the caller did nothing wrong and is not being limited,
-// the process is. Retry-After tells a client roughly when a slot is likely
-// to be free.
+// busy answers when every hashing slot is taken. 503, not 429: the process is
+// at capacity, the caller is not being limited.
 func busy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Retry-After", "1")
 	httpx.Error(w, r, http.StatusServiceUnavailable, codeSignInBusy,

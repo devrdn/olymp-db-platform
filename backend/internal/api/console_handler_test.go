@@ -29,14 +29,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The validator's vocabulary and the API's are two lists, and the interface
-// chooses its sentence from the second. A refusal with no code of its own
-// would reach a participant as whatever the interface says about an answer it
-// cannot read — during a contest, about a query that may have been perfectly
-// reasonable.
-//
-// This walks the first list rather than a copy of it, so adding a refusal
-// without a code fails here instead of there.
+// The interface picks its sentence from the API's codes, so a validator refusal
+// without one would reach a participant as an unreadable answer. This walks the
+// validator's own list, so a new refusal without a code fails here.
 func TestEveryRefusalHasACodeOfItsOwn(t *testing.T) {
 	for _, code := range sqlpolicy.Codes() {
 		t.Run(string(code), func(t *testing.T) {
@@ -47,9 +42,8 @@ func TestEveryRefusalHasACodeOfItsOwn(t *testing.T) {
 	}
 }
 
-// fakeConsole answers with whatever a test asked for, so the handler's own
-// mapping from an error to a status and a code can be exercised without
-// wiring the whole façade behind it.
+// fakeConsole answers with whatever a test asked for, to exercise the handler's
+// error mapping alone.
 type fakeConsole struct {
 	result *queryrunner.Result
 	err    error
@@ -118,9 +112,8 @@ func (f *consoleFixture) run(sql string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// strconvQuote is a tiny JSON string literal, good enough for the plain SQL
-// these tests send — a dedicated encoder would be answering a question this
-// package's real JSON decoding already covers elsewhere.
+// strconvQuote is a JSON string literal good enough for the plain SQL these
+// tests send.
 func strconvQuote(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -134,10 +127,8 @@ func strconvQuote(s string) string {
 	return b.String()
 }
 
-// CLAUDE.md's security rule 1: every refusal the console can answer with
-// needs a declared sentinel, a mapping in fail(), and a test asserting the
-// 4xx. This is that test, for the length bound queryproxy now enforces
-// before a query ever reaches the journal.
+// CLAUDE.md rule 1, for the length bound queryproxy enforces before a query
+// reaches the journal.
 func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: "70000 bytes"},
@@ -152,10 +143,8 @@ func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
 	}
 }
 
-// A generating function whose size is not bounded is refused with a code of
-// its own rather than as a function that is not available: the function is
-// available, and the participant needs to be told that the size is what to
-// change. The subject carries the function and the bound.
+// The function is available, so the participant must be told the size is what
+// to change; the subject carries the function and the bound.
 func TestAnUnboundedGeneratorIsA400WithItsOwnCode(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeArgumentNotBounded, Subject: "repeat length 900000000 exceeds the 10000 limit"},
@@ -173,10 +162,8 @@ func TestAnUnboundedGeneratorIsA400WithItsOwnCode(t *testing.T) {
 	}
 }
 
-// A syntax error carries a position so the console can point at the
-// character rather than making a participant count them under a timer — the
-// position pg_query's own C parser reported, not a value this handler
-// invents.
+// The position lets the console point at the character; it is what pg_query's
+// parser reported, not invented here.
 func TestAParseErrorCarriesThePositionInTheText(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeParseError, Subject: `syntax error at or near "FRO"`, Position: 15},
@@ -193,10 +180,7 @@ func TestAParseErrorCarriesThePositionInTheText(t *testing.T) {
 	}
 }
 
-// A refusal that names no position — every code but a parse error — must not
-// invent one: zero is a real character offset (the first one), so a client
-// distinguishing "no position" from "the first character" needs the key
-// absent, not present and zero.
+// Zero is a real offset, so "no position" needs the key absent.
 func TestARefusalWithNoPositionCarriesNoPositionField(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: "70000 bytes"},
@@ -209,10 +193,8 @@ func TestARefusalWithNoPositionCarriesNoPositionField(t *testing.T) {
 	}
 }
 
-// A participant asking faster than the contest allows meets the same code
-// whether the runner or this façade's own pre-check caught them — the two are
-// the same limit, checked in two places, and the participant should not be
-// able to tell which one refused.
+// The runner and this façade's pre-check enforce the same limit, so the
+// participant meets the same code from either.
 func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{err: queryrunner.ErrTooManyQueries})
 
@@ -229,8 +211,6 @@ func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
 	}
 }
 
-// The query service being unreachable is ours, and says so: 503 with its own
-// code, never the participant's query being wrong.
 func TestAnUnreachableQueryServiceIsA503WithItsOwnCode(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{err: fmt.Errorf("%w: dial tcp", rpc.ErrUnreachable)})
 
@@ -246,9 +226,6 @@ func TestAnUnreachableQueryServiceIsA503WithItsOwnCode(t *testing.T) {
 	}
 }
 
-// The console answers an admission refusal exactly as the play screen and the
-// events channel do — one table, one sentence — rather than with the
-// sentinel's own lower-case text, which it used to send.
 func TestTheConsoleRefusesADisallowedAddressInTheSameWordsAsThePlayScreen(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{err: contests.ErrAddressNotAllowed})
 
@@ -264,9 +241,7 @@ func TestTheConsoleRefusesADisallowedAddressInTheSameWordsAsThePlayScreen(t *tes
 	}
 }
 
-// A participant whose own time is up is told so at the console in the words
-// the answer route uses for the same fact: the gate gives one refusal for it
-// wherever it is asked.
+// The gate gives one refusal for it wherever it is asked.
 func TestTheConsoleRefusesAParticipantWhoseTimeIsUpWithDeadlinePassed(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{err: contests.ErrDeadlinePassed})
 
@@ -282,14 +257,10 @@ func TestTheConsoleRefusesAParticipantWhoseTimeIsUpWithDeadlinePassed(t *testing
 	}
 }
 
-// A game cluster at its configured disk budget has to reach the participant as
-// its own sentence. It used to reach them as a 500 with "internal error": the
-// refusal had no sentinel at all, because nothing on the participant's own path
-// asked whether there was room before making them a database (CLAUDE.md rule
-// 1). A 503 rather than a 500 because nothing is broken — an operator raising
-// GAME_CLUSTER_MAX_BYTES or reclaiming a finished olympiad clears it — and
-// rather than a 409 because it is a fact about the installation and not about
-// the contest or the query.
+// A 503 rather than a 500 because nothing is broken: raising
+// GAME_CLUSTER_MAX_BYTES or reclaiming a finished olympiad clears it. Not a
+// 409, because it is a fact about the installation, not the contest or the
+// query.
 func TestAFullGameClusterIsA503WithItsOwnCode(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull),
@@ -302,17 +273,14 @@ func TestAFullGameClusterIsA503WithItsOwnCode(t *testing.T) {
 	if code := errorCode(t, rec); code != "game_cluster_full" {
 		t.Fatalf("code = %q, want %q", code, "game_cluster_full")
 	}
-	// An operator has to hear that participants are being turned away; the
-	// console used to answer this without a word in the log.
+	// An operator has to hear that participants are being turned away.
 	if !fixture.logs.loggedError("the game cluster has no room") {
 		t.Fatal("a full game cluster was answered without being logged")
 	}
 }
 
-// A journal that could not be opened is ours, not the participant's SQL being
-// wrong, and the finding this closes is exactly a raw database error reaching
-// the client as a 400 for it. It gets the same 500 the query service being
-// unreachable gets, and none of the database's own words.
+// A journal that could not be opened is ours: the same 500 as an unreachable
+// query service, and none of the database's words.
 func TestAJournalFailureIsA500NotARawDatabaseError(t *testing.T) {
 	underlying := errors.New(`ERROR: string is too long for tsvector (SQLSTATE 54001)`)
 	fixture := newConsoleFixture(t, fakeConsole{
@@ -328,11 +296,8 @@ func TestAJournalFailureIsA500NotARawDatabaseError(t *testing.T) {
 	}
 }
 
-// CLAUDE.md's security rule 1 again, for the refusal that closes the console
-// once nothing of the contest is still answerable. A 409 and a code of its
-// own: the interface has to be able to say "there is nothing left to run a
-// query for" rather than "you are not allowed here", and it chooses that
-// sentence by the code alone.
+// CLAUDE.md rule 1: the interface must say "nothing left to run a query for",
+// not "you are not allowed here", and picks the sentence by code alone.
 func TestAConsoleWithNothingLeftToAnswerIsA409(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrNothingLeftToAnswer})
 
@@ -345,9 +310,8 @@ func TestAConsoleWithNothingLeftToAnswerIsA409(t *testing.T) {
 	}
 }
 
-// And it is not the same answer as a participant who has actually finished:
-// finishing closes the whole play screen, this closes one panel of it, and a
-// client that cannot tell them apart shows the wrong screen to one of them.
+// Finishing closes the whole play screen and this closes one panel; a client
+// that cannot tell them apart shows one of them the wrong screen.
 func TestNothingLeftToAnswerIsNotTheSameCodeAsHavingFinished(t *testing.T) {
 	nothingLeft := errorCode(t, newConsoleFixture(t, fakeConsole{err: queryproxy.ErrNothingLeftToAnswer}).run("SELECT 1"))
 	finished := errorCode(t, newConsoleFixture(t, fakeConsole{err: contests.ErrParticipantFinished}).run("SELECT 1"))
@@ -357,10 +321,8 @@ func TestNothingLeftToAnswerIsNotTheSameCodeAsHavingFinished(t *testing.T) {
 	}
 }
 
-// The console draws a column's type under its name and a meter under the
-// editor, and neither exists unless this handler puts them in the body. The
-// runner resolved both; this is the last boundary they have to cross
-// (CLAUDE.md rule 11).
+// Neither exists unless this handler puts them in the body: the last boundary
+// they cross (CLAUDE.md rule 11).
 func TestTheAnswerCarriesTheColumnTypesAndTheDuration(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{result: &queryrunner.Result{
 		Columns:     []string{"full_name", "at"},
@@ -400,9 +362,7 @@ func TestTheAnswerCarriesTheColumnTypesAndTheDuration(t *testing.T) {
 	}
 }
 
-// The handler's own promise: never `null` for a list. A client that has to
-// tell `null` from `[]` before it can draw a table is a client with a bug
-// waiting, and the promise now covers three lists rather than two.
+// A client that must tell null from [] before drawing a table is a bug waiting.
 func TestAnEmptyAnswerCarriesEmptyListsAndNotNulls(t *testing.T) {
 	// What a write with no RETURNING clause produces: a count, and nothing to
 	// draw a table out of.
@@ -425,15 +385,9 @@ func TestAnEmptyAnswerCarriesEmptyListsAndNotNulls(t *testing.T) {
 	}
 }
 
-// The finding this closes, on the path it was found on: the Query Runner
-// could not connect to the game cluster, the failure was classified as the
-// database refusing the query, and the participant was handed the cluster's
-// host, port, role name and their own database's internal name — under
-// "check the fields you filled in", for a query that was fine.
-//
-// Asserted on the body, because the body is what left the building. A log
-// line saying the right thing while the response says the wrong one is the
-// defect, not the fix.
+// When the Query Runner cannot connect to the game cluster, the participant
+// must not be handed its host, port, role or database name as if their query
+// were wrong. Asserted on the body, because the body is what leaves the server.
 func TestAFailureOfOursNeverReachesTheParticipantsBody(t *testing.T) {
 	// Not wrapped in any sentinel: this is the fallthrough, which is where an
 	// error nobody anticipated lands.
@@ -456,10 +410,8 @@ func TestAFailureOfOursNeverReachesTheParticipantsBody(t *testing.T) {
 	}
 }
 
-// And the one thing that is safe to repeat still is. PostgreSQL naming the
-// relation that does not exist is the most useful sentence anybody can send
-// back, and it goes out because the error says it came from the database —
-// not because the handler ran out of cases.
+// PostgreSQL naming a missing relation is safe and useful; it goes out because
+// the error came from the database, not because the handler ran out of cases.
 func TestTheDatabasesOwnWordsStillReachTheParticipant(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
 		err: &queryrunner.DatabaseError{Message: `ERROR: relation "guests" does not exist (SQLSTATE 42P01)`},
@@ -474,12 +426,9 @@ func TestTheDatabasesOwnWordsStillReachTheParticipant(t *testing.T) {
 	}
 }
 
-// The words have to arrive where the console reads them. They used to travel
-// only in `message` under `invalid_request`, so the console printed its
-// sentence for a malformed form — "check the fields you filled in", with a
-// support reference under it — and never showed the one line that said what
-// to change. The console reads a query's specifics from `subject`, as it
-// already does for every refusal the validator makes.
+// The console reads a query's specifics from `subject`, as for every validator
+// refusal; under invalid_request it would show its generic form sentence
+// instead.
 func TestADatabaseRefusalHasItsOwnCodeAndNamesTheReasonAsItsSubject(t *testing.T) {
 	const reason = `ERROR: column "alibi" does not exist (SQLSTATE 42703)`
 	fixture := newConsoleFixture(t, fakeConsole{err: &queryrunner.DatabaseError{Message: reason}})
@@ -494,9 +443,8 @@ func TestADatabaseRefusalHasItsOwnCodeAndNamesTheReasonAsItsSubject(t *testing.T
 	}
 }
 
-// The address a query came from is written into its journal row (design
-// §2.3), and this is where it enters: the exact client address, the one
-// httpx.ClientIP resolves, not the rate limiter's grouped subject.
+// The journal row records the exact address from httpx.ClientIP, not the rate
+// limiter's grouped subject.
 func TestTheConsoleHandsOnTheExactClientAddress(t *testing.T) {
 	var got queryproxy.Command
 	fixture := newConsoleFixture(t, recordingConsole{got: &got})

@@ -11,9 +11,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// TestConcurrentCallersShareOneComputation is the reason the package exists:
-// callers arriving while a value is being computed wait for it rather than
-// starting one each.
 func TestConcurrentCallersShareOneComputation(t *testing.T) {
 	var group singleflight.Group
 	var calls atomic.Int32
@@ -47,8 +44,6 @@ func TestConcurrentCallersShareOneComputation(t *testing.T) {
 	}
 }
 
-// TestAPanicBecomesAnErrorAndIsNotRemembered: one bad computation is a
-// refusal, not a crash, and the next call for the key starts afresh.
 func TestAPanicBecomesAnErrorAndIsNotRemembered(t *testing.T) {
 	var group singleflight.Group
 	_, err := Do(t.Context(), &group, "key", time.Second, func(context.Context) (any, error) {
@@ -66,8 +61,6 @@ func TestAPanicBecomesAnErrorAndIsNotRemembered(t *testing.T) {
 	}
 }
 
-// TestACallerWhoGoesAwayStopsWaitingWithoutCancellingTheComputation: the
-// computation belongs to the key, not to the caller that happened to start it.
 func TestACallerWhoGoesAwayStopsWaitingWithoutCancellingTheComputation(t *testing.T) {
 	var group singleflight.Group
 	finished := make(chan error, 1)

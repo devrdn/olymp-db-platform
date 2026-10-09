@@ -1,5 +1,6 @@
-// Package storage wires the Core API to PostgreSQL and Redis and exposes them
-// as readiness probes.
+// Package storage opens the core PostgreSQL pool, runs transactions through
+// UnitOfWork, and adapts the database and cache to readiness probes.
+// It holds no queries: repositories live in internal/postgres.
 package storage
 
 import (
@@ -7,9 +8,7 @@ import (
 	"fmt"
 )
 
-// Pinger is the minimal contract shared by the database pool and the cache
-// client. Depending on this instead of the concrete types keeps the readiness
-// probe testable without a live server.
+// Pinger is satisfied by both the database pool and the cache client.
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
@@ -28,8 +27,8 @@ func NewChecker(name string, pinger Pinger) Checker {
 // Name identifies the dependency in the readiness response.
 func (c Checker) Name() string { return c.name }
 
-// Check pings the dependency using the caller's context, so the readiness
-// timeout applies to the underlying network call.
+// Check pings the dependency with the caller's context, so the readiness
+// timeout bounds the network call.
 func (c Checker) Check(ctx context.Context) error {
 	if err := c.pinger.Ping(ctx); err != nil {
 		return fmt.Errorf("ping %s: %w", c.name, err)

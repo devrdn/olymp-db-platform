@@ -14,8 +14,6 @@ import (
 
 func quiet() *slog.Logger { return logging.New("error", io.Discard) }
 
-// startTestServer starts a server on an ephemeral port and stops it when the
-// test ends.
 func startTestServer(t *testing.T, h http.Handler) *Server {
 	t.Helper()
 	srv := New("test", "127.0.0.1:0", h, quiet())
@@ -64,7 +62,6 @@ func TestShutdownWaitsForInFlightRequest(t *testing.T) {
 		close(handlerDone)
 	}))
 
-	// Send a request and wait until the handler is running.
 	respCh := make(chan *http.Response, 1)
 	go func() {
 		resp, err := http.Get("http://" + srv.Addr() + "/")
@@ -113,8 +110,6 @@ func TestShutdownWaitsForInFlightRequest(t *testing.T) {
 }
 
 func TestStartFailsOnAddressAlreadyInUse(t *testing.T) {
-	// Binding eagerly in Start means a port clash is reported at startup
-	// instead of disappearing into a background goroutine.
 	first := startTestServer(t, http.NotFoundHandler())
 
 	second := New("clash", first.Addr(), http.NotFoundHandler(), quiet())

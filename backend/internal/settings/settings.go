@@ -1,16 +1,10 @@
-// Package settings answers "what does this installation call itself, and what
-// does it look like" — the decisions an organisation makes about its own copy
-// of the product, changed from a screen rather than from a deploy.
+// Package settings answers what this installation calls itself and what it
+// looks like, changed from a screen rather than a deploy.
 //
-// It deliberately does not hold what the process cannot start without, nor
-// anything secret: the database DSN, the cache address, the trusted proxies
-// and the cookie policy stay in the environment (platform/config). The line is
-// drawn by consequence rather than by type — a wrong value here makes the
-// installation look wrong, a wrong value there makes it unreachable or unsafe.
-//
-// Nor does it hold the palette. Colours are tokens of the design system, and
-// "let the administrator pick colours" turns a system whose contrast is
-// guaranteed into a set of fields where it is not (SPEC 3.3).
+// It does not hold what the process needs to start or anything secret; those
+// stay in the environment (platform/config). A wrong value here makes the
+// installation look wrong, not unreachable or unsafe. Nor does it hold
+// colours: they are design-system tokens with guaranteed contrast.
 package settings
 
 import (
@@ -23,47 +17,34 @@ import (
 	"github.com/google/uuid"
 )
 
-// Keys. Constants rather than literals so a rename is a compile error and the
-// set is discoverable.
+// Keys.
 const (
 	KeyName    = "installation.name"
 	KeyContact = "installation.contact_email"
 	KeyLogo    = "installation.logo"
 )
 
-// Errors the domain reports.
 var (
-	// ErrUnknownKey refuses a setting nothing reads. A store that accepted
-	// anything would fill with keys whose meaning died with whoever typed
-	// them, and a typo would look like a saved change.
+	// ErrUnknownKey refuses a setting nothing reads, so a typo does not look
+	// like a saved change.
 	ErrUnknownKey = errors.New("no such setting")
 	ErrInvalid    = errors.New("setting value is not valid")
 )
 
-// maxValueLength bounds what a field may hold. These are names and addresses,
-// not documents, and the values are read on every page.
+// maxValueLength bounds a value; values are names and addresses, read on
+// every page.
 const maxValueLength = 200
 
-// Definition describes one setting the product knows about.
-//
-// The catalogue is code, while the values are data. That is the right way
-// round: a setting nothing reads is not configuration, it is a row somebody
-// has to guess the meaning of later.
+// Definition describes one setting the product knows about. The catalogue is
+// code and the values are data, so every stored key is one something reads.
 type Definition struct {
 	Key string
-	// Fallback is used until somebody sets a value, so a fresh installation
-	// renders as something rather than as blanks.
+	// Fallback is used until somebody sets a value.
 	Fallback string
-	// Public marks a setting a page with no session may read.
-	//
-	// The sign-in screen carries the installation's name and logo, and it is
-	// seen before anybody is signed in — so some of this has to be readable by
-	// anyone. That makes an allow-list the only safe shape: the day somebody
-	// adds a mail server's password here, an endpoint that returned the whole
-	// table would publish it, and nothing in that change would look like a
-	// disclosure.
-	Public bool
-	// Validate refuses a value the interface would not survive.
+	// Public marks a setting a page with no session may read (the sign-in
+	// screen shows the name and logo). It is an allow-list so that a secret
+	// added later is never published by accident.
+	Public   bool
 	Validate func(string) error
 }
 
@@ -71,12 +52,10 @@ type Definition struct {
 var Catalogue = []Definition{
 	{Key: KeyName, Fallback: "DB Contest", Public: true, Validate: required},
 	{Key: KeyContact, Public: true, Validate: optionalEmail},
-	// The stored value is a reference to an uploaded file, not the file. What
-	// serving it safely requires is the HTTP layer's problem.
+	// The stored value is a reference to an uploaded file, not the file.
 	{Key: KeyLogo, Public: true, Validate: anything},
 }
 
-// Definitions indexes the catalogue by key.
 func Definitions() map[string]Definition {
 	byKey := make(map[string]Definition, len(Catalogue))
 	for _, d := range Catalogue {
@@ -85,14 +64,12 @@ func Definitions() map[string]Definition {
 	return byKey
 }
 
-// Values is a set of settings and what they hold.
 type Values map[string]string
 
-// Repository stores the values. The catalogue is not its business.
+// Repository stores the values; the catalogue is not its business.
 type Repository interface {
-	// All returns every stored value, whatever keys happen to be in the table.
+	// All returns every stored value, whatever keys are in the table.
 	All(ctx context.Context) (Values, error)
-	// Save writes these values and stamps who did it.
 	Save(ctx context.Context, actorID uuid.UUID, values Values) error
 }
 

@@ -3,20 +3,10 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 // GameReclaimCounters are the counters the game-database reclaim sweep
-// reports (docs/ARCHITECTURE.md §2.4): how many participant databases and
-// contest templates it removed once their contest's grace period passed, how
-// many attempts of each failed, and how many instances it left for the next
-// tick because something was still connected.
-//
-// The sweep is a background job, not an HTTP request, so it has no route or
-// status code for Recorder.ObserveRequest to key on — this is what it reports
-// through instead. internal/app/background.go's own task also logs these
-// counts on every tick that moved anything, the same dual reporting every
-// other background job in this codebase already gives its own numbers; this
-// set exists for what a log line does not serve on its own — a dashboard or
-// an alert asking "is the sweep actually running, or silently stuck", or
-// "is something permanently busy" (Skipped climbing tick after tick, with
-// Reclaimed flat, is exactly that question answering itself).
+// reports: participant databases and contest templates removed after their
+// grace period, failed attempts, and instances skipped because something was
+// still connected. They let a dashboard or alert see a stuck sweep (Skipped
+// climbing while Reclaimed stays flat), which the job's log line does not.
 type GameReclaimCounters struct {
 	reclaimed prometheus.Counter
 	skipped   prometheus.Counter
@@ -26,13 +16,9 @@ type GameReclaimCounters struct {
 	templatesFailed    prometheus.Counter
 }
 
-// NewGameReclaimCounters registers the set on rec's own registry when rec is
-// the Prometheus backend, and returns a counter that discards otherwise: the
-// log and none backends already carry these figures through the job's own log
-// line, and neither has a registry to add a collector to. A caller that
-// always gets a working *GameReclaimCounters back never needs a type switch
-// of its own to find out which backend is actually running — the same
-// reasoning Recorder itself is built on.
+// NewGameReclaimCounters registers the set on rec's registry when rec is the
+// Prometheus backend, and returns counters that discard otherwise, so the
+// caller never switches on the backend.
 func NewGameReclaimCounters(rec Recorder) *GameReclaimCounters {
 	p, ok := rec.(*Prometheus)
 	if !ok {
@@ -65,9 +51,7 @@ func NewGameReclaimCounters(rec Recorder) *GameReclaimCounters {
 	return c
 }
 
-// AddInstances records one tick's outcome for participant databases. Safe to
-// call regardless of backend: with no Prometheus counters behind it, it does
-// nothing.
+// AddInstances records one tick's outcome for participant databases.
 func (c *GameReclaimCounters) AddInstances(reclaimed, skipped, failed int) {
 	if c.reclaimed != nil {
 		c.reclaimed.Add(float64(reclaimed))
@@ -80,11 +64,8 @@ func (c *GameReclaimCounters) AddInstances(reclaimed, skipped, failed int) {
 	}
 }
 
-// AddTemplates records one tick's outcome for contest templates. Split from
-// AddInstances rather than one call with four numbers: the two are different
-// databases with different volumes — at most one template per contest
-// against many instances — and a dashboard built on one must not have to
-// filter the other out of it.
+// AddTemplates records one tick's outcome for contest templates, kept apart
+// from instances because their volumes differ by orders of magnitude.
 func (c *GameReclaimCounters) AddTemplates(reclaimed, failed int) {
 	if c.templatesReclaimed != nil {
 		c.templatesReclaimed.Add(float64(reclaimed))

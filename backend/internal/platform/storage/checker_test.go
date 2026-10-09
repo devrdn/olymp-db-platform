@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// fakePinger stands in for a database pool or cache client.
 type fakePinger struct {
 	err     error
 	calls   int

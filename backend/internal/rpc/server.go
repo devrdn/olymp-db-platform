@@ -22,19 +22,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ServiceName is what the health service reports on, and what a probe asks
-// about. The generated constant, so it cannot drift from the contract.
+// ServiceName is what the health service reports on and a probe asks about.
 var ServiceName = pb.QueryRunner_ServiceDesc.ServiceName
 
-// Probe reports whether a Query Runner at this address is serving.
-//
-// Used by the container health check, which runs this binary with a flag
-// rather than a shell: the runtime image has neither a shell nor grpc_health_probe.
-//
-// It presents the token like any other caller. The health service sits behind
-// the same check as the Query Runner itself rather than on an exemption list,
-// and the health check runs inside the runner's own container, which holds the
-// token already.
+// Probe reports whether a Query Runner at this address is serving. The
+// container health check runs it, since the image has no shell. It presents
+// the token: the health service has no exemption from the check.
 func Probe(ctx context.Context, address, token string) error {
 	options := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, withToken(token)...)
 	conn, err := grpc.NewClient(address, options...)
@@ -53,10 +46,8 @@ func Probe(ctx context.Context, address, token string) error {
 	return nil
 }
 
-// ProbeAddress turns a listen address into one that can be dialled.
-//
-// A listen address is often just a port (":9100"), which means "every
-// interface" when listening and nothing at all when connecting.
+// ProbeAddress turns a listen address into one that can be dialled: ":9100"
+// means every interface when listening and nothing when connecting.
 func ProbeAddress(listen string) string {
 	if listen == "" {
 		listen = "127.0.0.1:9100"
@@ -67,18 +58,11 @@ func ProbeAddress(listen string) string {
 	return listen
 }
 
-// MaxPayloadBytes is the largest message either side will carry.
-//
-// Set here rather than left at gRPC's own default, which is 4 MiB on the
-// receiving side and was smaller than the runner's own 5 MiB result budget: a
-// large but perfectly valid answer came back as ResourceExhausted, which the
-// client reported as the service being unable to answer and the journal
-// recorded as an error. A big answer looked like an outage.
-//
-// Generous, and deliberately not equal to the result budget: the budget bounds
-// the cells, while a message also carries column names and framing. The
-// command that wires the service refuses a configured budget that would not
-// fit inside this, so the two cannot be set into conflict again.
+// MaxPayloadBytes is the largest message either side will carry. gRPC's 4 MiB
+// default is below the runner's result budget, which would turn a valid answer
+// into ResourceExhausted. It is larger than the budget because a message also
+// carries column names and framing; the command that wires the service refuses
+// a budget that does not fit.
 const MaxPayloadBytes = 16 << 20
 
 // Server serves the Query Runner contract over gRPC.
@@ -90,13 +74,9 @@ type Server struct {
 	log    *slog.Logger
 }
 
-// NewServer adapts an executor to the service.
-//
-// It takes the limits as well as the runner because the byte budget can only
-// be applied honestly here: the runner counts the Go values it read, and what
-// crosses the wire is those values rendered as text — a number counted as
-// eight bytes can render as twenty characters, so the estimate is a floor and
-// not a bound. This is the layer that knows the real size.
+// NewServer adapts an executor to the service. It takes the limits because
+// only this layer knows the rendered size; the runner's count over Go values
+// is a floor, not a bound.
 func NewServer(runner queryrunner.Executor, limits queryrunner.Limits, log *slog.Logger) *Server {
 	return &Server{runner: runner, limits: limits, log: log}
 }
@@ -104,25 +84,16 @@ func NewServer(runner queryrunner.Executor, limits queryrunner.Limits, log *slog
 // Register attaches the service to a gRPC server.
 func (s *Server) Register(server *grpc.Server) { pb.RegisterQueryRunnerServer(server, s) }
 
-// Run executes one participant's query.
-//
-// Almost nothing returns a gRPC error. A refused query, a busy instance and a
-// query that ran too long are answers, and answers belong in the response —
-// what an error status means here is that this service could not answer at
-// all, which is what lets a caller tell "your query was refused" from "the
-// query service is down".
+// Run executes one participant's query. Refusals, a busy instance and
+// timeouts are answers in the response; a gRPC error means a malformed request
+// or that the service could not answer.
 func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, error) {
 	registration, err := uuid.Parse(req.GetRegistration())
 	if err != nil {
-		// A malformed identifier is the caller's mistake, not an outcome of
-		// running anything, so it is an error status rather than a Failure.
 		return nil, status.Errorf(codes.InvalidArgument, "registration is not a uuid")
 	}
-	// A database name is the caller's, taken from game_instances, and every
-	// name that table holds is one the platform generated. Checked anyway, at
-	// the door: it goes into a connection string, and the runner would refuse
-	// it too, but "invalid argument" here names the caller's mistake where a
-	// failure inside the response would name the database's.
+	// Platform-generated names only, but checked here anyway: it goes into a
+	// connection string.
 	if !sqlpolicy.PlainIdentifier(req.GetDatabase()) {
 		return nil, status.Errorf(codes.InvalidArgument, "database is not a plain identifier")
 	}
@@ -147,9 +118,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		Columns:     result.Columns,
 		ColumnTypes: result.ColumnTypes,
 		Truncated:   ptr(result.Truncated),
-		// Microseconds, which is the contract's unit: the console rounds to
-		// milliseconds and a sub-millisecond query rounded here would cross as
-		// a zero.
+		// Microseconds: milliseconds would send a fast query as zero.
 		DurationMicros: ptr(result.Duration.Microseconds()),
 		RowsAffected:   ptr(result.RowsAffected),
 		Rows:           make([]*pb.Row, 0, len(result.Rows)),
@@ -157,9 +126,8 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	var spent int
 	for _, values := range result.Rows {
 		row := cellsFor(values)
-		// Measured after rendering, because rendering is where the size
-		// becomes real. Checked before appending, so the budget is a ceiling
-		// rather than a threshold the last row may cross.
+		// Measured after rendering, checked before appending: the budget is a
+		// ceiling the last row may not cross.
 		if spent += weigh(row); spent > s.limits.MaxBytes {
 			answer.Truncated = ptr(true)
 			break
@@ -169,16 +137,10 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	return &pb.RunResponse{Outcome: &pb.RunResponse_Result{Result: answer}}, nil
 }
 
-// Serve runs the service on lis until the context is cancelled.
-//
-// The standard gRPC health service is registered alongside it, because the
-// runtime image is distroless: it carries no shell and no probe, so the
-// container's health check is the binary dialling itself (see Probe).
-//
-// Every call, on every service, must carry token (QUERY_RUNNER_TOKEN); the
-// check runs first in both interceptor chains, before any handler work. An
-// empty token serves without authentication, which configuration allows only
-// in development, and says so in the log.
+// Serve runs the service and the gRPC health service on lis until the context
+// is cancelled. Every call must carry QUERY_RUNNER_TOKEN, checked first in both
+// interceptor chains. An empty token serves without authentication, which
+// configuration allows only in development, and logs a warning.
 func Serve(ctx context.Context, lis net.Listener, server *Server, token string, shutdown time.Duration, log *slog.Logger) error {
 	gate := newTokenGate(token, log)
 	if gate.open {
@@ -201,11 +163,8 @@ func Serve(ctx context.Context, lis net.Listener, server *Server, token string, 
 	go func() {
 		<-ctx.Done()
 
-		// Graceful first: a query in flight is a participant waiting, and a
-		// few seconds of shutdown is cheaper than an answer thrown away. But
-		// GracefulStop waits without limit, so a call that never returns would
-		// hold the deploy open indefinitely — which is what SHUTDOWN_TIMEOUT
-		// is for, and what it was not doing.
+		// Graceful first, so in-flight queries finish, but GracefulStop has
+		// no limit: the shutdown timeout bounds it.
 		stopped := make(chan struct{})
 		go func() {
 			grpcServer.GracefulStop()
@@ -228,12 +187,8 @@ func Serve(ctx context.Context, lis net.Listener, server *Server, token string, 
 }
 
 // correlate carries the caller's request identifier into this process's
-// context, so that every line this service logs about a call joins the line
-// the Core API logged about the same one.
-//
-// A separate service whose logs cannot be joined to the requests that caused
-// them is a separate service nobody can debug. The identifier is the caller's
-// and is not trusted for anything: it decides nothing, it only labels.
+// context so the two services' logs can be joined. It only labels; nothing
+// trusts it.
 func correlate(
 	ctx context.Context,
 	req any,
@@ -245,8 +200,7 @@ func correlate(
 			ctx = logging.WithRequestID(ctx, ids[0])
 		}
 	}
-	// A seam for the test that proves the identifier arrived: the service
-	// deliberately logs nothing per query, so there is no line to look for.
+	// Test seam: the service logs nothing per query to assert on.
 	if carried != nil {
 		carried(ctx)
 	}

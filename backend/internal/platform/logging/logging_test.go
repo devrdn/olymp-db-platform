@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// decodeLine parses the single JSON log record written to buf.
 func decodeLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 	t.Helper()
 	if buf.Len() == 0 {
@@ -107,9 +106,6 @@ func TestRequestIDFromReturnsStoredValue(t *testing.T) {
 	}
 }
 
-// Handlers derive child loggers with With(...). If deriving dropped the
-// context behaviour, correlation fields would silently disappear from exactly
-// the components that log the most.
 func TestChildLoggerFromWithKeepsContextFields(t *testing.T) {
 	var buf bytes.Buffer
 	log := New("info", &buf).With("component", "queryproxy")
@@ -177,8 +173,6 @@ type loggerFuncs struct {
 }
 
 func TestUnknownLevelFallsBackToInfo(t *testing.T) {
-	// Configuration rejects unknown levels, but the logger must still behave
-	// predictably if one slips through.
 	var buf bytes.Buffer
 	log := New("verbose", &buf)
 

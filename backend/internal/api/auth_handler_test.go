@@ -69,7 +69,6 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 	return &handlerFixture{router: router, repo: repo, user: user, hasher: hasher}
 }
 
-// post sends a JSON body to the router.
 func (f *handlerFixture) post(path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -81,7 +80,6 @@ func (f *handlerFixture) post(path, body string, cookies ...*http.Cookie) *httpt
 	return rec
 }
 
-// login performs a successful sign-in and returns the session cookie.
 func (f *handlerFixture) login(t *testing.T) *http.Cookie {
 	t.Helper()
 	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
@@ -139,14 +137,9 @@ func TestLoginResponseNeverCarriesThePasswordHash(t *testing.T) {
 	}
 }
 
-// TestLoginResponseDoesNotCarryStatusChangeMetadata pins the fix for the
-// leak toUserResponse's widening for the account card introduced: an
-// unblocked account is active again and its reason is empty, but its
-// StatusChangedAt/By/ByLogin still name the administrator and the moment of
-// the last change. login used to share toUserResponse verbatim with the
-// account-management screens, so that metadata — an administrator's UUID and
-// login among it — rode along into the response an ordinary account owner
-// gets merely by signing in.
+// TestLoginResponseDoesNotCarryStatusChangeMetadata: an unblocked account still
+// holds StatusChangedAt/By/ByLogin naming the administrator, and signing in
+// must not hand that to the account owner.
 func TestLoginResponseDoesNotCarryStatusChangeMetadata(t *testing.T) {
 	f := newHandlerFixture(t)
 
@@ -182,10 +175,8 @@ func TestLoginRejectsWrongCredentialsWith401(t *testing.T) {
 }
 
 func TestLoginRejectsAnOverlongLoginTheSameWayAsAWrongOne(t *testing.T) {
-	// A login longer than any real account can have (users.MaxLoginLength)
-	// must be answered exactly like an ordinary wrong login — not a code of
-	// its own, which would let a caller use the length bound to tell an
-	// existing login from an impossible one.
+	// A login longer than users.MaxLoginLength is answered like any wrong
+	// login, or the bound would tell an existing login from an impossible one.
 	f := newHandlerFixture(t)
 	overlong := strings.Repeat("a", users.MaxLoginLength+1)
 
@@ -277,10 +268,8 @@ func TestCurrentUserEndpointDescribesTheSignedInAccount(t *testing.T) {
 }
 
 func TestCurrentUserEndpointNamesTheAccountAsAPersonWouldReadIt(t *testing.T) {
-	// /auth/me was built for routing: a login and a permission list is all a
-	// guard needs. A profile screen has to greet somebody, and the identity the
-	// middleware assembles carries no name — deriving initials from a login is
-	// how "i.ivanov" becomes "II" instead of "Ivan Ivanov" becoming "IV".
+	// The identity the middleware assembles carries no name, and initials
+	// derived from a login turn "i.ivanov" into "II" instead of "IV".
 	f := newHandlerFixture(t)
 	cookie := f.login(t)
 
@@ -411,9 +400,8 @@ func TestPasswordChangeRequiresASession(t *testing.T) {
 }
 
 func TestPasswordChangeEndsTheOtherSessions(t *testing.T) {
-	// Changing a password is what someone does when they fear the account is
-	// in use elsewhere; the session that made the change may survive, the rest
-	// must not.
+	// Someone changes a password when they fear the account is used elsewhere:
+	// the session that made the change may survive, the rest must not.
 	f := newHandlerFixture(t)
 	first := f.login(t)
 	second := f.login(t)
@@ -435,8 +423,7 @@ func TestPasswordChangeEndsTheOtherSessions(t *testing.T) {
 }
 
 func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
-	// A borrowed session must not be a place to guess the current password;
-	// the endpoint is throttled like the sign-in it resembles.
+	// Throttled like sign-in (CLAUDE.md rule 4).
 	f := newHandlerFixture(t)
 	cookie := f.login(t)
 
@@ -450,7 +437,6 @@ func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
 	}
 }
 
-// holdEveryHashingSlot fills the fixture's hasher until the test ends.
 func (f *handlerFixture) holdEveryHashingSlot(t *testing.T) {
 	t.Helper()
 	slot, err := f.hasher.Hold(context.Background())
@@ -539,9 +525,9 @@ func TestLoginMarksTheBrowserAsOneTheOwnerSignedInFrom(t *testing.T) {
 }
 
 func TestTheOwnersBrowserSignsInThroughALockoutAtItsOwnAddress(t *testing.T) {
-	// Every request here comes from httptest's one address, as a lecture
-	// hall's do: the rival spends the guessing limit, and the owner's browser,
-	// holding the cookie from an earlier sign-in, still gets in.
+	// Every request here comes from one address, as a lecture hall's do: the
+	// rival spends the guessing limit, and the owner's trusted browser still
+	// gets in.
 	f := newHandlerFixture(t)
 	first := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
 	device := responseCookie(first, auth.DeviceCookieName)
@@ -563,9 +549,7 @@ func TestTheOwnersBrowserSignsInThroughALockoutAtItsOwnAddress(t *testing.T) {
 	}
 }
 
-// Signing in again from a browser that is already signed in replaces its
-// session: the cookie it came with stops working, and a cookie that names no
-// session does not stand in the way of signing in.
+// A cookie that names no session does not stand in the way of signing in.
 func TestSigningInAgainEndsTheBrowsersPreviousSession(t *testing.T) {
 	f := newHandlerFixture(t)
 	first := f.login(t)

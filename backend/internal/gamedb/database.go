@@ -8,24 +8,15 @@ import (
 )
 
 // HardenDatabase applies the per-database half of the boundary. It must run
-// connected to the database being hardened.
-//
-// Two things happen here, and both are privileges rather than settings, which
-// is what makes them hold against SQL the validator never saw.
-//
-// It is applied to a template, once, and reaches participants by being
-// inherited: CREATE DATABASE … TEMPLATE copies the catalog, ACLs included. That
-// inheritance is the whole mechanism — without it every instance would have to
-// be hardened separately, and the one that was missed would look exactly like
-// the others.
+// connected to the database being hardened. Both changes are privileges, not
+// settings, so they hold against SQL the validator never saw. It runs once on a
+// template; CREATE DATABASE … TEMPLATE copies the ACLs to every instance.
 func HardenDatabase(ctx context.Context, conn Conn) error {
 	if err := hideSensitiveCatalogs(ctx, conn); err != nil {
 		return err
 	}
-	// PostgreSQL 15 stopped granting CREATE on the public schema to PUBLIC, so
-	// this is usually already true. Stated anyway: it costs one statement, and
-	// it survives both an older cluster and a template whose author granted it
-	// back while getting something to work.
+	// Default since PostgreSQL 15, but stated for older clusters and for a
+	// template author who granted it back.
 	if _, err := conn.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`); err != nil {
 		return fmt.Errorf("revoking create on the public schema: %w", err)
 	}
@@ -33,13 +24,9 @@ func HardenDatabase(ctx context.Context, conn Conn) error {
 }
 
 // hideSensitiveCatalogs revokes the catalogs that describe the installation
-// rather than the game.
-//
-// The list comes from internal/sqlpolicy, which is the same list its validator
-// refuses — one description, two layers, exactly as section 4.1 requires. A
-// relation that does not exist on this server is skipped rather than fatal:
-// the list spans PostgreSQL versions and one extension's view, and a cluster
-// without pg_stat_statements installed is not a misconfigured cluster.
+// rather than the game, using the same list the sqlpolicy validator refuses. A
+// relation missing on this server (another PostgreSQL version, no
+// pg_stat_statements) is skipped.
 func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 	for _, name := range sqlpolicy.SensitiveCatalogs() {
 		var present bool

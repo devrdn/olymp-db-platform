@@ -21,9 +21,7 @@ func TestRenderingValuesForAConsole(t *testing.T) {
 		"a number":                    {int64(42), "42", false},
 		"a boolean":                   {true, "true", false},
 		"a time":                      {moment, "2026-09-02T14:03:00Z", false},
-		// PostgreSQL's own spelling for bytea, so what is shown can be pasted
-		// back into a query.
-		"bytes": {[]byte{0xde, 0xad}, `\xdead`, false},
+		"bytes":                       {[]byte{0xde, 0xad}, `\xdead`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			text, null := render(given.value)
@@ -34,9 +32,6 @@ func TestRenderingValuesForAConsole(t *testing.T) {
 	}
 }
 
-// The driver hands back its own types for columns Go has no equivalent for.
-// Printing one of those directly gives a dump of its fields rather than the
-// number that was in the column, which is why driver.Valuer is unwrapped.
 func TestADriverTypeIsRenderedAsItsValueRatherThanItsFields(t *testing.T) {
 	var numeric pgtype.Numeric
 	if err := numeric.Scan("1234.5678"); err != nil {
@@ -53,15 +48,13 @@ func TestADriverTypeIsRenderedAsItsValueRatherThanItsFields(t *testing.T) {
 	}
 }
 
-// A NULL arriving inside a driver type is still a NULL, not the empty string.
 func TestANullDriverValueStaysNull(t *testing.T) {
 	if _, null := render(pgtype.Numeric{}); !null {
 		t.Fatal("a null numeric was not rendered as null")
 	}
 }
 
-// A console answer at the row bound: a thousand rows of eight columns, some
-// of them NULL. What it costs to render is paid by every query.
+// A console answer at the row bound: a thousand rows of eight columns.
 func BenchmarkCellsFor(b *testing.B) {
 	values := []any{"Alice", int64(42), nil, "2026-03-01", 3.5, "Library", nil, true}
 	b.ReportAllocs()

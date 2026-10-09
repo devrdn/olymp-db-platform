@@ -1,12 +1,12 @@
 // Package rbac answers one question: may this identity perform this action,
 // here?
 //
-// Authorisation has two levels, and they are not interchangeable. Global roles
-// (`user_roles`) grant installation-wide abilities such as creating contests or
-// managing accounts. Contest roles (`contest_managers`) grant power over one
-// contest and nothing else. A person who runs the March olympiad must not
-// thereby gain any say over the April one, and must never gain the ability to
-// manage accounts.
+// Global roles (`user_roles`) grant installation-wide abilities such as
+// creating contests or managing accounts. Contest roles (`contest_managers`)
+// grant power over one contest and nothing else: running one contest gives no
+// say over another, and never the ability to manage accounts.
+//
+// It does not authenticate (auth) and does not store roles (users).
 package rbac
 
 import (
@@ -17,8 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Permission codes. They mirror the rows seeded into `permissions`; the
-// constants exist so a typo is a compile error rather than a silent denial.
+// Permission codes, mirroring the rows seeded into `permissions`, so a typo
+// is a compile error rather than a silent denial.
 const (
 	PermissionContestCreate     = "contest.create"
 	PermissionContestView       = "contest.view"
@@ -32,18 +32,14 @@ const (
 	PermissionSettingsManage    = "settings.manage"
 
 	// PermissionContestMonitor lets its holder watch everything a contest's
-	// participants did: their queries, answers, notes, tabs and the signals
-	// their browsers and sessions left. Granted wherever contest.view is — by
-	// migration 000033 to the global roles, and through managerPermissions
-	// below to a contest's owner and managers. It is only ever checked with a
-	// contest id: the global grant to organizers must never gate an
-	// installation-wide view of every contest's participants.
+	// participants did. It is granted wherever contest.view is, and only ever
+	// checked with a contest id: the global grant to organizers must never
+	// gate an installation-wide view of every contest's participants.
 	PermissionContestMonitor = "contest.monitor"
 
 	// PermissionContestAdminAll lifts the contest scope: its holder acts on
-	// every contest without being listed as a manager. It is a permission
-	// rather than a hard-coded "is admin" check, so a new role (a dean's
-	// office account, an auditor) can be given the same reach from data.
+	// every contest without being listed as a manager. Being a permission, it
+	// can be given to a new role from data.
 	PermissionContestAdminAll = "contest.admin_all"
 )
 
@@ -51,21 +47,18 @@ const (
 type ContestRole string
 
 const (
-	// RoleNone means the user is not listed as staff on the contest.
 	RoleNone ContestRole = ""
 	// RoleOwner is the contest's creator: everything a manager may do, plus
 	// appointing managers and archiving.
-	RoleOwner ContestRole = "owner"
-	// RoleManager runs the contest day to day.
+	RoleOwner   ContestRole = "owner"
 	RoleManager ContestRole = "manager"
 )
 
-// ErrForbidden reports that the identity may not perform the action. Callers
-// translate it to 403; it deliberately carries no detail about why, since the
-// reason can itself be information (that a contest exists, for instance).
+// ErrForbidden reports that the identity may not perform the action. It
+// carries no reason, since the reason can itself leak information (that a
+// contest exists, for instance).
 var ErrForbidden = errors.New("forbidden")
 
-// managerPermissions are the contest-scoped abilities of a manager.
 var managerPermissions = map[string]struct{}{
 	PermissionContestView:       {},
 	PermissionContestMonitor:    {},
@@ -75,8 +68,8 @@ var managerPermissions = map[string]struct{}{
 	PermissionReportsView:       {},
 }
 
-// ownerOnlyPermissions are reserved for the contest owner. Appointing staff is
-// the one power a manager must not be able to grant themselves more of.
+// ownerOnlyPermissions are reserved for the contest owner, so a manager cannot
+// appoint more staff.
 var ownerOnlyPermissions = map[string]struct{}{
 	PermissionContestManage: {},
 }
@@ -89,38 +82,29 @@ type Identity struct {
 	Permissions map[string]struct{}
 }
 
-// Has reports whether a global role grants the permission.
 func (i Identity) Has(permission string) bool {
 	_, ok := i.Permissions[permission]
 	return ok
 }
 
 // ContestRoleLoader reads a user's standing in one contest.
-//
-// The lookup is per contest rather than "load every contest this user staffs",
-// because a request only ever concerns the contest it names.
 type ContestRoleLoader interface {
 	ContestRole(ctx context.Context, userID, contestID uuid.UUID) (ContestRole, error)
 }
 
-// Authorizer decides access.
 type Authorizer struct {
 	roles ContestRoleLoader
 }
 
-// New returns an authorizer that resolves contest roles through loader.
 func New(loader ContestRoleLoader) *Authorizer {
 	return &Authorizer{roles: loader}
 }
 
-// Authorize reports whether the identity may exercise the permission.
-//
-// Pass uuid.Nil as contestID for installation-wide actions ("create a
-// contest", "manage accounts"); pass a contest id for anything that concerns
-// one contest.
+// Authorize reports whether the identity may exercise the permission. Pass
+// uuid.Nil as contestID for installation-wide actions.
 //
 // It returns ErrForbidden on denial, and a wrapped error when the decision
-// could not be made — a caller must treat the latter as a failure, never as
+// could not be made; a caller must treat the latter as a failure, never as
 // permission.
 func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission string, contestID uuid.UUID) error {
 	if contestID == uuid.Nil {
@@ -130,11 +114,9 @@ func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission stri
 		return fmt.Errorf("%w: %s", ErrForbidden, permission)
 	}
 
-	// Installation-wide administrators skip the contest-role lookup; there is
-	// no contest they are not staff on. The shortcut sits after the
-	// installation-wide branch on purpose: admin_all lifts the contest scope
-	// and nothing else, so it must not double as users.manage or audit.view
-	// for a role that was only ever given reach over contests.
+	// admin_all skips the contest-role lookup. It sits after the
+	// installation-wide branch because it lifts the contest scope only and
+	// must not double as users.manage or audit.view.
 	if id.Has(PermissionContestAdminAll) {
 		return nil
 	}
@@ -150,7 +132,6 @@ func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission stri
 	return fmt.Errorf("%w: %s", ErrForbidden, permission)
 }
 
-// grantsContestPermission reports whether a contest role covers the permission.
 func grantsContestPermission(role ContestRole, permission string) bool {
 	switch role {
 	case RoleOwner:

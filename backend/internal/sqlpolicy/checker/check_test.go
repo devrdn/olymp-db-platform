@@ -9,7 +9,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// refusal returns the refusal checker.Check produced, failing if it allowed the query.
 func refusal(t *testing.T, sql string, p sqlpolicy.Policy) *sqlpolicy.Refusal {
 	t.Helper()
 
@@ -24,7 +23,6 @@ func refusal(t *testing.T, sql string, p sqlpolicy.Policy) *sqlpolicy.Refusal {
 	return r
 }
 
-// allow asserts the query is accepted, reporting the refusal if it is not.
 func allow(t *testing.T, sql string, p sqlpolicy.Policy) {
 	t.Helper()
 
@@ -33,9 +31,7 @@ func allow(t *testing.T, sql string, p sqlpolicy.Policy) {
 	}
 }
 
-// The queries a detective olympiad is actually made of. A validator that
-// refuses these is useless however safe it is, so they are asserted first and
-// with the same weight as the refusals below.
+// A checker that refuses these is useless however safe it is.
 func TestTheQueriesTheContestIsMadeOf(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT 1`,
@@ -79,8 +75,6 @@ func TestTheQueriesTheContestIsMadeOf(t *testing.T) {
 }
 
 func TestOnlyOneStatement(t *testing.T) {
-	// Two statements is how a validator that checks "the query" gets walked
-	// past: the second one is the one that matters.
 	r := refusal(t, `SELECT 1; DROP TABLE suspects`, sqlpolicy.ReadOnly())
 	if r.Code != sqlpolicy.CodeNotOneStatement {
 		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeNotOneStatement)
@@ -104,23 +98,18 @@ func TestAQueryThatDoesNotParse(t *testing.T) {
 	if r.Code != sqlpolicy.CodeParseError {
 		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeParseError)
 	}
-	// The parser's own message is the most useful thing anyone can tell a
-	// student here, so it is carried rather than replaced.
+	// The parser's own message is carried, not replaced.
 	if !strings.Contains(strings.ToLower(r.Subject), "selec") {
 		t.Fatalf("the refusal does not carry the parser's message: %q", r.Subject)
 	}
-	// The parser is PostgreSQL's own, so the position it names is a real
-	// character offset into sql, not merely a nonzero placeholder — a
-	// participant reading the console must be able to find the character it
-	// points at rather than have to trust that it is somewhere.
+	// A real character offset into sql, not just a nonzero placeholder.
 	if r.Position <= 0 || r.Position > len(sql) {
 		t.Fatalf("position = %d, want a 1-based offset into %q (len %d)", r.Position, sql, len(sql))
 	}
 }
 
-// Everything a read-only contest must not permit. Each of these is a way to
-// change the database, read something that is not the game, or spend the
-// server's time, and each has been a real escape somewhere.
+// Each is a way to change the database, read beyond the game, or spend the
+// server's time.
 func TestReadOnlyRefusesEveryWayOfWriting(t *testing.T) {
 	for _, sql := range []string{
 		`INSERT INTO suspects (name) VALUES ('x')`,
@@ -160,36 +149,25 @@ func TestReadOnlyRefusesEveryWayOfWriting(t *testing.T) {
 	}
 }
 
-// The three that look like a SELECT and are not. These are the ones a
-// root-node check alone lets through, which is why the whole tree is walked.
+// A root-node check alone would let these through.
 func TestTheWritesDisguisedAsReads(t *testing.T) {
 	t.Run("SELECT INTO creates a table", func(t *testing.T) {
-		// `SELECT * INTO notes FROM suspects` is CREATE TABLE AS with a
-		// SelectStmt at the root. The root says read; the statement writes.
 		refusal(t, `SELECT * INTO notes FROM suspects`, sqlpolicy.ReadOnly())
 	})
 
 	t.Run("a data-modifying CTE", func(t *testing.T) {
-		// The root is a SelectStmt. The INSERT is three levels down, inside
-		// the WITH, and it runs.
 		refusal(t,
 			`WITH gone AS (DELETE FROM suspects RETURNING *) SELECT * FROM gone`,
 			sqlpolicy.ReadOnly())
 	})
 
 	t.Run("EXPLAIN ANALYZE executes what it explains", func(t *testing.T) {
-		// ANALYZE is not a plan, it is a run. On a DML it is the DML.
 		refusal(t, `EXPLAIN ANALYZE DELETE FROM suspects`, sqlpolicy.ReadOnly())
 		refusal(t, `EXPLAIN (ANALYZE) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
 	})
 
 	t.Run("EXPLAIN carries only the options that change the printout", func(t *testing.T) {
-		// SETTINGS prints the server settings that differ from their
-		// defaults — the same configuration the catalogue rules and the
-		// revoked grants keep out of a participant's reach. The others are
-		// refused because the list of what an EXPLAIN option may do is
-		// PostgreSQL's to extend, and a new one that executes or reports
-		// would arrive allowed.
+		// SETTINGS prints server configuration the catalog rules hide.
 		refusal(t, `EXPLAIN (SETTINGS) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
 		refusal(t, `EXPLAIN (BUFFERS) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
 		refusal(t, `EXPLAIN (WAL) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
@@ -197,8 +175,6 @@ func TestTheWritesDisguisedAsReads(t *testing.T) {
 	})
 
 	t.Run("locking is a write to the transaction", func(t *testing.T) {
-		// A read-only transaction refuses it anyway; refusing it here is what
-		// turns a database error nobody can read into a sentence.
 		refusal(t, `SELECT * FROM suspects FOR UPDATE`, sqlpolicy.ReadOnly())
 	})
 }
@@ -210,10 +186,8 @@ func TestAnUnknownConstructIsRefusedByName(t *testing.T) {
 	}
 }
 
-// Two bounds that are not policy but self-defence: this package parses
-// attacker-chosen text and walks the result recursively, so both the input and
-// the recursion need a ceiling that does not depend on another layer having
-// set one.
+// The input and the recursion need a ceiling of their own, independent of
+// other layers, because the text is attacker-chosen.
 func TestTheCheckerProtectsItself(t *testing.T) {
 	t.Run("a query too long to be a query", func(t *testing.T) {
 		r := refusal(t, `SELECT `+strings.Repeat("1,", 40_000)+`1`, sqlpolicy.ReadOnly())
@@ -223,8 +197,7 @@ func TestTheCheckerProtectsItself(t *testing.T) {
 	})
 
 	t.Run("nesting deep enough to end the process", func(t *testing.T) {
-		// A stack overflow is not a refusal — it takes the API down with it,
-		// and it costs the sender one line of generated text.
+		// A stack overflow would take the process down, not refuse the query.
 		sql := "SELECT 1" + strings.Repeat(" FROM (SELECT 1", 200) + strings.Repeat(") q", 200)
 		if err := checker.Check(sql, sqlpolicy.ReadOnly()); err == nil {
 			t.Fatal("deep nesting was allowed")
@@ -232,17 +205,14 @@ func TestTheCheckerProtectsItself(t *testing.T) {
 	})
 }
 
-// Shapes worth pinning down because the answer is a decision, not an accident.
 func TestDecisionsWorthStating(t *testing.T) {
 	t.Run("CREATE TABLE AS is refused", func(t *testing.T) {
 		refusal(t, `CREATE TABLE notes AS SELECT * FROM suspects`, sqlpolicy.ReadOnly())
 	})
 
 	t.Run("a recursive CTE is allowed", func(t *testing.T) {
-		// It can loop for ever, and deliberately stays allowed: it is ordinary
-		// SQL and a fair exercise, and a runaway one costs a single execution
-		// slot until statement_timeout ends it — which is the same bound every
-		// heavy query has, and the reason admission control exists.
+		// It can loop forever, but it is ordinary SQL; a runaway one holds one
+		// execution slot until statement_timeout ends it.
 		allow(t, `WITH RECURSIVE chain AS (
 			SELECT id, boss_id FROM staff WHERE id = 1
 			UNION ALL
@@ -255,18 +225,14 @@ func TestDecisionsWorthStating(t *testing.T) {
 	})
 }
 
-// The statement's own text, as the parser delimited it. A caller that wraps
-// the query in a subquery needs the statement and not the string: what follows
-// a terminating semicolon is one statement to the parser and a syntax error
-// inside a FROM.
+// What follows the semicolon would be a syntax error inside a wrapping FROM.
 func TestAnalyseReportsTheStatementsOwnText(t *testing.T) {
 	cases := map[string]string{
 		"SELECT 1":            "SELECT 1",
 		"SELECT 1;":           "SELECT 1",
 		"SELECT 1; -- a note": "SELECT 1",
-		// Leading whitespace and comments belong to the statement as the parser
-		// sees it, and are harmless inside a subquery; only what follows the
-		// terminating semicolon is cut.
+		// Leading whitespace and comments stay; only what follows the
+		// semicolon is cut.
 		"  \n SELECT 1  ":                    "  \n SELECT 1  ",
 		"-- a note\nSELECT 1":                "-- a note\nSELECT 1",
 		"/* thinking */ SELECT 1; \n\n":      "/* thinking */ SELECT 1",

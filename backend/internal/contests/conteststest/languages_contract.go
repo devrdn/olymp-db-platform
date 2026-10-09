@@ -8,39 +8,24 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 )
 
-// LanguageTarget is what one case of the contract runs against: a catalogue
-// holding what a fresh installation holds, and the means to change it. The
-// catalogue is data, so the contract cannot ask a catalogue for anything the
-// installation did not put there: each implementation fills Add and Retire its
-// own way, the in-memory catalogue by editing its list and PostgreSQL by an
-// INSERT and an UPDATE on the languages table.
+// LanguageTarget is a catalogue holding what a fresh installation holds, and
+// the means to change it, which each implementation provides its own way.
 type LanguageTarget struct {
 	Catalog contests.LanguageCatalog
 	// Add offers a further language; l.IsActive says whether it starts active.
-	Add func(l contests.Language)
-	// Retire deactivates a language the installation already holds.
+	Add    func(l contests.Language)
 	Retire func(code string)
 }
 
-// LanguageCatalogContract is what every contests.LanguageCatalog must do, run
-// as subtests against one implementation. Both the in-memory Languages and
-// postgres.Languages run it, so the catalogue the service tests trust and the
-// one production reads are held to the same answers: a rule the fake got wrong
-// would otherwise pass every service test and fail only in a contest.
+// LanguageCatalogContract is what every contests.LanguageCatalog must do; both
+// the in-memory Languages and postgres.Languages run it. each prepares a fresh
+// target for one case, calls run with it, and cleans up.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the catalogue with, and cleans up afterwards.
-//
-// What a fresh target holds is the three languages the platform launches with:
-// the migration that creates the table inserts them, and the in-memory
-// catalogue is written to start with the same three. That is the one fact the
-// contract takes from the installation rather than from the catalogue, and it
-// is stated here so that a seed which changes in only one place fails. The
-// cases look only at the codes they name (the three above and the "x…" ones
-// they add), so a further language an installation has added does not disturb
-// them. Codes are lower-case letters throughout, because ties in the display
-// order are broken by code and the order of anything else depends on the
-// database's collation.
+// A fresh target holds the three launch languages, seeded by the migration
+// and by NewLanguages; asserting them here fails a seed changed in only one
+// place. Cases look only at the codes they name, so an installation's extra
+// languages do not disturb them. Codes are lower-case letters because ties in
+// display order break by code, and anything else depends on the collation.
 func LanguageCatalogContract(t *testing.T, each func(t *testing.T, run func(context.Context, LanguageTarget))) {
 	// offered lists, in the order returned, the active languages among codes.
 	offered := func(t *testing.T, ctx context.Context, target LanguageTarget, codes ...string) []contests.Language {
@@ -96,8 +81,7 @@ func LanguageCatalogContract(t *testing.T, each func(t *testing.T, run func(cont
 
 	t.Run("languages come in display order, ties broken by code", func(t *testing.T) {
 		each(t, func(ctx context.Context, target LanguageTarget) {
-			// Added out of order on purpose: neither the order they were added
-			// in nor the order of their codes is the display order.
+			// Neither insertion order nor code order is the display order.
 			target.Add(contests.Language{Code: "xb", Name: "B", NativeName: "B", IsActive: true, SortOrder: 25})
 			target.Add(contests.Language{Code: "xa", Name: "A", NativeName: "A", IsActive: true, SortOrder: 25})
 			target.Add(contests.Language{Code: "xc", Name: "C", NativeName: "C", IsActive: true, SortOrder: 5})

@@ -13,8 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// schemas is the reader behind the façade, recording which database it was
-// pointed at — the fact the panel's whole claim rests on.
+// schemas records which database the reader was pointed at.
 type schemas struct {
 	schema provisioning.Schema
 	err    error
@@ -26,15 +25,12 @@ func (s *schemas) Schema(_ context.Context, _ provisioning.Contest, database str
 	return s.schema, s.err
 }
 
-// admitted is a participant and the contest they were admitted to, as the
-// caller's Access resolved them: what Schema is handed.
+// admitted is the pair the caller's Access resolved and Schema is handed.
 type admitted struct {
 	contest     contests.Contest
 	participant contests.Participant
 }
 
-// schemaFixture assembles the façade around a policy, so each test can say
-// what the contest allows and nothing else.
 func schemaFixture(policy sqlpolicy.Policy) (*queryproxy.Service, *databases, *schemas, admitted) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
@@ -61,17 +57,13 @@ func TestSchemaDescribesTheParticipantsOwnDatabase(t *testing.T) {
 	if len(got.Tables) != 1 || got.Tables[0].Name != "guests" {
 		t.Fatalf("returned %+v", got.Tables)
 	}
-	// A caller names no database, the same guarantee section 5 gives Run: it
-	// is looked up from their registration.
+	// The database comes from the registration, never from the caller.
 	if len(reader.asked) != 1 || reader.asked[0] != "game_c1_u1" {
 		t.Fatalf("read the schema of %v, want the participant's own copy", reader.asked)
 	}
 }
 
-// The whole security point of this endpoint. A contest that closed its
-// catalogues must not be handed the same answer through a different door —
-// the console's panel would otherwise be a better oracle than the one
-// ErrDatabaseDeclined exists to shut.
+// The panel must not leak what a closed catalogue hides.
 func TestSchemaIsRefusedWhereTheContestClosedItsCatalogues(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -89,13 +81,8 @@ func TestSchemaIsRefusedWhereTheContestClosedItsCatalogues(t *testing.T) {
 	}
 }
 
-// A build that never wired the reader answers the same way a contest that
-// hides its schema does, rather than panicking during an olympiad.
-//
-// The nils are not hypothetical: internal/app builds exactly this Service for
-// the participant read endpoints when QUERY_RUNNER_ADDR is unset, handing it
-// nils for the three collaborators only Run uses. Access and AdmitRead never
-// touch them — and neither may this.
+// internal/app builds this Service, with nils for Run's collaborators, when
+// QUERY_RUNNER_ADDR is unset.
 func TestSchemaIsRefusedByAConsolelessBuildRatherThanPanicking(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
@@ -122,11 +109,8 @@ func TestSchemaIsRefusedWhenNothingWasWiredToAnswerIt(t *testing.T) {
 	}
 }
 
-// Schema is handed a participant and a contest the caller's Access already
-// admitted (the /play/schema handler, like every other /play route), and
-// does not admit them a second time: what the game lookup reads about the
-// registration and the contest is not asked again. Here that read would
-// refuse — disqualified, finished — and the pair handed in is still described.
+// The lookup's view of the registration (disqualified, finished here) is not
+// asked again: Access already admitted the pair.
 func TestSchemaDescribesThePairItWasHandedWithoutAdmittingItAgain(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
@@ -151,12 +135,8 @@ func TestSchemaDescribesThePairItWasHandedWithoutAdmittingItAgain(t *testing.T) 
 	}
 }
 
-// The game lookup reads the participant's registration again, and that row
-// can be a different one from the registration Access admitted: removed from
-// the roster and added back in between. The participant's copy of the game
-// belongs to a registration, so describing one would describe the wrong
-// database; the read is refused, failing closed, as a registration gone since
-// Access found it, and nothing is provisioned or read.
+// A registration removed and re-added since Access owns a different database,
+// so nothing is provisioned or read for it.
 func TestSchemaRefusesARegistrationReplacedSinceItWasAdmitted(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
@@ -179,8 +159,6 @@ func TestSchemaRefusesARegistrationReplacedSinceItWasAdmitted(t *testing.T) {
 	}
 }
 
-// individualSchemaFixture is schemaFixture for a participant of an
-// individual-timing contest who has not started yet.
 func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*queryproxy.Service, *schemas, *int, admitted) {
 	contest := individualContest()
 	contest.AllowedCIDRs = allowed
@@ -197,8 +175,6 @@ func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*
 	return service, reader, &starts, admitted{contest: contest, participant: registration}
 }
 
-// The schema is contest content like the story and the questions: under
-// individual timing, reading it is a first read that starts the clock.
 func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
 	service, _, starts, pair := individualSchemaFixture(sqlpolicy.ReadOnly(), nil)
 
@@ -210,10 +186,8 @@ func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
 	}
 }
 
-// A schema read that is refused showed nothing, so it starts nothing: not
-// where the contest hides its schema, and not from an address the contest
-// does not allow — the caller's Access refuses that first, and the start
-// asks the gate again rather than trust it did.
+// A refused read starts nothing. For a disallowed address the start asks the
+// gate itself rather than trust Access did.
 func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -238,8 +212,6 @@ func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 	}
 }
 
-// A contest whose game was never built has no schema to show, and that is not
-// a fault.
 func TestSchemaReportsAContestWithNoGame(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
@@ -256,10 +228,8 @@ func TestSchemaReportsAContestWithNoGame(t *testing.T) {
 	}
 }
 
-// The deployment wires the single lookup, and the schema panel reads the game
-// and the participant's copy through it alone, asked about the admitted
-// contest and the admitted participant's own account: none of the default's
-// separate reads runs.
+// None of the default lookup's separate reads runs once the single lookup is
+// wired.
 func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
@@ -294,8 +264,6 @@ func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
 	}
 }
 
-// A contest that closed its catalogues is refused over the single lookup too,
-// before its participant's database is provisioned.
 func TestSchemaOverTheSingleLookupStillRefusesAClosedCatalogueFirst(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false

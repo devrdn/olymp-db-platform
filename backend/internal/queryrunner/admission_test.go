@@ -11,16 +11,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// slowRunner is a runner that can be made to hold a slot for as long as a test
-// needs, by allowing the one function the standard list leaves out.
+// slowRunner allows pg_sleep, so a test can hold a slot.
 func slowRunner(t *testing.T, limits queryrunner.Limits) (*queryrunner.Runner, string) {
 	t.Helper()
 	return setupWith(t, limits, checker.NewChecker("pg_sleep"))
 }
 
-// One query at a time per participant. Not a fairness rule but a resource one:
-// a participant who can open ten tabs would otherwise hold ten execution slots
-// while everyone else queues behind them.
+// A participant with ten tabs must not hold ten slots.
 func TestOneQueryAtATimePerParticipant(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 3 * time.Second
@@ -51,9 +48,6 @@ func TestOneQueryAtATimePerParticipant(t *testing.T) {
 	}
 }
 
-// Past the semaphore and past the queue, the answer is immediate. A request
-// that hangs waiting is worse than one that is turned away: the participant
-// learns nothing and the slot is still spoken for.
 func TestBeyondTheQueueTheAnswerIsImmediateRatherThanAWait(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Concurrent = 1
@@ -80,10 +74,8 @@ func TestBeyondTheQueueTheAnswerIsImmediateRatherThanAWait(t *testing.T) {
 	if !errors.Is(err, queryrunner.ErrBusy) {
 		t.Fatalf("error = %v, want ErrBusy", err)
 	}
-	// The holder sleeps for a second, so anything well short of that proves
-	// the answer did not wait for the slot — which is the claim. The earlier
-	// bound of 200ms was measuring the machine rather than the code and failed
-	// under the race detector.
+	// The holder sleeps a second; well short of that proves no wait. A
+	// tighter bound fails under the race detector.
 	if waited > 700*time.Millisecond {
 		t.Fatalf("waited %s before saying it was busy, so it queued after all", waited)
 	}
@@ -91,8 +83,6 @@ func TestBeyondTheQueueTheAnswerIsImmediateRatherThanAWait(t *testing.T) {
 	wg.Wait()
 }
 
-// With a queue, a newcomer waits rather than being turned away — that is what
-// the queue is for, and the difference between "busy" and "briefly slower".
 func TestWithRoomInTheQueueANewcomerWaitsAndSucceeds(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Concurrent = 1
@@ -123,8 +113,6 @@ func TestWithRoomInTheQueueANewcomerWaitsAndSucceeds(t *testing.T) {
 	wg.Wait()
 }
 
-// A slot has to come back however the query ended, or the instance runs out of
-// room after N failures and never recovers.
 func TestASlotIsReturnedWhateverHappened(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Concurrent = 1
@@ -141,8 +129,7 @@ func TestASlotIsReturnedWhateverHappened(t *testing.T) {
 			if _, err := runner.Run(t.Context(), request(database, sql)); err == nil {
 				t.Fatalf("%s: expected a failure", sql)
 			}
-			// The next query proves the slot came back; with Concurrent=1 and
-			// no queue it would be refused outright otherwise.
+			// With Concurrent=1 and no queue, this fails if the slot leaked.
 			if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
 				t.Fatalf("the slot was not returned after %s: %v", name, err)
 			}
@@ -150,8 +137,6 @@ func TestASlotIsReturnedWhateverHappened(t *testing.T) {
 	}
 }
 
-// other is a different participant, named by a stable id so a failure names
-// which one.
 func other(participant, database, sql string) queryrunner.Request {
 	r := request(database, sql)
 	r.Registration = uuid.NewSHA1(uuid.Nil, []byte(participant))

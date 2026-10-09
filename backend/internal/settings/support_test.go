@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fixture assembles the service over in-memory storage, so the rules are
-// exercised without a database.
 type fixture struct {
 	service *settings.Service
 	repo    *repo
@@ -29,8 +27,7 @@ func newFixture() *fixture {
 
 type repo struct {
 	values settings.Values
-	// Err, when set, is returned by every method.
-	Err error
+	Err    error
 }
 
 func (r *repo) All(context.Context) (settings.Values, error) {
@@ -66,14 +63,12 @@ func (s *sink) AppendMany(_ context.Context, entries []audit.Entry) error {
 	return nil
 }
 
-// unitOfWork runs the function directly. It cannot roll back a map, and no
-// test claims it does: what the fixture exercises is the rules, while the
-// atomicity of the writes belongs to the real transaction runner.
+// unitOfWork runs the function directly; it cannot roll back a map, so no
+// test here relies on atomicity.
 type unitOfWork struct{}
 
 func (unitOfWork) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
 
-// images is the picture store, in memory.
 type images struct{ byKind map[string]settings.Image }
 
 func (i *images) ByKind(_ context.Context, kind string) (settings.Image, error) {

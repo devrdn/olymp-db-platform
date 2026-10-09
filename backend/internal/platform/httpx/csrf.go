@@ -6,34 +6,19 @@ import (
 	"strings"
 )
 
-// CheckOrigin rejects state-changing requests that come from another site.
+// CheckOrigin rejects state-changing requests that come from another site,
+// as a second defence behind SameSite=Lax on the session cookie.
 //
-// The session lives in a cookie, so a browser attaches it to any request the
-// page makes — including one a malicious site triggers. SameSite=Lax is the
-// first defence; this is the second, because a single cookie attribute is a
-// thin thing to rest an entire authorisation model on.
+// Safe methods pass, and so does a request with no Origin: browsers always
+// send it on cross-origin writes, while non-browser clients send none.
+// Requiring it would break those clients without stopping the attack.
 //
-// Safe methods pass untouched, and so does a request with no Origin at all:
-// browsers always send it on cross-origin writes, while curl, health probes
-// and server-side integrations send nothing. Requiring the header would break
-// every non-browser client without stopping the attack it targets.
-//
-// `allowed` names front origins this deployment answers for, in addition to
-// its own. Empty is the strict default and the shape the compose deployment
-// uses: Caddy passes the browser's Host through, so the API's own host is the
-// origin the page came from and nothing else has to be said.
-//
-// It exists because that identity is not universal. A development stack has
-// no Caddy — the browser is on :3000 and Next's rewrite forwards /api/* to
-// :8080, replacing Host on the way — and a production deployment may put the
-// interface and the API on different names. In both, a browser's write is
-// same-site to the person using it and cross-origin to this comparison. The
-// answer is for the deployment to say which origin that is, not for the check
-// to guess: an origin nobody configured is still refused.
+// allowed names front origins this deployment answers for besides its own,
+// for setups where the interface and the API have different hosts (a dev
+// stack on :3000 and :8080). Empty is the strict default; an origin nobody
+// configured is refused.
 func CheckOrigin(allowed []string) func(http.Handler) http.Handler {
-	// Normalised once, at construction: an origin is a scheme and a host, and
-	// comparing anything else (a path, a trailing slash, a case difference in
-	// the scheme) would compare noise.
+	// Normalised to scheme and host once, at construction.
 	permitted := make(map[string]struct{}, len(allowed))
 	for _, origin := range allowed {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
@@ -82,8 +67,7 @@ func isSafeMethod(method string) bool {
 }
 
 // requestScheme reports the scheme the browser used. Behind the reverse proxy
-// the request itself arrives over plain HTTP, so the forwarded header is what
-// the Origin has to be compared against.
+// the request arrives over plain HTTP, so a trusted forwarded header decides.
 func requestScheme(r *http.Request) string {
 	if isTLS(r) {
 		return "https"

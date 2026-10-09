@@ -15,16 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// What a single caller can observe of the contests is the contract every
-// contests.Repository answers to, the in-memory one the service tests use
-// included (conteststest.ContestRepositoryContract). What the contract leaves
-// to this file, for the contests themselves, is what only the real database
-// can be asked: the bounds its columns keep when the domain check is not in
-// front of them, the default a column fills in, the cascade into the rows that
-// hang off a contest, the cover a listing carries, and the locks, which are
-// between sessions. The rest of the file is about other interfaces: the
-// registrations lookup (Registrations.EnrolledIn) and the scheduler's
-// (contests.ScheduleRepository), which has a contract of its own.
+// The shared contract covers what a single caller can observe; the tests
+// below cover what only the real database shows: column bounds and defaults,
+// cascades, the cover projection and locks between sessions.
 func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.ContestRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ContestTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -62,14 +55,9 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 // checkViolation is the SQLSTATE PostgreSQL raises for a CHECK constraint.
 const checkViolation = "23514"
 
-// Finding 5: internal/contests.Contest.Validate was the only thing bounding
-// duration_min before this migration — a row written by hand, or one that
-// predates the check, was not, and Deadline's
-// time.Duration(*DurationMin)*time.Minute arithmetic overflows and wraps to a
-// deadline in the past well before an int this size otherwise would. This
-// goes straight through Exec rather than the repository, the same way a
-// hand-written row or a pre-migration one would have reached the table: the
-// domain's own Create was never in a position to stop either.
+// The CHECK constraint bounds rows that bypass Contest.Validate; an unbounded
+// duration_min overflows Deadline's arithmetic into a past deadline. The
+// insert goes through Exec to bypass the domain check.
 func TestDurationMinIsBoundedAtTheDatabaseToo(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-duration-bound")
@@ -86,8 +74,7 @@ func TestDurationMinIsBoundedAtTheDatabaseToo(t *testing.T) {
 	})
 }
 
-// A duration exactly at the bound is still accepted — this is a ceiling, not
-// a tighter limit than the domain's own.
+// The database bound must not be tighter than the domain's.
 func TestDurationMinAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-duration-at-bound")
@@ -102,11 +89,6 @@ func TestDurationMinAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
 	})
 }
 
-// The picture a contest wears comes back with the contest, because the one
-// screen that shows a picture above a story (design spec §10) already reads
-// this listing and opens under a timer. A projection is the whole point: a
-// second read per row would be the N+1 the languages and translations are
-// already written to avoid.
 func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)
@@ -133,8 +115,7 @@ func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 		if got := byID[dressed]; got.CoverAttribution != want.Attribution {
 			t.Errorf("CoverAttribution = %q, want %q", got.CoverAttribution, want.Attribution)
 		}
-		// Empty, not a failed read: a contest nobody uploaded a picture for
-		// wears the drawn cover, and that is an ordinary state.
+		// No upload reads back empty, not as an error.
 		if got := byID[bare]; got.CoverHash != "" || got.CoverAttribution != "" {
 			t.Errorf("a contest with no uploaded cover read back %q/%q, want both empty",
 				got.CoverHash, got.CoverAttribution)
@@ -142,9 +123,6 @@ func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	})
 }
 
-// Update writes icpc_penalty_min the same way Create does — a column added
-// after Update's own SQL was last touched is exactly the one a future column
-// gets left out of by mistake.
 func TestUpdateWritesTheICPCPenalty(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)
@@ -201,8 +179,8 @@ func TestDeletingAContestTakesItsTranslationsWithIt(t *testing.T) {
 }
 
 func TestEnrolledInReportsOnlyTheCallersOwnRegistrations(t *testing.T) {
-	// The flag the catalogue marks its rows with. Reporting somebody else's
-	// registration would disclose who takes part in what.
+	// Reporting another account's registration would disclose who takes part
+	// in what.
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
 		author := makeUser(t, ctx, "author-on")
@@ -232,13 +210,8 @@ func TestEnrolledInReportsOnlyTheCallersOwnRegistrations(t *testing.T) {
 	})
 }
 
-// TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction proves the
-// guarantee contests.Scheduler's whole design rests on across two real
-// connections, not one: pg_try_advisory_xact_lock is a lock between database
-// sessions, and a test that only ever opens one transaction could not tell
-// the difference between "this call cannot get the lock" and "this call
-// forgot to ask" (CLAUDE.md rule 10 — prove it on the path the deployment
-// uses).
+// The advisory lock is between sessions, so the test uses two real
+// connections (CLAUDE.md rule 10).
 func TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -300,10 +273,8 @@ func TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction(t *testing.T
 	}
 }
 
-// setSchedule puts a seeded contest (already valid by makeContest's own
-// column defaults) into the status and window a schedule case needs, without
-// fighting the enumerated CHECK constraints a hand-built contests.Contest
-// would have to satisfy on every other field.
+// setSchedule sets a seeded contest's status and window directly, keeping
+// makeContest's valid defaults for every other column.
 func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string, startsAt, endsAt *time.Time) {
 	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -314,11 +285,6 @@ func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string,
 	}
 }
 
-// What a single caller can observe of the scheduler's reads and moves is
-// the contract the in-memory Schedule answers to as well
-// (conteststest.ScheduleRepositoryContract). What it leaves to this file is
-// TryLock refusing a second holder, which only two transactions can see
-// (TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction above).
 func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
 	conteststest.ScheduleRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ScheduleTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -339,17 +305,9 @@ func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
 	})
 }
 
-// TestLockContestSerialisesConcurrentWriters proves LockContest is a real
-// lock between database sessions, not merely decoration: a second caller
-// must block until the first transaction holding it ends, across two real
-// connections rather than one (CLAUDE.md rule 10 — prove it on the path the
-// deployment uses; TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction
-// above proves the same thing for the scheduler's advisory lock). This is
-// what contests.Service.GrantManager and Service.Enroll/AddParticipants rely
-// on to keep a contest's staff and its participants from overlapping no
-// matter how two requests for the same contest interleave: the two checks
-// live in different tables, so only a lock shared by both directions can
-// make one of them wait for the other to finish.
+// A second LockContest must block until the first transaction ends, across
+// two real connections (CLAUDE.md rule 10). GrantManager, Enroll and
+// AddParticipants rely on it to keep staff and participants apart.
 func TestLockContestSerialisesConcurrentWriters(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -410,18 +368,9 @@ func TestLockContestSerialisesConcurrentWriters(t *testing.T) {
 	}
 }
 
-// TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest proves
-// LockContest takes a lock weak enough to leave the contest's other
-// concurrent writers alone: inserting a row that references this contest by
-// foreign key (game_instances.contest_id, here through AddSpare — the same
-// insert the pool's own background top-ups make) takes a key-share lock on
-// the referenced contests row, and that must not be made to wait behind
-// whatever GrantManager, Enroll or AddParticipants is doing with the
-// stronger lock this type serialises them on. A `FOR UPDATE` lock would
-// block it — exactly what would starve the pool of capacity a participant
-// is waiting on for as long as a roster import runs; `FOR NO KEY UPDATE`
-// does not conflict with a key-share lock, so this insert completes
-// promptly while the first transaction still holds LockContest open.
+// A foreign-key insert (AddSpare, as the pool's top-ups do) takes a key-share
+// lock on the contest row, which FOR NO KEY UPDATE does not block. FOR UPDATE
+// would stall the pool for as long as a roster import ran.
 func TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -454,9 +403,7 @@ func TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest(t *testin
 
 	<-holding
 
-	// A tight deadline stands in for "did not wait behind the lock": if the
-	// insert were blocked, it would still be waiting when this expires,
-	// long before release is ever closed.
+	// A blocked insert would still be waiting when this deadline expires.
 	insertCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	insertErr := instances.AddSpare(insertCtx, contest, "lockfk_"+uuid.NewString()[:12], 1)

@@ -14,7 +14,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 )
 
-// fakeWatchStore counts the computations and can hold them until released.
 type fakeWatchStore struct {
 	WatchStore
 	rosters atomic.Int32
@@ -88,7 +87,6 @@ func TestConcurrentRosterMissesShareOneComputation(t *testing.T) {
 	}
 }
 
-// auditSink keeps what the recorder writes, and can refuse.
 type auditSink struct {
 	mu      sync.Mutex
 	entries []audit.Entry

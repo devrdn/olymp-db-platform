@@ -1,15 +1,7 @@
-// Package sentineltest checks that a package lists every error it declares.
-//
-// A domain package hands its errors to the HTTP layer through a list of its
-// own (queryproxy.Errors(), for one), and internal/api answers each from a
-// table. A sentinel declared and left off that list reaches a client as
-// "internal error" for a refusal that is really theirs (CLAUDE.md, security
-// rule 1). A list kept by hand is exactly what drifts, so this reads the
-// package's source and compares names: every exported Err… the package
-// declares, however it is built, against the names its Errors() returns.
-//
-// It reads source and nothing else: no database, no network. It does not
-// decide what an error means to a client; that is internal/api's table.
+// Package sentineltest checks, by reading source, that a package's Errors()
+// lists every exported Err… it declares, so none reaches a client as
+// "internal error" (CLAUDE.md security rule 1). It does not decide what an
+// error means to a client; that is internal/api's table.
 package sentineltest
 
 import (
@@ -54,11 +46,10 @@ func AssertListed(t testing.TB, dir string, internal ...string) {
 	}
 }
 
-// Scan reads the non-test Go source in dir and returns, sorted, the names of
-// every exported package-level Err… it declares and the names its Errors()
-// returns. Errors() must be a single return of a []error literal naming the
-// package's own sentinels; anything else is an error rather than an empty
-// list, so a check cannot pass without reading it.
+// Scan reads the non-test Go source in dir and returns, sorted, the exported
+// package-level Err… names it declares and the names its Errors() returns.
+// Errors() must be a single return of a []error literal; anything else is an
+// error, so a check cannot pass without reading it.
 func Scan(dir string) (declared, listed []string, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -132,7 +123,6 @@ func returnedNames(fn *ast.FuncDecl) ([]string, error) {
 	return names, nil
 }
 
-// describe names an expression for an error message.
 func describe(expr ast.Expr) string {
 	if sel, ok := expr.(*ast.SelectorExpr); ok {
 		if pkg, ok := sel.X.(*ast.Ident); ok {

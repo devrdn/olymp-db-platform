@@ -22,12 +22,9 @@ type Querier interface {
 	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
-// UnitOfWork runs a function inside a single database transaction.
-//
-// The architecture requires several writes to be atomic together — an accepted
-// answer updates the score and appends an audit entry, and either all of it
-// lands or none of it does. Handlers express that by wrapping their work in
-// Do; they never touch a transaction object.
+// UnitOfWork runs a function inside a single database transaction, so that
+// writes such as a score update and its audit entry land together or not at
+// all. Callers never touch a transaction object.
 type UnitOfWork interface {
 	Do(ctx context.Context, fn func(ctx context.Context) error) error
 }
@@ -53,13 +50,9 @@ func QuerierFrom(ctx context.Context, fallback Querier) Querier {
 	return fallback
 }
 
-// InTx reports whether ctx carries an open transaction.
-//
-// Repositories use it to refuse work that is only correct inside one. Deferring
-// a constraint is the case that motivated it: SET CONSTRAINTS outside a
-// transaction block is silently ignored, so a reordering that relies on it
-// would appear to work and then fail depending on the order rows happened to
-// be visited.
+// InTx reports whether ctx carries an open transaction. Repositories use it to
+// refuse work that is only correct inside one: SET CONSTRAINTS outside a
+// transaction block is silently ignored.
 func InTx(ctx context.Context) bool {
 	_, ok := ctx.Value(txKey{}).(Querier)
 	return ok
@@ -70,17 +63,13 @@ type PgxUnitOfWork struct {
 	pool *pgxpool.Pool
 }
 
-// NewUnitOfWork returns a transaction runner for the given pool.
 func NewUnitOfWork(pool *pgxpool.Pool) *PgxUnitOfWork {
 	return &PgxUnitOfWork{pool: pool}
 }
 
 // Do runs fn in a transaction, committing on success and rolling back on
-// failure or panic.
-//
-// A nested call joins the outer transaction rather than opening a second one:
-// PostgreSQL has no independent nested transactions, and silently opening one
-// would break the atomicity the caller asked for.
+// failure or panic. A nested call joins the outer transaction, so the caller's
+// atomicity holds.
 func (u *PgxUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
 	if _, nested := ctx.Value(txKey{}).(Querier); nested {
 		return fn(ctx)
@@ -92,8 +81,7 @@ func (u *PgxUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) 
 	}
 
 	defer func() {
-		// Rollback after a successful commit is a no-op, so this is safe as an
-		// unconditional guard against an early return or a panic.
+		// Rollback after a successful commit is a no-op.
 		_ = tx.Rollback(ctx)
 	}()
 

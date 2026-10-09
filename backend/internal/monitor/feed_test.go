@@ -120,8 +120,6 @@ func TestACursorOutsideTheClockIsRefused(t *testing.T) {
 	}
 }
 
-// pagedSources holds each source's items, oldest first, and serves them a
-// page past a cursor at a time, counting the reads.
 type pagedSources struct {
 	items         map[Source][]FeedItem
 	registrations []uuid.UUID
@@ -188,7 +186,7 @@ func TestStreamFeedMergesEverySourceOnceInOrder(t *testing.T) {
 			t.Fatalf("items %d and %d out of order", i-1, i)
 		}
 	}
-	// Each source's pages once, and one empty read at its end: linear.
+	// Each source's pages once plus one empty read: linear.
 	if limit := 3*(1000/3/MaxFeedPage+2) + 3; sources.reads > limit {
 		t.Errorf("reads = %d, want at most %d", sources.reads, limit)
 	}
@@ -254,8 +252,6 @@ func TestAStreamEndsAtOneInstantForEverySource(t *testing.T) {
 	}
 }
 
-// A stream whose page comes back short is finished: nothing more is asked
-// of that source, since the stream's end is fixed.
 func TestAShortPageEndsAStreamWithoutAnotherRead(t *testing.T) {
 	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
 	reg := uuid.New()

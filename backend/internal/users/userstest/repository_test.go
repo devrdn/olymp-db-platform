@@ -7,14 +7,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
-// TestByLoginResolvesToTheLiveAccountAfterDeleteAndRecreate guards the
-// guarantee ByLogin must give: the real repository resolves a login through
-// the partial unique index on lower(login), which allows at most one
-// non-deleted row per login, so once a login is deleted and recreated the
-// live row is the only sensible answer. The fake used to pick whichever row
-// Go's map iteration visited first, which is unspecified order — so this
-// runs many fresh repositories, each with a fresh map, to catch the case
-// where the deleted row happens to come first.
+// Runs many fresh repositories, since map order decides which row is seen
+// first.
 func TestByLoginResolvesToTheLiveAccountAfterDeleteAndRecreate(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		repo := New()
@@ -32,11 +26,7 @@ func TestByLoginResolvesToTheLiveAccountAfterDeleteAndRecreate(t *testing.T) {
 	}
 }
 
-// TestByLoginStillFindsADeletedAccountWithNoLiveRecreation matches the real
-// repository: its query filters on nothing but lower(login), so a login
-// nobody has recreated yet still resolves to its deleted row. Hiding deleted
-// accounts by default is List's job (see the Status handling in both
-// repositories' List), not ByLogin's.
+// Hiding deleted accounts is List's job, not ByLogin's.
 func TestByLoginStillFindsADeletedAccountWithNoLiveRecreation(t *testing.T) {
 	repo := New()
 	gone := repo.Add(users.User{Login: "petrov", Status: users.StatusDeleted})

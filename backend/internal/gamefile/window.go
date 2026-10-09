@@ -7,49 +7,23 @@ import (
 	"os"
 )
 
-// windowScanBufferSize bounds how much of the data file Window holds at once
-// while it skips to the requested line and reads the lines themselves. Like
-// scanBufferSize in index.go, it does not grow with the file or with any one
-// line inside it.
+// windowScanBufferSize is all Window holds of the data file at once.
 const windowScanBufferSize = 64 * 1024
 
-// maxWindowSkipBytes bounds the one part of a Window call whose cost the
-// caller's own byte budget never described: the walk from the nearest index
-// mark forward to the requested line.
-//
-// A mark every indexInterval lines is what makes paging cheap, and it is also
-// the gap this bound exists for. Asked for line 1,999, Window seeks to the
-// mark at line 1,001 and walks 998 lines it will never show — and a line in
-// this package has no length limit at all, because a dump's COPY rows are
-// whatever the organiser's data is. So `?from=1999&max_bytes=1` could read
-// most of a four-gigabyte file to hand back one byte, on the process serving
-// the olympiad, with no rate limit on the route and (until this file took a
-// context) no way for a client that has hung up to stop it.
-//
-// Eight mebibytes is an average of about 8 KiB across the 999 lines the walk
-// can span — orders of magnitude past a SQL dump's own statements and
-// generous even for wide COPY rows — while still being a fixed, small number
-// rather than "however long the file is". Past it the answer is
-// ErrWindowUnreachable: an honest refusal the console can show, rather than a
-// read nobody asked the cost of.
+// maxWindowSkipBytes bounds the walk from the nearest index mark to the
+// requested line, which maxBytes does not cover. Lines have no length limit,
+// so without it a request for one byte at line 1,999 could read most of a
+// multi-gigabyte file. 8 MiB averages about 8 KiB per skipped line; past it
+// Window returns ErrWindowUnreachable.
 const maxWindowSkipBytes = 8 << 20
 
 // Window returns up to maxLines lines of id's completed upload, starting at
 // fromLine (1-based).
 //
-// Two bounds, and they measure two different things. maxBytes is the caller's
-// own budget for the lines it gets back — the same role MaxChunkBytes plays
-// for Append, just decided by whoever is asking for a look at the file rather
-// than fixed at Store construction, since a console page's reasonable window
-// size has nothing to do with an upload's chunk size. maxWindowSkipBytes is
-// this package's own bound on getting *to* fromLine, which costs I/O and no
-// memory and which maxBytes never described. Together they are what makes the
-// whole call's work a fixed number rather than a function of the file's size.
-//
-// ctx stops the walk between buffers. This runs inside an HTTP request on the
-// process serving the olympiad, and a console that has navigated away or a
-// browser that hung up must not leave a goroutine reading megabytes for
-// nobody.
+// maxBytes bounds the lines returned and maxWindowSkipBytes bounds reaching
+// fromLine, so the call's cost never depends on the file's size. ctx stops
+// the read between buffers, so a client that hung up does not keep a
+// goroutine reading.
 func (s *Store) Window(ctx context.Context, id string, fromLine, maxLines int, maxBytes int64) (Window, error) {
 	if err := validateUploadID(id); err != nil {
 		return Window{}, err
@@ -63,10 +37,8 @@ func (s *Store) Window(ctx context.Context, id string, fromLine, maxLines int, m
 		if !os.IsNotExist(err) {
 			return Window{}, fmt.Errorf("gamefile: open index: %w", err)
 		}
-		// No index yet: either this id was never begun, or it was begun
-		// but never sealed with Complete. Those are different refusals for
-		// a caller to act on, so tell them apart rather than collapsing
-		// both into ErrNotFound.
+		// No index: never begun (ErrNotFound) or not yet completed
+		// (ErrIncomplete).
 		if _, statErr := os.Stat(s.dataPath(id)); statErr != nil {
 			if os.IsNotExist(statErr) {
 				return Window{}, ErrNotFound
@@ -83,9 +55,7 @@ func (s *Store) Window(ctx context.Context, id string, fromLine, maxLines int, m
 	}
 
 	if maxLines <= 0 || int64(fromLine) > hdr.totalLines {
-		// Nothing was asked for, or the request starts past the end of the
-		// file. Both are an empty window, not an error — the caller finding
-		// out there is nothing more to show is a normal outcome of paging.
+		// Paging past the end is an empty window, not an error.
 		return Window{FromLine: fromLine, TotalLines: hdr.totalLines}, nil
 	}
 
@@ -125,17 +95,9 @@ func (s *Store) Window(ctx context.Context, id string, fromLine, maxLines int, m
 	}, nil
 }
 
-// skipLines advances f past exactly n newlines, leaving its position at the
-// first byte of the line that follows. It never accumulates the bytes it
-// skips over — it only counts '\n' occurrences through a fixed buffer — so
-// skipping across lines that are themselves megabytes long costs no more
-// memory than skipping across short ones.
-//
-// budget is the number of bytes it may read doing so. Memory was never what
-// this walk spent; time and disk were, and nothing else bounded them (see
-// maxWindowSkipBytes). ctx is checked once per buffer, which is the finest
-// granularity that costs nothing: one read of windowScanBufferSize is the
-// longest a cancelled call can still be working.
+// skipLines advances f past n newlines, reading at most budget bytes, and
+// leaves it at the first byte of the following line. ctx is checked once per
+// buffer.
 func skipLines(ctx context.Context, f *os.File, n, budget int64) error {
 	start, err := f.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -162,10 +124,7 @@ func skipLines(ctx context.Context, f *os.File, n, budget int64) error {
 			}
 			skipped++
 			if skipped == n {
-				// Seek to just past this newline rather than trusting the
-				// buffered read position: the buffer likely holds bytes
-				// beyond the target, and this call must leave f positioned
-				// exactly at the start of the requested line.
+				// The read went past the target; seek back to it.
 				_, err := f.Seek(pos+int64(i)+1, io.SeekStart)
 				return err
 			}
@@ -173,13 +132,8 @@ func skipLines(ctx context.Context, f *os.File, n, budget int64) error {
 		pos += int64(nRead)
 
 		if rerr == io.EOF {
-			// The index guaranteed fromLine <= totalLines, so this means
-			// the data file no longer matches the index it was completed
-			// with. ErrCorruptIndex and not a bare error: it is the same
-			// fact readIndexHeader's own checks report — the bytes beside
-			// the index have stopped being what it describes — and the one
-			// thing the organiser can do about it is upload the file again
-			// (CLAUDE.md rule 1).
+			// The index promised fromLine <= totalLines, so the data file
+			// no longer matches it.
 			return fmt.Errorf("%w: the data file ended after %d of %d line(s)",
 				ErrCorruptIndex, skipped, n)
 		}
@@ -189,16 +143,9 @@ func skipLines(ctx context.Context, f *os.File, n, budget int64) error {
 	}
 }
 
-// readWindowLines reads forward from f's current position, collecting up to
-// maxLines complete lines and stopping the instant maxBytes bytes have been
-// read, whichever comes first. A line that is still open when the byte
-// budget runs out is returned as the (honestly partial) last line, with
-// truncated set to true.
-//
-// The memory this holds is bounded by maxBytes — the caller's own budget for
-// this call, the same way MaxChunkBytes bounds one Append. It is never
-// bounded by the file, because the file is never the thing being measured
-// here. ctx is checked once per buffer, as in skipLines.
+// readWindowLines reads up to maxLines lines from f's position, stopping once
+// maxBytes have been read. A line cut by the budget is returned partial, with
+// truncated set. ctx is checked once per buffer.
 func readWindowLines(ctx context.Context, f *os.File, maxLines int, maxBytes int64) ([]string, bool, error) {
 	buf := make([]byte, windowScanBufferSize)
 	var (
@@ -240,9 +187,7 @@ readLoop:
 		}
 	}
 
-	// Whatever line was still open when the loop stopped: on a byte-budget
-	// cutoff it is genuinely partial (truncated=true says so); on reaching
-	// EOF it is a file with no trailing newline, and it is whole.
+	// The open line is partial after a budget cutoff, or whole at EOF.
 	if len(cur) > 0 {
 		lines = append(lines, string(cur))
 	}

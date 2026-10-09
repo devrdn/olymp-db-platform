@@ -15,17 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// The guard only protects the tests that go through it. A test that reads
-// CORE_DB_DSN or GAME_DB_DSN itself and opens its own pool walks straight
-// past it — which is how every core test connected until this package
-// existed, and what the next test written in a hurry would do by habit. So
-// this reads the test code of the whole module and fails on any read of
-// either variable outside the two doors: this package for the core database,
-// gamedbtest for the game cluster.
-//
-// It looks for the literal read, the form that habit produces. It is a
-// tripwire, not a proof: a test that goes out of its way to build the name
-// can still get past it, and review is what catches that.
+// The guard protects only the tests that go through it, so this fails on any
+// test code that reads CORE_DB_DSN or GAME_DB_DSN outside this package and
+// gamedbtest. It matches the literal read only; a test that builds the name
+// can still get past it.
 func TestNoTestReadsADatabaseDSNPastTheGuard(t *testing.T) {
 	root := moduleRoot(t)
 	read := regexp.MustCompile(`(Getenv|LookupEnv)\("(CORE|GAME)_DB_DSN"\)`)
@@ -48,9 +41,8 @@ func TestNoTestReadsADatabaseDSNPastTheGuard(t *testing.T) {
 		}
 		dir := filepath.ToSlash(filepath.Dir(rel))
 
-		// Test code is a _test.go file or anything in a <pkg>test helper
-		// package. The product's own reads (internal/platform/config, the
-		// commands under cmd/) are neither, and are not this test's business.
+		// Test code is a _test.go file or anything in a <pkg>test package; the
+		// product's own reads are neither.
 		testCode := strings.HasSuffix(path, "_test.go") || strings.HasSuffix(filepath.Base(filepath.Dir(path)), "test")
 		if !testCode || doors[dir] {
 			return nil
@@ -75,8 +67,6 @@ func TestNoTestReadsADatabaseDSNPastTheGuard(t *testing.T) {
 	}
 }
 
-// moduleRoot is the directory holding go.mod, found by walking up from this
-// package — where `go test` runs it.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -100,13 +90,13 @@ func TestCheckName(t *testing.T) {
 		"dbcontest_core_test": true,
 		"dbcontest_game_test": true,
 		"x_test":              true,
-		"dbcontest_core":      false, // the product's own, the accident this exists for
+		"dbcontest_core":      false,
 		"dbcontest_game":      false,
 		"postgres":            false,
-		"_test":               false, // says nothing about whose tests
+		"_test":               false,
 		"dbcontest_test_core": false,
-		"dbcontest_core_TEST": false, // PostgreSQL names are case-sensitive, and so is this
-		"":                    false, // no name is not a test database's name
+		"dbcontest_core_TEST": false, // PostgreSQL names are case-sensitive
+		"":                    false,
 	} {
 		err := CheckName(name)
 		if got := err == nil; got != want {
@@ -118,15 +108,8 @@ func TestCheckName(t *testing.T) {
 	}
 }
 
-// The refusal, proved on a real server the way a mistaken DSN would meet it:
-// same host, same credentials, a database that is not a test database. The
-// maintenance database "postgres" is the one every cluster has, so this needs
-// nothing created for it — and it is also the database a careless DSN with the
-// name trimmed off lands in.
-//
-// The database is swapped in configure, which runs before the guard is
-// installed: whatever a caller does to the config, it cannot get past the
-// guard by doing it.
+// The maintenance database "postgres" exists on every cluster. It is swapped
+// in through configure, which runs before the guard is installed.
 func TestOpenRefusesADatabaseThatIsNotATestDatabase(t *testing.T) {
 	dsn := os.Getenv(CoreDSNVar)
 	if dsn == "" {
@@ -144,8 +127,6 @@ func TestOpenRefusesADatabaseThatIsNotATestDatabase(t *testing.T) {
 	}
 }
 
-// And the other side: what CORE_DB_DSN names in a test run is accepted, and
-// the pool really is on it.
 func TestOpenCoreAcceptsTheTestDatabase(t *testing.T) {
 	pool, err := OpenCore(t.Context(), nil)
 	if err != nil {
@@ -165,8 +146,6 @@ func TestOpenCoreAcceptsTheTestDatabase(t *testing.T) {
 	}
 }
 
-// OpenCore with nothing configured is a nil pool and no error — the signal
-// every package's TestMain skips on.
 func TestOpenCoreWithoutADSNOpensNothing(t *testing.T) {
 	t.Setenv(CoreDSNVar, "")
 	pool, err := OpenCore(t.Context(), nil)
@@ -175,17 +154,13 @@ func TestOpenCoreWithoutADSNOpensNothing(t *testing.T) {
 	}
 }
 
-// A hook the caller installs in configure is kept — Protect wraps it rather
-// than replacing it — and runs only once the guard has accepted the
-// connection, so a refused database never reaches it.
 func TestProtectKeepsTheCallersHookAndRunsTheGuardFirst(t *testing.T) {
 	dsn := os.Getenv(CoreDSNVar)
 	if dsn == "" {
 		t.Skip("set CORE_DB_DSN to run the database tests")
 	}
 
-	// Atomic: the pool may open a connection, and so run the hook, on a
-	// goroutine of its own.
+	// Atomic: the pool may run the hook on its own goroutine.
 	var calls atomic.Int32
 	withHook := func(database string) func(*pgxpool.Config) {
 		return func(cfg *pgxpool.Config) {

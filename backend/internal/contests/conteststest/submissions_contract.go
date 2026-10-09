@@ -10,34 +10,24 @@ import (
 	"github.com/google/uuid"
 )
 
-// SubmissionTarget is what one case of the contract runs against: a
-// repository holding no submissions yet, a registration and question it may
-// write to, and the store's own clock.
+// SubmissionTarget is a repository holding no submissions yet, a
+// registration and question it may write to, and the store's clock.
 type SubmissionTarget struct {
 	Repo           contests.SubmissionRepository
 	RegistrationID uuid.UUID
 	QuestionID     uuid.UUID
-	// Now is what the store's clock reads when Insert runs. The deadline is
-	// checked against that clock and not the caller's (SubmissionRequest's
-	// own doc), so the contract can only state the boundary in its terms.
+	// Now is the store's clock. The deadline is checked against it, not the
+	// caller's, so the contract states the boundary in its terms.
 	Now func() time.Time
 }
 
 // SubmissionRepositoryContract is what every contests.SubmissionRepository
-// must do, run as subtests against one implementation. Both the in-memory
-// Submissions and postgres.Submissions run it, so the store the service
-// tests trust and the store production uses are held to the same answers:
-// a rule the fake got wrong would otherwise pass every service test and
-// fail only in a contest.
-//
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here; the race between two
-// transactions is a property of the real statement and is proven against
-// PostgreSQL alone.
+// must do; both the in-memory Submissions and postgres.Submissions run it.
+// each prepares a fresh target for one case, calls run with it, and cleans
+// up. The race between two transactions is tested against PostgreSQL alone.
 func SubmissionRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, SubmissionTarget))) {
-	// Every deadline is stated against the store's clock: a day ahead for
-	// the cases not about the deadline, an hour behind for those that are.
+	// Deadlines are stated against the store's clock: a day ahead, or an
+	// hour behind for the cases about the deadline.
 	request := func(target SubmissionTarget, value string) contests.SubmissionRequest {
 		return contests.SubmissionRequest{
 			RegistrationID: target.RegistrationID,
@@ -126,7 +116,7 @@ func SubmissionRepositoryContract(t *testing.T, each func(t *testing.T, run func
 			refused(t, ctx, target, req, contests.ErrQuestionClosed)
 
 			// The cap is the question's setting at the moment of writing,
-			// never one a submission remembers (SubmissionRequest's own doc).
+			// never one a submission remembers.
 			req.MaxAttempts = &two
 			if got := insert(t, ctx, target, req).AttemptNo; got != 2 {
 				t.Fatalf("AttemptNo = %d, want 2", got)

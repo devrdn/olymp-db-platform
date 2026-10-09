@@ -16,8 +16,7 @@ import (
 // ContestManagers implements contests.ManagerRepository.
 var _ contests.ManagerRepository = (*ContestManagers)(nil)
 
-// managerColumns joins the account, because a staff screen listing bare
-// identifiers would send the reader to look every one of them up.
+// managerColumns joins the account so the staff list shows logins and names.
 const managerColumns = `
 	m.contest_id, m.user_id, u.login, u.full_name, m.role, m.granted_by, m.granted_at`
 

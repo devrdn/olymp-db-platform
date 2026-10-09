@@ -23,9 +23,6 @@ func TestProbeURLKeepsAnExplicitHost(t *testing.T) {
 }
 
 func TestProbeURLDefaultsToTheConfigDefault(t *testing.T) {
-	// The container healthcheck runs without full configuration; its fallback
-	// must be the same constant config.Load uses, or the two drift and the
-	// probe silently checks a dead port.
 	got := ProbeURL("")
 
 	if got != "http://127.0.0.1"+config.DefaultInternalAddr+"/healthz" {

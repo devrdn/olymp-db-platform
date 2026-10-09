@@ -219,8 +219,7 @@ func TestWatchWorkspaceListsRevisionsAndReadsOne(t *testing.T) {
 			t.Errorf("another participant's revision: %v, want ErrRevisionNotFound", err)
 		}
 
-		// An organiser looking creates nothing: a workspace never opened has
-		// no tab, and still has none after.
+		// Looking creates nothing: an unopened workspace stays without tabs.
 		empty, err := watch.Workspace(ctx, stranger)
 		if err != nil || len(empty.Tabs) != 0 || empty.Notes.UpdatedAt != nil || len(empty.Revisions) != 0 {
 			t.Errorf("an unopened workspace: %+v, %v", empty, err)

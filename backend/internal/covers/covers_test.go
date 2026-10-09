@@ -43,9 +43,7 @@ func TestAnUploadWritesEverySizeAndRecordsWhatItWrote(t *testing.T) {
 }
 
 func TestAnUploadWithNoCreditLineIsRefusedBeforeThePictureIsRead(t *testing.T) {
-	// Refused before the decode, not after it: resampling a photograph for a
-	// request that was always going to be refused is the expensive half of
-	// this endpoint spent on nothing.
+	// Refused before the decode, which is the expensive step.
 	f := newFixture()
 
 	_, err := f.service.Upload(context.Background(), uuid.New(), uuid.New(),
@@ -57,8 +55,6 @@ func TestAnUploadWithNoCreditLineIsRefusedBeforeThePictureIsRead(t *testing.T) {
 }
 
 func TestACreditLineHasABound(t *testing.T) {
-	// The column is unbounded text and the body limit bounds the request, not
-	// the field (CLAUDE.md, security rule 2).
 	f := newFixture()
 
 	_, err := f.service.Upload(context.Background(), uuid.New(), uuid.New(),
@@ -70,10 +66,8 @@ func TestACreditLineHasABound(t *testing.T) {
 }
 
 func TestACreditLineKeepsOnlyTextItCanStore(t *testing.T) {
-	// It arrives as a multipart field, past the JSON body's own check. A NUL
-	// or bytes that are not UTF-8 made the insert fail — a 500 for a pasted
-	// credit line — and are invisible in a caption anyway, so they are
-	// dropped; a line of nothing but them is no credit line at all.
+	// A multipart field skips the JSON NUL check; NUL and invalid UTF-8 are
+	// dropped, and a line of nothing else is no credit line.
 	ctx := context.Background()
 	f := newFixture()
 	contest := uuid.New()
@@ -136,9 +130,6 @@ func TestAWidthThisServiceNeverStoredIsNotAFile(t *testing.T) {
 }
 
 func TestRemovingACoverLeavesTheFilesToTheSweep(t *testing.T) {
-	// A file system that refuses a delete must not be able to fail an
-	// organiser's edit; the sweep that already collects orphaned game
-	// databases collects these too (design spec §4).
 	ctx := context.Background()
 	f := newFixture()
 	contest := uuid.New()
@@ -161,9 +152,6 @@ func TestRemovingACoverLeavesTheFilesToTheSweep(t *testing.T) {
 }
 
 func TestADraftsCoverIsNotPublic(t *testing.T) {
-	// The file belongs to the olympiad, and the olympiad answers to the same
-	// selection of statuses the public list makes. Guessing an address is not
-	// a way into an unpublished contest.
 	ctx := context.Background()
 	f := newFixture()
 	contest := uuid.New()
@@ -182,8 +170,6 @@ func TestADraftsCoverIsNotPublic(t *testing.T) {
 	}
 }
 
-// --- the stores, in memory -------------------------------------------------
-
 type fixture struct {
 	repo    *memoryRepo
 	files   *memoryFiles
@@ -196,8 +182,8 @@ func newFixture() *fixture {
 	return &fixture{repo: repo, files: files, service: covers.NewService(repo, files)}
 }
 
-// memoryRepo is the covers table, with the contest's own visibility beside it
-// — which is what PublicByContest joins for in PostgreSQL.
+// memoryRepo keeps each contest's visibility beside its cover, which
+// PublicByContest joins for in PostgreSQL.
 type memoryRepo struct {
 	rows      map[uuid.UUID]covers.Cover
 	published map[uuid.UUID]bool
@@ -228,7 +214,6 @@ func (r *memoryRepo) Delete(_ context.Context, contestID uuid.UUID) error {
 	return nil
 }
 
-// memoryFiles stands in for the directory on the volume.
 type memoryFiles struct{ stored map[string][]byte }
 
 func (f *memoryFiles) Put(_ context.Context, key string, _ string, body []byte) error {
@@ -244,8 +229,7 @@ func (f *memoryFiles) Get(_ context.Context, key string) ([]byte, string, error)
 	return body, "image/jpeg", nil
 }
 
-// refusingReader fails the test if anything reads from it: it stands for the
-// upload a refusal must happen before.
+// refusingReader fails the test if anything reads from it.
 type refusingReader struct{ t *testing.T }
 
 func (r *refusingReader) Read([]byte) (int, error) {

@@ -1,16 +1,6 @@
-// Command apicontract writes the API's error vocabulary to a file.
-//
-// The interface has to know every machine code the server can answer with, so
-// that each one has a message in each language. It used to learn that by
-// walking the Go sources with a regular expression, which was both a
-// dependency on another language's layout and wrong: a code written anywhere
-// but the expected call shape was invisible, and one shipped with no message
-// in any language while the check reported success.
-//
-// This publishes the same knowledge as data. The catalog it reads cannot be
-// incomplete — a code that is not declared cannot be sent, because
-// httpx.Error takes a declared type and not a string — so the file is exact by
-// construction rather than by pattern matching.
+// Command apicontract writes the API's error codes to a file the interface
+// checks its translations against. The catalog it reads is complete by
+// construction: httpx.Error accepts only declared codes.
 //
 // It is generated, committed and checked by a test:
 //
@@ -24,29 +14,18 @@ import (
 	"os"
 	"path/filepath"
 
-	// Imported for their side effect: declaring codes. The catalog is
-	// populated by package initialisation, so every package that answers with
-	// codes has to be linked in here.
+	// Imported to declare codes at init; every package with codes must be
+	// linked in.
 	_ "github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 )
 
-// contractFile is where the published contract lives, relative to the
-// repository root.
-//
-// Under docs/ rather than inside either application: it is the boundary
-// between them, and it belongs to neither. If the two ever move to separate
-// repositories, this file is what the backend publishes and the interface
-// consumes — the only thing that has to change is where the consumer fetches
-// it from.
+// contractFile is relative to the repository root, under docs/ because it
+// belongs to neither application.
 const contractFile = "docs/api/error-codes.json"
 
-// contractPath resolves contractFile against the repository root.
-//
-// Found by walking up to the directory holding go.mod rather than trusting the
-// working directory: `go run ./cmd/apicontract` starts in the module root and
-// `go test` starts in the package's own directory, and a relative path cannot
-// be right for both.
+// contractPath resolves contractFile by walking up to go.mod, since `go run`
+// and `go test` start in different directories.
 func contractPath() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -65,10 +44,8 @@ func contractPath() (string, error) {
 	}
 }
 
-// document is the published shape. A wrapper object rather than a bare array
-// so the file can gain a field later without every consumer breaking.
+// document is an object rather than a bare array, so it can gain fields.
 type document struct {
-	// About says what the file is, to whoever opens it without context.
 	About string           `json:"about"`
 	Codes []httpx.CodeInfo `json:"codes"`
 }
@@ -97,10 +74,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// Narrow modes on purpose: git records neither directory permissions nor
-	// anything but the executable bit, so what is committed is unaffected and
-	// there is nothing to gain by asking for more on the machine that
-	// generates the file.
+	// Narrow modes: git records only the executable bit anyway.
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "create %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)

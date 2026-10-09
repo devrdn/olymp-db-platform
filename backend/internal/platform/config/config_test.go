@@ -60,8 +60,6 @@ func TestLoadReadsInternalListenerAddress(t *testing.T) {
 }
 
 func TestLoadRejectsInternalListenerSharingThePublicPort(t *testing.T) {
-	// Metrics and readiness live on the internal listener precisely because
-	// they must not be reachable from the public one.
 	setRequired(t)
 	t.Setenv("HTTP_ADDR", ":8080")
 	t.Setenv("INTERNAL_ADDR", ":8080")
@@ -138,7 +136,6 @@ func TestLoadRejectsMalformedDuration(t *testing.T) {
 }
 
 func TestRedisAddressIsOptional(t *testing.T) {
-	// A single-node install runs without Redis; the service must still start.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
 	cfg, err := Load()
@@ -152,12 +149,7 @@ func TestRedisAddressIsOptional(t *testing.T) {
 }
 
 func TestCoreDatabaseRemainsRequired(t *testing.T) {
-	// The core database has no fallback: without it there are no users,
-	// contests or answers, so starting would be pointless.
-	//
-	// The variable is cleared rather than assumed absent: CI exports it for
-	// the whole job, and a test that reads the ambient environment passes or
-	// fails by accident of where it runs.
+	// Cleared rather than assumed absent: CI exports it for the whole job.
 	t.Setenv("CORE_DB_DSN", "")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
 
@@ -199,8 +191,6 @@ func TestMetricsBackendIsConfigurable(t *testing.T) {
 }
 
 func TestUnknownMetricsBackendIsRejectedAtStartup(t *testing.T) {
-	// Catching a typo at boot beats discovering at the first contest that
-	// nothing was ever recorded.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("METRICS_BACKEND", "statsd")
 
@@ -277,12 +267,6 @@ func TestNegativeDeadlineGraceIsRejected(t *testing.T) {
 	}
 }
 
-// GameInstanceGraceMin is what a contest's own grace_period_min defers to
-// when it is left at zero (provisioning.effectiveGrace's convention, the same
-// one QueryPerMinute documents above): an installation that never configures
-// this still keeps every participant's database for a day after their
-// contest finishes, rather than reclaiming on the very first tick after the
-// feature ships.
 func TestGameInstanceGraceDefaultsToADay(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -319,9 +303,6 @@ func TestNegativeGameInstanceGraceIsRejected(t *testing.T) {
 	}
 }
 
-// GameBuildTimeout bounds one run of an organiser's game script — see the
-// field's own doc for why thirty minutes and not the provisioning pool's own
-// ten.
 func TestGameBuildTimeoutDefaultsToThirtyMinutes(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -361,8 +342,6 @@ func TestANonPositiveGameBuildTimeoutIsRejected(t *testing.T) {
 }
 
 func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
-	// The dangerous default is the insecure one, so production must not have
-	// to remember a flag to get it right.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "production")
 	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
@@ -378,8 +357,6 @@ func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 }
 
 func TestCookieIsNotSecureInDevelopment(t *testing.T) {
-	// A local stack has no certificate, and a browser silently drops a Secure
-	// cookie over plain HTTP — nobody could sign in.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "development")
 
@@ -409,7 +386,6 @@ func TestCookieSecurityCanBeOverridden(t *testing.T) {
 }
 
 func TestTrustedProxiesDefaultToNone(t *testing.T) {
-	// Trusting nobody is the safe default: forwarded headers stay ignored.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
 	cfg, err := Load()
@@ -437,8 +413,6 @@ func TestTrustedProxiesParseCommaSeparatedList(t *testing.T) {
 }
 
 func TestTrustedProxiesRejectGarbageAtStartup(t *testing.T) {
-	// A typo must fail the boot, not silently produce a resolver that trusts
-	// nobody and reintroduces the shared-throttle bug behind the proxy.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("TRUSTED_PROXIES", "not-a-cidr")
 
@@ -448,9 +422,7 @@ func TestTrustedProxiesRejectGarbageAtStartup(t *testing.T) {
 }
 
 func TestDefaultLocaleFallsBackToEnglish(t *testing.T) {
-	// The last resort when a request expresses no preference and no contest
-	// context has narrowed it down. English because the game database is
-	// English, so it is the one language every installation certainly has.
+	// English, because the game database is English.
 	setRequired(t)
 
 	cfg, err := Load()
@@ -464,8 +436,6 @@ func TestDefaultLocaleFallsBackToEnglish(t *testing.T) {
 }
 
 func TestDefaultLocaleIsConfigurable(t *testing.T) {
-	// An installation that runs entirely in Romanian should not have to see
-	// English first; the code is data, so no rebuild is involved.
 	setRequired(t)
 	t.Setenv("DEFAULT_LOCALE", "ro")
 
@@ -480,8 +450,6 @@ func TestDefaultLocaleIsConfigurable(t *testing.T) {
 }
 
 func TestDefaultLocaleRejectsSomethingThatIsNotALanguageTag(t *testing.T) {
-	// Catching a typo at boot beats every participant silently getting the
-	// wrong fallback.
 	setRequired(t)
 	t.Setenv("DEFAULT_LOCALE", "not a tag!")
 
@@ -490,23 +458,10 @@ func TestDefaultLocaleRejectsSomethingThatIsNotALanguageTag(t *testing.T) {
 	}
 }
 
-// A deployment that provisions game databases must also say what the
-// game-script role authenticates with.
-//
-// The two travel together because the second is what stops an organiser's
-// uploaded SQL running with the first one's privileges (gamedb.RoleAuthor).
-// Caught at boot rather than at the first build, which would be an organiser
-// pressing "build" during preparation and being told the deployment is
-// misconfigured.
 func TestAProvisionerWithoutTheGameAuthorPasswordIsRejected(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:pass@pg-game:5432/game")
-	// "Without" has to be stated, not assumed. Load reads the real
-	// environment, and GAME_AUTHOR_PASSWORD is set in any shell that can run
-	// the game-cluster tests — `make test-game` exports it, and so does the
-	// CI job now that it starts a game cluster of its own. Inherited, it made
-	// this test fail for the one reason that is not a defect: the variable it
-	// is asserting the absence of was present.
+	// Cleared: `make test-game` and CI export it.
 	t.Setenv("GAME_AUTHOR_PASSWORD", "")
 
 	_, err := Load()
@@ -518,7 +473,6 @@ func TestAProvisionerWithoutTheGameAuthorPasswordIsRejected(t *testing.T) {
 	}
 }
 
-// And with it, both reach the composition root.
 func TestTheGameAuthorPasswordIsRead(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:pass@pg-game:5432/game")
@@ -533,8 +487,6 @@ func TestTheGameAuthorPasswordIsRead(t *testing.T) {
 	}
 }
 
-// A deployment with no game cluster needs neither, and must still start: the
-// game circuit is optional and registration does not depend on it.
 func TestNeitherGameCredentialIsRequiredWithoutAProvisioner(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -543,10 +495,6 @@ func TestNeitherGameCredentialIsRequiredWithoutAProvisioner(t *testing.T) {
 	}
 }
 
-// The byte budget the game pool is sized against. A default rather than
-// "unlimited", because unlimited is the state where an open contest's roster —
-// written by whoever self-enrols — is a lever on the disk every olympiad on
-// the cluster shares.
 func TestTheGameClusterHasAByteBudgetByDefault(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -559,9 +507,6 @@ func TestTheGameClusterHasAByteBudgetByDefault(t *testing.T) {
 	}
 }
 
-// And it is sized by the operator, in bytes, because only they know the volume
-// underneath the cluster. Past a 32-bit integer, which is the whole reason it
-// is not read as an ordinary count.
 func TestTheGameClusterByteBudgetIsConfigurableBeyondFourGibibytes(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_CLUSTER_MAX_BYTES", "1099511627776")
@@ -584,11 +529,6 @@ func TestANegativeGameClusterByteBudgetIsRejected(t *testing.T) {
 	}
 }
 
-// File uploads are off by default — GameUploadDir empty is exactly what an
-// installation with no upload volume mounted needs, the same convention
-// QueryRunnerAddr uses to turn the console off — and the size limits still
-// come back with real defaults so a deployment that only sets GAME_UPLOAD_DIR
-// is not left with a zero-byte ceiling.
 func TestGameUploadsAreOffByDefault(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -616,10 +556,6 @@ func TestGameUploadsAreOffByDefault(t *testing.T) {
 	}
 }
 
-// The pilot itself named "1 GB-3 GB max" for one upload; the compiled
-// default has to sit above that named ceiling, not equal to it, or the
-// first organiser to approach what somebody guessed at design time is
-// refused for a reason they have no way to raise themselves.
 func TestGameUploadMaxFileBytesDefaultsAboveThePilotsOwnCeiling(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -666,18 +602,6 @@ func TestGameUploadsAreConfigurable(t *testing.T) {
 	}
 }
 
-// GameUploadMaxDirBytes and GameUploadTableMaxDirBytes are two independent
-// ceilings — provisioning.Games.WithTableData's own doc explains why the
-// table builder's CSV data lives in a second, independent gamefile.Store
-// rather than sharing the dump's — and an operator who only ever set the
-// first (because there used to be only one Store to size) must not find the
-// second silently defaulting to the same number: that would let the two
-// stores together claim twice the volume the first variable's own name
-// promises. This is why the field has its own default (4 GiB, a quarter of
-// the dump's 16 GiB) rather than falling back to GameUploadMaxDirBytes's
-// value: a fixed, named default an operator can see and size against the
-// volume, not a silent inherited one that changes if the dump's own limit
-// does.
 func TestGameUploadTableMaxDirBytesIsIndependentOfTheDumpsOwnLimit(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
@@ -701,10 +625,6 @@ func TestNegativeGameUploadAbandonedAfterIsRejected(t *testing.T) {
 	}
 }
 
-// A zero size limit configured alongside a real upload directory would let
-// Games.WithUploads construct a gamefile.Store that refuses every upload
-// outright (its own NewStore requires positive limits) — refused here, at
-// boot, rather than surfacing later as every organiser's upload failing.
 func TestGameUploadDirWithAZeroLimitIsRejectedAtStartup(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
@@ -715,12 +635,6 @@ func TestGameUploadDirWithAZeroLimitIsRejectedAtStartup(t *testing.T) {
 	}
 }
 
-// A zero GameUploadTableMaxDirBytes would let Games.WithTableData construct
-// a second gamefile.Store that refuses every table upload outright, the
-// identical reasoning TestGameUploadDirWithAZeroLimitIsRejectedAtStartup
-// gives for the dump's own directory limit — checked here separately
-// because the two are now two different fields or this refusal could not
-// tell them apart.
 func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
@@ -731,12 +645,6 @@ func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
 	}
 }
 
-// Covers have a directory whether anybody configured one or not. Unlike
-// GAME_UPLOAD_DIR above, empty is not a way to turn the feature off: an
-// installation always has a front page, the front page always shows covers,
-// and the only question this variable answers is where the uploaded ones are
-// kept. The default is the mount point deploy/docker-compose.yml gives the
-// api service.
 func TestTheCoverDirectoryHasADefault(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
@@ -762,23 +670,8 @@ func TestTheCoverDirectoryIsConfigurable(t *testing.T) {
 	}
 }
 
-// The variables this file reads are the whole of what an operator can
-// configure, and deploy/.env.example is where they are told so. Neither of
-// those facts reaches the running process on its own: the compose file has to
-// pass each one into the api container, and a variable it does not pass is a
-// variable an operator sets, restarts for, and never sees take effect — with
-// no error and no log line, because from the process's side it was simply
-// never set. That is how PUBLIC_ORIGINS came to be documented, settable, and
-// dead: an operator whose interface and API answer on different names filled
-// it in and still got 403 on every chunk upload.
-//
-// So the vocabulary this package declares is checked against the deployment
-// that has to carry it, in the same way cmd/apicontract's own test checks the
-// error codes against the file the interface reads. Only variables
-// .env.example actually documents are required: a knob nobody is told about
-// is a knob nobody sets (SHUTDOWN_TIMEOUT is the one such today), and a
-// variable compose passes that this file does not read belongs to another
-// service in the same file.
+// A variable compose does not pass into the api container is silently never
+// set. Only variables deploy/.env.example documents are required to reach it.
 func TestEveryDocumentedVariableReachesTheAPIContainer(t *testing.T) {
 	documented := documentedVariables(t)
 	passed := apiServiceEnvironment(t)
@@ -795,8 +688,6 @@ func TestEveryDocumentedVariableReachesTheAPIContainer(t *testing.T) {
 	}
 }
 
-// repoFile reads one file from the repository root, four levels above this
-// package's own directory.
 func repoFile(t *testing.T, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", name))
@@ -806,11 +697,8 @@ func repoFile(t *testing.T, name string) string {
 	return string(raw)
 }
 
-// configVariables are the environment variables config.go names, read out of
-// its own source rather than listed here: a second, hand-typed copy of the
-// vocabulary is exactly the drift the test above exists to catch (the same
-// reasoning frontend/lib/i18n/dictionary.test.ts gives for reading the
-// generated contract instead of a hand-typed list of actions).
+// configVariables are the environment variables config.go names, read from
+// its source so the list cannot drift.
 func configVariables(t *testing.T) []string {
 	t.Helper()
 	source, err := os.ReadFile("config.go")
@@ -827,13 +715,9 @@ func configVariables(t *testing.T) []string {
 	return names
 }
 
-// A quoted SCREAMING_SNAKE_CASE literal in config.go is an environment
-// variable's name and nothing else — there is no other kind of constant
-// written that way in this file.
+// In config.go a quoted SCREAMING_SNAKE_CASE literal is always a variable name.
 var envNamePattern = regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
 
-// documentedVariables are the assignments deploy/.env.example carries, which
-// is what an operator reads as "this is what you may set".
 func documentedVariables(t *testing.T) map[string]bool {
 	t.Helper()
 	found := map[string]bool{}
@@ -853,10 +737,8 @@ func documentedVariables(t *testing.T) map[string]bool {
 }
 
 // apiServiceEnvironment are the keys the compose file's `api` service passes
-// in. Parsed by indentation rather than with a YAML library: the shape being
-// read is two known levels deep in a file this repository owns, and adding a
-// dependency to a test that guards a deployment file is a worse trade than
-// twenty lines that fail loudly when the shape changes (the guard below).
+// in, parsed by indentation to avoid a YAML dependency; the guard below fails
+// loudly if the shape changes.
 func apiServiceEnvironment(t *testing.T) map[string]bool {
 	t.Helper()
 	keys := map[string]bool{}
@@ -920,9 +802,6 @@ func TestPasswordHashingIsConfigurable(t *testing.T) {
 }
 
 func TestPasswordHashingOutsideItsBoundsIsRejected(t *testing.T) {
-	// Each slot is 64 MiB, so the concurrency is a memory figure and has a
-	// ceiling; a wait of zero would refuse every sign-in that meets another
-	// one, and a long wait parks a goroutine per request of a flood.
 	for name, env := range map[string][2]string{
 		"concurrency above the ceiling": {"PASSWORD_HASH_CONCURRENCY", "65"},
 		"negative concurrency":          {"PASSWORD_HASH_CONCURRENCY", "-1"},
@@ -968,9 +847,6 @@ func TestTheAnswerRateIsConfigurableAndBounded(t *testing.T) {
 		t.Errorf("AnswerRatePerMinute = %d, want 12", cfg.AnswerRatePerMinute)
 	}
 
-	// Zero is not "unlimited" here: an answer budget nobody can turn off is the
-	// point of having one, and above sixty a minute it no longer slows a
-	// script walking a candidate list.
 	for _, value := range []string{"0", "61", "-1", "many"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
@@ -1050,11 +926,6 @@ func TestCoreDBPoolMaxIsConfigurableAndBounded(t *testing.T) {
 	}
 }
 
-// Each bound holds its own value inside a sane range, and neither notices
-// that the two together ask for more connections than exist: a download holds
-// its connection for as long as the reader takes, so ten of them against a
-// pool of five is the whole pool held by people who may be slow on purpose,
-// and sign-in queueing behind them.
 func TestExportConcurrencyIsCheckedAgainstThePoolItIsAShareOf(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("CORE_DB_POOL_MAX", "5")
@@ -1064,8 +935,6 @@ func TestExportConcurrencyIsCheckedAgainstThePoolItIsAShareOf(t *testing.T) {
 		t.Error("Load() accepted EXPORT_CONCURRENCY=10 against CORE_DB_POOL_MAX=5, want error")
 	}
 
-	// Two fifths of the pool is the share the ceiling itself is derived
-	// from, and it is allowed.
 	t.Setenv("EXPORT_CONCURRENCY", "2")
 	cfg, err := Load()
 	if err != nil {
@@ -1075,8 +944,6 @@ func TestExportConcurrencyIsCheckedAgainstThePoolItIsAShareOf(t *testing.T) {
 		t.Errorf("ExportConcurrency = %d, want 2", cfg.ExportConcurrency)
 	}
 
-	// A pool left to its own default is the case the standing ceiling was
-	// already sized against, so the cross-check has nothing to say about it.
 	t.Setenv("CORE_DB_POOL_MAX", "")
 	t.Setenv("EXPORT_CONCURRENCY", "10")
 	if _, err := Load(); err != nil {
@@ -1109,8 +976,6 @@ func TestSessionMaximumLifetimeIsConfigurableAndBounded(t *testing.T) {
 		t.Errorf("SessionMaxLifetime = %v, want 8h", cfg.SessionMaxLifetime)
 	}
 
-	// Below a few minutes nobody finishes signing in and doing anything; past
-	// a week the limit stops being one.
 	for _, raw := range []string{"0s", "-1h", "4m", "169h"} {
 		t.Setenv("SESSION_MAX_LIFETIME", raw)
 		if _, err := Load(); err == nil {
@@ -1135,7 +1000,6 @@ func TestTheAccountCacheLifetimeDefaultsToAFewSeconds(t *testing.T) {
 func TestTheAccountCacheLifetimeIsConfigurableAndBounded(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
-	// Zero turns the cache off: every request reads the account.
 	for raw, want := range map[string]time.Duration{"0s": 0, "2s": 2 * time.Second, "30s": 30 * time.Second} {
 		t.Setenv("SESSION_ACCOUNT_CACHE_TTL", raw)
 		cfg, err := Load()
@@ -1147,8 +1011,6 @@ func TestTheAccountCacheLifetimeIsConfigurableAndBounded(t *testing.T) {
 		}
 	}
 
-	// It is how long a change nothing could announce takes to apply, a
-	// block made by hand included; past half a minute that stops being soon.
 	for _, raw := range []string{"-1s", "31s", "5m", "soon"} {
 		t.Setenv("SESSION_ACCOUNT_CACHE_TTL", raw)
 		if _, err := Load(); err == nil {
@@ -1158,8 +1020,6 @@ func TestTheAccountCacheLifetimeIsConfigurableAndBounded(t *testing.T) {
 }
 
 func TestTheDeviceCookieSecretIsRequiredOutsideDevelopment(t *testing.T) {
-	// Without it every device cookie would be signed with a key nobody chose
-	// — or a fresh one per restart, silently distrusting every browser.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "production")
 
@@ -1246,10 +1106,6 @@ func TestTheTrustedSignInBudgetIsConfigurable(t *testing.T) {
 	}
 }
 
-// The Query Runner runs whatever database and policy a request names, so the
-// Core API's calls to it must carry the shared token wherever the console is
-// on. A production API that starts without one would find out at the first
-// participant's query, from a refusal; refusing the boot names the cause.
 func TestTheQueryRunnerTokenIsRequiredOutsideDevelopmentWhenTheConsoleIsOn(t *testing.T) {
 	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
@@ -1282,10 +1138,6 @@ func TestTheQueryRunnerTokenIsRequiredOutsideDevelopmentWhenTheConsoleIsOn(t *te
 	}
 }
 
-// The device cookie secret signs what a browser presents to sign in without
-// the address limit; the Query Runner token is sent to another service on
-// every query. One value in both places makes a leak of either the other, so
-// the API refuses to start with them equal — and says so without repeating it.
 func TestTheDeviceCookieSecretMustNotBeTheQueryRunnerToken(t *testing.T) {
 	shared := strings.Repeat("x", 40)
 	for _, env := range []string{"production", "development"} {
@@ -1308,8 +1160,6 @@ func TestTheDeviceCookieSecretMustNotBeTheQueryRunnerToken(t *testing.T) {
 	}
 }
 
-// Without an address the API never dials the runner, so there is nothing for
-// a token to protect and nothing to refuse.
 func TestTheQueryRunnerTokenIsNotRequiredWithoutAConsole(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "production")
@@ -1321,9 +1171,6 @@ func TestTheQueryRunnerTokenIsNotRequiredWithoutAConsole(t *testing.T) {
 	}
 }
 
-// Development may run without a token, but a token that is set is held to the
-// same bounds everywhere: a short one set on a laptop is the one copied into
-// production.
 func TestADevelopmentAPIMayOmitTheQueryRunnerTokenButNotShortenIt(t *testing.T) {
 	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
@@ -1358,11 +1205,8 @@ func TestADevelopmentAPIMayOmitTheQueryRunnerTokenButNotShortenIt(t *testing.T) 
 	}
 }
 
-// TRUSTED_PROXIES decides whose X-Forwarded-For the API believes, and so the
-// per-address login throttle, a contest's network restriction and the audit
-// trail. The compose file pins the two containers that front a browser and
-// defaults to exactly those; an operator who follows `cp .env.example .env`
-// must get the same, not a range that trusts every container on the network.
+// An operator who copies .env.example must trust only the two pinned proxy
+// containers, not every container on the network (CLAUDE.md rule 9).
 func TestTheExampleTrustsOnlyThePinnedProxies(t *testing.T) {
 	compose := repoFile(t, "deploy/docker-compose.yml")
 
@@ -1404,11 +1248,6 @@ func TestTheExampleTrustsOnlyThePinnedProxies(t *testing.T) {
 	}
 }
 
-// deploy/.env.example marks every value an operator must choose with
-// "change-me". A deployment started from a copied file without replacing them
-// runs on credentials anybody who has read the repository knows, and nothing
-// else in the system notices. Outside development each variable the API reads
-// a credential from refuses one, naming the variable and never the value.
 func TestAPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 	production := func(t *testing.T) {
 		t.Helper()
@@ -1433,7 +1272,6 @@ func TestAPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			production(t)
 			if name == "GAME_AUTHOR_PASSWORD" || name == "GAME_PROVISIONER_DSN" {
-				// The two are required together.
 				t.Setenv("GAME_PROVISIONER_DSN", "postgres://game:real@pg-game:5432/game")
 				t.Setenv("GAME_AUTHOR_PASSWORD", "a-real-author-password")
 			}

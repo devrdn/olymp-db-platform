@@ -25,9 +25,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeGames stands in for provisioning.Games: the handler's job is the URL,
-// the permission, the shape of the answer and the name of every refusal, and
-// what the service decides is tested where the service lives.
+// fakeGames stands in for provisioning.Games; the service's decisions are
+// tested where it lives.
 type fakeGames struct {
 	template provisioning.Template
 	ofErr    error
@@ -35,9 +34,7 @@ type fakeGames struct {
 	gotSet   string
 	gotActor uuid.UUID
 
-	// Upload half. Every gotX field is set the moment the corresponding
-	// method is called — even on the error path — the same way gotSet and
-	// gotActor above prove a request actually reached the service.
+	// Upload half. gotX fields are set even on the error path.
 	beginErr        error
 	beginResult     provisioning.Upload
 	gotBeginContest uuid.UUID
@@ -49,35 +46,22 @@ type fakeGames struct {
 	gotAppendContest   uuid.UUID
 	gotAppendUpload    uuid.UUID
 	gotAppendOffset    int64
-	gotAppendBodyBytes []byte // read via io.ReadAll here — a test double, not the production streaming path
+	gotAppendBodyBytes []byte // read with io.ReadAll; production streams
 
-	// bodyMeter, when set, is the request body the caller sent, wrapped so
-	// that it counts what has been taken from it. AppendChunk records its
-	// reading at the moment it is entered, which is the one moment that
-	// tells a streamed body from a buffered one — see
-	// gotAppendBodyReadOnEntry.
+	// bodyMeter, when set, wraps the request body so AppendChunk can record how
+	// much was read on entry.
 	bodyMeter *readMeter
-	// gotAppendBodyReadOnEntry is how many bytes of the request body had
-	// already been consumed by the time the handler called AppendChunk. Zero
-	// on the streaming path this route promises; the whole body on a handler
-	// that read it into memory first.
+	// gotAppendBodyReadOnEntry is zero when the handler streams.
 	gotAppendBodyReadOnEntry int64
 
-	// uploads, when set, replaces that io.ReadAll with the real thing: the
-	// body is streamed into a real gamefile.Store on a real directory by the
-	// real provisioning.Games (realUploadService below), so the refusal that
-	// comes back is the domain's own, translated by the domain. It is what
-	// the tests about the *byte path* use — a ceiling the body runs into, a
-	// body that stops arriving — because io.ReadAll is the one thing the
-	// production path never does, and reading the body whole is what hid a
-	// refusal that never happened (CLAUDE.md rule 10).
+	// uploads, when set, streams into a real store via realUploadService, since
+	// io.ReadAll can hide a refusal (CLAUDE.md rule 10).
 	uploads *provisioning.Games
 
 	currentErr    error
 	currentResult provisioning.Upload
 
-	// uploadResult and uploadErr back Upload — the lookup gameView makes for
-	// a file-sourced Template, to resolve the row its UploadID names.
+	// uploadResult and uploadErr back Upload.
 	uploadErr        error
 	uploadResult     provisioning.Upload
 	gotUploadContest uuid.UUID
@@ -103,26 +87,17 @@ type fakeGames struct {
 	gotAbortContest uuid.UUID
 	gotAbortUpload  uuid.UUID
 
-	// limits and limitsEnabled back UploadLimits. Left at their zero values —
-	// an empty gamefile.Limits and enabled=false — a fixture behaves like an
-	// installation with no GAME_UPLOAD_DIR configured, exactly the state
-	// TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff exercises.
+	// limits and limitsEnabled back UploadLimits; their zero values behave like
+	// an installation with no GAME_UPLOAD_DIR.
 	limits        gamefile.Limits
 	limitsEnabled bool
 
-	// The table builder's own third way: a structural description
-	// (SetDefinition) and one table's own chunked CSV data. Every gotX field
-	// below follows beginResult's own convention: set the moment the call is
-	// made, even on the error path, so a test can prove a request actually
-	// reached the service.
+	// Table builder half; gotX fields as above.
 	setDefinitionErr    error
 	gotSetDefinition    provisioning.Definition
 	gotSetDefinitionFor uuid.UUID
 
-	// requestBuildResult and requestBuildErr back RequestBuild — the button
-	// that asks for an already-stored game to be built again. gotRequestBuildActor
-	// and gotRequestBuildContest follow gotCompleteActor's own convention: set
-	// the moment the call is made, even on the error path.
+	// requestBuildResult and requestBuildErr back RequestBuild.
 	requestBuildResult     provisioning.Template
 	requestBuildErr        error
 	gotRequestBuildActor   uuid.UUID
@@ -140,16 +115,11 @@ type fakeGames struct {
 	gotAppendTableDataID    uuid.UUID
 	gotAppendTableOffset    int64
 	gotAppendTableBodyBytes []byte
-	// tableBodyMeter and tableStore are bodyMeter and store above, for
-	// AppendTableChunk instead of AppendChunk — the same reason each exists:
-	// proving the byte path streams rather than buffers, and running a chunk
-	// into a real gamefile.Store so a transport-ceiling test meets the same
-	// probe read the production path does (CLAUDE.md rule 10).
+	// tableBodyMeter and tableStore are bodyMeter and store for
+	// AppendTableChunk.
 	tableBodyMeter                *readMeter
 	gotAppendTableBodyReadOnEntry int64
-	// tableData, when set, is the real provisioning.Games over a real
-	// gamefile.Store: AppendTableChunk is delegated to it so its refusals
-	// are the domain's own, produced by the domain (realTableDataService).
+	// tableData is uploads for AppendTableChunk (realTableDataService).
 	tableData *provisioning.Games
 
 	completeTableErr        error
@@ -185,14 +155,10 @@ type fakeGames struct {
 	gotDeleteRowTable   string
 	gotDeleteRowRow     int64
 
-	// tableLimits and tableLimitsEnabled back TableDataLimits — limits' own
-	// doc, for the table builder's independently configured store.
+	// tableLimits and tableLimitsEnabled back TableDataLimits.
 	tableLimits        gamefile.Limits
 	tableLimitsEnabled bool
 
-	// currentTableErr and currentTableResult back CurrentTableData —
-	// currentErr and currentResult's own convention, for a table's own
-	// chunked CSV upload instead of a dump.
 	currentTableErr        error
 	currentTableResult     provisioning.TableData
 	gotCurrentTableContest uuid.UUID
@@ -296,12 +262,8 @@ func (g *fakeGames) TableDataLimits() (gamefile.Limits, bool) {
 	return g.tableLimits, g.tableLimitsEnabled
 }
 
-// Of mirrors what postgres.GameInstances.Template can actually answer: a row
-// with a real status, or provisioning.ErrNoGame. A zero Template — a game
-// that exists and has no status — is a shape the real repository cannot
-// produce, and several tests used to drive the "there is a game" branch on
-// exactly that, which meant they proved the handler's behaviour for a row
-// production never stores.
+// Of answers only what the real repository can: a row with a real status, or
+// provisioning.ErrNoGame.
 func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error) {
 	if g.ofErr != nil {
 		return provisioning.Template{}, g.ofErr
@@ -312,9 +274,8 @@ func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error
 	return g.template, nil
 }
 
-// StatusOf mirrors what postgres.GameInstances.TemplateStatus returns: the
-// script's length and never the script, so a handler that went on reading
-// Template.Script would answer zero here and the test below would say so.
+// StatusOf, like the real TemplateStatus, returns the script's length but never
+// the script.
 func (g *fakeGames) StatusOf(context.Context, uuid.UUID) (provisioning.Template, error) {
 	if g.ofErr != nil {
 		return provisioning.Template{}, g.ofErr
@@ -356,10 +317,7 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 	if g.uploads != nil {
 		return g.uploads.AppendChunk(context.Background(), contestID, uploadID, offset, r)
 	}
-	// io.ReadAll here is what proves the handler handed AppendChunk a real
-	// io.Reader rather than something it had already drained: reading it a
-	// second time, from the fake, is only possible if the handler never read
-	// it at all.
+	// Readable here only if the handler never read it.
 	body, err := io.ReadAll(r)
 	if err != nil {
 		return 0, err
@@ -371,17 +329,8 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 	return g.appendResult, nil
 }
 
-// realUploadService is the *real* provisioning.Games over a real
-// gamefile.Store on a fresh directory, with one upload already begun — the
-// state a chunk arrives into.
-//
-// The two tests that stream a chunk into a real store used to get their
-// domain sentinels from a copy of provisioning's own wrapGamefileErr kept in
-// this file. A copy is a claim about production that production cannot
-// break: change the mapping there and these tests went on asserting the old
-// codes and passing. So the service itself does the translating now, and
-// chunkRepo below is the smallest thing that lets it run.
-// The store is handed back too, so a test can ask the volume what it kept.
+// realUploadService is the real provisioning.Games over a real gamefile.Store
+// with one upload begun, so refusals use the service's own error mapping.
 func realUploadService(t *testing.T, contestID, uploadID uuid.UUID, limits gamefile.Limits) (*provisioning.Games, *gamefile.Store) {
 	t.Helper()
 	store := beginOn(t, uploadID, limits)
@@ -391,8 +340,8 @@ func realUploadService(t *testing.T, contestID, uploadID uuid.UUID, limits gamef
 	return provisioning.NewGames(repo, nil, nil).WithUploads(store, limits), store
 }
 
-// realTableDataService is realUploadService's own shape for a table's
-// chunked CSV, over the table builder's independent store.
+// realTableDataService is realUploadService for a table's chunked CSV, over the
+// table builder's store.
 func realTableDataService(t *testing.T, contestID, dataID uuid.UUID, table string, limits gamefile.Limits) (*provisioning.Games, *gamefile.Store) {
 	t.Helper()
 	store := beginOn(t, dataID, limits)
@@ -402,11 +351,9 @@ func realTableDataService(t *testing.T, contestID, dataID uuid.UUID, table strin
 	return provisioning.NewGames(repo, nil, nil).WithTableData(store, limits), store
 }
 
-// chunkRepo is provisioning.TemplateRepository cut down to the rows
-// AppendChunk and AppendTableChunk read, and the progress writes they make.
-// Every other method is left to the embedded nil interface and panics if it
-// is ever reached — deliberately: this exists so the real service can run
-// here, not so this file grows a second fake of storage.
+// chunkRepo is provisioning.TemplateRepository cut down to what AppendChunk and
+// AppendTableChunk use; any other method hits the embedded nil interface and
+// panics.
 type chunkRepo struct {
 	provisioning.TemplateRepository
 	upload provisioning.Upload
@@ -480,10 +427,7 @@ func (g *fakeGames) UploadLimits() (gamefile.Limits, bool) {
 	return g.limits, g.limitsEnabled
 }
 
-// fakeDatabases stands in for provisioning.Service's own half: the rows an
-// organizer reads and the drop they ask for. What the drop actually does to a
-// cluster is tested where the service lives; here the questions are the URL,
-// the permission, the shape of the answer and the name of every refusal.
+// fakeDatabases stands in for provisioning.Service's instance list and drop.
 type fakeDatabases struct {
 	list       provisioning.InstanceList
 	listErr    error
@@ -553,24 +497,18 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 	}
 }
 
-// The two budgets allowUploadBegin enforces, restated here because this is an
-// external test package and they are unexported. A change to either constant
-// without a change here shows up as a test that stops asserting the boundary
-// it names — which is why the loops below run right up to the limit and then
-// one past it, rather than "enough" times.
+// Copies of allowUploadBegin's unexported budgets.
 const (
 	maxUploadBeginsPerAddressInTest = 20
 	maxUploadBeginsPerContestInTest = 8
 )
 
-// oneOffice is the address several organisers share — httptest's own default
-// RemoteAddr, spelled out because these tests are about which key a refusal
-// came from.
+// oneOffice is the address several organisers share (httptest's default
+// RemoteAddr), spelled out because these tests are about which key refused.
 const oneOffice = "192.0.2.1:1234"
 
-// beginUploadFrom starts an upload for one contest as seen from one address:
-// the two keys allowUploadBegin bounds, varied independently, which is the
-// only way a test can tell which of them refused a request.
+// beginUploadFrom varies the two keys allowUploadBegin bounds independently, so
+// a test can tell which one refused.
 func (f *gameFixture) beginUploadFrom(remoteAddr, contestID string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID+"/game/uploads",
 		strings.NewReader(`{"filename":"dump.sql","declared_bytes":1}`))
@@ -582,11 +520,8 @@ func (f *gameFixture) beginUploadFrom(remoteAddr, contestID string) *httptest.Re
 	return rec
 }
 
-// readMeter counts what has been drawn from a request body, so a test can ask
-// *when* the bytes were read rather than only what they were. The handler
-// under test is on one side of it and the service double on the other, and
-// the whole difference between streaming and buffering is which of the two
-// had read them by the time the service was called.
+// readMeter counts bytes drawn from a request body, so a test can tell when
+// they were read.
 type readMeter struct {
 	r    io.Reader
 	read int64
@@ -598,8 +533,6 @@ func (m *readMeter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// doBody is do with a body the caller owns — an io.Reader rather than a
-// string, so the test can watch it being consumed.
 func (f *gameFixture) doBody(method, path string, body io.Reader) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, body)
 	req.Header.Set("Content-Type", "application/json")
@@ -622,8 +555,6 @@ func (f *gameFixture) do(method, path, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// Every contest is in this state until somebody writes its game, so it is one
-// shape for the interface to render rather than a 404 to special-case.
 func TestAContestWithNoGameReportsItAsAbsentRatherThanMissing(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.ofErr = provisioning.ErrNoGame
@@ -657,8 +588,7 @@ func TestStoringAScriptIsAcceptedAndComesBackPending(t *testing.T) {
 	}
 }
 
-// The status is polled while a build runs; the script is up to half a
-// mebibyte. Carrying one inside the other would make every poll pay for it.
+// The status is polled during a build, and the script is up to half a mebibyte.
 func TestTheStatusDoesNotCarryTheScriptAndTheScriptEndpointDoes(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.template = provisioning.Template{
@@ -681,13 +611,7 @@ func TestTheStatusDoesNotCarryTheScriptAndTheScriptEndpointDoes(t *testing.T) {
 	}
 }
 
-// This is the fix for the defect this file's own doc names: before it, the
-// status carried neither the source a game was built from nor which upload a
-// file-sourced one came from, so a reloaded page could not tell a file-
-// sourced game from an editor-sourced one, let alone reopen the viewer on the
-// file it was built from. Source and Upload are what closes that — read from
-// provisioning.Template.Source and .UploadID, resolved to the upload's own
-// row through fakeGames.Upload, never invented here.
+// A reloaded page must reopen the viewer on the file the game came from.
 func TestAFileSourcedGamesStatusNamesItsSourceAndItsUpload(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contestID, uploadID := uuid.New(), uuid.New()
@@ -724,11 +648,7 @@ func TestAFileSourcedGamesStatusNamesItsSourceAndItsUpload(t *testing.T) {
 	}
 }
 
-// An editor-sourced game — every game that predates the upload feature, and
-// every one written directly since — carries no upload object at all, not
-// one whose fields are merely empty: a client tells the two apart by
-// whether Upload is present (uploadLimitsResponse's own Enabled field makes
-// the identical choice for a different pair of numbers).
+// Clients test whether Upload is present.
 func TestAnEditorSourcedGamesStatusNamesItsSourceAndCarriesNoUpload(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.template = provisioning.Template{
@@ -746,15 +666,8 @@ func TestAnEditorSourcedGamesStatusNamesItsSourceAndCarriesNoUpload(t *testing.T
 	}
 }
 
-// The status carries the chunk and file ceilings a browser needs before it
-// can slice a file and start a chunked upload — CLAUDE.md rule 11: the value
-// that decides whether AppendChunk accepts a chunk must reach the client that
-// has to obey it. The values chosen here are neither the package's own
-// defaults (defaultMaxGameChunkBodyBytes, 64 MiB) nor the configuration
-// defaults (8 MiB / 4 GiB, config.go's own int64Env calls) — if the handler
-// answered a constant instead of what provisioning.Games.UploadLimits
-// actually reports, this test would still pass with the wrong numbers, which
-// is exactly the failure mode CLAUDE.md rule 11 names.
+// CLAUDE.md rule 11; the values match no default, so answering a constant
+// fails.
 func TestGameStatusCarriesTheConfiguredUploadLimitsNotAConstant(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.limitsEnabled = true
@@ -776,16 +689,8 @@ func TestGameStatusCarriesTheConfiguredUploadLimitsNotAConstant(t *testing.T) {
 	}
 }
 
-// The script ceiling travels with the status too — CLAUDE.md rule 11, the
-// same reason the upload and builder ceilings do. The editor refuses a
-// script that is too long before it spends a request on it, and the number
-// it refuses by has to be the server's own: a copy in the client keeps
-// refusing by the old value the day this one changes, and neither side has
-// a test that notices.
-//
-// Both answers carry it, including the synthetic "absent" one — which is the
-// answer for every contest whose game has not been written yet, and so the
-// one the editor reads before its very first save.
+// CLAUDE.md rule 11; the editor reads the "absent" answer before its first
+// save.
 func TestGameStatusCarriesTheScriptCeilingForAGameAndForNoGame(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -808,13 +713,7 @@ func TestGameStatusCarriesTheScriptCeilingForAGameAndForNoGame(t *testing.T) {
 	}
 }
 
-// A deployment with no GAME_UPLOAD_DIR configured never calls WithUploads, so
-// fakeGames.limitsEnabled stays at its zero value here — the same state
-// provisioning.Games.UploadLimits reports for that installation. The
-// interface must be able to tell "uploads are off" from "the operator
-// configured a limit of zero" (uploadLimitsResponse's own doc), so this
-// checks both halves: enabled is false, and the numbers are not silently
-// reported as some other ceiling.
+// The interface must tell "uploads are off" from "a limit of zero".
 func TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -831,12 +730,8 @@ func TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff(t *testing.T) {
 	}
 }
 
-// GET .../uploads/current is the other moment a reloading page needs the
-// ceilings — before it even knows whether an upload is in progress (Games'
-// own doc on the two situations this covers). Both branches of currentUpload
-// (an upload found, and "absent") must carry them; this checks the one
-// actually returned when there is nothing to resume, since a fresh page load
-// with no prior upload is the common case.
+// A reloading page needs the ceilings before it knows whether an upload is in
+// progress.
 func TestCurrentUploadCarriesTheConfiguredUploadLimits(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.currentErr = provisioning.ErrUploadNotFound
@@ -856,8 +751,7 @@ func TestCurrentUploadCarriesTheConfiguredUploadLimits(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every refusal is a sentinel the handler can name, so the
-// organiser is told what to fix rather than "internal error".
+// CLAUDE.md rule 1: the organiser is told what to fix, not "internal error".
 func TestEveryGameRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -892,15 +786,9 @@ func TestEveryGameRefusalHasItsOwnCode(t *testing.T) {
 	}
 }
 
-// The script runs with the provisioning role's privileges: whoever may write
-// it can run arbitrary SQL on the game cluster. So the route is gated, and an
-// authenticated account that is not staff on this contest is refused.
-//
-// Note what this cannot assert. The contest roles are owner and manager, and
-// both carry contest.view *and* contest.edit — there is no role that reads
-// without writing — so no test here can tell the two permissions apart on
-// this route. What it can prove is that the gate exists and that it
-// discriminates: a stranger is refused and a manager is not.
+// The script runs arbitrary SQL as the provisioning role. No contest role
+// separates view from edit, so this proves only that a stranger is refused and
+// a manager is not.
 func TestWritingTheScriptIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
 
@@ -936,12 +824,8 @@ func TestGameEndpointsRefuseAContestIdentifierThatIsNotAUUID(t *testing.T) {
 	}
 }
 
-// registrationID is a stable pointer for a fixture row's holder.
 func registrationID(id uuid.UUID) *uuid.UUID { return &id }
 
-// What the screen is for: which databases exist, whose each one is, and how
-// much disk it takes. A spare and a participant's copy are one row apart, and
-// the answer has to tell them apart.
 func TestTheInstanceListNamesTheHolderOfEveryCopy(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	held := uuid.New()
@@ -1001,9 +885,6 @@ func TestTheInstanceListNamesTheHolderOfEveryCopy(t *testing.T) {
 	}
 }
 
-// The destructive half. The organiser's identity has to reach the service —
-// nothing can be recorded against them otherwise — and so does the contest,
-// which is what scopes the drop to their own olympiad.
 func TestDroppingADatabaseReachesTheServiceWithTheActorAndTheContest(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
@@ -1026,8 +907,7 @@ func TestDroppingADatabaseReachesTheServiceWithTheActorAndTheContest(t *testing.
 	}
 }
 
-// CLAUDE.md rule 1: every refusal is a sentinel the handler names, so a stale
-// page is told which of the two things happened rather than "internal error".
+// CLAUDE.md rule 1: a stale page is told which of the two things happened.
 func TestEveryInstanceRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1053,15 +933,7 @@ func TestEveryInstanceRefusalHasItsOwnCode(t *testing.T) {
 	}
 }
 
-// Dropping somebody's database is destructive and contest-scoped, so it sits
-// behind the same gate as writing the script.
-//
-// The same limit applies here that TestWritingTheScriptIsRefusedToAnAccount
-// ThatIsNotStaffOnTheContest documents: no contest role grants view without
-// edit, so nothing here can tell contest.view and contest.edit apart on a
-// route. What it can prove is that the gate exists and discriminates — a
-// stranger is refused, and a manager, who is the person on duty when a
-// database goes wrong mid-olympiad, is not.
+// As for the script, no role separates view from edit.
 func TestDroppingADatabaseIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
 
@@ -1089,8 +961,6 @@ func TestAManagerOfTheContestMayDropOneOfItsDatabases(t *testing.T) {
 	}
 }
 
-// Reading the list is behind the contest's own view permission, so a stranger
-// cannot learn which databases an olympiad owns.
 func TestTheInstanceListIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
 
@@ -1127,15 +997,8 @@ func TestBeginningAnUploadReservesOneAndReturnsIt(t *testing.T) {
 	}
 }
 
-// The address budget, proven where only it can answer: every request goes to
-// a *different* contest, so the contest-scoped counter never reaches its own
-// eight and the twenty-first refusal can only have come from the address.
-//
-// Twenty-one requests into one contest — what this asserted before — proved
-// neither. maxUploadBeginsPerContest is 8 against maxUploadBeginsPerAddress's
-// 20, so the ninth request was already refused by the contest key, and both
-// keys answer with the same status and the same code: deleting the address
-// block from allowUploadBegin outright left the test green.
+// Each request targets a different contest, so only the address budget can
+// refuse the twenty-first.
 func TestBeginningAnUploadIsRateLimitedPerAddressAcrossContests(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -1173,9 +1036,8 @@ func TestBeginningAnUploadLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {
 	}
 }
 
-// And the contest budget, proven the same way round: every request comes from
-// a different address, so the address counter never reaches twenty and the
-// ninth refusal can only be the contest's own.
+// Every request comes from a different address, so the ninth refusal can only
+// be the contest's.
 func TestBeginningAnUploadIsRateLimitedPerContestAcrossAddresses(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.NewString()
@@ -1196,14 +1058,8 @@ func TestBeginningAnUploadIsRateLimitedPerContestAcrossAddresses(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 5, as a fact somebody can observe rather than a comment: the
-// address key is spent *before* the contest key, so a caller the address
-// budget refuses never spends a counter in the contest's own budget.
-//
-// The two keys answer with the same status and code, so order cannot be read
-// off the refusal itself. What can be read off it is the contest budget
-// afterwards: a fresh contest whose eight begins are all still there was
-// never charged for the request the address refused.
+// CLAUDE.md rule 5. Both keys answer alike, so the order shows in the contest
+// budget afterwards.
 func TestTheAddressBudgetIsSpentBeforeTheContestsOwn(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -1213,16 +1069,13 @@ func TestTheAddressBudgetIsSpentBeforeTheContestsOwn(t *testing.T) {
 		}
 	}
 
-	// Refused by the address. If the contest key were checked first, this
-	// request would have spent one of the eight below on its way to the same
-	// 429.
+	// Refused by the address. Checked contest-first, this would have spent one
+	// of the eight below.
 	victim := uuid.NewString()
 	if rec := f.beginUploadFrom(oneOffice, victim); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status %d, want 429: %s", rec.Code, rec.Body)
 	}
 
-	// From an address with a budget of its own, the victim contest must
-	// still have all eight of its begins.
 	for i := range maxUploadBeginsPerContestInTest {
 		rec := f.beginUploadFrom(fmt.Sprintf("203.0.113.%d:5000", i+1), victim)
 		if rec.Code != http.StatusCreated {
@@ -1232,14 +1085,8 @@ func TestTheAddressBudgetIsSpentBeforeTheContestsOwn(t *testing.T) {
 	}
 }
 
-// A refused attempt must still count against the budget (CLAUDE.md rule 13):
-// a caller who cannot pass RequireContestPermission must not be able to probe
-// the limiter for free either. Asserted by the same threshold as the address
-// test above holding even though the middleware never lets these requests
-// reach beginUpload — the limiter check sits inside the handler, not before
-// authentication, so RequireContestPermission's own 403 is what is actually
-// being proven never to reach the limiter at all in this case; the
-// permission test below covers that half on its own.
+// RequireContestPermission refuses before the handler, so neither the limiter
+// nor the service is reached.
 func TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
 
@@ -1253,19 +1100,8 @@ func TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *test
 	}
 }
 
-// The chunk is streamed straight into AppendChunk, never read into memory by
-// the handler first (CLAUDE.md rule 12; appendChunk's own doc).
-//
-// What proves that is *when* the body was read, not what came back from it.
-// Asserting only that the fake's own io.ReadAll returned the right bytes —
-// what this test did before — is satisfied just as well by a handler that
-// drains r.Body itself and hands over a bytes.Reader of what it kept: the
-// fake reads the same bytes either way, and rule 12's whole point (an
-// eight-mebibyte chunk of a three-gigabyte upload must not become an
-// eight-mebibyte allocation per request in the API process) went unchecked.
-// So the body counts what is taken from it, and the fake records that count
-// at the instant it is entered: zero on the streaming path, the whole chunk
-// on a buffering one.
+// CLAUDE.md rule 12: the fake records how much of the body was read on entry,
+// zero only when streamed.
 func TestAppendingAChunkStreamsTheBodyToTheService(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, upload := uuid.NewString(), uuid.NewString()
@@ -1315,19 +1151,9 @@ func TestAppendingAChunkWithoutANumericOffsetIsRefused(t *testing.T) {
 	}
 }
 
-// The transport-level ceiling (appendChunk's own doc on maxChunkBody): a body
-// larger than it is refused, and reported as the same refusal
-// ErrUploadChunkTooLarge would produce — not a second code to explain.
-//
-// Proven on the path the deployment uses, not against a double that reads
-// the body with io.ReadAll (CLAUDE.md rule 10). The two numbers below are
-// deliberately equal, because app.go makes them equal — the socket's ceiling
-// *is* GAME_UPLOAD_CHUNK_BYTES — and that is the arrangement in which the
-// refusal used to disappear: io.LimitReader took exactly the cap without an
-// error, the probe read came back (0, "request body too large"), and a
-// refused 9-byte chunk was answered 200 OK with 8 bytes quietly kept. A
-// double that drains the body with io.ReadAll never meets the probe at all,
-// which is why this one streams into a real gamefile.Store.
+// Refused as ErrUploadChunkTooLarge through a real store (CLAUDE.md rule 10),
+// with both numbers equal as app.go sets them: only the probe read sees the
+// excess, which an io.ReadAll double never meets.
 func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, upload := uuid.New(), uuid.New()
@@ -1354,17 +1180,9 @@ func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	}
 }
 
-// The listener's ReadTimeout bounds the whole request, body included, and it
-// is sized for a JSON document (internal/platform/server's own doc). A chunk
-// is not one: it is megabytes, sent over whatever uplink an organiser has,
-// and a Caddy in front does not buffer request bodies. So this route takes
-// its own read deadline, sized to the body it accepts.
-//
-// Proven across a real listener with a real ReadTimeout, because that is
-// where the guarantee lives — a recorder never has a deadline to miss
-// (CLAUDE.md rule 10). The numbers are scaled down by three orders of
-// magnitude; the shape is the deployment's: a body that pauses for longer
-// than the listener's own timeout while it is still being sent.
+// The listener's ReadTimeout is sized for JSON, so this route sets its own read
+// deadline for multi-megabyte chunks; proven across a real listener (CLAUDE.md
+// rule 10).
 func TestASlowChunkBodyIsNotCutOffByTheListenersReadTimeout(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.appendResult = 4
@@ -1402,8 +1220,7 @@ func TestASlowChunkBodyIsNotCutOffByTheListenersReadTimeout(t *testing.T) {
 	}
 }
 
-// A chunk out of order is CLAUDE.md rule 1's own example in this task's
-// brief: its own sentinel, its own code, never a 500.
+// CLAUDE.md rule 1: its own sentinel and code, never a 500.
 func TestAppendingAChunkOutOfOrderNamesItsOwnCode(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.appendErr = provisioning.ErrUploadChunkOutOfOrder
@@ -1419,8 +1236,7 @@ func TestAppendingAChunkOutOfOrderNamesItsOwnCode(t *testing.T) {
 	}
 }
 
-// A page reload finds nothing to resume as an empty, successful answer, not a
-// 404 — the same "absent" shape status() uses for a contest with no game.
+// The same "absent" shape status() uses for a contest with no game.
 func TestCurrentUploadReportsAbsentWhenThereIsNone(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.currentErr = provisioning.ErrUploadNotFound
@@ -1450,8 +1266,7 @@ func TestCurrentUploadReturnsTheInProgressOne(t *testing.T) {
 	}
 }
 
-// CompleteUpload's own doc calls this "the same path as SetScript" — the
-// answer follows the exact shape and status setScript's own test asserts.
+// The same path as SetScript, so the same answer shape and status.
 func TestCompletingAnUploadReplacesTheGame(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, upload := uuid.NewString(), uuid.NewString()
@@ -1494,9 +1309,6 @@ func TestAbortingAnUploadCancelsIt(t *testing.T) {
 	}
 }
 
-// Paging past the last line is a normal outcome, not a failure: gamefile.
-// Window's own doc treats it as an empty window, and this handler adds
-// nothing on top of that.
 func TestUploadWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.windowResult = gamefile.Window{FromLine: 10_000, TotalLines: 40}
@@ -1515,11 +1327,8 @@ func TestUploadWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 2: max_lines and max_bytes are the caller's own budget for
-// one gamefile.Window call, and an organiser's query string is not a trusted
-// source for how much of this process's memory one request may hold
-// (readWindowLines' own doc). A value past the ceiling is clamped, not
-// honoured verbatim.
+// CLAUDE.md rule 2: a query string must not decide how much memory a request
+// holds.
 func TestUploadWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -1536,12 +1345,8 @@ func TestUploadWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every one of provisioning/upload.go's thirteen sentinels
-// gets its own code and its own status, proven through one endpoint the same
-// way TestEveryGameRefusalHasItsOwnCode and TestEveryInstanceRefusalHasItsOwn
-// Code already prove it for the script and instance sentinels — fail is one
-// switch shared by every route on this handler, so which endpoint raises the
-// sentinel does not change what it maps to.
+// fail is one switch for every route, so one endpoint covers
+// provisioning/upload.go's sentinels.
 func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1580,13 +1385,7 @@ func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
 	}
 }
 
-// Starting, feeding, finishing and cancelling an upload all sit behind
-// contest.edit, exactly where writing the script does — replacing the game
-// through an upload is no less destructive than SetScript (Mount's own
-// comment). Only beginUpload is exercised directly above
-// (TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest); this
-// covers the other three write endpoints and the two read ones with the same
-// gate.
+// beginUpload is tested above; this covers the other writes and the two reads.
 func TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	upload := uuid.NewString()
 	for _, tc := range []struct {
@@ -1612,13 +1411,8 @@ func TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testi
 	}
 }
 
-// The 401 every unauthenticated request on this handler gets is not proof a
-// route exists — chi answers a genuinely unmounted path with the router's own
-// 404 before this handler is ever reached, but this whole fixture's router
-// has nothing else mounted for a 401 to come from either. Only a real,
-// permitted session reaching each handler's own success shape (not chi's
-// codeNotFound) proves the routing table in Mount actually holds all six
-// upload routes.
+// Only a permitted session reaching each handler's own success shape, not chi's
+// 404, proves Mount holds all six upload routes.
 func TestGameUploadRoutesAreMounted(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, upload := uuid.NewString(), uuid.New()
@@ -1655,10 +1449,6 @@ func TestGameUploadRoutesAreMounted(t *testing.T) {
 
 // --- The table builder: a structural description instead of SQL -----------
 
-// A PUT is decoded into the exact provisioning.Definition the service is
-// asked to save, and a GET answers back the shape a saved builder-sourced
-// game carries — the round trip this task's own brief asks for ("read and
-// written whole in a single request").
 func TestDefinitionRoundTripsThroughGetAndPut(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.NewString()
@@ -1697,10 +1487,7 @@ func TestDefinitionRoundTripsThroughGetAndPut(t *testing.T) {
 	}
 }
 
-// A contest with no game, or one built the other two ways, must not refuse
-// this read: a console that has not yet learned which of the three ways
-// built a game can still ask for a definition and get an empty one back,
-// exactly the "absent" shape status() and script() already give.
+// The same "absent" shape status() gives.
 func TestDefinitionOfANonBuilderGameComesBackEmptyNotAnError(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.template = provisioning.Template{
@@ -1714,17 +1501,8 @@ func TestDefinitionOfANonBuilderGameComesBackEmptyNotAnError(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every provisioning.Definition.Validate sentinel gets its
-// own code, so an organiser is told which mistake they made rather than
-// "internal error".
-//
-// The exact status, not merely "some 4xx" — which is what this asserted
-// until it was noticed that the difference is the whole of one of these
-// cases. ErrDefinitionTableLocked is deliberately a 409 and not a 400, with
-// five lines in fail() saying why: the interface tells "the description is
-// wrong, fix the form" (400) from "the description conflicts with data you
-// already have, delete the rows first" (409), and a silent change that
-// merged the two would have left every table in this list green.
+// ErrDefinitionTableLocked is a 409, "delete the rows first", not a 400 "fix
+// the form".
 func TestEveryDefinitionRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1770,10 +1548,7 @@ func TestWritingTheDefinitionIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *t
 	}
 }
 
-// The status published alongside every other game screen must carry the
-// table builder's own ceilings too — builderLimitsResponse's own doc, the
-// same rule 11 concern uploadLimitsResponse's own tests already cover for
-// the dump.
+// CLAUDE.md rule 11, for the table builder's ceilings.
 func TestGameStatusCarriesBuilderLimits(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -1819,9 +1594,6 @@ func TestBeginningATableUploadReachesTheServiceAndReturnsIt(t *testing.T) {
 	}
 }
 
-// The chunk is streamed straight into AppendTableChunk, never buffered by
-// the handler first — appendChunk's own test of the identical concern, for
-// the table builder's independent transport ceiling.
 func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, dataID := uuid.NewString(), uuid.NewString()
@@ -1851,12 +1623,7 @@ func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
 	}
 }
 
-// The transport-level ceiling (appendTableChunk's own doc), proven the same
-// way TestAppendingAChunkOverTheTransportCeilingIsRefused proves it for the
-// dump: a real gamefile.Store, so the refusal comes from the same probe read
-// the production path meets rather than from a double that drains the body
-// with io.ReadAll first (CLAUDE.md rule 10). This is the mandatory "chunk
-// size exceeded" case for the table builder's own independent ceiling.
+// Through a real store, as for the dump (CLAUDE.md rule 10).
 func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, dataID := uuid.New(), uuid.New()
@@ -1883,10 +1650,6 @@ func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	}
 }
 
-// A reloaded page finds a table's own chunked upload still in progress and
-// can offer to resume it — CurrentUpload's own test
-// (TestCurrentUploadReturnsTheInProgressOne), mirrored here for a table's
-// CSV instead of a dump.
 func TestCurrentTableDataReturnsTheInProgressOne(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.currentTableResult = provisioning.TableData{
@@ -1907,9 +1670,6 @@ func TestCurrentTableDataReturnsTheInProgressOne(t *testing.T) {
 	}
 }
 
-// A reloaded page finding nothing to resume gets an empty, successful
-// answer, not a 404 — TestCurrentUploadReportsAbsentWhenThereIsNone's own
-// doc, for a table's own CSV.
 func TestCurrentTableDataReportsAbsentWhenThereIsNone(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.currentTableErr = provisioning.ErrTableDataNotFound
@@ -1930,9 +1690,7 @@ func TestCurrentTableDataReportsAbsentWhenThereIsNone(t *testing.T) {
 	}
 }
 
-// A refusal that is not "nothing in progress" — the table itself is not
-// (or no longer) part of the contest's current definition — is still a
-// refusal, never folded into the "absent" answer above.
+// A table no longer in the definition is a refusal, not the "absent" answer.
 func TestCurrentTableDataForAnUnknownTableIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.currentTableErr = provisioning.ErrTableUnknown
@@ -1946,12 +1704,8 @@ func TestCurrentTableDataForAnUnknownTableIsRefused(t *testing.T) {
 	}
 }
 
-// Proof that appendTableChunk's own transport ceiling (maxTableChunkBody) is
-// independent of appendChunk's (maxChunkBody): a body that would be refused
-// by the dump's default 64 MiB ceiling but fits comfortably inside it is
-// still refused here once the table builder's own, separately configured
-// ceiling is set below the body's size — the two fields must never collide
-// onto one number.
+// A body well inside the dump's 64 MiB default is still refused by a smaller
+// table ceiling.
 func TestATableChunkCeilingIsIndependentOfTheDumpsOwn(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.handler.WithMaxTableChunkBody(4)
@@ -2008,10 +1762,6 @@ func TestAbortingATableUploadCancelsIt(t *testing.T) {
 	}
 }
 
-// The mandatory "window on a nonexistent row" case: a window whose
-// fromRow is past the file's own end comes back as an empty page, not an
-// error — provisioning.Games.TableDataWindow's own doc, and this handler
-// adds nothing on top of it (uploadWindow's identical test for the dump).
 func TestTableDataWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.windowTableResult = provisioning.TableRowWindow{FromRow: 10_000, TotalRows: 3}
@@ -2030,9 +1780,7 @@ func TestTableDataWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
 	}
 }
 
-// The same rule 2 concern uploadWindow's own test already proves for the
-// dump: an organiser's query string is not a trusted source for how much of
-// this process's memory one request may hold.
+// CLAUDE.md rule 2, as for the dump's window.
 func TestTableDataWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -2049,10 +1797,7 @@ func TestTableDataWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	}
 }
 
-// The two ceilings tableDataWindow clamps to, restated here because this is
-// an external test package and they are unexported — chunkOffset's own
-// TestAppendingAChunkWithoutANumericOffsetIsRefused gives the identical
-// reason for restating a package-private constant in this file.
+// Copies of tableDataWindow's unexported ceilings.
 const (
 	maxTableWindowRowsInTest  = 1000
 	maxTableWindowBytesInTest = 1 << 20
@@ -2094,9 +1839,6 @@ func TestDeletingATableRowSucceedsWithNoContent(t *testing.T) {
 	}
 }
 
-// A row number that is not a positive integer is refused before the service
-// is ever asked — the same shape TestAppendingAChunkWithoutANumericOffset
-// IsRefused proves for the dump's own offset.
 func TestDeletingATableRowWithAMalformedRowNumberIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -2109,12 +1851,8 @@ func TestDeletingATableRowWithAMalformedRowNumberIsRefused(t *testing.T) {
 	}
 }
 
-// The mandatory "operation with the feature disabled" case: an installation
-// with no table-data volume configured answers every one of these routes
-// with a named refusal — provisioning.ErrTableDataDisabled, mapped below —
-// never a panic from dereferencing a store that was never opened. The
-// service itself is what refuses (Games' own nil check); this proves the
-// handler passes that refusal through as a 4xx rather than assuming success.
+// The service refuses with ErrTableDataDisabled; the handler must not panic on
+// a store never opened.
 func TestTableDataDisabledAnswersANamedRefusalNotAPanic(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -2144,9 +1882,6 @@ func TestTableDataDisabledAnswersANamedRefusalNotAPanic(t *testing.T) {
 	}
 }
 
-// A row a delete asked for that the file does not have is refused by name —
-// mirroring TestEveryInstanceRefusalHasItsOwnCode's own reasoning: an
-// organiser is told which of several similar things happened.
 func TestDeletingANonexistentTableRowNamesItsOwnCode(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.deleteRowErr = provisioning.ErrTableRowNotFound
@@ -2160,11 +1895,7 @@ func TestDeletingANonexistentTableRowNamesItsOwnCode(t *testing.T) {
 	}
 }
 
-// The mandatory "someone else's contest" case: a table-data id that belongs to
-// another contest reads identically to one that does not exist at all
-// (tableDataByIDForContest's own doc) — the handler must not distinguish
-// them, so this asserts on the code the service's own answer produces
-// rather than on anything the handler could leak about the other contest.
+// The handler must not tell another contest's id from a missing one.
 func TestAnotherContestsTableDataIsReportedAsNotFound(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.completeTableErr = provisioning.ErrTableDataNotFound
@@ -2179,13 +1910,8 @@ func TestAnotherContestsTableDataIsReportedAsNotFound(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1, for every sentinel in provisioning/tabledata.go and the
-// CSV parsing it drives (provisioning/tablecsv.go) — this task's own brief
-// names both files by name. Proven through completeTableUpload, the one
-// route that can raise every one of them: the header check, the row check
-// and every tabledata.go sentinel besides ErrTableUnknown (its own test,
-// below) all reach CompleteTableUpload's own return in the real service, and
-// fail is one switch shared by every route on this handler.
+// completeTableUpload can raise every tabledata.go and tablecsv.go sentinel
+// except ErrTableUnknown, and fail is one switch for every route.
 func TestEveryTableDataRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -2227,11 +1953,9 @@ func TestEveryTableDataRefusalHasItsOwnCode(t *testing.T) {
 	}
 }
 
-// The other sentinels not reachable through completeTableUpload above:
-// ErrTableUnknown (a table not in the contest's current definition),
-// ErrTableRowNotFound and ErrTableRowAlreadyDeleted (DeleteTableRow's own),
-// and ErrTooManyDeletedRows (migration 27's own CHECK, surfaced as a
-// sentinel) — proven through the routes that can actually raise them.
+// The sentinels completeTableUpload cannot raise, through the routes that can:
+// ErrTableUnknown, ErrTableRowNotFound, ErrTableRowAlreadyDeleted and
+// ErrTooManyDeletedRows (migration 27's CHECK).
 func TestTheRemainingTableRefusalsHaveTheirOwnCode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -2259,13 +1983,8 @@ func TestTheRemainingTableRefusalsHaveTheirOwnCode(t *testing.T) {
 	}
 }
 
-// The mandatory requirement this task's own brief states by name: a CSV
-// refusal must carry the row number and the column to the interface, or a
-// refusal on a file of a million rows is useless. provisioning's own
-// validateRow already writes both into the sentinel's message
-// (fmt.Errorf("%w: row %d, column %q: ...")); this proves fail() passes
-// that text through as the response's own message rather than replacing it
-// with a fixed sentence that drops the specifics.
+// validateRow puts the row and column in the message; fail() must pass that
+// text through.
 func TestATableValueRefusalCarriesTheRowAndColumnToTheInterface(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.completeTableErr = fmt.Errorf("%w: row 42, column \"age\": %q is not a whole number that fits a 32-bit integer",
@@ -2276,20 +1995,14 @@ func TestATableValueRefusalCarriesTheRowAndColumnToTheInterface(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
 	}
-	// The column name reaches the wire JSON-escaped (\"age\"), not literally
-	// quoted — checked for the word itself rather than for Go's own %q
-	// spelling of it.
+	// The column arrives JSON-escaped (\"age\"), so the word is checked, not
+	// Go's %q spelling.
 	if !strings.Contains(rec.Body.String(), "row 42") || !strings.Contains(rec.Body.String(), "age") {
 		t.Fatalf("the refusal does not name the row and column: %s", rec.Body)
 	}
 }
 
-// CLAUDE.md rule 11, for the table builder's own independently configured
-// ceilings: the response must carry provisioning.Games.TableDataLimits' own
-// answer, never defaultMaxGameChunkBodyBytes or any other constant this
-// package keeps. The numbers chosen here are neither that default nor the
-// dump's own configured pair a sibling test uses, so a handler that
-// answered with the wrong source would still be caught.
+// CLAUDE.md rule 11; the values match no default.
 func TestBuilderLimitsCarryTheConfiguredTableDataLimitsNotAConstant(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.tableLimitsEnabled = true
@@ -2308,11 +2021,7 @@ func TestBuilderLimitsCarryTheConfiguredTableDataLimitsNotAConstant(t *testing.T
 	}
 }
 
-// A deployment with no table-data volume configured never calls
-// WithTableData, so fakeGames.tableLimitsEnabled stays false — the state
-// TableDataLimits reports for that installation — while the structural
-// ceilings (max_tables and friends) are still published: a definition may
-// be described without ever uploading a byte of CSV.
+// A definition needs no CSV, so the structural ceilings are still published.
 func TestBuilderLimitsAreDisabledButStructuralLimitsStillShowWhenTableDataIsOff(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 
@@ -2329,9 +2038,6 @@ func TestBuilderLimitsAreDisabledButStructuralLimitsStillShowWhenTableDataIsOff(
 	}
 }
 
-// Every write endpoint of the table builder's own group sits behind
-// contest.edit, the mandatory "missing permission" case, mirroring
-// TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest.
 func TestTableEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	dataID := uuid.NewString()
 	for _, tc := range []struct {
@@ -2380,10 +2086,8 @@ func TestTableReadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *te
 	}
 }
 
-// Only a real, permitted session reaching each handler's own success shape
-// proves the routing table in Mount actually holds every table-builder
-// route — TestGameUploadRoutesAreMounted's own reasoning: a 401 from an
-// unmounted path proves nothing here, since authentication runs first.
+// Only a permitted session reaching each handler's success shape proves Mount
+// holds every table-builder route.
 func TestGameTableBuilderRoutesAreMounted(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, dataID := uuid.NewString(), uuid.New()
@@ -2425,9 +2129,7 @@ func TestGameTableBuilderRoutesAreMounted(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildAnswersTheGameItWillBuild is the button's happy path.
-// 202, because nothing is built by the time this answers, and a body the
-// polling screen can carry on from.
+// 202: nothing is built yet.
 func TestAskingForABuildAnswersTheGameItWillBuild(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.NewString()
@@ -2453,9 +2155,7 @@ func TestAskingForABuildAnswersTheGameItWillBuild(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildWhileTheContestRunsIs409GameNotEditable: raising the
-// version takes every participant's database at once, which is why the
-// service refuses it and why the code, not the sentence, is the contract.
+// Raising the version takes every participant's database at once.
 func TestAskingForABuildWhileTheContestRunsIs409GameNotEditable(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.requestBuildErr = provisioning.ErrGameNotEditable
@@ -2469,10 +2169,8 @@ func TestAskingForABuildWhileTheContestRunsIs409GameNotEditable(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildWhileOneRunsIs409BuildInProgress: a build already
-// running or waiting loads everything stored up to the moment it started, so
-// a second request while it is in flight would only build the same thing
-// twice.
+// A running or waiting build already loads everything stored before it started,
+// so a second would build the same thing twice.
 func TestAskingForABuildWhileOneRunsIs409BuildInProgress(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.requestBuildErr = provisioning.ErrBuildInProgress
@@ -2486,14 +2184,9 @@ func TestAskingForABuildWhileOneRunsIs409BuildInProgress(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildWithNoGameIs404NoGameToBuild: there is nothing stored to
-// build again.
-//
-// Its own code rather than the participant's no_game_yet. That one says the
-// database is not ready yet and to try again shortly, which is true for
-// somebody waiting on their own copy and false here: every route on this
-// handler is staff, waiting never produces a game, and saving a script, a
-// dump or a table definition is the only thing that does.
+// Its own code rather than the participant's no_game_yet, which means "try
+// again shortly": on staff routes waiting never produces a game, only saving a
+// script, dump or table definition does.
 func TestAskingForABuildWithNoGameIs404NoGameToBuild(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.requestBuildErr = provisioning.ErrNoGame
@@ -2507,10 +2200,6 @@ func TestAskingForABuildWithNoGameIs404NoGameToBuild(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest mirrors
-// every other write route on this handler: the button sits behind
-// contest.edit, the same permission that already guards replacing the game
-// outright.
 func TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
 

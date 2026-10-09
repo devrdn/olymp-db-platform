@@ -24,9 +24,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// collectingSink keeps audit entries for assertions. Appends are guarded: a
-// test that signs in from several goroutines at once records from each of
-// them. Assertions read entries directly once those goroutines are done.
+// collectingSink guards appends, since some tests sign in concurrently.
 type collectingSink struct {
 	mu      sync.Mutex
 	entries []audit.Entry
@@ -128,8 +126,6 @@ func TestLoginRejectsAWrongPassword(t *testing.T) {
 }
 
 func TestUnknownLoginAndWrongPasswordAreIndistinguishable(t *testing.T) {
-	// Different answers would turn the login form into a directory of who has
-	// an account here.
 	f := newFixture(t)
 	ctx := context.Background()
 
@@ -142,9 +138,6 @@ func TestUnknownLoginAndWrongPasswordAreIndistinguishable(t *testing.T) {
 }
 
 func TestUnknownLoginStillSpendsTheHashingTime(t *testing.T) {
-	// Returning early for an unknown login would answer in microseconds while
-	// a real account costs tens of milliseconds — a timing oracle for account
-	// enumeration.
 	f := newFixture(t)
 
 	started := time.Now()
@@ -170,11 +163,6 @@ func TestBlockedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
 	}
 }
 
-// TestDeletedAccountIsRejectedEvenWithTheRightPassword is the central claim
-// the whole feature rests on: deletion is a status, not a column, and sign-in
-// already refuses anything whose status is not active. The account's password
-// is still correct and its row still exists — the refusal has to come from
-// the status alone.
 func TestDeletedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
 	f := newFixture(t)
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
@@ -190,8 +178,6 @@ func TestDeletedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
 }
 
 func TestBlockedAccountLooksLikeAnyOtherFailureToSomeoneGuessing(t *testing.T) {
-	// The account owner deserves to be told they are blocked, but only after
-	// proving they own it. A wrong guess must not reveal that the login exists.
 	f := newFixture(t)
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 
@@ -232,7 +218,6 @@ func TestLoginStampsTheLastLoginTime(t *testing.T) {
 }
 
 func TestLoginSurfacesAOneTimePassword(t *testing.T) {
-	// An administrator-issued password has to end in the user choosing theirs.
 	f := newFixture(t)
 	hash := passwordtest.Hash(t, testPassword)
 	_ = f.repo.SetPassword(context.Background(), f.user.ID, hash, true)
@@ -261,7 +246,6 @@ func TestSuccessfulLoginIsAudited(t *testing.T) {
 }
 
 func TestFailedLoginIsAudited(t *testing.T) {
-	// Failed attempts are the signal that matters when investigating later.
 	f := newFixture(t)
 
 	_, _ = f.service.Login(context.Background(), loginCmd("wrong password"))
@@ -269,19 +253,11 @@ func TestFailedLoginIsAudited(t *testing.T) {
 	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionAuthLoginFailed {
 		t.Errorf("audit actions = %v, want one %q", got, audit.ActionAuthLoginFailed)
 	}
-	// The record has to say why, or an administrator reading it cannot tell a
-	// mistyped password from a blocked account from a sweep of guesses — three
-	// different conversations to have.
 	if reason := f.sink.entries[0].Payload["reason"]; reason != ReasonInvalidCredentials {
 		t.Errorf("reason = %v, want %q", reason, ReasonInvalidCredentials)
 	}
 }
 
-// TestBlockedAccountFailureRecordsWhyItIsBlocked covers the case where the
-// caller does own the account: the password matched, and only then did the
-// block refuse the sign-in. The endpoint tells this caller the account is
-// blocked (they proved ownership), so the trail recording the same fact adds
-// no distinction beyond what the wire already gave away.
 func TestBlockedAccountFailureRecordsWhyItIsBlocked(t *testing.T) {
 	f := newFixture(t)
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
@@ -296,14 +272,7 @@ func TestBlockedAccountFailureRecordsWhyItIsBlocked(t *testing.T) {
 	}
 }
 
-// TestBlockedAccountWithWrongPasswordNeverRecordsTheBlock is the trail-side
-// half of TestBlockedAccountLooksLikeAnyOtherFailureToSomeoneGuessing: a
-// wrong guess against a blocked account must record exactly what a wrong
-// guess against any other account records. Recording ReasonAccountBlocked
-// here would make the audit trail an oracle the endpoint itself was built to
-// deny — an administrator (or anyone who later gets read access to the same
-// row) would learn the account exists and is blocked from a password that
-// never matched anything.
+// The trail must not become the oracle the endpoint denies.
 func TestBlockedAccountWithWrongPasswordNeverRecordsTheBlock(t *testing.T) {
 	f := newFixture(t)
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
@@ -322,9 +291,6 @@ func TestBlockedAccountWithWrongPasswordNeverRecordsTheBlock(t *testing.T) {
 	}
 }
 
-// TestThrottledLoginRecordsTooManyAttempts covers both throttle windows: the
-// caller is told "too many attempts" either way, and the trail says no more
-// than that either.
 func TestThrottledLoginRecordsTooManyAttempts(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -375,8 +341,6 @@ func TestRepeatedFailuresAreBlocked(t *testing.T) {
 }
 
 func TestThrottlingSurvivesTheCorrectPassword(t *testing.T) {
-	// Otherwise an attacker who eventually guesses right walks straight in,
-	// which is exactly the case throttling exists for.
 	f := newFixture(t)
 	ctx := context.Background()
 	for range maxLoginAttemptsPerAccountAddress + 1 {
@@ -400,7 +364,6 @@ func TestSuccessClearsTheFailureCount(t *testing.T) {
 		t.Fatalf("Login() returned error: %v", err)
 	}
 
-	// The counter is clear, so a fresh run of failures is allowed again.
 	for range maxLoginAttemptsPerAccountAddress {
 		if _, err := f.service.Login(ctx, loginCmd("wrong password")); errors.Is(err, ErrTooManyAttempts) {
 			t.Fatal("the failure counter was not cleared by the successful login")
@@ -409,8 +372,6 @@ func TestSuccessClearsTheFailureCount(t *testing.T) {
 }
 
 func TestLoginUpgradesAnOutdatedPasswordHash(t *testing.T) {
-	// Raising the cost must not lock anyone out: a digest made with weaker
-	// parameters still authenticates, and is replaced on the way through.
 	f := newFixture(t)
 	ctx := context.Background()
 	outdated := passwordtest.WeakHash(t, testPassword)
@@ -430,7 +391,6 @@ func TestLoginUpgradesAnOutdatedPasswordHash(t *testing.T) {
 }
 
 func TestLoginIsCaseInsensitiveInTheLogin(t *testing.T) {
-	// The unique index is on lower(login); authentication must agree with it.
 	f := newFixture(t)
 
 	_, err := f.service.Login(context.Background(), LoginCommand{Login: "IVANOV", Password: testPassword, IP: "10.0.0.1"})
@@ -476,10 +436,7 @@ func TestLogoutOfAnUnknownSessionIsNotAnError(t *testing.T) {
 }
 
 func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
-	// Every login somebody types becomes a counter key, so a caller whose
-	// address is already refused must not be able to keep minting new ones by
-	// inventing logins: on the in-process cache that is how the store fills
-	// until every counter — and every sign-in — is refused.
+	// CLAUDE.md rule 5.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -501,23 +458,16 @@ func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
 		})
 	}
 
-	// One address counter, plus the two account counters — this account from
-	// this address, and the account across all addresses — for each of the
-	// two attempts the address was allowed. The eight refused attempts left
-	// nothing behind.
+	// One address counter plus two account counters for each of the two
+	// allowed attempts; refused attempts left nothing.
 	if got := c.Len(); got != 5 {
 		t.Errorf("the cache holds %d counters, want 5: refused attempts created account keys", got)
 	}
 }
 
 func TestAnOverlongLoginNeverBecomesARateLimitKey(t *testing.T) {
-	// accountSubject turns the login into a rate-limit cache key verbatim. No
-	// real account's login can exceed users.MaxLoginLength, so a longer one
-	// must be refused before it can mint a counter of its own size — an
-	// unauthenticated caller could otherwise fill the in-process cache with
-	// megabyte-sized keys, one request at a time. The address counter above
-	// it in checkThrottle still gets spent, which is what c.Len() == 1 (and
-	// not 0) below proves.
+	// An over-long login mints no counter, but the address counter is still
+	// spent: c.Len() == 1, not 0.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -546,8 +496,7 @@ func TestAnOverlongLoginNeverBecomesARateLimitKey(t *testing.T) {
 }
 
 func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
-	// The endpoint verifies a password exactly as sign-in does, so a borrowed
-	// session must not be a place to guess the current one at leisure.
+	// CLAUDE.md rule 4.
 	f := newFixture(t)
 	ctx := context.Background()
 
@@ -560,7 +509,6 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 		t.Errorf("err = %v, want ErrTooManyAttempts once the window is spent", err)
 	}
 
-	// A success forgets the attempts, as it does at sign-in.
 	f.service.ClearPasswordChangeThrottle(ctx, f.user.ID)
 	if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
 		t.Errorf("AllowPasswordChange() after a reset = %v, want nil", err)
@@ -568,10 +516,8 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 }
 
 func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) {
-	// Every verification holds 64 MiB, so the hasher admits a bounded number
-	// at once. An attempt that finds every slot taken is refused within the
-	// wait rather than queued — and it has already spent its address budget:
-	// a refusal that cost the caller nothing could be retried at no cost.
+	// A busy refusal has already spent the address budget, so it is not
+	// free to retry.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
@@ -619,18 +565,14 @@ func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) 
 		}
 	}
 
-	// The slot is free again, and the address budget of one is already spent
-	// by the refused attempt.
 	if _, err := service.Login(context.Background(), loginCmd(testPassword)); !errors.Is(err, ErrTooManyAttempts) {
 		t.Errorf("the next attempt = %v, want ErrTooManyAttempts: the refusal was not counted", err)
 	}
 }
 
 func TestAThrottledAttemptNeverStoresAnOversizedLogin(t *testing.T) {
-	// A caller whose address budget is spent is still recorded, and the
-	// login is what the record carries. The request body is bounded at a
-	// megabyte, not the field: without a bound of its own, each refused
-	// attempt could write a megabyte into a trail kept for a year.
+	// A refusal by the address budget is recorded before the length guard,
+	// so the stored login must be bounded on its own.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	sink := &collectingSink{}
@@ -664,10 +606,6 @@ func TestAThrottledAttemptNeverStoresAnOversizedLogin(t *testing.T) {
 }
 
 func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) {
-	// No stored digest can be of a password longer than password.MaxLength,
-	// so the answer is known at once. It is the ordinary "wrong login or
-	// password", so nothing is learned about the account, and it comes after
-	// the address counter, so it is not a way around the address budget.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
@@ -698,8 +636,6 @@ func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) 
 	}
 }
 
-// throttleService builds a service over a real account with the given
-// account-wide ceiling.
 func throttleService(t *testing.T, ceiling int) *Service {
 	t.Helper()
 	c := cache.NewMemory(1000)
@@ -722,11 +658,6 @@ func throttleService(t *testing.T, ceiling int) *Service {
 }
 
 func TestAGuesserAtAnotherAddressCannotLockTheOwnerOut(t *testing.T) {
-	// Logins are not secret — a public leaderboard may list them — so a
-	// counter keyed on the login alone let anybody who knew one keep its
-	// owner from signing in. The guessing limit is per account and address:
-	// it still stops the guesser, and the owner elsewhere is not their
-	// counter.
 	service := throttleService(t, 0)
 	ctx := context.Background()
 
@@ -744,10 +675,6 @@ func TestAGuesserAtAnotherAddressCannotLockTheOwnerOut(t *testing.T) {
 }
 
 func TestTheAccountWideCeilingStopsAGuessSpreadAcrossAddresses(t *testing.T) {
-	// Keying the guessing limit on the address hands a guesser with many
-	// addresses a fresh budget at each. The account-wide ceiling is the
-	// backstop: far above what one person mistyping reaches, and still a
-	// limit on a distributed guess.
 	const ceiling = 5
 	service := throttleService(t, ceiling)
 	ctx := context.Background()
@@ -766,10 +693,6 @@ func TestTheAccountWideCeilingStopsAGuessSpreadAcrossAddresses(t *testing.T) {
 }
 
 func TestAnAttemptRefusedAtItsAddressDoesNotSpendTheAccountCeiling(t *testing.T) {
-	// The per-address guessing limit is checked first, and a refusal there
-	// stops before the account-wide counter. Otherwise one address repeating
-	// refused attempts would climb to the ceiling on its own and lock the
-	// owner out everywhere — the lockout the address key exists to prevent.
 	const ceiling = maxLoginAttemptsPerAccountAddress + 2
 	service := throttleService(t, ceiling)
 	ctx := context.Background()
@@ -784,10 +707,6 @@ func TestAnAttemptRefusedAtItsAddressDoesNotSpendTheAccountCeiling(t *testing.T)
 }
 
 func TestBusyRefusalsNeverSpendTheAccountsOwnCounters(t *testing.T) {
-	// A refusal for load says nothing about the password, so it must not
-	// count towards the account's guessing limit or its ceiling: otherwise a
-	// flood that fills the hashing slots locks out whoever it names. It still
-	// spends the address budget, so it is not free to repeat either.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
@@ -830,8 +749,7 @@ func TestBusyRefusalsNeverSpendTheAccountsOwnCounters(t *testing.T) {
 }
 
 func TestAnIPv6NetworkIsOneAddressToTheSignInThrottle(t *testing.T) {
-	// A /64 is one subscriber. Taken host by host, each of its addresses
-	// would be a fresh address budget and a fresh guessing limit per account.
+	// A /64 is one subscriber (CLAUDE.md rule 9).
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	service := NewService(ServiceConfig{
@@ -854,8 +772,6 @@ func TestAnIPv6NetworkIsOneAddressToTheSignInThrottle(t *testing.T) {
 	}
 }
 
-// unlockFixture is a service over one real account, with the sink and the
-// account exposed for the unlock tests.
 type unlockFixture struct {
 	service *Service
 	sink    *collectingSink
@@ -885,9 +801,6 @@ func newUnlockFixture(t *testing.T, cfg ServiceConfig) *unlockFixture {
 }
 
 func TestUnlockingSignInClearsTheAccountsGuessingLimitAndCeiling(t *testing.T) {
-	// A rival sharing the owner's address, or a guess spread across many
-	// addresses, can still shut an account for a window. Staff can reopen it
-	// at once rather than tell a participant to wait out the clock.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAccount: maxLoginAttemptsPerAccountAddress + 1})
 	ctx := context.Background()
 
@@ -912,8 +825,6 @@ func TestUnlockingSignInClearsTheAccountsGuessingLimitAndCeiling(t *testing.T) {
 }
 
 func TestUnlockingSignInLeavesTheAddressBudgetAlone(t *testing.T) {
-	// The address budget is about a machine, not an account: clearing it
-	// for one account's sake would reopen a sweep across every other login.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 1})
 	ctx := context.Background()
 	_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.1"})
@@ -958,8 +869,6 @@ func TestUnlockingSignInForAnUnknownAccountIsNotFound(t *testing.T) {
 	}
 }
 
-// trustedBrowser signs in successfully from ip and returns the device cookie
-// that sign-in issued.
 func (f *unlockFixture) trustedBrowser(t *testing.T, ip string) string {
 	t.Helper()
 	result, err := f.service.Login(context.Background(), LoginCommand{Login: "ivanov", Password: testPassword, IP: ip})
@@ -972,7 +881,6 @@ func (f *unlockFixture) trustedBrowser(t *testing.T, ip string) string {
 	return result.DeviceToken
 }
 
-// lockOut spends ivanov's guessing limit, and the address budget, from ip.
 func (f *unlockFixture) lockOut(t *testing.T, ip string) {
 	t.Helper()
 	ctx := context.Background()
@@ -985,9 +893,6 @@ func (f *unlockFixture) lockOut(t *testing.T, ip string) {
 }
 
 func TestTheOwnersBrowserSignsInThroughARivalsLockoutAtTheSameAddress(t *testing.T) {
-	// A lecture hall is one address. A rival there can spend the owner's
-	// guessing limit, and the address budget with it, but not the limit of
-	// a browser the owner has already signed in from.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: maxLoginAttemptsPerAccountAddress + 3})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
 	f.lockOut(t, "10.0.0.1")
@@ -1049,8 +954,6 @@ func TestAForgedOrExpiredDeviceCookieIsTreatedAsNone(t *testing.T) {
 }
 
 func TestAPasswordChangeRetiresEveryDeviceCookie(t *testing.T) {
-	// Changing a password is what somebody does when they think another
-	// person has the account; that person's browser must not keep its trust.
 	f := newUnlockFixture(t, ServiceConfig{})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
 	f.lockOut(t, "10.0.0.1")
@@ -1083,10 +986,6 @@ func TestABlockRetiresEveryDeviceCookie(t *testing.T) {
 }
 
 func TestGuessingThroughAStolenCookieIsBoundedByTheOrdinaryLimitsPastTheDevices(t *testing.T) {
-	// A copied cookie skips the address and account limits only for the
-	// device's own attempts. Past them its guesses pay the guessing limit at
-	// the thief's address like anybody's — and the owner, at their own
-	// address, is untouched by either.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 4})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
 	ctx := context.Background()
@@ -1108,8 +1007,8 @@ func TestGuessingThroughAStolenCookieIsBoundedByTheOrdinaryLimitsPastTheDevices(
 }
 
 func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
-	// The address budget is spent, so the ordinary fallback is closed and
-	// only a cleared device limit can let the owner's browser in.
+	// With the address budget spent, only a cleared device limit lets the
+	// owner's browser in.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 3})
 	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
@@ -1132,7 +1031,6 @@ func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
 	}
 }
 
-// tooManyAttemptRows counts the throttle refusals the trail recorded.
 func (f *unlockFixture) tooManyAttemptRows() int {
 	n := 0
 	for _, e := range f.sink.entries {
@@ -1144,12 +1042,6 @@ func (f *unlockFixture) tooManyAttemptRows() int {
 }
 
 func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
-	// A spent trusted limit is not a refusal: the attempt goes on as one with
-	// no cookie at all. Refusing instead would let whoever holds a copy of a
-	// cookie spend the owner's trusted limits and shut the owner out, which
-	// is the lockout the cookie exists to prevent. The limits still count
-	// every attempt, successes included, so past them the attempt pays the
-	// address budget and the account's counters like anybody's.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 2})
 	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
@@ -1162,8 +1054,7 @@ func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
 		}
 	}
 
-	// The eleventh and twelfth went the ordinary way and spent the clean
-	// address's budget of two; the thirteenth has none left.
+	// The 11th and 12th spent the address budget of two; the 13th has none.
 	if _, err := f.service.Login(ctx, LoginCommand{
 		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
 	}); !errors.Is(err, ErrTooManyAttempts) {
@@ -1175,8 +1066,6 @@ func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
 }
 
 func TestBusyRefusalsThroughATrustedBrowserCostTheOwnerNothing(t *testing.T) {
-	// Past the trusted limits a busy refusal goes the ordinary way, and on
-	// that way it spends the address budget and nothing of the account's.
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 10 * time.Millisecond})
 	f := newUnlockFixture(t, ServiceConfig{Passwords: hasher})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
@@ -1203,9 +1092,8 @@ func TestBusyRefusalsThroughATrustedBrowserCostTheOwnerNothing(t *testing.T) {
 }
 
 func TestPastTheTrustedBudgetALoopIsStillBounded(t *testing.T) {
-	// The fallback must not undo the bound on the trusted path: an account's
-	// own cookie looping with the right password gets its trusted attempts,
-	// and then exactly what the address budget or the account ceiling allow.
+	// A looping cookie gets its trusted attempts, then only what the
+	// address budget or ceiling allow.
 	loop := func(t *testing.T, f *unlockFixture, cookie string, ip func(int) string) int {
 		t.Helper()
 		signedIn := 0
@@ -1236,8 +1124,8 @@ func TestPastTheTrustedBudgetALoopIsStillBounded(t *testing.T) {
 		})
 		cookie := f.trustedBrowser(t, "10.0.0.9")
 
-		// The first sign-in that issued the cookie spent one of the ceiling's
-		// four; every address below is fresh, so only the ceiling binds.
+		// The issuing sign-in spent one of the ceiling's four; with fresh
+		// addresses only the ceiling binds.
 		if got := loop(t, f, cookie, func(i int) string { return fmt.Sprintf("10.0.3.%d", i) }); got != 3+3 {
 			t.Errorf("%d sign-ins succeeded, want 3 trusted + the ceiling's remaining 3", got)
 		}
@@ -1245,10 +1133,8 @@ func TestPastTheTrustedBudgetALoopIsStillBounded(t *testing.T) {
 }
 
 func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
-	// Signing in again mints another device id, so a per-device limit alone
-	// multiplies by however many cookies were collected in advance. Every
-	// trusted attempt at the account counts once more, across all of them:
-	// past four, each one pays the clean address's budget of two.
+	// Collected cookies share the trusted budget: past four, each attempt
+	// pays the address budget of two.
 	f := newUnlockFixture(t, ServiceConfig{
 		MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4, MaxAttemptsPerAddress: 2,
 	})
@@ -1271,11 +1157,6 @@ func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
 }
 
 func TestATrustedSignInRenewsTheCookieOnlyPastHalfItsLifetime(t *testing.T) {
-	// A browser in regular use keeps its trust without an ordinary sign-in
-	// every month. Renewal needs the right password — it happens only on a
-	// success — so a copied cookie without the password never extends
-	// itself, and a renewed cookie keeps its device id and with it every
-	// attempt already counted against that device.
 	devices := testDevices(t)
 	issued := time.Now()
 	devices.now = func() time.Time { return issued }
@@ -1314,8 +1195,6 @@ func TestATrustedSignInRenewsTheCookieOnlyPastHalfItsLifetime(t *testing.T) {
 	}
 }
 
-// slotWatch reports whether the hasher's only slot is free at the moment it is
-// asked, recording every time it was not.
 type slotWatch struct {
 	hasher *password.Hasher
 	held   []string
@@ -1353,8 +1232,6 @@ func (s *watchedSink) Append(ctx context.Context, e audit.Entry) error {
 }
 
 func TestTheHashingSlotIsNeverHeldAcrossTheLookupOrTheTrail(t *testing.T) {
-	// A slot is 64 MiB and one of a handful. Held while the database answers a
-	// lookup or takes an audit row, it stands idle while sign-ins queue for it.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
@@ -1388,11 +1265,6 @@ func TestTheHashingSlotIsNeverHeldAcrossTheLookupOrTheTrail(t *testing.T) {
 }
 
 func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
-	// Before it waits for a slot an attempt has paid only its address budget,
-	// and that budget is hundreds. Were that the only bound, one machine could
-	// line up enough attempts in front of the handful of slots that everybody
-	// else's sign-in outlasted the wait. Past a few waiting attempts of its own
-	// an address is refused at once, and another address still gets a slot.
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
@@ -1401,8 +1273,7 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 		PasswordHash: passwordtest.Hash(t, testPassword),
 	})
 
-	// Roomy: the attempts ahead of the other address each run a full
-	// verification, which is slow under the race detector.
+	// Roomy: each queued attempt runs a full verification, slow under -race.
 	const wait = 20 * time.Second
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: wait})
 	service := NewService(ServiceConfig{
@@ -1421,7 +1292,6 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
 
-	// Fill the address's share of the queue.
 	waiting := waitingPerSlot * hasher.Concurrency()
 	done := make(chan error, waiting)
 	for range waiting {
@@ -1442,8 +1312,6 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 		t.Errorf("the refusal took %v: it waited for a slot instead of being refused at once", elapsed)
 	}
 
-	// Another address is not refused for the first one's queue: it waits
-	// behind it and signs in once the slot comes free.
 	other := make(chan error, 1)
 	go func() {
 		_, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.2"})
@@ -1462,9 +1330,6 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 	}
 }
 
-// Signing in again from a browser that is already signed in — opening the
-// sign-in page and submitting it — replaces that browser's session rather
-// than leaving it alive beside the new one.
 func TestLoginEndsTheSessionTheBrowserAlreadyHad(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -1487,8 +1352,6 @@ func TestLoginEndsTheSessionTheBrowserAlreadyHad(t *testing.T) {
 	}
 }
 
-// A refused sign-in signs nobody out, and a cookie that names no session is
-// simply ignored.
 func TestLoginKeepsThePreviousSessionUnlessItSucceeds(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -1513,8 +1376,6 @@ func TestLoginKeepsThePreviousSessionUnlessItSucceeds(t *testing.T) {
 	}
 }
 
-// The monitoring trail sees the replaced session as ended: signing in again
-// from the same browser is not a second device.
 func TestSigningInAgainIsNotAParallelSession(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

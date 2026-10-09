@@ -14,13 +14,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// scratchDatabase creates an empty database of its own next to the one
-// CORE_DB_DSN names, and returns a DSN for it.
-//
-// Its own database rather than the shared test database: rolling a migration
-// back drops tables other test packages are using at the same moment, and
-// `go test` runs packages in parallel. The scratch name ends in the test
-// suffix like every database the tests touch, and it is dropped afterwards.
+// scratchDatabase creates an empty _test database next to CORE_DB_DSN's and
+// drops it afterwards. Rolling back would drop tables other packages are
+// using in parallel on the shared test database.
 func scratchDatabase(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv(storagetest.CoreDSNVar)
@@ -69,15 +65,12 @@ func scratchDatabase(t *testing.T) string {
 	return parsed.String()
 }
 
-// monitoringSchema is which of the monitoring objects exist in a database:
-// the two tables and their indexes, the two query_log columns, and the
-// contest.monitor permission with its grants.
+// monitoringSchema is which of the monitoring objects exist in a database.
 type monitoringSchema struct {
 	events, revisions, ip, fingerprint, eventIndexes, failedLoginIndex, keysetIndexes bool
 	permission                                                                        bool
-	// grants is how many roles hold contest.monitor.
-	grants int
-	// mismatched is how many roles hold exactly one of contest.view and
+	grants                                                                            int
+	// mismatched counts roles holding exactly one of contest.view and
 	// contest.monitor.
 	mismatched int
 }
@@ -135,11 +128,9 @@ func readMonitoringSchema(t *testing.T, dsn string) monitoringSchema {
 	return s
 }
 
-// TestTheMonitoringMigrationRollsBackAndForward applies every migration to an
-// empty database, rolls the participant-monitoring one back and applies it
-// again, through the same migrator the deployment runs — so the down file is
-// proven to undo exactly what the up file did, and the up file to be
-// re-appliable after it.
+// TestTheMonitoringMigrationRollsBackAndForward proves, through the
+// deployment's migrator, that the down file undoes exactly the up file and
+// the up file re-applies.
 func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 	dsn := scratchDatabase(t)
 
@@ -178,10 +169,6 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 	}
 }
 
-// The migration connection does not cut a migration short.
-//
-// The lock timeout is not here on purpose, and migrations_test.go holds the
-// other half of that: see migrationConfig's own doc.
 func TestTheMigrationConnectionDoesNotCutAMigrationShort(t *testing.T) {
 	cfg, err := migrationConfig("postgres://u:p@localhost:5432/db?sslmode=disable")
 	if err != nil {
@@ -191,8 +178,6 @@ func TestTheMigrationConnectionDoesNotCutAMigrationShort(t *testing.T) {
 	if got := cfg.RuntimeParams["statement_timeout"]; got != "0" {
 		t.Errorf("statement_timeout = %q, want 0: an index build is long by nature", got)
 	}
-	// A connection-wide lock timeout aborts CREATE INDEX CONCURRENTLY, which
-	// waits on the virtualxid locks of transactions older than itself.
 	if got, set := cfg.RuntimeParams["lock_timeout"]; set {
 		t.Errorf("lock_timeout = %q on the connection: it belongs to the migration that wants it", got)
 	}

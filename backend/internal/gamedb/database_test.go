@@ -11,7 +11,7 @@ import (
 )
 
 // gameDatabase returns a hardened database holding a small game, with no
-// connection left open on it.
+// connection left open on it (so it can serve as a template).
 func gameDatabase(t *testing.T) string {
 	t.Helper()
 
@@ -25,7 +25,6 @@ func gameDatabase(t *testing.T) string {
 	return database
 }
 
-// setupGame is gameDatabase plus a connection as the participant's role.
 func setupGame(t *testing.T) (*pgx.Conn, string) {
 	t.Helper()
 
@@ -45,11 +44,8 @@ func TestTheReaderCanReadTheGame(t *testing.T) {
 	}
 }
 
-// The guarantee the whole design rests on: even a query that reached the
-// database unchecked cannot write. Each statement below runs *after* the
-// session has turned the read-only default off, because that default is not
-// what stops it — the absence of a GRANT is, and this test exists to prove
-// which of the two is load-bearing.
+// The read-only default is turned off first, to prove that missing GRANTs, not
+// the default, stop every write.
 func TestNoWriteSurvivesEvenWithTheReadOnlyDefaultOff(t *testing.T) {
 	reader, _ := setupGame(t)
 
@@ -78,10 +74,8 @@ func TestNoWriteSurvivesEvenWithTheReadOnlyDefaultOff(t *testing.T) {
 	}
 }
 
-// Granting itself more is not an error — PostgreSQL warns and grants nothing —
-// so the assertion has to be about the privilege rather than about the
-// statement. A test that only checked for an error here would have passed
-// while believing something it had not shown.
+// PostgreSQL only warns on such a GRANT, so the test checks the privilege, not
+// an error.
 func TestTheReaderCannotGrantItselfMore(t *testing.T) {
 	reader, _ := setupGame(t)
 
@@ -99,9 +93,8 @@ func TestTheReaderCannotGrantItselfMore(t *testing.T) {
 	}
 }
 
-// pg_stat_activity shows the queries other participants are running, which
-// during an olympiad is simply the answers. pg_database names everyone else's
-// database. Neither is the participant's game.
+// pg_stat_activity shows other participants' queries (the answers), and
+// pg_database names their databases.
 func TestTheSensitiveCatalogsAreRefusedByTheDatabaseItself(t *testing.T) {
 	reader, _ := setupGame(t)
 
@@ -119,10 +112,7 @@ func TestTheSensitiveCatalogsAreRefusedByTheDatabaseItself(t *testing.T) {
 	}
 }
 
-// The other half of the same decision: looking at the shape of the data is
-// part of the exercise, so the structural catalogs stay readable. A test for
-// each half, because a REVOKE that took both would be a contest nobody can
-// explore and would otherwise be noticed only by a participant.
+// Exploring the data's shape is part of the exercise.
 func TestTheStructuralCatalogsStayReadable(t *testing.T) {
 	reader, _ := setupGame(t)
 
@@ -141,14 +131,10 @@ func TestTheStructuralCatalogsStayReadable(t *testing.T) {
 	}
 }
 
-// The hardening has to survive CREATE DATABASE … TEMPLATE, because that is the
-// only way it reaches a participant: it is applied once when the template is
-// built and inherited by every copy. If it did not carry, every instance would
-// be unhardened and nothing would say so.
+// Inheritance through CREATE DATABASE … TEMPLATE is the only way hardening
+// reaches a participant.
 func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
-	// No reader connection here on purpose: CREATE DATABASE … TEMPLATE refuses
-	// while anything is connected to the source, which is exactly the template
-	// discipline section 4.2 requires of the provisioner.
+	// No connection: CREATE DATABASE … TEMPLATE refuses while the source has one.
 	template := gameDatabase(t)
 
 	copyName := template + "_copy"
@@ -156,9 +142,7 @@ func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
 		`CREATE DATABASE `+sqlpolicy.QuoteIdentifier(copyName)+` TEMPLATE `+sqlpolicy.QuoteIdentifier(template)); err != nil {
 		t.Fatalf("copying the template: %v", err)
 	}
-	// gamedbtest.Drop rather than a pool call: cleanup runs after the test's
-	// own context is cancelled, and anything taking t.Context() here fails for
-	// a reason that has nothing to do with the test.
+	// Cleanup runs after t.Context() is cancelled, so it uses gamedbtest.Drop.
 	t.Cleanup(func() { gamedbtest.Drop(copyName) })
 
 	reader := connectAs(t, roleReader, testReaderPassword(t), copyName)
@@ -170,11 +154,6 @@ func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
 	}
 }
 
-// A participant's role has no business anywhere but a game database. It cannot
-// separate one participant from another — they share the role, and what keeps
-// them apart is that the Query Runner chooses the database name from
-// game_instances, never the client — but it does keep the role out of the
-// cluster's own databases.
 func TestTheParticipantRoleCannotReachTheMaintenanceDatabases(t *testing.T) {
 	requireCluster(t)
 
@@ -196,13 +175,8 @@ func TestTheParticipantRoleCannotReachTheMaintenanceDatabases(t *testing.T) {
 	}
 }
 
-// The one description, checked in both directions.
-//
-// The validator refuses these by name and the database revokes them by name,
-// and the architecture's claim is that the two cannot drift because they are
-// built from one list. That is only true while nothing filters the list on the
-// way to the REVOKEs, so this walks the exported list itself and provokes each
-// entry.
+// The validator and the REVOKEs share one list; this provokes every entry so
+// nothing filters it on the way to the database.
 func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 	reader, _ := setupGame(t)
 
@@ -228,17 +202,12 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 	}
 }
 
-// Hardening reaches a participant by being inherited, and the surest way to
-// inherit it is to make the default carry it: every database created without
-// an explicit template comes from template1. Hardening that once means a
-// database nobody remembered to harden is hardened anyway — which matters
-// because the failure mode of the alternative is silent, an instance that
-// looks exactly like the others and is not.
+// A database created without a TEMPLATE clause copies template1, so hardening
+// template1 covers a database nobody remembered to harden.
 func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {
 	requireCluster(t)
 
-	// What the deploy job does, and idempotent, so running it here is running
-	// the real thing rather than a rehearsal of it.
+	// The deploy job does the same, idempotently.
 	template := connectAsOwner(t, "template1")
 	if err := gamedb.HardenDatabase(t.Context(), template); err != nil {
 		t.Fatalf("hardening template1: %v", err)
@@ -253,7 +222,6 @@ func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {
 		`DROP DATABASE IF EXISTS `+sqlpolicy.QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
 		t.Fatalf("clearing a previous run: %v", err)
 	}
-	// No TEMPLATE clause at all: this is the shape a person types.
 	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(name)); err != nil {
 		t.Fatalf("creating %s: %v", name, err)
 	}

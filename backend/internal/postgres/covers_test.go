@@ -13,7 +13,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
 
-// aCover is a row with everything set, so a test only says what it changes.
 func aCover(contest, actor uuid.UUID) covers.Cover {
 	return covers.Cover{
 		ContestID:   contest,
@@ -53,8 +52,7 @@ func TestACoverIsReadBackAsItWasStored(t *testing.T) {
 }
 
 func TestAContestWithNoCoverSaysSoInTheDomainsOwnWords(t *testing.T) {
-	// Not pgx.ErrNoRows: the HTTP layer maps sentinels, and a driver error
-	// reaching it is a 500 where a 404 was meant (CLAUDE.md, security rule 1).
+	// A sentinel, not pgx.ErrNoRows (CLAUDE.md, security rule 1).
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-cover-missing")
 		contest := makeContest(t, ctx, author.ID)
@@ -103,9 +101,6 @@ func TestUploadingAgainReplacesTheRowRatherThanAddingOne(t *testing.T) {
 }
 
 func TestADraftsCoverIsNotServedToAVisitor(t *testing.T) {
-	// The file belongs to the olympiad, and the olympiad answers to the same
-	// four statuses the public list selects. Guessing an address must not be
-	// a way into a contest nobody has published.
 	withTx(t, func(ctx context.Context) {
 		repo := NewCovers(testPool)
 		author := makeUser(t, ctx, "author-cover-draft")
@@ -126,8 +121,6 @@ func TestADraftsCoverIsNotServedToAVisitor(t *testing.T) {
 }
 
 func TestDeletingAContestTakesItsCoverWithIt(t *testing.T) {
-	// The cascade, so that removing an olympiad never leaves a row pointing
-	// at a contest that is gone. The files are the sweep's business.
 	withTx(t, func(ctx context.Context) {
 		repo := NewCovers(testPool)
 		author := makeUser(t, ctx, "author-cover-cascade")
@@ -181,7 +174,6 @@ func TestRemovingACoverLeavesTheContestAlone(t *testing.T) {
 		if err := repo.Delete(ctx, contest); err != nil {
 			t.Fatalf("Delete() = %v", err)
 		}
-		// A second removal is what a second click is, not an error.
 		if err := repo.Delete(ctx, contest); err != nil {
 			t.Errorf("Delete() again = %v, want it to do nothing", err)
 		}
@@ -201,9 +193,8 @@ func TestRemovingACoverLeavesTheContestAlone(t *testing.T) {
 }
 
 func TestTheColumnRefusesACreditLineTheDomainWouldHaveRefused(t *testing.T) {
-	// The domain bounds the field (covers.MaxAttributionLen) and the column
-	// says the same thing, so a writer that skips the service cannot park a
-	// megabyte of prose in a row the front page reads.
+	// The column repeats covers.MaxAttributionLen for writers that skip the
+	// service.
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-cover-bound")
 		contest := makeContest(t, ctx, author.ID)
@@ -216,11 +207,6 @@ func TestTheColumnRefusesACreditLineTheDomainWouldHaveRefused(t *testing.T) {
 	})
 }
 
-// What the sweep for orphaned files decides on: every hash any row names,
-// once each. Two contests wearing the same picture share one file, so the
-// hash has to come back as one answer rather than as one answer per contest
-// — the sweep asks whether anybody refers to a file, and "how many" is a
-// question it never has to ask.
 func TestTheReferencedHashesAreEveryRowsHashWithoutRepetition(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewCovers(testPool)

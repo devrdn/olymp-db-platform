@@ -13,15 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// finishContest backdates a fresh contest to look as though it finished
-// ageMinutes ago, by writing the same updated_at a real SetStatus or
-// AdvanceFinished move would have (postgres/contests.go). Reclaim reads that
-// column through the real repository, so this is what stands in for "time
-// passed" without waiting for the clock.
-//
-// ctx, like every other fixture in these tests, decides where the write lands:
-// inside withRollback it is the test's own transaction, so the contest this
-// finishes is a contest nobody else can see.
+// finishContest backdates a contest to have finished ageMinutes ago, writing
+// the updated_at a real status move would have.
 func finishContest(t *testing.T, ctx context.Context, contest uuid.UUID, ageMinutes int) {
 	t.Helper()
 	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -31,9 +24,7 @@ func finishContest(t *testing.T, ctx context.Context, contest uuid.UUID, ageMinu
 	}
 }
 
-// archiveContest is finishContest's counterpart for the other status
-// Reclaimable now honours — an organizer moving a finished contest to its
-// final resting place must not be a way to exempt it from the sweep.
+// archiveContest is finishContest for the archived status.
 func archiveContest(t *testing.T, ctx context.Context, contest uuid.UUID, ageMinutes int) {
 	t.Helper()
 	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -43,10 +34,7 @@ func archiveContest(t *testing.T, ctx context.Context, contest uuid.UUID, ageMin
 	}
 }
 
-// sink is a minimal audit.Sink recording what it was told. Local to this
-// file rather than a shared fixture: nothing else in this package needs one,
-// and rule 5 keeps a fixture used by one package's own tests in that
-// package's own support file.
+// sink is a minimal audit.Sink recording what it was told.
 type sink struct{ entries []audit.Entry }
 
 func (s *sink) Append(_ context.Context, e audit.Entry) error {
@@ -59,15 +47,9 @@ func (s *sink) AppendMany(_ context.Context, entries []audit.Entry) error {
 	return nil
 }
 
-// serviceWithAudit is serviceFor plus the audit trail wired in, for the tests
-// that check what Reclaim records.
-//
-// One worker rather than DefaultWorkers' three, because every caller builds
-// its fixture inside withRollback: a pgx transaction is one connection, and
-// TopUp's own workers would use it from several goroutines at once. That the
-// pool is filled by a bounded number of workers at all is a claim
-// instances_test.go's high-water test makes, outside any transaction, where
-// concurrency is the point; here it is only ever setup.
+// serviceWithAudit is serviceFor plus the audit trail. It uses one worker
+// because callers run inside withRollback, and a pgx transaction is one
+// connection that TopUp's workers must not share across goroutines.
 func serviceWithAudit(t *testing.T, ctx context.Context, registrations int) (*provisioning.Service, *cluster, *sink, provisioning.Contest, []uuid.UUID) {
 	t.Helper()
 
@@ -80,8 +62,7 @@ func serviceWithAudit(t *testing.T, ctx context.Context, registrations int) (*pr
 	return service, fake, s, contest, people
 }
 
-// instancesOf lists every not-yet-dropped database of contest, for tests that
-// need the real generated names TopUp produced rather than a name they chose.
+// instancesOf lists every not-yet-dropped database of contest.
 func instancesOf(t *testing.T, ctx context.Context, contest uuid.UUID) []provisioning.Stale {
 	t.Helper()
 	// version 2 catches every copy: TopUp always makes version-1 copies here.
@@ -112,38 +93,17 @@ func templateStatusOf(t *testing.T, ctx context.Context, contest uuid.UUID) stri
 	return status
 }
 
-// Reclaim is installation-wide by design (its own doc): one call sweeps
-// every contest in the shared database that is due, not only the one a test
-// just set up. Two separate things follow from that, and they need two
-// separate answers.
-//
-// What the pass *writes* is dealt with by withRollback (support_test.go):
-// every test below runs inside a transaction that is always rolled back, so
-// a sweep that marks the developer's own rows 'dropped' — which is exactly
-// what these tests used to do, and the reason eleven databases are stranded
-// on the development game cluster today — leaves nothing behind.
-//
-// What the pass *reports* is dealt with by the helpers below. A rolled-back
-// transaction still sees every committed row in the installation, so a
-// ReclaimResult's totals, and a fake cluster's or sink's raw contents, can
-// still carry somebody else's contest alongside this test's own. Scoping is
-// the lever, the same one audit_test.go's writeTrail chose for the identical
-// problem: not a smaller batch limit (Reclaim's own limit stays what
-// production uses, see its doc) and not a different pass order (the ordering
-// is a guarantee this package tests directly elsewhere).
+// Reclaim sweeps every due contest in the shared database, not only the
+// test's own. withRollback keeps its writes from landing; the helpers below
+// scope what a test reads from the result, the fake cluster and the sink to
+// its own contest, since those can also carry other committed contests.
 
-// wasDropped reports whether the cluster actually dropped database — built
-// on outcomeOf (support_test.go) so it answers about this one database
-// regardless of whatever else the same installation-wide pass processed.
 func wasDropped(fake *cluster, database string) bool {
 	dropped, _, _ := fake.outcomeOf(database)
 	return dropped
 }
 
-// entriesFor returns just the entries s recorded about contest — s is a
-// fresh sink per test, but the one Reclaim call it backs is installation-
-// wide, so it can carry another contest's entry too when that other
-// contest's own reclaim happened to fall in the same pass.
+// entriesFor returns the entries s recorded about contest.
 func entriesFor(s *sink, contest uuid.UUID) []audit.Entry {
 	var found []audit.Entry
 	id := contest.String()
@@ -155,9 +115,7 @@ func entriesFor(s *sink, contest uuid.UUID) []audit.Entry {
 	return found
 }
 
-// stuckEntryFor finds database's own entry in result.Stuck, if any — the
-// list can name another package's overdue candidate in the same pass, so a
-// test asks for its own by name rather than trusting the list's length.
+// stuckEntryFor finds database's entry in result.Stuck, if any.
 func stuckEntryFor(result provisioning.ReclaimResult, database string) (provisioning.StuckInstance, bool) {
 	for _, s := range result.Stuck {
 		if s.Database == database {
@@ -167,22 +125,10 @@ func stuckEntryFor(result provisioning.ReclaimResult, database string) (provisio
 	return provisioning.StuckInstance{}, false
 }
 
-// The property withRollback exists for, asserted directly rather than
-// described: a reclaim test must leave every row it did not create exactly as
-// it found it.
-//
-// The bystander below is committed on its own connection, the way a
-// developer's own finished contest is committed in their own database, and it
-// is a genuine candidate — finished two hours ago, one 'ready' instance, well
-// past the grace the sweep is given. The sweep therefore really does reach it
-// (the check on `reached` is what stops this passing for the far more
-// comfortable reason that Reclaim never saw it at all), really does mark it
-// dropped — and, because that write is inside the test's transaction, really
-// does leave the committed row alone.
-//
-// Before withRollback this test fails on its last assertion: the row comes
-// back 'dropped' from a second connection, which is precisely the damage
-// eleven databases on the development cluster are still living with.
+// The bystander is a committed, real candidate, so the sweep reaches it and
+// marks it dropped inside the test's transaction; a second connection must
+// still see it 'ready'. The `reached` check keeps the test from passing just
+// because Reclaim never saw the row.
 func TestReclaimLeavesTheInstallationsOwnRowsUntouched(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -207,10 +153,8 @@ func TestReclaimLeavesTheInstallationsOwnRowsUntouched(t *testing.T) {
 	}
 }
 
-// bystanderInstance commits a finished contest past its grace and one 'ready'
-// instance of it, on the pool rather than on any test transaction, and
-// removes it again when the test ends. It stands in for what a developer's
-// own database already holds when they run `make test-db`.
+// bystanderInstance commits, outside any test transaction, a finished contest
+// past its grace with one 'ready' instance, and removes it on cleanup.
 func bystanderInstance(t *testing.T) string {
 	t.Helper()
 	ctx := t.Context()
@@ -244,9 +188,8 @@ func bystanderInstance(t *testing.T) string {
 	return database
 }
 
-// committedStatusOf reads a row's status on the pool, deliberately outside
-// any test transaction: what this test has to know is what a second
-// connection — the developer's, tomorrow — sees.
+// committedStatusOf reads a row's status on the pool, outside any test
+// transaction, as a second connection sees it.
 func committedStatusOf(t *testing.T, database string) string {
 	t.Helper()
 	var status string
@@ -257,9 +200,6 @@ func committedStatusOf(t *testing.T, database string) string {
 	return status
 }
 
-// The ordinary case: a contest finished well past its grace, one instance,
-// nothing in the way. Covers the row ending 'dropped' rather than deleted,
-// and the audit entry an organizer would find it by.
 func TestReclaimDropsAnInstanceOfAContestPastItsGrace(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, s, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -298,10 +238,7 @@ func TestReclaimDropsAnInstanceOfAContestPastItsGrace(t *testing.T) {
 	})
 }
 
-// Archiving is the "put this away" action available once a contest is
-// finished, and it must not be a way to exempt a contest's instances from
-// the sweep forever — the leak Reclaimable's widened status filter exists to
-// close.
+// Archiving a finished contest must not exempt its instances from the sweep.
 func TestReclaimDropsAnInstanceOfAnArchivedContestPastItsGrace(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -325,8 +262,6 @@ func TestReclaimDropsAnInstanceOfAnArchivedContestPastItsGrace(t *testing.T) {
 	})
 }
 
-// The grace exists to be honoured, not merely configured: an instance whose
-// contest finished a moment ago must survive this tick.
 func TestReclaimLeavesAnInstanceInsideItsGraceAlone(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, s, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -340,10 +275,7 @@ func TestReclaimLeavesAnInstanceInsideItsGraceAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reclaim: %v", err)
 		}
-		// Reclaimable's own WHERE clause (internal/postgres/gameinstances.go)
-		// excludes an instance still inside its grace before Reclaim ever sees
-		// it, so the cluster must never even have been asked about it — no
-		// membership check on idleDrops needed, the call itself must be absent.
+		// Reclaimable excludes it, so the cluster must not even be asked.
 		if _, _, called := fake.outcomeOf(database); called {
 			t.Fatalf("the cluster was asked about %s inside its grace; result = %+v", database, result)
 		}
@@ -356,16 +288,13 @@ func TestReclaimLeavesAnInstanceInsideItsGraceAlone(t *testing.T) {
 	})
 }
 
-// A contest that never finished must never lose a database to this sweep,
-// however deep its pool and however loose the installation grace.
 func TestReclaimNeverTouchesAContestThatHasNotFinished(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
 		if _, err := service.TopUp(ctx, contest, 2); err != nil {
 			t.Fatalf("top-up: %v", err)
 		}
-		// contestFor leaves the contest at whatever status a fresh contest
-		// starts at (draft) — never touched by finishContest, on purpose.
+		// The contest stays in draft.
 		var databases []string
 		for _, inst := range instancesOf(t, ctx, contest.ID) {
 			databases = append(databases, inst.Database)
@@ -377,10 +306,8 @@ func TestReclaimNeverTouchesAContestThatHasNotFinished(t *testing.T) {
 		if _, err := service.Reclaim(ctx, 0); err != nil {
 			t.Fatalf("reclaim: %v", err)
 		}
-		// Reclaimable's WHERE clause excludes any instance of a contest whose
-		// status is not 'finished' or 'archived', so the cluster must never have
-		// been asked about either database — a running contest's instances are
-		// not even offered, never mind reclaimed.
+		// Grace 0, yet a contest that is not finished or archived is never
+		// offered, so the cluster must not even be asked.
 		for _, database := range databases {
 			if _, _, called := fake.outcomeOf(database); called {
 				t.Fatalf("the cluster was asked about %s of a contest that never finished", database)
@@ -392,12 +319,7 @@ func TestReclaimNeverTouchesAContestThatHasNotFinished(t *testing.T) {
 	})
 }
 
-// A database still busy — the reclaim sweep's stand-in for "a query is
-// running against it right now" — is left for the next tick rather than
-// forced, and counted as a skip rather than folded into silence. Cutting off
-// a participant mid-query is exactly what this proves does not happen at the
-// service level; internal/gamedb's own test proves the underlying refusal
-// against a real cluster.
+// internal/gamedb's tests prove the underlying refusal on a real cluster.
 func TestReclaimLeavesABusyDatabaseForTheNextTick(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, s, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -412,14 +334,8 @@ func TestReclaimLeavesABusyDatabaseForTheNextTick(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reclaim: %v", err)
 		}
-		// outcomeOf is what proves "busy is not failure" for this database
-		// specifically: DropIdle must have been called (the candidate was
-		// offered, not silently dropped from the batch) and must have reported
-		// neither dropped nor an error — the same (false, nil) PostgreSQL itself
-		// returns for a plain DROP DATABASE against a live connection. Reading
-		// result.Skipped instead would also count every other reclaimable row
-		// this same installation-wide pass happened to skip, which a test
-		// running under `go test ./...` does not own.
+		// Asked per database rather than via result.Skipped, which also counts
+		// other contests' rows in the same pass.
 		dropped, dropErr, called := fake.outcomeOf(database)
 		if !called {
 			t.Fatalf("the cluster was never asked about %s; result = %+v", database, result)
@@ -436,9 +352,6 @@ func TestReclaimLeavesABusyDatabaseForTheNextTick(t *testing.T) {
 	})
 }
 
-// A database only just past its grace and still busy is the unremarkable,
-// expected steady state the grace period is designed to allow — it must not
-// be named as stuck on its very first skipped tick.
 func TestReclaimDoesNotCallABusyDatabaseStuckRightAfterItsGrace(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -447,28 +360,20 @@ func TestReclaimDoesNotCallABusyDatabaseStuckRightAfterItsGrace(t *testing.T) {
 		}
 		database := instancesOf(t, ctx, contest.ID)[0].Database
 		fake.markBusy(database)
-		// 60-minute grace, finished 120 minutes ago: the deadline passed an hour
-		// back — busy, but nowhere near stuckAfter's 24-hour bound.
+		// 60-minute grace, finished 120 minutes ago: one hour overdue, far
+		// below stuckAfter's 24 hours.
 		finishContest(t, ctx, contest.ID, 120)
 
 		result, err := service.Reclaim(ctx, 60)
 		if err != nil {
 			t.Fatalf("reclaim: %v", err)
 		}
-		// result.Stuck can legitimately carry another package's own overdue
-		// candidate from the same installation-wide pass — asking for this
-		// database by name is what keeps the assertion about this test's own
-		// row rather than the whole pass's list.
 		if _, found := stuckEntryFor(result, database); found {
 			t.Fatalf("%s was named stuck this soon past the grace; stuck = %+v", database, result.Stuck)
 		}
 	})
 }
 
-// A database still busy long after its grace ran out has stopped reading as
-// "the last admitted query finishing up" — that only ever explains a short
-// overrun — and Reclaim is asked to name it rather than let it fold into an
-// unremarkable skip count forever.
 func TestReclaimNamesADatabaseStuckFarPastItsGrace(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -477,8 +382,7 @@ func TestReclaimNamesADatabaseStuckFarPastItsGrace(t *testing.T) {
 		}
 		database := instancesOf(t, ctx, contest.ID)[0].Database
 		fake.markBusy(database)
-		// 60-minute grace, finished 2000 minutes ago (~33.3h): the deadline
-		// passed roughly 32.3 hours back, comfortably past the 24-hour bound.
+		// 60-minute grace, finished 2000 minutes ago: about 32 hours overdue.
 		finishContest(t, ctx, contest.ID, 2000)
 
 		result, err := service.Reclaim(ctx, 60)
@@ -502,8 +406,6 @@ func TestReclaimNamesADatabaseStuckFarPastItsGrace(t *testing.T) {
 	})
 }
 
-// One instance's failure must not stop the rest of the pass, and must not be
-// recorded as though it succeeded.
 func TestReclaimOneFailureLeavesTheRestReclaimed(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -537,8 +439,6 @@ func TestReclaimOneFailureLeavesTheRestReclaimed(t *testing.T) {
 	})
 }
 
-// The largest single database a contest owns is reclaimed too, once every
-// instance copied from it is gone — §2.4's leak this closes.
 func TestReclaimDropsATemplateOnceItsInstancesAreGone(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, s, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -566,11 +466,7 @@ func TestReclaimDropsATemplateOnceItsInstancesAreGone(t *testing.T) {
 			t.Fatalf("template status = %q, want %q", status, "dropped")
 		}
 
-		// Both belong to the same pass's single sequential drop list
-		// (fake.idleDrops), so their positions in it — whatever else that same
-		// installation-wide pass also dropped around them — still prove the
-		// instance went before its own template, exactly as Reclaim's own doc
-		// promises (reclaimTemplates runs after the instance loop).
+		// The instance must be dropped before its template.
 		drops := fake.idleDrops()
 		instanceIdx, templateIdx := -1, -1
 		for i, d := range drops {
@@ -603,9 +499,6 @@ func TestReclaimDropsATemplateOnceItsInstancesAreGone(t *testing.T) {
 	})
 }
 
-// A template must never be dropped while one of its own instances is still
-// there — the ordering Reclaim's own doc calls out explicitly: it is what
-// instances are copied from.
 func TestReclaimLeavesTheTemplateAloneWhileAnInstanceIsStillBusy(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
@@ -621,10 +514,8 @@ func TestReclaimLeavesTheTemplateAloneWhileAnInstanceIsStillBusy(t *testing.T) {
 		if _, err := service.Reclaim(ctx, 60); err != nil {
 			t.Fatalf("reclaim: %v", err)
 		}
-		// ReclaimableTemplates' own NOT EXISTS clause (internal/postgres/
-		// gameinstances.go) excludes a template while any of its instances is
-		// still live, so the cluster must never even have been asked about this
-		// template — called must be false, not merely "returned not dropped".
+		// ReclaimableTemplates excludes it while an instance is live, so the
+		// cluster must not even be asked.
 		if _, _, called := fake.outcomeOf(templateDB); called {
 			t.Fatal("the cluster was asked about the template while an instance still needed it")
 		}

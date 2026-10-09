@@ -1,11 +1,7 @@
-// Package auth answers "who is this?": password-backed sign-in, server-side
-// sessions, the cookie that carries them, brute-force throttling, and the
-// middleware that turns a session into an identity for the rest of the API.
-//
-// It deliberately does not answer "may they do this?" — that is package rbac —
-// nor does it own accounts, which belong to package users. Password hashing is
-// a primitive in platform/password, kept separate so authentication and account
-// management do not have to depend on each other.
+// Package auth answers "who is this?": password sign-in, server-side sessions
+// and their cookie, brute-force throttling, and the middleware that turns a
+// session into an identity. It does not answer "may they do this?" (rbac) and
+// does not own accounts (users).
 package auth
 
 import (
@@ -25,30 +21,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sessions are server-side rather than self-contained tokens. A JWT cannot be
-// withdrawn before it expires; a disqualified participant or a compromised
-// account has to lose access immediately, which means the server has to hold
-// the state.
 const (
-	// tokenBytes is the entropy handed to the client. 256 bits is far beyond
-	// guessable and keeps the cookie short.
 	tokenBytes = 32
 
-	// sessionKeyPrefix namespaces session records inside the shared cache.
 	sessionKeyPrefix = "sess:"
 )
 
 // ErrSessionNotFound reports a token that is unknown, expired or withdrawn.
-// All three are the same thing to a caller: not authenticated.
 var ErrSessionNotFound = errors.New("session not found")
 
-// UserStore is the slice of the account repository that authentication needs:
-// finding an account, and the two writes a successful sign-in performs.
-//
-// Declaring it here rather than importing users.Repository wholesale keeps the
-// coupling to what is actually used — authentication has no business seeing
-// Create, List or ReplaceRoles, and a test double only has to provide four
-// methods. The production repository satisfies it without knowing it exists.
+// UserStore is the slice of users.Repository authentication needs (CLAUDE.md
+// layout rule 3).
 type UserStore interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 	ByLogin(ctx context.Context, login string) (users.User, error)
@@ -60,63 +43,49 @@ type UserStore interface {
 type Principal struct {
 	UserID uuid.UUID
 	Login  string
-	// Generation pins the session to a point in the account's life. Blocking
-	// an account or changing its password advances the counter, which retires
-	// every session issued before it — including ones on other devices.
+	// Generation pins the session to the account's session generation;
+	// blocking or a password change advances it, retiring older sessions.
 	Generation int64
 }
 
-// Session is a stored authentication record.
 type Session struct {
 	UserID     uuid.UUID `json:"user_id"`
 	Login      string    `json:"login"`
 	Generation int64     `json:"generation"`
 	IssuedAt   time.Time `json:"issued_at"`
-	// RefreshedAt is when the lifetime was last rewritten. Touch reads it to
-	// decide whether the store needs another write at all; a record from
-	// before the field existed leaves it zero and is treated as due.
+	// RefreshedAt is when the lifetime was last rewritten; zero is treated
+	// as due.
 	RefreshedAt time.Time `json:"refreshed_at,omitzero"`
 }
 
 // maxRefreshInterval caps how long an active session goes without its
-// lifetime being rewritten. The sliding window is the product's promise; how
-// often it slides is an implementation cost, and once a minute is
-// indistinguishable from every request to anybody working through a contest.
+// lifetime being rewritten (CLAUDE.md rule 6).
 const maxRefreshInterval = time.Minute
 
-// DefaultMaxSessionLifetime is how long a session may exist from sign-in,
-// however actively it is used, when the deployment does not state otherwise.
-// A working day: longer than any contest, short enough that a copied cookie
-// does not stay useful for days just because somebody keeps it warm.
+// DefaultMaxSessionLifetime is a working day: longer than any contest, short
+// enough that a copied cookie kept warm does not last for days.
 const DefaultMaxSessionLifetime = 12 * time.Hour
 
-// SessionStore keeps sessions in the shared cache.
+// SessionStore keeps server-side sessions in the shared cache (per instance on
+// the in-process fallback), so access can be withdrawn at once.
 //
-// With Redis every replica sees the same sessions. On the in-process fallback
-// they are per-instance, which is one of the reasons that mode is documented
-// as single-instance only.
-//
-// A session ends at whichever comes first of two limits. The idle timeout
-// (ttl) slides with activity, so somebody working through a contest is not
-// signed out mid-answer. The maximum lifetime counts from sign-in and nothing
-// extends it: without it, a session kept in use — by its owner or by whoever
-// copied its cookie off a shared machine — never ends at all.
+// A session ends at the first of two limits: the idle timeout, which slides
+// with activity, and the maximum lifetime from sign-in, which nothing extends,
+// so a copied cookie kept in use still ends.
 type SessionStore struct {
 	cache       cache.Cache
 	ttl         time.Duration
 	maxLifetime time.Duration
 }
 
-// NewSessionStore returns a store whose sessions live for ttl, extended on
-// activity by Touch, and never longer than DefaultMaxSessionLifetime from
-// sign-in.
+// NewSessionStore returns a store whose sessions idle out after ttl and never
+// outlive DefaultMaxSessionLifetime.
 func NewSessionStore(c cache.Cache, ttl time.Duration) *SessionStore {
 	return &SessionStore{cache: c, ttl: ttl, maxLifetime: DefaultMaxSessionLifetime}
 }
 
-// WithMaxLifetime sets how long a session may exist from sign-in, however
-// actively it is used. A non-positive value keeps the default. It is meant
-// for the composition root, before the store is shared.
+// WithMaxLifetime sets the maximum lifetime; non-positive keeps the default.
+// For the composition root, before the store is shared.
 func (s *SessionStore) WithMaxLifetime(d time.Duration) *SessionStore {
 	if d > 0 {
 		s.maxLifetime = d
@@ -124,8 +93,8 @@ func (s *SessionStore) WithMaxLifetime(d time.Duration) *SessionStore {
 	return s
 }
 
-// Create issues a session and returns its token. The token is the only copy
-// the client ever sees; the store keeps a digest of it.
+// Create issues a session and returns its token; the store keeps only a
+// digest.
 func (s *SessionStore) Create(ctx context.Context, p Principal) (string, error) {
 	raw := make([]byte, tokenBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -147,14 +116,12 @@ func (s *SessionStore) Create(ctx context.Context, p Principal) (string, error) 
 	return token, nil
 }
 
-// put writes a session under its token for a full idle timeout, or for what
-// is left of its maximum lifetime when that is shorter — so the store drops a
-// session at its end even if nobody asks about it again.
+// put writes a session for the idle timeout or its remaining lifetime,
+// whichever is shorter, so the store drops it at its end.
 func (s *SessionStore) put(ctx context.Context, token string, session Session) error {
 	ttl := min(s.ttl, s.remaining(session, time.Now()))
 	if ttl <= 0 {
-		// Already past its end: there is nothing to extend, and writing it
-		// would only resurrect a record Get is about to refuse.
+		// Past its end: writing would resurrect a dead record.
 		return ErrSessionNotFound
 	}
 	record, err := json.Marshal(session)
@@ -167,7 +134,6 @@ func (s *SessionStore) put(ctx context.Context, token string, session Session) e
 	return nil
 }
 
-// Get resolves a token to its session.
 func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 	if token == "" {
 		return Session{}, ErrSessionNotFound
@@ -175,8 +141,7 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 
 	raw, found, err := s.cache.Get(ctx, sessionKey(token))
 	if err != nil {
-		// Fail closed: an unreadable session store means "not authenticated",
-		// never "authenticated".
+		// Fail closed.
 		return Session{}, fmt.Errorf("read session: %w", err)
 	}
 	if !found {
@@ -188,12 +153,8 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 		return Session{}, fmt.Errorf("decode session: %w", err)
 	}
 
-	// Past its maximum lifetime the session is over, however recently it was
-	// used. The record is removed so it stops occupying the store; if that
-	// write fails, the refusal stands and the record's own expiry, which put
-	// never set past this point, removes it anyway. A record without an issue
-	// time is refused too: its age cannot be known, so it cannot be shown to
-	// be within the limit.
+	// Past its maximum lifetime the session is over and removed (its expiry
+	// removes it anyway). A record without an issue time is refused too.
 	if s.remaining(session, time.Now()) <= 0 {
 		_ = s.cache.Delete(ctx, sessionKey(token))
 		return Session{}, ErrSessionNotFound
@@ -202,21 +163,10 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 	return session, nil
 }
 
-// SessionAlive reports whether the session whose digest is tracked could
-// still be in use beside the session whose digest is current: its record is
-// there, within its maximum lifetime, and not retired by a newer sign-in of
-// the same account. It answers the monitoring trail (monitor.Tracker), which
-// names sessions by the same digest this store keys them by and asks only
-// when a registration's requests switch sessions — so a participant who
-// signed out and back in, or whose session ended, is not reported as using a
-// second device.
-//
-// A digest is not a credential and cannot authenticate anything; a value
-// that is not one names no session. Retirement is judged from the two
-// records alone: a session of the same account with a newer generation means
-// "sign out everywhere" or a password change retired the older one. Blocking
-// an account is not seen here, and does not need to be: a blocked account
-// makes no second request.
+// SessionAlive reports, for monitor.Tracker, whether the tracked session (by
+// digest) could still be in use beside the current one: it exists, is within
+// its lifetime, and has not been retired by a newer generation of the same
+// account. A block is not checked: a blocked account makes no second request.
 func (s *SessionStore) SessionAlive(ctx context.Context, tracked, current string) (bool, error) {
 	if !isDigest(tracked) {
 		return false, nil
@@ -240,7 +190,6 @@ func (s *SessionStore) SessionAlive(ctx context.Context, tracked, current string
 	return true, nil
 }
 
-// byDigest reads a session record by the digest of its token.
 func (s *SessionStore) byDigest(ctx context.Context, digest string) (Session, bool, error) {
 	raw, found, err := s.cache.Get(ctx, sessionKeyPrefix+digest)
 	if err != nil || !found {
@@ -253,8 +202,6 @@ func (s *SessionStore) byDigest(ctx context.Context, digest string) (Session, bo
 	return session, true, nil
 }
 
-// isDigest reports whether value is a token digest as sessionKey writes it:
-// 64 lower-case hexadecimal characters.
 func isDigest(value string) bool {
 	if len(value) != 2*sha256.Size {
 		return false
@@ -263,7 +210,6 @@ func isDigest(value string) bool {
 	return err == nil && strings.ToLower(value) == value
 }
 
-// remaining is how long the session has left before its maximum lifetime.
 func (s *SessionStore) remaining(session Session, now time.Time) time.Duration {
 	if session.IssuedAt.IsZero() {
 		return 0
@@ -271,24 +217,16 @@ func (s *SessionStore) remaining(session Session, now time.Time) time.Duration {
 	return session.IssuedAt.Add(s.maxLifetime).Sub(now)
 }
 
-// Touch extends a session the caller has already loaded, but only when the
-// last extension is old enough to matter.
-//
-// The middleware authenticates every request and used to rewrite the session
-// on each one: a read to authenticate, a second read to refresh it, then a
-// write — three round trips to the cache per request, two of them to move an
-// expiry by a few seconds. Working from the record already in hand and
-// skipping writes inside the refresh interval leaves one read per request for
-// the common case. The cost is that the idle timeout is honoured to within
-// one interval rather than exactly, which nobody can observe.
+// Touch extends a session the caller already loaded, only when the last
+// extension is older than the refresh interval, so the common request costs
+// one read (CLAUDE.md rule 6). The idle timeout is honoured to within one
+// interval.
 func (s *SessionStore) Touch(ctx context.Context, token string, session Session) error {
 	now := time.Now().UTC()
 
 	last := session.RefreshedAt
 	if last.IsZero() {
-		// Written before the field existed, or by a Create that predates it:
-		// the issue time is the last moment the lifetime is known to have
-		// been set.
+		// Without RefreshedAt, the issue time is the last known refresh.
 		last = session.IssuedAt
 	}
 	if now.Sub(last) < s.refreshInterval() {
@@ -299,9 +237,8 @@ func (s *SessionStore) Touch(ctx context.Context, token string, session Session)
 	return s.put(ctx, token, session)
 }
 
-// refreshInterval is how long a session may go between lifetime rewrites: a
-// tenth of the lifetime, and never more than a minute, so a short-lived
-// session still slides often enough to stay alive under steady use.
+// refreshInterval is a tenth of the lifetime and at most a minute, so a
+// short-lived session still slides often enough.
 func (s *SessionStore) refreshInterval() time.Duration {
 	interval := s.ttl / 10
 	if interval > maxRefreshInterval {
@@ -310,8 +247,7 @@ func (s *SessionStore) refreshInterval() time.Duration {
 	return interval
 }
 
-// Delete ends one session. An unknown token is not an error: logging out twice
-// or with a stale cookie is a normal thing for a browser to do.
+// Delete ends one session. An unknown token is not an error.
 func (s *SessionStore) Delete(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
@@ -322,27 +258,22 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 	return nil
 }
 
-// TTL reports the configured idle timeout.
 func (s *SessionStore) TTL() time.Duration { return s.ttl }
 
-// CookieLifetime is how long the cookie of a session issued now should live:
-// the idle timeout, or the maximum lifetime when that is shorter, so the
-// browser stops sending the token no later than the server stops accepting it.
+// CookieLifetime is the shorter of the idle timeout and the maximum
+// lifetime, so the browser stops sending the token no later than the server
+// stops accepting it.
 func (s *SessionStore) CookieLifetime() time.Duration { return min(s.ttl, s.maxLifetime) }
 
-// sessionKey derives the cache key from the token.
-//
-// The token itself is never stored. Anyone who reads the cache gets digests,
-// which are useless for authenticating, so a leaked dump cannot be replayed as
-// a live session.
+// sessionKey derives the cache key from the token's digest, so a leaked
+// cache dump cannot be replayed.
 func sessionKey(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return sessionKeyPrefix + hex.EncodeToString(sum[:])
 }
 
-// normalizeLogin lower-cases a login for lookups and rate-limit keys. The
-// unique index is on lower(login), so authentication has to agree with it —
-// otherwise "Ivanov" and "ivanov" would get separate throttle counters.
+// normalizeLogin lower-cases a login for lookups and rate-limit keys, as the
+// unique index on lower(login) does, so case variants share a counter.
 func normalizeLogin(login string) string {
 	return strings.ToLower(strings.TrimSpace(login))
 }

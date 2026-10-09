@@ -28,7 +28,6 @@ import (
 	"time"
 )
 
-// stubChecker reports a fixed outcome for a named dependency.
 type stubChecker struct {
 	name string
 	err  error
@@ -215,7 +214,6 @@ func startDegradedStack(t *testing.T) (publicURL, internalURL string, startupLog
 	return "http://" + public.Addr(), "http://" + internal.Addr(), buf
 }
 
-// cacheChecker adapts the cache to the readiness probe.
 type cacheChecker struct{ c cache.Cache }
 
 func (c cacheChecker) Name() string                    { return "cache" }
@@ -290,16 +288,13 @@ func TestDegradedServiceStillMeasuresTraffic(t *testing.T) {
 	}
 }
 
-// deletionFixture mounts the account-management endpoints and the
-// authentication endpoints on one router, sharing one account store and one
-// session store — the two halves of the deletion round trip, wired the way
-// main.go wires them, rather than each tested against its own handler alone.
+// deletionFixture wires the account-management and authentication endpoints on
+// one router, sharing one account store and one session store, as main.go does.
 type deletionFixture struct {
-	router http.Handler
-	repo   *userstest.Repository
-	admin  users.User
-	cookie *http.Cookie
-	// accountReads counts the account reads authentication makes.
+	router       http.Handler
+	repo         *userstest.Repository
+	admin        users.User
+	cookie       *http.Cookie
 	accountReads *countingAccounts
 }
 
@@ -345,8 +340,8 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 		Passwords: passwordtest.NewHasher(),
 		Devices:   devices(t),
 	})
-	// Accounts cached between requests, and the account service telling the
-	// cache about every change — as app.New assembles them.
+	// Accounts cached between requests and invalidated by the account service,
+	// as app.New assembles them.
 	accounts := auth.NewAccountCache(c, time.Hour, log)
 	reads := &countingAccounts{Repository: repo}
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
@@ -369,7 +364,6 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 	}
 }
 
-// asAdmin sends a request carrying the administrator's session cookie.
 func (f *deletionFixture) asAdmin(method, path, body string) *httptest.ResponseRecorder {
 	var reader io.Reader
 	if body != "" {
@@ -383,8 +377,7 @@ func (f *deletionFixture) asAdmin(method, path, body string) *httptest.ResponseR
 	return rec
 }
 
-// signIn attempts a login with no session cookie, the way an anonymous client
-// would.
+// signIn attempts a login with no session cookie.
 func (f *deletionFixture) signIn(login, plaintext string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/login",
 		strings.NewReader(`{"login":"`+login+`","password":"`+plaintext+`"}`))
@@ -394,11 +387,9 @@ func (f *deletionFixture) signIn(login, plaintext string) *httptest.ResponseReco
 	return rec
 }
 
-// TestDeletionAndBulkRoundTrip is the whole path the design promises,
-// end to end over HTTP: two accounts, deleted together by one bulk call,
-// vanish from the register an administrator reads by default; restoring one
-// brings it back to the register and to being able to sign in, while the
-// other stays exactly as locked out as the day it was deleted.
+// TestDeletionAndBulkRoundTrip runs deletion end to end over HTTP: a bulk
+// delete hides both accounts from the default register, and restoring one lets
+// it sign in again while the other stays locked out.
 func TestDeletionAndBulkRoundTrip(t *testing.T) {
 	f := newDeletionFixture(t)
 	hash := passwordtest.Hash(t, testPassword)
@@ -417,7 +408,6 @@ func TestDeletionAndBulkRoundTrip(t *testing.T) {
 		t.Fatalf("popa could not sign in before deletion: status = %d (body: %s)", rec.Code, rec.Body.String())
 	}
 
-	// Select both and delete them in one bulk call.
 	rec := f.asAdmin(http.MethodPost, "/users/bulk/status", `{"ids":["`+
 		first.ID.String()+`","`+second.ID.String()+`"],"status":"deleted","reason":"graduated"}`)
 	if rec.Code != http.StatusOK {
@@ -433,8 +423,7 @@ func TestDeletionAndBulkRoundTrip(t *testing.T) {
 		t.Fatalf("bulk delete changed %v, want both accounts", bulkBody.Changed)
 	}
 
-	// The default listing is the register an administrator reads; a deleted
-	// account is not in it.
+	// The default listing omits deleted accounts.
 	rec = f.asAdmin(http.MethodGet, "/users?limit=200", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -443,7 +432,6 @@ func TestDeletionAndBulkRoundTrip(t *testing.T) {
 		t.Errorf("the default listing still names a deleted account: %s", rec.Body.String())
 	}
 
-	// Restore one of the two.
 	rec = f.asAdmin(http.MethodPost, "/users/"+first.ID.String()+"/restore", "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("restore status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
@@ -464,10 +452,9 @@ func TestDeletionAndBulkRoundTrip(t *testing.T) {
 	}
 }
 
-// TestStaffUnlockReopensSignInOverHTTP is the unlock as the deployment runs
-// it: a guessing limit spent through the login endpoint, cleared through the
-// account endpoint by an administrator, with one account store and one cache
-// between them.
+// TestStaffUnlockReopensSignInOverHTTP runs the unlock as deployed: a limit
+// spent through login and cleared by an administrator, with one account store
+// and one cache between them.
 func TestStaffUnlockReopensSignInOverHTTP(t *testing.T) {
 	f := newDeletionFixture(t)
 	owner := f.repo.Add(users.User{
@@ -491,12 +478,9 @@ func TestStaffUnlockReopensSignInOverHTTP(t *testing.T) {
 	}
 }
 
-// TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP is blocking as the
-// deployment runs it: a participant signed in through the login endpoint and
-// working, so their account is being served from the cache between requests;
-// an administrator blocks them through the account endpoint; the very next
-// request the participant makes is refused — not the next one after the
-// cached copy expires, which here would be an hour.
+// TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP: the participant's
+// account is served from the cache, yet the request right after the block is
+// refused, not the first one after the hour-long cache entry expires.
 func TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP(t *testing.T) {
 	f := newDeletionFixture(t)
 	participant := f.repo.Add(users.User{

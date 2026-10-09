@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// latency is a distribution of durations, in milliseconds.
 type latency struct {
 	Count int     `json:"count"`
 	P50   float64 `json:"p50_ms"`
@@ -21,10 +20,8 @@ type latency struct {
 	Max   float64 `json:"max_ms"`
 }
 
-// distribution summarises durations by nearest rank: the p-th percentile is
-// the smallest value at least p percent of the sample is no larger than. With
-// a few hundred samples that is a value somebody actually waited, rather
-// than an interpolation between two that nobody did.
+// distribution summarises durations by nearest rank, so every percentile is
+// a value somebody actually waited.
 func distribution(values []time.Duration) latency {
 	if len(values) == 0 {
 		return latency{}
@@ -45,7 +42,6 @@ func distribution(values []time.Duration) latency {
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
-// runSummary is one run, as the report shows it.
 type runSummary struct {
 	Name         string    `json:"name"`
 	Shape        string    `json:"shape"`
@@ -53,30 +49,23 @@ type runSummary struct {
 	Started      time.Time `json:"started"`
 	Ended        time.Time `json:"ended"`
 
-	Queries int `json:"queries"`
-	// Outcomes counts every answer and refusal by status and code.
+	Queries  int            `json:"queries"`
 	Outcomes map[string]int `json:"outcomes"`
 
-	// All is every query's latency, refusals included — a 503 is a wait the
-	// participant sat through too, however short. Answered is only the ones
-	// that came back with rows, and ByKind splits those by query class.
+	// All includes refusals; Answered only queries that returned rows,
+	// split by class in ByKind.
 	All      latency          `json:"latency_all"`
 	Answered latency          `json:"latency_answered"`
 	ByKind   map[Kind]latency `json:"latency_answered_by_kind"`
-	// Statement is the Query Runner's own measurement of the statement alone,
-	// from the answer: no queue, no connection, no journal, no HTTP.
+	// Statement is the Query Runner's measurement of the statement alone.
 	Statement latency `json:"statement"`
-	// Journal is the query log's view of the same queries: the time from
-	// the API opening the journal row to closing it — the gRPC call, the
-	// queue in front of the execution slots, the connection and the
-	// statement — by the status the journal recorded.
+	// Journal is the time from opening to closing each journal row, by
+	// recorded status.
 	Journal journalSummary `json:"journal"`
 
-	Usage    map[string]usage `json:"usage"`
-	Backends backends         `json:"game_backends"`
-	// InFlightMax is the most queries the participants had sent and not yet
-	// had answered at one moment.
-	InFlightMax int `json:"in_flight_max"`
+	Usage       map[string]usage `json:"usage"`
+	Backends    backends         `json:"game_backends"`
+	InFlightMax int              `json:"in_flight_max"`
 }
 
 type journalSummary struct {
@@ -110,8 +99,6 @@ func summarise(name, shape string, participants int, started, ended time.Time, o
 	return s
 }
 
-// readJournal reads what the query log recorded for these registrations
-// between two instants.
 func readJournal(ctx context.Context, core *pgxpool.Pool, registrations []uuid.UUID, from, to time.Time) (journalSummary, error) {
 	j := journalSummary{ByStatus: map[string]int{}}
 	rows, err := core.Query(ctx, `
@@ -158,7 +145,6 @@ func readJournal(ctx context.Context, core *pgxpool.Pool, registrations []uuid.U
 	return j, nil
 }
 
-// markdown renders the runs as the tables the report is made of.
 func markdown(runs []runSummary) string {
 	var b strings.Builder
 
@@ -217,7 +203,6 @@ func joinCounts(m map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-// human prints a byte count in binary units.
 func human(n int64) string {
 	const unit = 1024
 	if n < unit {

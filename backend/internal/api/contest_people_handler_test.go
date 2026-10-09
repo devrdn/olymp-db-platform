@@ -49,9 +49,8 @@ func TestTheOwnerAppointsAManager(t *testing.T) {
 }
 
 func TestAManagerCannotAppointFurtherStaff(t *testing.T) {
-	// The one power a manager must not be able to grant themselves more of.
-	// contest.manage belongs to the owner alone, which is what separates the
-	// two roles at all.
+	// contest.manage belongs to the owner alone; it is what separates owner
+	// from manager.
 	f := newContestFixture(t)
 	c := f.stores.SeedContest(contests.StatusDraft)
 	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
@@ -86,11 +85,8 @@ func TestOwnershipIsNotHandedOverThroughTheStaffList(t *testing.T) {
 }
 
 func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
-	// A deleted account can never sign in; appointing it would staff the
-	// contest with somebody who can never act on it. contests.Service.GrantManager
-	// refuses it with users.ErrAccountDeleted, which must reach the client as a
-	// declared code rather than an internal error. A blocked account is refused
-	// the same way, as account_blocked: both are rows of usersErrors.
+	// A deleted account can never sign in, so appointing it is refused with a
+	// declared code; a blocked one likewise (both are rows of usersErrors).
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	deleted := f.stores.Users.Add(users.User{
@@ -108,9 +104,9 @@ func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
-// The contest routes answer a missing account under their own code, not the
-// accounts screens' not_found (contestUserErrors); every other refusal the
-// account can meet is usersErrors' own, and walked there.
+// Contest routes answer a missing account as user_not_found
+// (contestUserErrors); the other refusals are usersErrors' own and tested
+// there.
 func TestAppointingAnUnknownAccountIsAnsweredAsUserNotFound(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -126,10 +122,7 @@ func TestAppointingAnUnknownAccountIsAnsweredAsUserNotFound(t *testing.T) {
 	}
 }
 
-// TestGrantManagerRefusesARegisteredParticipantWithAConflict is a
-// handler-level test for one direction of the staff/participant overlap:
-// appointing a contest's own participant is refused with a declared 409,
-// not an internal error, and the roster entry stays unpromoted.
+// The roster entry must stay unpromoted.
 func TestGrantManagerRefusesARegisteredParticipantWithAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)
@@ -152,9 +145,6 @@ func TestGrantManagerRefusesARegisteredParticipantWithAConflict(t *testing.T) {
 	}
 }
 
-// TestStaffSelfEnrollIsRefusedWithAConflict is a handler-level test for the
-// other direction of the overlap: a contest's own manager cannot
-// self-enroll as its participant.
 func TestStaffSelfEnrollIsRefusedWithAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.stores.SeedContest(contests.StatusPublished)
@@ -179,10 +169,7 @@ func TestStaffSelfEnrollIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
-// TestImportSkipsAStaffMemberWithAReason is a handler-level test for the
-// roster import: a mistaken entry naming one of the contest's own staff is
-// reported as skipped, not rejected as an unrelated failure, and the rest of
-// the roster still goes in.
+// The rest of the roster still goes in.
 func TestImportSkipsAStaffMemberWithAReason(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)
@@ -365,9 +352,6 @@ func TestSignupFromInsideTheAllowedNetworkIsAccepted(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchIsRefusedWithoutParticipantManage pins the permission
-// this endpoint was built behind: an account with no standing on the contest
-// — not even a manager, let alone a stranger — gets a 403, not a directory.
 func TestDirectorySearchIsRefusedWithoutParticipantManage(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.stores.SeedContest(contests.StatusDraft)
@@ -380,11 +364,8 @@ func TestDirectorySearchIsRefusedWithoutParticipantManage(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchIsUsableByAManagerNotOnlyTheOwner proves the permission
-// choice: participant.manage, which every manager carries — not
-// contest.manage, which only the owner does — because the participant
-// picker on this same screen is a manager's ordinary work, not the owner's
-// alone.
+// participant.manage, not contest.manage: the participant picker is a manager's
+// ordinary work.
 func TestDirectorySearchIsUsableByAManagerNotOnlyTheOwner(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.stores.SeedContest(contests.StatusDraft)
@@ -402,10 +383,6 @@ func TestDirectorySearchIsUsableByAManagerNotOnlyTheOwner(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchFindsACandidateByLoginNameOrEmail pins the owner's own
-// requirement (also proven at the domain level in
-// internal/contests/directory_test.go): the picker matches a login, a name,
-// or an email.
 func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -426,13 +403,9 @@ func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchPublishesTheEmailAddress guards the response shape after
-// the owner's decision to show the email in the picker (see PersonResponse's
-// own comment for the trade they accepted): this endpoint reaches every
-// contest's staff, not only users.manage, so returning the email here widens
-// what that wider audience can read about any account in the installation —
-// a cost the owner weighed against telling two same-named candidates apart
-// and chose to pay.
+// This endpoint reaches every contest's staff, not only users.manage, so the
+// email widens what they can read about any account; the owner accepted that to
+// tell same-named candidates apart (see PersonResponse).
 func TestDirectorySearchPublishesTheEmailAddress(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -452,10 +425,7 @@ func TestDirectorySearchPublishesTheEmailAddress(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchOmitsAnEmptyEmailRatherThanPublishingAnEmptyString
-// guards the other half of that decision: an account that never set an email
-// must not come back as `"email": ""`, which reads as an address that was
-// looked up and found blank rather than one that was never given.
+// `"email": ""` would read as an address looked up and found blank.
 func TestDirectorySearchOmitsAnEmptyEmailRatherThanPublishingAnEmptyString(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -472,11 +442,9 @@ func TestDirectorySearchOmitsAnEmptyEmailRatherThanPublishingAnEmptyString(t *te
 	}
 }
 
-// TestDirectorySearchReturnsNothingBelowTheMinimumLength proves
-// contests.MinDirectoryQueryLength reaches the client as an empty result,
-// not an error: a debounced picker sends every keystroke including the
-// first one, and a query below the minimum should look exactly like nothing
-// having been typed yet, not like a request that failed.
+// A debounced picker sends every keystroke, so a query below
+// contests.MinDirectoryQueryLength must look like nothing typed yet, not a
+// failure.
 func TestDirectorySearchReturnsNothingBelowTheMinimumLength(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -493,8 +461,6 @@ func TestDirectorySearchReturnsNothingBelowTheMinimumLength(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchRefusesAnOverlongQuery proves the domain's own bound
-// (contests.MaxDirectoryQueryLength) reaches the client as a 400, not a 500.
 func TestDirectorySearchRefusesAnOverlongQuery(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)

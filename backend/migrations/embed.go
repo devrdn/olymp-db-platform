@@ -1,8 +1,6 @@
-// Package migrations embeds the core database schema migrations.
-//
-// Embedding them in the binary means the deployed image always carries the
-// exact migrations that match its code, with no separate file mount or CLI
-// tool to keep in sync.
+// Package migrations embeds the core database schema migrations, so a
+// deployed image always carries the migrations that match its code. It does
+// not apply them; cmd/migrate does.
 package migrations
 
 import "embed"

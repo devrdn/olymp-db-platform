@@ -6,10 +6,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// The reclaim sweep is a background job, not an HTTP request, so it cannot
-// report through Recorder.ObserveRequest — this is the counter set it
-// reports through instead, and this proves the numbers actually land where a
-// dashboard or an alert would read them.
 func TestGameReclaimCountersAccumulateOnThePrometheusBackend(t *testing.T) {
 	p := NewPrometheus()
 	counters := NewGameReclaimCounters(p)
@@ -36,11 +32,6 @@ func TestGameReclaimCountersAccumulateOnThePrometheusBackend(t *testing.T) {
 	}
 }
 
-// A deployment on the log or none backend has no registry to add these to —
-// internal/app/background.go's own log line is where that figure goes
-// instead. Both Add methods must still be safe to call unconditionally, so
-// the reclaim job never needs a type switch of its own to find out which
-// backend is running.
 func TestGameReclaimCountersDoNothingOnNonPrometheusBackends(t *testing.T) {
 	for name, rec := range allBackends(t) {
 		if name == "prometheus" {

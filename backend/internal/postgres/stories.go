@@ -61,8 +61,8 @@ func (r *Stories) ByContest(ctx context.Context, contestID uuid.UUID) (contests.
 	return story, nil
 }
 
-// BodyIn returns the story's text in one language: one row by the
-// translations' primary key, where ByContest aggregates and decodes them all.
+// BodyIn returns the story's text in one language, by the translations'
+// primary key.
 func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) (string, error) {
 	var body string
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -79,11 +79,8 @@ func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) 
 	return body, nil
 }
 
-// Save creates or replaces the story.
-//
-// The row is created on demand: a contest has no story until one is written,
-// and requiring a separate "create the story" step would be a state the editor
-// could get stuck in.
+// Save creates or replaces the story; a contest has no story row until one is
+// written.
 func (r *Stories) Save(ctx context.Context, contestID uuid.UUID, bodies map[string]string) (contests.Story, error) {
 	var storyID uuid.UUID
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -91,8 +88,7 @@ func (r *Stories) Save(ctx context.Context, contestID uuid.UUID, bodies map[stri
 		ON CONFLICT (contest_id) DO UPDATE SET updated_at = now()
 		RETURNING id`, contestID).Scan(&storyID)
 	if err != nil {
-		// A contest deleted since the caller read it is refused here, by
-		// the foreign key.
+		// The foreign key refuses a contest deleted since the caller read it.
 		return contests.Story{}, fmt.Errorf("save story: %w", missingParent(err, map[string]error{
 			"stories_contest_id_fkey": contests.ErrNotFound,
 		}))

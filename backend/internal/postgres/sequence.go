@@ -16,7 +16,7 @@ import (
 var _ contests.SequentialGate = (*Sequence)(nil)
 
 // Sequence answers whether a question has opened yet in a sequential contest
-// (§6.1.1), by reading questions and submissions — it never writes either.
+// (§6.1.1). It only reads.
 type Sequence struct {
 	pool *pgxpool.Pool
 }
@@ -34,17 +34,10 @@ func (r *Sequence) querier(ctx context.Context) storage.Querier {
 // ord is closed for registrationID: answered correctly, or every attempt
 // spent.
 //
-// One statement, one round trip, regardless of how many questions the
-// contest has: NOT EXISTS short-circuits at the first open (unclosed)
-// question, and every subquery inside it is filtered by
-// (registration_id, question_id) — the leading two columns of submissions'
-// own UNIQUE (registration_id, question_id, attempt_no) constraint, the same
-// index CLAUDE.md rule 7 asks a filter to come with (see
-// postgres.Submissions.Insert's own doc for why that index already exists).
-// questions.contest_id and questions.ord are covered the same way by the
-// table's UNIQUE (contest_id, ord). What this costs scales with how many
-// questions precede the target one in this contest, not with anything
-// touching every registration or every contest in the installation.
+// NOT EXISTS stops at the first open question. The subqueries use the UNIQUE
+// (registration_id, question_id, attempt_no) index on submissions and the
+// UNIQUE (contest_id, ord) index on questions (CLAUDE.md rule 7), so the cost
+// grows with the preceding questions only.
 func (r *Sequence) Open(ctx context.Context, contestID, registrationID uuid.UUID, ord int) (bool, error) {
 	var open bool
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -70,19 +63,9 @@ func (r *Sequence) Open(ctx context.Context, contestID, registrationID uuid.UUID
 	return open, nil
 }
 
-// Frontier reports which question of contestID is currently open for
-// registrationID: the one lowest in q.ord that is not yet closed — answered
-// correctly, or every attempt spent — considering every question, hidden
-// ones included, the same way Open does (§6.1.1: hidden questions count in
-// the sequence exactly as visible ones). Returns uuid.Nil once every
-// question is closed.
-//
-// The same shape as Open's own query — see its doc for the correctness
-// argument and the indexes both rely on — with ORDER BY q.ord LIMIT 1 in
-// place of NOT EXISTS: this caller wants to know which question is open
-// rather than whether one particular one is, but it is still one statement,
-// one round trip, scaling with how many questions precede the open one
-// rather than with anything installation-wide.
+// Frontier returns the lowest-ord question of contestID that is not closed
+// for registrationID, or uuid.Nil when all are closed. Hidden questions count,
+// as in Open (§6.1.1). It uses the same indexes as Open.
 func (r *Sequence) Frontier(ctx context.Context, contestID, registrationID uuid.UUID) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -103,7 +86,7 @@ func (r *Sequence) Frontier(ctx context.Context, contestID, registrationID uuid.
 		ORDER BY q.ord
 		LIMIT 1`, contestID, registrationID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Every question is closed — there is nothing left to point at.
+		// Every question is closed.
 		return uuid.Nil, nil
 	}
 	if err != nil {

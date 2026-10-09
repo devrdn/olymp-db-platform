@@ -10,39 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// StoryTarget is what one case of the contract runs against: a repository
-// holding no stories yet, and the means to create what a story hangs off. A
-// real schema needs a contest to exist before a story can name it, so each
-// implementation fills NewContest its own way: the in-memory store mints an
-// identifier and remembers it, PostgreSQL inserts a row.
+// StoryTarget is a repository holding no stories yet, and the means to create
+// the contest a story hangs off.
 type StoryTarget struct {
 	Repo contests.StoryRepository
-	// Text is the participant's read over the same stories as Repo: what Repo
-	// saved is what Text serves.
-	Text contests.StoryText
-	// NewContest creates a contest and returns its identifier.
+	// Text is the participant's read over the same stories as Repo.
+	Text       contests.StoryText
 	NewContest func() uuid.UUID
-	// Now is what the store's clock reads when a story is written. A story's
-	// UpdatedAt is that clock, so the contract can only state it in its terms.
+	// Now is the store's clock, which stamps UpdatedAt.
 	Now func() time.Time
 }
 
 // StoryRepositoryContract is what every contests.StoryRepository and
-// contests.StoryText must do, run as subtests against one implementation. Both
-// the in-memory Stories and postgres.Stories run it, so the store the service
-// tests trust and the store production uses are held to the same answers: a
-// rule the fake got wrong would otherwise pass every service test and fail
-// only in a contest.
-//
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. The clock cannot be moved
-// between two saves inside one case, so the contract states that a save
-// stamps the story with the store's clock, and not that a later save moves it
-// on.
-//
-// Texts use the language codes "en", "ro" and "ru", which the real schema
-// seeds.
+// contests.StoryText must do; both the in-memory Stories and postgres.Stories
+// run it. each prepares a fresh target for one case, calls run with it, and
+// cleans up. The clock cannot move within a case, so the contract checks only
+// that a save stamps the store's clock. Texts use "en", "ro" and "ru", which
+// the real schema seeds.
 func StoryRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, StoryTarget))) {
 	save := func(t *testing.T, ctx context.Context, target StoryTarget, contest uuid.UUID, bodies map[string]string) contests.Story {
 		t.Helper()
@@ -60,7 +44,6 @@ func StoryRepositoryContract(t *testing.T, each func(t *testing.T, run func(cont
 		}
 		return story
 	}
-	// wantBodies fails the case unless the story's text is exactly want.
 	wantBodies := func(t *testing.T, got contests.Story, want map[string]string, what string) {
 		t.Helper()
 		if len(got.Bodies) != len(want) {
@@ -215,8 +198,7 @@ func StoryRepositoryContract(t *testing.T, each func(t *testing.T, run func(cont
 			bodies := map[string]string{"en": english}
 			saved := save(t, ctx, target, contest, bodies)
 
-			// Neither the map handed to Save nor the ones handed back may be
-			// the store's own: writing to them later is not saving.
+			// Writing to a map after Save or a read is not saving.
 			bodies["ro"] = romanian
 			saved.Bodies["ru"] = "Не сохранено."
 			load(t, ctx, target, contest).Bodies["en"] = "Scribbled over."
@@ -224,8 +206,7 @@ func StoryRepositoryContract(t *testing.T, each func(t *testing.T, run func(cont
 			wantBodies(t, load(t, ctx, target, contest), map[string]string{"en": english}, "loaded after the caller's writes")
 		}},
 		{"saving the story of a contest that is not there is reported", func(t *testing.T, ctx context.Context, target StoryTarget) {
-			// A contest deleted while its story was being edited: the author
-			// is told the contest is gone, not that the store failed.
+			// A contest deleted while its story was being edited.
 			if _, err := target.Repo.Save(ctx, uuid.New(), map[string]string{"en": english}); !errors.Is(err, contests.ErrNotFound) {
 				t.Errorf("Save() for an unknown contest error = %v, want ErrNotFound", err)
 			}

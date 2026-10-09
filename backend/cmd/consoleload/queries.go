@@ -7,18 +7,10 @@ import (
 	"strings"
 )
 
-// The query mix, written against the detective game the harness was built on
-// (persons, calls, statements, cases): 200 thousand persons, 1.2 million
-// calls, 284 thousand statements. A game with other tables needs other
-// queries; the classes are what matter, and each is named for what it costs
-// rather than for what it asks.
-//
-// Every query takes a random parameter, so that two participants asking "the
-// same" question read different rows, the way thirty people exploring a case
-// do — and so that nothing is answered from a cache warmed by the previous
-// participant's identical query.
+// The query mix is written against the detective game (persons, calls,
+// statements, cases); another game needs other queries. Each takes a random
+// parameter so no query is answered from a cache warmed by another's.
 
-// Kind is how expensive a query is.
 type Kind string
 
 const (
@@ -32,7 +24,6 @@ const (
 
 var kinds = []Kind{KindCheap, KindMid, KindExpensive}
 
-// templates are the queries of each kind. %d and %s are filled by pick.
 var templates = map[Kind][]func(r *rand.Rand) string{
 	KindCheap: {
 		func(r *rand.Rand) string {
@@ -75,7 +66,6 @@ WHERE c.duration_s > %d GROUP BY p.role`, r.IntN(300))
 	},
 }
 
-// mix is the share of each kind, in percent.
 type mix map[Kind]int
 
 func parseMix(s string) (mix, error) {
@@ -99,7 +89,6 @@ func parseMix(s string) (mix, error) {
 	return out, nil
 }
 
-// pick draws one query from the mix.
 func (m mix) pick(r *rand.Rand) (Kind, string) {
 	roll := r.IntN(100)
 	for _, kind := range kinds {
@@ -109,6 +98,6 @@ func (m mix) pick(r *rand.Rand) (Kind, string) {
 		}
 		roll -= m[kind]
 	}
-	// Unreachable while the shares add up to 100, which parseMix insists on.
+	// Unreachable: parseMix requires shares summing to 100.
 	return KindCheap, templates[KindCheap][0](r)
 }
