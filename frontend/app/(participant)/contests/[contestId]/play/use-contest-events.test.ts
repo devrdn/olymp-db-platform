@@ -274,6 +274,51 @@ describe("useContestEvents", () => {
       expect(result.current.phase).toBe("waiting");
     });
 
+    // A running contest with individual timing whose own window has not
+    // opened yet (an organiser started it early) is refused as not open now,
+    // and the page behind it was rendered from that refusal. The channel's
+    // first accepted connection is the one moment this screen learns the
+    // window opened, so the hook has to say so: nothing else will.
+    test("after a refusal because the contest is not open now, the first accepted connection reports it reopened", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(409, "contest_not_running")));
+      const { result } = renderHook(() => useContestEvents("c1", "running"));
+      expect(result.current.reopened).toBe(false);
+
+      await act(async () => {
+        FakeEventSource.instances[0].failPermanently();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.reopened).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      act(() => FakeEventSource.instances[1].emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
+
+      expect(result.current.reopened).toBe(true);
+      expect(result.current.channelError).toBeNull();
+    });
+
+    test("a channel that was never refused as not open now does not report reopening on connect", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "query_too_often")));
+      const { result } = renderHook(() => useContestEvents("c1", "running"));
+
+      act(() => FakeEventSource.instances[0].emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
+      expect(result.current.reopened).toBe(false);
+
+      // A refusal that passes by itself is not the contest opening.
+      await act(async () => {
+        FakeEventSource.instances[0].failPermanently();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      act(() => FakeEventSource.instances[1].emit("sync", { server_now: "2026-01-01T00:00:05.000Z" }));
+
+      expect(result.current.reopened).toBe(false);
+    });
+
     // Finding 3: an admitted probe used to reconnect synchronously, with the
     // backoff reset and no timer at all. If EventSource kept failing on this
     // exact URL while a plain fetch of it kept succeeding, that reconnected

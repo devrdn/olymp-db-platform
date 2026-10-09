@@ -117,6 +117,12 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
   const deadlineRef = useRef<number | null | undefined>(undefined);
   const [phase, setPhase] = useState<ContestPhase>(initialPhase);
   const [channelError, setChannelError] = useState<string | null>(null);
+  // Whether a connection has been accepted after the channel was refused
+  // because the contest is not open now. A page the server rendered from that
+  // same refusal is stale from this moment, and this is the only place that
+  // learns it: the window opening is not an event the channel pushes, it is
+  // simply the next connection being admitted. Stays true once set.
+  const [reopened, setReopened] = useState(false);
   // Set by the effect below to the live channel's own resync; a no-op until
   // then and after unmount.
   const resyncRef = useRef<() => void>(() => {});
@@ -127,6 +133,10 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryDelay = RECONNECT_MIN_DELAY_MS;
+    // Set by a `dormant` refusal and cleared by the first sync after it,
+    // which is the moment `reopened` reports. Other refusals in between
+    // leave it set: the contest was still not known to be open.
+    let dormant = false;
 
     const clearRetryTimer = () => {
       if (retryTimer !== null) {
@@ -178,6 +188,10 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
           // banner and backoff from it are stale.
           retryDelay = RECONNECT_MIN_DELAY_MS;
           setChannelError(null);
+          if (dormant) {
+            dormant = false;
+            setReopened(true);
+          }
         } catch {
           // A malformed push changes nothing; the next sync, at most thirty
           // seconds later, corrects it.
@@ -226,10 +240,13 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             return;
           }
           // A contest that is not open now (`dormant`: a published contest
-          // taken back to draft, say) is not over, and is not terminal
-          // either: it is shown, and the channel keeps reconnecting on the
-          // same backoff until the contest is published again and a sync
-          // clears the reason.
+          // taken back to draft, or a running one whose individual window
+          // has not opened yet) is not over, and is not terminal either: it
+          // is shown, and the channel keeps reconnecting on the same backoff
+          // until the contest opens and a sync clears the reason — and
+          // reports `reopened`, since the page was rendered from the same
+          // refusal.
+          if (refusalKind(code) === "dormant") dormant = true;
           setChannelError(code);
           if (isTerminal(code)) {
             // Retrying on a timer would only repeat the same refusal
@@ -281,7 +298,7 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
   // Stable across renders, so a caller can list it as an effect dependency.
   const resync = useCallback(() => resyncRef.current(), []);
 
-  return { offsetRef, deadlineRef, phase, channelError, resync };
+  return { offsetRef, deadlineRef, phase, channelError, resync, reopened };
 }
 
 /** What asking the same URL again turned up: an admission, or the API's own reason for refusing one. */
