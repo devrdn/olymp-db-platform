@@ -121,17 +121,17 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 	return a.participant, a.contest, a.err
 }
 
-// AccessForEvents answers the way queryproxy.Service.AccessForEvents does,
-// over whatever a test staged: a staged err is a lookup that failed, with
-// nothing known about the participant (the zero Standing); otherwise the real
-// gate, contests.StandingOf, is asked of the staged participant and contest,
-// and anything it will not let wait is refused with its own Refusal and the
-// Standing it was refused on. The rule itself is proven where queryproxy owns
-// it (internal/queryproxy/queryproxy_test.go); asking the real gate here is
-// what lets an events test stage a state — a finished registration, a time
-// that ran out, a contest taken back to draft — and see what the channel does
-// with the Standing that state produces, rather than a sentinel picked to
-// match.
+// AccessForEvents answers the way queryproxy.Service.AccessForEvents does, over
+// whatever a test staged: a staged err is a lookup that failed, with nothing
+// known about the participant (the zero Standing); otherwise the real gate,
+// contests.Gate.StandingOf with no grace, is asked of the staged participant
+// and contest, and anything it will not let wait is refused with its own
+// Refusal and the Standing it was refused on. The rule itself is proven where
+// queryproxy owns it (internal/queryproxy/queryproxy_test.go); asking the real
+// gate here is what lets an events test stage a state — a finished
+// registration, a time that ran out, a contest taken back to draft — and see
+// what the channel does with the Standing that state produces, rather than a
+// sentinel picked to match.
 func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
 	a.mu.Lock()
 	delay := a.delay
@@ -151,7 +151,7 @@ func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid
 	if now.IsZero() {
 		now = time.Now()
 	}
-	standing := contests.StandingOf(contest, participant, now, 0, addr)
+	standing := contests.NewGate(0).StandingOf(contest, participant, now, addr)
 	if !standing.MayWait() {
 		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
 	}

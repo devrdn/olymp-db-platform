@@ -391,7 +391,7 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 
 // AdvanceFinished moves every running contest whose deadline has passed to
 // finished: ends_at plus grace, the same network-latency allowance
-// submission.go and the participation gate (contests.StandingOf) add before
+// submission.go and the participation gate (contests.Gate) add before
 // refusing a fixed-timing participant's own late answer or query (§8's one
 // deadline formula, one grace). Comparing against ends_at alone used to
 // close a contest a tick before that grace ran out, so which of two answers

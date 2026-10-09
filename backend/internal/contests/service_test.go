@@ -16,6 +16,19 @@ import (
 	"github.com/google/uuid"
 )
 
+// Submit asks the participation gate and writes against its closing instant,
+// so a Service cannot be assembled without one: zero used to be what a
+// forgotten grace silently became here, while the console defaulted to five
+// seconds.
+func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService without a Gate did not panic")
+		}
+	}()
+	contests.NewService(contests.ServiceConfig{})
+}
+
 func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
 	// Somebody has to be able to appoint managers from the first moment, and
 	// the only person who certainly exists then is the author.

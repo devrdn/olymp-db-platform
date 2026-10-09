@@ -882,9 +882,10 @@ func TestSubmitNeedsNoTransactionForACorrectAnswerWorthNoPoints(t *testing.T) {
 }
 
 // Finding 2: a deliberately configured zero grace must be honoured exactly
-// as queryproxy.Service.WithGrace(0) already honours it, not silently
-// substituted back to five seconds because contests.NewService used to read
-// zero as "unset" rather than as the deliberate choice it is.
+// as the console honours it, not silently substituted back to five seconds
+// because contests.NewService used to read zero as "unset" rather than as the
+// deliberate choice it is. The grace now arrives in the gate, which every
+// consumer shares, so there is no field left to read as "unset".
 func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	registrations := conteststest.NewRegistrations()
 	questions := conteststest.NewQuestions()
@@ -904,7 +905,7 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	svc := contests.NewService(contests.ServiceConfig{
 		Questions: questions, Registrations: registrations, Submissions: submissions,
 		UnitOfWork: &conteststest.UnitOfWork{},
-		Grace:      0,
+		Gate:       contests.NewGate(0),
 		Now:        func() time.Time { return conteststest.FixtureNow },
 		Sleep:      func(time.Duration) {},
 	})
@@ -917,8 +918,8 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	}
 }
 
-// Submit asks the participation gate (StandingOf) itself, before it reads the
-// question and before it starts anybody's clock: the answer route admits
+// Submit asks the participation gate (Gate.StandingOf) itself, before it reads
+// the question and before it starts anybody's clock: the answer route admits
 // first too, but Submit is the method that writes, and any other caller of it
 // must meet the same rule. A refused answer starts nothing and writes nothing.
 func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {

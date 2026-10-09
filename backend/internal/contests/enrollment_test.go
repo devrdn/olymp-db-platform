@@ -687,6 +687,9 @@ func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 		Registrations: f.Registrations, Policies: f.Policies, Languages: f.Languages,
 		Users: f.Users, Audit: audit.New(f.Audit), UnitOfWork: f.UnitOfWork,
 		Now: func() time.Time { return f.Now },
+		// The fixture's own gate, with its zero grace: this test is about the
+		// trigger, not the deadline.
+		Gate: f.Gate,
 		// PoolTrigger deliberately left unset.
 	})
 

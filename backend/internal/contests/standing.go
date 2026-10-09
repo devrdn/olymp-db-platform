@@ -2,11 +2,12 @@ package contests
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"time"
 )
 
-// What a participant meets at the gate (StandingOf): the one refusal a
+// What a participant meets at the gate (Gate.StandingOf): the one refusal a
 // Standing gives when it does not let them act. The sixth, a network the
 // contest is not held on, is ErrAddressNotAllowed (enrollment.go), which
 // enrolment refuses for the same reason.
@@ -88,9 +89,34 @@ const (
 	phaseExcluded
 )
 
+// Gate is the participation rule bound to the installation's one deadline
+// grace (DEADLINE_GRACE): the network allowance an already-working
+// participant is given past their deadline. It is built once, by the
+// composition root, and the same *Gate is handed to everything that asks
+// "may this participant act" or "is it over for them" — the console, the
+// answer route, the profile — and to the scheduler that finishes a contest,
+// so none of them can hold a grace of its own that disagrees with the others.
+// Each of them refuses to be assembled without one.
+type Gate struct {
+	grace time.Duration
+}
+
+// NewGate returns the gate for an installation whose deadline grace is
+// grace. Zero is a valid grace — no allowance at all — and is honoured as
+// given; config.Load is where an unset DEADLINE_GRACE becomes five seconds.
+//
+// Panics on a negative grace: config.Load refuses one first, so a caller
+// passing one is a bug in the wiring, not input to fail closed on quietly.
+func NewGate(grace time.Duration) *Gate {
+	if grace < 0 {
+		panic(fmt.Sprintf("contests: negative deadline grace %s", grace))
+	}
+	return &Gate{grace: grace}
+}
+
 // StandingOf is the one participation rule: where participant stands in
-// contest at now, from addr, with grace the network allowance an
-// already-working participant is given past their deadline (DEADLINE_GRACE).
+// contest at now, from addr, with the gate's grace allowed past their
+// deadline.
 //
 // The registration is read first, because neither status it can carry here
 // ever changes back: disqualified, then finished. Then the contest: finished
@@ -115,16 +141,16 @@ const (
 // The address is checked against the contest's own network restriction
 // separately from all of that, so that Over never depends on where the
 // caller happens to be; Refusal decides which of the two to name.
-func StandingOf(c Contest, p Participant, now time.Time, grace time.Duration, addr netip.Addr) Standing {
+func (g *Gate) StandingOf(c Contest, p Participant, now time.Time, addr netip.Addr) Standing {
 	return Standing{
-		phase:          phaseOf(c, p, now, grace),
+		phase:          g.phaseOf(c, p, now),
 		addressRefused: !c.AllowsAddress(addr),
 		draft:          c.Status == StatusDraft,
 	}
 }
 
 // phaseOf is StandingOf's rule without the address.
-func phaseOf(c Contest, p Participant, now time.Time, grace time.Duration) phase {
+func (g *Gate) phaseOf(c Contest, p Participant, now time.Time) phase {
 	switch {
 	case p.Status == RegistrationDisqualified:
 		return phaseExcluded
@@ -144,7 +170,7 @@ func phaseOf(c Contest, p Participant, now time.Time, grace time.Duration) phase
 	if !ok {
 		return phaseNotRunning
 	}
-	if !now.Before(closesAt(deadline, grace)) {
+	if !now.Before(g.closesAt(deadline)) {
 		return phaseTimeUp
 	}
 	return phaseOpen
@@ -165,10 +191,11 @@ func startPhase(c Contest, now time.Time) phase {
 }
 
 // closesAt is the instant an already-working participant may no longer act:
-// their deadline plus the grace. The one place grace is added, so the gate
-// and anything else that needs that instant cannot disagree about it.
-func closesAt(deadline time.Time, grace time.Duration) time.Time {
-	return deadline.Add(grace)
+// their deadline plus the grace. The one place a participant's deadline gets
+// the grace added, so the gate and Submit's write, which needs that instant
+// too, cannot disagree about it.
+func (g *Gate) closesAt(deadline time.Time) time.Time {
+	return deadline.Add(g.grace)
 }
 
 // MayAct reports whether the participant may act in the contest now: read

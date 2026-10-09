@@ -157,8 +157,8 @@ type SubmissionRequest struct {
 	// do with the race the statement exists to close.
 	PenaltyPerAttempt int
 	// Deadline is this participant's own deadline, grace already added
-	// (contests.Deadline plus Service.grace, summed once by Submit before
-	// the retry loop starts, by the same closesAt the participation gate
+	// (contests.Deadline plus the gate's grace, summed once by Submit before
+	// the retry loop starts, by the same Gate.closesAt the participation gate
 	// refuses at) — the instant at or after which Insert must
 	// refuse the write regardless of attempts remaining. Checked by the
 	// implementation against its own clock at the moment it actually writes
@@ -209,12 +209,12 @@ type SubmissionRepository interface {
 //
 // Participant and Contest are trusted as already resolved by the caller: the
 // answer route resolves them through queryproxy.Service.Access, which admits
-// them through the participation gate (StandingOf) before the body is even
-// read. Submit asks the same gate again, from Address — not a second rule,
-// the same function — because Submit is the method that writes, and nothing
-// stops another caller from reaching it without the route's admission.
-// contests cannot import queryproxy to call Access itself either way —
-// queryproxy is built on top of this package, not the other way round.
+// them through the participation gate (Gate.StandingOf) before the body is even
+// read. Submit asks the same gate again, from Address — not a second rule, the
+// same *Gate — because Submit is the method that writes, and nothing stops
+// another caller from reaching it without the route's admission. contests
+// cannot import queryproxy to call Access itself either way — queryproxy is
+// built on top of this package, not the other way round.
 //
 // What Submit adds on top, and the gate could never answer on its own:
 // whether the question actually belongs to this contest, whether this
@@ -264,7 +264,7 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	// The participation gate first, before the question is read or a clock
 	// started: a participant who may not act learns nothing about which
 	// questions exist, and a refused answer starts nothing.
-	if err := StandingOf(cmd.Contest, cmd.Participant, s.now(), s.grace, cmd.Address).Refusal(); err != nil {
+	if err := s.gate.StandingOf(cmd.Contest, cmd.Participant, s.now(), cmd.Address).Refusal(); err != nil {
 		return SubmitOutcome{}, err
 	}
 	if utf8.RuneCountInString(cmd.Value) > maxAnswerRunes {
@@ -322,8 +322,8 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 
 	// The instant the write must refuse at is the one the gate refuses at:
 	// the participant's own deadline plus the grace, from the same helper
-	// (closesAt), worked out once rather than inside every retry — the grace
-	// is a fixed installation setting, not something that could change
+	// (Gate.closesAt), worked out once rather than inside every retry — the
+	// grace is a fixed installation setting, not something that could change
 	// between tries.
 	//
 	// The gate has just admitted this participant, so a deadline is there to
@@ -337,7 +337,7 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	if !ok {
 		return SubmitOutcome{}, ErrContestNotRunning
 	}
-	writeDeadline := closesAt(deadline, s.grace)
+	writeDeadline := s.gate.closesAt(deadline)
 
 	correct := s.grade(ctx, q, cmd.Value)
 	points := awardablePoints(q, cmd.Contest)
@@ -391,7 +391,7 @@ func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr
 	if err != nil {
 		return Participant{}, fmt.Errorf("start the participant's clock: %w", err)
 	}
-	if err := StandingOf(c, started, s.now(), s.grace, addr).Refusal(); err != nil {
+	if err := s.gate.StandingOf(c, started, s.now(), addr).Refusal(); err != nil {
 		return Participant{}, err
 	}
 	return started, nil

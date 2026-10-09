@@ -19,9 +19,10 @@ var (
 	end   = start.Add(3 * time.Hour)
 )
 
-// grace is the rig's installation grace (DEADLINE_GRACE): what a participant
-// already at work is given past their deadline, and so how long after it the
-// profile still keeps their results shut.
+// grace is the rig's installation grace (DEADLINE_GRACE), the one its gate is
+// built with: what a participant already at work is given past their
+// deadline, and so how long after it the profile still keeps their results
+// shut.
 const grace = 5 * time.Second
 
 // store is the profile's storage double. It holds the enrolments a test
@@ -109,7 +110,7 @@ func newRig(t *testing.T) *rig {
 		Results:      r.results,
 		Attempts:     r.attempts,
 		Now:          func() time.Time { return r.now },
-		Grace:        grace,
+		Gate:         contests.NewGate(grace),
 	})
 	return r
 }

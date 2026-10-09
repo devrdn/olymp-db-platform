@@ -50,6 +50,11 @@ type Fixture struct {
 	// a test about the trigger itself asserts on f.PoolTrigger.Triggered, and
 	// every other test simply never looks.
 	PoolTrigger *PoolTrigger
+	// Gate is the participation gate Service was assembled with: a zero
+	// grace unless WithGrace says otherwise, so an instant past a deadline is
+	// past it. Exposed so a test wiring another consumer of the gate next to
+	// this Service can hand it the same one, as internal/app does.
+	Gate *contests.Gate
 
 	// config is what Service was assembled from, kept so WithGrace can
 	// assemble it again over the same stores.
@@ -128,6 +133,7 @@ func NewFixture() *Fixture {
 	// reads who staffs and who is registered, which are these two stores.
 	f.Contests.Rosters(f.Managers, f.Registrations)
 
+	f.Gate = contests.NewGate(0)
 	f.config = contests.ServiceConfig{
 		Contests:      f.Contests,
 		Stories:       f.Stories,
@@ -144,6 +150,7 @@ func NewFixture() *Fixture {
 		Audit:         audit.New(f.Audit),
 		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
+		Gate:          f.Gate,
 		// Quiet by default: a test exercising submission.go's own defensive
 		// log line (a malformed reference answer) should not spray a fixed
 		// test suite's output with it.
@@ -162,11 +169,13 @@ func NewFixture() *Fixture {
 	return f
 }
 
-// WithGrace reassembles Service over the same stores with grace as the
-// deadline allowance (ServiceConfig.Grace), for a test about what the grace
-// moves. Every other fixture has none: an instant past a deadline is past it.
+// WithGrace reassembles Service over the same stores with a gate of grace
+// as the deadline allowance, for a test about what the grace moves, and
+// replaces Gate with it. Every other fixture has none: an instant past a
+// deadline is past it.
 func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
-	f.config.Grace = grace
+	f.Gate = contests.NewGate(grace)
+	f.config.Gate = f.Gate
 	f.Service = contests.NewService(f.config)
 	return f
 }

@@ -51,7 +51,7 @@ type ScheduleRepository interface {
 	// AdvanceFinished moves every running contest whose deadline — ends_at
 	// plus grace — has passed, by the core database's own clock, to
 	// finished, and returns their ids. The same grace Submit and the
-	// participation gate (StandingOf) add before refusing a late answer or
+	// participation gate (Gate) add before refusing a late answer or
 	// query (§8's one deadline formula), so a participant's request inside
 	// that window is never refused by an API that thinks the contest is
 	// already finished. A contest with no ends_at (individual timing
@@ -153,12 +153,12 @@ type Scheduler struct {
 	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
-	// grace is the same network-latency allowance Submit and the
-	// participation gate (StandingOf) add to a participant's own deadline
-	// (cfg.DeadlineGrace) — passed to AdvanceFinished so the scheduler's own
-	// finish check agrees with theirs about when a contest's window
-	// actually closes.
-	grace time.Duration
+	// gate is the participation gate the console, Submit and the profile
+	// ask — the same *Gate, so its grace is the one they add to a
+	// participant's own deadline. Its grace is passed to AdvanceFinished so
+	// the scheduler's own finish check agrees with theirs about when a
+	// contest's window actually closes.
+	gate *Gate
 	// poolTrigger asks the game pool to be tended again soon for every
 	// contest this tick moves to running (see PoolTrigger's own doc). nil
 	// until WithPoolTrigger, which is the state of every test that predates
@@ -170,9 +170,12 @@ type Scheduler struct {
 	covers scheduleCovers
 }
 
-// NewScheduler assembles the background scheduler.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, grace time.Duration) *Scheduler {
-	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, blocked: blocked, audit: auditRecorder, uow: uow, grace: grace}
+// NewScheduler assembles the background scheduler. Panics without a gate.
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, gate *Gate) *Scheduler {
+	if gate == nil {
+		panic("contests: NewScheduler needs the participation gate")
+	}
+	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, blocked: blocked, audit: auditRecorder, uow: uow, gate: gate}
 }
 
 // WithPoolTrigger wires the trigger Advance fires for every contest it moves
@@ -353,7 +356,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 			entries = append(entries, scheduleEntry(c.ID, StatusPublished, StatusRunning))
 		}
 
-		finishedIDs, err := s.repo.AdvanceFinished(ctx, s.grace)
+		finishedIDs, err := s.repo.AdvanceFinished(ctx, s.gate.grace)
 		if err != nil {
 			return fmt.Errorf("advance contests to finished: %w", err)
 		}

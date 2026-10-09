@@ -144,6 +144,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL).WithMaxLifetime(cfg.SessionMaxLifetime)
 	participantTracker := monitor.NewTracker(cacheBackend, postgres.NewMonitor(pool), sessions, log)
 
+	// The participation gate (contests.Gate): whether a participant may act
+	// and whether a contest is over for them, with the installation's one
+	// deadline grace (DEADLINE_GRACE, §8). Built once, here, and the same
+	// value handed to everything that asks or depends on it — the console
+	// and the participant reads (queryproxy), the answer route
+	// (contests.Service.Submit), the scheduler that finishes a contest, and
+	// the profile — so no two of them can disagree about when a
+	// participant's time is up. Each refuses to be built without it.
+	gate := contests.NewGate(cfg.DeadlineGrace)
+
 	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
 	// The game's authoring half — the script and the build. Nil in a
@@ -318,7 +328,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				games,
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
-			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
+				gate,
+			).WithPerMinuteDefault(cfg.QueryPerMinute).
 				// Collapses the façade's own lookups — Run's participant,
 				// contest, game and instance, Access's participant and
 				// contest — into one round trip each.
@@ -443,14 +454,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// Read only by Service.ExportPackage, and nil where this deployment
 		// has no game cluster at all — see packageGames above.
 		Game: packageGames,
-		// Records answers (submission.go). The same grace as queryproxy's own
-		// console (cfg.DeadlineGrace): §8 names one deadline formula and one
-		// grace, not one per path.
+		// Records answers (submission.go), admitted by the same gate as the
+		// console: §8 names one deadline formula and one grace, not one per
+		// path.
 		Submissions: postgres.NewSubmissions(pool),
 		// Answers whether a question has opened yet in a sequential contest
 		// (§6.1.1); only ever consulted when a contest turns that on.
 		Sequence:   postgres.NewSequence(pool),
-		Grace:      cfg.DeadlineGrace,
+		Gate:       gate,
 		Users:      userRepo,
 		Audit:      auditRecorder,
 		UnitOfWork: storage.NewUnitOfWork(pool),
@@ -494,13 +505,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),
-		// The same grace Submit and the participation gate
-		// (contests.StandingOf) add to a participant's own deadline
-		// (cfg.DeadlineGrace, one grace for the whole installation, §8), so
-		// the scheduler's own finish check never closes a contest a tick
-		// before a late-arriving answer or query inside that grace would
-		// still be admitted.
-		cfg.DeadlineGrace,
+		// The same gate, so the scheduler finishes a contest at ends_at plus
+		// the grace the console and Submit admit by (one grace for the
+		// whole installation, §8), never a tick before a late-arriving
+		// answer or query inside that grace would still be admitted.
+		gate,
 	).WithPoolTrigger(poolTrigger).WithCovers(postgres.NewCovers(pool))
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
@@ -602,7 +611,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		participantAccess = queryproxy.New(
 			registrations, postgres.NewContests(pool),
 			nil, nil, nil,
-		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
+			gate,
+		).WithPerMinuteDefault(cfg.QueryPerMinute).
 			// Access's participant and contest in one round trip, as the
 			// console's own Service reads them.
 			WithLookup(registrations)
@@ -671,10 +681,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Participants: postgres.NewRegistrations(pool),
 		Results:      standings,
 		Attempts:     watch,
-		// The same grace as the console and the answer route
-		// (cfg.DeadlineGrace): results open at the instant the participation
-		// gate stops letting the participant act, never while it still does.
-		Grace: cfg.DeadlineGrace,
+		// The same gate as the console and the answer route: results open
+		// at the instant it stops letting the participant act, never while
+		// it still does.
+		Gate: gate,
 	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
 		WithExports(logExports).
 		WithExportSlots(exportSlots))

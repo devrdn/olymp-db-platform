@@ -253,7 +253,7 @@ func standingRows() []standingRow {
 func TestStandingOf(t *testing.T) {
 	for _, row := range standingRows() {
 		t.Run(row.name, func(t *testing.T) {
-			s := contests.StandingOf(row.contest, row.participant, row.now, standingGrace, row.addr)
+			s := contests.NewGate(standingGrace).StandingOf(row.contest, row.participant, row.now, row.addr)
 			if got := s.MayAct(); got != row.act {
 				t.Errorf("MayAct() = %v, want %v", got, row.act)
 			}
@@ -272,13 +272,48 @@ func TestStandingOf(t *testing.T) {
 	}
 }
 
+// The grace a gate was built with, and no other, decides where a working
+// participant's time is up: the row "fixed, at exactly ends_at plus grace the
+// time is up" moves with it, to the nanosecond, and a zero grace is no grace
+// at all rather than a default.
+func TestAGateClosesAtTheDeadlinePlusItsOwnGrace(t *testing.T) {
+	for _, grace := range []time.Duration{0, 2 * time.Second, 5 * time.Second} {
+		t.Run(grace.String(), func(t *testing.T) {
+			gate := contests.NewGate(grace)
+			contest := fixedContest(contests.StatusRunning)
+
+			before := gate.StandingOf(contest, registered(), standingEnds.Add(grace-time.Nanosecond), inTheLab)
+			if err := before.Refusal(); err != nil {
+				t.Errorf("one nanosecond before ends_at+%s: Refusal() = %v, want nil", grace, err)
+			}
+			at := gate.StandingOf(contest, registered(), standingEnds.Add(grace), inTheLab)
+			if err := at.Refusal(); err != contests.ErrDeadlinePassed {
+				t.Errorf("at exactly ends_at+%s: Refusal() = %v, want ErrDeadlinePassed", grace, err)
+			}
+		})
+	}
+}
+
+// A negative grace would close every participant's window before their own
+// deadline. config.Load refuses DEADLINE_GRACE below zero, so a caller
+// passing one is a bug in the wiring, and the gate says so at construction
+// rather than quietly admitting less than the deadline promises.
+func TestNewGateRefusesANegativeGrace(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewGate(-1s) did not panic")
+		}
+	}()
+	contests.NewGate(-time.Second)
+}
+
 // The three answers can never contradict each other, whatever the inputs: a
 // participant for whom it is over may neither act nor wait, one who may act
 // may wait, and a refusal is given exactly when acting is not allowed.
 func TestStandingAnswersAgreeWithEachOther(t *testing.T) {
 	for _, row := range standingRows() {
 		t.Run(row.name, func(t *testing.T) {
-			s := contests.StandingOf(row.contest, row.participant, row.now, standingGrace, row.addr)
+			s := contests.NewGate(standingGrace).StandingOf(row.contest, row.participant, row.now, row.addr)
 			if s.Over() && (s.MayAct() || s.MayWait()) {
 				t.Errorf("Over() but MayAct() = %v, MayWait() = %v", s.MayAct(), s.MayWait())
 			}
