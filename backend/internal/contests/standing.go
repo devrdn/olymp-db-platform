@@ -97,6 +97,9 @@ const (
 // answer route, the profile — and to the scheduler that finishes a contest,
 // so none of them can hold a grace of its own that disagrees with the others.
 // Each of them refuses to be assembled without one.
+//
+// The zero Gate is a gate with no grace at all; tests may use one, but the
+// installation builds its gate with NewGate, which refuses a negative grace.
 type Gate struct {
 	grace time.Duration
 }
