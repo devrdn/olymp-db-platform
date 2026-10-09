@@ -1,7 +1,7 @@
 # Build stage: compiles the Core API's binaries against the pinned toolchain.
 # The patch version is pinned deliberately — it is the one govulncheck reports
 # clean, and it matches the `go` directive in go.mod.
-FROM golang:1.26.6-alpine AS build
+FROM golang:1.26.9-alpine AS build
 
 WORKDIR /src
 
@@ -64,7 +64,7 @@ ENTRYPOINT ["/usr/local/bin/api"]
 # against glibc, and a musl build would have to be matched by a musl runtime,
 # which distroless does not offer.
 
-FROM golang:1.26.6-bookworm AS build-runner
+FROM golang:1.26.9-bookworm AS build-runner
 
 WORKDIR /src
 
