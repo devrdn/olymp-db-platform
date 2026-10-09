@@ -165,6 +165,8 @@ in an issue: see [SECURITY.md](SECURITY.md).
 
 ## License
 
+Copyright 2026 Nartea Nichita.
+
 DB Contest is licensed under the [Apache License, Version 2.0](LICENSE). You
 may use, modify and run it, including for commercial purposes, provided you
 keep the license and the [NOTICE](NOTICE) with it and say what you changed.
