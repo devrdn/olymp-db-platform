@@ -32,8 +32,6 @@ func TestPoolConfigKeepsDSNSettings(t *testing.T) {
 		t.Fatalf("PoolConfig() returned error: %v", err)
 	}
 
-	// An explicit pool size in the DSN must win over the service default, so
-	// deployments can tune the pool without a code change.
 	if cfg.MaxConns != 7 {
 		t.Errorf("MaxConns = %d, want 7 from the DSN", cfg.MaxConns)
 	}
@@ -54,7 +52,6 @@ func TestPoolConfigRejectsMalformedDSN(t *testing.T) {
 }
 
 func TestPoolConfigErrorDoesNotLeakCredentials(t *testing.T) {
-	// Startup errors reach the logs; a DSN password must not travel with them.
 	_, err := PoolConfig("postgres://app:sup3rs3cret@localhost:99999/core")
 
 	if err == nil {
@@ -71,8 +68,6 @@ func TestPoolConfigSetsStatementTimeoutGuard(t *testing.T) {
 		t.Fatalf("PoolConfig() returned error: %v", err)
 	}
 
-	// A runtime parameter caps any single statement, so one slow query cannot
-	// pin a connection for the lifetime of the pool.
 	got := cfg.ConnConfig.RuntimeParams["statement_timeout"]
 	if got == "" {
 		t.Fatal("statement_timeout is not set on core connections")
@@ -105,8 +100,6 @@ func TestDSNSetsPoolMaxConns(t *testing.T) {
 }
 
 func TestPoolConfigKeepsAPoolSizeTheDSNChose(t *testing.T) {
-	// The doc comment promises a deployment can tune the pool without a code
-	// change, so an explicit value has to survive the service default.
 	cfg, err := PoolConfig("postgres://app:secret@localhost:5432/core?pool_max_conns=25")
 	if err != nil {
 		t.Fatalf("PoolConfig() returned error: %v", err)
@@ -117,9 +110,6 @@ func TestPoolConfigKeepsAPoolSizeTheDSNChose(t *testing.T) {
 	}
 }
 
-// The provisioning pool runs CREATE DATABASE … TEMPLATE, which takes as long
-// as copying the template takes; the core API's ten seconds would fail it for
-// exactly the contests large enough to need it.
 func TestMaintenancePoolConfigTakesItsOwnStatementTimeout(t *testing.T) {
 	cfg, err := MaintenancePoolConfig("postgres://u:p@localhost:5432/game", 10*time.Minute)
 	if err != nil {
@@ -129,7 +119,6 @@ func TestMaintenancePoolConfigTakesItsOwnStatementTimeout(t *testing.T) {
 		t.Errorf("statement_timeout = %q, want 600000 (ten minutes in milliseconds)", got)
 	}
 
-	// The core default is untouched by the variant.
 	core, err := PoolConfig("postgres://u:p@localhost:5432/core")
 	if err != nil {
 		t.Fatalf("PoolConfig() returned error: %v", err)
@@ -139,9 +128,6 @@ func TestMaintenancePoolConfigTakesItsOwnStatementTimeout(t *testing.T) {
 	}
 }
 
-// A deployment sizes the pool through CORE_DB_POOL_MAX (config.Config),
-// applied here rather than baked into the DSN so the operator's own value and
-// the service default can be told apart from "the DSN already decided".
 func TestPoolConfigWithMaxConnsAppliesTheConfiguredSize(t *testing.T) {
 	cfg, err := PoolConfigWithMaxConns("postgres://app:secret@localhost:5432/core", 40)
 	if err != nil {
@@ -152,9 +138,6 @@ func TestPoolConfigWithMaxConnsAppliesTheConfiguredSize(t *testing.T) {
 	}
 }
 
-// A DSN that already tunes the pool itself is not second-guessed by the
-// separate CORE_DB_POOL_MAX override — one deployment should not need to
-// agree with itself twice about the same number.
 func TestPoolConfigWithMaxConnsKeepsTheDSNsOwnSetting(t *testing.T) {
 	cfg, err := PoolConfigWithMaxConns("postgres://app:secret@localhost:5432/core?pool_max_conns=7", 40)
 	if err != nil {
@@ -165,8 +148,6 @@ func TestPoolConfigWithMaxConnsKeepsTheDSNsOwnSetting(t *testing.T) {
 	}
 }
 
-// Zero means "not configured": the deployment left CORE_DB_POOL_MAX unset,
-// and the service's own default applies exactly as PoolConfig's does.
 func TestPoolConfigWithMaxConnsFallsBackToTheServiceDefaultWhenUnset(t *testing.T) {
 	cfg, err := PoolConfigWithMaxConns("postgres://app:secret@localhost:5432/core", 0)
 	if err != nil {

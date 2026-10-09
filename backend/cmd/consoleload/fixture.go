@@ -25,24 +25,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// loginPrefix starts the login of every account this command creates. It is
-// how `consoleload sweep` finds what an interrupted run left behind, so it is
-// deliberately something no real account would be called.
+// loginPrefix starts every login this command creates; `consoleload sweep`
+// finds leftovers by it.
 const loginPrefix = "loadtest-"
 
-// maintenanceTimeout bounds one statement on the game cluster. CREATE
-// DATABASE … TEMPLATE takes as long as copying the template takes, so this is
-// the figure the API's own provisioning pool uses rather than the core API's
-// ten seconds (CLAUDE.md rule 15).
+// maintenanceTimeout bounds one statement on the game cluster, sized for
+// CREATE DATABASE … TEMPLATE (CLAUDE.md rule 15).
 const maintenanceTimeout = 10 * time.Minute
 
-// stores are the two databases the harness writes its fixture into.
 type stores struct {
-	// core is the core database, with the API's own pool settings: the
-	// harness's statements there are request-sized.
-	core *pgxpool.Pool
-	// game is the game cluster as the provisioning role, with a maintenance
-	// statement timeout.
+	core        *pgxpool.Pool
 	game        *pgxpool.Pool
 	provisioner *gamedb.Provisioner
 }
@@ -63,8 +55,7 @@ func openStores(ctx context.Context, copyStrategy string) (*stores, error) {
 		core.Close()
 		return nil, fmt.Errorf("open the game cluster: %w", err)
 	}
-	// No author password: the harness copies templates and never builds one,
-	// and a provisioner without it refuses to (gamedb.ErrNoAuthorCredential).
+	// No author password: the harness never builds a template.
 	provisioner, err := gamedb.NewProvisioner(game, gameDSN, "")
 	if err == nil && copyStrategy != "" {
 		provisioner, err = provisioner.WithCopyStrategy(gamedb.CopyStrategy(copyStrategy))
@@ -82,10 +73,8 @@ func (s *stores) close() {
 	s.game.Close()
 }
 
-// fixture is everything one run created, and all teardown needs to find it.
-//
-// It carries no password. A reused fixture gets fresh ones (credentials), so
-// nothing that could sign in is ever written to disk.
+// fixture is everything one run created. It carries no password, so nothing
+// that could sign in is written to disk; a reused fixture gets fresh ones.
 type fixture struct {
 	RunID        string              `json:"run_id"`
 	ContestID    uuid.UUID           `json:"contest_id"`
@@ -100,7 +89,6 @@ type participantRecord struct {
 	RegistrationID uuid.UUID `json:"registration_id"`
 }
 
-// userIDs is every account the fixture created, the owner included.
 func (f *fixture) userIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(f.Participants)+1)
 	if f.OwnerID != uuid.Nil {
@@ -140,26 +128,21 @@ func loadFixture(path string) (*fixture, error) {
 	return &f, nil
 }
 
-// setupReport is what creating the fixture cost.
 type setupReport struct {
 	TemplateCopy  time.Duration `json:"template_copy_ns"`
 	TemplateBytes int64         `json:"template_bytes"`
 }
 
-// setup creates the contest, its game and its participants.
-//
-// It fills f as it goes, so that a failure half-way still leaves the caller a
-// record of what exists: the caller tears down whatever f names, whether
-// setup finished or not.
+// setup creates the contest, its game and its participants, filling f as it
+// goes so a failure half-way can still be torn down.
 func setup(ctx context.Context, st *stores, f *fixture, source string, participants int) (setupReport, error) {
 	var report setupReport
 	f.RunID = randomHex(4)
 
 	accounts := postgres.NewUsers(st.core)
 
-	// The contest's owner: contests.created_by has to name somebody. Blocked,
-	// with a password nobody was ever told, because it exists only to be a
-	// foreign key.
+	// The owner exists only for contests.created_by: blocked, with an unknown
+	// password.
 	owner, err := accounts.Create(ctx, users.User{
 		Login:        loginPrefix + f.RunID + "-owner",
 		FullName:     "Load test owner " + f.RunID,
@@ -171,24 +154,20 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	}
 	f.OwnerID = owner.ID
 
-	// Running now and for the next day: the console only answers a running
-	// contest, and a window that closes mid-run would turn the tail of the
-	// measurement into "the contest is not running". Fixed timing, so no
-	// participant has a clock of their own to start.
+	// Running for a day, so the window cannot close mid-run; fixed timing,
+	// so no participant has a clock to start.
 	now := time.Now().UTC()
 	starts, ends := now.Add(-time.Minute), now.Add(24*time.Hour)
 	contest, err := postgres.NewContests(st.core).Create(ctx, contests.Contest{
-		Status:       contests.StatusRunning,
-		Enrollment:   contests.EnrollmentInviteOnly,
-		QuestionMode: contests.QuestionModeMulti,
-		Progression:  contests.ProgressionFree,
-		Scoring:      contests.ScoringPoints,
-		Timing:       contests.TimingFixed,
-		StartsAt:     &starts,
-		EndsAt:       &ends,
-		CreatedBy:    owner.ID,
-		// Written straight to the repository, past the domain that defaults
-		// both of these.
+		Status:           contests.StatusRunning,
+		Enrollment:       contests.EnrollmentInviteOnly,
+		QuestionMode:     contests.QuestionModeMulti,
+		Progression:      contests.ProgressionFree,
+		Scoring:          contests.ScoringPoints,
+		Timing:           contests.TimingFixed,
+		StartsAt:         &starts,
+		EndsAt:           &ends,
+		CreatedBy:        owner.ID,
 		LeaderboardNames: contests.LeaderboardNamesLogin,
 		ICPCPenaltyMin:   contests.DefaultICPCPenaltyMin,
 	})
@@ -197,10 +176,8 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	}
 	f.ContestID = contest.ID
 
-	// A template of its own rather than the source's: every copy, and the
-	// template itself, then carries this contest's name and goes when it
-	// goes, and nothing the harness drops can belong to anybody else. The name
-	// follows the product's own scheme (game_tpl_c<contest>).
+	// A template of its own, named by the product's scheme, so nothing the
+	// harness drops can belong to anybody else.
 	f.Template = "game_tpl_c" + short(contest.ID)
 	if !sqlpolicy.PlainIdentifier(source) {
 		return report, fmt.Errorf("-source-template %q is not a plain identifier", source)
@@ -215,9 +192,8 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		return report, err
 	}
 
-	// Ready, version 1, from the editor: the state a built game is in. The
-	// init script is empty because nothing will ever rebuild it — the
-	// template was copied, not built.
+	// The state of a built game; the script is empty because the template
+	// was copied, never built.
 	if _, err := st.core.Exec(ctx, `
 		INSERT INTO game_templates (contest_id, template_db, version, init_script, status, source)
 		VALUES ($1, $2, 1, '', 'ready', 'editor')`, contest.ID, f.Template); err != nil {
@@ -227,10 +203,9 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	registrations := postgres.NewRegistrations(st.core)
 	for i := range participants {
 		account, err := accounts.Create(ctx, users.User{
-			Login:    fmt.Sprintf("%s%s-p%03d", loginPrefix, f.RunID, i+1),
-			FullName: fmt.Sprintf("Load test participant %d", i+1),
-			Status:   users.StatusActive,
-			// Replaced by credentials() before anybody signs in.
+			Login:        fmt.Sprintf("%s%s-p%03d", loginPrefix, f.RunID, i+1),
+			FullName:     fmt.Sprintf("Load test participant %d", i+1),
+			Status:       users.StatusActive,
 			PasswordHash: mustHash(randomSecret()),
 		})
 		if err != nil {
@@ -248,9 +223,8 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	return report, nil
 }
 
-// credentials gives every participant a fresh random password and returns
-// them, in the order of f.Participants. They live in this process's memory
-// and nowhere else.
+// credentials gives every participant a fresh random password, kept only in
+// this process's memory, in the order of f.Participants.
 func credentials(ctx context.Context, st *stores, f *fixture) ([]string, error) {
 	accounts := postgres.NewUsers(st.core)
 	secrets := make([]string, len(f.Participants))
@@ -263,9 +237,8 @@ func credentials(ctx context.Context, st *stores, f *fixture) ([]string, error) 
 	return secrets, nil
 }
 
-// teardown removes everything f names: the databases on the game cluster
-// first, then the rows in the core database, in the order the foreign keys
-// require.
+// teardown removes everything f names: game databases first, then core rows
+// in foreign-key order.
 func teardown(ctx context.Context, st *stores, f *fixture) error {
 	var contestIDs []uuid.UUID
 	if f.ContestID != uuid.Nil {
@@ -275,13 +248,9 @@ func teardown(ctx context.Context, st *stores, f *fixture) error {
 }
 
 // remove drops every game database of the given contests and deletes the
-// contests and accounts.
-//
-// Databases are found three ways, because each alone can miss one: the rows
-// game_instances holds, the names the caller already knows, and the
-// cluster's own catalogue matched against the naming scheme — a copy whose
-// row was never written (a TopUp interrupted between CREATE DATABASE and
-// INSERT) is only in the last.
+// contests and accounts. Databases are found from game_instances rows, the
+// known names and the cluster catalogue, since a copy interrupted before its
+// INSERT appears only in the last.
 func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, known []string) error {
 	names := map[string]bool{}
 	for _, name := range known {
@@ -329,8 +298,7 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		}
 	}
 	if len(failures) > 0 {
-		// The rows stay while a database they name is still on the cluster,
-		// so a second attempt can find it again.
+		// Rows stay while their database exists, so a retry finds it.
 		return errors.Join(failures...)
 	}
 
@@ -345,20 +313,14 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	// The audit entries the fixture caused: every sign-in and sign-out of its
-	// accounts, and anything recorded about the contest or the accounts
-	// themselves. They reference the accounts through actor_id, so the
-	// accounts cannot be removed while they remain — and entries about
-	// accounts that no longer exist would be the same leftovers in another
-	// table.
+	// Audit entries reference the accounts through actor_id, so they go
+	// first.
 	for _, statement := range []struct {
 		what string
 		sql  string
 		args []any
 	}{
 		{"audit entries", `DELETE FROM audit_log WHERE actor_id = ANY($1) OR entity_id = ANY($2)`, []any{userIDs, ids}},
-		// Registrations, the query log, copies and the template row all
-		// cascade from the contest.
 		{"contests", `DELETE FROM contests WHERE id = ANY($1)`, []any{contestIDs}},
 		{"accounts", `DELETE FROM users WHERE id = ANY($1)`, []any{userIDs}},
 	} {
@@ -369,9 +331,7 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	return tx.Commit(ctx)
 }
 
-// databasePrefixes are the product's own names for a contest's template, its
-// participants' copies and its spare copies (provisioning.instanceName and
-// spareName).
+// databasePrefixes are the product's database name prefixes for a contest.
 func databasePrefixes(contestIDs []uuid.UUID) []string {
 	var out []string
 	for _, id := range contestIDs {
@@ -381,7 +341,6 @@ func databasePrefixes(contestIDs []uuid.UUID) []string {
 	return out
 }
 
-// runSweep removes every fixture a run left behind, found by login prefix.
 func runSweep(args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("sweep takes no arguments, got %v", args)
@@ -400,8 +359,7 @@ func runSweep(args []string) error {
 		return err
 	}
 
-	// left() rather than LIKE: the prefix is fixed text, and a LIKE pattern
-	// would have to be escaped (CLAUDE.md rule 3) to mean the same thing.
+	// left() rather than an escaped LIKE pattern (CLAUDE.md rule 3).
 	rows, err := st.core.Query(ctx, `SELECT id FROM users WHERE left(login, $1) = $2`,
 		len(loginPrefix), loginPrefix)
 	if err != nil {
@@ -433,11 +391,8 @@ func runSweep(args []string) error {
 	return nil
 }
 
-// counts is what the installation holds, for the before-and-after table.
 type counts map[string]int64
 
-// countedTables are the core tables a run writes to, directly or through the
-// API.
 var countedTables = []string{
 	"users", "registrations", "contests", "game_templates", "game_instances",
 	"query_log", "submissions", "audit_log",
@@ -447,7 +402,7 @@ func countEverything(ctx context.Context, st *stores) (counts, error) {
 	out := counts{}
 	for _, table := range countedTables {
 		var n int64
-		// The names are this file's own constants, never input.
+		// Table names are constants, never input.
 		if err := st.core.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
 			return nil, fmt.Errorf("count %s: %w", table, err)
 		}
@@ -489,8 +444,7 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// short is provisioning's own abbreviation of an identifier, which the
-// database names are built from.
+// short is provisioning's abbreviation of an identifier in database names.
 func short(id uuid.UUID) string {
 	return strings.ReplaceAll(id.String(), "-", "")[:12]
 }
@@ -503,8 +457,6 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// randomSecret is a password of 24 random bytes, far past the product's
-// own minimum length.
 func randomSecret() string {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -513,10 +465,8 @@ func randomSecret() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// fixtureHasher hashes the harness's own fixture passwords. It is not the
-// server's hasher — this is a separate process preparing accounts — but it is
-// bounded the same way, so preparing a large cohort does not allocate a
-// digest's memory per account at once.
+// fixtureHasher is bounded like the server's, so a large cohort does not
+// allocate a digest's memory per account at once.
 var fixtureHasher = password.NewHasher(password.HasherConfig{MaxWait: time.Minute})
 
 func mustHash(secret string) string {

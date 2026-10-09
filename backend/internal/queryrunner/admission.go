@@ -7,25 +7,18 @@ import (
 	"sync"
 )
 
-// What admission control answers with when it will not admit a query. Both are
-// ordinary outcomes rather than faults: they are what the participant is told,
-// and what the journal records.
+// Admission refusals: ordinary outcomes the participant is told, not faults.
 var (
-	// ErrBusy means the instance is full and the queue is too. Answered
-	// immediately rather than waited out — a request that hangs teaches the
-	// participant nothing and keeps the slot spoken for.
+	// ErrBusy means every slot and the queue are full. It is answered at once
+	// rather than waited out.
 	ErrBusy = errors.New("the system is busy")
 	// ErrAlreadyRunning means this participant already has a query in flight.
 	ErrAlreadyRunning = errors.New("a query is already running")
 )
 
 // gate is admission control: how many queries may run at once, and how many
-// may wait.
-//
-// It exists because statement_timeout bounds one query and nothing bounds the
-// sum. Two hundred participants running one heavy query each will bring an
-// instance down with every per-query limit in place, so the limit that matters
-// is on how many run together (section 4.3).
+// may wait. Per-query limits do not bound the sum of many heavy queries
+// (section 4.3).
 type gate struct {
 	slots chan struct{}
 
@@ -49,16 +42,11 @@ func newGate(concurrent, depth int) *gate {
 	}
 }
 
-// enter admits a participant's query, or explains why not.
+// enter admits a participant's query: one per participant first, then a slot,
+// taken at once, waited for if the queue has room, or refused.
 //
-// Two limits, checked in this order. One query per participant comes first
-// because it is about who is asking and can be answered without touching the
-// semaphore. Then a slot: taken at once if one is free, waited for if there is
-// room in the queue, and refused immediately if there is not.
-//
-// The returned function must be called however the execution ended. A slot
-// that is not returned is gone for the life of the process, and an instance
-// that leaks one per failure stops admitting anything after N failures.
+// The returned release must be called however the execution ended; a leaked
+// slot is gone for the life of the process.
 func (g *gate) enter(ctx context.Context, participant string) (func(), error) {
 	g.mu.Lock()
 	if _, already := g.running[participant]; already {
@@ -75,7 +63,6 @@ func (g *gate) enter(ctx context.Context, participant string) (func(), error) {
 		g.mu.Unlock()
 	}
 
-	// A slot going spare: take it without joining the queue at all.
 	select {
 	case g.slots <- struct{}{}:
 		return release, nil
@@ -104,9 +91,8 @@ func (g *gate) enter(ctx context.Context, participant string) (func(), error) {
 		g.mu.Lock()
 		delete(g.running, participant)
 		g.mu.Unlock()
-		// Named rather than passed through raw: a bare context error reaches
-		// the transport as an unrecognised failure and is reported as a fault
-		// of the database, which a queue nobody waited out is not.
+		// Named, because a bare context error would be reported as a
+		// database fault.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%w: waiting for a free slot", ErrTimeout)
 		}

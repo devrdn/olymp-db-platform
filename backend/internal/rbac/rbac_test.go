@@ -15,7 +15,6 @@ var (
 	alice = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 )
 
-// fakeRoles answers contest-role lookups from a fixed table.
 type fakeRoles struct {
 	roles map[uuid.UUID]ContestRole
 	err   error
@@ -69,8 +68,6 @@ func TestContestManagerActsOnTheirOwnContest(t *testing.T) {
 }
 
 func TestContestManagerCannotActOnSomebodyElsesContest(t *testing.T) {
-	// The whole point of the second level: managing one contest grants nothing
-	// anywhere else.
 	auth := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: RoleManager}})
 
 	err := auth.Authorize(context.Background(), identity(), PermissionContestEdit, contestB)
@@ -81,8 +78,7 @@ func TestContestManagerCannotActOnSomebodyElsesContest(t *testing.T) {
 }
 
 func TestGlobalPermissionDoesNotByItselfUnlockEveryContest(t *testing.T) {
-	// An organizer holds contest.edit globally, but that means "may edit the
-	// contests they run", not "may edit anyone's contest".
+	// An organizer's global contest.edit covers the contests they run only.
 	auth := New(&fakeRoles{})
 
 	err := auth.Authorize(context.Background(), identity(PermissionContestEdit), PermissionContestEdit, contestA)
@@ -107,13 +103,8 @@ func TestSystemAdministratorPassesEveryContestScopedCheck(t *testing.T) {
 }
 
 func TestContestAdminAllLiftsOnlyTheContestScope(t *testing.T) {
-	// The permission's own comment says what it does: "acts on every contest
-	// without being listed as a manager". It says nothing about accounts or
-	// the audit trail, and the package doc is explicit that contest power
-	// "must never gain the ability to manage accounts". A shortcut that fires
-	// before the scope is even looked at would hand an auditor role, granted
-	// admin_all from data alone, every installation-wide right there is —
-	// including resetting any account's password.
+	// admin_all must not grant installation-wide rights such as resetting
+	// any account's password.
 	auth := New(&fakeRoles{})
 
 	err := auth.Authorize(context.Background(), identity(PermissionContestAdminAll), PermissionUsersManage, uuid.Nil)
@@ -154,7 +145,6 @@ func TestManagerHoldsTheEverydayContestPermissions(t *testing.T) {
 }
 
 func TestContestRoleGrantsNothingOutsideTheContest(t *testing.T) {
-	// Running a contest must not turn into managing the installation.
 	auth := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: RoleOwner}})
 
 	err := auth.Authorize(context.Background(), identity(), PermissionUsersManage, contestA)
@@ -175,7 +165,6 @@ func TestUserWithNoRoleInTheContestIsDenied(t *testing.T) {
 }
 
 func TestLookupFailureDeniesRatherThanAllows(t *testing.T) {
-	// A database blip must not become an authorisation bypass.
 	wantErr := errors.New("connection reset")
 	auth := New(&fakeRoles{err: wantErr})
 
@@ -200,9 +189,6 @@ func TestHasReportsGlobalPermissions(t *testing.T) {
 	}
 }
 
-// Whoever may look at a contest as staff may watch its participants: the
-// owner and the managers hold contest.view, so they hold contest.monitor too,
-// and on their own contest only.
 func TestContestStaffMayMonitorTheirOwnContestOnly(t *testing.T) {
 	for _, role := range []ContestRole{RoleOwner, RoleManager} {
 		auth := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: role}})

@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// AuditSink implements audit.Sink.
 var _ audit.Sink = (*AuditSink)(nil)
 
 // AuditSink appends to the audit trail.
@@ -27,11 +26,8 @@ func NewAuditSink(pool *pgxpool.Pool) *AuditSink {
 	return &AuditSink{pool: pool}
 }
 
-// Append writes one entry.
-//
-// It goes through the ambient transaction, so an entry lands exactly when the
-// action it records does: a rolled-back change leaves no trace claiming it
-// happened, and a change that succeeded is never unaccounted for.
+// Append writes one entry through the ambient transaction, so the entry
+// commits or rolls back with the action it records.
 func (s *AuditSink) Append(ctx context.Context, e audit.Entry) error {
 	q := storage.QuerierFrom(ctx, s.pool)
 
@@ -55,12 +51,9 @@ func (s *AuditSink) Append(ctx context.Context, e audit.Entry) error {
 	return nil
 }
 
-// AppendMany writes entries in one statement.
-//
-// A bulk operation writes one entry per account, and a round trip each would
-// undo the reason the operation is batched at all. Every column travels as
-// text and is cast in the SELECT — the same trick ReplaceTexts and Save use
-// for a jsonb column — so the statement needs no array codec beyond text[].
+// AppendMany writes entries in one statement, so a bulk operation does not
+// pay a round trip per entry. Every column travels as text[] and is cast in
+// the SELECT, so no other array codec is needed.
 func (s *AuditSink) AppendMany(ctx context.Context, entries []audit.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -110,8 +103,8 @@ func (s *AuditSink) AppendMany(ctx context.Context, entries []audit.Entry) error
 	return nil
 }
 
-// parseIP converts an address for the `inet` column, returning nil for
-// anything unparseable rather than failing the action being recorded.
+// parseIP returns nil for an unparseable address rather than failing the
+// action being recorded.
 func parseIP(value string) *netip.Addr {
 	if value == "" {
 		return nil
@@ -123,8 +116,6 @@ func parseIP(value string) *netip.Addr {
 	return &addr
 }
 
-// nullIfEmpty stores NULL rather than an empty string, so "not recorded" and
-// "recorded as blank" stay distinguishable in the trail.
 func nullIfEmpty(value string) *string {
 	if value == "" {
 		return nil
@@ -132,15 +123,10 @@ func nullIfEmpty(value string) *string {
 	return &value
 }
 
-// AuditTrail implements audit.Reader.
 var _ audit.Reader = (*AuditTrail)(nil)
 
-// AuditTrail reads the trail back.
-//
-// A separate type from the sink although both use one table: the sink writes
-// inside every action's transaction and must never fail quietly, while this is
-// a paged query behind a permission. Giving them one type would invite a
-// caller to hold the thing that can read while meaning to write.
+// AuditTrail reads the trail back. It is separate from AuditSink so a caller
+// that writes never holds the reader, a paged query behind a permission.
 type AuditTrail struct {
 	pool *pgxpool.Pool
 }
@@ -150,9 +136,8 @@ func NewAuditTrail(pool *pgxpool.Pool) *AuditTrail {
 	return &AuditTrail{pool: pool}
 }
 
-// auditListWhere selects what AuditTrail.List answers, with the filter as $1
-// to $6. It names only audit_log's own columns, so the count past the end
-// reads it without the joins that name things for the page.
+// auditListWhere is AuditTrail.List's filter as $1 to $6. It names only
+// audit_log columns, so the count past the end needs no joins.
 const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 		  AND ($2 = '' OR a.action = $2)
 		  AND ($3 = '' OR a.entity = $3)
@@ -161,17 +146,12 @@ const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 		  AND ($6::timestamptz IS NULL OR a.created_at < $6)`
 
 // List returns a page of the trail, newest first, and the total matching.
-//
-// The total rides on the page's own rows, so a page past the end has no row
-// to carry it; only then is it counted on its own (Contests.List's own doc).
-//
-// The actor is joined to a login because a page of identifiers answers
-// nothing. The join is LEFT: a system event has no actor, and an account that
-// has since been deleted still has its entries — the trail outlives the people
-// in it, which is the point of keeping one.
+// The total rides on the page's rows, so only a page past the end counts it
+// separately. The actor join is LEFT: system events have no actor, and a
+// deleted account's entries remain.
 func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, int, error) {
-	// The entity filters are compared, never stored: one that no stored entry
-	// can equal matches nothing, and asking would fail the statement.
+	// A filter no stored text can equal matches nothing; sending it would
+	// fail the statement.
 	if !storableText(f.Entity) || !storableText(f.EntityID) {
 		return nil, 0, nil
 	}
@@ -249,14 +229,10 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 	return found, total, nil
 }
 
-// LatestStartBlocked implements the narrow read contests.Scheduler needs to
-// keep finding 1's guarantee — a blocked contest recorded once, not once a
-// tick: the problem codes of the newest audit entry for contestID, and
-// whether that newest entry is itself a contest.start_blocked one at all.
-//
-// A single row on (entity, entity_id) — the same index Filter's own doc
-// names — rather than List's paged, joined query: Advance asks this once per
-// contest the gate just refused, and needs nothing List computes beyond it.
+// LatestStartBlocked returns the problem codes of the newest audit entry for
+// contestID and whether that entry is contest.start_blocked, so
+// contests.Scheduler records a blocked contest once rather than every tick.
+// It reads one row through the (entity, entity_id) index.
 func (r *AuditTrail) LatestStartBlocked(ctx context.Context, contestID uuid.UUID) ([]string, bool, error) {
 	var (
 		action  string
@@ -277,10 +253,8 @@ func (r *AuditTrail) LatestStartBlocked(ctx context.Context, contestID uuid.UUID
 		return nil, false, fmt.Errorf("read latest audit entry for contest %s: %w", contestID, err)
 	}
 	if action != audit.ActionContestStartBlocked {
-		// Something else is the newest entry for this contest — an edit, a
-		// manual transition, the contest actually starting — so whatever
-		// refusal came before it is no longer the story; a fresh block
-		// deserves its own entry.
+		// A later entry supersedes any earlier refusal; a new block gets its
+		// own entry.
 		return nil, false, nil
 	}
 

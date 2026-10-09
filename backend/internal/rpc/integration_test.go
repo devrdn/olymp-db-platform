@@ -19,11 +19,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// The whole path, assembled: a client, a socket, a server, a runner and a real
-// database. It exists because everything either side of the wire is tested
-// separately and none of that says the two halves agree — and because the
-// point of the split is that a caller cannot tell the difference, which is a
-// claim only an end-to-end test can make.
+// The whole path: client, socket, server, runner and a real database. Only an
+// end-to-end test shows the two halves agree (CLAUDE.md rule 10).
 
 func serving(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) (*Client, string) {
 	t.Helper()
@@ -96,21 +93,17 @@ func TestAQueryAndItsAnswerCrossTheWire(t *testing.T) {
 	if result.Rows[0][1] != "a knife" {
 		t.Fatalf("first note = %v", result.Rows[0][1])
 	}
-	// NULL has to arrive as nothing rather than as an empty string: a
-	// participant debugging a left join is looking at exactly that column.
+	// NULL arrives as nil, not as an empty string.
 	if result.Rows[1][1] != nil {
 		t.Fatalf("a NULL arrived as %#v", result.Rows[1][1])
 	}
-	// The rows share one backing array; growing one must not write into the
-	// next.
+	// Rows share one backing array; growing one must not write into the next.
 	_ = append(result.Rows[0], "extra")
 	if result.Rows[1][0] != "2" {
 		t.Fatalf("second id = %#v after the first row grew, want \"2\"", result.Rows[1][0])
 	}
 }
 
-// The refusal has to arrive as a refusal, with its code, because that is what
-// the interface turns into a sentence in the participant's language.
 func TestARefusalArrivesAsARefusal(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -140,8 +133,6 @@ func TestTruncationSurvivesTheWire(t *testing.T) {
 	}
 }
 
-// The deadline is the reason this service exists at all, so it has to be the
-// same deadline when reached through the wire.
 func TestTheDeadlineStillBoundsTimeThroughTheWire(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
@@ -179,9 +170,7 @@ func TestAFullInstanceSaysSoRatherThanWaiting(t *testing.T) {
 	}
 }
 
-// The journal wraps an executor, and after the split the executor is this
-// client. If that stopped compiling the split would have cost the query log,
-// which is the one thing the Core API keeps on its own side of the wire.
+// The journal wraps an executor, and the executor is this client.
 func TestTheJournalCanWrapTheClient(t *testing.T) {
 	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -191,10 +180,8 @@ func TestTheJournalCanWrapTheClient(t *testing.T) {
 	}
 }
 
-// The container's health check is this binary dialling itself, because the
-// runtime image has neither a shell nor a gRPC probe. If the health service
-// stopped being registered, every deployment would report a runner that never
-// becomes healthy — and would do so only in production.
+// The container's health check is this binary dialling itself; without the
+// health service a deployed runner never becomes healthy.
 func TestTheServiceReportsItselfHealthy(t *testing.T) {
 	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -204,8 +191,6 @@ func TestTheServiceReportsItselfHealthy(t *testing.T) {
 }
 
 func TestAListenAddressBecomesOneThatCanBeDialled(t *testing.T) {
-	// ":9100" means every interface when listening and nothing at all when
-	// connecting, which is the whole reason this exists.
 	if got := ProbeAddress(":9100"); got != "127.0.0.1:9100" {
 		t.Fatalf("ProbeAddress(\":9100\") = %q", got)
 	}
@@ -217,17 +202,12 @@ func TestAListenAddressBecomesOneThatCanBeDialled(t *testing.T) {
 	}
 }
 
-// A result the runner considers acceptable must be one the transport can
-// carry. It was not: gRPC's default receive limit is 4 MiB and the runner's
-// own budget is 5 MiB, so an answer between the two came back as
-// ResourceExhausted — which the client reported as the service being unable to
-// answer and the journal recorded as an error. A big answer looked like an
-// outage.
+// gRPC's default 4 MiB receive limit is below the runner's 5 MiB budget; an
+// answer between the two must still arrive.
 func TestAnAnswerInsideTheBudgetArrivesWhole(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
-	// Five million bytes: comfortably past gRPC's default, comfortably inside
-	// the five mebibyte budget. Precisely the range that used to fail.
+	// Five million bytes: past gRPC's default, inside the 5 MiB budget.
 	result, err := client.Run(t.Context(),
 		ask(database, `SELECT repeat('x', 5000) FROM generate_series(1, 1000)`))
 	if err != nil {
@@ -241,10 +221,7 @@ func TestAnAnswerInsideTheBudgetArrivesWhole(t *testing.T) {
 	}
 }
 
-// Past the budget it is cut, not refused — and cut by what is actually sent.
-// The runner's own count is over the Go values it read, and a value counted as
-// eight bytes can render as twenty characters, so that count is a floor rather
-// than a bound. This is the layer that knows the real size.
+// Past the budget an answer is cut by its rendered size, not refused.
 func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -261,10 +238,8 @@ func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
 	}
 }
 
-// The disk quota is decided on the Core API's side and checked on the runner's,
-// so it has to cross the wire. It did not: the request carried no such field,
-// and the check that section 4.1 puts first was dead in the one arrangement
-// the deployment actually uses.
+// The disk quota is decided by the Core API and checked by the runner, so it
+// must cross the wire (CLAUDE.md rule 11).
 func TestTheDiskQuotaCrossesTheWire(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -277,7 +252,6 @@ func TestTheDiskQuotaCrossesTheWire(t *testing.T) {
 	}
 }
 
-// What a write answers with is a count, and the count has to arrive.
 func TestRowsAffectedCrossTheWire(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -293,8 +267,6 @@ func TestRowsAffectedCrossTheWire(t *testing.T) {
 	}
 }
 
-// An answer too large to read at all is its own kind of failure on the wire,
-// so that the caller can say so rather than reporting the database as broken.
 func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
@@ -306,20 +278,13 @@ func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
 	}
 }
 
-// A separate service whose logs cannot be joined to the requests that caused
-// them is a separate service nobody can debug. The identifier travels as
-// metadata, so every line the runner writes about a call carries the same
-// request_id as the line the Core API wrote about it.
 func TestTheRequestIdentifierCrossesIntoTheOtherProcess(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	const id = "9d1f0c3a-known"
 	ctx := logging.WithRequestID(t.Context(), id)
 
-	// The server puts it into its own context, where the logger picks it up.
-	// Asserting on what the runner logs would mean logging per query, which it
-	// deliberately does not; asserting the context carried it is the same
-	// fact one step earlier.
+	// The runner logs nothing per query, so the test asserts on the context.
 	var seen string
 	carried = func(ctx context.Context) { seen = logging.RequestIDFrom(ctx) }
 	t.Cleanup(func() { carried = nil })
@@ -332,13 +297,8 @@ func TestTheRequestIdentifierCrossesIntoTheOtherProcess(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 11: a value decided on one side of this contract and shown on
-// the other has to cross it. The runner resolves a column's type from the row
-// description and times the statement it ran; both are useless unless the
-// Core API — which never holds the connection that knew either — receives
-// them. The deployment has this service in a separate process, so this is the
-// only arrangement in which the console's column types and its meter exist at
-// all.
+// The runner resolves column types and times the statement; the Core API
+// shows them (CLAUDE.md rule 11).
 func TestTheColumnTypesAndTheDurationCrossTheWire(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -364,16 +324,9 @@ func TestTheColumnTypesAndTheDurationCrossTheWire(t *testing.T) {
 	}
 }
 
-// The duration crosses as a number and a unit, and only one of the two is
-// written down. A thousandfold error in either direction still arrives as a
-// plausible-looking duration, so this pins the magnitude against something
-// the test measured itself.
-//
-// Counting ten million rows server-side is tens of milliseconds and cannot be
-// less than one; the whole call is the ceiling, because the answer was carried
-// by it. Nanoseconds mistaken for microseconds put the value a thousand times
-// over that ceiling, and microseconds mistaken for nanoseconds put it a
-// thousand times under the floor.
+// A thousandfold unit error still looks plausible, so the duration is pinned
+// between a floor (ten million rows take over a millisecond) and the whole
+// call's measured time.
 func TestTheDurationKeepsItsUnitAcrossTheWire(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -395,9 +348,7 @@ func TestTheDurationKeepsItsUnitAcrossTheWire(t *testing.T) {
 	}
 }
 
-// A write answers with a count and no columns at all. Nothing may invent a
-// list for it — an interface drawing a header from an empty answer draws an
-// empty header.
+// A write has no columns; nothing may invent a type list for it.
 func TestAWriteCrossesTheWireWithNoColumnTypes(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -419,22 +370,13 @@ func TestAWriteCrossesTheWireWithNoColumnTypes(t *testing.T) {
 	}
 }
 
-// The whole path, for the failure that started this: the runner cannot open a
-// connection, and what the Core API is handed must be ours rather than the
-// database's own words about the query.
-//
-// Through the real transport (CLAUDE.md rule 10), because that is the only
-// arrangement a deployment uses and because the classification is made on one
-// side of the contract and acted on at the other. A database that does not
-// exist fails the connection the same way a wrong password does — PostgreSQL
-// answers FATAL, so the error carries a *pgconn.PgError inside a connection
-// failure, which is exactly the shape that used to be forwarded to a
-// participant as "your query was wrong".
+// Classified on one side of the contract and acted on at the other, so tested
+// over the real transport (CLAUDE.md rule 10). A missing database fails like a
+// wrong password: a *pgconn.PgError inside a connection failure.
 func TestAConnectionTheRunnerCouldNotOpenArrivesAsOursNotTheDatabases(t *testing.T) {
 	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
-	// A plain identifier, so the runner tries to connect rather than refusing
-	// the name — and no database of that name exists on the cluster.
+	// A plain identifier, so the runner tries to connect rather than refusing it.
 	_, err := client.Run(t.Context(), ask("game_no_such_database_at_all", `SELECT 1`))
 
 	if !errors.Is(err, ErrUnreachable) {
@@ -446,29 +388,16 @@ func TestAConnectionTheRunnerCouldNotOpenArrivesAsOursNotTheDatabases(t *testing
 	}
 }
 
-// The console underlines the character PostgreSQL objected to, and that
-// character is decided inside the Query Runner — the checker runs there,
-// because it links PostgreSQL's parser through cgo. Without a field on the
-// contract the number is produced on one side of the wire and read on the
-// other, so it is zero in every arrangement a deployment actually uses: the
-// console only exists when QUERY_RUNNER_ADDR is set (CLAUDE.md rule 11).
-//
-// Cyrillic on purpose. The offset is a 1-based *character* count, and in UTF-8
-// these are two bytes each — so a byte offset and a character offset differ by
-// a factor of two here, and a wire that quietly carried the wrong one would
-// still look right in every ASCII test.
+// The checker runs in the Query Runner and the console underlines on the other
+// side (CLAUDE.md rule 11). Cyrillic because the offset is a 1-based character
+// count: two-byte characters make a byte offset distinguishable from it.
 func TestAParseErrorsPositionSurvivesTheWireForACyrillicQuery(t *testing.T) {
 	local := checker.NewChecker()
 	client, database := serving(t, queryrunner.DefaultLimits(), local)
 
-	// A comment in Cyrillic, then a statement the parser cannot finish. The
-	// text before the mistake is all multi-byte, so any byte/character
-	// confusion shows up as a position roughly twice what it should be.
 	const sql = "-- отчёт по гостям\nSELECT FROM"
 
-	// What the checker itself says, asked here rather than hard-coded: the
-	// claim is that the wire carries *the checker's own* number, not that
-	// somebody counted the characters correctly in a test.
+	// Asked of the checker rather than hard-coded: the wire must carry its number.
 	direct := local.Check(sql, sqlpolicy.ReadOnly())
 	var expected *sqlpolicy.Refusal
 	if !errors.As(direct, &expected) || expected.Code != sqlpolicy.CodeParseError {
@@ -477,11 +406,8 @@ func TestAParseErrorsPositionSurvivesTheWireForACyrillicQuery(t *testing.T) {
 	if expected.Position <= 0 {
 		t.Fatalf("the checker located the error at %d; there is nothing to carry", expected.Position)
 	}
-	// And it really is a character offset into a string whose bytes outnumber
-	// its characters, or this test proves nothing about the distinction. The
-	// ceiling is one past the last character, which is where PostgreSQL points
-	// at a statement that ended too early; a byte offset into this query would
-	// be half as far again.
+	// One past the last character is where PostgreSQL points at a statement
+	// that ended too early; a byte offset would be further.
 	characters := utf8.RuneCountInString(sql)
 	if len(sql) <= characters+1 {
 		t.Fatal("the query has too little Cyrillic in it; a byte offset and a character offset would be indistinguishable")

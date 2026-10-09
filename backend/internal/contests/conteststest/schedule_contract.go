@@ -11,45 +11,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// ScheduleTarget is what one case of the contract runs against: a schedule
-// over a contest store, the same store seen as a contests.Repository, and the
-// means to put a contest into the status and window a case needs. Each
-// implementation fills these its own way: the in-memory Schedule stores the
-// contest in its Contests, PostgreSQL inserts a row and sets its columns.
+// ScheduleTarget is a schedule over a contest store, the same store seen as a
+// contests.Repository, and the means to seed a contest in a status and
+// window.
 type ScheduleTarget struct {
 	Repo contests.ScheduleRepository
 	// Contests is the store Repo reads and moves, for reading back what a
-	// move left behind and for dressing a contest the way ByID projects it.
+	// move left.
 	Contests contests.Repository
-	// Seed stores a contest in status with the given window and returns its
-	// identifier. Either end may be nil; when both are set, startsAt is
-	// before endsAt, as the schema requires.
+	// Seed stores a contest in status with the given window. Either end may
+	// be nil; when both are set, startsAt is before endsAt, as the schema
+	// requires.
 	Seed func(status string, startsAt, endsAt *time.Time) uuid.UUID
-	// Now is what the store's clock reads. Whether a window has opened or
-	// closed is decided by that clock, so every time in the contract is
-	// stated in its terms.
+	// Now is the store's clock, which decides whether a window has opened or
+	// closed.
 	Now func() time.Time
 }
 
 // ScheduleRepositoryContract is what every contests.ScheduleRepository must
-// do, run as subtests against one implementation. Both the in-memory
-// Schedule and postgres.Contests run it, so the store the scheduler's tests
-// trust and the store production uses are held to the same answers: a rule
-// the fake got wrong would otherwise pass every scheduler test and fail only
-// in a contest.
+// do; both the in-memory Schedule and postgres.Contests run it. each prepares
+// a fresh target for one case, calls run with it, and cleans up. TryLock
+// refusing a second holder needs two transactions, so internal/postgres
+// tests it across two connections.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the store with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. TryLock refusing a second
-// holder is a matter between two transactions, which one caller cannot see;
-// internal/postgres tests it across two real connections.
-//
-// The store may hold contests a case did not make (a shared database can), so
-// every listing is checked against the case's own contests only: each one the
-// case expects appears exactly once, and none of the others appears at all.
+// A shared database may hold contests a case did not make, so listings are
+// checked against the case's own contests only.
 func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, ScheduleTarget))) {
-	// at is the store's clock moved by d, as the pointer a contest's window
-	// holds.
 	at := func(target ScheduleTarget, d time.Duration) *time.Time {
 		v := target.Now().Add(d)
 		return &v
@@ -93,9 +80,8 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		}
 		return ids
 	}
-	// matched fails the case unless got holds each of want exactly once and
-	// none of not, both named for the message. Identifiers in got that are in
-	// neither belong to contests the case did not make and are not looked at.
+	// matched requires each of want exactly once and none of not. Other
+	// identifiers belong to contests the case did not make and are ignored.
 	matched := func(t *testing.T, call string, got []uuid.UUID, want, not map[string]uuid.UUID) {
 		t.Helper()
 		seen := make(map[uuid.UUID]int, len(got))
@@ -137,8 +123,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("DueToStart leaves out a contest whose start is still ahead or unset", func(t *testing.T) {
-		// A microsecond is the finest step the database's clock takes, so it
-		// is the nearest a start can be to now without having arrived.
+		// A microsecond is the database clock's finest step.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			matched(t, "DueToStart()", dueIDs(t, ctx, target), nil, map[string]uuid.UUID{
 				"starting in a microsecond": target.Seed(contests.StatusPublished, at(target, time.Microsecond), nil),
@@ -149,8 +134,6 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("DueToStart returns only published contests", func(t *testing.T) {
-		// Only a published contest is the scheduler's to open: a draft has
-		// not been released, and the rest have left published behind.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			not := map[string]uuid.UUID{}
 			for _, status := range []string{
@@ -164,9 +147,8 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("DueToStart returns the row ByID reads and moves nothing", func(t *testing.T) {
-		// The scheduler re-runs the publish gate against what DueToStart
-		// returns, so it needs the languages and titles too; and the gate
-		// decides whether the contest moves, so reading it must not.
+		// The scheduler re-runs the publish gate on the result, so it needs
+		// languages and titles, and the gate decides whether it moves.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			starts := at(target, -time.Hour)
 			id := target.Seed(contests.StatusPublished, starts, nil)
@@ -232,8 +214,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("SetStatus refuses a contest whose status moved after DueToStart read it", func(t *testing.T) {
-		// The scheduler tells this refusal apart from a failure: a manual
-		// transition got there first, and the tick moves on.
+		// A manual transition got there first; the tick moves on.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
 			matched(t, "DueToStart()", dueIDs(t, ctx, target), map[string]uuid.UUID{"due": id}, nil)
@@ -251,8 +232,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("SetStatus of a contest that is not there is ErrNotFound", func(t *testing.T) {
-		// The other refusal the scheduler moves on from: the contest was
-		// deleted between the read and the write.
+		// Deleted between the read and the write; the tick moves on.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusPublished, contests.StatusRunning)
 
@@ -283,8 +263,8 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("AdvanceFinished leaves running a contest whose end is still ahead or unset", func(t *testing.T) {
-		// A contest with no end (individual timing needs none) stays running
-		// until an organizer moves it, however long it has been open.
+		// A contest with no end (individual timing) stays running until an
+		// organizer moves it.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			left := map[string]uuid.UUID{
 				"ending in a microsecond": target.Seed(contests.StatusRunning, nil, at(target, time.Microsecond)),
@@ -301,9 +281,8 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("AdvanceFinished closes a contest at its end plus the grace, not before", func(t *testing.T) {
-		// The grace is the allowance a participant's late answer is still
-		// admitted in; closing the contest inside it would refuse on the
-		// status what the deadline still allows.
+		// Late answers are admitted within the grace; closing inside it
+		// would refuse by status what the deadline still allows.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			const grace = 5 * time.Second
 			inside := map[string]uuid.UUID{
@@ -328,8 +307,6 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("AdvanceFinished finishes only running contests", func(t *testing.T) {
-		// A contest that never started is not closed by its end passing, and
-		// one already finished or archived is neither moved nor reported.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			others := map[string]uuid.UUID{}
 			for _, status := range []string{
@@ -347,8 +324,8 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	})
 
 	t.Run("AdvanceFinished reports a contest once, on the call that finished it", func(t *testing.T) {
-		// The scheduler audits every identifier it is handed as a move, so a
-		// contest reported again on the next tick would be recorded twice.
+		// The scheduler audits every identifier it is handed, so a repeat
+		// would be recorded twice.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusRunning, nil, at(target, -time.Hour))
 

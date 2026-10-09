@@ -15,15 +15,11 @@ import (
 )
 
 // Monitor stores what is recorded about a participant beyond their queries
-// and answers: participant_events and workspace_revisions (migration 000033).
+// and answers: participant_events and workspace_revisions.
 //
-// Both methods run inside the caller's transaction when the context carries
-// one (storage.QuerierFrom), which is how a workspace save writes its
-// revision atomically with the save itself; without one, RecordRevision opens
-// its own, and InsertEvents is a single statement.
-//
-// The interfaces over this type are declared by its consumers, each with the
-// methods it uses (CLAUDE.md, Go layout rule 3).
+// Both methods join the caller's transaction when the context carries one, so
+// a workspace save commits its revision atomically; without one,
+// RecordRevision opens its own and InsertEvents is a single statement.
 type Monitor struct {
 	pool *pgxpool.Pool
 	uow  *storage.PgxUnitOfWork
@@ -38,20 +34,13 @@ func (m *Monitor) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, m.pool)
 }
 
-// InsertEvents stores a batch of events in one multi-row insert, in the order
-// given, or none of them.
+// InsertEvents stores a batch of events in one statement, in the order given,
+// or none of them.
 //
-// Every event is normalised here again (monitor.Event.Normalize) rather than
-// trusted to have been: the bounds are what keeps the table's jsonb from
-// holding whatever a browser sent, and they must not depend on each caller
-// remembering them. A batch larger than monitor.MaxBatchEvents, or holding an
-// event that cannot be stored, is refused whole with the domain's sentinel;
-// a caller that wants to drop the odd event (a too-short absence) filters the
-// batch first.
-//
-// One statement whatever the batch size: the columns travel as five arrays
-// and are unnested server-side, so a batch costs one round trip and one
-// statement plan.
+// Every event is normalised again here so the jsonb bounds do not depend on
+// the caller. A batch over monitor.MaxBatchEvents, or with an event that
+// cannot be stored, is refused whole with the domain's sentinel; a caller
+// that wants to drop odd events filters the batch first.
 func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) error {
 	if err := monitor.CheckBatch(events); err != nil {
 		return err
@@ -86,8 +75,8 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 		claimed[i] = event.ClientAt
 	}
 
-	// WITH ORDINALITY and the ORDER BY keep the ids in the order the batch
-	// gave, so a timeline read by id reads the events as they happened.
+	// WITH ORDINALITY and ORDER BY assign ids in batch order, so reading by id
+	// follows the events as they happened.
 	if _, err := m.querier(ctx).Exec(ctx, `
 		INSERT INTO participant_events (contest_id, registration_id, kind, payload, client_at)
 		SELECT contest_id, registration_id, kind, payload::jsonb, client_at
@@ -103,27 +92,16 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 // checkStored refuses a batch whose browser events would take a registration
 // past monitor.MaxStoredEvents stored events.
 //
-// Only what the browser posts is refused (monitor.Kind.FromBrowser). Events
-// the server observes — an address changing, a second session, a tab's life —
-// are always stored: refused, a participant could fill the budget with
-// signals of their own and then change address or open a second session
-// unrecorded, which is what the monitoring exists to catch; and a tab change
-// would fail with the event that records it. Each of those is bounded where it
-// is written instead (the tracker reports a pair at most once per
-// monitor.ParallelReportEvery; the workspace caps tabs and writes a minute).
-// The count they are measured against is every stored event, so the server's
-// own fill the budget a little sooner, which only ever costs the browser.
+// Only browser events are refused (monitor.Kind.FromBrowser). Server-observed
+// events (an address change, a second session, a tab change) are always
+// stored, or a participant could fill the budget and then act unrecorded;
+// those are bounded where they are written. They still count toward the
+// total, which only costs the browser.
 //
-// One statement whatever the batch size, and it asks registration_activity —
-// a primary key per registration in the batch — rather than counting
-// participant_events, which is the table the limit exists to bound. A
-// registration with no summary row has stored nothing.
-//
-// The count and the insert are two statements, so two batches racing can put
-// a registration one batch past the line. That is the right side to err on:
-// the limit exists to bound a table over a contest, not to be exact to the
-// event, and a lock held across the insert would cost every batch to catch a
-// case the next batch refuses anyway.
+// It reads registration_activity by primary key rather than counting
+// participant_events, the table the limit bounds. No summary row means
+// nothing stored. Two racing batches can overshoot by one batch; the limit
+// bounds table size, so that is not worth a lock across the insert.
 func (m *Monitor) checkStored(ctx context.Context, events []monitor.Event) error {
 	arriving := make(map[uuid.UUID]int, len(events))
 	for _, event := range events {
@@ -165,24 +143,17 @@ func (m *Monitor) checkStored(ctx context.Context, events []monitor.Event) error
 	return nil
 }
 
-// RecordRevision folds one save of a document into its history
-// (design §2.4):
+// RecordRevision folds one save of a document into its history:
 //
 //   - a body equal to the latest revision's writes nothing;
-//   - a save while the latest revision is younger than monitor.RevisionWindow
-//     (monitor.Extends) rewrites that revision in place — its body, its title
-//     and its updated_at, which only ever moves forward, so a clock that
-//     stepped back never leaves it before started_at;
+//   - a save within monitor.RevisionWindow of the latest revision's start
+//     (monitor.Extends) rewrites it in place; updated_at only moves forward,
+//     so a clock stepping back never puts it before started_at;
 //   - anything else starts a new revision.
 //
-// The latest revision is read FOR UPDATE, so two saves of the same document
-// in separate transactions take turns rather than both rewriting it. Two
-// first saves of a document racing each other can each find no revision and
-// each insert one; that costs an extra revision in the history, never a lost
-// state, and is not worth a lock on every save.
-//
-// Within the caller's transaction when there is one, so the revision commits
-// or rolls back with the save it records.
+// The latest revision is read FOR UPDATE, so concurrent saves take turns. Two
+// racing first saves can each insert a revision; that adds an extra revision,
+// never loses state, and is not worth a lock on every save.
 func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision) error {
 	if err := revision.Validate(); err != nil {
 		return err
@@ -190,9 +161,8 @@ func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision)
 	return m.uow.Do(ctx, func(ctx context.Context) error {
 		querier := m.querier(ctx)
 
-		// The comparison is made by the database: the body is up to 64 KiB
-		// and autosave may ask forty times a minute, so reading it back only
-		// to compare would move every byte twice for a yes or a no.
+		// The database compares the bodies: they are up to 64 KiB and
+		// autosave is frequent, so reading one back to compare is wasteful.
 		var (
 			latest    int64
 			unchanged bool
@@ -228,7 +198,6 @@ func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision)
 	})
 }
 
-// insertRevision starts a new revision at revision.At.
 func (m *Monitor) insertRevision(ctx context.Context, querier storage.Querier, revision monitor.Revision) error {
 	if _, err := querier.Exec(ctx, `
 		INSERT INTO workspace_revisions (registration_id, document, title, body, started_at, updated_at)

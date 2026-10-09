@@ -11,8 +11,8 @@ import (
 )
 
 // feedFixture is a contest whose two participants did one of everything,
-// several of it in the very same instant across sources and within one, and
-// a participant of another contest whose history must never show.
+// several items at the same instant, plus another contest's participant whose
+// history must never show.
 type feedFixture struct {
 	*watchFixture
 	alice, bob uuid.UUID
@@ -126,11 +126,8 @@ func TestTheFeedMergesEverySourceInTimeOrder(t *testing.T) {
 	})
 }
 
-// The organiser's feed re-reads itself every few seconds per open tab, and
-// its sources are independent of one another: they go to the database as one
-// batch, and the page's participants are named in one more read — two round
-// trips whatever the number of sources, where there used to be one per
-// source and one for the names.
+// The sources go as one batch and the names in one more read: two round trips
+// per poll whatever the number of sources.
 func TestTheFeedCostsTwoRoundTrips(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newFeedFixture(t, ctx)
@@ -152,8 +149,6 @@ func TestTheFeedCostsTwoRoundTrips(t *testing.T) {
 	})
 }
 
-// Paging through the feed a few items at a time, forwards and backwards,
-// meets every item exactly once, whatever falls on a page boundary.
 func TestTheFeedPagesWithoutGapsOrRepeats(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newFeedFixture(t, ctx)
@@ -244,10 +239,8 @@ func TestTheFeedFilters(t *testing.T) {
 	})
 }
 
-// An item stamped before one already delivered, but written after it — two
-// transactions committing out of the order of their clocks — still reaches a
-// feed polled forwards: the newest FeedSettle of the journals is held back
-// until it can no longer change.
+// An item stamped before one already delivered but committed after it still
+// reaches a feed polled forwards, because the newest FeedSettle is held back.
 func TestPollingForwardsLosesNoItemCommittedLate(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -305,9 +298,8 @@ func TestAStreamedFeedIsTheWholeFeedOnce(t *testing.T) {
 	})
 }
 
-// A participant's sign-ins belong to the contest only while it could
-// concern them: from their registration to an hour past the contest's end,
-// or past their own finish.
+// Sign-ins count from the registration to the grace period past the
+// contest's end or the participant's finish.
 func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -344,11 +336,9 @@ func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
 	})
 }
 
-// Registering weeks ahead does not open the weeks before the contest: a
-// participant's sign-ins count from monitor.SignInGrace before the contest's
-// start, in either timing, so a late individual start still shows what they
-// did once the window opened. Only without a contest start does their own
-// start, and then their registration, bound them.
+// Sign-ins count from monitor.SignInGrace before the contest's start in
+// either timing, not from an early registration. Without a contest start,
+// the participant's own start, then their registration, bounds them.
 func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
 	cases := map[string]struct {
 		timing    string
@@ -411,8 +401,7 @@ func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
 	}
 }
 
-// One participant's disqualification is found however many of the others'
-// come after it: the limit applies to theirs alone.
+// The limit applies to this participant's disqualifications, not others'.
 func TestATimelineFindsItsDisqualificationAmongOthers(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -449,18 +438,15 @@ func journalRowsRead(t *testing.T, ctx context.Context, table string) int64 {
 }
 
 // A contest-wide export reads each journal row about once, however many
-// pages the file runs to: the cost grows with the contest, not its square.
-// Each participant has a dozen pages of queries, so a read that fetched a
-// registration's whole remaining range for every page — a bitmap scan cannot
-// return rows in order, and sorts what it fetched — would read about six
-// times the rows here.
+// pages it runs to. With a dozen pages per participant, re-reading the
+// remaining range per page (a bitmap scan and sort) would read about six
+// times the rows.
 func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
 		const participants, queries = 40, 600 // 24,000 queries, 2,400 answers, 2,400 sign-ins
 		loadOlympiadQueries(t, f, 7, participants, queries)
-		// The rest of a year beside it, so the journals are not this
-		// contest alone and a whole-table read is not the cheap plan.
+		// Other contests' rows, so a whole-table read is not the cheap plan.
 		loadOlympiad(t, newWatchFixture(t, ctx), 98, 400)
 		for _, table := range []string{"users", "registrations", "query_log", "submissions", "audit_log", "participant_events"} {
 			f.exec("ANALYZE " + table)
@@ -488,8 +474,8 @@ func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 	})
 }
 
-// The newest page holds back the settle window too: the cursor a live screen
-// starts polling from must not already be past an item still committing.
+// The cursor a live screen starts polling from must not be past an item
+// still committing.
 func TestTheNewestPageHoldsBackTheSettleWindow(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -503,9 +489,8 @@ func TestTheNewestPageHoldsBackTheSettleWindow(t *testing.T) {
 	})
 }
 
-// Under individual timing a participant who started but never finished is
-// bounded by their own deadline (contests.Deadline): the start plus the
-// duration, or the contest's end when that comes first.
+// An individual participant who never finished is bounded by their deadline
+// as contests.Deadline computes it.
 func TestAnIndividualParticipantsSignInsEndWithTheirDeadline(t *testing.T) {
 	for name, endsAt := range map[string]*time.Duration{"no end": nil, "a distant end": ptrDuration(10 * time.Hour)} {
 		t.Run(name, func(t *testing.T) {
@@ -537,19 +522,16 @@ func TestAnIndividualParticipantsSignInsEndWithTheirDeadline(t *testing.T) {
 
 func ptrDuration(d time.Duration) *time.Duration { return &d }
 
-// The contest the platform is built for: three hundred participants on one
-// monitoring screen. A hundred queries and twenty answers each is thirty
-// times a page from each source — enough for a read that takes a page per
-// participant to show it — and still loads in about a second, which is what a
-// suite that runs on every change can afford.
+// Three hundred participants, the target contest size: enough to expose a
+// read that takes a page per participant, while loading in about a second.
 const (
 	feedLoadParticipants = 300
 	feedLoadQueries      = 100
 	feedLoadAnswers      = 20
 )
 
-// loadContest fills f's contest with participants and their journals, written
-// in time order across the participants as a real olympiad interleaves them.
+// loadContest fills f's contest with participants and their journals,
+// interleaved in time order as in a real contest.
 func loadContest(t *testing.T, f *watchFixture, participants, queries, answers int) {
 	t.Helper()
 	f.exec(`
@@ -588,15 +570,9 @@ func loadContest(t *testing.T, f *watchFixture, participants, queries, answers i
 	}
 }
 
-// TestTheFeedReadsOnePageNotOnePerParticipant holds the contest-wide feed to
-// the cost of what it returns.
-//
-// The screen polls every few seconds, so a page that reads a page's worth of
-// rows from every registration — three hundred of them — reads thirty
-// thousand rows of each journal to show a hundred items, and does it twenty
-// times a minute. Every source of a contest-wide page is one range of one
-// index: the rows it touches are the page it returns, whatever the contest's
-// size, both for the newest page and for a page past a cursor.
+// TestTheFeedReadsOnePageNotOnePerParticipant checks that a contest-wide page
+// touches about the rows it returns, whatever the contest's size, for the
+// newest page and for a page past a cursor.
 func TestTheFeedReadsOnePageNotOnePerParticipant(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -613,13 +589,10 @@ func TestTheFeedReadsOnePageNotOnePerParticipant(t *testing.T) {
 				_, err := w.Feed(ctx, q)
 				return err
 			})
-			// A page of items plus the row that says there is another, from
-			// each source that feeds the page; twice that leaves room for a
-			// plan that reads a few rows it then discards, and is still two
-			// orders of magnitude below a page per participant.
+			// Page plus one per source, doubled for rows a plan discards;
+			// still far below a page per participant.
 			bound := int64(2 * (page + 1))
-			// And the newest page read something at all: a statement that
-			// bypassed the measurement would otherwise pass every bound.
+			// A statement that bypassed the measurement would pass every bound.
 			if name == "newest" && touched["query_log"] == 0 {
 				t.Errorf("the %s page read no rows of query_log: the feed's reads went unmeasured", name)
 			}

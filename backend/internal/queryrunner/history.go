@@ -4,99 +4,49 @@ import (
 	"time"
 )
 
-// HistoryEntry is one row of a participant's own query log, read back rather
-// than written — the same table Journal writes to (query_log), the other
-// direction. It carries exactly what the log already records for this
-// purpose: the statement, how it ended, and when.
+// HistoryEntry is one row of a participant's own query log (query_log), read
+// back.
 type HistoryEntry struct {
 	SQL string
-	// SQLTruncated says SQL is the beginning of the statement rather than the
-	// whole of it — see MaxHistorySQLChars. A flag rather than a silent cut,
-	// for the same reason a truncated query result and a truncated schema
-	// each carry one: a short answer presented as a complete one is a wrong
-	// answer, and this is the participant's own text being shortened.
-	//
-	// Never set by a streamed export, which carries every statement whole.
+	// SQLTruncated says SQL was cut at MaxHistorySQLChars, so a shortened
+	// statement is never shown as whole. Never set by the streamed export.
 	SQLTruncated bool
 	Status       Status
 	// Error is empty for a query that did not fail.
 	Error string
-	// DurationMs and RowCount are nil for a row still `running` — a query in
-	// flight the instant this is read, or one whose process died before
-	// SweepAbandoned closed it. Nil rather than zero standing in for "not
-	// yet recorded", the same distinction ParticipantQuestion's own
-	// AttemptsRemaining keeps on the read side of a different table.
+	// DurationMs and RowCount are nil, not zero, for a row still `running`:
+	// in flight, or abandoned and not yet swept.
 	DurationMs *int
 	RowCount   *int
 	ExecutedAt time.Time
 }
 
 // DefaultHistoryLimit and MaxHistoryLimit bound one page of a participant's
-// own query log.
-//
-// CLAUDE.md rule 2: the bound belongs in the domain, not only in the 1 MiB
-// request-body limit that would otherwise be the only ceiling on how large a
-// page a client could ask for — and a query log can run to hundreds of rows
-// over a two-hour contest, unlike most lists this size a participant reads.
+// own query log (CLAUDE.md rule 2).
 const (
 	DefaultHistoryLimit = 50
 	MaxHistoryLimit     = 200
 )
 
-// MaxHistorySQLChars bounds the statement one row of a *page* carries, in
-// characters.
-//
-// The row count was bounded and the bytes were not, which is only half a
-// bound (CLAUDE.md rule 2). sqlpolicy.MaxQueryBytes lets one statement be
-// 64 KiB, MaxHistoryLimit lets one page hold two hundred of them, and
-// nothing between the column and the browser said no: a single request for
-// one's own log could be twelve megabytes, and a participant may ask for it
-// as often as their rate budget allows.
-//
-// Applied in the SELECT rather than after the scan, so the bound holds where
-// the bytes actually arrive (CLAUDE.md rule 12) — a driver reads a whole row
-// before handing any of it over, so a cut made in Go has already paid for the
-// allocation it exists to prevent. A thousand characters is at most four
-// kilobytes of UTF-8, so a full page is under 800 KiB where it was 12.8 MiB,
-// and it is far more of a statement than the panel's own one-line cell shows.
-//
-// It bounds the page, not the record: the CSV export streams every statement
-// whole, one row at a time, and is where a participant goes for the text of
-// something they wrote (see postgres.QueryLog.ExportHistory).
+// MaxHistorySQLChars bounds the statement one row of a page carries, in
+// characters, so a full page stays under 800 KiB instead of 200 statements of
+// 64 KiB (CLAUDE.md rule 2). It is applied in the SELECT, where the bytes
+// arrive (rule 12). The CSV export still carries every statement whole.
 const MaxHistorySQLChars = 1000
 
 // MaxExportRows and MaxExportBytes bound one CSV download of a participant's
-// own log — the read that is not paged, because a file is the whole record.
-//
-// "Not paged" was taken to mean "not bounded", and those are different things
-// (CLAUDE.md rule 2). The export streams every row of a column that
-// sqlpolicy.MaxQueryBytes lets reach 64 KiB, inside a transaction holding one
-// of the core pool's ten connections for as long as the client chooses to
-// read — the same core database every other participant's sign-in, submission
-// and timer depends on. Unbounded, one participant's log is the size of one
-// participant's patience.
-//
-// Both numbers are safety nets rather than budgets anybody spends. The
-// installation's default rate is 30 queries a minute (QUERY_PER_MINUTE), so
-// MaxExportRows is over eleven hours of asking without pause, against
-// olympiads measured in hours; and MaxExportBytes is what makes that row count
-// mean something, since a bound on rows with none on bytes is the same half a
-// bound MaxHistorySQLChars was written for — at 64 KiB a statement, 20,000
-// rows is 1.2 GiB. A real statement is a few hundred bytes, which puts a
-// full-rate three-hour log around a megabyte and both bounds out of reach of
-// anything a contest can produce.
-//
-// What a participant loses when one does bind: the file carries the oldest
-// rows up to the bound and says so in a final line, rather than stopping
-// silently. The newest rows are the ones the panel beside it shows.
+// own log (CLAUDE.md rule 2). The export holds a core pool connection while it
+// streams, so it must end. Both are safety nets no real contest reaches: 20,000
+// rows is eleven hours at the default rate, and the byte bound covers 64 KiB
+// statements. When one binds, the file keeps the oldest rows and says so in a
+// final line.
 const (
 	MaxExportRows  = 20_000
 	MaxExportBytes = 32 << 20
 )
 
-// NormalizeHistoryPage clamps a requested page to what History implementations
-// actually honour, mirroring audit.Filter.Normalize — the existing pattern for
-// a paged, append-mostly journal a caller pages through newest-first.
+// NormalizeHistoryPage clamps a requested page to the history bounds, like
+// audit.Filter.Normalize.
 func NormalizeHistoryPage(limit, offset int) (int, int) {
 	if limit <= 0 {
 		limit = DefaultHistoryLimit

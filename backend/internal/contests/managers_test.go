@@ -36,8 +36,7 @@ func TestAManagerIsAppointedToTheContest(t *testing.T) {
 }
 
 func TestAppointingAnAccountThatDoesNotExistIsRefused(t *testing.T) {
-	// The foreign key would refuse it too, as an opaque 500; the person doing
-	// the appointing mistyped a name and deserves to be told so.
+	// The foreign key would refuse it too, but as an opaque 500.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -49,10 +48,8 @@ func TestAppointingAnAccountThatDoesNotExistIsRefused(t *testing.T) {
 }
 
 func TestAppointingADeletedAccountIsRefused(t *testing.T) {
-	// users.Repository.ByID returns a deleted account rather than
-	// ErrNotFound — the row stays so the audit trail keeps its subject — and
-	// a deleted account can never sign in, so appointing it would staff the
-	// contest with somebody who can never act on it.
+	// ByID still returns a deleted account (the audit trail keeps its subject),
+	// and it can never sign in to act on the appointment.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	deleted := f.Users.Add(users.User{Login: "gone", FullName: "gone", Status: users.StatusDeleted})
@@ -65,10 +62,7 @@ func TestAppointingADeletedAccountIsRefused(t *testing.T) {
 }
 
 func TestAppointingABlockedAccountIsRefused(t *testing.T) {
-	// auth.Service.Login and auth.Middleware both refuse a blocked account, so
-	// appointing one would staff the contest with somebody who can never act
-	// on it — the same reason TestAppointingADeletedAccountIsRefused gives for
-	// a deleted one, just above.
+	// A blocked account can never sign in to act on the appointment.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	blocked := f.Users.Add(users.User{Login: "blocked", FullName: "blocked", Status: users.StatusBlocked})
@@ -80,11 +74,7 @@ func TestAppointingABlockedAccountIsRefused(t *testing.T) {
 	}
 }
 
-// TestGrantManagerRefusesARegisteredParticipant covers the other direction
-// of the staff/participant overlap: a contest's own participant must not
-// also be appointed to its staff, which would hand them the reference
-// answers (contest.view) and the unfrozen leaderboard (contest.edit) for a
-// contest they are competing in.
+// Staff see the reference answers and the unfrozen leaderboard.
 func TestGrantManagerRefusesARegisteredParticipant(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -104,8 +94,7 @@ func TestGrantManagerRefusesARegisteredParticipant(t *testing.T) {
 }
 
 func TestOwnershipCannotBeHandedOverThroughTheStaffList(t *testing.T) {
-	// Two owners make "who may appoint staff" ambiguous, and the staff list is
-	// not where a transfer of ownership should quietly happen.
+	// Two owners would make "who may appoint staff" ambiguous.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	assistant := f.AddUser("assistant")
@@ -175,8 +164,6 @@ func TestRevokingSomebodyWhoIsNotStaffReportsNotFound(t *testing.T) {
 }
 
 func TestAppointmentsAreAudited(t *testing.T) {
-	// Who gained power over which contest, and who gave it to them, is the
-	// first question asked after anything goes wrong.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	assistant := f.AddUser("assistant")

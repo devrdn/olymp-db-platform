@@ -10,18 +10,11 @@ import (
 	"testing"
 )
 
-// The fixtures below are pictures rather than byte strings that happen to
-// start correctly, because what is under test is a decoder's answer and not a
-// prefix match. The one exception is pngHeaderClaiming, which is deliberately
-// a header with no picture behind it: that is the attack.
-
-// jpegOf returns a real JPEG of that size.
 func jpegOf(t *testing.T, width, height int) []byte {
 	t.Helper()
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	// A gradient rather than one flat colour, so that two pictures of
-	// different shapes cannot encode to the same bytes and so the resize has
+	// A gradient, so different shapes encode differently and the resize has
 	// something to interpolate.
 	for y := range height {
 		for x := range width {
@@ -36,10 +29,8 @@ func jpegOf(t *testing.T, width, height int) []byte {
 	return buf.Bytes()
 }
 
-// jpegWithComment returns a JPEG carrying comment in a COM segment — the
-// shape of everything a camera leaves behind, and the thing re-encoding
-// exists to destroy. Spliced in after the two-byte start-of-image marker,
-// which is where a writer puts its own metadata.
+// jpegWithComment returns a JPEG carrying comment in a COM segment right
+// after the start-of-image marker, as camera metadata would be.
 func jpegWithComment(t *testing.T, comment string) []byte {
 	t.Helper()
 
@@ -66,12 +57,7 @@ func jpegWithComment(t *testing.T, comment string) []byte {
 }
 
 // pngHeaderClaiming returns a PNG signature and one IHDR chunk declaring that
-// size, and nothing else: no pixel data at all.
-//
-// It is what a decompression bomb looks like on the wire. image.DecodeConfig
-// reads exactly this much and answers with the declared size, which is why
-// the refusal can happen before a single pixel is allocated; image.Decode on
-// the same bytes would try to build the picture first.
+// size, with no pixel data: a decompression bomb's header.
 func pngHeaderClaiming(t *testing.T, width, height int) []byte {
 	t.Helper()
 
@@ -86,8 +72,7 @@ func pngHeaderClaiming(t *testing.T, width, height int) []byte {
 	chunk = binary.BigEndian.AppendUint32(chunk, uint32(len(header)))
 	chunk = append(chunk, "IHDR"...)
 	chunk = append(chunk, header...)
-	// The checksum covers the type and the data, not the length. A wrong one
-	// makes the decoder refuse for the wrong reason.
+	// The checksum covers the type and the data, not the length.
 	chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
 
 	out := append([]byte("\x89PNG\r\n\x1a\n"), chunk...)

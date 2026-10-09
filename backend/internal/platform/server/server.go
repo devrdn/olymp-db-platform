@@ -1,4 +1,5 @@
-// Package server runs an HTTP listener with a graceful shutdown.
+// Package server runs an HTTP listener with a graceful shutdown. It does not
+// route or apply middleware; httpx and internal/api do.
 package server
 
 import (
@@ -13,27 +14,15 @@ import (
 
 // Timeouts protecting the listener from slow or idle peers.
 //
-// ReadHeaderTimeout bounds the header phase and readTimeout bounds the body
-// after it: without the second, a client that has sent complete headers may
-// then feed the 1 MiB body one byte at a time and hold a goroutine and a
-// connection for as long as it likes. Thirty seconds is far beyond any
-// legitimate JSON body — the largest thing the API accepts is a roster import
-// — and far below "indefinitely".
+// readTimeout bounds the body after the headers, so a client cannot feed the
+// 1 MiB body a byte at a time and hold a connection indefinitely. Thirty
+// seconds is far beyond any JSON body. A route taking a large body (game dump
+// chunks) sets its own deadline through http.ResponseController instead of
+// raising this value for every route.
 //
-// "Legitimate JSON body" is the premise, and one route now carries something
-// else: a chunk of an uploaded game dump, megabytes of it, sent from wherever
-// an organiser happens to be with nothing in front buffering the request. It
-// does not weaken this value — it replaces the deadline for its own request
-// with one sized to its own body, through http.ResponseController (see
-// internal/api's minChunkUploadBytesPerSecond). Anything added here that
-// takes a large body has to do the same; raising the number below instead
-// would hand every other route the same slack for no reason.
-//
-// WriteTimeout is deliberately absent, not forgotten. It is measured from the
-// end of the request headers rather than from the start of the response, so
-// any value at all would cut off the streaming endpoints (SSE) that keep a
-// response open for the length of a contest. Slow readers are bounded by
-// IdleTimeout and by the reverse proxy in front.
+// WriteTimeout is absent on purpose: it counts from the end of the request
+// headers, so any value would cut off SSE streams that stay open for a whole
+// contest. Slow readers are bounded by IdleTimeout and the reverse proxy.
 const (
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 30 * time.Second
@@ -51,8 +40,8 @@ type Server struct {
 	done     chan struct{}
 }
 
-// New creates a server bound to addr. The name identifies it in logs, since
-// the service runs a public and an internal listener side by side.
+// New creates a server bound to addr. The name tells the public and internal
+// listeners apart in logs.
 func New(name, addr string, handler http.Handler, log *slog.Logger) *Server {
 	return &Server{
 		name: name,
@@ -68,9 +57,8 @@ func New(name, addr string, handler http.Handler, log *slog.Logger) *Server {
 	}
 }
 
-// Start binds the listener and serves in the background. Binding happens
-// synchronously so an occupied port is reported to the caller instead of
-// vanishing into a goroutine.
+// Start binds the listener synchronously, so an occupied port is reported to
+// the caller, and serves in the background.
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.http.Addr)
 	if err != nil {
@@ -87,8 +75,7 @@ func (s *Server) Start() error {
 
 	go func() {
 		defer close(done)
-		// Serve always ends with an error; a closed listener is the expected
-		// outcome of a graceful shutdown, not a failure.
+		// A closed listener is the normal end of a graceful shutdown.
 		if err := s.http.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.log.Error("http server stopped", "server", s.name, "error", err)
 		}
@@ -110,8 +97,7 @@ func (s *Server) Addr() string {
 }
 
 // Shutdown stops accepting connections and waits for in-flight requests to
-// finish, or for ctx to expire. Calling it on a server that never started is a
-// no-op, which keeps startup error paths simple.
+// finish, or for ctx to expire. It is a no-op on a server that never started.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	started := s.listener != nil

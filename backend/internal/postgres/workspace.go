@@ -15,31 +15,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Workspace stores a participant's notes and SQL tabs
-// (participant_notes, participant_sql_tabs).
+// Workspace stores a participant's notes and SQL tabs.
 //
-// Every change to the *set* of tabs — creating the first one, adding one
-// under the limit, deleting one, reordering them — runs in one transaction
-// holding a per-registration advisory lock (lockWorkspace). The lock is what
-// makes "count, then insert" and "read the set, then rewrite positions"
-// correct when the same participant has two browser tabs open: two first
-// loads would otherwise each find no tab and each create one, and two creates
-// could each find room for the tenth. An advisory lock rather than a row lock
-// on registrations, so the registration row — which the clock and the
-// scoring update — is never held by a workspace write. Editing one tab's text
-// or title changes no set and takes no lock.
+// Every change to the set of tabs (first tab, create, delete, reorder) runs
+// in one transaction holding a per-registration advisory lock
+// (lockWorkspace), so "count, then insert" and "read the set, then rewrite
+// positions" stay correct with two browser tabs open. An advisory lock rather
+// than a row lock keeps the registrations row, which the clock and scoring
+// update, free. Editing one tab's text or title takes no lock.
 //
-// Every write also records its history (design §2.4) in the same
-// transaction, through Monitor: a save of the notes or of a tab's text folds
-// into the document's revisions, and creating, renaming and deleting a tab
-// each writes a participant event. A history that cannot be written takes
-// the write back with it, so what an organiser reads is never behind what the
-// participant saved. Saving the notes or one tab is a transaction of its own
-// for that reason, serialised by the row it updates rather than by the lock.
+// Every write records its history through Monitor in the same transaction,
+// so a failed history write rolls the save back and the organiser's view is
+// never behind.
 //
-// The table has no unique constraint on (registration_id, position): that
-// positions stay unique and dense (0..n-1) rests on this lock. Every path
-// that changes the set or the positions takes it, and a new one must too.
+// There is no unique constraint on (registration_id, position): unique,
+// dense positions (0..n-1) rest on the lock, and every path that changes the
+// set or the positions must take it.
 type Workspace struct {
 	pool    *pgxpool.Pool
 	uow     *storage.PgxUnitOfWork
@@ -53,12 +44,9 @@ func NewWorkspace(pool *pgxpool.Pool) *Workspace {
 	return &Workspace{pool: pool, uow: storage.NewUnitOfWork(pool), history: NewMonitor(pool)}
 }
 
-// recordTab writes one event in the life of a tab, filed under the contest of
-// the registration. Called inside the transaction of the change it records.
-// The contest is read here rather than carried by every caller: a tab is
-// created, renamed or deleted a handful of times in an olympiad, and a
-// primary-key read on those is cheaper than widening the repository's
-// contract for them.
+// recordTab writes one tab event inside the transaction of the change it
+// records. The contest is read here: tab events are rare, so a primary-key
+// read is cheaper than widening the repository's contract.
 func (w *Workspace) recordTab(ctx context.Context, registration uuid.UUID, payload monitor.Payload) error {
 	var contest uuid.UUID
 	if err := w.querier(ctx).QueryRow(ctx,
@@ -73,15 +61,14 @@ func (w *Workspace) querier(ctx context.Context) storage.Querier {
 }
 
 // workspaceLockClass is the first key of every workspace advisory lock. The
-// two-key form of pg_advisory_xact_lock is a key space of its own, apart from
-// the single-bigint locks the scheduler and the cluster preparation take;
-// this constant keeps workspace locks apart from any other two-key lock
-// added later. The value is arbitrary ("WSKP" in ASCII).
+// two-key form is a key space apart from the single-bigint locks elsewhere;
+// this class keeps workspace locks apart from other two-key locks. The value
+// is arbitrary ("WSKP" in ASCII).
 const workspaceLockClass = 0x57534b50
 
 // lockWorkspace serialises changes to one registration's tab set until the
-// transaction ends. The second key is a hash of the registration: two
-// registrations sharing a hash merely wait for each other, which is harmless.
+// transaction ends. Two registrations sharing a hash only wait for each
+// other.
 func (w *Workspace) lockWorkspace(ctx context.Context, registration uuid.UUID) error {
 	if _, err := w.querier(ctx).Exec(ctx,
 		`SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))`,
@@ -99,7 +86,6 @@ func scanTab(row pgx.Row) (workspace.Tab, error) {
 	return tab, err
 }
 
-// tabs reads a registration's tabs in position order.
 func (w *Workspace) tabs(ctx context.Context, registration uuid.UUID) ([]workspace.Tab, error) {
 	rows, err := w.querier(ctx).Query(ctx, `
 		SELECT `+tabColumns+`
@@ -117,12 +103,9 @@ func (w *Workspace) tabs(ctx context.Context, registration uuid.UUID) ([]workspa
 }
 
 // Load returns the notes and the tabs, creating the first tab when there is
-// none.
-//
-// The ordinary load — a workspace that already has its tabs — is two plain
-// reads and takes no lock. Only an empty workspace goes on to the locked
-// transaction, which reads again under the lock before it inserts, so of two
-// first loads racing each other exactly one creates the tab.
+// none. A workspace with tabs costs two reads and no lock; an empty one
+// re-reads under the lock before inserting, so of two racing first loads
+// only one creates the tab.
 func (w *Workspace) Load(ctx context.Context, registration uuid.UUID, firstTitle string) (workspace.Notes, []workspace.Tab, error) {
 	var notes workspace.Notes
 	err := w.querier(ctx).QueryRow(ctx,
@@ -163,9 +146,8 @@ func (w *Workspace) Load(ctx context.Context, registration uuid.UUID, firstTitle
 	return notes, tabs, nil
 }
 
-// SaveNotes writes the notes, whether or not they existed, and their
-// revision with them. The last write wins: the same participant typing in two
-// windows at once is rare enough not to merge.
+// SaveNotes upserts the notes and records their revision. The last write
+// wins; typing in two windows at once is too rare to merge.
 func (w *Workspace) SaveNotes(ctx context.Context, registration uuid.UUID, body string) (time.Time, error) {
 	var at time.Time
 	err := w.uow.Do(ctx, func(ctx context.Context) error {
@@ -222,18 +204,14 @@ func (w *Workspace) CreateTab(ctx context.Context, registration uuid.UUID, limit
 	return created, nil
 }
 
-// UpdateTab changes one tab of this registration. A tab of another
-// registration matches nothing, which is ErrTabNotFound — the same answer as
-// a tab that never existed.
-//
-// A new title is a tab_renamed event when it differs from the old one; new
-// text is a revision of the tab, under the title it has after the change.
-// A title-only change writes no revision: the text did not change.
+// UpdateTab changes one tab of this registration; another registration's tab
+// is ErrTabNotFound. A changed title writes a tab_renamed event; new text
+// writes a revision under the new title.
 func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, patch workspace.TabPatch) (time.Time, error) {
 	var at time.Time
 	err := w.uow.Do(ctx, func(ctx context.Context) error {
-		// The old title comes from the row as it was locked for this update,
-		// so two renames racing each other each report what they replaced.
+		// The old title is read from the locked row, so racing renames each
+		// report what they replaced.
 		var oldTitle, title string
 		err := w.querier(ctx).QueryRow(ctx, `
 			UPDATE participant_sql_tabs AS t
@@ -262,9 +240,7 @@ func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, p
 		if patch.Body == nil {
 			return nil
 		}
-		// The body is the one this call wrote: coalesce($4, t.body) with $4
-		// set is $4. Reading it back would carry up to MaxTabBodyBytes out of
-		// the database on every autosave for a value already in hand.
+		// With $4 set the stored body is *patch.Body, so it is not read back.
 		return w.history.RecordRevision(ctx, monitor.Revision{
 			Registration: registration, Document: monitor.TabDocument(id), Title: title, Body: *patch.Body, At: at,
 		})
@@ -294,9 +270,8 @@ func (w *Workspace) DeleteTab(ctx context.Context, registration, id uuid.UUID) e
 			return workspace.ErrLastTab
 		}
 
-		// The title comes from the row as it is deleted: a rename takes no
-		// workspace lock, so one committed while this waited for the row
-		// would make the title read above stale.
+		// The title comes from the deleted row: a rename takes no workspace
+		// lock, so the title read above may be stale.
 		q := w.querier(ctx)
 		var title string
 		err = q.QueryRow(ctx,
@@ -343,8 +318,7 @@ func (w *Workspace) ReorderTabs(ctx context.Context, registration uuid.UUID, ids
 	})
 }
 
-// sameTabSet reports whether ids names every tab exactly once and nothing
-// else.
+// sameTabSet reports whether ids names every tab once and nothing else.
 func sameTabSet(tabs []workspace.Tab, ids []uuid.UUID) bool {
 	if len(tabs) != len(ids) {
 		return false

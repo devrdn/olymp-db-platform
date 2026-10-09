@@ -18,13 +18,10 @@ import (
 // Contests implements contests.Repository.
 var _ contests.Repository = (*Contests)(nil)
 
-// contestColumns is the projection every contest read shares, so a new column
-// is added in one place and the scan order cannot drift between queries.
-//
-// The languages and translations arrive as JSON from correlated subqueries
-// rather than as extra round trips: the publish gate reasons about a contest
-// together with them, and loading them separately would be both an N+1 and a
-// chance for the two to disagree.
+// contestColumns is the projection every contest read shares; its order must
+// match contestScanTargets. Languages and translations arrive as JSON from
+// correlated subqueries, which avoids an N+1 and reads them in the same
+// snapshot as the contest.
 const contestColumns = `
 	c.id, c.status, c.enrollment, c.question_mode, c.progression, c.scoring, c.timing, c.duration_min,
 	c.starts_at, c.ends_at, c.allowed_cidrs, c.settings, c.created_by,
@@ -59,9 +56,7 @@ func (r *Contests) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// languageRow and translationRow are the JSON shapes the projection above
-// produces. They live here rather than on the domain types because the shape
-// is a storage detail: the domain does not know it is ever serialised.
+// languageRow and translationRow are the JSON shapes contestColumns produces.
 type languageRow struct {
 	Code      string `json:"code"`
 	IsDefault bool   `json:"is_default"`
@@ -73,19 +68,13 @@ type translationRow struct {
 	Description string `json:"description"`
 }
 
-// The cover rides in the projection for the same reason the languages and
-// the translations do: the listing the play screen reads is what puts a
-// picture above a story (design spec §10), and a read per row would be the
-// N+1 this projection exists to avoid. Two correlated subqueries rather than
-// a join, because contest_covers holds at most one row per contest and a
-// join would put the unique constraint in charge of the listing's row count.
-// Empty rather than NULL, because a contest with no uploaded picture is not
-// a missing answer — it wears the drawn cover, which is an ordinary state.
+// The cover comes from correlated subqueries rather than a join, so the
+// unique constraint on contest_covers does not decide the listing's row
+// count. An empty hash means no uploaded picture: the contest shows the drawn
+// cover.
 
-// contestScanTargets returns pointers matching contestColumns' own column
-// order, so any query that selects it can share this one list instead of
-// repeating it — the same invariant contestColumns' own doc asks for, kept
-// for every caller and not only scanContest below.
+// contestScanTargets returns pointers in contestColumns' order, shared by
+// every query that selects it.
 func contestScanTargets(c *contests.Contest, settings, languages, translations *[]byte) []any {
 	return []any{
 		&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Progression, &c.Scoring, &c.Timing, &c.DurationMin,
@@ -113,7 +102,6 @@ func scanContest(row pgx.Row) (contests.Contest, error) {
 	return hydrate(c, settings, languages, translations)
 }
 
-// hydrate turns the JSON columns into the domain's own types.
 func hydrate(c contests.Contest, settings, languages, translations []byte) (contests.Contest, error) {
 	if len(settings) > 0 {
 		if err := json.Unmarshal(settings, &c.Settings); err != nil {
@@ -172,9 +160,8 @@ func (r *Contests) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, er
 		`SELECT `+contestColumns+` FROM contests c WHERE c.id = $1`, id))
 }
 
-// contestListWhere selects what Contests.List answers, with the filter's
-// arguments as $1 to $5 (contestListArgs). The page and the count past the
-// end both read it, so they cannot disagree about what matches.
+// contestListWhere is Contests.List's filter, with contestListArgs as $1 to
+// $5. The page and the count past the end share it.
 const contestListWhere = `
 		WHERE ($1 = '' OR EXISTS (
 		          SELECT 1 FROM contest_translations t
@@ -200,23 +187,17 @@ const contestListWhere = `
 		          SELECT 1 FROM registrations reg
 		          WHERE reg.contest_id = c.id AND reg.user_id = $4))`
 
-// contestListArgs are contestListWhere's $1 to $5.
 func contestListArgs(f contests.Filter) []any {
-	// The search text is typed by a person and lands in an ILIKE pattern,
-	// so its metacharacters are neutralised (see like.go).
+	// The search text lands in an ILIKE pattern (CLAUDE.md rule 3).
 	return []any{escapeLike(f.Query), f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Enrolled}
 }
 
 // List returns a page of contests and the total matching the filter.
+// ManagedBy limits it to an organizer's contests; VisibleTo to what a student
+// may see.
 //
-// The two scopes are applied here rather than by the caller because they are
-// selection, not authorisation: ManagedBy is what keeps an organizer's list
-// their own, and VisibleTo is what a student may see at all.
-//
-// The total rides on the page's own rows (COUNT(*) OVER()), so a page past
-// the end has no row to carry it; only then is it counted on its own. A
-// screen that went one page too far is told how many there are, not that
-// there are none, and every other page still costs one round trip.
+// The total rides on the page's rows (COUNT(*) OVER()); only a page past the
+// end, which has no rows, counts separately, so it still reports the total.
 func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Contest, int, error) {
 	args := contestListArgs(f)
 	rows, err := r.querier(ctx).Query(ctx, `
@@ -241,10 +222,6 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 			languages    []byte
 			translations []byte
 		)
-		// The shared target list plus this query's own trailing count, rather
-		// than a second copy of the projection: the copy had already drifted
-		// once, which is the drift contestScanTargets' own doc asks for one
-		// list to prevent.
 		if err := rows.Scan(append(contestScanTargets(&c, &settings, &languages, &translations), &total)...); err != nil {
 			return nil, 0, fmt.Errorf("scan contest: %w", err)
 		}
@@ -266,11 +243,9 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 	return found, total, nil
 }
 
-// Update saves a contest's own fields.
-//
-// Status is deliberately not among them: it moves through the service's
-// transition, which is where the lifecycle rules and the publish gate live,
-// and a second way to set it would be a way around both.
+// Update saves a contest's own fields. Status is not among them: it moves
+// only through SetStatus, so the service's lifecycle rules and publish gate
+// cannot be bypassed.
 func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 	settings, err := json.Marshal(c.Settings)
 	if err != nil {
@@ -296,13 +271,10 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 	return nil
 }
 
-// SetStatus moves the contest along its lifecycle, only from the status the
-// caller decided against.
-//
-// The comparison is in the WHERE clause rather than in a preceding SELECT,
-// which is what makes it atomic: PostgreSQL locks the row for the UPDATE and
-// re-evaluates the condition against the committed value, so of two concurrent
-// callers holding the same stale status exactly one matches a row.
+// SetStatus moves the contest to status to, only if it is still in status
+// from. The comparison is in the WHERE clause: PostgreSQL locks the row and
+// re-evaluates it against the committed value, so of two concurrent callers
+// with the same stale status only one matches.
 func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
 	tag, err := r.querier(ctx).Exec(ctx,
 		`UPDATE contests SET status = $3, updated_at = now() WHERE id = $1 AND status = $2`,
@@ -314,9 +286,8 @@ func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 		return nil
 	}
 
-	// Nothing matched: either the contest is gone or its status moved. The two
-	// are different answers, and a second read is the only way to tell them
-	// apart. It costs one indexed lookup on a path that has already failed.
+	// Nothing matched: a second read tells a missing contest from a moved
+	// status.
 	if _, err := r.ByID(ctx, id); err != nil {
 		return err
 	}
@@ -326,21 +297,13 @@ func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 var _ contests.ScheduleRepository = (*Contests)(nil)
 
 // scheduleLockKey is the advisory lock every replica's scheduler tick
-// competes for (§8, contests.Scheduler). Distinct from gamedb's own
-// prepareLock — a different constant only so the two are easy to tell apart
-// at a glance; they could not collide anyway, since PostgreSQL keeps a
-// session's advisory locks scoped to the database it is connected to, and
-// this one and the game cluster's are never the same database.
+// competes for. Advisory locks are scoped to a database, so it cannot collide
+// with gamedb's prepareLock.
 const scheduleLockKey = 8_531_204_477_119_003_2
 
 // TryLock attempts the scheduler's advisory lock for the ambient transaction.
-//
-// pg_try_advisory_xact_lock never blocks — a losing replica finds out
-// immediately rather than queueing behind the winner — and releases
-// automatically at the end of the transaction that acquired it, whether by
-// commit or rollback. That is what keeps the lock from ever being held
-// between ticks: nothing in this package's code releases it explicitly, and
-// nothing has to.
+// It never blocks, so a losing replica returns at once, and the lock is
+// released when the transaction ends, by commit or rollback.
 func (r *Contests) TryLock(ctx context.Context) (bool, error) {
 	var acquired bool
 	if err := r.querier(ctx).QueryRow(ctx,
@@ -351,22 +314,11 @@ func (r *Contests) TryLock(ctx context.Context) (bool, error) {
 	return acquired, nil
 }
 
-// DueToStart returns every published contest whose starts_at has arrived, by
-// this database's own clock — the same reasoning postgres.Submissions applies
-// to a deadline (now() here is PostgreSQL's own, not a value computed in this
-// process and handed down), so that every replica racing for TryLock agrees
-// about which contests qualify regardless of how its own wall clock happens
-// to be skewed.
-//
-// Full rows, not ids: the caller re-checks CheckPublishable against each one
-// before starting it (finding 1 — the scheduler is now a second door into a
-// contest, and it must hold the same invariant Service.Transition does), and
-// that needs the contest's languages, translations, timing and mode alongside
-// it, exactly what ByID returns. This is also what keeps a tick cheap: the
-// WHERE clause is on indexed columns and matches only what would actually
-// move, so the gate this runs per contest is paid for contests due right now,
-// never for the rest of the installation's published ones sitting on a future
-// starts_at.
+// DueToStart returns every published contest whose starts_at has arrived by
+// the database's clock, so replicas with skewed wall clocks agree. It returns
+// full rows because the caller re-checks CheckPublishable against each one
+// before starting it, so the scheduler cannot start a contest that Transition
+// would refuse.
 func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`SELECT `+contestColumns+`
@@ -389,19 +341,13 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 	return due, rows.Err()
 }
 
-// AdvanceFinished moves every running contest whose deadline has passed to
-// finished: ends_at plus grace, the same network-latency allowance
-// submission.go and the participation gate (contests.Gate) add before
-// refusing a fixed-timing participant's own late answer or query (§8's one
-// deadline formula, one grace). Comparing against ends_at alone used to
-// close a contest a tick before that grace ran out, so which of two answers
-// submitted a moment apart was accepted depended on whether the scheduler
-// had ticked yet — a race no participant could see or control.
+// AdvanceFinished moves to finished every running contest past ends_at plus
+// grace. The grace is the same one submissions and contests.Gate allow, so
+// the scheduler never closes a contest while a late answer would still be
+// accepted.
 //
-// A contest with no ends_at (individual timing needs none to publish) never
-// matches this WHERE clause, and stays running until an organizer moves it by
-// hand — the same absence CheckPublishable already tolerates for that timing
-// model.
+// A contest with no ends_at (individual timing) stays running until an
+// organizer moves it.
 func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`UPDATE contests SET status = $1, updated_at = now()
@@ -414,8 +360,7 @@ func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]
 	return scanIDs(rows)
 }
 
-// scanIDs collects a single uuid column, closing rows itself so every caller
-// does not have to remember to.
+// scanIDs collects a single uuid column and closes rows.
 func scanIDs(rows pgx.Rows) ([]uuid.UUID, error) {
 	defer rows.Close()
 	var ids []uuid.UUID
@@ -429,8 +374,7 @@ func scanIDs(rows pgx.Rows) ([]uuid.UUID, error) {
 	return ids, rows.Err()
 }
 
-// Delete removes a contest. Everything hanging off it goes with it through the
-// schema's cascades, so there is nothing to clean up by hand.
+// Delete removes a contest; the schema's cascades remove its dependent rows.
 func (r *Contests) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := r.querier(ctx).Exec(ctx, `DELETE FROM contests WHERE id = $1`, id)
 	if err != nil {
@@ -451,9 +395,8 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 		defaults = append(defaults, l.IsDefault)
 	}
 
-	// Delete-then-insert in one statement each: "replace" has to mean replace,
-	// and a language quietly left behind would keep the publish gate demanding
-	// translations for something the contest no longer offers.
+	// A language left behind would keep the publish gate demanding
+	// translations for it.
 	const stale = `DELETE FROM contest_languages WHERE contest_id = $1 AND NOT (lang = ANY($2))`
 	if len(codes) == 0 {
 		exists, err := clearChildren(ctx, r.querier(ctx), stale, "contests", id, codes)
@@ -469,11 +412,9 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 		return fmt.Errorf("replace contest languages: %w", err)
 	}
 
-	// Clear the old default before writing the new one. Only one language per
-	// contest may carry the flag, and that is a plain unique index — checked
-	// row by row, and not deferrable. Without this step, moving the default
-	// from en to ro collides with the en row that has not been rewritten yet,
-	// and the move is simply impossible to express.
+	// Clear the old default first: the one-default-per-contest unique index is
+	// checked row by row and not deferrable, so moving the default from en to
+	// ro would collide with the en row not yet rewritten.
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE contest_languages SET is_default = false WHERE contest_id = $1 AND is_default`,
 		id); err != nil {
@@ -487,8 +428,7 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 		ON CONFLICT (contest_id, lang) DO UPDATE SET is_default = EXCLUDED.is_default`,
 		id, codes, defaults)
 	if err != nil {
-		// A contest deleted since the caller read it is refused here, by
-		// the foreign key.
+		// A contest deleted meanwhile trips the foreign key.
 		return fmt.Errorf("replace contest languages: %w", missingParent(err, map[string]error{
 			"contest_languages_contest_id_fkey": contests.ErrNotFound,
 		}))
@@ -537,31 +477,18 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 	return nil
 }
 
-// LockContest takes the contest row itself, the same technique
-// internal/postgres/questions.go's own lockContest uses to serialise
-// ordinal allocation within one contest — here to serialise across two
-// different tables instead of two rows of one: appointing a manager
-// (contest_managers) and registering a participant (registrations) for the
-// same contest must never both succeed for the same account, however the
-// two requests interleave. The lock is released when the surrounding
-// transaction ends, so a caller outside one would see no protection at all
-// while believing it had some — refusing is the honest answer.
+// LockContest locks the contest row until the transaction ends, so appointing
+// a manager and registering a participant for the same contest cannot both
+// succeed for one account. It must run inside a transaction.
 //
-// FOR NO KEY UPDATE rather than the stronger FOR UPDATE: every row that
-// references a contest by foreign key (game_instances.contest_id, inserted
-// continuously by the pool's own background top-ups, among others) takes a
-// key-share lock on this row the moment it is inserted, and FOR UPDATE
-// conflicts with that — a roster import or a manager appointment holding
-// this lock would have stalled the pool for as long as it ran, for a
-// contest whose participants are meanwhile waiting on that same pool for a
-// database. FOR NO KEY UPDATE does not conflict with a key-share lock, and
-// still conflicts with itself, which is the only property GrantManager,
-// Enroll and AddParticipants actually need from it.
+// FOR NO KEY UPDATE, not FOR UPDATE: every insert referencing the contest by
+// foreign key (game_instances from the pool's top-ups, among others) takes a
+// key-share lock that FOR UPDATE would block. FOR NO KEY UPDATE still
+// conflicts with itself, which is all GrantManager, Enroll and
+// AddParticipants need.
 //
-// A contest that is not there is ErrNotFound: a lock that found no row
-// holds nothing, and a caller told otherwise would go on to write against a
-// contest deleted since it read it. Once the row is found it is held until
-// the transaction ends, so it cannot be deleted under the caller after that.
+// A missing contest is ErrNotFound; once found, the row cannot be deleted
+// before the transaction ends.
 func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("locking a contest must run inside a transaction")
@@ -576,9 +503,8 @@ func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// cidrList makes sure an empty restriction is stored as an empty array rather
-// than NULL, which is what the column's NOT NULL default expects and what
-// "no restriction" means everywhere else.
+// cidrList stores no restriction as an empty array, not NULL: the column is
+// NOT NULL.
 func cidrList(prefixes []netip.Prefix) []netip.Prefix {
 	if prefixes == nil {
 		return []netip.Prefix{}

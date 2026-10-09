@@ -12,8 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/profile"
 )
 
-// answered builds the answers tab of one question: the attempts given, in
-// order, at a minute apart.
+// answered builds one question's answers tab, attempts a minute apart.
 func answered(question uuid.UUID, ord int, correct ...bool) monitor.QuestionAttempts {
 	group := monitor.QuestionAttempts{QuestionID: question, QuestionOrd: ord}
 	for i, ok := range correct {
@@ -88,14 +87,6 @@ func TestTheReportCarriesTheResultAndThePlaceOfAnOpenTable(t *testing.T) {
 	}
 }
 
-// A registration the leaderboard has no row for gets its report with no
-// result at all — nil, not a zeroed one.
-//
-// The table is bounded (leaderboard.DefaultMaxRows), and a registration below
-// the cut is on no computation of it, so this is every participant of a large
-// contest past the two thousandth row, not a corner case. A zeroed Result
-// would carry an empty scoring and an empty state, which read as a result of
-// nought in a mode nobody can name.
 func TestTheReportOfARegistrationTheTableHasNoRowFor(t *testing.T) {
 	r := newRig(t)
 	c, p := r.seed(t, contests.StatusFinished)
@@ -115,8 +106,6 @@ func TestTheReportOfARegistrationTheTableHasNoRowFor(t *testing.T) {
 	if report.Result != nil {
 		t.Errorf("result = %+v, want none at all", report.Result)
 	}
-	// The rest of the report is still the participant's own, and still theirs
-	// to read: the standing is the only thing the table was asked for.
 	if len(report.Questions) != 1 || !report.Questions[0].Solved {
 		t.Errorf("questions = %+v, want the participant's own answers", report.Questions)
 	}
@@ -137,8 +126,6 @@ func TestTheReportCountsTheQueriesAndTheTimeWorked(t *testing.T) {
 	}
 }
 
-// A participant who never started the clock, or never answered, has no
-// stretch of time to report — not a zero one.
 func TestTheTimeWorkedIsAbsentWithoutAStartAndAnAnswer(t *testing.T) {
 	r := newRig(t)
 	report := r.report(t, contests.StatusFinished)
@@ -147,14 +134,6 @@ func TestTheTimeWorkedIsAbsentWithoutAStartAndAnAnswer(t *testing.T) {
 	}
 }
 
-// In ICPC scoring a question's share of the penalty is what the report has
-// to show: the server writes points_awarded = 0 for every ICPC submission,
-// so a column of points would read nought on a row that cost fifty minutes.
-//
-// The number is not derived here. It is leaderboard.Cell.Penalty over the
-// cell the table already computed for that question, with the contest's own
-// icpc_penalty_min — the same arithmetic the standings statement performs
-// (TestICPCCellPenaltiesAddUpToTheRowsOwn holds the two together).
 func TestTheReportCarriesEachQuestionsShareOfTheICPCPenalty(t *testing.T) {
 	r := newRig(t)
 	solved, missed := uuid.New(), uuid.New()
@@ -198,8 +177,6 @@ func TestTheReportCarriesEachQuestionsShareOfTheICPCPenalty(t *testing.T) {
 	}
 }
 
-// Outside ICPC nothing charges minutes, so no question has a penalty — and
-// the points the contest recorded are still the result.
 func TestTheReportChargesNoPenaltyOutsideICPC(t *testing.T) {
 	r := newRig(t)
 	solved := uuid.New()

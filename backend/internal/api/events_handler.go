@@ -20,206 +20,84 @@ import (
 	"github.com/google/uuid"
 )
 
-// EventsAccess is the slice of queryproxy.Service this handler needs: the
-// same pre-lookup rate check every participant-facing read pays (AdmitRead),
-// and the one admission that differs from ParticipantAccess's own
-// (AccessForEvents, finding 4) — a contest that is published and not yet
-// started is something this channel may still be held open for, so a
-// participant who enrolled early can learn the moment it starts instead of
-// polling, while everything else (reading the story, the questions,
-// answering a question) keeps going through Access, unchanged, and still
-// refuses exactly what it always refused.
+// EventsAccess is the slice of queryproxy.Service this handler needs.
+// AccessForEvents differs from Access in one way: it also admits a published
+// contest that has not started, so an early participant learns of the start
+// without polling. Every read and answer still goes through Access.
 type EventsAccess interface {
 	AdmitRead(userID uuid.UUID) error
-	// AccessForEvents also hands back the participant's contests.Standing,
-	// refused or not: a resync that is refused asks it whether the contest
-	// is over for them (queryproxy.Service.AccessForEvents).
+	// AccessForEvents also returns the participant's Standing, refused or not,
+	// so a refused resync can tell whether the contest is over for them.
 	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error)
 }
 
-// GET /contests/{id}/events — a Server-Sent Events channel for a participant
-// of a contest that is running, or published and waiting to (docs/ARCHITECTURE.md
-// §8, finding 4).
+// EventsHandler serves GET /contests/{id}/events, a Server-Sent Events channel
+// for a participant of a running contest, or a published one waiting to start
+// (docs/ARCHITECTURE.md §8).
 //
-// It carries exactly two things over the channel's lifetime: a "sync" event,
-// every defaultResyncInterval, with server_now and this caller's own
-// deadline (contests.Deadline — never with the grace the participation gate,
-// contests.Gate, adds before refusing a late action: the grace is an
-// allowance for a request already on its way, not time a participant is
-// shown); and a "contest_started"
-// event when the contest starts, and a "contest_finished" event when the
-// channel closes because the contest is over for this participant
-// (contests.Standing.Over). Nothing about another participant ever crosses
-// it — every event is built from this caller's own contests.Participant and
-// contests.Contest, the same two values Access resolves for the read
-// endpoints (participant_handler.go), and nothing else is ever added to the
-// payload.
+// It sends a "sync" event every resync interval with server_now and this
+// caller's deadline (contests.Deadline, without the gate's grace: that is an
+// allowance for a request already in flight, not time to show),
+// "contest_started" when the contest starts, and "contest_finished" when the
+// channel closes because the contest is over for this participant. Every event
+// is built from this caller's own Participant and Contest; nothing about
+// another participant crosses it.
 //
-// Access is decided exactly once, by the same façade the participant's read
-// endpoints already use, extended by exactly one method
-// (EventsAccess — AccessForEvents and AdmitRead), so this is not a fourth set
-// of "may this student be here". Everything a participant may read or submit
-// still goes through Access, unmodified: AccessForEvents only widens what
-// this one channel may be held open for, to include a contest that has been
-// published but has not started, so a participant who connects before
-// starts_at can still observe the published → running transition on it
-// instead of the channel refusing them until Access says the contest exists.
-// What is new here, and exists only here, is what an HTTP endpoint that holds
-// the connection open needs beyond a single admission check:
+// Beyond admission, a held-open connection needs:
 //
-//   - A connection limit. AdmitRead bounds how often a caller may ask to open
-//     one, keyed by account and shared with the rate every other read and
-//     every query already spends from — a caller who opens and abandons
-//     connections in a loop pays for every attempt, exactly as a caller who
-//     hammers Run with queries that are all refused still pays for each one
-//     (queryproxy.Service.Run's own doc, finding 3). It does not bound how
-//     many may be open at once: a burst of `AdmitRead`-cleared attempts
-//     could all succeed within the same window and never be asked to close
-//     any of them. connLimiter is that second, independent bound — a plain
-//     count per registration, checked after Access resolves who is asking,
-//     so the number that matters (how many sockets one participant holds)
-//     is capped regardless of how quickly they were opened. This is a
-//     deliberate choice, not an oversight: opening a channel still costs the
-//     same database lookup a read does, so it is charged the same way a
-//     read is (CLAUDE.md rule 13) rather than exempted from the budget it
-//     would otherwise be free to spend in a loop — what actually keeps a
-//     flaky connection from spending that budget is the stream's retry field and
-//     tolerating a transient failure on a tick (both below), which cut how
-//     often a legitimately reconnecting client ever asks again in the first
-//     place, rather than letting every attempt in for free.
-//   - Not touching AdmitRead's budget again after the connection opens. A
-//     tick's own resync calls AccessForEvents directly, the same lookups Run
-//     pays for on every query, but never AdmitRead: this is a periodic push
-//     this server chose to make, not a caller-initiated request, and
-//     charging it against the shared per-minute budget would let an idle,
-//     correctly open connection quietly starve the very account it belongs
-//     to of the query rate the architecture actually promises it (CLAUDE.md
-//     rule 5's reasoning applied to a budget rather than a cache key: spend
-//     the bounded, caller-controlled cost first, never a cost the server
-//     itself schedules).
-//   - Pacing a client that does reconnect. The stream's own `retry:` field
-//     is sent as resync — the same interval this channel already refreshes
-//     on — so a client that reconnects at all does so on this server's own
-//     schedule rather than EventSource's undeclared three-second default:
-//     twenty attempts a minute, each one a fresh AdmitRead charge, is what
-//     turns a student's flaky wifi during a graded contest into their own
-//     SQL console refusing queries (finding 3).
-//   - Tolerating a transient failure on a tick rather than closing the
-//     channel over it. AccessForEvents wrapping queryproxy.ErrUnavailable —
-//     the game database or the core one was briefly away, not a refusal of
-//     this participant — is retried on the next tick instead of ending the
-//     connection; only a genuine refusal (finished, not running for reasons
-//     that are not "briefly unreachable", disqualified, address no longer
-//     allowed) closes it. Ending the connection on every blip is what forces
-//     the reconnect in the first place — this and the retry field both exist
-//     to keep an honest, if unlucky, connection from ever needing to.
-//   - Holding nothing while idle. Between ticks this goroutine holds a
-//     ticker and a TCP socket the standard library already owns — no pooled
-//     database connection, no held row lock. AccessForEvents's one lookup
-//     acquire a connection from the pool and return it before the next tick
-//     even begins, the same way any other short request would. A room of two
-//     hundred participants therefore costs, between ticks, two hundred idle
-//     goroutines and sockets and nothing the game database's connection
-//     pool would ever notice; during a tick it costs the same lookup
-//     Access always costs, spread over whatever fraction of
-//     defaultResyncInterval two hundred participants' tickers happen to
-//     land in.
-//   - Ending on disconnect, on shutdown, on a write that will not finish, and
-//     on nothing else. A write that fails (the socket is gone) or
-//     r.Context().Done() (the standard library cancels it when the client
-//     disconnects) both return from this handler immediately, which is what
-//     releases the connection-limit slot and stops the ticker — no goroutine
-//     here outlives its request. A write that blocks — a client that
-//     completed the handshake and then never reads again, so TCP's zero
-//     window is never reported as an error — ends the same way, bounded by
-//     writeTimeout (finding 2): without it, that goroutine, its
-//     connection-limit slot and its share of shutdown's wait would be held
-//     for the rest of the process, four such clients being all it takes to
-//     lock a participant out of their own timer for the remainder of the
-//     contest. A slow but honest client — one still draining its socket at
-//     any rate, however low — is unaffected: every write here is a few dozen
-//     bytes, sent at most once every defaultResyncInterval, so it finishes
-//     long before writeTimeout unless the peer has stopped reading
-//     altogether. On a process shutdown the same disconnect path is taken one
-//     instant sooner: shutdown is closed by internal/app.App.Run at the same
-//     moment it starts draining the servers, so every open connection's next
-//     select sees it and returns before http.Server.Shutdown would otherwise
-//     wait out its own timeout for a stream nothing was ever going to end on
-//     its own (internal/platform/server's own doc names exactly this
-//     endpoint as the reason WriteTimeout is absent — writeTimeout below is
-//     this handler's own, per write, and does not change that).
+//   - A connection limit. AdmitRead bounds how often a caller may open one
+//     (charged like any read, CLAUDE.md rule 13), not how many are open at
+//     once; connLimiter caps that per registration.
+//   - No AdmitRead charge per tick. A resync is a push the server chose, and
+//     charging it would let an idle connection starve its own account's query
+//     rate.
+//   - Paced reconnects. The stream's retry field is set to the resync interval
+//     instead of EventSource's three-second default, which would spend the
+//     account's read budget on flaky wifi.
+//   - Tolerance of transient failures. queryproxy.ErrUnavailable on a tick is
+//     retried next tick; only a real refusal closes the channel.
+//   - Nothing held while idle. Between ticks a connection holds a ticker and a
+//     socket, no pooled database connection or lock.
+//   - An end on disconnect, on shutdown, or on a stalled write (writeTimeout).
 type EventsHandler struct {
 	access EventsAccess
 	mw     *auth.Middleware
 	log    *slog.Logger
 
 	limiter *connLimiter
-	// resync is how often an open connection re-asks Access for the
-	// participant's current state and pushes it down the wire — a field,
-	// not the constant below, so a test can shrink it instead of waiting on
-	// the real clock (the same reason queryproxy.Service.WithClock exists).
+	// resync is how often an open connection re-asks for the participant's
+	// state; a field so a test can shrink it.
 	resync time.Duration
-	// writeTimeout bounds one write to this connection (finding 2) — a
-	// field, not the constant below, for the same reason resync is: a test
-	// shrinks it instead of waiting out ten real seconds to prove a stalled
-	// write is ever reclaimed.
+	// writeTimeout bounds one write; a field so a test can shrink it.
 	writeTimeout time.Duration
-	// now is the clock server_now is read from — never the deadline itself,
-	// which is contests.Deadline alone (see the type's own doc above); only
-	// the value a participant's own browser clock is offset against.
+	// now is the clock server_now is read from, never the deadline's.
 	now func() time.Time
-	// shutdown is closed when the process starts shutting down
-	// (internal/app.App wires it to the same context main.go cancels on
-	// SIGINT/SIGTERM). Without it, every open connection would keep this
-	// handler's goroutine running until its own client disconnected, which
-	// on a contest with participants still connected is "until the process
-	// is killed" — exactly the leak this type's own doc promises not to be.
+	// shutdown is closed when the process starts shutting down; without it each
+	// open stream would run until its client left.
 	shutdown <-chan struct{}
 }
 
-// defaultResyncInterval is the middle of the range
-// docs/ARCHITECTURE.md §8 gives the frontend for its own resynchronisation
-// (30 to 60 seconds): far enough apart that two hundred participants cost
-// only a few of these round trips a second between them, close enough that a
-// browser clock nobody trusts for more than half a minute never drifts
-// further than that from the server's own.
+// defaultResyncInterval sits in the 30 to 60 seconds docs/ARCHITECTURE.md §8
+// gives: two hundred participants cost a few lookups a second, and a browser
+// clock never drifts more than half a minute from the server's.
 const defaultResyncInterval = 30 * time.Second
 
-// defaultMaxConnections is how many of this endpoint one participant may
-// hold open at once.
+// defaultMaxConnections is how many channels one participant may hold open at
+// once. More than one, because a reconnecting tab briefly holds two and working
+// from two tabs is normal; small, so a script opening connections in a loop
+// hits a wall quickly.
 //
-// Not one: a browser tab reconnecting after a network blip briefly holds the
-// old EventSource and the new one at once, and working from two tabs — the
-// story in one, the console in another — is not abuse. Not unbounded
-// either: the question this endpoint exists to answer under load is exactly
-// "how many may one participant hold, and what happens to the rest"
-// (this task's own check) — a script opening connections in a loop must hit
-// a wall well before a two-hundred-seat room's worth of them could ever be
-// one account's doing.
-//
-// Per process (finding 7): connLimiter's count lives in this handler's own
-// memory, not in the cache every other rate limit in this service shares
-// across replicas. With N replicas behind the same reverse proxy, the
-// installation-wide cap on one participant is defaultMaxConnections * N, not
-// this number alone — worth knowing before reading it as a system-wide
-// guarantee.
+// The count is per process, not in the shared cache: with N replicas the real
+// cap is defaultMaxConnections * N.
 const defaultMaxConnections = 4
 
-// writeTimeout bounds how long one write to this connection may block before
-// it is treated the same as a client that vanished (finding 2): a client
-// that completes the handshake and then never reads holds a zero TCP receive
-// window, which the sending side probes forever without ever returning an
-// error on its own — so without a deadline, that goroutine (and the
-// connection-limit slot and shutdown responsiveness that come with it) is
-// held for the rest of the process. Ten seconds is far longer than any write
-// this handler ever makes needs: every event is a few dozen bytes and this
-// handler writes at most a handful of them per defaultResyncInterval, so a
-// client that is still draining its socket at any rate finishes well inside
-// it, and only a peer that has stopped reading altogether ever hits it.
+// writeTimeout bounds how long one write may block before the client is treated
+// as gone. A peer that stops reading holds a zero TCP window that never returns
+// an error, so without it the goroutine and its connection slot are held for
+// the life of the process. Every event is a few dozen bytes, so any client
+// still reading finishes well inside ten seconds.
 const writeTimeout = 10 * time.Second
 
-// eventSync, eventContestStarted and eventContestFinished are the three
-// event names this channel ever writes (see EventsHandler's own doc).
 const (
 	eventSync            = "sync"
 	eventContestStarted  = "contest_started"
@@ -227,9 +105,8 @@ const (
 )
 
 // NewEventsHandler assembles the events endpoint. shutdown is closed to end
-// every open connection promptly when the process is stopping — pass
-// ctx.Done() of the same context internal/app.App.Run waits on, exactly as
-// its own field doc describes.
+// every open connection when the process stops: pass the Done channel of the
+// context internal/app.App.Run waits on.
 func NewEventsHandler(access EventsAccess, mw *auth.Middleware, log *slog.Logger, shutdown <-chan struct{}) *EventsHandler {
 	return &EventsHandler{
 		access:       access,
@@ -243,9 +120,7 @@ func NewEventsHandler(access EventsAccess, mw *auth.Middleware, log *slog.Logger
 	}
 }
 
-// WithResyncInterval overrides the interval New defaults to thirty seconds.
-// A deployment never calls this; tests use it to observe more than one tick
-// without waiting thirty real seconds to do it.
+// WithResyncInterval overrides the thirty-second resync interval, for tests.
 func (h *EventsHandler) WithResyncInterval(d time.Duration) *EventsHandler {
 	if d > 0 {
 		h.resync = d
@@ -253,10 +128,7 @@ func (h *EventsHandler) WithResyncInterval(d time.Duration) *EventsHandler {
 	return h
 }
 
-// WithWriteTimeout overrides the ten-second default a write to this
-// connection may block for (finding 2). A deployment never calls this; tests
-// use a small value so a stalled write is proven reclaimed without waiting
-// out ten real seconds to do it.
+// WithWriteTimeout overrides the ten-second write timeout, for tests.
 func (h *EventsHandler) WithWriteTimeout(d time.Duration) *EventsHandler {
 	if d > 0 {
 		h.writeTimeout = d
@@ -264,9 +136,7 @@ func (h *EventsHandler) WithWriteTimeout(d time.Duration) *EventsHandler {
 	return h
 }
 
-// WithMaxConnections overrides how many connections one participant may hold
-// at once. A deployment never calls this; tests use a small number so the
-// limit can be reached with a handful of goroutines instead of a thousand.
+// WithMaxConnections overrides the per-participant connection cap, for tests.
 func (h *EventsHandler) WithMaxConnections(n int) *EventsHandler {
 	if n > 0 {
 		h.limiter = newConnLimiter(n)
@@ -274,9 +144,7 @@ func (h *EventsHandler) WithMaxConnections(n int) *EventsHandler {
 	return h
 }
 
-// WithClock overrides the clock server_now is read from. A deployment never
-// calls this and gets time.Now().UTC(); tests use it to make the value
-// assertable instead of merely "close to when the test ran".
+// WithClock overrides the clock server_now is read from, for tests.
 func (h *EventsHandler) WithClock(now func() time.Time) *EventsHandler {
 	if now != nil {
 		h.now = now
@@ -284,11 +152,8 @@ func (h *EventsHandler) WithClock(now func() time.Time) *EventsHandler {
 	return h
 }
 
-// ActiveConnections reports how many of this endpoint's connections
-// participantID currently holds open. Exported so a test can prove the limit
-// above is enforced by counting rather than by racing real sockets and hoping
-// the timing lines up (this task's own instruction: "a connection limit ...
-// [is] testable by counting").
+// ActiveConnections reports how many connections participantID holds open, so a
+// test can check the limit by counting instead of racing sockets.
 func (h *EventsHandler) ActiveConnections(participantID uuid.UUID) int {
 	return h.limiter.count(participantID)
 }
@@ -303,11 +168,8 @@ func (h *EventsHandler) Mount(r chi.Router) {
 
 func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
-	// The same pre-lookup charge every other participant-facing read pays
-	// (see EventsAccess.AdmitRead's own doc): bounded by account, ahead of
-	// any lookup, so a caller opening and abandoning connections in a loop is
-	// charged for every attempt. See EventsHandler's own doc (finding 3) for
-	// why this stays a charge rather than being waived for this endpoint.
+	// Charged like every participant read, ahead of any lookup, so opening and
+	// abandoning connections in a loop pays for each attempt.
 	if err := h.access.AdmitRead(identity.UserID); err != nil {
 		h.fail(w, r, err)
 		return
@@ -332,41 +194,30 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.limiter.release(participant.ID)
 
-	// Past every check that could still answer with an ordinary 4xx: this
-	// request is now going to hold its connection open, so its eventual
-	// duration belongs in the stream histogram, not the one every short
-	// request shares (finding 5, internal/platform/metrics.MarkStreaming's
-	// own doc).
+	// Past every check that could answer an ordinary 4xx: from here the request
+	// is a stream, and its duration belongs in the stream histogram
+	// (metrics.MarkStreaming).
 	metrics.MarkStreaming(r)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// Some reverse proxies buffer a response until it ends or fills an
-	// internal buffer, which would turn every event on this channel into one
-	// that arrives in a batch minutes later, or on the way out when the
-	// connection finally closes. Harmless to send when the proxy in front
-	// does not look at it.
+	// Stops reverse proxies that buffer responses from delivering events in
+	// batches; harmless where the proxy ignores it.
 	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
 	h.setWriteDeadline(rc)
 	w.WriteHeader(http.StatusOK)
 
-	// Paces a client that reconnects (finding 3) — see EventsHandler's own
-	// doc. Sent once, before the first event, exactly as the SSE spec allows
-	// a standalone `retry:` field.
+	// Sent once, before the first event, to pace reconnects.
 	if err := writeRetry(w, h.resync); err != nil {
 		return
 	}
 	if err := h.sendSync(w, contest, participant); err != nil {
 		return
 	}
-	// Sent only when the contest is actually running: AccessForEvents can now
-	// also admit a contest that is merely published (finding 4), and
-	// announcing "started" for one that has not would be telling this
-	// participant something false the instant they connect. The published
-	// case is covered inside the loop below, the moment a tick observes the
-	// transition.
+	// Only for a running contest: a published one has not started, and the loop
+	// below announces the start when a tick observes it.
 	if contest.Status == contests.StatusRunning {
 		if err := writeEvent(w, eventContestStarted, statusPayload{Status: contest.Status}); err != nil {
 			return
@@ -386,13 +237,9 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 		case <-h.shutdown:
 			return
 		case <-ticker.C:
-			// The session was checked when the stream opened; the stream
-			// outlives that check, so each push asks again. A session past
-			// its maximum lifetime, signed out or expired ends the stream, and
-			// so does an account that was blocked, deleted or had its
-			// sessions retired since; a session or account store that is
-			// briefly unreadable is retried next tick, like the transient
-			// failures below.
+			// The stream outlives the session check made when it opened, so
+			// each tick checks again. An invalid session or account ends the
+			// stream; a store that is briefly unreadable is retried next tick.
 			alive, err := h.mw.SessionStillValid(r)
 			if err != nil {
 				h.log.WarnContext(r.Context(), "events resync could not read the session; retrying next tick", "error", err)
@@ -401,35 +248,21 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			if !alive {
 				return
 			}
-			// Armed after the lookup below, not before: AccessForEvents is a
-			// database round trip, and a deadline meant to bound how long this
-			// goroutine may block trying to write must not start ticking
-			// against time this request spends waiting on the server's own
-			// storage (finding 2). A resync whose lookup runs slow would
-			// otherwise disconnect an honest, still-enrolled client for a
-			// delay entirely on this side of the connection.
 			newParticipant, newContest, standing, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
 			if err != nil {
 				// A store that is briefly away is not a refusal of this
-				// participant (finding 3): retried on the next tick, the
-				// same as any other transient failure a background loop in
-				// this codebase tolerates, rather than closing a connection
-				// an honest, still-enrolled participant did nothing to lose.
+				// participant; retry next tick.
 				if errors.Is(err, queryproxy.ErrUnavailable) {
 					h.log.WarnContext(r.Context(), "events resync could not reach storage; retrying next tick", "error", err)
 					continue
 				}
-				// Over is the gate's own answer to "is it over for this
-				// participant": their registration finished, the contest
-				// finished, or their own time ran out while the scheduler
-				// has not caught up yet (§8: the status and this channel
-				// affect only what the interface shows, never the closing
-				// guarantee itself). Anything not over — a contest taken back
-				// to draft, an address no longer allowed — closes without
-				// it, since it may yet let them back in. A disqualified
-				// participant is over too, and still closes without it, as
-				// not_a_participant always has here: the channel tells a
-				// disqualified caller nothing a stranger would not be told.
+				// Over means the registration or the contest finished, or the
+				// participant's own time ran out before the scheduler caught
+				// up. Anything not over (a contest back in draft, an address no
+				// longer allowed) closes silently, since it may yet let them
+				// back in. A disqualified participant is over but still closes
+				// silently: the channel tells them nothing a stranger would not
+				// be told.
 				if standing.Over() && !errors.Is(err, contests.ErrNotAParticipant) {
 					h.setWriteDeadline(rc)
 					if writeEvent(w, eventContestFinished, statusPayload{Status: contests.StatusFinished}) == nil {
@@ -438,20 +271,16 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			// Assigned only now that the call succeeded: on the transient
-			// branch above, participant and contest must keep the last
-			// known-good state, or the next successful tick would compare
-			// against a zero value and wrongly announce a fresh start.
+			// Assigned only on success: after a transient failure the last good
+			// state must stay, or the next tick would compare against a zero
+			// value and announce a fresh start.
 			wasRunning := contest.Status == contests.StatusRunning
 			participant, contest = newParticipant, newContest
-			// The lookup is done; everything from here writes to the
-			// connection, so this is where the deadline belongs (finding 2).
+			// The write deadline is armed only after the lookup, so a slow
+			// database round trip on our side never counts against the client.
 			h.setWriteDeadline(rc)
-			// The published → running transition, announced the moment a
-			// tick observes it (finding 4) — the one case connect-time
-			// could never cover, since Access itself refuses a contest that
-			// has not started and a client could not have been connected
-			// across the transition any other way before AccessForEvents.
+			// The published to running transition, announced when a tick
+			// observes it.
 			if contest.Status == contests.StatusRunning && !wasRunning {
 				if err := writeEvent(w, eventContestStarted, statusPayload{Status: contest.Status}); err != nil {
 					return
@@ -467,47 +296,36 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// setWriteDeadline extends this connection's write deadline before the next
-// write (finding 2, EventsHandler's own doc). Its own error is ignored on
-// purpose: some ResponseWriter implementations — a reverse proxy's own, or a
-// test's recorder — do not support a deadline at all
-// (http.ErrNotSupported), and the point of setting one is defence in depth
-// for the connection that does support it, not a reason to refuse a write
-// the underlying connection is otherwise willing to attempt.
+// setWriteDeadline extends the write deadline before the next write. Its error
+// is ignored: some writers (a proxy's, a test recorder) do not support
+// deadlines, and that is no reason to refuse a write.
 func (h *EventsHandler) setWriteDeadline(rc *http.ResponseController) {
 	_ = rc.SetWriteDeadline(time.Now().Add(h.writeTimeout))
 }
 
-// writeRetry writes the SSE stream's own `retry:` field: how long a client
-// should wait before reconnecting (finding 3, EventsHandler's own doc).
+// writeRetry writes the stream's retry field: how long a client should wait
+// before reconnecting.
 func writeRetry(w http.ResponseWriter, d time.Duration) error {
 	_, err := fmt.Fprintf(w, "retry: %d\n\n", d.Milliseconds())
 	return err
 }
 
 // statusPayload is the whole body of a contest_started or contest_finished
-// event: the contest's status and nothing else (§8's own words: "events
-// carry the olympiad's status. And nothing else.").
+// event: the status and nothing else (§8).
 type statusPayload struct {
 	Status string `json:"status"`
 }
 
-// syncPayload is the whole body of a sync event: server_now, for the
-// frontend to compute its own clock offset against, and this participant's
-// own deadline — never anyone else's, and never with the gate's grace added
-// (see EventsHandler's own doc for why a deadline shown to a participant must
-// not carry it).
+// syncPayload is the whole body of a sync event: server_now for the client's
+// clock offset, and this participant's own deadline without the gate's grace.
 type syncPayload struct {
 	ServerNow string `json:"server_now"`
-	// Deadline is absent, not null, when contests.Deadline has none yet — an
-	// individual-timing participant who has not started (Deadline's own
-	// doc). A client sees no deadline field at all rather than one it has to
-	// know means "not started" instead of "no limit".
+	// Deadline is omitted while contests.Deadline has none, as for an
+	// individual-timing participant who has not started.
 	Deadline string `json:"deadline,omitempty"`
 }
 
-// sendSync writes one sync event for contest and participant's current
-// state, computing the deadline the one way this codebase ever computes one.
+// sendSync writes one sync event for the current state.
 func (h *EventsHandler) sendSync(w http.ResponseWriter, contest contests.Contest, participant contests.Participant) error {
 	payload := syncPayload{ServerNow: h.now().Format(time.RFC3339)}
 	if deadline, ok := contests.Deadline(contest, participant); ok {
@@ -516,10 +334,8 @@ func (h *EventsHandler) sendSync(w http.ResponseWriter, contest contests.Contest
 	return writeEvent(w, eventSync, payload)
 }
 
-// writeEvent writes one Server-Sent Event. The caller flushes: several
-// events are sometimes written back to back (the initial sync and
-// contest_started), and flushing once for the pair is one syscall instead of
-// two for a client that is about to read both anyway.
+// writeEvent writes one Server-Sent Event. The caller flushes, so events
+// written back to back cost one flush.
 func writeEvent(w http.ResponseWriter, event string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -529,9 +345,7 @@ func writeEvent(w http.ResponseWriter, event string, payload any) error {
 	return err
 }
 
-// connLimiter bounds how many of one thing a single identifier may hold at
-// once. Used here keyed by registration id (see EventsHandler's own doc for
-// why this exists beside AdmitRead's own, different bound).
+// connLimiter bounds how many connections one registration holds at once.
 type connLimiter struct {
 	mu   sync.Mutex
 	max  int
@@ -553,10 +367,8 @@ func (l *connLimiter) acquire(id uuid.UUID) bool {
 	return true
 }
 
-// release gives back a slot acquire counted. Every acquire that returned true
-// is matched by exactly one release, from a defer right beside it, so the
-// count an idle connection holds is exactly the connections actually open —
-// never one leaked by a handler that returned early.
+// release gives back a slot acquire counted. Each successful acquire is paired
+// with a deferred release, so no early return leaks a slot.
 func (l *connLimiter) release(id uuid.UUID) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -572,15 +384,9 @@ func (l *connLimiter) count(id uuid.UUID) int {
 	return l.open[id]
 }
 
-// fail maps a refusal from EventsAccess.AdmitRead or .AccessForEvents to a
-// response.
-//
-// CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
-// in errortable.go and a test asserting the 4xx it produces.
+// fail maps a refusal from AdmitRead or AccessForEvents to a response, from the
+// same tables the console and the play screen use (CLAUDE.md rule 1).
 func (h *EventsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	// The same tables the console and the play screen answer from
-	// (errortable.go): this is not a fourth implementation of "may this
-	// student be here", so its refusals read the same.
 	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
 		return
 	}

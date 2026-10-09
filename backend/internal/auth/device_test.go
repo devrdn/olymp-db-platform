@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// testDeviceSecret is long enough for NewDeviceTrust and used by every test
-// in the package that needs trusted devices.
 var testDeviceSecret = bytes.Repeat([]byte("k"), MinDeviceSecretLength)
 
 func testDevices(t *testing.T) *DeviceTrust {
@@ -111,9 +109,6 @@ func TestAnExpiredDeviceCookieIsIgnored(t *testing.T) {
 }
 
 func TestADeviceCookieStopsVouchingOnceTheAccountChanges(t *testing.T) {
-	// A changed password advances the session generation; a block, unblock,
-	// deletion or restore moves the status timestamp. Either is the account
-	// saying "whatever vouched for me before, does not now".
 	devices := testDevices(t)
 	token, _ := devices.Issue(deviceAccount(), DeviceID{})
 	device, _ := devices.Verify(token, "ivanov")

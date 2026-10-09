@@ -1,6 +1,7 @@
-// Package postgres implements the storage interfaces the domain packages
-// declare. All SQL lives here, so swapping the database means writing another
-// package rather than editing business rules.
+// Package postgres implements the repository interfaces the domain packages
+// declare, against the core PostgreSQL database. All core SQL lives here.
+// It holds no business rules: what a write means is decided by the domain,
+// and this package only maps its constraints and SQLSTATEs onto domain errors.
 package postgres
 
 import (
@@ -18,8 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// userColumns is the projection every read shares, so a new column is added in
-// one place and the scan order cannot drift between queries.
+// userColumns is the projection scanUser reads; every account query uses it.
 const userColumns = `
 	u.id, u.login, COALESCE(u.email, ''), u.password_hash, u.full_name, u.status,
 	COALESCE(u.status_reason, ''), u.status_changed_at, u.status_changed_by,
@@ -40,58 +40,31 @@ const userColumns = `
 	), '{}'),
 	COALESCE(a.login, '')`
 
-// userJoin resolves the login of the account named by status_changed_by, so
-// the account card can name the actor without a second request for one
-// login. LEFT, not an inner join: an account nobody has ever blocked or
-// deleted has NULL there, and it must still come back — the COALESCE above
-// turns the resulting NULL login into "", matching how the other
-// status-change columns already report "nothing to explain".
+// userJoin resolves the login of the account in status_changed_by. It is a
+// LEFT join because that column is NULL for an account whose status never
+// changed.
 const userJoin = `LEFT JOIN users a ON a.id = u.status_changed_by`
 
-// usersSearchMatch is the login-or-name-or-email half of usersSearchWhere,
-// pulled out on its own so a test can EXPLAIN it apart from the status
-// condition below — see users_test.go's TestSearchPredicateUsesTheTrigramIndexes
-// for why the two cannot be judged together.
+// usersSearchMatch is the text half of usersSearchWhere, kept separate so a
+// test can EXPLAIN it on its own.
 //
-// Every ILIKE reads a bare column, not COALESCE(u.email, "") — migration
-// 000016_directory_search_indexes adds trigram indexes on exactly the bare
-// login, full_name and email columns, and PostgreSQL will not match a
-// plain-column index to a COALESCE(...) expression. Because the three
-// conditions are OR'd together, that one non-indexable disjunct used to force
-// a sequential scan of the whole table for the clause, so the login and
-// full_name trigram indexes went unused as well — on a search every
-// contest's staff can now reach, not only the handful of administrators the
-// account screen serves.
-//
-// Dropping the wrapper does not change which rows match: email is a nullable
-// column, and `u.email ILIKE '%x%'` on a NULL email evaluates to NULL, which
-// a WHERE clause treats exactly like `COALESCE(u.email, "") ILIKE '%x%'`
-// evaluating to false — both exclude the row. The wrapper was never needed
-// for correctness, only for a habit of never comparing directly against a
-// nullable column; here that habit is what made the column unindexable.
+// Each ILIKE reads a bare column so the trigram indexes from migration
+// 000016 apply; a COALESCE around email would not match its index and, being
+// OR'd with the others, would force a sequential scan. A NULL email yields
+// NULL, which WHERE treats as false, so the matched rows are the same.
 const usersSearchMatch = `(u.login ILIKE '%' || $1 || '%'
 	            OR u.full_name ILIKE '%' || $1 || '%'
 	            OR u.email ILIKE '%' || $1 || '%')`
 
-// usersSearchWhere is the predicate List and Search both filter by: a login,
-// full name or email that contains the query, restricted to the requested
-// status. List and Search share the literal string rather than each writing
-// their own, so the two can never drift apart on what "matches" means.
-//
-// The empty-query branch ($1 = "") short-circuits usersSearchMatch entirely,
-// so an empty query is never limited by what that predicate can or cannot
-// index.
+// usersSearchWhere is the predicate List and Search share: a login, full name
+// or email containing $1, restricted to status $2. An empty status means
+// every account except deleted ones.
 const usersSearchWhere = `
 	WHERE ($1 = '' OR ` + usersSearchMatch + `)
 	  AND (CASE WHEN $2 = '' THEN u.status <> 'deleted' ELSE u.status = $2 END)`
 
-// Users implements users.Repository; the assertion fails the build here
-// rather than at wiring time if the interface and this type drift apart.
 var _ users.Repository = (*Users)(nil)
 
-// Users also implements contests.UserDirectory: the staff and participant
-// pickers resolve candidates through the same repository the account screens
-// use, rather than a second copy of the same query.
 var _ contests.UserDirectory = (*Users)(nil)
 
 // Users stores accounts in PostgreSQL.
@@ -104,8 +77,7 @@ func NewUsers(pool *pgxpool.Pool) *Users {
 	return &Users{pool: pool}
 }
 
-// querier returns the ambient transaction when one is open, so a repository
-// call joins the caller's unit of work instead of writing outside it.
+// querier returns the ambient transaction when one is open.
 func (r *Users) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
@@ -129,47 +101,18 @@ func scanUser(row pgx.Row) (users.User, error) {
 }
 
 // ByLogin resolves an account case-insensitively, preferring a live account
-// over a deleted one whenever both match.
+// over a deleted one.
 //
-// The partial unique index on lower(login) (WHERE status <> 'deleted') only
-// promises at most one *live* row per login — it says nothing about a
-// deleted one. Deletion exists precisely so a login can be reused, so once an
-// account has been deleted and recreated, two rows legitimately share
-// lower(login): the deleted original and the live account that now actually
-// means that login. A bare SELECT with no ORDER BY gives no guarantee which
-// one a single-row QueryRow gets, and before this ORDER BY existed that let
-// sign-in resolve to the deleted original (checking the password against the
-// wrong hash) and let Service.Create refuse to recreate the account at all
-// (finding the deleted row and reporting the login taken). `status = 'deleted'`
-// is false for a live row and true for a deleted one, and false sorts first,
-// so ORDER BY puts a live row ahead of a deleted one whenever one exists.
+// The unique index on lower(login) is partial (status <> 'deleted'), so a
+// reused login has a live row and one or more deleted ones. The ORDER BY puts
+// the live row first, then the most recently deleted, then id for a
+// deterministic tie. With nothing live it still returns a deleted row, not
+// ErrNotFound: auth.Service.Login uses it to tell a former owner the account
+// is inaccessible, and callers that must treat it as absent check Status.
 //
-// When nothing live matches, this still returns a deleted row rather than
-// ErrNotFound — the login is not literally unclaimed, only free to be
-// reclaimed. auth.Service.Login relies on that: it is what lets a deleted
-// account's own owner be told the account is inaccessible rather than that
-// no such login exists (see TestDeletedAccountIsRejectedEvenWithTheRightPassword).
-// A caller for whom a deleted account must NOT count as "found" —
-// users.Service.Create's duplicate check, BootstrapAdmin's idempotency
-// check — has to inspect the returned Status itself; ByLogin only orders the
-// candidates, it does not decide who is allowed to treat which one as absent.
-//
-// A login can go through delete, recreate, delete again, so more than one
-// *deleted* row can legitimately share lower(login) too — the live-wins ORDER
-// BY above says nothing about which of those wins when nothing live matches.
-// `u.status_changed_at DESC` breaks that tie by picking the row deleted most
-// recently: it is the one that held the login last, so it is the row whose
-// history — who deleted it, and why — an administrator asking "what happened
-// to this login" actually wants, and it is also the row auth.Service.Login
-// will name in refusing a former owner access. `u.id DESC` is a last resort
-// after that, only reached if two rows were deleted in the same instant, to
-// keep the result deterministic even then rather than merely likely.
-//
-// A string no account can hold as its login — longer than the domain allows,
-// or text PostgreSQL cannot store at all (a NUL byte, bytes that are not
-// UTF-8) — is not found without asking. Asked, the database refuses it by
-// failing the statement, which is a 500 at sign-in and, inside a roster
-// import's transaction, aborts every row after it.
+// A login no account can hold (too long, or text PostgreSQL cannot store) is
+// not found without a query, since the statement would fail and abort an
+// enclosing roster import.
 func (r *Users) ByLogin(ctx context.Context, login string) (users.User, error) {
 	if !storableText(login) || len(login) > users.MaxLoginLength {
 		return users.User{}, users.ErrNotFound
@@ -189,12 +132,8 @@ func (r *Users) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
 	return scanUser(row)
 }
 
-// ByIDs resolves the accounts that exist among the ids.
-//
-// ANY($1) is a membership test against the users table, not a join against
-// the array — a repeated id in ids still returns that account once, and a
-// missing one is simply absent rather than users.ErrNotFound: telling the
-// caller which of its ids exist is the whole job.
+// ByIDs resolves the accounts that exist among the ids. A repeated id returns
+// its account once, and a missing id is absent rather than an error.
 func (r *Users) ByIDs(ctx context.Context, ids []uuid.UUID) ([]users.User, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`SELECT `+userColumns+` FROM users u `+userJoin+` WHERE u.id = ANY($1)`, ids)
@@ -232,9 +171,8 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 
 	created, err := scanUser(row)
 	if err != nil {
-		// The pre-check in the service is a courtesy; this is the guarantee,
-		// and it is what catches two administrators creating the same login at
-		// the same moment.
+		// The unique index, not the service's pre-check, is what catches two
+		// concurrent creations of one login.
 		return users.User{}, mapUserConstraint(err)
 	}
 	return created, nil
@@ -244,15 +182,8 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, error) {
 	f = f.Normalize()
 	q := r.querier(ctx)
-	// The pattern is parameterized (no injection possible); escaping is about
-	// meaning, not safety: the admin's text must match literally (see like.go).
 	needle := escapeLike(f.Query)
 
-	// The filter is passed as parameters, never interpolated: the search box is
-	// user input reaching a query.
-	//
-	// An empty status means the register an administrator reads, which is not
-	// "every row": a deleted account appears only when asked for by name.
 	var total int
 	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+usersSearchWhere, needle, f.Status).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
@@ -281,45 +212,13 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 	return found, total, nil
 }
 
-// Search resolves accounts by a substring of their login, full name or
-// email — the picker behind contests.Service.SearchPeople
-// (internal/contests's UserDirectory).
+// Search resolves active accounts by a substring of their login, full name or
+// email, for the contest staff and participant pickers.
 //
-// It shares List's predicate (usersSearchWhere) but is not implemented as a
-// call to List: List always runs a "SELECT count(*)" for its total, and a
-// typeahead has no use for one — it shows a handful of matches, never a page
-// count. Routing through List would spend a second sequential pass over the
-// table computing an answer this method would then throw away, on every
-// debounced keystroke a picker sends.
-//
-// It does not select userColumns either, and for the same reason: that
-// projection carries two correlated ARRAY(...) subqueries for roles and
-// permissions and a join for the status-changer's login, none of which
-// contests.Service.SearchPeople reads — it turns every row into a Person of
-// a login, a full name and an email, nothing more. Running those subqueries
-// for up to DirectorySearchMaxLimit rows on every keystroke a picker sends
-// would be work spent computing an answer nobody asked for, on a search
-// every contest's staff can reach. The returned users.User carries only ID,
-// Login, FullName and Email; every other field is its zero value, which is
-// fine for the one caller this method has.
-//
-// The email is coalesced to an empty string, same as userColumns above: the
-// column is nullable, and contests.Person.Email must come back as "" for an
-// account with none, not a value that reads as an address somebody actually
-// gave. This COALESCE costs nothing extra on the plan the way the one on
-// usersSearchMatch's own predicate did (see that constant's comment) — it
-// wraps a selected column, not one being matched by an index, so it neither
-// touches the trigram indexes nor adds a join or a subquery: the projection
-// widens by one plain column, the query shape stays the same.
-//
-// The status is pinned to StatusActive rather than left empty. List's own
-// empty status means "the register an administrator reads" — every account
-// except a deleted one, blocked included, because an administrator has to be
-// able to find a blocked account to unblock it. A picker is a different
-// question: it offers a candidate to appoint or enrol, and a blocked account
-// is exactly as unusable there as a deleted one — auth.Service.Login and
-// auth.Middleware both refuse it, so offering it here only lets staff appoint
-// or enrol somebody who can never act on it and be told the server succeeded.
+// It runs on every keystroke, so it skips List's count and userColumns'
+// role and permission subqueries: the returned users carry only ID, Login,
+// FullName and Email. Blocked accounts are excluded because they cannot sign
+// in, so appointing or enrolling one would do nothing.
 func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.User, error) {
 	f := users.Filter{Query: query, Status: users.StatusActive, Limit: limit}.Normalize()
 	needle := escapeLike(f.Query)
@@ -357,24 +256,17 @@ func (r *Users) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email
 		id, fullName, emailValue)
 }
 
-// SetStatus moves the named accounts to the status.
-//
-// A missing id is not reported as an error: it is silently skipped instead of
-// returning users.ErrNotFound the way the single-row exec helper does. This
-// method has no such helper to fall back on because the coming bulk path
-// resolves the accounts before writing and reports a missing one as a skip in
-// its own result, not as a failure of the write; the caller is the one
-// positioned to say which id was missing, this method only knows how many
-// rows an UPDATE touched.
+// SetStatus moves the named accounts to the status. A missing id is skipped,
+// not reported: the caller resolves the accounts first and reports its own
+// skips.
 func (r *Users) SetStatus(ctx context.Context, ids []uuid.UUID, status string, change users.StatusChange) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		UPDATE users
 		SET status = $2, status_reason = $3, status_changed_at = $4,
 		    status_changed_by = $5, updated_at = now()
 		WHERE id = ANY($1)`,
-		// A nil By means the system made the change, not a missing user — write
-		// NULL rather than uuid.Nil, or the foreign key on status_changed_by
-		// raises a raw constraint violation instead of the actor being absent.
+		// A nil By means the system made the change: write NULL, since uuid.Nil
+		// would violate the foreign key on status_changed_by.
 		ids, status, nullIfEmpty(change.Reason), change.At, nilUUID(change.By))
 	if err != nil {
 		return fmt.Errorf("set account status: %w", mapUserConstraint(err))
@@ -403,14 +295,8 @@ func (r *Users) SetPasswordMany(ctx context.Context, creds []users.Credential) e
 	seen := make(map[uuid.UUID]struct{}, len(creds))
 	for i, c := range creds {
 		if _, dup := seen[c.UserID]; dup {
-			// A repeated id here is not a harmless repeat the way it is for
-			// ReplaceRolesMany's roleCodes: two Credentials for the same
-			// account can carry different hashes, and unnest's join against
-			// UPDATE ... FROM applies an unspecified one of them with no
-			// error. Silently picking or deduplicating would hide that the
-			// caller lost track of its own selection at the exact moment it
-			// matters — which password the account actually ends up with —
-			// so this is refused instead.
+			// Two credentials for one account may carry different hashes, and
+			// UPDATE ... FROM would apply an unspecified one, so refuse.
 			return fmt.Errorf("set passwords: account %s is named more than once", c.UserID)
 		}
 		seen[c.UserID] = struct{}{}
@@ -446,8 +332,7 @@ func (r *Users) BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64,
 }
 
 // BumpSessionGenerationMany retires every session of every named account. A
-// missing id is skipped rather than reported, matching SetStatus: the bulk
-// path resolves accounts before writing and reports a missing one itself.
+// missing id is skipped, as in SetStatus.
 func (r *Users) BumpSessionGenerationMany(ctx context.Context, ids []uuid.UUID) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		UPDATE users SET session_generation = session_generation + 1, updated_at = now()
@@ -463,11 +348,8 @@ func (r *Users) RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) err
 	return r.exec(ctx, `UPDATE users SET last_login_at = $2 WHERE id = $1`, id, at)
 }
 
-// CountActiveWithRole returns how many accounts hold the role and can sign in.
-//
-// The status is part of the question, not a refinement of it: a blocked
-// administrator cannot administer, and counting them would let the last usable
-// one be removed on the strength of an account nobody can use.
+// CountActiveWithRole returns how many active accounts hold the role. Blocked
+// accounts do not count, so the last usable administrator cannot be removed.
 func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, error) {
 	var count int
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -483,11 +365,8 @@ func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, 
 }
 
 // TakenAmong returns the deleted accounts among ids whose login or email a
-// live account now holds, saying which of the two each one hit.
-//
-// Checked before a bulk move's transaction rather than by it: a move off
-// "deleted" that would collide is refused up front, without aborting the
-// accounts around it that would have succeeded.
+// live account now holds. A bulk restore checks it up front, so one collision
+// does not abort the whole transaction.
 func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]users.TakenConflict, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT id, login_taken, email_taken FROM (
@@ -520,8 +399,7 @@ func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]users.TakenC
 	return taken, rows.Err()
 }
 
-// Roles lists the installation's global roles, ordered by code so the
-// interface renders them the same way twice.
+// Roles lists the installation's global roles, ordered by code.
 func (r *Users) Roles(ctx context.Context) ([]users.Role, error) {
 	rows, err := r.querier(ctx).Query(ctx, `SELECT code, name FROM roles ORDER BY code`)
 	if err != nil {
@@ -543,10 +421,8 @@ func (r *Users) Roles(ctx context.Context) ([]users.Role, error) {
 	return catalogue, nil
 }
 
-// ReplaceRoles sets the account's global roles to exactly these codes.
-//
-// Delete-then-insert rather than a diff: the set is tiny, and both statements
-// run in the caller's transaction, so no request ever observes the gap.
+// ReplaceRoles sets the account's global roles to these codes. It deletes then
+// inserts; the caller's transaction hides the gap.
 func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error {
 	q := r.querier(ctx)
 
@@ -557,8 +433,7 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 		return nil
 	}
 
-	// Unknown codes are silently dropped by the join; the count check below
-	// turns that into an explicit error rather than a half-applied change.
+	// The join drops unknown codes; the row count turns that into an error.
 	tag, err := q.Exec(ctx, `
 		INSERT INTO user_roles (user_id, role_id)
 		SELECT $1, r.id FROM roles r WHERE r.code = ANY($2)`, id, roleCodes)
@@ -572,32 +447,23 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 	return nil
 }
 
-// ReplaceRolesMany sets the same roles on every named account, in one
-// delete and one insert rather than one pair per account.
+// ReplaceRolesMany sets the same roles on every named account in one delete
+// and one insert.
 func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error {
 	q := r.querier(ctx)
 
-	// Accounts are a set here too, matching roleCodes below: a repeated id is
-	// harmless because both copies want the identical set of roles, unlike
-	// SetPasswordMany where two copies can disagree on which password wins
-	// and are refused instead. Left alone, a repeated id would make the
-	// CROSS JOIN insert two identical (user_id, role_id) rows and trip the
-	// user_roles primary key instead of being absorbed the way it is here.
+	// A repeated id would make the CROSS JOIN trip the user_roles primary key.
 	ids = distinctUserIDs(ids)
 
 	if _, err := q.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ANY($1)`, ids); err != nil {
 		return fmt.Errorf("clear roles: %w", err)
 	}
-	// Roles are a set an account holds, not a sequence of assignments: a
-	// caller-supplied duplicate must not inflate what "one row per code"
-	// means below, or a harmless repeat gets reported as an unknown role.
+	// A repeated code would otherwise be reported as unknown by the row count.
 	roleCodes = distinctRoleCodes(roleCodes)
 	if len(roleCodes) == 0 {
 		return nil
 	}
 
-	// The cross join is the batch form of the single-account insert: every
-	// named account against every named role, in one statement.
 	tag, err := q.Exec(ctx, `
 		INSERT INTO user_roles (user_id, role_id)
 		SELECT u.id, r.id
@@ -607,11 +473,9 @@ func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes
 	if err != nil {
 		return fmt.Errorf("assign roles: %w", err)
 	}
-	// Unknown codes are dropped by the join rather than refused by it, so the
-	// row count is what turns a typo into an error instead of a silent
-	// half-applied change: every account should have gained every code. The
-	// row count is always an exact multiple of len(ids) — each matched role
-	// contributes one row per account — so the division below is exact.
+	// The join drops unknown codes, so every account should have gained every
+	// code. Each matched role adds one row per account, so the division is
+	// exact.
 	if want := len(ids) * len(roleCodes); int(tag.RowsAffected()) != want {
 		matched := 0
 		if len(ids) > 0 {
@@ -623,9 +487,7 @@ func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes
 	return nil
 }
 
-// distinctRoleCodes drops repeats while keeping order, so a caller-supplied
-// duplicate cannot be counted as a second, unknown role by the row-count
-// check in ReplaceRolesMany.
+// distinctRoleCodes drops repeats while keeping order.
 func distinctRoleCodes(codes []string) []string {
 	seen := make(map[string]struct{}, len(codes))
 	out := make([]string, 0, len(codes))
@@ -639,9 +501,7 @@ func distinctRoleCodes(codes []string) []string {
 	return out
 }
 
-// distinctUserIDs drops repeats while keeping order, the uuid.UUID
-// counterpart to distinctRoleCodes: a repeated id must not inflate what "one
-// row per account" means in the row-count check that follows it.
+// distinctUserIDs drops repeats while keeping order.
 func distinctUserIDs(ids []uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(ids))
 	out := make([]uuid.UUID, 0, len(ids))
@@ -655,10 +515,8 @@ func distinctUserIDs(ids []uuid.UUID) []uuid.UUID {
 	return out
 }
 
-// mapUserConstraint translates a unique violation into the sentinel the
-// violated constraint means. Which index fired matters: reporting a duplicate
-// email as "login already in use" sends the administrator fixing the wrong
-// field. Anything unrecognised passes through untouched.
+// mapUserConstraint translates a unique violation into the sentinel of the
+// violated index, login or email. Anything else passes through unchanged.
 func mapUserConstraint(err error) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolation {

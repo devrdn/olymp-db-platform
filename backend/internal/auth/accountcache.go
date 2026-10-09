@@ -14,82 +14,48 @@ import (
 	"github.com/google/uuid"
 )
 
-// DefaultAccountCacheTTL is how long the middleware may decide on a copy of
-// an account rather than the row, when the deployment does not state
-// otherwise. See AccountCache for what it bounds.
+// DefaultAccountCacheTTL is how long the middleware may decide on a cached
+// account (see AccountCache).
 const DefaultAccountCacheTTL = 5 * time.Second
 
 const (
-	// accountKeyPrefix namespaces cached accounts in the shared cache.
-	accountKeyPrefix = "acct:"
-	// accountGenerationKeyPrefix namespaces each account's cache generation.
+	accountKeyPrefix           = "acct:"
 	accountGenerationKeyPrefix = "acctgen:"
 
 	// accountGenerationLifetime is how long a replaced generation is kept.
-	// When it lapses the account reads the initial generation again, so every
-	// entry written under that one has to be gone by then: an entry lives for
-	// the cache's TTL, seconds, and is written by a request that read its
-	// generation moments before. An hour is margin enough by orders of
-	// magnitude, and costs one short key per account changed in that hour.
+	// When it lapses the initial generation returns, so every entry under it
+	// must be gone by then; entries live seconds, so an hour is ample.
 	accountGenerationLifetime = time.Hour
 
-	// initialAccountGeneration is the generation of an account nothing has
-	// been forgotten for yet, or whose last replacement has lapsed.
 	initialAccountGeneration = "0"
 
-	// forgetTimeout bounds the writes of one Forget. It runs after the
-	// caller's change has committed, on a context detached from the request,
-	// so nothing else would.
+	// forgetTimeout bounds one Forget, which runs on a detached context.
 	forgetTimeout = 5 * time.Second
 )
 
-// AccountCache keeps, for a few seconds, the part of an account the
-// authentication middleware decides on: status, session generation, the
-// one-time-password flag and the permissions the account's roles grant.
-// Without it every authenticated request reads the account with its roles
-// and permissions from the database; with it the steady state is a read from
-// the cache.
+// AccountCache keeps, for a few seconds, what the authentication middleware
+// decides on: status, session generation, the one-time-password flag and
+// permissions. The steady state is then a cache read, not a database query.
 //
-// # Invalidation
+// Entries are keyed by account and a per-account random generation. Forget
+// replaces the generation once a change commits, so an older entry is never
+// read again; this also defeats the race a plain delete loses, where a
+// request that read the old row caches it after the Forget.
 //
-// Entries are keyed by the account and by a per-account cache generation, a
-// random value kept in the same cache. Forget — which package users calls
-// once a change to status, roles, password or sessions has committed —
-// replaces the generation, and an entry under the old one is never read
-// again. That is also what closes the race a plain delete loses: a request
-// that read the account before the change and caches it after the Forget
-// writes under the generation it read first, which nobody asks for any more.
-// So when Forget reaches the cache, a blocked or deleted account is refused on
-// its very next request.
+// Otherwise the TTL bounds staleness: a failed Forget, a change made outside
+// package users (SQL by hand), or several instances on in-process caches.
 //
-// # The bound
-//
-// Where Forget cannot do that, the entry's lifetime (the TTL, 5 s by default)
-// is the bound: a change is honoured at most one TTL after it commits. That
-// covers a Forget that failed to write, a change made outside package users
-// (SQL by hand; a migration that edits a role's permission set, which nothing
-// in the running service can do), and an in-process cache shared by several
-// instances, which is not a supported arrangement for sessions either. With
-// Redis every instance reads the same generation, so a Forget made by one is
-// seen by all.
-//
-// # Failure
-//
-// A cache that cannot be read is a miss: the middleware reads the database,
-// exactly as it did before this cache existed, and nothing is written under a
-// generation that could not be read. A garbled entry, or one naming another
-// account, is a miss too. And a cached copy only ever lets a request through:
-// when it would refuse one, the middleware asks the database before refusing,
-// so a copy gone stale in the other direction — an account unblocked, a new
-// session after a password change — never locks anybody out.
+// An unreadable or garbled entry is a miss. A cached copy only ever admits a
+// request; a refusal is always checked against the database, so a copy stale
+// the other way never locks anybody out.
 type AccountCache struct {
 	cache cache.Cache
 	ttl   time.Duration
 	log   *slog.Logger
 }
 
-// NewAccountCache returns a cache whose entries live for ttl. A non-positive
-// ttl keeps DefaultAccountCacheTTL.
+// NewAccountCache returns a cache whose entries live for ttl; non-positive
+// keeps DefaultAccountCacheTTL.
 func NewAccountCache(c cache.Cache, ttl time.Duration, log *slog.Logger) *AccountCache {
 	if ttl <= 0 {
 		ttl = DefaultAccountCacheTTL
@@ -97,11 +63,10 @@ func NewAccountCache(c cache.Cache, ttl time.Duration, log *slog.Logger) *Accoun
 	return &AccountCache{cache: c, ttl: ttl, log: log}
 }
 
-// The account cache is what package users tells about changes.
 var _ users.AccessCache = (*AccountCache)(nil)
 
-// cachedAccount is what an entry holds: only what Authenticate decides on and
-// puts into the identity. No digest, no contact details.
+// cachedAccount holds only what Authenticate needs: no digest, no contact
+// details.
 type cachedAccount struct {
 	UserID             uuid.UUID `json:"user_id"`
 	Login              string    `json:"login"`
@@ -111,15 +76,13 @@ type cachedAccount struct {
 	Permissions        []string  `json:"permissions"`
 }
 
-// accountSlot is where a lookup that missed may store what the database says.
-// It carries the generation read before the database was, which is what makes
-// a store that lands after a Forget harmless. The zero slot stores nothing.
+// accountSlot is where a missed lookup may store the database's answer. It
+// carries the generation read before the database, so a store landing after a
+// Forget is harmless. The zero slot stores nothing.
 type accountSlot struct{ key string }
 
 // lookup returns the cached account and the slot to store a fresh copy in.
-//
-// Every failure is a miss; one that leaves the generation unknown also leaves
-// the slot empty, so nothing is written for this request.
+// Every failure is a miss; with the generation unknown the slot is empty.
 func (a *AccountCache) lookup(ctx context.Context, id uuid.UUID) (users.User, bool, accountSlot) {
 	generation, err := a.generation(ctx, id)
 	if err != nil {
@@ -141,8 +104,7 @@ func (a *AccountCache) lookup(ctx context.Context, id uuid.UUID) (users.User, bo
 
 	var entry cachedAccount
 	if err := json.Unmarshal(raw, &entry); err != nil || entry.UserID != id {
-		// Unreadable, or somebody else's: either way not this account. The
-		// slot stays, so the copy read from the database replaces it.
+		// Unreadable or another account's: the fresh copy replaces it.
 		return users.User{}, false, slot
 	}
 	return users.User{
@@ -155,7 +117,6 @@ func (a *AccountCache) lookup(ctx context.Context, id uuid.UUID) (users.User, bo
 	}, true, slot
 }
 
-// generation reads the account's current cache generation.
 func (a *AccountCache) generation(ctx context.Context, id uuid.UUID) (string, error) {
 	raw, found, err := a.cache.Get(ctx, accountGenerationKey(id))
 	if err != nil {
@@ -164,7 +125,6 @@ func (a *AccountCache) generation(ctx context.Context, id uuid.UUID) (string, er
 	if !found {
 		return initialAccountGeneration, nil
 	}
-	// Only a value Forget could have written is used as part of a key.
 	if len(raw) != 32 {
 		return "", fmt.Errorf("account cache generation of %d bytes", len(raw))
 	}
@@ -174,9 +134,7 @@ func (a *AccountCache) generation(ctx context.Context, id uuid.UUID) (string, er
 	return string(raw), nil
 }
 
-// store writes the account read from the database into the slot a lookup
-// returned. It is called only after a miss, so a request served from the
-// cache writes nothing.
+// store writes the database's account into the slot, only after a miss.
 func (a *AccountCache) store(ctx context.Context, slot accountSlot, account users.User) {
 	if slot.key == "" {
 		return
@@ -198,13 +156,9 @@ func (a *AccountCache) store(ctx context.Context, slot accountSlot, account user
 	}
 }
 
-// Forget makes every cached copy of the named accounts unreachable, by giving
-// each a new cache generation. It implements users.AccessCache.
-//
-// The generation is 128 random bits, so it never repeats a value an old
-// entry was written under. A failure is logged at error level and not
-// returned: the change it follows has already committed, and the copy it
-// could not drop still expires within the cache's TTL.
+// Forget makes every cached copy of the named accounts unreachable by giving
+// each a new random 128-bit generation. A failure is logged, not returned:
+// the change has committed, and the copy expires within the TTL.
 func (a *AccountCache) Forget(ctx context.Context, ids []uuid.UUID) {
 	if a == nil {
 		return
@@ -227,5 +181,4 @@ func (a *AccountCache) Forget(ctx context.Context, ids []uuid.UUID) {
 	}
 }
 
-// accountGenerationKey names the cache generation of one account.
 func accountGenerationKey(id uuid.UUID) string { return accountGenerationKeyPrefix + id.String() }

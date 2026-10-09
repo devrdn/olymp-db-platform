@@ -35,52 +35,39 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeAccess answers Access with whatever a test staged, so the handler's own
-// mapping from a refusal to a status and a code can be exercised without a
-// real queryproxy.Service behind it — that admission is proven where
-// queryproxy owns it (internal/queryproxy).
+// fakeAccess answers Access with whatever a test staged; admission is tested in
+// internal/queryproxy.
 type fakeAccess struct {
 	participant contests.Participant
 	contest     contests.Contest
-	// err is guarded by mu rather than left a bare field: the events handler
-	// tests (events_handler_test.go) change it while a connection's own
-	// goroutine is concurrently calling Access on every resync tick — a
-	// scenario nothing in this file needed until that one had a channel
-	// left open across several ticks.
+	// mu guards err: events tests change it while a connection's goroutine
+	// calls Access on every resync tick.
 	mu  sync.Mutex
 	err error
-	// gotContestID records what Access was asked about, so a test can prove
-	// the identifier came from the URL.
+	// gotContestID records what Access was asked about.
 	gotContestID uuid.UUID
-	// admitReadErr is what AdmitRead answers; nil means every caller is
-	// admitted. accessCalled records whether Access was reached, so a test
-	// can prove a refusal here stops the request before Access's own lookups.
+	// admitReadErr is what AdmitRead answers (nil admits); accessCalled records
+	// whether Access was reached.
 	admitReadErr error
 	accessCalled bool
-	// admitReads counts AdmitRead calls, so a test can prove a request spent
-	// its rate budget even though it was refused further in.
+	// admitReads counts AdmitRead calls.
 	admitReads int
-	// delay, when set, is how long AccessForEvents waits before answering —
-	// events_handler_test.go's own way of standing for a resync tick's two
-	// lookups running slow (finding 2), without a real, adjustable-latency
-	// store behind this fake.
+	// delay, when set, is how long AccessForEvents waits before answering,
+	// standing for slow resync lookups.
 	delay time.Duration
-	// schema and schemaErr are what Schema answers, and schemaAsked and
-	// schemaFor record the contest and the registration it was handed, so a
-	// test can prove they are the pair Access admitted.
+	// schema and schemaErr are what Schema answers; schemaAsked and schemaFor
+	// record what it was handed.
 	schema      provisioning.Schema
 	schemaErr   error
 	schemaAsked uuid.UUID
 	schemaFor   uuid.UUID
-	// startedOnRead records the registrations StartOnRead was asked to start,
-	// startedFrom the address each was asked from, and startOnReadErr is what
-	// it answers with.
+	// startedOnRead and startedFrom record StartOnRead calls; startOnReadErr is
+	// its answer.
 	startedOnRead  []uuid.UUID
 	startedFrom    []netip.Addr
 	startOnReadErr error
-	// gateNow is the instant AccessForEvents asks the gate about; zero is the
-	// wall clock. A test that pins its contest to fixed dates sets it, so the
-	// gate does not find that contest's time up because the calendar moved on.
+	// gateNow is the instant AccessForEvents asks the gate about (zero is the
+	// wall clock), so fixed-date contests do not expire as the calendar moves.
 	gateNow time.Time
 }
 
@@ -121,17 +108,9 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 	return a.participant, a.contest, a.err
 }
 
-// AccessForEvents answers the way queryproxy.Service.AccessForEvents does, over
-// whatever a test staged: a staged err is a lookup that failed, with nothing
-// known about the participant (the zero Standing); otherwise the real gate,
-// contests.Gate.StandingOf with no grace, is asked of the staged participant
-// and contest, and anything it will not let wait is refused with its own
-// Refusal and the Standing it was refused on. The rule itself is proven where
-// queryproxy owns it (internal/queryproxy/queryproxy_test.go); asking the real
-// gate here is what lets an events test stage a state — a finished
-// registration, a time that ran out, a contest taken back to draft — and see
-// what the channel does with the Standing that state produces, rather than a
-// sentinel picked to match.
+// AccessForEvents mirrors queryproxy.Service.AccessForEvents: a staged err is a
+// failed lookup with a zero Standing; otherwise the real gate decides, so
+// events tests see the Standing a staged state produces.
 func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
 	a.mu.Lock()
 	delay := a.delay
@@ -158,80 +137,55 @@ func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid
 	return participant, contest, standing, nil
 }
 
-// setDelay stages how long the next AccessForEvents calls take to answer
-// (finding 2), safely against a connection's own goroutine reading it
-// concurrently on its next resync tick.
 func (a *fakeAccess) setDelay(d time.Duration) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.delay = d
 }
 
-// setErr changes what Access answers with, safely against a connection's own
-// goroutine reading it concurrently on its next resync tick.
 func (a *fakeAccess) setErr(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.err = err
 }
 
-// setParticipant changes what Access answers a participant with, safely
-// against a connection's own goroutine reading it concurrently on its next
-// resync tick — how a test finishes or disqualifies a registration while the
-// channel is open.
 func (a *fakeAccess) setParticipant(p contests.Participant) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.participant = p
 }
 
-// setContest changes what Access answers a contest with, safely against a
-// connection's own goroutine reading it concurrently on its next resync tick
-// — a test's way of staging the published → running transition mid-connection
-// (finding 4) without a second implementation of "who is this and are they
-// still in".
 func (a *fakeAccess) setContest(c contests.Contest) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.contest = c
 }
 
-// fakeHistory answers History with whatever a test staged, so the query log
-// endpoint's own wiring and error mapping can be exercised without a real
-// postgres.QueryLog behind it — that scoping is proven where it lives
-// (internal/postgres/querylog_test.go).
+// fakeHistory answers History with whatever a test staged.
 type fakeHistory struct {
 	items []queryrunner.HistoryEntry
 	total int
 	err   error
-	// gotRegistration, gotLimit and gotOffset record what History was asked,
-	// so a test can prove the registration came from Access rather than the
-	// request, and that limit/offset came straight from the query string.
+	// gotRegistration, gotLimit and gotOffset record what History was asked.
 	gotRegistration uuid.UUID
 	gotLimit        int
 	gotOffset       int
 	called          bool
-	// exported is what ExportHistory streams, exportErr what it fails with,
-	// and gotExportRegistration what it was asked about — the same three
-	// facts the paged read above stages, for the CSV download beside it.
+	// exported, exportErr and gotExportRegistration are the same three facts
+	// for the CSV download.
 	exported              []queryrunner.HistoryEntry
 	exportErr             error
 	gotExportRegistration uuid.UUID
 	exportCalled          bool
-	// exportTruncated is what the read reports about a log longer than one
-	// download may carry.
+	// exportTruncated reports a log longer than one download may carry.
 	exportTruncated bool
-	// exportGate, when set, holds the read inside ExportHistory until it is
-	// closed — the only way a test can have two downloads genuinely
-	// overlapping rather than merely issued one after the other.
+	// exportGate, when set, holds the read inside ExportHistory until closed,
+	// so two downloads can overlap.
 	exportGate chan struct{}
-	// gotExportDeadline is the deadline the handler put on the read. Kept so
-	// a test can assert the connection is held for a bounded time rather than
-	// for as long as a client cares to read.
+	// gotExportDeadline is the deadline the handler put on the read.
 	gotExportDeadline time.Time
-	// inside counts the reads currently held at exportGate, so a test can
-	// wait for the first request to be demonstrably in the middle of one.
-	// The mutex guards every field above that two goroutines touch.
+	// inside counts reads held at exportGate; mu guards the fields two
+	// goroutines touch.
 	mu     sync.Mutex
 	inside int
 }
@@ -265,11 +219,8 @@ func (h *fakeHistory) ExportHistory(ctx context.Context, registrationID uuid.UUI
 	return truncated, failure
 }
 
-// awaitInsideExport blocks until a read is actually inside ExportHistory.
-//
-// Without it the concurrency test is the kind that passes for the wrong
-// reason: the second request would be refused, or admitted, depending on
-// whether the first goroutine had been scheduled yet.
+// awaitInsideExport blocks until a read is inside ExportHistory; without it the
+// concurrency test would depend on goroutine scheduling.
 func (h *fakeHistory) awaitInsideExport(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -293,16 +244,11 @@ func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit
 	return h.items, h.total, h.err
 }
 
-// fakeSubmitter answers Submit with whatever a test staged, so the answer
-// endpoint's own request wiring and error mapping can be exercised without a
-// real contests.Service behind it — that behaviour is proven where
-// contests.Service owns it (internal/contests/submission_test.go).
+// fakeSubmitter answers Submit with whatever a test staged.
 type fakeSubmitter struct {
 	outcome contests.SubmitOutcome
 	err     error
-	// gotCmd records what Submit was asked, so a test can prove the
-	// question identifier and the value came from the request rather than
-	// being invented here.
+	// gotCmd records what Submit was asked.
 	gotCmd contests.SubmitCommand
 	called bool
 }
@@ -313,14 +259,11 @@ func (s *fakeSubmitter) Submit(_ context.Context, cmd contests.SubmitCommand) (c
 	return s.outcome, s.err
 }
 
-// fixtureAnswersPerMinute is the answer rate every participant fixture is
-// built with: low enough that a test can reach it in a few requests, high
-// enough that a test posting one or two answers never meets it by accident.
+// fixtureAnswersPerMinute is low enough to reach in a few requests and high
+// enough that one or two answers never meet it.
 const fixtureAnswersPerMinute = 3
 
-// answerRate is the answer throttle a handler under test is built with: the
-// real fixed-window limiter over the test's own cache, so what is counted is
-// what the deployment counts.
+// answerRate is the real fixed-window limiter over the test's cache.
 func answerRate(c cache.Cache, perMinute int) api.AnswerRate {
 	return api.AnswerRate{Limiter: auth.NewLimiter(c), PerMinute: perMinute}
 }
@@ -332,36 +275,25 @@ func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, 
 	return false, errors.New("cache unreachable")
 }
 
-// participantFixture mounts the participant endpoints behind a session, with
-// a fake Access and a real Reader over in-memory stores — the same
-// conteststest fakes internal/contests's own Reader tests use, so what is
-// under test here is the handler's wiring and error mapping, not a second
-// implementation of the reading rules.
+// participantFixture mounts the participant endpoints with a fake Access and a
+// real Reader over in-memory stores.
 type participantFixture struct {
-	router    http.Handler
-	access    *fakeAccess
-	history   *fakeHistory
-	submitter *fakeSubmitter
-	stories   *conteststest.Stories
-	questions *conteststest.Questions
-	// submissions is what the reader's attempt stats derive from, as
-	// production derives them from the submissions table.
-	submissions *conteststest.Submissions
-	// workspaceStore is the in-memory store behind the workspace endpoints.
+	router         http.Handler
+	access         *fakeAccess
+	history        *fakeHistory
+	submitter      *fakeSubmitter
+	stories        *conteststest.Stories
+	questions      *conteststest.Questions
+	submissions    *conteststest.Submissions
 	workspaceStore *failingWorkspace
-	// watcher records every visit admission reported.
-	watcher *recordingWatcher
-	// signalStore records every batch of browser signals stored.
-	signalStore *signalStore
-	// logs is what the handler logged.
-	logs   *logBuffer
-	cookie *http.Cookie
+	watcher        *recordingWatcher
+	signalStore    *signalStore
+	logs           *logBuffer
+	cookie         *http.Cookie
 }
 
-// fixtureUserAgent is the browser every fixture request claims to be.
 const fixtureUserAgent = "fixture-browser/1.0"
 
-// recordingWatcher keeps every visit it is told about.
 type recordingWatcher struct {
 	mu     sync.Mutex
 	visits []monitor.Visit
@@ -453,8 +385,8 @@ func (f *participantFixture) post(path, body string) *httptest.ResponseRecorder 
 	return rec
 }
 
-// submit records one answer through the submission store the reader's attempt
-// stats derive from, carrying the question's own points and cap.
+// submit records one answer through the store the reader's attempt stats derive
+// from.
 func (f *participantFixture) submit(t *testing.T, registrationID uuid.UUID, q contests.Question, correct bool) {
 	t.Helper()
 	if _, err := f.submissions.Insert(t.Context(), contests.SubmissionRequest{
@@ -486,11 +418,8 @@ func (f *participantFixture) playContest(t *testing.T) uuid.UUID {
 	return contestID
 }
 
-// Reading the story or the question list is reading the contest, and under
-// individual timing that is where the participant's clock starts: each read
-// hands the registration admission resolved to StartOnRead, with the address
-// the request came from, since starting is admitted by the same gate as the
-// read and the gate asks where the caller is.
+// Under individual timing reading starts the clock; the gate admitting the
+// start needs the caller's address.
 func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
 	for _, path := range []string{"/play/story", "/play/questions"} {
 		t.Run(path, func(t *testing.T) {
@@ -512,8 +441,6 @@ func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
 	}
 }
 
-// A read that is refused showed nothing, so it starts nothing: over the rate,
-// from an address the contest does not allow, or a story that does not exist.
 func TestARefusedContentReadStartsNoClock(t *testing.T) {
 	for name, given := range map[string]struct {
 		path  string
@@ -542,8 +469,7 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 	}
 }
 
-// When the clock cannot be started — the window closed between admission and
-// the read — the content read is refused, and the content is not sent.
+// The window can close between admission and the read.
 func TestAContentReadWhoseClockCannotStartIsRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
@@ -575,9 +501,6 @@ func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
 	}
 }
 
-// TestAHiddenQuestionIsAbsentFromTheParticipantsList is the requirement
-// section 6.1 is explicit about: a hidden question exists fully and is
-// simply never shown.
 func TestAHiddenQuestionIsAbsentFromTheParticipantsList(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -621,12 +544,8 @@ func TestAHiddenQuestionIsAbsentFromTheParticipantsList(t *testing.T) {
 	}
 }
 
-// Finding 1: the response must carry no display position at all. A dense
-// ordinal — 1, 3, 4, 7 — would tell the caller exactly how many questions are
-// hidden and precisely where each one sits, which is the one fact §6.1 says a
-// participant must work out rather than read off a field. The items array
-// already arrives in display order, so there is nothing an ordinal would add
-// except that leak.
+// A dense ordinal would reveal how many questions are hidden and where (§6.1);
+// items already arrive in display order.
 func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -676,8 +595,6 @@ func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
 	}
 }
 
-// The reference answer must never appear anywhere in the response, for a
-// visible question either.
 func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -705,10 +622,7 @@ func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 	}
 }
 
-// Every refusal queryproxy hands over is answered from one table
-// (errortable.go, and TestEveryQueryproxyErrorHasItsAnswer walks every one of
-// them). What this proves is that each read endpoint hands its refusal to
-// that table, so one representative refusal is enough.
+// One representative refusal: the mapping is one table (errortable.go).
 func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.err = contests.ErrAddressNotAllowed
@@ -732,9 +646,7 @@ func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
 	}
 }
 
-// A full game cluster turns the schema panel away, and an operator hears of
-// it: participants are being refused, which the pool's own warning does not
-// say.
+// The pool's own warning does not say participants are being refused.
 func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.schemaErr = fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull)
@@ -751,9 +663,7 @@ func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
 	}
 }
 
-// A participant of another contest is refused the same way a stranger to
-// every contest is — not_a_participant, never a 404 that would confirm the
-// contest exists, and never a body that says anything about it.
+// Not a 404, which would confirm the contest exists.
 func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.err = contests.ErrNotAParticipant
@@ -767,10 +677,8 @@ func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	}
 }
 
-// Finding 3: a caller over their own rate budget is refused before Access
-// ever runs its lookups — the same order Run itself uses, and the same
-// sentinel the console maps to 429 (queryrunner.ErrTooManyQueries,
-// codeQueryTooOften).
+// Refused before Access runs its lookups, with the sentinel the console maps to
+// 429.
 func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 	for _, path := range []string{"story", "questions", "log"} {
 		t.Run(path, func(t *testing.T) {
@@ -794,8 +702,6 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 	}
 }
 
-// A caller within their own rate budget is unaffected: AdmitRead admits them
-// and Access runs exactly as it always has.
 func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.contest = contests.Contest{
@@ -816,9 +722,6 @@ func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
 	}
 }
 
-// A contest with no story yet: the reader's refusal reaches the participant
-// as a 404 through the contests table (contestsErrors), on the story route
-// itself rather than only in the table's own test.
 func TestAMissingStoryIsA404(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -827,8 +730,7 @@ func TestAMissingStoryIsA404(t *testing.T) {
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
 	}
 	f.access.participant = contests.Participant{ID: uuid.New()}
-	// No story saved: f.stories has nothing for contestID, so the reader
-	// answers contests.ErrStoryNotFound.
+	// No story saved, so the reader answers contests.ErrStoryNotFound.
 
 	rec := f.get("/contests/" + contestID.String() + "/play/story")
 	if rec.Code != http.StatusNotFound {
@@ -839,9 +741,7 @@ func TestAMissingStoryIsA404(t *testing.T) {
 	}
 }
 
-// The story falls back per §6.2 when the requested language has no
-// translation: the contest's own default, here English, answers instead of
-// an error, and the response says which language it actually served.
+// The response names the language it served (§6.2).
 func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -857,9 +757,8 @@ func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 		t.Fatalf("Save() = %v", err)
 	}
 
-	// A language the contest does not offer at all (French) falls back to the
-	// contest's own default (English), not to an error and not to whatever
-	// the installation's own default happens to be.
+	// A language the contest does not offer falls back to the contest's
+	// default, not the installation's.
 	rec := f.get("/contests/" + contestID.String() + "/play/story?lang=fr")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -875,7 +774,6 @@ func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 		t.Fatalf("payload = %+v, want the contest's own default language", payload)
 	}
 
-	// A language it does offer, Russian, is honoured.
 	rec = f.get("/contests/" + contestID.String() + "/play/story?lang=ru")
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -885,8 +783,6 @@ func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 	}
 }
 
-// The questions list also carries attempts remaining and closed, resolved
-// from this participant's own attempts.
 func TestQuestionsCarryAttemptsRemainingAndClosed(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -932,10 +828,8 @@ func TestQuestionsCarryAttemptsRemainingAndClosed(t *testing.T) {
 	}
 }
 
-// Finding 5: a reloaded question list must say whether a closed question was
-// won, and for how much — the only way a participant can tell "closed
-// because solved" from "closed because every attempt is spent" without
-// re-submitting to find out.
+// The only way to tell "closed because solved" from "closed because every
+// attempt is spent" without re-submitting.
 func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -950,9 +844,8 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
 	})
-	// One wrong attempt at a penalty of two before the right one: what was
-	// won is 8, not the question's face value, so a list that echoed the
-	// question's points instead of the submission's would fail here.
+	// One wrong attempt at a penalty of two: 8 is won, not the question's face
+	// value.
 	for _, correct := range []bool{false, true} {
 		if _, err := f.submissions.Insert(t.Context(), contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "an answer",
@@ -984,8 +877,6 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 	}
 }
 
-// A contest identifier that is not a UUID is a 400, not a 500 and not a call
-// to Access with garbage.
 func TestAnInvalidContestIDInTheURLIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
 
@@ -998,17 +889,8 @@ func TestAnInvalidContestIDInTheURLIsA400(t *testing.T) {
 	}
 }
 
-// TestParticipantRoutesDoNotShadowTheStaffContentEndpoints is a regression
-// test for a defect this task's own review found rather than reasoned about:
-// mounting this handler's story and questions routes at the same paths
-// ContestsHandler already answers (/contests/{id}/story,
-// /contests/{id}/questions) does not fail to build — chi's router silently
-// lets the later Mount win — and with both mounted the way app.go actually
-// mounts them, the staff-only endpoint stopped answering as itself at all.
-// This assembles both handlers over one router exactly as app.go does and
-// proves each still answers its own path: the organizer's endpoint still
-// requires contest.view and returns the staff shape, and the participant's
-// own view lives at its own /play prefix rather than contesting that URL.
+// chi silently lets the later Mount win on shared paths, so both handlers are
+// assembled as app.go does.
 func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	stores := conteststest.NewFixture()
 	stores.Users.GrantRole("staff", "contest.create")
@@ -1035,7 +917,6 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	})
 	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
 
-	// Both handlers mounted over one router, exactly as app.go mounts them.
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
@@ -1050,8 +931,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 		return rec
 	}
 
-	// The organizer's own endpoint, unaffected: still answering with the
-	// staff shape (a contest UUID and every translation) rather than the
+	// The staff shape (a contest UUID and every translation), not the
 	// participant's {lang, body_md}.
 	staff := do("/contests/" + contestID.String() + "/story")
 	if staff.Code != http.StatusOK {
@@ -1068,12 +948,9 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 		t.Fatalf("staff body = %+v, want the full staff projection", staffBody)
 	}
 
-	// The participant's own path lives at /play and is unaffected by the
-	// staff route sharing a prefix — here refused, since the fake Access is
-	// staged to refuse everyone, which is enough to prove the request
-	// reached this handler's own admission check rather than the staff
-	// route's RBAC gate (that would answer a bare 403 forbidden, not this
-	// handler's own not_a_participant).
+	// The fake Access refuses everyone, so not_a_participant proves the request
+	// reached this handler's admission and not the staff route's RBAC, which
+	// would answer a bare 403.
 	participant := do("/contests/" + contestID.String() + "/play/story")
 	if participant.Code != http.StatusForbidden {
 		t.Fatalf("the participant story endpoint = %d, want 403 (body: %s)", participant.Code, participant.Body.String())
@@ -1083,9 +960,6 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	}
 }
 
-// The answer endpoint sends Submit exactly what the URL and the body carry —
-// never a value invented by the handler, and never a participant or contest
-// other than what Access just resolved.
 func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1112,15 +986,12 @@ func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 	if got.Participant.ID != participantID || got.Contest.ID != contestID {
 		t.Fatalf("command = %+v, want the participant and contest Access resolved", got)
 	}
-	// httptest.NewRequest's own RemoteAddr, 192.0.2.1:1234: Submit asks the
-	// participation gate itself, from the caller's own address.
+	// httptest's RemoteAddr: Submit asks the gate from the caller's address.
 	if want := netip.MustParseAddr("192.0.2.1"); got.Address != want {
 		t.Fatalf("Address = %v, want %v (the caller's)", got.Address, want)
 	}
 }
 
-// The response carries exactly what SubmitOutcome says — never more, never
-// a reference answer.
 func TestAnswerReturnsTheOutcome(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1150,12 +1021,8 @@ func TestAnswerReturnsTheOutcome(t *testing.T) {
 	}
 }
 
-// Every refusal contests.Service.Submit can answer with is a row in
-// contestsErrors, and TestEveryContestsErrorHasItsAnswer walks all of them.
-// What this proves is that the answer route hands Submit's refusal to that
-// table, so one contests refusal is enough; the sentence is the one the
-// organiser's routes send too, since both read the same row. The queryproxy
-// cases are the admission refusals Submit passes through.
+// One representative refusal: TestEveryContestsErrorHasItsAnswer walks the
+// table. The queryproxy cases are admission refusals Submit passes through.
 func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -1174,10 +1041,8 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed", ""},
 		{"address not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed", ""},
 		{"participant finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished", ""},
-		// An organiser removed the caller between admission and the answer:
-		// their registration is gone, which a participant hears as it is told
-		// everywhere else — not taking part — and never as the organiser's
-		// participant_not_found, a code the play screen does not know.
+		// Removed between admission and the answer: told "not taking part",
+		// never participant_not_found, which the play screen does not know.
 		{"registration removed mid-answer", fmt.Errorf("start the participant's clock: %w", contests.ErrParticipantNotFound),
 			http.StatusForbidden, "not_a_participant", "The caller is not taking part in this contest"},
 	} {
@@ -1204,8 +1069,6 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	}
 }
 
-// A question identifier that is not a UUID is a 400, and Submit is never
-// called with garbage.
 func TestAnswerWithAnInvalidQuestionIDIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1221,7 +1084,6 @@ func TestAnswerWithAnInvalidQuestionIDIsA400(t *testing.T) {
 	}
 }
 
-// A malformed body is a 400, and Submit is never called.
 func TestAnswerWithAnInvalidBodyIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1237,27 +1099,9 @@ func TestAnswerWithAnInvalidBodyIsA400(t *testing.T) {
 	}
 }
 
-// Finding 1, end to end: the review's own scenario is seven simultaneous
-// answers to the very same question outrunning contests.Service.Submit's own
-// retry bound — every retry loses the attempt-number race, and Submit used
-// to hand the caller an error the handler had no case for (a 500,
-// indistinguishable from a real outage) rather than the refusal a
-// participant can act on. This drives that scenario through the real
-// contests.Service (not fakeSubmitter's canned error) and the real handler,
-// so what is under test is Submit's own retry loop and fail()'s own mapping
-// together, not either one asserted in isolation.
-//
-// conteststest.Submissions.ConflictsRemaining stands in for the seven
-// simultaneous racers — the same technique
-// TestSubmitGivesUpAfterTooManyConflicts uses at the service level (its own
-// doc explains why: a Go map has no analogue of the table's own UNIQUE
-// constraint racing two real transactions, so the genuine race is proven
-// against PostgreSQL instead, in
-// internal/postgres/submissions_test.go and
-// TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber).
-// What this test adds on top is the part that repository-level proof cannot
-// reach on its own: that running out of retries surfaces as a 4xx, not a
-// 5xx.
+// Exhausting Submit's retry bound must surface as a 4xx, not a 500.
+// ConflictsRemaining stands in for seven racers; the real race is tested
+// against PostgreSQL in internal/postgres/submissions_test.go.
 func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	stores := conteststest.NewFixture()
 	starts := conteststest.FixtureNow.Add(-time.Hour)
@@ -1272,9 +1116,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	})
 	q := stores.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
 
-	// However many of the seven actually lost every round, this is what it
-	// looks like from Submit's side: its own retry loop never once sees
-	// anything but a conflict.
+	// From Submit's side, its retry loop sees nothing but conflicts.
 	stores.Submissions.ConflictsRemaining = 1000
 
 	c2 := cache.NewMemory(1000)
@@ -1294,8 +1136,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	access := &fakeAccess{participant: p, contest: c}
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	router := chi.NewRouter()
-	// stores.Service, not a fakeSubmitter: what answers here is the real
-	// retry loop.
+	// The real retry loop, not a fakeSubmitter.
 	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c2, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost,
@@ -1314,8 +1155,6 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	}
 }
 
-// Finding 3 (queryproxy's own, reused here): a caller over their own rate
-// budget is refused before Access — and before Submit — ever run.
 func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.admitReadErr = queryrunner.ErrTooManyQueries
@@ -1332,10 +1171,7 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	}
 }
 
-// Answers have a budget of their own, per registration, far below the read
-// budget a console query spends: an answer is a guess, and a guess repeated
-// fast enough turns a candidate list into a solved question. The refusal says
-// when to try again and never reaches grading.
+// An answer is a guess, and fast guesses solve a question by elimination.
 func TestAnswersBeyondTheRegistrationsRateAreRefusedBeforeGrading(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1365,10 +1201,7 @@ func TestAnswersBeyondTheRegistrationsRateAreRefusedBeforeGrading(t *testing.T) 
 	}
 }
 
-// CLAUDE.md rule 13: the budget counts attempts, not successes. A body that
-// does not decode and an answer the service refuses both spent one, so a
-// stream of malformed or refused guesses meets the limit as surely as a
-// stream of graded ones.
+// CLAUDE.md rule 13: malformed and refused answers spend the budget too.
 func TestARefusedAnswerStillCountsAgainstTheAnswerRate(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1398,9 +1231,6 @@ func TestARefusedAnswerStillCountsAgainstTheAnswerRate(t *testing.T) {
 	}
 }
 
-// The budget belongs to the registration admission resolved, never to
-// anything the request names: one participant spending theirs leaves another
-// participant's untouched.
 func TestTheAnswerRateIsKeptPerRegistration(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1418,8 +1248,7 @@ func TestTheAnswerRateIsKeptPerRegistration(t *testing.T) {
 	}
 }
 
-// A counter that cannot be kept is a protection that is not in place, and the
-// answer is refused rather than graded unthrottled.
+// A counter that cannot be kept is a protection not in place.
 func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
@@ -1461,9 +1290,7 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 13: a value refused for not being one of a choice
-// question's options still spent the caller's rate budget, which is checked
-// before Submit ever reads the question; a stream of guesses is not free.
+// CLAUDE.md rule 13: the budget is checked before Submit reads the question.
 func TestAnAnswerRefusedAsNotAChoiceStillSpendsTheRateBudget(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1481,10 +1308,8 @@ func TestAnAnswerRefusedAsNotAChoiceStillSpendsTheRateBudget(t *testing.T) {
 	}
 }
 
-// The query log endpoint asks History for exactly the registration Access
-// resolved — never a value the request itself carries — and hands the query
-// string's limit and offset straight through, unmodified: clamping them is
-// History's own job (queryrunner.NormalizeHistoryPage), not this handler's.
+// Clamping limit and offset is History's job
+// (queryrunner.NormalizeHistoryPage), so they pass through unmodified.
 func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1507,9 +1332,8 @@ func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *test
 	}
 }
 
-// The response carries exactly what History returned, in its own vocabulary
-// — never a reference to another registration, and a row still `running`
-// carries no duration or row count rather than a false zero.
+// A row still running carries no duration or row count rather than a false
+// zero.
 func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1551,11 +1375,8 @@ func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
 	}
 }
 
-// A page bounded in bytes has to say which rows it bounded. Shortening
-// somebody's own query and presenting the result as what they wrote is the
-// one thing a log must not do — so the row carries the flag, and a row that
-// was not cut carries nothing (omitted, not `false`, the way every other
-// "nothing to report" field on this response is).
+// A log must not present a shortened query as what they wrote. A row that was
+// not cut omits the flag rather than sending false.
 func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1593,9 +1414,7 @@ func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 	}
 }
 
-// A failure to read the log is ours, not the participant's — the same
-// treatment every other infrastructure failure on this handler gets (fail's
-// default, and queryproxy.ErrUnavailable's row in errortable.go).
+// Ours, not the participant's: fail's default, like queryproxy.ErrUnavailable.
 func TestQueryLogReadFailureIsA500(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1609,11 +1428,8 @@ func TestQueryLogReadFailureIsA500(t *testing.T) {
 	}
 }
 
-// The CSV download of a participant's own query log (§9.1). What it must
-// carry is exactly what the panel beside it already shows, in a shape a
-// spreadsheet opens; what it must never carry is a row belonging to anybody
-// else, which is decided by which registration it is asked about rather than
-// by anything in the request.
+// Whose rows is decided by the registration Access resolved, not the request
+// (§9.1).
 func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1666,9 +1482,8 @@ func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 		records[1][2] != "12" || records[1][3] != "3" || records[1][5] != "SELECT * FROM guests" {
 		t.Errorf("first row = %v", records[1])
 	}
-	// A row still running has no duration and no row count, and an empty cell
-	// is how CSV says "not recorded" — the same distinction the JSON page
-	// keeps by omitting the field.
+	// An empty cell is how CSV says "not recorded", as the JSON omits the
+	// field.
 	if records[2][2] != "" || records[2][3] != "" {
 		t.Errorf("a rejected row reported a duration or a row count: %v", records[2])
 	}
@@ -1677,8 +1492,7 @@ func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 	}
 }
 
-// An empty log is still a file: a header row and nothing else. A zero-byte
-// download is indistinguishable from a failed one.
+// A zero-byte download is indistinguishable from a failed one.
 func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1698,11 +1512,8 @@ func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
 	}
 }
 
-// The same admission every other participant endpoint goes through: somebody
-// who is not in this contest is refused, and the log is never read on their
-// behalf. Staff have no route to this one at all — it answers about the
-// caller's own registration and about nothing else, so there is no
-// participant to name in it.
+// Staff have no route to this one: it answers only about the caller's own
+// registration.
 func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.setErr(contests.ErrNotAParticipant)
@@ -1719,10 +1530,8 @@ func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 13, and the reason AdmitRead exists: a read that costs
-// database round trips is charged the same budget a query is, before any of
-// them are spent. Downloading the whole log is the most expensive read this
-// handler offers, so it is the last one that should be free.
+// CLAUDE.md rule 13: the most expensive read here is charged like a query,
+// before any round trip.
 func TestTheQueryLogCSVSpendsTheSameRateBudgetAQueryDoes(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.admitReadErr = queryrunner.ErrTooManyQueries
@@ -1739,8 +1548,8 @@ func TestTheQueryLogCSVSpendsTheSameRateBudgetAQueryDoes(t *testing.T) {
 	}
 }
 
-// A failure before the first row still has a status line to spend, so it is
-// spent on saying so rather than on a 200 carrying half a file.
+// Before the first row the status line is unspent, so it reports the failure
+// rather than a 200 with half a file.
 func TestAQueryLogCSVThatFailsBeforeItStartsIsAnErrorNotAnEmptyFile(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1757,11 +1566,8 @@ func TestAQueryLogCSVThatFailsBeforeItStartsIsAnErrorNotAnEmptyFile(t *testing.T
 	}
 }
 
-// The CSV reads the same column the paged log does, so it goes through the
-// same guard. `query_log.error_text` is written straight from the error a run
-// produced, before anything above it sanitises anything — the file would
-// otherwise be a second way round both of the console's own guards, and the
-// more convenient one, because it arrives as a document somebody keeps.
+// query_log.error_text is stored unsanitised, so the file goes through the same
+// guard as the paged log or it would bypass the console's guards.
 func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1777,9 +1583,8 @@ func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 			ExecutedAt: time.Now().UTC(),
 		},
 		{
-			// The validator refusing the participant's own text is a fact
-			// about what they typed, and the most useful thing the file can
-			// tell them. It stays.
+			// A validator refusal of their own text is about what they typed;
+			// it stays.
 			SQL:        "select pg_sleep(9);",
 			Status:     queryrunner.StatusRejected,
 			Error:      "function_not_supported: pg_sleep",
@@ -1801,12 +1606,8 @@ func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 	}
 }
 
-// The download used to be unbounded in three separate ways, and each one is
-// its own test because each one is refused by a different mechanism.
-
-// A file cut short by a bound has to say so inside itself. The alternative is
-// a participant holding what they believe is the record of their session and
-// is not — the same reason a truncated query result carries a flag.
+// Otherwise a participant keeps what they believe is the whole record of their
+// session.
 func TestAQueryLogDownloadCutShortSaysSoInTheFileItself(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1844,12 +1645,9 @@ func TestAQueryLogDownloadCutShortSaysSoInTheFileItself(t *testing.T) {
 	}
 }
 
-// The read runs inside a transaction on the core pool, so the time it takes
-// is a connection nobody else can have. Nothing about the size of the file
-// bounds that — the slow party is the client — so the handler puts a deadline
-// on it, and this is the assertion that the deadline is really there rather
-// than the request context's own (which, for an HTTP server with no
-// WriteTimeout, has none at all).
+// The read holds a core-pool connection for as long as the client reads, so the
+// handler sets its own deadline; the request context has none without a server
+// WriteTimeout.
 func TestAQueryLogDownloadHoldsItsConnectionForABoundedTime(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
@@ -1863,29 +1661,22 @@ func TestAQueryLogDownloadHoldsItsConnectionForABoundedTime(t *testing.T) {
 	if f.history.gotExportDeadline.IsZero() {
 		t.Fatal("the read was given no deadline; a client reading a byte a second holds a pool connection for as long as it likes")
 	}
-	// The figure the handler chose is its own; what this pins is that it is a
-	// figure at all and not one an operator would call unbounded. Two minutes
-	// is the ceiling this test is willing to call bounded — ten of these held
-	// that long is a stall a contest recovers from by itself.
+	// The handler's figure is its own; this pins only that it is bounded. Ten
+	// downloads held two minutes is a stall a contest recovers from.
 	const tolerable = 2 * time.Minute
 	if held := f.history.gotExportDeadline.Sub(before); held > tolerable {
 		t.Fatalf("the read may hold its connection for %s, want at most %s", held, tolerable)
 	}
 }
 
-// A bound per request is not a bound in aggregate. The rate budget allows
-// thirty starts a minute and the core pool has ten connections, so an account
-// that starts downloads and reads them slowly can hold every one of them
-// while refusing nothing — which is sign-in, submission and the timer stopped
-// for everybody else. One at a time per account is what closes that.
+// The rate budget allows thirty starts a minute and the core pool has ten
+// connections, so slow-read downloads could hold every connection; one at a
+// time per account closes that.
 func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
 	f.access.participant = contests.Participant{ID: uuid.New()}
-	// The first request is inside the read for as long as this takes, which
-	// is what "still running" has to mean for the gate to be under test at
-	// all. Released by the channel below rather than by a sleep.
 	held := make(chan struct{})
 	f.history.exportGate = held
 
@@ -1896,8 +1687,7 @@ func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
 		first <- f.get("/contests/" + contestID.String() + "/play/log.csv").Code
 	}()
 	<-started
-	// Wait until the first request is demonstrably inside ExportHistory, so
-	// the second one cannot pass merely because the first had not started.
+	// So the second cannot pass merely because the first had not started.
 	f.history.awaitInsideExport(t)
 
 	second := f.get("/contests/" + contestID.String() + "/play/log.csv")
@@ -1917,9 +1707,7 @@ func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
 	}
 }
 
-// An admitted /play request is a request of the registration: the tracker
-// of address changes and parallel sessions hears of it, with the session
-// named by a hash of its token and never the token (design §2.3).
+// The session is named by a hash of its token, never the token.
 func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
@@ -1943,8 +1731,6 @@ func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
 	}
 }
 
-// A request admission refuses is not the registration's: nothing is
-// observed.
 func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
@@ -1958,11 +1744,8 @@ func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 	}
 }
 
-// A spreadsheet evaluates a cell that begins with =, +, - or @, and a
-// participant's SQL is theirs to write: `=cmd|' /c calc'!A1` is a valid
-// statement to type into a console and a formula to whoever opens the file.
-// The organiser's export has always defused this; the participant's own
-// download is opened by the same people.
+// A spreadsheet evaluates a cell starting with =, +, - or @, and
+// `=cmd|' /c calc'!A1` is valid SQL. The organiser's export defuses this too.
 func TestTheQueryLogCSVDefusesSpreadsheetFormulas(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()

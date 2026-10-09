@@ -13,10 +13,8 @@ import (
 // Attempts implements contests.AttemptStore.
 var _ contests.AttemptStore = (*Attempts)(nil)
 
-// Attempts reads what a participant has already tried against a question,
-// from the submissions table (§6.1). It is deliberately a reader only:
-// recording a submission is Task 3's own repository, once the answer path
-// exists.
+// Attempts reads what a participant has already tried against each question,
+// from the submissions table. Submissions writes them.
 type Attempts struct {
 	pool *pgxpool.Pool
 }
@@ -31,17 +29,11 @@ func (r *Attempts) querier(ctx context.Context) storage.Querier {
 }
 
 // ForRegistration returns the registration's attempt stats keyed by question.
-//
-// Filtered by registration_id alone, which is the leading column of the
-// table's own UNIQUE (registration_id, question_id, attempt_no) constraint —
-// the index that constraint creates already serves this query, so no
-// migration is owed alongside it (CLAUDE.md rule 7).
+// registration_id leads the UNIQUE (registration_id, question_id, attempt_no)
+// index, which serves the filter (CLAUDE.md rule 7).
 func (r *Attempts) ForRegistration(ctx context.Context, registrationID uuid.UUID) (map[uuid.UUID]contests.AttemptStats, error) {
-	// SUM(points_awarded) rides along on the same query and the same index
-	// (this function's own doc) rather than a second round trip: only a
-	// correct submission ever carries a non-zero points_awarded, so the sum
-	// is exactly the one winning attempt's award, or zero when there is none
-	// (contests.AttemptStats.PointsAwarded's own doc).
+	// Only a correct submission carries non-zero points, so the sum is the
+	// winning attempt's award, or zero.
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT question_id, COUNT(*), bool_or(is_correct), COALESCE(SUM(points_awarded), 0)
 		FROM submissions

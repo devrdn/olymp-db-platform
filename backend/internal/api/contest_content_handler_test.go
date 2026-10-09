@@ -46,7 +46,7 @@ func TestAContestWithNoStoryAnswersNotFound(t *testing.T) {
 }
 
 func TestANewQuestionIsVisibleByDefault(t *testing.T) {
-	// Hiding is the deliberate choice; leaving the flag out must not hide it.
+	// Leaving the flag out must not hide the question.
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 
@@ -80,9 +80,6 @@ func TestAQuestionCanBeCreatedHidden(t *testing.T) {
 	}
 }
 
-// Finding 1: penalty_pct had no field on questionRequest/QuestionResponse at
-// all, so an organizer could never set it through the API that creates and
-// edits questions.
 func TestAQuestionsPenaltySurvivesARoundTripThroughTheAPI(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -98,10 +95,8 @@ func TestAQuestionsPenaltySurvivesARoundTripThroughTheAPI(t *testing.T) {
 	}
 }
 
-// The worse half of finding 1: internal/contests.Service.UpdateQuestion used
-// to assign cmd.PenaltyPct unconditionally, so any PATCH — even one only
-// about the wording — silently reset a penalty configured earlier back to
-// zero. An edit that never mentions penalty_pct must leave it alone.
+// TestUpdatingAQuestionPreservesAnUnmentionedPenalty: a PATCH that never
+// mentions penalty_pct must not reset it to zero.
 func TestUpdatingAQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -126,8 +121,6 @@ func TestUpdatingAQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	}
 }
 
-// The penalty can still be changed on purpose — "absent leaves it alone"
-// must not become "it can never move again".
 func TestUpdatingAQuestionCanChangeThePenalty(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -150,8 +143,7 @@ func TestUpdatingAQuestionCanChangeThePenalty(t *testing.T) {
 }
 
 func TestStaffSeeTheReferenceAnswers(t *testing.T) {
-	// They are the authors. The participant-facing view is a different
-	// projection, not this one with a field removed.
+	// They are the authors; the participant view is a separate projection.
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	question := f.addQuestion(t, c.ID)
@@ -248,7 +240,6 @@ func TestQuestionTextRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	}
 }
 
-// addQuestion appends a question through the API and returns its identifier.
 func (f *contestFixture) addQuestion(t *testing.T, contestID uuid.UUID) string {
 	t.Helper()
 
@@ -289,9 +280,8 @@ func TestSavingAQuestionWholeAnswersWithIt(t *testing.T) {
 	}
 }
 
-// The same "absent leaves it alone" guarantee applies to PUT
-// (SaveQuestion), not only PATCH — both write through
-// contests.Question.PenaltyPct, and both used to overwrite it unconditionally.
+// TestSavingAQuestionWholePreservesAnUnmentionedPenalty is the PUT counterpart
+// of the PATCH test above.
 func TestSavingAQuestionWholePreservesAnUnmentionedPenalty(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -316,8 +306,8 @@ func TestSavingAQuestionWholePreservesAnUnmentionedPenalty(t *testing.T) {
 }
 
 func TestSavingAQuestionRefusesAnAnswerTheOptionsDoNotHave(t *testing.T) {
-	// The one check the three narrower endpoints could not make between them:
-	// the answers are compared against the question as it will be.
+	// Only a whole-question save can compare the answers against the question
+	// as it will be.
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
 	q := f.stores.Questions.Put(contests.Question{

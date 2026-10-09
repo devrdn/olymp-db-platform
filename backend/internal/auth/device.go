@@ -15,39 +15,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// DeviceCookieName carries the proof that this browser has signed in to an
-// account before.
 const DeviceCookieName = "dbcontest_device"
 
-// MinDeviceSecretLength is the shortest secret NewDeviceTrust accepts: the
-// HMAC key is as strong as the secret, and 256 bits is SHA-256's own size.
+// MinDeviceSecretLength is the shortest secret accepted: 256 bits, the
+// HMAC-SHA256 key size.
 const MinDeviceSecretLength = 32
 
 const (
-	// deviceTokenVersion is the first payload byte, so a later format can be
-	// told apart from this one rather than misread as it.
+	// deviceTokenVersion is the first payload byte, so a later format is not
+	// misread as this one.
 	deviceTokenVersion byte = 1
 	// devicePayloadLength is version, account id, device id, issue time,
 	// session generation and status-change time.
 	devicePayloadLength = 1 + 16 + 16 + 8 + 8 + 8
-	// maxDeviceTokenLength bounds what Verify decodes: the cookie is caller
-	// supplied, and a real token is well under this.
+	// maxDeviceTokenLength bounds what Verify decodes from the caller.
 	maxDeviceTokenLength = 256
-	// deviceClockSkew is how far in the future an issue time may be and still
-	// be believed, for a secret shared by replicas whose clocks differ.
+	// deviceClockSkew tolerates replicas' clock differences.
 	deviceClockSkew = time.Minute
 	// deviceMACContext separates this MAC from any other use of the secret.
 	deviceMACContext = "dbcontest device cookie v1\x00"
 )
 
-// DeviceID names one browser that has signed in.
 type DeviceID [16]byte
 
-// String renders the id for a rate-limit key.
 func (d DeviceID) String() string { return base64.RawURLEncoding.EncodeToString(d[:]) }
 
 // Device is what a verified device cookie says: which browser, and the
-// account as it was when the browser signed in to it.
+// account's state when it signed in.
 type Device struct {
 	ID         DeviceID
 	accountID  uuid.UUID
@@ -56,14 +50,10 @@ type Device struct {
 	issued     time.Time
 }
 
-// Vouches reports whether the cookie still speaks for account as it is now.
-//
-// The account must be the one the cookie was issued for — a login deleted and
-// taken by somebody else is a different account — and still active. Its
-// session generation must be unchanged, which a password change advances,
-// and so must the moment its status last changed, which a block, an unblock, a
-// deletion or a restore moves. Any of those is the account saying that
-// whatever vouched for it before does not now.
+// Vouches reports whether the cookie still speaks for account: the same
+// account id, still active, with an unchanged session generation (a password
+// change advances it) and status-change time (a block, unblock, delete or
+// restore moves it).
 func (d Device) Vouches(account users.User) bool {
 	return account.ID == d.accountID &&
 		account.IsActive() &&
@@ -71,27 +61,17 @@ func (d Device) Vouches(account users.User) bool {
 		statusMicros(account) == d.statusAt
 }
 
-// DeviceTrust issues and checks device cookies.
-//
-// The cookie is an HMAC over the account, a random device id, the issue time
-// and the account's current state, keyed by a server secret, rather than a
-// random token held in the cache. Nothing has to be stored for thirty days
-// per browser that ever signed in: the in-process cache would lose every
-// device on a restart and fill with them in between, and Redis would hold one
-// record per lab machine per student for a month. Revocation needs no store
-// either, because the account state is inside the MAC — see Device.Vouches.
-//
-// The login being tried is part of the MAC input but not of the cookie. A
-// cookie offered for any other login simply fails verification, before
-// anything is looked up, so a cookie for one account is no different from no
-// cookie at all for another.
+// DeviceTrust issues and checks device cookies: an HMAC over the account, a
+// random device id, the issue time and the account's state, so nothing is
+// stored per browser and revocation follows from the state (Device.Vouches).
+// The login is in the MAC input but not the cookie, so a cookie offered for
+// another login fails verification before any lookup.
 type DeviceTrust struct {
 	secret []byte
 	ttl    time.Duration
 	now    func() time.Time
 }
 
-// NewDeviceTrust returns device trust keyed by secret, for cookies living ttl.
 func NewDeviceTrust(secret []byte, ttl time.Duration) (*DeviceTrust, error) {
 	if len(secret) < MinDeviceSecretLength {
 		return nil, fmt.Errorf("device cookie secret must be at least %d bytes, got %d", MinDeviceSecretLength, len(secret))
@@ -106,12 +86,10 @@ func NewDeviceTrust(secret []byte, ttl time.Duration) (*DeviceTrust, error) {
 	}, nil
 }
 
-// TTL is how long a device cookie lives.
 func (d *DeviceTrust) TTL() time.Duration { return d.ttl }
 
 // Issue returns a cookie vouching that this browser signed in to account. A
-// zero id mints a new device; a known one keeps the browser's identity, and
-// with it its attempt counter, across sign-ins.
+// zero id mints a new device; a known one keeps its attempt counter.
 func (d *DeviceTrust) Issue(account users.User, id DeviceID) (string, error) {
 	if id == (DeviceID{}) {
 		if _, err := rand.Read(id[:]); err != nil {
@@ -131,10 +109,9 @@ func (d *DeviceTrust) Issue(account users.User, id DeviceID) (string, error) {
 		base64.RawURLEncoding.EncodeToString(d.mac(payload, account.Login)), nil
 }
 
-// Verify checks a cookie offered with an attempt to sign in as login. It
-// reports false for anything that is not a cookie this installation issued
-// for that login within its lifetime; what it returns is then still to be
-// checked against the account with Device.Vouches.
+// Verify checks a cookie offered to sign in as login, reporting false for
+// anything this installation did not issue for that login within its
+// lifetime. The result must still pass Device.Vouches.
 func (d *DeviceTrust) Verify(token, login string) (Device, bool) {
 	if token == "" || len(token) > maxDeviceTokenLength {
 		return Device{}, false
@@ -166,14 +143,12 @@ func (d *DeviceTrust) Verify(token, login string) (Device, bool) {
 	return device, true
 }
 
-// DueForRenewal reports whether a verified cookie has lived past half its
-// lifetime, the point from which a trusted sign-in renews it.
+// DueForRenewal reports whether a cookie has lived past half its lifetime.
 func (d *DeviceTrust) DueForRenewal(device Device) bool {
 	return d.now().Sub(device.issued) > d.ttl/2
 }
 
-// mac signs a payload for one login, normalised the way every lookup and
-// throttle key is, so "Ivanov" and "ivanov" are the same account here too.
+// mac signs a payload for one normalised login.
 func (d *DeviceTrust) mac(payload []byte, login string) []byte {
 	h := hmac.New(sha256.New, d.secret)
 	h.Write([]byte(deviceMACContext))
@@ -182,9 +157,8 @@ func (d *DeviceTrust) mac(payload []byte, login string) []byte {
 	return h.Sum(nil)
 }
 
-// statusMicros is the moment the account's status last changed, in the
-// precision the database keeps, or zero for an account whose status never
-// changed.
+// statusMicros is when the status last changed, in the database's
+// precision, or zero.
 func statusMicros(account users.User) int64 {
 	if account.StatusChangedAt == nil {
 		return 0

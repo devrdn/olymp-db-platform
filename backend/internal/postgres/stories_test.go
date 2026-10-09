@@ -9,11 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// What a single caller can observe of the story is the contract every
-// contests.StoryRepository and contests.StoryText answers to, the in-memory
-// one the service tests use included (conteststest.StoryRepositoryContract).
-// What the schema itself enforces (a translation going with its story) is not
-// part of it, and has no test here yet.
 func TestStoriesHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.StoryRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.StoryTarget)) {
 		withTx(t, func(ctx context.Context) {

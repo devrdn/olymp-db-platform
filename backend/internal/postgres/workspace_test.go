@@ -16,15 +16,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// workspaceRegistration enrols somebody inside the test transaction.
 func workspaceRegistration(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	user := makeUser(t, ctx, "workspace-"+uuid.NewString()[:8])
 	return makeRegistration(t, ctx, makeContest(t, ctx, user.ID), user.ID)
 }
 
-// numbered names a new tab "Tab N" after how many are already taken, so a test
-// can see the callback was handed the workspace's titles.
+// numbered names a new tab "Tab N" from the count of taken titles, so a test
+// can see the callback received them.
 func numbered(taken []string) string { return "Tab " + strconv.Itoa(len(taken)+1) }
 
 func tabTitles(tabs []workspace.Tab) []string {
@@ -63,9 +62,8 @@ func TestWorkspaceLoadCreatesTheFirstTabOnce(t *testing.T) {
 	})
 }
 
-// Two first loads at once — two browser tabs opened together — must not give
-// the participant two first tabs. Outside a rolled-back transaction, because
-// the race is between two connections.
+// Runs outside a rolled-back transaction: the race is between two
+// connections.
 func TestConcurrentFirstLoadsCreateOneTab(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	repo := NewWorkspace(testPool)
@@ -156,11 +154,7 @@ func TestWorkspaceTabsAreAppendedUpToTheLimit(t *testing.T) {
 	})
 }
 
-// The limit is counted under the lock that inserts: parallel creates cannot
-// each see room for one more.
-// A participant whose events are at the budget can still open a tab: the
-// event recording it is the server's own and is never refused for the budget,
-// and refused it used to fail the tab change with an internal error.
+// A tab event is the server's own and is never refused for the event budget.
 func TestATabIsCreatedWhenTheEventBudgetIsFull(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewWorkspace(testPool)
@@ -253,8 +247,6 @@ func TestWorkspaceTabUpdateChangesOnlyWhatItNames(t *testing.T) {
 	})
 }
 
-// Another participant's tab is invisible and untouchable: every write that
-// names it answers ErrTabNotFound and changes nothing.
 func TestAnotherParticipantsTabIsNotFoundAndUnchanged(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewWorkspace(testPool)
@@ -387,7 +379,6 @@ func TestWorkspaceReorderRewritesEveryPosition(t *testing.T) {
 	})
 }
 
-// The workspace belongs to the registration and goes with it.
 func TestTheWorkspaceIsDeletedWithTheRegistration(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewWorkspace(testPool)
@@ -416,8 +407,8 @@ func TestTheWorkspaceIsDeletedWithTheRegistration(t *testing.T) {
 	})
 }
 
-// The path the deployment uses: no transaction around the call, so the
-// repository opens its own for the writes that need one (CLAUDE.md rule 10).
+// The deployment calls with no transaction, so the repository opens its own
+// (CLAUDE.md rule 10).
 func TestWorkspaceWritesWorkWithNoTransactionAroundThem(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -447,10 +438,9 @@ func TestWorkspaceWritesWorkWithNoTransactionAroundThem(t *testing.T) {
 	}
 }
 
-// ageRevisions moves every revision of the registration back by age, so the
-// next save of a document starts a new one rather than folding into it: the
-// revision time is the transaction's own, and a test transaction does not
-// get thirty seconds older by waiting.
+// ageRevisions moves the registration's revisions back by age, so the next
+// save starts a new one: revision time is the transaction's now(), which does
+// not advance inside a test transaction.
 func ageRevisions(t *testing.T, ctx context.Context, registration uuid.UUID, age time.Duration) {
 	t.Helper()
 	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
@@ -615,9 +605,7 @@ func TestTheLifeOfATabIsRecordedAsEvents(t *testing.T) {
 	})
 }
 
-// The save and its revision are one transaction on the path the deployment
-// uses (no transaction around the call, CLAUDE.md rule 10): a revision that
-// cannot be stored takes the save back with it.
+// Called with no outer transaction, as deployed (CLAUDE.md rule 10).
 func TestASaveWhoseRevisionFailsIsNotSaved(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -653,9 +641,8 @@ func TestASaveWhoseRevisionFailsIsNotSaved(t *testing.T) {
 	}
 }
 
-// A rename that commits while a delete of the same tab waits for its row
-// records the title the tab really had when it was deleted, not the one the
-// delete read before it waited.
+// A rename committed while the delete waits for the row: the event records
+// the renamed title.
 func TestADeletedTabIsRecordedUnderTheTitleItWasDeletedWith(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -687,9 +674,8 @@ func TestADeletedTabIsRecordedUnderTheTitleItWasDeletedWith(t *testing.T) {
 	deleted := make(chan error, 1)
 	go func() { deleted <- repo.DeleteTab(ctx, registration, doomed.ID) }()
 
-	// Wait until a backend is blocked by the rename itself — only the delete
-	// can be, since nothing else touches this tab — so a lock wait anywhere
-	// else in the shared test database cannot end the wait early.
+	// Wait until a backend is blocked by the rename itself (only the delete
+	// can be), so an unrelated lock wait cannot end the wait early.
 	for {
 		var waiting bool
 		if err := testPool.QueryRow(ctx, `

@@ -14,8 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
-// Running it twice must be as good as running it once: it is applied on every
-// deploy, and a cluster that is already prepared is the normal case.
+// It runs on every deploy, so a prepared cluster is the normal case.
 func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	requireCluster(t)
 
@@ -28,13 +27,8 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	}
 }
 
-// The settings are defaults for a session, and a session can change most of
-// them. They are worth setting anyway — they bound the ordinary case — but the
-// tests below distinguish carefully between what they bound and what they
-// guarantee.
 func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
-	// A game database, not the maintenance one: the reader is deliberately
-	// barred from that, which the last test in database_test.go proves.
+	// The reader is barred from the maintenance database.
 	conn := connectAs(t, roleReader, testReaderPassword(t), scratchDatabase(t))
 
 	for setting, want := range map[string]string{
@@ -43,16 +37,8 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 		"idle_in_transaction_session_timeout": "5s",
 		"work_mem":                            "16MB",
 		"temp_file_limit":                     "64MB",
-		// Capped so a participant query occupies at most a leader plus one
-		// worker process, each under the per-process memory cap — the count the
-		// deployment's memory arithmetic is sized for (config.Runner). A
-		// participant cannot raise it: SET is not a statement the validator
-		// admits.
-		"max_parallel_workers_per_gather": "1",
-		// Bounds how long a backend keeps running after its client has gone,
-		// so an abandoned query does not hold a memory cap's worth of the
-		// cluster until statement_timeout.
-		"client_connection_check_interval": "250ms",
+		"max_parallel_workers_per_gather":     "1",
+		"client_connection_check_interval":    "250ms",
 	} {
 		t.Run(setting, func(t *testing.T) {
 			var got string
@@ -66,18 +52,9 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 	}
 }
 
-// This test asserts a limitation rather than a guarantee, deliberately.
-//
-// statement_timeout and default_transaction_read_only are USERSET: the session
-// can change them, and `SET` is itself SQL. So neither is a boundary against a
-// participant whose SQL reached the database unchecked — they are defaults
-// that bound the ordinary case. What actually stops a write is the absence of
-// a GRANT, which the next test proves, and what actually bounds time is the
-// Query Runner's own deadline on the connection, which no SQL can reach
-// (section 4.4).
-//
-// It is written down as a test because the alternative is that somebody later
-// reads `ALTER ROLE ... SET statement_timeout` and believes it is a limit.
+// This asserts a limitation: statement_timeout and
+// default_transaction_read_only are USERSET, so a session can `SET` them off.
+// Writes are stopped by missing GRANTs and time by the Query Runner's deadline.
 func TestWhatTheRoleSettingsDoNotGuarantee(t *testing.T) {
 	conn := connectAs(t, roleReader, testReaderPassword(t), scratchDatabase(t))
 
@@ -91,8 +68,7 @@ func TestWhatTheRoleSettingsDoNotGuarantee(t *testing.T) {
 		}
 	}
 
-	// temp_file_limit is the one that is not USERSET, so it is a real bound on
-	// disk spilled by a single query.
+	// temp_file_limit is not USERSET, so it is a real bound.
 	if _, err := conn.Exec(t.Context(), "SET temp_file_limit = -1"); err == nil {
 		t.Fatal("temp_file_limit became settable by the session; the disk bound is gone")
 	} else if !strings.Contains(err.Error(), "permission denied") {
@@ -124,14 +100,7 @@ func TestTheRolesExistAndCannotBecomeMore(t *testing.T) {
 	}
 }
 
-// Idempotent has to mean concurrent too.
-//
-// Two replicas of the job, a retry after a timeout, or simply `docker compose
-// up` next to somebody's manual run: two of these overlap and PostgreSQL
-// answers `tuple concurrently updated` — SQLSTATE XX000, an internal error
-// indistinguishable from a real fault. It was found by Go running two test
-// binaries against the same cluster at once, which is exactly the shape of the
-// production case.
+// Overlapping runs must queue, not fail with `tuple concurrently updated`.
 func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 	requireCluster(t)
 	pool := admin(t)
@@ -161,27 +130,15 @@ func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 	}
 }
 
-// `make test-game` must not lock out `make runner`.
-//
-// The tests and a development stack share one cluster and one pair of roles,
-// and every test run prepares those roles again. It used to prepare them with
-// passwords of the harness's own, so the first `make test-game` after a stack
-// was started took the Query Runner's credentials away from it — silently,
-// until a participant ran a query and the console answered with the cluster's
-// address. This asserts the property directly: after a test run has prepared
-// the cluster, the credentials the deployment uses still open a connection.
+// Tests and a development stack share the cluster and its roles, so a test
+// run must not change the passwords the running stack uses.
 func TestPreparingTheClusterForTestsLeavesTheDeploymentsCredentialsWorking(t *testing.T) {
-	// Scratch prepares the cluster on the way, so this is the state a test run
-	// leaves a developer's machine in.
+	// scratchDatabase prepares the cluster on the way.
 	database := scratchDatabase(t)
 
 	for _, role := range []struct{ name, variable string }{
 		{gamedb.RoleReader, "GAME_READER_PASSWORD"},
 		{gamedb.RoleWriter, "GAME_WRITER_PASSWORD"},
-		// The Core API's own credential on this cluster, and the same
-		// argument: a test run that changed it would leave a running `make
-		// run` unable to build a game, and nothing would say so until an
-		// organiser pressed the button.
 		{gamedb.RoleAuthor, "GAME_AUTHOR_PASSWORD"},
 	} {
 		t.Run(role.name, func(t *testing.T) {
@@ -196,16 +153,10 @@ func TestPreparingTheClusterForTestsLeavesTheDeploymentsCredentialsWorking(t *te
 	}
 }
 
-// The role an organiser's game script runs as, checked the same way the
-// participants' are: by reading what the cluster says it is rather than what
-// the deploy meant.
-//
-// Every attribute here is one the script would otherwise be able to use to get
-// out. SUPERUSER is the whole boundary; CREATEROLE is a superuser one ALTER
-// ROLE later; CREATEDB makes it the owner of databases it creates, and an
-// owner may DROP DATABASE. The role memberships are the other half: three
-// predefined roles hand out exactly the powers the COPY tests provoke, so a
-// membership in any of them would make those refusals lapse silently.
+// Each attribute and predefined-role membership checked here would let a game
+// script escape: CREATEROLE leads to superuser, CREATEDB to owning (and so
+// dropping) databases, and the predefined roles grant what the COPY tests
+// provoke.
 func TestTheAuthorRoleCannotBecomeMoreThanAnAuthor(t *testing.T) {
 	requireCluster(t)
 
@@ -250,18 +201,8 @@ func TestTheAuthorRoleCannotBecomeMoreThanAnAuthor(t *testing.T) {
 	}
 }
 
-// The author role's sessions are deliberately not bounded the way a
-// participant's are.
-//
-// A game script is one long run of DDL and INSERTs against a database nobody
-// is looking at; the five-second statement_timeout that is right for a
-// stranger's SELECT would fail every olympiad whose data takes longer than
-// that to load. What bounds a build instead is the deadline its caller puts on
-// the context, which is on the connection and cannot be `SET` away.
-//
-// Asserted rather than left implicit, because "0" here is a decision and an
-// inherited 5s would look exactly like one until an author's build started
-// timing out for no reason anybody could see.
+// A build is bounded by its caller's deadline; an inherited 5s would fail any
+// game whose data takes longer to load.
 func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
 	conn := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), scratchDatabase(t))
 
@@ -275,21 +216,9 @@ func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
 	}
 }
 
-// A role membership somebody granted is taken back by the next deploy, the
-// same way an attribute somebody granted is.
-//
-// prepareRole's ALTER names every attribute a role must *not* have precisely
-// so a cluster edited by hand during a contest is put back. A membership is
-// the same kind of edit and is invisible to that statement: the five
-// predefined roles PostgreSQL ships hand out exactly the powers a game script
-// must not have, and one GRANT makes every refusal in
-// TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo lapse while the
-// role still reads as NOSUPERUSER NOCREATEDB NOCREATEROLE.
-//
-// It is not hypothetical. A cluster that ran a game script before this
-// boundary existed ran it as a superuser, so `GRANT pg_read_server_files TO
-// game_author` inside one is a leftover an upgrade has to remove — and until
-// it does, the new role is the old hole under a new name.
+// A membership is invisible to prepareRole's ALTER, and one GRANT of a
+// predefined role would undo the refusals in
+// TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo.
 func TestPreparingTheClusterTakesBackARoleMembershipSomebodyGranted(t *testing.T) {
 	pool := admin(t)
 
@@ -323,23 +252,13 @@ func TestPreparingTheClusterTakesBackARoleMembershipSomebodyGranted(t *testing.T
 	}
 }
 
-// A backend whose client disappears without a goodbye — the Query Runner killed
-// mid-query, a dropped network — receives no Terminate and no CancelRequest.
-// Nothing then tells it the client is gone: with statement_timeout off it would
-// run for as long as its query does, holding a memory cap's worth of the
-// cluster. client_connection_check_interval on the participant roles is what
-// ends it: the backend polls its socket and gives up once the client is gone.
+// A backend whose client vanishes (runner killed, network dropped) gets no
+// Terminate or cancel; client_connection_check_interval must end it.
 //
-// The test reproduces exactly that, and has to go around the driver to do it:
-// pgconn, on any socket error in the middle of a query, sends a CancelRequest
-// before closing (its asyncClose), so closing the socket underneath pgconn is a
-// cancelled query, not a vanished client. Instead the connection is set up as
-// the reader with statement_timeout off, then hijacked — pgconn lets go of it —
-// and the long count(*) is written on the raw socket as a plain Query message.
-// The socket is then closed; no Terminate and no cancel can be sent, because
-// nothing that would send them still holds the connection. The backend must be
-// gone within a second. With the interval at 0 it is still running when the
-// test gives up (and is terminated by the cleanup).
+// pgconn sends a CancelRequest when its socket fails mid-query, so the test
+// hijacks the connection and writes the long query on the raw socket, then
+// closes it. With statement_timeout off, only the interval can stop the
+// backend.
 func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
 	database := scratchDatabase(t)
 	pool := admin(t)
@@ -349,8 +268,7 @@ func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
 		t.Fatalf("connecting as the reader: %v", err)
 	}
 	pid := conn.PID()
-	// Whatever the outcome, never leave a backend with no statement_timeout
-	// running on the test cluster.
+	// Never leave a backend without statement_timeout running.
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pid)
 	})
@@ -380,8 +298,7 @@ func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
 		}
 		return active
 	}
-	// Executing, not merely received: seen active on the long query, and still
-	// active a moment later.
+	// Executing, not merely received.
 	for deadline := time.Now().Add(5 * time.Second); !running(); time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("backend %d never started the long query", pid)
@@ -392,7 +309,6 @@ func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
 		t.Fatalf("backend %d stopped before the client went away", pid)
 	}
 
-	// The client vanishes.
 	if err := raw.Conn.Close(); err != nil {
 		t.Fatalf("closing the raw socket: %v", err)
 	}

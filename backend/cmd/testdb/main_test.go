@@ -7,9 +7,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 )
 
-// The command issues DROP DATABASE, so what it refuses matters more than what
-// it accepts: the product's own database, however the DSN is spelled, must
-// never get as far as a connection.
 func TestTargetRefusesADatabaseThatIsNotATestDatabase(t *testing.T) {
 	for name, dsn := range map[string]string{
 		"the product's database":     "postgres://dbcontest:secret@localhost:5432/dbcontest_core?sslmode=disable",
@@ -26,8 +23,6 @@ func TestTargetRefusesADatabaseThatIsNotATestDatabase(t *testing.T) {
 	}
 }
 
-// A DSN that names no database leaves the choice to the driver's defaults,
-// which is not a choice anybody made; refused.
 func TestTargetRefusesADSNThatNamesNoDatabase(t *testing.T) {
 	// Emptied, or the driver would fill the missing name in from it.
 	t.Setenv("PGDATABASE", "")
@@ -36,9 +31,6 @@ func TestTargetRefusesADSNThatNamesNoDatabase(t *testing.T) {
 	}
 }
 
-// The database to recreate is the one the DSN names; the connection that
-// recreates it goes to the same server's maintenance database, because
-// PostgreSQL cannot drop the database a session is in.
 func TestTargetConnectsToTheMaintenanceDatabaseOfTheSameServer(t *testing.T) {
 	cfg, name, err := target("postgres://dbcontest:secret@db.example:6543/dbcontest_core_test?sslmode=disable")
 	if err != nil {

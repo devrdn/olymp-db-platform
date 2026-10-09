@@ -1,41 +1,16 @@
-// Package filestore keeps small files in one directory on a volume and hands
-// them back by key.
+// Package filestore keeps small files (contest covers) in one directory on a
+// volume and hands them back by key. It does not know what the bytes are,
+// whom they belong to, or who may read them; that is the covers package and
+// internal/api. An object-store implementation would be a new type here.
 //
-// It answers: where do a contest's cover pictures live, how does a whole file
-// appear at once rather than in pieces, and how is a key kept from naming
-// anything outside the directory it belongs to. It deliberately does not
-// answer: what the bytes are, which contest they belong to, who may read
-// them, or what cache headers they are served with. Those belong to the
-// domain package that owns covers and to internal/api — this package knows
-// one directory and nothing above it.
+// Two security properties hold:
 //
-// It is infrastructure (CLAUDE.md, Go layout rule 7) and imports no domain
-// package. The consumer declares the narrow interface it needs and this
-// Store satisfies it structurally; nothing here is shared by importing.
-//
-// The design decision behind it is recorded in
-// docs/ARCHITECTURE.md §9.7: a directory
-// on a volume rather than a table in the database or an object store, which
-// adds no service, no credentials and no new way to fail to start. The cost
-// is named there too — a second API replica has a different disk — and this
-// package is the seam that pays it, since an object-store implementation of
-// the same port is a new type here and no change at all in the domain.
-//
-// Two properties hold, and both are security properties rather than
-// niceties:
-//
-//   - A key is a name, never a path. Keys arrive as content hashes chosen by
-//     code, but code that can be made to choose "../../etc/cron.d/x" turns an
-//     upload into a write anywhere this process can reach. checkKey allows
-//     one unqualified file name of a bounded length, built from an explicit
-//     set of characters, ending in an extension this package will serve.
-//   - A write is all or nothing. The bytes land in a temporary file in the
-//     same directory, are flushed to disk, and are moved into place with one
-//     rename. A reader therefore sees the whole file or no file — never a
-//     prefix of one. That matters more here than it usually does: a file is
-//     named by the hash of its content, so nothing will ever overwrite a
-//     truncated one, and a picture served short would be served short
-//     forever.
+//   - A key is a name, never a path. checkKey allows one unqualified file name
+//     of bounded length, from an explicit character set, with an extension
+//     this package serves.
+//   - A write is all or nothing: temp file in the same directory, sync, one
+//     rename. Files are named by content hash and never rewritten, so a
+//     truncated one would be served short forever.
 package filestore
 
 import (
@@ -48,44 +23,32 @@ import (
 	"strings"
 )
 
-// Sentinels for every refusal this package can hand to a caller (CLAUDE.md,
-// security rule 1). None is a bare errors.New at the call site: each is named
-// here so a handler's fail switch can map it to a status code rather than
-// collapsing a caller's own mistake into "internal error".
+// Sentinels for every refusal this package can hand to a caller (CLAUDE.md
+// security rule 1).
 var (
-	// ErrNotFound is a key the directory does not hold.
 	ErrNotFound = errors.New("file not found")
 
-	// ErrBadKey is a key that is not a name this store will use: empty, too
-	// long, carrying a path separator or any character outside the allowed
-	// set, or ending in an extension this store does not serve.
+	// ErrBadKey is a key that is not a name this store will use (see
+	// checkKey).
 	ErrBadKey = errors.New("key is not a valid file name")
 
-	// ErrTooLarge is a body — or a file already on the volume — beyond
+	// ErrTooLarge is a body, or a file already on the volume, beyond
 	// MaxFileBytes.
 	ErrTooLarge = errors.New("file exceeds the maximum size")
 )
 
-// MaxFileBytes bounds one file, in both directions (CLAUDE.md, security rule
-// 2). 8 MiB matches the largest upload the cover route accepts, and every
-// file this store actually holds is a re-encoded JPEG two orders of magnitude
-// below it: the ceiling is there to stop a caller that has lost track of what
-// it is writing, and to keep Get from reading an arbitrarily large file — one
-// an operator dropped onto the volume by hand — into the memory of the
-// process serving the olympiad.
+// MaxFileBytes bounds one file on write and on read (CLAUDE.md security rule
+// 2). It matches the largest cover upload; on read it stops Get loading a
+// large file an operator dropped onto the volume by hand.
 const MaxFileBytes = 8 << 20
 
-// maxKeyLen bounds a key. A content hash plus a size suffix and an extension
-// is about 70 characters; 128 leaves room for a naming scheme to grow and
-// stays far below every file system's own limit.
+// maxKeyLen bounds a key. Current keys are about 70 characters.
 const maxKeyLen = 128
 
-// servedTypes is the complete set of extensions this store accepts and the
-// content type each one is served as. It is an allowlist for a reason: the
-// files land in a directory the application serves from its own origin, and
-// a stored .html or .svg would be script running as the site. Deciding the
-// set here, once, also keeps the answer off mime.TypeByExtension, which
-// reads a table from the machine the process happens to run on.
+// servedTypes is the allowlist of extensions and the content type each is
+// served as. Files are served from the application's origin, so a stored .html
+// or .svg would be script running as the site. It also avoids
+// mime.TypeByExtension, which depends on the host's tables.
 var servedTypes = map[string]string{
 	".jpg":  "image/jpeg",
 	".jpeg": "image/jpeg",
@@ -93,29 +56,19 @@ var servedTypes = map[string]string{
 	".webp": "image/webp",
 }
 
-// Store is one directory on disk, addressed by key.
-//
-// It holds no state beyond the path: every call goes to the file system, so
-// nothing here has to be invalidated when another process — a backup, an
-// operator — touches the same directory.
+// Store is one directory on disk, addressed by key. It holds no state beyond
+// the path, so other processes may touch the directory freely.
 type Store struct {
 	dir string
 }
 
-// New prepares dir and returns a Store over it.
-//
-// The directory is created when it is missing, so an operator who mounted a
-// volume but never made the directory inside it gets a working service. It is
-// then probed for writability, because a directory that cannot be written to
-// must refuse at start-up and not on the day of the olympiad — and a
-// read-only mount stats perfectly well, so nothing short of a write proves
-// anything.
+// New creates dir if missing and probes it with a write, so an unwritable
+// directory fails at start-up rather than on the day of the olympiad.
 func New(dir string) (*Store, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("filestore: the directory must be named")
 	}
-	// 0o700: nothing outside this process has business in here. The
-	// application serves the files; the directory is not published.
+	// 0o700: the application serves the files; the directory is not published.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create the file directory %s: %w", dir, err)
 	}
@@ -126,20 +79,15 @@ func New(dir string) (*Store, error) {
 	return store, nil
 }
 
-// Dir is the directory the store writes to, for a log line at start-up.
 func (s *Store) Dir() string { return s.dir }
 
 // Put writes body under key, replacing whatever was there, as one step.
 //
-// contentType states what the caller believes it is writing. This store does
-// not keep it: a second file beside each picture is a second thing to write,
-// to back up, and to disagree with itself, so Get answers from the key's own
-// extension instead. The parameter stays part of the port because an
-// implementation that is not a directory — the object store the design spec
-// names for the day a second replica exists — stores it as object metadata
-// and needs it at exactly this call.
+// This store ignores contentType and answers Get from the key's extension. The
+// parameter is part of the port for an object-store implementation, which
+// keeps it as metadata.
 func (s *Store) Put(ctx context.Context, key string, contentType string, body []byte) error {
-	_ = contentType // see the doc comment above.
+	_ = contentType
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -150,36 +98,29 @@ func (s *Store) Put(ctx context.Context, key string, contentType string, body []
 		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, len(body), MaxFileBytes)
 	}
 
-	// In the same directory, so the rename below is a rename within one file
-	// system and therefore atomic. A temporary file elsewhere — /tmp, say —
-	// would make it a copy, which is exactly the torn write this avoids.
+	// In the same directory, so the rename stays within one file system and
+	// is atomic.
 	tmp, err := os.CreateTemp(s.dir, ".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create a temporary file in %s: %w", s.dir, err)
 	}
 	tmpName := tmp.Name()
-	// Removes the temporary file on every path that does not rename it away.
-	// After a successful rename the name no longer exists and this is a
-	// no-op, which is why the error is dropped.
+	// After a successful rename this is a no-op, hence the dropped error.
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if err := writeAndSync(tmp, body); err != nil {
 		return fmt.Errorf("write %s: %w", tmpName, err)
 	}
-	// CreateTemp makes the file 0o600; this is the same mode stated
-	// deliberately rather than inherited, so a change in the standard
-	// library's default cannot quietly widen it.
+	// Stated rather than inherited from CreateTemp's default.
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		return fmt.Errorf("set the mode of %s: %w", tmpName, err)
 	}
 	if err := os.Rename(tmpName, filepath.Join(s.dir, key)); err != nil {
 		return fmt.Errorf("move %s into place: %w", tmpName, err)
 	}
-	// The file's own contents are already on disk; this makes the directory
-	// entry that names them durable too, so a power loss cannot leave the
-	// database pointing at a cover whose name never reached the volume. A
-	// file system that cannot sync a directory is not an error here — the
-	// bytes are safe either way, and refusing the write would be worse.
+	// Sync the directory entry too, so a power loss cannot leave the database
+	// pointing at a name that never reached the volume. A file system that
+	// cannot sync a directory is not an error.
 	if dir, err := os.Open(s.dir); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
@@ -198,9 +139,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	}
 	path := filepath.Join(s.dir, key)
 
-	// The size is read from the file's metadata before any of it is
-	// allocated (CLAUDE.md, security rule 12): checking after os.ReadFile
-	// would be a limit applied to the bytes it exists to keep out.
+	// Size checked from metadata before allocating (CLAUDE.md rule 12).
 	info, err := os.Stat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -208,10 +147,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	case err != nil:
 		return nil, "", fmt.Errorf("stat %s: %w", key, err)
 	case info.IsDir():
-		// Nothing this package writes is a directory, so one under a valid
-		// key was put there by something else. Reporting it as absent is
-		// both true for this store's purposes and free of detail about the
-		// volume.
+		// A directory under a valid key was not written by this store.
 		return nil, "", fmt.Errorf("%w: %s", ErrNotFound, key)
 	case info.Size() > MaxFileBytes:
 		return nil, "", fmt.Errorf("%w: %s is %d bytes, limit %d", ErrTooLarge, key, info.Size(), MaxFileBytes)
@@ -228,11 +164,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	return body, servedTypes[strings.ToLower(filepath.Ext(key))], nil
 }
 
-// Delete removes the file stored under key.
-//
-// A key that is not there is not an error: the caller is a sweep for files no
-// contest refers to any more, and it has no use for the difference between
-// "nothing to do" and "already done".
+// Delete removes the file stored under key. A missing key is not an error.
 func (s *Store) Delete(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -246,29 +178,14 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// List reports every file in the directory that this store would serve.
+// List reports every file in the directory that this store would serve, for
+// the orphan sweep.
 //
-// It exists for one caller: the sweep that removes files no contest refers to
-// any more. That shapes two decisions.
-//
-// It returns fs.FileInfo rather than a type of this package's own, so that a
-// domain package can declare the narrow interface it needs over a standard
-// library type and this Store satisfies it without either importing the other
-// (CLAUDE.md, Go layout rules 3 and 7). The size and the modification time
-// come with it, and the second is what tells an upload in flight apart from
-// an orphan.
-//
-// It names only what checkKey accepts, so a listing a sweep acts on cannot
-// contain something that sweep must not delete. A subdirectory, a file an
-// operator left behind under another extension, and above all this package's
-// own .tmp-* and .probe-* files are left out: a temporary file is a write in
-// progress, and handing it to a caller that deletes what it is given would
-// make the sweep the one thing able to tear a Put.
-//
-// The whole directory is read in one call. The volume holds two files per
-// uploaded cover, so this is thousands of entries on a large installation and
-// not a size that needs paging; a sweep that had to page would also have to
-// decide what a file appearing between pages means.
+// It returns fs.FileInfo so a domain package can declare its own interface
+// without importing this one (CLAUDE.md layout rules 3 and 7); the
+// modification time tells an upload in flight from an orphan. It names only
+// what checkKey accepts, so this store's own .tmp-* and .probe-* files never
+// reach a caller that deletes what it is given.
 func (s *Store) List(ctx context.Context) ([]fs.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -285,16 +202,13 @@ func (s *Store) List(ctx context.Context) ([]fs.FileInfo, error) {
 		}
 		info, err := entry.Info()
 		if errors.Is(err, os.ErrNotExist) {
-			// Removed between the directory read and this stat. A file that
-			// is already gone is nothing for the caller to do.
+			// Removed since the directory read.
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("stat %s: %w", entry.Name(), err)
 		}
-		// Not entry.IsDir() twice over: the entry's own answer comes from the
-		// directory read, and on a file system that reports DT_UNKNOWN it is
-		// the stat above that knows.
+		// Checked again after stat: a file system may report DT_UNKNOWN.
 		if info.IsDir() {
 			continue
 		}
@@ -303,13 +217,9 @@ func (s *Store) List(ctx context.Context) ([]fs.FileInfo, error) {
 	return files, nil
 }
 
-// Ping reports whether the directory can still be written to.
-//
-// It writes and removes a probe file rather than stat-ing the directory,
-// because the failure worth catching — a volume that came back read-only, or
-// one that is full — is invisible to a stat. It leaves nothing behind: this
-// runs on every readiness probe, and a file per probe would fill the volume
-// it is checking.
+// Ping reports whether the directory can still be written to. It writes and
+// removes a probe file, because a read-only or full volume is invisible to a
+// stat.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -327,10 +237,8 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-// writeAndSync writes body to f, flushes it to the disk and closes f. The
-// sync is what makes Put's rename meaningful: renaming a file whose contents
-// are still only in the page cache would survive a crash as a name with no
-// bytes behind it.
+// writeAndSync writes body to f, syncs and closes it. Without the sync, a
+// renamed file could survive a crash as a name with no bytes behind it.
 func writeAndSync(f *os.File, body []byte) error {
 	write := func() error {
 		if _, err := f.Write(body); err != nil {
@@ -339,23 +247,16 @@ func writeAndSync(f *os.File, body []byte) error {
 		return f.Sync()
 	}
 	err := write()
-	// Closed on every path, and its own error reported when nothing worse
-	// happened first: a write that only fails at close is still a failed
-	// write.
+	// A write that only fails at close is still a failed write.
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	return err
 }
 
-// checkKey accepts exactly one unqualified file name.
-//
-// The rule is an allowlist, not a search for the patterns that are known to
-// escape: "is there a ../ in it" is a question with more right answers than
-// anyone can enumerate once separators, symbolic links and encodings are in
-// play, while "is every character one of these, and is the whole thing a
-// plain name" has one. A content hash with a size suffix and an extension
-// passes; nothing that could name a second directory does.
+// checkKey accepts exactly one unqualified file name. It is an allowlist of
+// characters rather than a search for escaping patterns, which cannot be
+// enumerated reliably.
 func checkKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: it is empty", ErrBadKey)
@@ -364,9 +265,7 @@ func checkKey(key string) error {
 		return fmt.Errorf("%w: %d characters, limit %d", ErrBadKey, len(key), maxKeyLen)
 	}
 	if key == "." || key == ".." || strings.HasPrefix(key, ".") {
-		// A leading dot is refused outright rather than only "." and "..":
-		// it is also what this package's own temporary and probe files are
-		// named with, and a key can never be allowed to name one of those.
+		// Any leading dot: it also marks this package's temp and probe files.
 		return fmt.Errorf("%w: %q is not a file name", ErrBadKey, key)
 	}
 	for _, r := range key {

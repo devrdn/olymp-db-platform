@@ -13,13 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The game's own lifecycle: the script an organiser writes and the build made
-// from it. Apart from gameinstances.go, which is the pool of copies that
-// lifecycle produces — one table, two jobs, and they run at different times
-// in a contest's life.
+// The game's lifecycle: the script an organiser writes and the build made from
+// it. The pool of copies it produces lives in gameinstances.go.
 
-// templateColumns is the row every read below returns, in one place so the
-// three of them cannot drift.
 const templateColumns = `contest_id, template_db, version, status,
 	init_script, coalesce(build_error, ''), updated_at, source, upload_id, definition_json, data_changed_at`
 
@@ -34,9 +30,7 @@ func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	}
 	t.Status = provisioning.TemplateStatus(status)
 	t.Source = provisioning.TemplateSource(source)
-	// Filled in here as well as by the status read below, so that a caller
-	// reading the length never has to know which of the two produced the row
-	// (Template.ScriptBytes' own doc).
+	// Set here too, so ScriptBytes is valid whichever read produced the row.
 	t.ScriptBytes = len(t.Script)
 	if len(definitionJSON) > 0 {
 		if err := json.Unmarshal(definitionJSON, &t.Definition); err != nil {
@@ -46,13 +40,9 @@ func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	return t, nil
 }
 
-// templateStatusColumns is templateColumns with the game's own content left
-// behind: octet_length in place of init_script, and no definition_json at all.
-//
-// The lengths agree by construction — octet_length is the byte length of the
-// text PostgreSQL would have sent, which is what len() of the Go string would
-// have measured — so a caller reading ScriptBytes gets the same number either
-// way.
+// templateStatusColumns is templateColumns without the content: octet_length
+// replaces init_script and definition_json is left out. octet_length equals
+// len() of the Go string, so ScriptBytes agrees between the two reads.
 const templateStatusColumns = `contest_id, template_db, version, status,
 	octet_length(init_script), coalesce(build_error, ''), updated_at, source, upload_id, data_changed_at`
 
@@ -69,22 +59,13 @@ func scanTemplateStatus(row pgx.Row) (provisioning.Template, error) {
 	return t, nil
 }
 
-// upsertGame is the one statement a contest's game is replaced through,
-// whichever produced it — an organiser's own script (SaveScript), a
-// completed upload (CompleteUpload, gameuploads.go) or a saved table-builder
-// definition (SaveDefinition). All three bump the version, clear the cached
-// schema and put the game back to pending, because all three are "the game
-// changed" to everything downstream: the pool tender, the build queue, a
-// participant's stale copy. Extracting this is the storage half of what
-// provisioning.Games.replaceGame does for the service layer — see its own
-// doc for why the three must not become three paths that drift.
+// upsertGame is the one statement that replaces a contest's game, whether from
+// a script, an upload or a builder definition. Each bumps the version, clears
+// the cached schema and puts the game back to pending.
 //
-// definitionJSON is nil for the other two sources, the same convention
-// uploadID already follows for anything that is not SourceFile: the ON
-// CONFLICT branch below overwrites definition_json unconditionally, which is
-// what clears a builder-sourced game's definition when it is replaced by a
-// script or an upload — the column pairing migration 26's own CHECK enforces
-// would otherwise be left describing a game this row no longer is.
+// definitionJSON is nil for non-builder sources, as uploadID is for non-file
+// ones. The upsert overwrites both unconditionally, so replacing a game clears
+// what no longer applies (migration 26 CHECKs the pairing).
 func (r *GameInstances) upsertGame(
 	ctx context.Context, contestID uuid.UUID, database, script, source string, uploadID *uuid.UUID, definitionJSON []byte,
 ) (provisioning.Template, error) {
@@ -111,33 +92,16 @@ func (r *GameInstances) upsertGame(
 }
 
 // SaveScript stores one contest's game script and puts the game back to
-// pending.
-//
-// An upsert that bumps the version, which is the whole mechanism behind a
-// rebuild: every instance carries the version it was copied from, so raising
-// it is what makes the existing copies stale and what has the pool tender
-// drop and remake them. It is also why provisioning.Games refuses this for a
-// contest that is already running.
-//
-// The cached schema is cleared in the same statement. It describes the build
-// being replaced, and the two columns are constrained to be null together
-// (migration 22).
+// pending. Raising the version makes every existing copy stale, so the pool
+// tender drops and remakes them. The cached schema is cleared with it; its two
+// columns must be null together (migration 22).
 func (r *GameInstances) SaveScript(ctx context.Context, contestID uuid.UUID, database, script string) (provisioning.Template, error) {
 	return r.upsertGame(ctx, contestID, database, script, string(provisioning.SourceEditor), nil, nil)
 }
 
-// SaveDefinition stores one contest's game as a structural description
-// (migration 26) and puts the game back to pending — the same upsertGame
-// statement SaveScript uses, with an empty script (SourceBuilder's own doc
-// explains why) and the definition encoded as jsonb in its place.
-//
-// Validation is the caller's: provisioning.Games.SetDefinition runs
-// Definition.Validate before this is ever reached, so a name that is not a
-// plain identifier or a definition past its bounds never gets this far.
-// json.Marshal here cannot itself fail on an already-validated Definition —
-// every field is a string, a bool, or a slice of those — so the error path
-// exists only for the encoder to have somewhere to report a future field
-// that broke that assumption.
+// SaveDefinition stores one contest's game as a builder definition, encoded as
+// jsonb with an empty script, and puts the game back to pending. The caller
+// must have run Definition.Validate.
 func (r *GameInstances) SaveDefinition(
 	ctx context.Context, contestID uuid.UUID, database string, definition provisioning.Definition,
 ) (provisioning.Template, error) {
@@ -161,10 +125,8 @@ func (r *GameInstances) Template(ctx context.Context, contestID uuid.UUID) (prov
 	return template, nil
 }
 
-// TemplateStatus reads one contest's game without its content — the read a
-// console polling a running build makes, twice a second, for as long as the
-// build lasts. See provisioning.TemplateRepository.TemplateStatus for why that
-// is a separate query rather than Template with a flag.
+// TemplateStatus reads one contest's game without its content, for a console
+// polling a running build.
 func (r *GameInstances) TemplateStatus(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
 	template, err := scanTemplateStatus(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+templateStatusColumns+` FROM game_templates WHERE contest_id = $1`, contestID))
@@ -177,18 +139,13 @@ func (r *GameInstances) TemplateStatus(ctx context.Context, contestID uuid.UUID)
 	return template, nil
 }
 
-// ClaimBuild takes one game waiting to be built and marks it building.
+// ClaimBuild takes one game waiting to be built and marks it building. FOR
+// UPDATE SKIP LOCKED keeps two workers from building one database and lets
+// the second take the next row without waiting.
 //
-// The conditional update is the race arbiter, the same one ClaimSpare uses
-// for a copy: two workers ticking at the same moment must not both run
-// CREATE DATABASE against one name. `FOR UPDATE SKIP LOCKED` is what makes
-// the second one take the next row rather than wait for the first.
-//
-// A game left in `building` for longer than stale is claimed too. An API that
-// died mid-build would otherwise leave it there for ever, with an organiser
-// watching a spinner that will never stop — and `updated_at` is touched by
-// nothing else while a build runs, so its age is exactly how long the build
-// has been going.
+// A game left building for longer than stale is claimed too, so a build whose
+// process died is retried. Nothing else touches updated_at during a build, so
+// its age is the build's duration.
 func (r *GameInstances) ClaimBuild(ctx context.Context, stale time.Duration) (provisioning.Template, error) {
 	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_templates SET status = 'building', updated_at = now()
@@ -210,12 +167,8 @@ func (r *GameInstances) ClaimBuild(ctx context.Context, stale time.Duration) (pr
 	return template, nil
 }
 
-// FinishBuild records how the build of one version ended.
-//
-// `version = $2` is what keeps a slow build from speaking for a newer script:
-// saving a script while a build runs already bumped the version, so the older
-// build's outcome matches nothing and is dropped rather than marking the new
-// script ready — or, worse, marking it failed with the old script's error.
+// FinishBuild records how the build of one version ended. The version check
+// discards the outcome of a build that a newer save has superseded.
 func (r *GameInstances) FinishBuild(
 	ctx context.Context, contestID uuid.UUID, version int, buildError string, claimedAt time.Time,
 ) error {
@@ -241,22 +194,10 @@ func (r *GameInstances) FinishBuild(
 	return nil
 }
 
-// RequestBuild puts a finished game back to pending so the build job takes it
-// again, raising the version the way SaveScript's own upsert does.
-//
-// The content is not touched. This is a request to build what is already
-// stored, not a replacement of it, so init_script, definition_json and
-// upload_id stay exactly as they are — which is also what makes it safe to
-// offer for all three sources rather than the builder alone.
-//
-// The status condition is the race arbiter, and the reason the caller's own
-// earlier check is not enough: two organisers pressing the button in the same
-// second both read 'ready', and only one of them may raise the version. The
-// other gets no row back, which the caller reads as ErrBuildInProgress.
-//
-// The cached schema goes for the reason upsertGame clears it: it describes the
-// build being replaced, and migration 22 constrains the two columns to be null
-// together.
+// RequestBuild puts a finished game back to pending and raises its version,
+// leaving the stored content untouched. The status condition settles a race
+// between two requests: only one raises the version, and the other gets
+// ErrBuildInProgress. The cached schema is cleared as in upsertGame.
 func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
 	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_templates
@@ -277,14 +218,9 @@ func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID) (
 	return template, nil
 }
 
-// Policy is what a contest lets participants do, which is what the build
-// grants inside the template.
-//
-// The same coalesced defaults Game() reads, and deliberately a separate query
-// rather than a call to it: Game() answers only for a template that is
-// already 'ready', which is precisely the state a build is not in, so reading
-// the policy through it would have meant every first build granting the
-// defaults instead of what the organiser configured.
+// Policy is a contest's SQL policy, which the build grants inside the
+// template. It does not go through Game, which answers only for a ready
+// template and so never during a first build.
 func (r *GameInstances) Policy(ctx context.Context, contestID uuid.UUID) (sqlpolicy.Policy, error) {
 	var policy sqlpolicy.Policy
 	var mode string
@@ -304,13 +240,9 @@ func (r *GameInstances) Policy(ctx context.Context, contestID uuid.UUID) (sqlpol
 	return policy, nil
 }
 
-// GameEditable reports whether a contest's game may still be replaced.
-//
-// The rule is contests.Contest.ContentEditable — a draft or a published
-// contest and nothing later — spelled once here as SQL so that provisioning
-// can ask without importing the contests package. gametemplates_test.go walks
-// every status and insists the two agree, which is the only thing that stops
-// them drifting.
+// GameEditable reports whether a contest's game may still be replaced. It
+// repeats contests.Contest.ContentEditable in SQL so provisioning need not
+// import contests; a test keeps the two in step.
 func (r *GameInstances) GameEditable(ctx context.Context, contestID uuid.UUID) (bool, error) {
 	var editable bool
 	err := r.querier(ctx).QueryRow(ctx,

@@ -10,9 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// inUnitOfWork is a context carrying the same marker the fixture's unit of
-// work puts on one, which is what the fakes that refuse to run outside a
-// transaction look for.
+// inUnitOfWork carries the fixture's transaction marker, which the
+// transaction-only fakes require.
 func inUnitOfWork() context.Context {
 	return context.WithValue(context.Background(), txKey{}, true)
 }

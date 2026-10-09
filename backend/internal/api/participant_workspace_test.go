@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// send makes a request with a JSON body (or none, for an empty body).
+// send makes a request; an empty body sends none.
 func (f *participantFixture) send(method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("User-Agent", fixtureUserAgent)
@@ -72,8 +72,8 @@ func expectStatus(t *testing.T, rec *httptest.ResponseRecorder, status int, code
 	}
 }
 
-// workspaceContest stages a running contest in English and Russian and
-// returns the /play prefix for it.
+// workspaceContest stages a running contest in English and Russian and returns
+// its /play prefix.
 func (f *participantFixture) workspaceContest(t *testing.T) string {
 	t.Helper()
 	contestID := uuid.New()
@@ -85,7 +85,6 @@ func (f *participantFixture) workspaceContest(t *testing.T) string {
 	return "/contests/" + contestID.String() + "/play"
 }
 
-// loadWorkspace reads the workspace and returns it.
 func (f *participantFixture) loadWorkspace(t *testing.T, play string) workspaceBody {
 	t.Helper()
 	rec := f.get(play + "/workspace")
@@ -121,8 +120,6 @@ func TestTheWorkspaceStartsWithOneTabNamedInTheRequestsLanguage(t *testing.T) {
 	}
 }
 
-// Reading the workspace is not reading the contest: it starts no clock, and
-// it is charged to the read budget every participant read spends.
 func TestReadingTheWorkspaceStartsNoClockAndSpendsTheReadBudget(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -159,9 +156,8 @@ func TestNotesAreSavedAndReadBack(t *testing.T) {
 	}
 }
 
-// The interface compares updated_at for equality to decide whether a draft
-// was written against the copy the server still holds, so the version has to
-// keep every digit the database stores, not just whole seconds.
+// The interface compares updated_at for equality to detect a stale draft, so
+// the version must keep every digit the database stores.
 func TestWorkspaceVersionsKeepSubsecondPrecision(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -289,9 +285,7 @@ func TestTheEleventhTabIsA409(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPost, play+"/tabs", `{}`), http.StatusConflict, "workspace_tab_limit")
 }
 
-// Writes have a budget of their own, spent before anything is looked up, and
-// never the read budget the SQL console shares: autosave must not take a
-// participant's queries away from them.
+// Autosave must not spend the read budget the SQL console shares.
 func TestWritesPastTheirRateAreA429BeforeAnyLookup(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -329,7 +323,6 @@ func TestWritesPastTheirRateAreA429BeforeAnyLookup(t *testing.T) {
 	}
 }
 
-// A write never starts the participant's clock: only reading the contest does.
 func TestAWriteStartsNoClock(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -340,9 +333,8 @@ func TestAWriteStartsNoClock(t *testing.T) {
 	}
 }
 
-// The workspace is admitted exactly as the rest of /play is: once the
-// contest has ended for the participant, every workspace route — the read and
-// each write — answers as /play/story does.
+// Once the contest has ended for the participant, every workspace route answers
+// as /play/story does.
 func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
@@ -388,8 +380,7 @@ func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPut, "/contests/not-a-uuid/play/notes", `{"body":"x"}`), http.StatusBadRequest, "invalid_contest_id")
 }
 
-// failingWorkspace is the in-memory store, failing every call once err is
-// set.
+// failingWorkspace is the in-memory store, failing every call once err is set.
 type failingWorkspace struct {
 	*workspacetest.Repository
 	err error
@@ -409,7 +400,6 @@ func (s *failingWorkspace) SaveNotes(ctx context.Context, registration uuid.UUID
 	return s.Repository.SaveNotes(ctx, registration, body)
 }
 
-// A store that fails is an internal error, never one of the caller's codes.
 func TestAWorkspaceStorageFailureIsA500(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -419,8 +409,7 @@ func TestAWorkspaceStorageFailureIsA500(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusInternalServerError, "internal_error")
 }
 
-// A workspace write is admitted apart from the reads, and is observed like
-// them: autosave is the participant using the registration too.
+// Autosave is the participant using the registration too.
 func TestAWorkspaceWriteIsObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)

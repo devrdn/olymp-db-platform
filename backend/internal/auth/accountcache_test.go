@@ -17,9 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// switchableCache passes through to an in-process store until failing is set,
-// and then fails every read and write — an unreachable Redis, in effect. It
-// also records the lifetime of every write.
+// switchableCache fails every call once failing is set, like an unreachable
+// Redis, and records each write's lifetime.
 type switchableCache struct {
 	cache.Cache
 
@@ -116,8 +115,6 @@ func TestAStoredAccountIsReadBackWithWhatAuthenticationDecidesOn(t *testing.T) {
 }
 
 func TestTheCachedAccountCarriesNoCredentialOrPersonalDetail(t *testing.T) {
-	// The copy is read by nothing but the middleware; the digest and the
-	// contact details have no business sitting in a shared store for it.
 	accounts, c := newTestAccountCache(t, 5*time.Second)
 	ctx := context.Background()
 	account := testAccount()
@@ -151,10 +148,8 @@ func TestForgetMakesTheCachedAccountUnreachable(t *testing.T) {
 }
 
 func TestForgetOutrunsARequestThatReadTheAccountBeforeTheChange(t *testing.T) {
-	// The race a plain delete loses: a request reads the old row, the change
-	// commits and the entry is deleted, and then that request writes the old
-	// row back. Its write lands under the generation it started with, which
-	// Forget has already replaced, so nobody reads it.
+	// The race a plain delete loses: the stale write lands under the old
+	// generation, which nobody reads.
 	accounts, _ := newTestAccountCache(t, 5*time.Second)
 	ctx := context.Background()
 	stale := testAccount()
@@ -200,8 +195,6 @@ func TestACachedAccountIsNeverServedForAnotherUser(t *testing.T) {
 		t.Fatal("one account's entry answered a lookup for another")
 	}
 
-	// An entry that somehow landed under the wrong key — a bug elsewhere, a
-	// hand-edited store — names its own user, and is refused for anyone else.
 	_, _, otherSlot := accounts.lookup(ctx, other.ID)
 	raw, _, _ := c.Cache.Get(ctx, slot.key)
 	if err := c.Cache.Set(ctx, otherSlot.key, raw, time.Minute); err != nil {
@@ -251,8 +244,6 @@ func TestAGarbledGenerationIsAMissAndIsNotWrittenUnder(t *testing.T) {
 }
 
 func TestAnUnreachableCacheIsAMissThatWritesNothing(t *testing.T) {
-	// Failing safe here means falling back to the database, never serving
-	// something half-read and never guessing at a generation.
 	accounts, c := newTestAccountCache(t, 5*time.Second)
 	ctx := context.Background()
 	account := testAccount()
@@ -308,8 +299,6 @@ func TestTheEntryLivesForTheConfiguredLifetimeAndNoLonger(t *testing.T) {
 }
 
 func TestTheGenerationOutlivesAnyEntryWrittenBeforeIt(t *testing.T) {
-	// When a generation lapses the account reads the first one again, so an
-	// entry written under the first must be long gone by then.
 	accounts, c := newTestAccountCache(t, 5*time.Second)
 	accounts.Forget(context.Background(), []uuid.UUID{uuid.New()})
 

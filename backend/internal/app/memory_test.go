@@ -11,9 +11,7 @@ import (
 )
 
 func TestAMemoryLimitBelowWhatHashingNeedsIsWarnedAbout(t *testing.T) {
-	// Four hashing slots are 256 MiB on top of the base; a limit of 512 MiB
-	// leaves the collector fighting a target it cannot meet during a burst of
-	// sign-ins, and an operator should hear that at start-up.
+	// Four slots need 256 MiB on top of the base, so 512 MiB is too low.
 	var buf bytes.Buffer
 	log := logging.New("info", &buf)
 

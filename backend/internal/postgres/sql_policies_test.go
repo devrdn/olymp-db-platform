@@ -10,10 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// What a single caller can observe of the SQL policy is the contract every
-// contests.PolicyStore answers to, the in-memory one the service tests use
-// included (conteststest.PolicyStoreContract). What the table refuses by
-// constraint is not part of it, and has no test here yet.
+// The shared contract also run against the in-memory store. Table
+// constraints are not covered yet.
 func TestSQLPoliciesHonoursTheStoreContract(t *testing.T) {
 	conteststest.PolicyStoreContract(t, func(t *testing.T, run func(context.Context, conteststest.PolicyTarget)) {
 		withTx(t, func(ctx context.Context) {

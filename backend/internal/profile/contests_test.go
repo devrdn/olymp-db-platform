@@ -9,8 +9,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/profile"
 )
 
-// enrol adds a contest of the given status to what the store answers with,
-// carrying the own result storage computed for it, and returns the contest.
 func (r *rig) enrol(t *testing.T, status string, result profile.Result) (contests.Contest, contests.Participant) {
 	t.Helper()
 	c, p := r.seed(t, status)
@@ -19,7 +17,6 @@ func (r *rig) enrol(t *testing.T, status string, result profile.Result) (contest
 	return c, p
 }
 
-// scored is the result storage reads for a points contest.
 func scored(points, solved int) profile.Result {
 	return profile.Result{Scoring: contests.ScoringPoints, Points: points, Solved: solved}
 }
@@ -47,14 +44,9 @@ func TestTheListIsOneReadHoweverManyContests(t *testing.T) {
 	}
 }
 
-// The list names no place, and costs no standings computation to say so: a
-// place would mean a whole table per contest to decorate an overview
-// (design §2.1). It says whether the table is open, and the report has the
-// place.
 func TestTheListNamesNoPlaceAndAsksTheLeaderboardNothing(t *testing.T) {
 	r := newRig(t)
 	c, _ := r.enrol(t, contests.StatusFinished, scored(20, 2))
-	// A standing is on offer, and must not be taken.
 	r.results.own[c.ID] = leaderboard.Own{State: leaderboard.StateFinal, Open: true, Place: 2, Participants: 9}
 
 	rows, _, err := r.service.Contests(t.Context(), r.user)
@@ -73,7 +65,6 @@ func TestTheListNamesNoPlaceAndAsksTheLeaderboardNothing(t *testing.T) {
 	}
 }
 
-// A running contest is a link and nothing else: no result and no state.
 func TestARunningContestCarriesNoResult(t *testing.T) {
 	r := newRig(t)
 	r.now = start.Add(time.Hour)
@@ -88,9 +79,6 @@ func TestARunningContestCarriesNoResult(t *testing.T) {
 	}
 }
 
-// The list answers "is it over" by the same rule as Open: a running contest
-// at its deadline is still being taken, and carries no result until the
-// grace has gone by too.
 func TestARunningContestCarriesNoResultUntilTheGraceHasGoneBy(t *testing.T) {
 	for name, given := range map[string]struct {
 		now      time.Time
@@ -124,8 +112,6 @@ func TestARunningContestCarriesNoResultUntilTheGraceHasGoneBy(t *testing.T) {
 	}
 }
 
-// The freeze is not walked round: the participant's own numbers are shown,
-// and the row says the table is not open.
 func TestAFrozenContestShowsTheOwnResultAndSaysTheTableIsShut(t *testing.T) {
 	r := newRig(t)
 	freeze := 30
@@ -147,8 +133,6 @@ func TestAFrozenContestShowsTheOwnResultAndSaysTheTableIsShut(t *testing.T) {
 	}
 }
 
-// An organiser revealing the freeze opens the table, and the row says so
-// without the list learning anything else about it.
 func TestARevealedFreezeOpensTheListsRow(t *testing.T) {
 	r := newRig(t)
 	freeze, revealed := 30, end.Add(time.Minute)

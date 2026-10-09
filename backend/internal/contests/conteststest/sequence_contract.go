@@ -9,39 +9,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// SequenceTarget is what one case of the contract runs against: a gate over a
-// contest with no questions yet, and the repositories that write what it
-// reads. The real gate derives its answer from the questions and submissions
-// tables, so the contract arranges state the way production does — questions
-// through QuestionRepository, answers through SubmissionRepository.Insert —
-// and never through anything only a fake could offer.
+// SequenceTarget is a gate over a contest with no questions yet, and the
+// repositories that write what it reads. State is arranged only through those
+// repositories, as in production, never through anything only a fake offers.
 type SequenceTarget struct {
-	Gate        contests.SequentialGate
-	Questions   contests.QuestionRepository
-	Submissions contests.SubmissionRepository
-	// ContestID is the contest questions are created in, and RegistrationID
-	// a participant registered for it.
-	ContestID      uuid.UUID
-	RegistrationID uuid.UUID
-	// NewRegistration registers another participant for the same contest
-	// and returns the registration.
+	Gate            contests.SequentialGate
+	Questions       contests.QuestionRepository
+	Submissions     contests.SubmissionRepository
+	ContestID       uuid.UUID
+	RegistrationID  uuid.UUID
 	NewRegistration func() uuid.UUID
-	// NewContest creates another contest and returns its identifier.
-	NewContest func() uuid.UUID
-	// Now is what the submission store's clock reads, which is what an
-	// answer's deadline is checked against.
+	NewContest      func() uuid.UUID
+	// Now is the submission store's clock, which deadlines are checked
+	// against.
 	Now func() time.Time
 }
 
-// SequentialGateContract is what every contests.SequentialGate must do, run as
-// subtests against one implementation. Both the in-memory SequentialProgress
-// and postgres.Sequence run it, so the gate the service tests trust and the
-// gate production uses are held to the same answers: a rule the fake got
-// wrong would otherwise pass every service test and fail only in a contest.
-//
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repositories with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here.
+// SequentialGateContract is what every contests.SequentialGate must do; both
+// the in-memory SequentialProgress and postgres.Sequence run it. each prepares
+// a fresh target for one case, calls run with it, and cleans up.
 func SequentialGateContract(t *testing.T, each func(t *testing.T, run func(context.Context, SequenceTarget))) {
 	type shape struct {
 		contest     uuid.UUID
@@ -70,8 +56,8 @@ func SequentialGateContract(t *testing.T, each func(t *testing.T, run func(conte
 		t.Helper()
 		return create(t, ctx, target, shape{maxAttempts: &max})
 	}
-	// answer records one answer the way Submit does, carrying the question's
-	// own cap so the write is refused exactly where Submit's would be.
+	// answer records one answer the way Submit does, with the question's cap,
+	// so the write is refused where Submit's would be.
 	answer := func(t *testing.T, ctx context.Context, target SequenceTarget, registration uuid.UUID, q contests.Question, correct bool) {
 		t.Helper()
 		if _, err := target.Submissions.Insert(ctx, contests.SubmissionRequest{
@@ -102,8 +88,6 @@ func SequentialGateContract(t *testing.T, each func(t *testing.T, run func(conte
 		}
 		return got
 	}
-	// expectOpen and expectFrontier ask on behalf of the target's own
-	// participant in the target's own contest.
 	expectOpen := func(t *testing.T, ctx context.Context, target SequenceTarget, ord int, want bool, why string) {
 		t.Helper()
 		if got := open(t, ctx, target, target.RegistrationID, target.ContestID, ord); got != want {
@@ -261,9 +245,8 @@ func SequentialGateContract(t *testing.T, each func(t *testing.T, run func(conte
 			q2 := question(t, ctx, target)
 			answer(t, ctx, target, target.RegistrationID, q1, true)
 
-			// The other contest's question holds position 1 there and is
-			// unanswered, which would stand before question 2 here were the
-			// contests not kept apart.
+			// Unanswered at position 1 there, it would block question 2 here
+			// if the contests were not kept apart.
 			if elsewhere.Ord != 1 {
 				t.Fatalf("the other contest's question has position %d, want 1", elsewhere.Ord)
 			}

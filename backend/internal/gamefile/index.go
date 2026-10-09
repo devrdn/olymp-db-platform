@@ -13,17 +13,12 @@ import (
 	"path/filepath"
 )
 
-// indexInterval is how often the line index records a byte offset: every
-// 1000th line, so that reading "lines 1,200,000-1,200,200" means seeking to
-// the mark at line 1,200,001 and reading forward two hundred lines, never
-// reading the gigabyte that precedes them.
+// indexInterval is how many lines apart the line index records a byte offset,
+// so a window seeks near its first line instead of reading from the start.
 const indexInterval = 1000
 
-// scanBufferSize bounds how much of the data file buildIndex holds at once
-// while it scans for line boundaries and feeds the hash. It is fixed
-// regardless of how large the file — or any single line inside it — is,
-// which is what makes one sequential pass over a multi-gigabyte dump safe to
-// run in this process at all (CLAUDE.md rule 12).
+// scanBufferSize is all buildIndex holds of the data file at once, however
+// large the file or any line in it (CLAUDE.md rule 12).
 const scanBufferSize = 1 << 20 // 1 MiB
 
 // indexMagic tags an index file so a stray file of the wrong shape fails
@@ -43,28 +38,14 @@ type fileIndex struct {
 	totalLines int64
 }
 
-// buildIndex reads f from the start to the end exactly once, computing the
-// SHA-256 of its bytes and the line index together. f's position is left at
-// EOF; callers that need it from the start again must Seek.
+// buildIndex reads f once from the start, computing its SHA-256 and line
+// index together, and leaves f at EOF. Only a line-start flag crosses chunk
+// boundaries, so a line of any length costs nothing beyond scanBufferSize.
 //
-// The scan never buffers a whole line: it walks each chunk from one '\n' to
-// the next, and what crosses a chunk boundary is just an integer state (are
-// we at the start of a line right now) rather than any accumulated bytes. A
-// single line of several gigabytes costs this function nothing beyond
-// scanBufferSize.
-//
-// The newline hunt is bytes.IndexByte and not a `for i, b := range chunk`
-// comparing every byte. The two are not close: measured on a gibibyte, the
-// byte-at-a-time loop runs at 1.26 GiB/s against IndexByte's 6.51 GiB/s
-// (IndexByte is assembly using the machine's vector registers), while the
-// sha256 this pass computes alongside it manages 2.26 GiB/s. So the naive
-// loop was not a detail next to the hashing — it was the larger half of the
-// pass, about 44% of its CPU spent finding newlines. It matters because this
-// runs synchronously inside the HTTP request that completes an upload: for a
-// three-gigabyte dump that is the difference between a handful of seconds and
-// twenty, on the API process serving the olympiad, and "one sequential pass"
-// above is a promise about I/O that should not quietly also mean one occupied
-// core for twenty seconds.
+// Newlines are found with bytes.IndexByte, not a byte loop: measured at
+// 6.5 GiB/s against 1.3 GiB/s, while SHA-256 runs at 2.3 GiB/s. This runs
+// inside the request that completes an upload, so for a 3 GB dump the byte
+// loop would cost about twenty seconds of a core instead of a few.
 func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return fileIndex{}, [sha256.Size]byte{}, err
@@ -86,10 +67,8 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 		if n > 0 {
 			chunk := buf[:n]
 			for pos := 0; pos < len(chunk); {
-				// A mark is recorded on the first byte of a line, never on
-				// the newline that ended the previous one — so a file whose
-				// last byte is '\n' records no mark for the line that never
-				// began, exactly as the byte-at-a-time version did.
+				// Marks go on a line's first byte, so a trailing '\n'
+				// records no mark for a line that never began.
 				if atLineStart {
 					if lineNo%indexInterval == 0 {
 						idx.marks = append(idx.marks, offset+int64(pos))
@@ -98,9 +77,6 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 				}
 				nl := bytes.IndexByte(chunk[pos:], '\n')
 				if nl < 0 {
-					// The rest of this chunk is one unterminated line so far;
-					// whether it is really the file's last is settled after
-					// the loop, by sawContent.
 					sawContent = true
 					break
 				}
@@ -109,9 +85,7 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 				sawContent = false
 				pos += nl + 1
 			}
-			// hash.Hash.Write never returns an error (documented on the
-			// interface); there is nothing here to check.
-			_, _ = h.Write(chunk)
+			_, _ = h.Write(chunk) // hash.Hash.Write never returns an error
 			offset += int64(n)
 		}
 		if rerr == io.EOF {
@@ -124,9 +98,7 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 
 	idx.totalLines = lineNo
 	if sawContent {
-		// The file has trailing bytes after the last '\n' (or none at all):
-		// a final line that never got terminated still counts.
-		idx.totalLines++
+		idx.totalLines++ // an unterminated last line still counts
 	}
 	idx.totalBytes = offset
 
@@ -135,32 +107,16 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 	return idx, sum, nil
 }
 
-// indexTempPattern is the name CreateTemp is asked for, and the glob
-// clearIndexTemps looks for. One constant, because a leftover is only ever
-// found by the same shape that made it.
+// indexTempPattern is both the CreateTemp pattern and the glob that finds
+// leftovers of it.
 const indexTempPattern = ".tmp-*"
 
-// clearIndexTemps removes every temporary index file left next to path.
-//
-// writeIndex's create-then-rename is atomic for the *index*: a process killed
-// mid-write leaves the previous index or none, never a torn one. What it is
-// not is complete: the temporary file it was writing survives, and nothing
-// used to look for one. Abort removes an upload's data and index by name;
-// Store.UploadIDs — which is how the provisioning janitor discovers what the
-// volume holds — only ever names data files, by construction (its own doc).
-// So a killed Complete left bytes that no code path could ever name again,
-// on a volume sized for multi-gigabyte dumps, and every one of them still
-// counted against MaxDirBytes because usage() sums every regular file it
-// finds.
-//
-// Called from the two places that hold the per-id lock and know the id is
-// theirs to tidy: writeIndex, about to make a temporary file for this very
-// path, and Abort, retiring the upload altogether. Failures are reported, not
-// swallowed — a directory this process cannot clean up is the thing the
-// caller is being asked about.
+// clearIndexTemps removes temporary index files left next to path by a
+// writeIndex that was killed before its rename. Nothing else can name them
+// (UploadIDs lists data files only), yet they count against MaxDirBytes.
+// Callers hold the per-id lock.
 func clearIndexTemps(path string) error {
-	// path is built by Store.indexPath from an id validateUploadID has
-	// already passed, so it carries no glob metacharacter of its own.
+	// path comes from a validated id, so it holds no glob metacharacters.
 	leftovers, err := filepath.Glob(path + indexTempPattern)
 	if err != nil {
 		return fmt.Errorf("gamefile: list leftover index files: %w", err)
@@ -173,31 +129,12 @@ func clearIndexTemps(path string) error {
 	return nil
 }
 
-// writeIndex persists idx next to the data file it describes. It writes to
-// a temporary file in the same directory and renames it into place, so a
-// process killed mid-write leaves either the previous index or none, never
-// a truncated one that Window would misread.
-//
-// What that leaves behind is the temporary file itself, which is why this
-// starts by clearing any from an earlier interrupted attempt at the same
-// index — see clearIndexTemps.
-//
-// The marks slice is proportional to totalLines/indexInterval, not to
-// totalBytes — for a several-gigabyte dump with short lines that is still
-// only tens of thousands of int64s, comfortably a bounded, small structure
-// rather than a second copy of the file.
+// writeIndex persists idx next to its data file via a temporary file and a
+// rename, so a killed process leaves the previous index or none, never a torn
+// one.
 func writeIndex(path string, idx fileIndex) error {
-	// buildIndex only ever produces non-negative totals and marks: offset
-	// and lineNo both start at zero and only ever increase over a
-	// sequential read of the file (buildIndex's own doc), so none of these
-	// checks can actually fire today. They are written anyway, rather than
-	// left as a comment's assertion, for two reasons: it is what the
-	// int64->uint64 conversions below need to be a verified fact instead of
-	// an assumption (gosec G115), and if buildIndex ever did produce a
-	// negative value — a future refactor that lets offset wrap, say — this
-	// is what turns that bug into an error here instead of a silent write
-	// of a huge unsigned offset that markOffset would have to catch on the
-	// read side instead.
+	// buildIndex never produces negative values; the checks make the uint64
+	// conversions below verified (gosec G115).
 	if idx.totalBytes < 0 || idx.totalLines < 0 {
 		return fmt.Errorf("gamefile: index has a negative total (bytes=%d lines=%d)", idx.totalBytes, idx.totalLines)
 	}
@@ -228,10 +165,6 @@ func writeIndex(path string, idx fileIndex) error {
 
 	var markBuf [8]byte
 	for _, m := range idx.marks {
-		// Same invariant as totalBytes/totalLines above, checked per mark
-		// rather than once: every mark is an offset buildIndex recorded
-		// while walking forward through the file, so it can never be
-		// negative either.
 		if m < 0 {
 			_ = tmp.Close()
 			return fmt.Errorf("gamefile: index has a negative mark (%d)", m)
@@ -253,61 +186,33 @@ func writeIndex(path string, idx fileIndex) error {
 	return os.Rename(tmpName, path)
 }
 
-// indexHeader is the fixed-size prefix of an index file, read without
-// touching the marks that follow it.
+// indexHeader is the fixed-size prefix of an index file.
 type indexHeader struct {
 	totalBytes int64
 	totalLines int64
 	markCount  int64
 }
 
-// maxMarkCount bounds markCount before readIndexHeader multiplies it by 8 to
-// compute the file size a genuine index of that shape would have: it is the
-// largest value for which indexHeaderSize+markCount*8 still fits in an
-// int64, so that multiplication can never wrap and turn a wildly-too-large
-// markCount into a small number that happens to match the file on disk.
+// maxMarkCount is the largest markCount for which indexHeaderSize+markCount*8
+// fits in an int64, so the size check cannot overflow.
 const maxMarkCount = (math.MaxInt64 - indexHeaderSize) / 8
 
-// readIndexHeader reads and validates the header of an already-open index
-// file, leaving its position just past the header, ready for markOffset to
-// seek relative to.
+// readIndexHeader reads and validates the header of an open index file.
 //
-// The index is a file on local disk next to the upload it describes, not a
-// value this package fully controls end to end: disk corruption, a killed
-// process leaving a half-written file some other path didn't catch, or a
-// substituted file are all real ways for its bytes to stop matching what
-// writeIndex actually wrote. Every field read here is a uint64 straight off
-// disk, so before any of them becomes this package's own int64 fields
-// (Seek offsets and line counts elsewhere in this package), two things are
-// checked: that the value fits in an int64 at all — a corrupt file can claim
-// any 64-bit pattern, and converting one at or above 2^63 gives a negative
-// int64 (gosec G115 is flagging exactly this narrowing) — and, for
-// markCount, that the file is actually as long as a header truthfully
-// declaring that many marks would make it. Both are ErrCorruptIndex, not a
-// value clamped or a rebuild triggered here: Window (the only caller) is
-// meant to be a cheap paginated read, and silently rescanning a
-// multi-gigabyte dump on every request against a corrupt index would turn a
-// corrupt file into a way to make every read of it expensive.
+// The file on disk may be corrupt or substituted, so each uint64 is checked to
+// fit an int64 (gosec G115) and the file size must match markCount. Failures
+// are ErrCorruptIndex rather than a rebuild: rescanning a multi-gigabyte dump
+// on every Window would make a corrupt index a way to make every read
+// expensive.
 func readIndexHeader(f *os.File) (indexHeader, error) {
 	var raw [indexHeaderSize]byte
 	if _, err := io.ReadFull(f, raw[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			// A file too short to hold a header is a damaged index, not an
-			// I/O failure of this host's: a write killed between CreateTemp
-			// and Rename, or a truncated disk. Same sentinel as every other
-			// way the bytes can stop describing the upload — see the note on
-			// the magic below.
 			return indexHeader{}, fmt.Errorf("%w: the index is shorter than one header", ErrCorruptIndex)
 		}
 		return indexHeader{}, fmt.Errorf("read index header: %w", err)
 	}
 	if [4]byte(raw[0:4]) != indexMagic {
-		// ErrCorruptIndex and not a bare error, exactly as the three checks
-		// below it. This one is the likeliest of the four to fire — the
-		// magic is the first thing a stray or half-written file gets wrong —
-		// and it was the one that answered with something provisioning could
-		// not name, so a damaged index reached the organiser as "internal
-		// error" instead of "upload the file again" (CLAUDE.md rule 1).
 		return indexHeader{}, fmt.Errorf("%w: the file does not begin with an index header", ErrCorruptIndex)
 	}
 
@@ -327,12 +232,7 @@ func readIndexHeader(f *os.File) (indexHeader, error) {
 		return indexHeader{}, fmt.Errorf("%w: mark count %d is not plausible", ErrCorruptIndex, hdr.markCount)
 	}
 
-	// markCount claims how many 8-byte marks follow the header; a real
-	// index file's size is exactly indexHeaderSize+markCount*8, so a file
-	// that disagrees was truncated, extended, or never written by
-	// writeIndex at all. Checking this once here means markOffset never has
-	// to guess whether the slot it is about to seek to and read actually
-	// exists inside the file.
+	// Checked once here so markOffset knows every slot exists.
 	info, err := f.Stat()
 	if err != nil {
 		return indexHeader{}, fmt.Errorf("stat index: %w", err)
@@ -346,43 +246,26 @@ func readIndexHeader(f *os.File) (indexHeader, error) {
 	return hdr, nil
 }
 
-// markOffset reads the byte offset recorded for mark markIdx (0-based),
-// which is the start of line markIdx*indexInterval + 1. It seeks directly to
-// that mark's slot rather than reading every mark before it, so looking up
-// one mark in a file with tens of thousands of them costs one seek and one
-// 8-byte read.
+// markOffset reads the byte offset of mark markIdx (0-based), the start of
+// line markIdx*indexInterval + 1, with one 8-byte read.
 func markOffset(f *os.File, hdr indexHeader, markIdx int64) (int64, error) {
 	if markIdx < 0 || markIdx >= hdr.markCount {
-		// Window derives markIdx from a line number it has already checked
-		// against this same header's totalLines, so the two disagreeing is
-		// the index disagreeing with itself — another shape of corruption,
-		// and named as one rather than left as a bare error the HTTP layer
-		// can only call "internal".
+		// Window checked the line against totalLines, so this is the index
+		// contradicting itself.
 		return 0, fmt.Errorf("%w: mark %d is out of range (have %d)", ErrCorruptIndex, markIdx, hdr.markCount)
 	}
 	at := int64(indexHeaderSize) + markIdx*8
 	var raw [8]byte
 	if _, err := f.ReadAt(raw[:], at); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			// readIndexHeader already checked the file is exactly as long as
-			// its markCount claims, so a short read here means it shrank
-			// underneath this call.
+			// The size was checked, so the file shrank underneath us.
 			return 0, fmt.Errorf("%w: mark %d could not be read in full", ErrCorruptIndex, markIdx)
 		}
 		return 0, fmt.Errorf("read mark %d: %w", markIdx, err)
 	}
 
-	// off is a byte offset read straight off disk, from the same file
-	// readIndexHeader already found the right size for — but that only
-	// bounds the file, not what any individual 8-byte slot inside it holds.
-	// A flipped bit here is exactly what turns into "Seek to a negative
-	// offset" the moment it is used (this function's whole reason to
-	// exist): the first check below is what makes the uint64->int64
-	// conversion a verified fact instead of an assumption (gosec G115); the
-	// second rejects a value that is technically a valid positive int64 but
-	// still not a byte offset that can exist in this data file, using
-	// hdr.totalBytes — the data length this very index declares for
-	// itself — as the bound.
+	// A corrupt slot must not become a negative or out-of-file seek: check it
+	// fits an int64 (gosec G115) and lies within the declared data length.
 	rawOff := binary.BigEndian.Uint64(raw[:])
 	if rawOff > math.MaxInt64 {
 		return 0, fmt.Errorf("%w: mark %d offset does not fit a signed 64-bit value", ErrCorruptIndex, markIdx)

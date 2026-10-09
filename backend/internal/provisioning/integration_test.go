@@ -18,8 +18,6 @@ func serviceFor(t *testing.T, registrations int) (*provisioning.Service, *cluste
 	return provisioning.New(postgres.NewGameInstances(testPool), fake), fake, contest, people
 }
 
-// The pool exists so that nobody waits for CREATE DATABASE. When it has a
-// copy, providing one must not touch the cluster at all.
 func TestAClaimFromThePoolCostsNoDatabaseWork(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -42,8 +40,6 @@ func TestAClaimFromThePoolCostsNoDatabaseWork(t *testing.T) {
 	}
 }
 
-// The one path where somebody waits, and it has to work: an empty pool must
-// still produce a database rather than an error.
 func TestAnEmptyPoolStillProducesADatabase(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -60,8 +56,6 @@ func TestAnEmptyPoolStillProducesADatabase(t *testing.T) {
 	}
 }
 
-// Asking twice is the ordinary case — a page reload, a reconnection — and it
-// must be the same database, not a second one.
 func TestAskingTwiceGivesTheSameDatabase(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -82,8 +76,6 @@ func TestAskingTwiceGivesTheSameDatabase(t *testing.T) {
 	}
 }
 
-// Topping up works towards a depth rather than adding blindly, or every run of
-// the background job would grow the pool for ever.
 func TestToppingUpCountsWhatIsAlreadyThere(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 0)
 
@@ -98,8 +90,6 @@ func TestToppingUpCountsWhatIsAlreadyThere(t *testing.T) {
 	}
 }
 
-// A rebuild leaves everything behind, claimed and free alike: old data and old
-// grants. Nobody may keep playing on one, and nobody may be handed one.
 func TestARebuildTakesEveryDatabaseWithIt(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -133,9 +123,6 @@ func TestARebuildTakesEveryDatabaseWithIt(t *testing.T) {
 	}
 }
 
-// A participant who was mid-contest when the template was rebuilt gets a fresh
-// database under the same name, rather than being left on the old one until
-// somebody sweeps.
 func TestAParticipantOnAnOldTemplateIsMovedOnFirstAsking(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -162,12 +149,8 @@ func TestAParticipantOnAnOldTemplateIsMovedOnFirstAsking(t *testing.T) {
 	}
 }
 
-// A row the reclaim sweep already dropped must never be handed back as a
-// live database. The version comparison alone cannot catch this: the row can
-// still carry the current template version even though the database behind
-// it is gone from the cluster — latent today because only a finished
-// contest's instances ever get dropped this way, one status transition away
-// from a returning participant meeting a raw "database does not exist".
+// The dropped row still carries the current version, so only its status says
+// the database is gone.
 func TestEnsureRebuildsAnInstanceTheSweepAlreadyDropped(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -200,14 +183,10 @@ func TestEnsureRebuildsAnInstanceTheSweepAlreadyDropped(t *testing.T) {
 	}
 }
 
-// A database the record does not know about is a database nobody will ever
-// clean up. If recording fails, the cluster is put back as it was.
 func TestADatabaseIsNotLeftBehindWhenItCannotBeRecorded(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{}
-	// A repository that refuses to record, over a contest that no longer
-	// exists: the composite reference makes the insert fail for real rather
-	// than by a stub pretending to.
+	// An unknown contest makes the real insert fail on its foreign key.
 	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
 
 	broken := contest
@@ -222,9 +201,6 @@ func TestADatabaseIsNotLeftBehindWhenItCannotBeRecorded(t *testing.T) {
 	}
 }
 
-// Resetting is the button a participant presses after ruining their own data.
-// The database keeps its name — everything pointing at it stays valid — and
-// its contents come back.
 func TestResettingKeepsTheNameAndRemakesTheDatabase(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -259,10 +235,6 @@ func TestResettingSomethingThatWasNeverProvisioned(t *testing.T) {
 	}
 }
 
-// The quota is a multiple of the template, because the template is the only
-// thing that says how large a contest's data legitimately is: a game with a
-// hundred rows and one with a million should not share a number somebody typed
-// into a configuration file once.
 func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 0)
 
@@ -275,8 +247,6 @@ func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
 		t.Fatalf("quota = %d, want a hundred times the template", large)
 	}
 
-	// A tiny template must not give a participant a quota they exhaust with
-	// one INSERT: the point is to bound a runaway, not to make work fail.
 	contest.Policy.DiskQuotaRatio = 1
 	small, err := service.Quota(t.Context(), contest)
 	if err != nil {
@@ -287,10 +257,6 @@ func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
 	}
 }
 
-// `CREATE DATABASE … TEMPLATE` is the one operation that can spoil an olympiad
-// before a query runs, so the pool is filled a few at a time and never by
-// however many are missing. Without a high-water mark this is a claim nothing
-// checks.
 func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{slow: 40 * time.Millisecond}
@@ -311,8 +277,6 @@ func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
 	}
 }
 
-// A cluster that refuses must not leave the workers spinning through the rest
-// of the list, and what was made before the failure still counts.
 func TestAFailureStopsTheFillingRatherThanGrindingOn(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{fail: errors.New("the cluster is out of disk")}

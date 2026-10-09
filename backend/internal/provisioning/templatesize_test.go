@@ -8,12 +8,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
-// The disk budget used to bind only the background tender, so every
-// participant past the point where the pool stopped growing was handed a copy
-// nobody had checked there was room for. At the scale this platform states —
-// a three-gigabyte template, three hundred participants, a 64 GiB default —
-// that is two hundred and eighty copies and eight hundred and forty gigabytes
-// onto a volume with no size of its own, until PostgreSQL stops for everybody.
+// 63 GiB used of 64: a 3 GiB copy does not fit.
 func TestALateRegistrationIsRefusedWhenTheClusterIsFull(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 63 << 30}
@@ -29,8 +24,6 @@ func TestALateRegistrationIsRefusedWhenTheClusterIsFull(t *testing.T) {
 	}
 }
 
-// The refusal has to be exactly at the boundary and not near it: a budget with
-// room for one more copy still hands one out.
 func TestALateRegistrationIsAllowedWhileThereIsRoom(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 60 << 30}
@@ -46,9 +39,6 @@ func TestALateRegistrationIsAllowedWhileThereIsRoom(t *testing.T) {
 	}
 }
 
-// A deployment that configured no budget is the state this platform shipped
-// in, and it must keep working exactly as it did — including not asking the
-// cluster how full it is on a path that never needed to know.
 func TestNoBudgetRefusesNothingAndMeasuresNothing(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 1 << 60}
@@ -62,9 +52,7 @@ func TestNoBudgetRefusesNothingAndMeasuresNothing(t *testing.T) {
 	}
 }
 
-// A copy that already exists is rebuilt under its own name — CreateInstance
-// drops the old one first — so the cluster does not grow and a full cluster
-// must not take a database away from somebody who already had one.
+// A rebuild drops the old copy first, so the cluster does not grow.
 func TestARebuildIsNotRefusedByTheBudget(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30}
@@ -89,11 +77,6 @@ func TestARebuildIsNotRefusedByTheBudget(t *testing.T) {
 	}
 }
 
-// `SELECT pg_database_size(...)` walks the database's own directory — hundreds
-// of stat(2) calls on an empty catalogue alone — and Quota is asked on every
-// query of every read-write contest. A template's bytes cannot change without
-// a rebuild, and a rebuild bumps the version, so once per version is the same
-// answer as once per request rather than a staler one.
 func TestTheTemplateIsMeasuredOncePerVersionRatherThanPerRequest(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	contest.Policy.DiskQuotaRatio = 2
@@ -109,8 +92,7 @@ func TestTheTemplateIsMeasuredOncePerVersionRatherThanPerRequest(t *testing.T) {
 		t.Fatalf("fifty quota reads cost %d measurements of the template, want 1", reads)
 	}
 
-	// A rebuild is the only thing that can change a template's bytes, and it
-	// bumps the version. The next reader must see the new figure.
+	// A rebuild bumps the version; the next reader sees the new size.
 	fake.setTemplateBytes(8 << 20)
 	contest.Version++
 

@@ -1,8 +1,9 @@
-// Package logging builds the service logger and carries correlation values
-// (request and user identifiers) through the request context.
+// Package logging builds the service logger (JSON on stdout, shipped to Loki
+// as is) and carries correlation values, the request and user identifiers,
+// through the request context.
 //
-// Records are emitted as JSON on stdout so the container runtime can ship them
-// to Loki without an agent-side parsing step.
+// It does not decide what is logged; callers do, and httpx.AccessLog writes
+// the request log.
 package logging
 
 import (
@@ -11,7 +12,6 @@ import (
 	"log/slog"
 )
 
-// ctxKey is unexported so no other package can collide with these context keys.
 type ctxKey int
 
 const (
@@ -20,7 +20,7 @@ const (
 )
 
 // Attribute names shared with the log pipeline and the query journal, which
-// links database records back to technical logs by request identifier.
+// links database records to logs by request identifier.
 const (
 	requestIDAttr = "request_id"
 	userIDAttr    = "user_id"
@@ -29,10 +29,7 @@ const (
 // New returns a JSON logger writing to w at the given level. Unknown levels
 // fall back to info; configuration validates the level before startup.
 func New(level string, w io.Writer) *slog.Logger {
-	// AddSource, because a line that says an error happened and not where is
-	// a line somebody has to grep the source for. The cost is one call into
-	// the runtime per record, which at a few hundred requests a minute is not
-	// a cost worth the ambiguity.
+	// AddSource costs one runtime call per record, negligible at this traffic.
 	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level:     parseLevel(level),
 		AddSource: true,
@@ -75,21 +72,17 @@ func UserIDFrom(ctx context.Context) string {
 	return id
 }
 
-// contextHandler copies correlation values from the context onto every record,
-// so call sites never have to pass them explicitly.
+// contextHandler copies correlation values from the context onto every record.
 //
-// Correlation attributes must stay at the top level of the record. Adding them
-// to the record directly would nest them under any group the caller opened
-// ("db.request_id"), and a log query filtering on request_id would silently
-// miss those lines — which defeats the tracing they exist for. To keep them
-// unnested, the handler records the caller's WithAttrs/WithGroup calls and
-// replays them *after* attaching correlation to the ungrouped root.
+// They must stay at the top level: added to the record directly they would
+// nest under the caller's group ("db.request_id") and a query on request_id
+// would miss them. So the handler records WithAttrs/WithGroup calls and
+// replays them after attaching correlation to the ungrouped root.
 type contextHandler struct {
 	root slog.Handler
 	ops  []handlerOp
 }
 
-// handlerOp is one recorded derivation step.
 type handlerOp struct {
 	attrs []slog.Attr // set for WithAttrs
 	group string      // set for WithGroup
@@ -127,8 +120,6 @@ func (h *contextHandler) Handle(ctx context.Context, rec slog.Record) error {
 	return handler.Handle(ctx, rec)
 }
 
-// WithAttrs and WithGroup record the derivation instead of applying it, so the
-// context behaviour survives in child loggers.
 func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
@@ -143,8 +134,7 @@ func (h *contextHandler) WithGroup(name string) slog.Handler {
 	return &contextHandler{root: h.root, ops: appendOp(h.ops, handlerOp{group: name})}
 }
 
-// appendOp copies the slice so derived handlers never share backing storage
-// with their parent.
+// appendOp copies so derived handlers never share backing storage.
 func appendOp(ops []handlerOp, op handlerOp) []handlerOp {
 	next := make([]handlerOp, len(ops), len(ops)+1)
 	copy(next, ops)

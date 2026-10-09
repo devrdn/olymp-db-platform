@@ -16,16 +16,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The whole chain, across both clusters, on the path a deployment actually
-// uses (CLAUDE.md rule 10).
-//
-// Every other test of this feature stops at a boundary: the domain sees a
-// fake cluster, the repository sees no cluster at all, and the handler sees
-// neither. What none of them can show is the one thing that matters before a
-// deploy — that a script an organiser saves in the core database ends up as a
-// real database on the game cluster with their tables in it. `BuildTemplate`
-// sat in this codebase for months with no caller precisely because nothing
-// ever went end to end.
+// The whole chain across both clusters (CLAUDE.md rule 10): every other test
+// stops at a fake cluster or none. Tests in this file share the prefix
+// `make test-game-build` selects with -run.
 func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -64,7 +57,6 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
 	}
 
-	// The row says ready...
 	stored, err := repo.Template(t.Context(), contest.ID)
 	if err != nil {
 		t.Fatalf("read the game back: %v", err)
@@ -73,8 +65,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 		t.Fatalf("the stored game is %q, want ready", stored.Status)
 	}
 
-	// ...and the database it names really exists, with the author's tables and
-	// their row in it. This is the assertion the whole test is for.
+	// The database it names exists and holds the author's row.
 	conn := gamedbtest.Connect(t, user, password, built.Database)
 	defer func() { _ = conn.Close(context.Background()) }()
 
@@ -86,8 +77,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 		t.Fatalf("the built game holds %q", name)
 	}
 
-	// And the schema panel can describe it, which is the other half of what a
-	// participant sees — read here through the same reader the API uses.
+	// The schema panel describes it through the reader the API uses.
 	schema, err := provisioning.NewSchemaReader(repo, cluster).
 		Schema(t.Context(), provisioning.Contest{ID: contest.ID, Version: stored.Version}, built.Database)
 	if err != nil {
@@ -106,14 +96,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	}
 }
 
-// The same chain, for the script that does not build — the path the review
-// found leaking, and the only arrangement where the leak is real: the error
-// has to be produced by a real pgx connection to a real cluster before there
-// is anything to leak.
-//
-// Named to share the prefix above so `make test-game-build` runs it: that
-// target selects by -run TestAScriptSavedInTheCoreDatabase, and a test of this
-// chain that no target runs is the state BuildTemplate was in for months.
+// Only a real pgx connection produces the error text that could leak.
 func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhatItSaidAndNothingElse(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -126,11 +109,8 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	repo := postgres.NewGameInstances(testPool)
 
 	user, password := gamedbtest.AdminCredentials(t)
-	// The author credential is wrong on purpose. This is the failure that used
-	// to reach GET /contests/{id}/game verbatim: pgx answers a refused login
-	// with a *pgconn.ConnectError naming the role, every address it dialled
-	// and the database it asked for — with PostgreSQL's own 28P01 nested
-	// inside it, which is what defeats a type test at the far end.
+	// A wrong author password: pgx's *pgconn.ConnectError names the role, the
+	// addresses and the database, with 28P01 nested inside it.
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
 		"not-the-author-password")
 	if err != nil {
@@ -152,8 +132,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 		t.Fatalf("the build finished as %q, want failed", built.Status)
 	}
 
-	// The row as GET /contests/{id}/game reads it, straight out of the core
-	// database rather than off the value Build happened to return.
+	// Read the row as the API serves it, not the value Build returned.
 	stored, err := repo.Template(t.Context(), contest.ID)
 	if err != nil {
 		t.Fatalf("read the game back: %v", err)
@@ -166,26 +145,15 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 			t.Fatalf("the stored build error names %q: %q", ours, stored.BuildError)
 		}
 	}
-	// And the cause really did survive for the log, or this would be a leak
-	// traded for an outage nobody can diagnose.
+	// The cause must still reach the log.
 	if !strings.Contains(buildErr.Error(), gamedb.RoleAuthor) {
 		t.Fatalf("the error returned for the log is %v; it has to keep what the organiser no longer gets", buildErr)
 	}
 }
 
-// The same chain again, for the thing an organiser uploading a dump actually
-// hits: a statement PostgreSQL refuses, hundreds of lines into a file.
-//
-// What used to arrive on their screen was `POSITION: 15` — an offset into a
-// statement that was cut out of the file before the server ever saw it, so
-// there was no way back to the place in the file. The line has to cross the
-// whole path: ScriptReader records it on the Statement, runScript hands it to
-// the failure, and it has to survive into game_templates.build_error, which
-// is what the console reads and what its viewer parses to jump (CLAUDE.md
-// rule 11 — the value that drives a check crosses every boundary it has to).
-//
-// Named to share the prefix `make test-game-build` selects on, for the
-// reason the test above it gives.
+// PostgreSQL's POSITION is an offset into one statement, useless in a long
+// file. The line number must travel from ScriptReader through runScript into
+// build_error, which the console parses to jump (CLAUDE.md rule 11).
 func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -206,9 +174,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 
 	games := provisioning.NewGames(repo, cluster, editableContest{})
 
-	// The refusal is on line 5 of the script as saved: line 1 is the newline
-	// after the backtick, so the CREATE TABLE is line 2 and the INSERT
-	// naming a table nobody made is line 5.
+	// Line 1 is the newline after the backtick, so the bad INSERT is line 5.
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
 		CREATE TABLE guests (id int);
 		INSERT INTO guests VALUES (1);
@@ -228,8 +194,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 		t.Fatalf("the build finished as %q, want failed", built.Status)
 	}
 
-	// The row as GET /contests/{id}/game reads it — the string the console's
-	// viewer parses, not the value Build happened to return.
+	// Read the row the console parses, not the value Build returned.
 	stored, err := repo.Template(t.Context(), contest.ID)
 	if err != nil {
 		t.Fatalf("read the game back: %v", err)
@@ -244,15 +209,9 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 	}
 }
 
-// A real streaming build: the reason gamedb.Provisioner.BuildTemplate now
-// takes an io.Reader is to run a script one statement (or COPY block) at a
-// time instead of holding it all in memory, and the one part of that a fake
-// connection cannot prove is that pgconn.PgConn.CopyFrom really accepts what
-// gamedb.ScriptReader hands it. Shaped like a small pg_dump on purpose: the
-// leading "-- Data for Name: ..." comment block pg_dump always writes before
-// a table's COPY, and a \N among the rows — the two things a naive
-// strings.Split(";") or a copy-data reader that touched the bytes would get
-// wrong first.
+// Only a real connection proves pgconn's CopyFrom accepts what
+// gamedb.ScriptReader streams. The input mimics pg_dump: a comment block
+// before the COPY and a \N among the rows.
 func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -335,16 +294,8 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 	}
 }
 
-// The same chain again, for the table builder's own way in: a Definition
-// saved instead of a script, generated into SQL by Definition.SQL, and run
-// through the identical BuildTemplate an editor's script and an uploaded
-// dump already go through (finishDefinitionBuild's own doc — there is no
-// third path). Two tables and a primary key, so what this proves is not just
-// "a CREATE TABLE ran" but that a participant can SELECT the columns and
-// types the organiser actually described, with the right ones NOT NULL.
-//
-// Named to share the prefix `make test-game-build` selects on, the same
-// reason the tests above it are.
+// The built database has the columns, nullability and primary key the
+// definition declared.
 func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealDatabaseOnTheGameCluster(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -380,9 +331,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 			Columns: []provisioning.ColumnDefinition{
 				{Name: "suspect_id", Type: provisioning.ColumnInteger},
 				{Name: "seen_at", Type: provisioning.ColumnTimestamp},
-				// The three types no CREATE TABLE in a test ever emitted:
-				// their keywords were checked against a Go string and never
-				// against the parser that has to accept them.
+				// Checks these type keywords against the real parser.
 				{Name: "distance_km", Type: provisioning.ColumnNumeric},
 				{Name: "seen_on", Type: provisioning.ColumnDate},
 				{Name: "confirmed", Type: provisioning.ColumnBoolean},
@@ -412,9 +361,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 		t.Fatalf("the stored game is %q, want ready", stored.Status)
 	}
 
-	// Both tables exist, empty, and a participant can SELECT them — this task
-	// creates tables and leaves them empty on purpose (Definition.SQL's own
-	// doc); loading the organiser's own rows is a following task's work.
+	// No table data was uploaded, so both tables are empty.
 	conn := gamedbtest.Connect(t, user, password, built.Database)
 	defer func() { _ = conn.Close(context.Background()) }()
 
@@ -428,9 +375,6 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 		}
 	}
 
-	// The schema panel describes exactly what the organiser declared: both
-	// tables, the right columns, the right nullability, and the primary key
-	// enforced (a duplicate id is refused).
 	schema, err := provisioning.NewSchemaReader(repo, cluster).
 		Schema(t.Context(), provisioning.Contest{ID: contest.ID, Version: stored.Version}, built.Database)
 	if err != nil {
@@ -468,22 +412,9 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 	}
 }
 
-// The same chain again, for this task's own work: a table's own CSV rows,
-// loaded through gamedb.Provisioner.LoadTableData's real COPY ... FROM
-// STDIN, the way an uploaded dump's own rows already go through runScript
-// (CLAUDE.md rule 10 — the path this task's brief names as already proven at
-// 1.2 million rows, not a second one written for row-at-a-time INSERTs).
-//
-// Two tables and every one of the four capabilities the brief lists: a
-// chunked CSV upload for suspects, two rows typed in one at a time for
-// sightings, one of them then deleted. What this proves is not merely "COPY
-// ran" — the fake-cluster tests in tabledata_test.go already show that
-// without a database — but that a participant's own SELECT sees exactly the
-// rows survived through all three paths and no others: the deleted
-// sighting's own suspect has nothing joined to it once this runs for real.
-//
-// Named to share the prefix `make test-game-build` selects on, the same
-// reason the tests above it are.
+// Table data loaded through LoadTableData's real COPY (CLAUDE.md rule 10): a
+// chunked CSV upload, rows typed into the form, and a deleted row. A
+// participant's SELECT must see exactly the surviving rows.
 func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuildsRowsOnTheGameCluster(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -524,12 +455,8 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 			Columns: []provisioning.ColumnDefinition{
 				{Name: "suspect_id", Type: provisioning.ColumnInteger},
 				{Name: "seen_at", Type: provisioning.ColumnTimestamp},
-				// The three types no test used to carry as far as a real
-				// COPY. Each was checked only against a Go parser and a Go
-				// string, and the whole point of that check is to agree with
-				// the column PostgreSQL actually creates: a value this
-				// platform accepts and COPY refuses is minutes of build time
-				// spent to produce a failed game.
+				// The Go value checks for these types must agree with COPY,
+				// or an accepted value fails the whole build.
 				{Name: "distance_km", Type: provisioning.ColumnNumeric},
 				{Name: "seen_on", Type: provisioning.ColumnDate},
 				{Name: "confirmed", Type: provisioning.ColumnBoolean},
@@ -542,12 +469,8 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
 
-	// The first build: the one a deployment's own background job runs
-	// seconds after SetDefinition, long before an organiser has typed a
-	// single row. On a deployment this is the *only* build that ever ran
-	// against an empty table builder game — which is exactly why the defect
-	// this test exists to catch could hide behind a test that built only
-	// once, after every row was already in.
+	// The first build runs right after SetDefinition, before any row exists,
+	// as the background job does on a deployment.
 	built, err := games.Build(t.Context(), time.Minute)
 	if err != nil {
 		t.Fatalf("build (first, right after the definition was saved): %v", err)
@@ -555,22 +478,14 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if built.Status != provisioning.TemplateReady {
 		t.Fatalf("the first build finished as %q: %s", built.Status, built.BuildError)
 	}
-	// Build claims the oldest pending template of *any* contest
-	// (postgres.GameInstances.ClaimBuild's own doc), not necessarily this
-	// test's own. Calling it twice in this test doubles the exposure to a
-	// concurrent test's template being claimed instead of this one, so that
-	// has to fail loudly here rather than let every assertion below run
-	// against a database this test never built.
+	// Build claims the oldest pending template of any contest, so a concurrent
+	// test's could be claimed instead; fail loudly if so.
 	if built.ContestID != contest.ID {
 		t.Fatalf("the first build claimed contest %s, not this test's own %s — a concurrent test's template was claimed instead", built.ContestID, contest.ID)
 	}
 
-	// The assertion the whole reorder exists to make: right after the first
-	// build, before a single row has been loaded, the table it just created
-	// has to be empty. Without this, nothing below proves *which* build
-	// loaded the rows asserted at the end of this test, and a regression
-	// that went back to loading data at the first build (the defect this
-	// branch fixes) would pass anyway (CLAUDE.md rule 10).
+	// Empty after the first build, which proves the rows asserted at the end
+	// were loaded by the second.
 	firstConn := gamedbtest.Connect(t, user, password, built.Database)
 	var suspectsBeforeAnyDataWasLoaded int
 	if err := firstConn.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspectsBeforeAnyDataWasLoaded); err != nil {
@@ -581,12 +496,8 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 	_ = firstConn.Close(context.Background())
 
-	// suspects: a whole CSV, uploaded in chunks — the same way a dump is.
-	// Deliberately with no trailing newline, which is what a good many
-	// exporters write and what validateTableFile accepts: the row added from
-	// the form below has to become a row of its own on the end of it, not two
-	// rows glued into one line of six fields (which is `extra data after last
-	// expected column` from COPY, and a failed build for the whole game).
+	// No trailing newline, as many exporters write: the form row appended
+	// below must start a line of its own, or COPY fails the whole build.
 	const suspectsCSV = "id,name,nickname\n1,Margot Feilhaber,\n2,Duplicate Suspect,Sparrow"
 	upload, err := games.BeginTableUpload(t.Context(), contest.ID, "suspects", int64(len(suspectsCSV)))
 	if err != nil {
@@ -599,23 +510,14 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("complete table upload: %v", err)
 	}
 
-	// One more suspect, typed into the form rather than uploaded, with the
-	// nullable nickname left empty. An empty value is a NULL on this path
-	// (AppendTableRow validates it as one and refuses it in a NOT NULL
-	// column), so it has to reach PostgreSQL as one: written as `""` it is the
-	// empty string instead, and the IS NULL a task asks about finds nothing.
+	// An empty form value is a NULL and must reach PostgreSQL as one, not as
+	// `""`.
 	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Typed In", ""}); err != nil {
 		t.Fatalf("append a suspect from the form: %v", err)
 	}
 
-	// sightings: two rows typed in one at a time, the first of which is then
-	// deleted — the row from a form and the tombstone, on the identical file.
-	//
-	// The numeric values are deliberately the two forms validNumericLiteral's
-	// own doc says were "verified against a live PostgreSQL 16 instance" and
-	// nothing re-verified since: a digit separator and one of the type's
-	// special values. If either were wrong, COPY is where it would show, and
-	// this is that check running by itself rather than by hand.
+	// Two typed rows, the first then deleted. The numerics are a digit
+	// separator and a special value, both forms COPY has to accept.
 	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "sightings",
 		[]string{"1", "2024-01-01 10:00:00", "1_000.5", "2024-01-01", "yes"}); err != nil {
 		t.Fatalf("append sighting 1: %v", err)
@@ -628,10 +530,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("delete sighting 1: %v", err)
 	}
 
-	// The second build: what RequestBuild exists for. Everything loaded above
-	// sat on disk, unreachable by any participant, until this asks for the
-	// game to be built again from what is now stored — the table builder's
-	// own missing half (Games.RequestBuild's own doc).
+	// The data above sits on disk until RequestBuild asks for a rebuild.
 	asked, err := games.RequestBuild(t.Context(), uuid.New(), contest.ID)
 	if err != nil {
 		t.Fatalf("request the build again, now that the table builder's data has changed: %v", err)
@@ -650,12 +549,8 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if second.ContestID != contest.ID {
 		t.Fatalf("the second build claimed contest %s, not this test's own %s — a concurrent test's template was claimed instead", second.ContestID, contest.ID)
 	}
-	// A second Drop that is, today, a deliberate no-op: templateName derives
-	// the name from the contest id alone, with no version in it, so the
-	// rebuild replaces the database the first build made rather than adding
-	// one and both cleanups name the same thing. It is registered anyway, and
-	// on `second` rather than on `saved`, so that a template name which ever
-	// does carry a version leaves nothing behind on the cluster.
+	// Today the same name as saved.Database (no version in it), registered so
+	// a versioned name would not leak a database.
 	t.Cleanup(func() { gamedbtest.Drop(second.Database) })
 
 	conn := gamedbtest.Connect(t, user, password, second.Database)
@@ -669,8 +564,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("suspects has %d rows, want 3 (the whole uploaded CSV, plus the row from the form)", suspectCount)
 	}
 
-	// Both empty nicknames are NULL in the database: the one that arrived as a
-	// bare empty field in the uploaded CSV, and the one the form left empty.
+	// One empty nickname came from the CSV, one from the form.
 	var nullNicknames int
 	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM suspects WHERE nickname IS NULL`).Scan(&nullNicknames); err != nil {
 		t.Fatalf("count null nicknames: %v", err)
@@ -679,8 +573,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("%d suspect(s) have a NULL nickname, want 2 — an empty value must not be stored as an empty string", nullNicknames)
 	}
 
-	// Only the surviving sighting is there to join: the tombstoned row 1
-	// (suspect 1, 2024-01-01) never reached the database at all.
+	// The deleted sighting (suspect 1) must not be there.
 	rows, err := conn.Query(t.Context(),
 		`SELECT s.id, s.name, si.seen_at FROM sightings si JOIN suspects s ON s.id = si.suspect_id ORDER BY si.seen_at`)
 	if err != nil {
@@ -712,11 +605,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("the surviving sighting joined to %+v, want suspect 2", got[0])
 	}
 
-	// The three types this test used to stop short of: what COPY put in the
-	// columns has to be a numeric, a date and a boolean — not text that
-	// happens to look like them. Asked as the types themselves (`= 'NaN'`,
-	// `= date '...'`, `IS false`) so a column of the wrong type could not
-	// answer at all.
+	// Compared as typed values, so a column of the wrong type cannot answer.
 	var typed bool
 	if err := conn.QueryRow(t.Context(), `
 		SELECT distance_km = 'NaN'::numeric AND seen_on = date '2024-01-02' AND confirmed IS false
@@ -728,38 +617,16 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 }
 
-// editableContest stands for a draft contest: the gate this test is not about.
+// editableContest stands for a draft contest.
 type editableContest struct{}
 
 func (editableContest) GameEditable(context.Context, uuid.UUID) (bool, error) { return true, nil }
 
-// The value check this platform makes before a build, held against the
-// database that actually decides.
-//
-// validateScalar exists for one reason: refuse a value *before* a build
-// spends minutes and dies inside COPY. That is a claim about PostgreSQL, and
-// until this ran it was a claim checked by hand — validNumericLiteral's own
-// doc says its rules were "verified against a live PostgreSQL 16 instance",
-// which is a sentence, not a test. Nothing re-verified it on an upgrade, and
-// nothing would have noticed the day the two stopped agreeing.
-//
-// Two directions, and they are not symmetric:
-//
-//   - Everything this platform accepts, PostgreSQL must accept. A value
-//     waved through here and refused by COPY is exactly the failed build the
-//     pre-check exists to prevent, so this holds for every candidate below.
-//   - Where the doc names a form as refused by PostgreSQL itself — the
-//     underscore rules, the hexadecimal float literal strconv.ParseFloat
-//     would have taken — PostgreSQL must refuse it too. Elsewhere this
-//     platform is allowed to be the stricter of the two (it insists on
-//     YYYY-MM-DD where PostgreSQL would also read 01/02/2024), and that is a
-//     deliberate narrowing rather than a disagreement.
-//
-// The domain's own answer is taken from AppendTableRow — the path an
-// organiser's form actually takes — rather than from the unexported checker,
-// so what is compared is what a request would get.
-//
-// Named to share the prefix `make test-game-build` selects on.
+// The pre-build value check (validateScalar) must agree with PostgreSQL, or a
+// build dies inside COPY. Everything it accepts PostgreSQL must accept; a form
+// the code says PostgreSQL refuses must be refused by both. Elsewhere the
+// platform may be stricter (YYYY-MM-DD only). Its answer is taken from
+// AppendTableRow, the path a request takes.
 func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
@@ -778,8 +645,7 @@ func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t 
 		t.Fatalf("open the table data store: %v", err)
 	}
 
-	// One single-column table per type, so a value refused for one column
-	// never blocks another type's own candidates.
+	// One single-column table per type, so candidates do not block each other.
 	types := map[string]provisioning.ColumnType{
 		"integers":   provisioning.ColumnInteger,
 		"numerics":   provisioning.ColumnNumeric,
@@ -795,9 +661,7 @@ func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t 
 			Columns: []provisioning.ColumnDefinition{{Name: "v", Type: typ}},
 		})
 	}
-	// Definition.SQL is deterministic in the order it is given, and the order
-	// a map hands these back is not — sorted so a failure names the same
-	// table every run.
+	// Sorted so a failure names the same table every run.
 	sort.Slice(tables, func(i, j int) bool { return tables[i].Name < tables[j].Name })
 
 	pgTypes := map[provisioning.ColumnType]string{
@@ -848,8 +712,8 @@ func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t 
 }
 
 // valueFormCandidate is one value offered to one single-column table.
-// alsoRefusedByPostgres marks the forms whose refusal this platform's own
-// comments attribute to PostgreSQL rather than to a narrowing of its own.
+// alsoRefusedByPostgres marks forms PostgreSQL itself refuses, as opposed to
+// the platform's own narrowing.
 type valueFormCandidate struct {
 	table                 string
 	value                 string
@@ -876,10 +740,8 @@ func valueFormCandidates() []valueFormCandidate {
 	all = append(all, accepted("integers", "0", "-1", "2147483647", "-2147483648")...)
 	all = append(all, refusedByBoth("integers", "1.5", "abc", "2147483648")...)
 
-	// numeric is the type validNumericLiteral's own doc makes claims about:
-	// the digit separator, the special values, and the two things
-	// strconv.ParseFloat would have got wrong (an exponent numeric holds
-	// happily, and a hexadecimal literal numeric_in has never accepted).
+	// Digit separators, special values, and two forms strconv.ParseFloat gets
+	// wrong: a huge exponent numeric holds and a hex literal numeric_in refuses.
 	all = append(all, accepted("numerics",
 		"5", "5.", ".5", "5.5", "-1.5e10", "1_000", "1e400",
 		"NaN", "nan", "Infinity", "-Infinity", "+Inf", "  7  ")...)
@@ -888,10 +750,8 @@ func valueFormCandidates() []valueFormCandidate {
 
 	all = append(all, accepted("dates", "2024-01-01", "0001-01-01", "9999-12-31")...)
 	all = append(all, refusedByBoth("dates", "2024-02-30", "not-a-date")...)
-	// Refused here and read by PostgreSQL: this platform insists on one
-	// spelling so that what an organiser sees in the window is what a
-	// participant queries, which is a narrowing rather than a disagreement —
-	// so it is not marked alsoRefusedByPostgres.
+	// Refused here but read by PostgreSQL: one spelling keeps what the
+	// organiser sees equal to what a participant queries.
 	all = append(all, valueFormCandidate{table: "dates", value: "01/02/2024"})
 
 	all = append(all, accepted("stamps", "2024-01-01 10:00:00", "2024-01-01 10:00")...)
@@ -900,8 +760,7 @@ func valueFormCandidates() []valueFormCandidate {
 	all = append(all, accepted("flags", "true", "false", "t", "f", "yes", "no", "y", "n", "1", "0")...)
 	all = append(all, refusedByBoth("flags", "maybe", "2")...)
 
-	// text takes anything that is not empty (an empty field is a NULL, which
-	// is a different rule and has its own test).
+	// An empty text field is a NULL, tested elsewhere.
 	all = append(all, accepted("free_texts", "anything at all", "0x1p-2", "NaN")...)
 	return all
 }

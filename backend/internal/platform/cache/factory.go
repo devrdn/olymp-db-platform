@@ -5,20 +5,16 @@ import (
 	"log/slog"
 )
 
-// Modes reported by Mode, surfaced in the readiness response so a degraded
-// install is visible without reading the startup log.
+// Modes reported by Mode, surfaced in the readiness response.
 const (
 	ModeRedis  = "redis"
 	ModeMemory = "memory"
 )
 
-// New builds the cache backend for the given address.
-//
-// An empty address selects the in-process store: a single-node install is a
-// supported deployment and should not require Redis. A non-empty address that
-// does not answer is an error, not a reason to fall back — the operator asked
-// for that server, and quietly using a different store would hide a broken
-// deployment and, with several replicas, silently break session sharing.
+// New builds the cache backend for the given address. An empty address
+// selects the in-process store. A non-empty one that does not answer is an
+// error, not a reason to fall back: a silent fallback would hide a broken
+// deployment and break session sharing between replicas.
 func New(ctx context.Context, addr string, log *slog.Logger) (Cache, error) {
 	if addr == "" {
 		log.Warn("no Redis address configured, using the in-process cache",
@@ -37,7 +33,6 @@ func New(ctx context.Context, addr string, log *slog.Logger) (Cache, error) {
 	return client, nil
 }
 
-// Mode names the active backend.
 func Mode(c Cache) string {
 	if _, ok := c.(*Redis); ok {
 		return ModeRedis

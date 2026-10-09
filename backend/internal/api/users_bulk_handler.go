@@ -1,13 +1,8 @@
 package api
 
-// Bulk account operations.
-//
-// Each answers 200 with an account of what happened, never a failure because
-// one identifier in the selection was unusable: the rest of the selection
-// applied, and an error would misreport that. Only a refusal of the request as
-// a whole — an unbounded selection, a missing reason, a status nothing has —
-// is a 4xx, and that refusal is already decided in the domain (users.bulk.go);
-// this file only carries it to the wire.
+// Bulk account operations. Each answers 200 with what happened, even when some
+// selected accounts were skipped, because the rest did apply. Only a refusal of
+// the whole request is a 4xx, decided in the domain (users/bulk.go).
 
 import (
 	"net/http"
@@ -18,22 +13,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// bulkStatusRequest is a selection and the status to move it to.
 type bulkStatusRequest struct {
 	IDs    []uuid.UUID `json:"ids"`
 	Status string      `json:"status"`
 	Reason string      `json:"reason"`
 }
 
-// bulkResponse is what a status or role operation did.
 type bulkResponse struct {
 	Changed []uuid.UUID       `json:"changed"`
 	Skipped []skippedResponse `json:"skipped"`
 }
 
-// skippedResponse is one account the operation declined to touch. The reason
-// is a code from a closed vocabulary (users.SkipNotFound and its siblings),
-// which the client renders in its own language rather than showing verbatim.
+// skippedResponse is one account the operation declined to touch. Reason is a
+// code from a closed set (users.SkipNotFound and siblings) the client
+// translates.
 type skippedResponse struct {
 	ID     uuid.UUID `json:"id"`
 	Login  string    `json:"login"`
@@ -64,10 +57,8 @@ func (h *UsersHandler) bulkStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, asBulkResponse(res))
 }
 
-// bulkRolesRequest is a selection and the role set to give every account in
-// it. Every account in the selection gets exactly this set, replacing
-// whatever it held — the same replace semantics as the single-account
-// PUT /roles.
+// bulkRolesRequest gives every selected account exactly this role set,
+// replacing what it held, as PUT /roles does for one.
 type bulkRolesRequest struct {
 	IDs   []uuid.UUID `json:"ids"`
 	Roles []string    `json:"roles"`
@@ -88,23 +79,18 @@ func (h *UsersHandler) bulkRoles(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, asBulkResponse(res))
 }
 
-// bulkPasswordResetRequest is only ever the selection: there is nothing else
-// to say about a password reset.
 type bulkPasswordResetRequest struct {
 	IDs []uuid.UUID `json:"ids"`
 }
 
-// issuedResponse is one account's new one-time password. Shown once, here,
-// exactly like the single-account reset and the account import: it is never
-// stored in clear and cannot be fetched later, and it is never logged.
+// issuedResponse is one account's new one-time password, shown only here: never
+// stored in clear, never logged.
 type issuedResponse struct {
 	ID              uuid.UUID `json:"id"`
 	Login           string    `json:"login"`
 	OneTimePassword string    `json:"one_time_password"`
 }
 
-// bulkPasswordResetResponse reports the passwords issued and the accounts
-// skipped.
 type bulkPasswordResetResponse struct {
 	Issued  []issuedResponse  `json:"issued"`
 	Skipped []skippedResponse `json:"skipped"`

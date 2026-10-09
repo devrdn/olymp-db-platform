@@ -1,46 +1,12 @@
-// Package gamedbtest hands a test a real game cluster.
+// Package gamedbtest gives tests a real, prepared game cluster, shared by
+// gamedb and the Query Runner. It cannot be faked: the guarantees under test
+// are what PostgreSQL refuses. Without GAME_DB_DSN every helper skips.
 //
-// It exists because two packages need the same arrangement — a prepared
-// cluster, a hardened database, a connection as the participant's own role —
-// and because that arrangement cannot be faked. Every guarantee either package
-// makes is a guarantee about what PostgreSQL refuses, and a refusal has to be
-// provoked rather than asserted.
-//
-// Without GAME_DB_DSN every helper skips the test rather than failing it: a
-// developer with no cluster to hand can still run `make test`. `make test-game`
-// is what makes sure they actually run.
-//
-// # Which cluster
-//
-// Never the one the product runs on. On a game cluster what the tests act on
-// is the cluster itself: CREATE DATABASE and DROP DATABASE name cluster-wide
-// objects, and preparing the cluster rewrites game_reader, game_writer and
-// game_author, which are cluster-wide too. Pointed at the development
-// cluster, test runs did both to the installation — took a running Query
-// Runner's credentials away mid-session, so the next participant's query
-// failed to connect, and left databases of their own behind in the cluster
-// the product's disk quota is measured on.
-//
-// So the test targets start a cluster of their own (pg-game-test in
-// deploy/docker-compose.dev.yml, recreated for every run), CI starts one per
-// job, and connect refuses any cluster whose maintenance database — the one
-// GAME_DB_DSN names, as the server reports it — does not end in "_test". That
-// is the core database's rule (internal/platform/storage/storagetest), applied
-// here to the database that stands for the cluster.
-//
-// # Why it does not invent credentials
-//
-// The roles are the product's roles, by name and by the code that prepares
-// them (gamedb.PrepareCluster), because what these tests prove is what
-// PostgreSQL refuses to *those* roles as the deploy prepares them — a copy
-// under another name would be a copy of the code under test rather than the
-// thing itself. Their passwords are the caller's to state, in
-// GAME_READER_PASSWORD, GAME_WRITER_PASSWORD and GAME_AUTHOR_PASSWORD: the
-// Makefile passes deploy/.env's, CI passes literals. Missing, they are a hard
-// failure and never a default. A harness that picked its own is how a test
-// run once locked the Query Runner out of a shared cluster; the test cluster
-// is what makes that impossible now, and refusing to guess keeps it harmless
-// if a DSN ever points somewhere the guard has been talked into accepting.
+// It refuses any cluster whose maintenance database does not end in "_test",
+// because the tests create databases and rewrite the cluster-wide roles. The
+// roles are the product's own, and their passwords must come from
+// GAME_READER_PASSWORD, GAME_WRITER_PASSWORD and GAME_AUTHOR_PASSWORD; made-up
+// passwords would lock out a running stack that shares the cluster.
 package gamedbtest
 
 import (
@@ -59,9 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// The environment the deployment's own credentials arrive in — the three
-// variables deploy/.env sets, docker-compose passes to the Query Runner and
-// the Core API, and `make test-game` passes to the tests.
+// The deployment's credentials, as deploy/.env sets them.
 const (
 	readerPasswordVar = "GAME_READER_PASSWORD" // #nosec G101 -- a variable's name.
 	writerPasswordVar = "GAME_WRITER_PASSWORD" // #nosec G101 -- a variable's name.
@@ -75,13 +39,9 @@ var (
 	open error
 )
 
-// connect opens the cluster once for the whole test binary. Lazy rather than
-// in a TestMain, so that a package using these helpers does not have to have
-// one — and so two packages cannot disagree about how it is set up.
-//
-// Through storagetest.Open, so the pool refuses a cluster that is not a test
-// cluster before any helper has prepared a role or created a database on it.
-// The refusal lands in open and fails every test that asks for the cluster.
+// connect opens the cluster once per test binary, lazily so callers need no
+// TestMain. storagetest.Open refuses a non-test cluster before anything is
+// prepared on it; the refusal lands in open.
 func connect() {
 	dsn = os.Getenv("GAME_DB_DSN")
 	if dsn == "" {
@@ -99,25 +59,17 @@ func connect() {
 	pool = p
 }
 
-// Configured reports whether this run was given a game cluster at all. A test
-// that has to decide before it builds any fixture asks this; everything else
-// simply calls Admin or Scratch, which skip on their own.
+// Configured reports whether this run was given a game cluster. Admin and
+// Scratch skip on their own; this is for deciding before building a fixture.
 func Configured() bool { return os.Getenv("GAME_DB_DSN") != "" }
 
-// ReaderPassword and WriterPassword are what the two participant roles
-// authenticate with, for the tests that connect as one of them.
-//
-// The deployment's, read from the environment rather than chosen here: see the
-// package comment. A test binary that has a cluster but no credentials for it
-// stops rather than making some up, because making some up is what breaks the
-// stack the developer is running.
+// ReaderPassword and WriterPassword are the participant roles' deployment
+// passwords, read from the environment; a missing one fails the test.
 func ReaderPassword(t *testing.T) string { t.Helper(); return credential(t, readerPasswordVar) }
 
 func WriterPassword(t *testing.T) string { t.Helper(); return credential(t, writerPasswordVar) }
 
-// AuthorPassword is what the game-script role authenticates with — the Core
-// API's own credential for this cluster, read from the deployment's
-// environment for the same reason the other two are.
+// AuthorPassword is the game-script role's deployment password.
 func AuthorPassword(t *testing.T) string { t.Helper(); return credential(t, authorPasswordVar) }
 
 func credential(t *testing.T, variable string) string {
@@ -127,10 +79,6 @@ func credential(t *testing.T, variable string) string {
 
 	password := os.Getenv(variable)
 	if password == "" {
-		// Loud, and on the first test that needs it. The alternative — a
-		// password of the harness's own — is silent until somebody's running
-		// Query Runner cannot authenticate any more, which is a failure that
-		// surfaces during a contest rather than during a test run.
 		t.Fatalf("%s is not set. These tests prepare the cluster's shared %s and %s roles, "+
 			"so they need the passwords the deployment already uses rather than passwords of "+
 			"their own — run `make test-game`, which passes them from deploy/.env.",
@@ -139,8 +87,8 @@ func credential(t *testing.T, variable string) string {
 	return password
 }
 
-// requireCluster opens the cluster, skipping the test where there is none to
-// open and failing where there is one that cannot be reached.
+// requireCluster skips without a configured cluster and fails if it was
+// refused or unreachable.
 func requireCluster(t *testing.T) {
 	t.Helper()
 
@@ -159,8 +107,6 @@ func Admin(t *testing.T) *pgxpool.Pool {
 
 	requireCluster(t)
 
-	// The caller's passwords, never ones made up here: see the package
-	// comment.
 	if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
 		ReaderPassword: ReaderPassword(t),
 		WriterPassword: WriterPassword(t),
@@ -171,11 +117,8 @@ func Admin(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// DSN builds a connection string for a role and a database.
-//
-// On the cluster connect accepted, and only on it: a refused or missing
-// cluster stops the test here rather than handing it an address to connect to
-// on its own, outside the guard.
+// DSN builds a connection string for a role and a database, only on a cluster
+// connect accepted, so no test reaches a cluster outside the guard.
 func DSN(t *testing.T, user, password, database string) string {
 	t.Helper()
 
@@ -202,12 +145,8 @@ func AdminCredentials(t *testing.T) (string, string) {
 	return parsed.User.Username(), password
 }
 
-// Scratch creates a hardened database and drops it when the test ends.
-//
-// A real database rather than a transaction: what these tests are about is
-// what CREATE DATABASE and the catalog ACLs do, neither of which a rolled-back
-// transaction can show. No connection is left open on it, because a database
-// with a live connection cannot be used as a template.
+// Scratch creates a hardened database and drops it when the test ends. No
+// connection is left open, so it can serve as a template.
 func Scratch(t *testing.T) string {
 	t.Helper()
 
@@ -231,11 +170,8 @@ func Scratch(t *testing.T) string {
 	return name
 }
 
-// Drop removes a database, terminating whatever is still connected to it.
-//
-// WITH (FORCE) because a test that failed halfway is exactly the run that left
-// a connection open, and a database left behind is a name every later run
-// trips over.
+// Drop removes a database, terminating whatever is still connected to it (a
+// test that failed halfway may have left a connection open).
 func Drop(name string) {
 	if pool == nil {
 		return

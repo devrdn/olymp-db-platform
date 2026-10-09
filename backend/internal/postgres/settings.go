@@ -25,13 +25,8 @@ func (r *Settings) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// All returns every stored value.
-//
-// Whatever keys the table happens to hold, including ones this build knows
-// nothing about — a row left behind by a version that has been rolled back is
-// still a row. Deciding which of them mean anything is the domain's job, and
-// keeping that decision in one place is what stops a forgotten key leaking
-// through a reader that did not think to filter.
+// All returns every stored value, including keys this build does not know.
+// Filtering them is the domain's job, kept in one place.
 func (r *Settings) All(ctx context.Context) (settings.Values, error) {
 	rows, err := r.querier(ctx).Query(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
@@ -49,9 +44,8 @@ func (r *Settings) All(ctx context.Context) (settings.Values, error) {
 
 		var value string
 		if err := json.Unmarshal(raw, &value); err != nil {
-			// A value written as something other than a string is a row this
-			// build cannot use. Skipped rather than fatal: one unreadable
-			// setting must not take the sign-in screen down with it.
+			// Skip a non-string value: one unreadable setting must not take
+			// the sign-in screen down.
 			continue
 		}
 		values[key] = value
@@ -62,12 +56,8 @@ func (r *Settings) All(ctx context.Context) (settings.Values, error) {
 	return values, nil
 }
 
-// Save writes the values and stamps who did it.
-//
-// One statement for the whole set, so a save is one round trip and cannot land
-// half-applied on its own account. `updated_by` is nullable and set to NULL
-// for a system actor, which is what the column's ON DELETE SET NULL already
-// promises: the record outlives the account that made it.
+// Save writes the values and stamps who did it, in one statement so a save
+// cannot land half-applied. updated_by is NULL for a system actor.
 func (r *Settings) Save(ctx context.Context, actorID uuid.UUID, values settings.Values) error {
 	if len(values) == 0 {
 		return nil
@@ -99,7 +89,6 @@ func (r *Settings) Save(ctx context.Context, actorID uuid.UUID, values settings.
 	return nil
 }
 
-// asText turns encoded values into the text array the statement unnests.
 func asText(encoded [][]byte) []string {
 	out := make([]string, 0, len(encoded))
 	for _, raw := range encoded {
@@ -137,11 +126,8 @@ func (r *SettingsImages) ByKind(ctx context.Context, kind string) (settings.Imag
 	return img, nil
 }
 
-// Save replaces whatever is in the slot.
-//
-// One row per purpose, enforced by the unique key on `kind`: replacing the
-// logo replaces the row, so there is no gallery of abandoned uploads that
-// nothing reads and somebody eventually has to clear out.
+// Save replaces whatever is in the slot; the unique key on kind keeps one row
+// per slot.
 func (r *SettingsImages) Save(ctx context.Context, actorID uuid.UUID, img settings.Image) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO settings_files (kind, content_type, bytes, sha256, width, height, uploaded_by, uploaded_at)
@@ -161,8 +147,7 @@ func (r *SettingsImages) Save(ctx context.Context, actorID uuid.UUID, img settin
 	return nil
 }
 
-// Delete empties the slot. An empty one is not an error: removing a picture
-// that is already gone is what a second click does.
+// Delete empties the slot. An empty one is not an error.
 func (r *SettingsImages) Delete(ctx context.Context, kind string) error {
 	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM settings_files WHERE kind = $1`, kind); err != nil {
 		return fmt.Errorf("remove image %q: %w", kind, err)
@@ -170,10 +155,8 @@ func (r *SettingsImages) Delete(ctx context.Context, kind string) error {
 	return nil
 }
 
-// Present lists the slots that hold something, with the hash the URL carries.
-//
-// Deliberately without the bytes: a page that only needs to know whether there
-// is a logo should not pull the logo across to find out.
+// Present lists the filled slots with the hash the URL carries, without
+// reading the image bytes.
 func (r *SettingsImages) Present(ctx context.Context) (map[string]string, error) {
 	rows, err := r.querier(ctx).Query(ctx, `SELECT kind, sha256 FROM settings_files`)
 	if err != nil {

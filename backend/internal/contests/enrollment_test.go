@@ -36,7 +36,6 @@ func TestInviteOnlyContestRefusesSelfSignup(t *testing.T) {
 }
 
 func TestDraftContestRefusesSelfSignup(t *testing.T) {
-	// An unpublished contest is not supposed to be visible at all.
 	c := contests.Contest{Status: contests.StatusDraft, Enrollment: contests.EnrollmentOpen, Timing: contests.TimingFixed}
 
 	if err := c.EnrollmentOpenAt(enrollmentNow); !errors.Is(err, contests.ErrEnrollmentClosed) {
@@ -45,8 +44,7 @@ func TestDraftContestRefusesSelfSignup(t *testing.T) {
 }
 
 func TestRunningFixedContestRefusesLateSignup(t *testing.T) {
-	// A late joiner in a shared window gets less time than everybody else,
-	// which is not a contest.
+	// A late joiner in a shared window gets less time than everybody else.
 	c := contests.Contest{Status: contests.StatusRunning, Enrollment: contests.EnrollmentOpen, Timing: contests.TimingFixed}
 
 	if err := c.EnrollmentOpenAt(enrollmentNow); !errors.Is(err, contests.ErrEnrollmentClosed) {
@@ -55,8 +53,7 @@ func TestRunningFixedContestRefusesLateSignup(t *testing.T) {
 }
 
 func TestRunningIndividualContestStillAcceptsSignup(t *testing.T) {
-	// Individual timing measures from each participant's own start, so joining
-	// late costs the joiner nothing and takes nothing from anybody else.
+	// Individual timing measures from each participant's own start.
 	c := contests.Contest{Status: contests.StatusRunning, Enrollment: contests.EnrollmentOpen, Timing: contests.TimingIndividual}
 
 	if err := c.EnrollmentOpenAt(enrollmentNow); err != nil {
@@ -93,8 +90,7 @@ func TestSignupStaysOpenBeforeTheEnrollmentDeadline(t *testing.T) {
 }
 
 func TestParticipantWhoStartedIsNotMerelyRegistered(t *testing.T) {
-	// Removal is refused for somebody who has started; the check has to see
-	// both the timestamp and the status, since either can arrive first.
+	// Either the timestamp or the status can arrive first.
 	started := enrollmentNow
 	cases := map[string]struct {
 		participant contests.Participant
@@ -126,8 +122,6 @@ func TestParticipantFilterClampsThePageSize(t *testing.T) {
 }
 
 func TestStaffAddAParticipantToAnInviteOnlyContest(t *testing.T) {
-	// The enrollment type decides who creates the registration, and nothing
-	// else: staff add people to a contest nobody can join by themselves.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	student := f.AddUser("s.popescu")
@@ -150,8 +144,7 @@ func TestStaffAddAParticipantToAnInviteOnlyContest(t *testing.T) {
 }
 
 func TestImportReportsTheLoginsItCouldNotUse(t *testing.T) {
-	// A roster is pasted in from a spreadsheet; one typo must not reject the
-	// other three hundred rows, and the person importing has to see which.
+	// One typo must not reject the rest of a pasted roster.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	f.AddUser("s.popescu")
@@ -181,11 +174,8 @@ func TestImportReportsTheLoginsItCouldNotUse(t *testing.T) {
 }
 
 func TestImportSkipsADeletedAccountsLogin(t *testing.T) {
-	// users.Repository.ByLogin deliberately still returns a deleted account
-	// when nothing live has reclaimed its login — a pasted roster naming a
-	// former student's login must not become a registration for an account
-	// that can never sign in, and it must be reported as skipped rather than
-	// silently added.
+	// ByLogin still returns a deleted account whose login nobody reclaimed;
+	// it can never sign in.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	f.Users.Add(users.User{Login: "s.removed", FullName: "s.removed", Status: users.StatusDeleted})
@@ -207,9 +197,7 @@ func TestImportSkipsADeletedAccountsLogin(t *testing.T) {
 }
 
 func TestImportSkipsADeletedAccountsID(t *testing.T) {
-	// The same guard applies whether the roster names the person by login or
-	// by identifier: users.Repository.ByID returns a deleted account too, the
-	// row staying so the audit trail keeps its subject.
+	// ByID returns a deleted account too (the audit trail keeps its subject).
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	deleted := f.Users.Add(users.User{Login: "s.removed2", FullName: "s.removed2", Status: users.StatusDeleted})
@@ -231,11 +219,8 @@ func TestImportSkipsADeletedAccountsID(t *testing.T) {
 }
 
 func TestImportSkipsABlockedAccount(t *testing.T) {
-	// A blocked account can never sign in — auth.Service.Login and
-	// auth.Middleware both refuse it — so a roster entry naming one must not
-	// be reported as added. Unlike a deleted account it is still somebody
-	// real, so it gets its own reason (SkipAccountBlocked) rather than being
-	// folded into SkipUnknownAccount.
+	// A blocked account can never sign in. Unlike a deleted one it still
+	// exists, so it gets SkipAccountBlocked, not SkipUnknownAccount.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	f.Users.Add(users.User{Login: "s.blocked", FullName: "s.blocked", Status: users.StatusBlocked})
@@ -256,10 +241,7 @@ func TestImportSkipsABlockedAccount(t *testing.T) {
 	}
 }
 
-// TestImportSkipsAStaffMember is a regression test for the roster import: a
-// mistaken attempt to enroll one of the contest's own owners or managers
-// must not fail the whole batch, the same partial-success shape every other
-// row-level refusal already gets.
+// A staff row is a row-level skip, not a failure of the whole batch.
 func TestImportSkipsAStaffMember(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -295,10 +277,8 @@ func TestImportSkipsAStaffMember(t *testing.T) {
 	}
 }
 
-// A roster holds the contest's row lock for the whole import, so every
-// statement per row lengthens how long a concurrent staff change or
-// enrolment waits. The staff list is read once under that lock and each row
-// is checked against it in memory, not looked up row by row.
+// The import holds the contest's row lock, so every per-row statement makes
+// concurrent staff changes and enrolments wait longer.
 func TestImportReadsTheStaffListOnceNotOncePerRow(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -383,11 +363,7 @@ func TestSelfSignupWorksForAnOpenContest(t *testing.T) {
 	}
 }
 
-// TestStaffCannotSelfEnroll is a regression test: a contest's own owner or
-// manager reads reference answers through contest.view and the unfrozen
-// leaderboard through contest.edit, so letting them also register as a
-// participant would let them compete with an advantage no other entrant
-// has.
+// Staff see the reference answers and the unfrozen leaderboard.
 func TestStaffCannotSelfEnroll(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -452,8 +428,7 @@ func TestSignupFromOutsideTheAllowedNetworkIsRefused(t *testing.T) {
 }
 
 func TestABlockedAttemptFromAnotherNetworkIsRecorded(t *testing.T) {
-	// The entry that proves the restriction works is the same signal that
-	// somebody tried from an outside device (§7.1).
+	// It signals an attempt from an outside device (§7.1).
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	c.Enrollment = contests.EnrollmentOpen
@@ -473,8 +448,7 @@ func TestABlockedAttemptFromAnotherNetworkIsRecorded(t *testing.T) {
 }
 
 func TestRemovingAParticipantWhoAlreadyStartedIsRefused(t *testing.T) {
-	// Their queries and answers are part of the record; excluding them is
-	// disqualification, not deletion.
+	// Their work is part of the record; excluding them is disqualification.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 	student := f.AddUser("s.popescu")
@@ -528,8 +502,6 @@ func TestDisqualifyingKeepsTheRecord(t *testing.T) {
 }
 
 func TestNothingAboutParticipantsChangesInAnArchivedContest(t *testing.T) {
-	// Removal already refuses it. Disqualification changing a status inside a
-	// closed record would be the same mistake through the other door.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusArchived)
 	student := f.AddUser("s.popescu")
@@ -545,10 +517,8 @@ func TestNothingAboutParticipantsChangesInAnArchivedContest(t *testing.T) {
 }
 
 func TestImportSurvivesSomebodyElseRegisteringTheSamePersonFirst(t *testing.T) {
-	// Two organizers importing overlapping rosters at the same moment: the
-	// lookup says the student is not there, the write finds out otherwise. The
-	// unique index is the real guarantee, so the import has to treat its
-	// verdict as an ordinary skip rather than failing the whole roster.
+	// A concurrent import registers the student between lookup and write; the
+	// unique index's refusal is an ordinary skip.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 	student := f.AddUser("s.popescu")
@@ -575,10 +545,6 @@ func TestImportSurvivesSomebodyElseRegisteringTheSamePersonFirst(t *testing.T) {
 }
 
 func TestTheRosterCanSayWhichOfTheseTheStudentIsOn(t *testing.T) {
-	// Without this the catalogue cannot tell "join" from "you are already in",
-	// and the workaround it replaces — offer the button everywhere and let the
-	// API answer already_enrolled — turns an ordinary state into an error
-	// message the moment the two lists are separate screens.
 	ctx := context.Background()
 	f := conteststest.NewFixture()
 	student := f.AddUser("s.popescu")
@@ -601,16 +567,14 @@ func TestTheRosterCanSayWhichOfTheseTheStudentIsOn(t *testing.T) {
 	if !on[mine.ID] {
 		t.Error("the contest the student is registered for is not reported")
 	}
-	// Somebody else's registration is not this student's business, and a flag
-	// that leaked it would be a disclosure of who takes part in what.
+	// It must not disclose who else takes part in what.
 	if on[theirs.ID] {
 		t.Error("another account's registration was reported as this student's")
 	}
 }
 
 func TestRosterImportRefusesMoreEntriesThanTheBound(t *testing.T) {
-	// Every entry is a lookup, an insert and an audit line inside one
-	// transaction; the request body alone would allow tens of thousands.
+	// CLAUDE.md rule 2: each entry is several statements in one transaction.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 
@@ -630,10 +594,6 @@ func TestRosterImportRefusesMoreEntriesThanTheBound(t *testing.T) {
 	}
 }
 
-// TestEnrollTriggersThePoolTenderOnSuccess is Enroll's own claim about
-// self-signup: a student joining a published or running contest wakes the
-// game pool's background tender rather than leaving a late registration
-// unreflected in any spare copy until its own next tick.
 func TestEnrollTriggersThePoolTenderOnSuccess(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -655,9 +615,7 @@ func TestEnrollTriggersThePoolTenderOnSuccess(t *testing.T) {
 	}
 }
 
-// A refused enrollment must not wake anything: nothing about the pool's
-// roster changed, and triggering on a refusal would be extra housekeeping
-// work for every probe of a closed contest.
+// Otherwise every probe of a closed contest would cost a tend.
 func TestEnrollDoesNotTriggerThePoolTenderOnRefusal(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished) // invite-only by default
@@ -674,8 +632,7 @@ func TestEnrollDoesNotTriggerThePoolTenderOnRefusal(t *testing.T) {
 	}
 }
 
-// A deployment with no game cluster wires no trigger at all — Service must
-// not panic reaching for one that was never set.
+// A deployment with no game cluster wires no trigger.
 func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -686,11 +643,9 @@ func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 		Contests: f.Contests, Stories: f.Stories, Questions: f.Questions, Managers: f.Managers,
 		Registrations: f.Registrations, Policies: f.Policies, Languages: f.Languages,
 		Users: f.Users, Audit: audit.New(f.Audit), UnitOfWork: f.UnitOfWork,
-		Now: func() time.Time { return f.Now },
-		// The fixture's own gate, with its zero grace: this test is about the
-		// trigger, not the deadline.
+		Now:  func() time.Time { return f.Now },
 		Gate: f.Gate,
-		// PoolTrigger deliberately left unset.
+		// PoolTrigger left unset.
 	})
 
 	if _, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
@@ -700,11 +655,6 @@ func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	}
 }
 
-// TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport is
-// AddParticipants' own claim for a staff-side roster: importing several
-// people into a running contest wakes the tender exactly once, not once per
-// row — a burst that large is exactly what the coalescing trigger exists to
-// absorb into one extra tend, not into a trigger per participant.
 func TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -728,9 +678,7 @@ func TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport(t *testing.T)
 	}
 }
 
-// A draft has no participants querying it yet, and the ordinary tick before
-// it publishes is plenty — importing a roster onto one must not wake
-// anything.
+// The ordinary tick before publication is enough for a draft.
 func TestAddParticipantsDoesNotTriggerThePoolTenderForADraftContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -750,8 +698,6 @@ func TestAddParticipantsDoesNotTriggerThePoolTenderForADraftContest(t *testing.T
 	}
 }
 
-// A roster where every entry was skipped changed nothing about the pool's
-// roster count, so nothing should wake it.
 func TestAddParticipantsDoesNotTriggerThePoolTenderWhenNothingWasAdded(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -770,12 +716,9 @@ func TestAddParticipantsDoesNotTriggerThePoolTenderWhenNothingWasAdded(t *testin
 	}
 }
 
-// A contest on a shared clock starts for everybody at once, so nothing ever
-// writes a first action per participant: started_at stays null and the status
-// stays "registered" however much work somebody does. The guard that reads
-// those two fields was therefore blind in every fixed-timing contest — the
-// ordinary kind — and a mis-click on the roster deleted the registration with
-// the participant's queries, answers, notes and events cascading behind it.
+// Under fixed timing started_at stays null and the status "registered"
+// however much work is done, so the guard must look at the work itself:
+// deleting the registration cascades it away.
 func TestRemovingAParticipantWhoHasWorkIsRefused(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -795,11 +738,8 @@ func TestRemovingAParticipantWhoHasWorkIsRefused(t *testing.T) {
 	}
 }
 
-// And the question is asked in the transaction that then deletes, not before
-// it. Asked outside, the answer is about a moment the write no longer
-// happens in: a participant whose first query lands in that window is
-// deleted on the strength of a reading that was already stale, and their
-// journal cascades away behind them.
+// Asked before the transaction, a first query landing in between would be
+// deleted on a stale reading.
 func TestRemovingAParticipantAsksAboutTheirRecordInsideTheTransaction(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -817,11 +757,8 @@ func TestRemovingAParticipantAsksAboutTheirRecordInsideTheTransaction(t *testing
 	}
 }
 
-// The exclusion is about who reads the answers, and a contest's own staff
-// list is not the whole of that: an account holding contest.admin_all is
-// staff of every contest there is — it exports the question package and
-// reads the unfrozen table — without being named on any contest's list.
-// Enrolling it as a participant would hand it a result nobody can trust.
+// contest.admin_all reads every contest's answers and unfrozen table without
+// being on any staff list.
 func TestAnAccountWithAdminAllCannotEnrolItself(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -843,9 +780,7 @@ func TestAnAccountWithAdminAllCannotEnrolItself(t *testing.T) {
 	}
 }
 
-// The same account on a roster somebody pastes in: a row-level skip, like
-// every other reason one entry of a bulk import cannot become a
-// registration, so the other three hundred still land.
+// A row-level skip, so the rest of the roster still lands.
 func TestARosterSkipsAnAccountWithAdminAll(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)

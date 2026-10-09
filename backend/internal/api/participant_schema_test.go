@@ -56,8 +56,8 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	if len(body.Tables) != 1 || body.Tables[0].Name != "guests" {
 		t.Fatalf("body carries %+v", body.Tables)
 	}
-	// The two fields the panel actually draws with, and the two most likely
-	// to be dropped by an `omitempty` somewhere on the way out.
+	// The two fields the panel draws with, and the most likely to be lost to an
+	// omitempty.
 	if !body.Tables[0].Columns[1].Nullable {
 		t.Error("nullability did not reach the client")
 	}
@@ -66,8 +66,7 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	}
 }
 
-// A client that has to tell `null` from `[]` before it can draw a tree is a
-// client with a bug waiting.
+// A client that must tell null from [] before drawing a tree is a bug waiting.
 func TestSchemaEndpointNeverAnswersWithANullList(t *testing.T) {
 	f := newParticipantFixture(t)
 
@@ -84,9 +83,7 @@ func TestSchemaEndpointNeverAnswersWithANullList(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every refusal a service hands the HTTP layer is a
-// sentinel the `fail` switch can name, so the client is told what happened
-// rather than "internal error".
+// CLAUDE.md rule 1: every refusal reaches the client as its own code.
 func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -127,10 +124,8 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 	}
 }
 
-// The schema panel is a /play read like the story: admitted by the same
-// Access, and observed like every other admitted request, so the tracker of
-// address changes and parallel sessions hears of a registration that only
-// ever looks at the schema.
+// The tracker of address changes and parallel sessions must hear of a
+// registration that only ever reads the schema.
 func TestASchemaReadIsObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
@@ -147,9 +142,8 @@ func TestASchemaReadIsObserved(t *testing.T) {
 	}
 }
 
-// Admission refuses before the schema is asked for anything: the game is not
-// looked up, no database is ensured, and nothing is observed. The refusal is
-// the gate's own, answered from the shared table.
+// Nothing is looked up, ensured or observed; the refusal comes from the shared
+// table.
 func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -194,8 +188,6 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 	}
 }
 
-// The rate budget is spent before the contest is even looked up, the same
-// order every other read on this handler uses.
 func TestSchemaEndpointIsRateLimitedBeforeItLooksAnythingUp(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.access.admitReadErr = queryrunner.ErrTooManyQueries
@@ -221,8 +213,8 @@ func TestSchemaEndpointRefusesAContestIdentifierThatIsNotAUUID(t *testing.T) {
 	}
 }
 
-// The journal is written before anything sanitises anything, so reading the
-// column back was a way round both of the console's guards at once.
+// The journal is written before anything is sanitised, so reading it back must
+// not get round the console's guards.
 func TestTheQueryLogNeverHandsBackAFailureOfOurs(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.history.items = []queryrunner.HistoryEntry{
@@ -251,10 +243,8 @@ func TestTheQueryLogNeverHandsBackAFailureOfOurs(t *testing.T) {
 	}
 }
 
-// The same reading, in a contest that hides its schema: the console
-// deliberately withholds PostgreSQL's own words so a participant cannot
-// enumerate a closed catalogue one guess at a time. Reading them back out of
-// the log restored exactly that oracle.
+// A contest that hides its schema withholds PostgreSQL's messages so a
+// participant cannot enumerate the catalogue; the log must not hand them back.
 func TestTheQueryLogIsNotAnOracleForAHiddenSchema(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.history.items = []queryrunner.HistoryEntry{
@@ -272,9 +262,8 @@ func TestTheQueryLogIsNotAnOracleForAHiddenSchema(t *testing.T) {
 	}
 }
 
-// And the one text that is theirs still arrives. A refusal from the SQL
-// validator is about the query they typed, and "syntax error at or near" is
-// the most useful thing they can be told.
+// A validator refusal is about the query they typed, and is the most useful
+// thing they can be told.
 func TestTheQueryLogStillShowsARefusalOfTheirOwnQuery(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.history.items = []queryrunner.HistoryEntry{

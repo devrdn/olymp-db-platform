@@ -9,32 +9,20 @@ import (
 // ErrTooManyQueries is a participant asking faster than the contest allows.
 var ErrTooManyQueries = errors.New("too many queries")
 
-// window is a sliding count of one participant's queries.
-//
-// Separate from the semaphore next door because they bound different things,
-// and section 5 lists them as different layers. The semaphore bounds what is
-// happening *now*: it stops a hundred people running heavy queries together.
-// This bounds a rate: it stops one person running a thousand cheap ones in a
-// minute, each of which the semaphore would happily admit because the previous
-// had already finished.
-//
-// In memory rather than in Redis, because one Query Runner is one process and
-// the limit is per participant. A second instance would need the count shared,
-// which is the same conversation as sessions and belongs with it.
+// window is a sliding count of each participant's queries. The gate bounds
+// what runs at once; this bounds a rate, which the gate cannot. It is in
+// memory because one Query Runner is one process.
 type window struct {
 	limit int
 	over  time.Duration
-	// now is injected so the tests can move time rather than spend it.
-	now func() time.Time
+	now   func() time.Time
 
 	mu    sync.Mutex
 	seen  map[string][]time.Time
 	since int
 }
 
-// pruneEvery is how many admissions pass between sweeps of the map. Often
-// enough that it cannot grow unboundedly, rarely enough that the sweep is not
-// what the rate limiter spends its time on.
+// pruneEvery is how many admissions pass between sweeps of the map.
 const pruneEvery = 256
 
 func newWindow(limit int, over time.Duration, now func() time.Time) *window {
@@ -44,20 +32,14 @@ func newWindow(limit int, over time.Duration, now func() time.Time) *window {
 	return &window{limit: limit, over: over, now: now, seen: map[string][]time.Time{}}
 }
 
-// admit records one query and reports whether it is within the rate.
-//
-// A refused query is not recorded. Otherwise a participant who kept clicking
-// would extend their own penalty indefinitely, which turns a rate limit into a
-// lockout — and the point is to slow somebody down, not to remove them from
-// the contest.
+// admit records one query and reports whether it is within the rate. A query
+// refused by the rate is not recorded, so retrying does not extend the penalty
+// into a lockout.
 func (w *window) admit(participant string) error {
 	return w.admitAt(participant, w.limit)
 }
 
-// admitAt is admit with the limit made explicit, so a caller who knows a more
-// specific rate than the instance's own — a contest's configured limit, in
-// particular — can enforce that one against the same sliding window instead
-// of a second one of its own.
+// admitAt is admit with an explicit limit, such as a contest's own.
 func (w *window) admitAt(participant string, limit int) error {
 	if limit <= 0 {
 		return nil
@@ -73,8 +55,6 @@ func (w *window) admitAt(participant string, limit int) error {
 	}
 	cutoff := now.Add(-w.over)
 
-	// Pruned on the way past, which is what keeps the map from growing with
-	// every participant who ever asked anything.
 	kept := w.seen[participant][:0]
 	for _, at := range w.seen[participant] {
 		if at.After(cutoff) {
@@ -91,27 +71,19 @@ func (w *window) admitAt(participant string, limit int) error {
 	return nil
 }
 
-// RateLimiter bounds how often one key may pass, in a sliding window.
-//
-// Exported so that a caller elsewhere in the process can enforce a rate the
-// Runner does not know — a contest's own configured limit, decided by an
-// organiser long before a query reaches this package — against the same
-// sliding-window logic the Runner's own per-instance check uses, rather than
-// a second implementation of it. The Query Runner and the façade in front of
-// it are separate processes, so this is still a second *instance*; it is
-// never a second *algorithm*.
+// RateLimiter bounds how often one key may pass, in a sliding window. It lets
+// a caller outside the runner, such as one enforcing a contest's configured
+// limit, reuse the same algorithm.
 type RateLimiter struct{ w *window }
 
-// NewRateLimiter returns a limiter whose default is defaultLimit passes of
-// one key per the given interval. Zero means the caller has no default of its
-// own to fall back to.
+// NewRateLimiter returns a limiter allowing defaultLimit passes of one key per
+// interval. Zero means no default limit.
 func NewRateLimiter(defaultLimit int, over time.Duration) *RateLimiter {
 	return &RateLimiter{w: newWindow(defaultLimit, over, nil)}
 }
 
 // Admit records one pass of key and reports whether it is within limit passes
-// of the configured interval. limit of zero or less falls back to the
-// limiter's own default.
+// per interval. A limit of zero or less uses the limiter's default.
 func (r *RateLimiter) Admit(key string, limit int) error {
 	if limit <= 0 {
 		limit = r.w.limit
@@ -119,11 +91,8 @@ func (r *RateLimiter) Admit(key string, limit int) error {
 	return r.w.admitAt(key, limit)
 }
 
-// prune drops participants with nothing left in the window.
-//
-// Called on the way past rather than on a timer: without it the map keeps a
-// key for everybody who ever asked anything, which over a term of olympiads is
-// a slow leak in a process meant to run for months.
+// prune drops participants with nothing left in the window, so the map does
+// not keep a key for everyone who ever asked.
 func (w *window) prune(now time.Time) {
 	cutoff := now.Add(-w.over)
 	for participant, at := range w.seen {

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// newTestHasher returns a hasher roomy enough that no test below waits on it
-// unless it means to.
 func newTestHasher() *Hasher {
 	return NewHasher(HasherConfig{Concurrency: 4, MaxWait: time.Second})
 }
@@ -50,8 +48,6 @@ func TestHashRejectsAWrongPassword(t *testing.T) {
 }
 
 func TestHashIsSaltedPerCall(t *testing.T) {
-	// Equal passwords must not produce equal digests, or a stolen dump would
-	// reveal which accounts share a password.
 	h := newTestHasher()
 	first := mustHash(t, h, "same password")
 	second := mustHash(t, h, "same password")
@@ -62,8 +58,6 @@ func TestHashIsSaltedPerCall(t *testing.T) {
 }
 
 func TestHashUsesThePHCStringFormat(t *testing.T) {
-	// The encoded parameters are what lets a future cost increase re-hash old
-	// passwords instead of invalidating them.
 	hash := mustHash(t, newTestHasher(), "password")
 
 	if !strings.HasPrefix(hash, "$argon2id$") {
@@ -83,7 +77,6 @@ func TestHashNeverContainsThePassword(t *testing.T) {
 }
 
 func TestVerifyRejectsAMalformedHash(t *testing.T) {
-	// A corrupt or truncated column value must fail closed, never authenticate.
 	malformed := []string{
 		"",
 		"not-a-hash",
@@ -116,7 +109,6 @@ func TestVerifyRejectsAnEmptyPasswordAgainstARealHash(t *testing.T) {
 }
 
 func TestHashRejectsAnEmptyPassword(t *testing.T) {
-	// Storing a hash of "" would create an account anyone can enter.
 	_, err := newTestHasher().Hash(context.Background(), "")
 
 	if err == nil {
@@ -125,8 +117,6 @@ func TestHashRejectsAnEmptyPassword(t *testing.T) {
 }
 
 func TestHashRejectsAnOversizedPassword(t *testing.T) {
-	// Argon2 cost grows with input; an unbounded password is a way to burn CPU
-	// on an unauthenticated endpoint.
 	_, err := newTestHasher().Hash(context.Background(), strings.Repeat("a", MaxLength+1))
 
 	if err == nil {
@@ -135,9 +125,6 @@ func TestHashRejectsAnOversizedPassword(t *testing.T) {
 }
 
 func TestVerifyRefusesAnOversizedPasswordWithoutTakingASlot(t *testing.T) {
-	// No stored digest can be of a password longer than Hash accepts, so the
-	// answer is known without any work — and without waiting for a slot that
-	// an honest sign-in could have used.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 5 * time.Second})
 	hash := mustHash(t, h, "actual password")
 	slot, err := h.Hold(context.Background())
@@ -158,9 +145,6 @@ func TestVerifyRefusesAnOversizedPasswordWithoutTakingASlot(t *testing.T) {
 }
 
 func TestHasherRefusesWithinTheWaitWhenEverySlotIsHeld(t *testing.T) {
-	// Every argon2id computation holds 64 MiB. Admitting them without a bound
-	// lets a burst of sign-in attempts exhaust the process's memory, so a call
-	// that cannot get a slot within the wait is refused rather than queued.
 	const wait = 50 * time.Millisecond
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: wait})
 	hash := mustHash(t, h, "actual password")
@@ -192,8 +176,6 @@ func TestHasherRefusesWithinTheWaitWhenEverySlotIsHeld(t *testing.T) {
 }
 
 func TestHasherStopsWaitingWhenTheCallerDoes(t *testing.T) {
-	// A request whose client has gone, or whose deadline is shorter than the
-	// wait, must not keep a goroutine parked for the full wait.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 30 * time.Second})
 	slot, err := h.Hold(context.Background())
 	if err != nil {
@@ -232,8 +214,6 @@ func TestHasherAdmitsAWaiterOnceASlotIsReleased(t *testing.T) {
 }
 
 func TestReleasingASlotTwiceFreesItOnce(t *testing.T) {
-	// A deferred release next to an explicit one must not hand out a slot the
-	// hasher never had.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
 	slot, err := h.Hold(context.Background())
 	if err != nil {
@@ -253,8 +233,6 @@ func TestReleasingASlotTwiceFreesItOnce(t *testing.T) {
 }
 
 func TestWithMaxWaitSharesTheSameSlots(t *testing.T) {
-	// A caller that may wait longer is still one of the same bounded set of
-	// hashes: a second pool would double the memory the bound exists to cap.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: time.Second})
 	patient := h.WithMaxWait(30 * time.Millisecond)
 
@@ -284,8 +262,6 @@ func TestNewHasherFillsInItsDefaults(t *testing.T) {
 }
 
 func TestNeedsRehashDetectsOutdatedParameters(t *testing.T) {
-	// Old digests stay valid but should be upgraded on the next successful
-	// login, so raising the cost does not lock anyone out.
 	weak := "$argon2id$v=19$m=1024,t=1,p=1$c29tZXNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA"
 
 	if !NeedsRehash(weak) {
@@ -305,9 +281,6 @@ func TestNeedsRehashTreatsAnUnreadableHashAsOutdated(t *testing.T) {
 }
 
 func TestAHeldSlotVerifiesWithoutTakingAnother(t *testing.T) {
-	// A caller that must know it has a slot before it spends anything else —
-	// sign-in, before it counts an attempt against an account — takes the
-	// slot first and then verifies inside it.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
 	hash := mustHash(t, h, "actual password")
 
@@ -327,7 +300,6 @@ func TestAHeldSlotVerifiesWithoutTakingAnother(t *testing.T) {
 }
 
 func TestAReleasedSlotRefusesToHash(t *testing.T) {
-	// Work after Release would run outside the bound the slot stands for.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
 	hash := mustHash(t, h, "actual password")
 	slot, err := h.Hold(context.Background())

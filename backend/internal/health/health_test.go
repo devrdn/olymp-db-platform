@@ -13,7 +13,6 @@ import (
 	"time"
 )
 
-// stubChecker is a dependency probe with a scripted outcome.
 type stubChecker struct {
 	name  string
 	err   error
@@ -33,8 +32,6 @@ func (s stubChecker) Check(ctx context.Context) error {
 	return s.err
 }
 
-// quietLogger discards records so expected failure paths do not pollute the
-// test output.
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

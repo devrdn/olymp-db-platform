@@ -27,36 +27,26 @@ const (
 // Entry opens a journal row, before the query runs.
 type Entry struct {
 	Registration uuid.UUID
-	// RequestID ties this row to the same request in the technical logs, which
-	// is what makes "the participant says it failed at 14:02" answerable.
+	// RequestID ties this row to the same request in the technical logs.
 	RequestID uuid.UUID
 	SQL       string
-	// Address is where the query came from (Origin.Address); the zero value
-	// is recorded as no address.
+	// Address is where the query came from; the zero value records none.
 	Address netip.Addr
 }
 
-// Origin is what the Core API knows about the request that carried a query
-// and the Query Runner has no use for: it travels beside the Request into the
-// journal and never crosses the gRPC contract, because the journal is written
-// on this side of it (Journalled wraps the service client).
+// Origin is what the Core API knows about the request that carried a query.
+// It goes into the journal and never crosses the gRPC contract, since the
+// journal is written on the Core API's side.
 type Origin struct {
-	// RequestID is the request's identifier in the technical logs.
 	RequestID uuid.UUID
-	// Address is the exact client address, as httpx.ClientIP resolves it —
-	// not the rate limiter's grouped subject. The zero value means it could
-	// not be worked out.
+	// Address is the exact client address from httpx.ClientIP, not the rate
+	// limiter's grouped subject. The zero value means unknown.
 	Address netip.Addr
 }
 
-// ErrJournalUnavailable wraps a failure to open the journal row itself — the
-// core database being unreachable, or refusing the write outright (a giant
-// statement defeating its own to_tsvector index, say).
-//
-// Marked apart for the same reason ErrUnavailable is marked apart one layer
-// up: this is not the query being wrong, it is the record-keeping around it
-// failing, and a participant shown the database's own words for it would be
-// shown a sentence about our infrastructure rather than about their SQL.
+// ErrJournalUnavailable wraps a failure to open the journal row. It is marked
+// apart because it is our infrastructure failing, not the participant's SQL,
+// and the database's words about it must not reach the participant.
 var ErrJournalUnavailable = errors.New("the query could not be journalled")
 
 // Outcome closes it.
@@ -75,55 +65,33 @@ type Journal interface {
 	Complete(ctx context.Context, id int64, outcome Outcome) error
 }
 
-// Executor is the part of a runner the journal wraps.
-//
-// An interface with one method, and it is the seam the architecture turns on:
-// the Query Runner is a separate service (section 2.3), so what the Core API
-// journals is a call over the network, not a local execution. Both satisfy
-// this, which is why moving the runner out of the process changes a line in
-// the composition root and nothing here.
+// Executor is the part of a runner the journal wraps: a local Runner or a
+// client of the Query Runner service (section 2.3).
 type Executor interface {
 	Run(ctx context.Context, req Request) (*Result, error)
 }
 
-// Journalled is an Executor that writes the query log around each execution.
-//
-// Two phases, and the order is the point (section 5, point 7). The row is
-// written *before* the query is sent, so that a process that dies mid-query
-// still leaves evidence that the query happened; the result is filled in
-// afterwards by an update. Rows left at `running` by a crash are visible and
-// are swept to `error` by a background job — which only works because they
-// were written first.
-//
-// It wraps the executor rather than living inside it, so that the runner stays
-// the thing that answers and this stays the thing that records — and so that
-// it can wrap the service client just as readily as a local runner. Section 2
-// puts the query log on the Core API's side of that boundary, which is only
-// possible if this does not know which side it is on.
+// Journalled is an Executor that writes the query log around each execution
+// (section 5, point 7). The row is written before the query is sent, so a
+// process that dies mid-query still leaves a `running` row for the sweeper to
+// close as `error`; the outcome is filled in afterwards.
 type Journalled struct {
 	runner  Executor
 	journal Journal
 	log     *slog.Logger
 }
 
-// NewJournalled wraps an executor — a local Runner, or a client of the Query
-// Runner service.
+// NewJournalled wraps an executor.
 func NewJournalled(runner Executor, journal Journal, log *slog.Logger) *Journalled {
 	return &Journalled{runner: runner, journal: journal, log: log}
 }
 
 // Run records the query, runs it, and records how it ended.
 //
-// A query that cannot be recorded is not run. That is a deliberate trade: the
-// journal is not only an audit trail, it is the material the report of "how
-// many queries this participant needed" is built from, and an execution
-// missing from it is a quietly wrong answer later. The interface already
-// depends on the core database being reachable for everything else, so
-// refusing here costs no availability that was not already spent.
-//
-// A query that cannot be *closed* is different: it has already run, and the
-// participant is owed the answer. The failure is logged and the row is left
-// for the sweeper.
+// A query that cannot be recorded is not run: reports count queries from the
+// journal, and the core database is needed for everything else anyway. A row
+// that cannot be closed is only logged, since the participant is owed the
+// answer; the sweeper closes it.
 func (j *Journalled) Run(ctx context.Context, req Request, origin Origin) (*Result, error) {
 	id, err := j.journal.Begin(ctx, Entry{
 		Registration: req.Registration,
@@ -146,16 +114,14 @@ func (j *Journalled) Run(ctx context.Context, req Request, origin Origin) (*Resu
 	}
 	if result != nil {
 		outcome.Rows = len(result.Rows)
-		// A write that answered with a count rather than rows: the count is
-		// what the journal's row_count means for it.
+		// A write answering with a count records that count.
 		if outcome.Rows == 0 && result.RowsAffected > 0 {
 			outcome.Rows = int(min(result.RowsAffected, int64(math.MaxInt32)))
 		}
 	}
 
-	// Detached from the request's context on purpose: a participant who
-	// navigated away cancels the context, and the row would then stay at
-	// `running` for a query that finished perfectly well.
+	// Detached so a caller who navigated away does not leave the row at
+	// `running`.
 	closing, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer stop()
 	if err := j.journal.Complete(closing, id, outcome); err != nil {
@@ -167,12 +133,6 @@ func (j *Journalled) Run(ctx context.Context, req Request, origin Origin) (*Resu
 }
 
 // statusOf maps what happened to what the journal records.
-//
-// Load shedding lands on `rejected` along with a validator's refusal, and the
-// two are told apart by the recorded message rather than by the status. Both
-// mean the same thing to a reader of the log — the system declined to run it,
-// and nothing reached the database — and inventing a status for the rarer one
-// would mean a schema change for a distinction the message already makes.
 func statusOf(err error) Status {
 	var refusal *sqlpolicy.Refusal
 
@@ -183,17 +143,12 @@ func statusOf(err error) Status {
 		return StatusRejected
 	case errors.Is(err, ErrBusy), errors.Is(err, ErrAlreadyRunning),
 		errors.Is(err, ErrTooManyQueries), errors.Is(err, ErrDiskFull):
-		// All four mean the same thing to a reader of the log: the system
-		// declined, and nothing reached the database. Which of them it was is
-		// in the recorded message.
+		// Declined like a validator refusal; the message says which.
 		return StatusRejected
 	case errors.Is(err, ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return StatusTimeout
 	case errors.Is(err, ErrCanceled), errors.Is(err, context.Canceled):
-		// Not a timeout: the query did not run out of time, the caller stopped
-		// waiting, and what happened to the query itself is unknown. `error`
-		// with the reason recorded is the honest answer, and it keeps the
-		// timeout count meaning what a reader assumes it means.
+		// Not a timeout: the caller left, and the query's fate is unknown.
 		return StatusError
 	default:
 		return StatusError

@@ -17,8 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// trailCache is the tracker's cache in memory, counting every call so a test
-// can prove how many round trips a request cost.
+// trailCache counts every call, so tests can prove the round trips.
 type trailCache struct {
 	mu      sync.Mutex
 	values  map[string][]byte
@@ -68,7 +67,6 @@ func (c *trailCache) counts() (gets, sets int) {
 	return c.gets, c.sets
 }
 
-// eventLog records the events the tracker wrote.
 type eventLog struct {
 	mu      sync.Mutex
 	events  []monitor.Event
@@ -93,8 +91,7 @@ func (l *eventLog) all() []monitor.Event {
 	return append([]monitor.Event(nil), l.events...)
 }
 
-// sessionBook answers whether a tracked session is still live beside the
-// current one: live unless a test ended it.
+// sessionBook reports a session live unless a test ended it.
 type sessionBook struct {
 	mu    sync.Mutex
 	ended map[string]bool
@@ -150,7 +147,6 @@ func newTrackerRig(t *testing.T) *trackerRig {
 	return rig
 }
 
-// observe records one request at the rig's current time, from visit.
 func (r *trackerRig) observe(visit monitor.Visit) {
 	r.tracker.Observe(context.Background(), visit)
 }
@@ -206,8 +202,7 @@ func TestAnAddressChangeIsOneEventAndTheSameAddressAgainIsNone(t *testing.T) {
 	}
 }
 
-// Rule 6: while nothing changes, a request reads the cache once and writes
-// nothing anywhere.
+// CLAUDE.md rule 6.
 func TestAnUnchangedRequestReadsOnceAndWritesNothing(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.visit)
@@ -223,8 +218,6 @@ func TestAnUnchangedRequestReadsOnceAndWritesNothing(t *testing.T) {
 		t.Fatalf("an unchanged request inserted events %d times", rig.events.inserts)
 	}
 
-	// Once the session's last sighting is old enough to matter, it is moved
-	// forward: one cache write, still no event.
 	rig.now = rig.now.Add(time.Millisecond)
 	rig.observe(rig.visit)
 	if _, finalSets := rig.cache.counts(); finalSets != sets+1 {
@@ -247,8 +240,7 @@ func TestASecondSessionInsideTheWindowIsReported(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events = %v, want one parallel_session", rig.kinds())
 	}
-	// The bounds are the storage's to apply (monitor.Event.Normalize, which
-	// internal/postgres calls on every event); what reaches it must pass.
+	// What reaches storage must pass Event.Normalize.
 	stored := normalized(t, events[0])
 	got, ok := stored.Payload.(monitor.ParallelSession)
 	if !ok {
@@ -262,9 +254,6 @@ func TestASecondSessionInsideTheWindowIsReported(t *testing.T) {
 	}
 }
 
-// The parallel session is reported as such, not also as the registration's
-// address changing: the first session is still the one the address is
-// tracked for.
 func TestAParallelSessionDoesNotMoveTheAddress(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -287,8 +276,6 @@ func TestASecondSessionAfterTheWindowTakesOver(t *testing.T) {
 		t.Fatalf("a new session after the first went quiet wrote %v, want nothing", got)
 	}
 
-	// The new session is now the one tracked: the old one coming back while
-	// it is active is the parallel one.
 	rig.now = rig.now.Add(time.Second)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
 	if got := rig.kinds(); len(got) != 1 || got[0] != monitor.KindParallelSession {
@@ -296,8 +283,6 @@ func TestASecondSessionAfterTheWindowTakesOver(t *testing.T) {
 	}
 }
 
-// A new session from a new address after the old one went quiet is a
-// participant who moved: the address change is what is reported.
 func TestASessionTakingOverFromAnotherAddressIsAnAddressChange(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -323,14 +308,12 @@ func TestTheSamePairIsReportedAtMostOnceInTenMinutes(t *testing.T) {
 			monitor.ParallelReportEvery+time.Minute, len(events), monitor.ParallelReportEvery)
 	}
 
-	// A third session is a different pair and is reported at once.
 	rig.observe(rig.from("10.0.0.7", "session-c"))
 	if got := len(rig.events.all()); got != 3 {
 		t.Fatalf("a third session made %d events in all, want 3", got)
 	}
 }
 
-// The pair is the same whichever of its two sessions is currently tracked.
 func TestThePairIsTheSameEitherWayRound(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -346,8 +329,6 @@ func TestThePairIsTheSameEitherWayRound(t *testing.T) {
 	}
 }
 
-// The signal is best-effort: a cache that cannot be read, or that hangs,
-// costs the request at most ObserveTimeout and never an error.
 func TestAnUnreadableCacheIsSkipped(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.cache.failGet = errors.New("redis is down")
@@ -367,8 +348,6 @@ func TestAHangingCacheCostsAtMostTheTimeout(t *testing.T) {
 	}
 }
 
-// An event that cannot be stored does not keep the change unrecorded in the
-// cache: otherwise every later request would try, and fail, again.
 func TestAFailedInsertStillMovesTheTrailOn(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -381,8 +360,6 @@ func TestAFailedInsertStillMovesTheTrailOn(t *testing.T) {
 	}
 }
 
-// Without an address or a session there is nothing to compare, and nothing
-// is read.
 func TestAVisitWithoutAnAddressOrASessionIsNotTracked(t *testing.T) {
 	rig := newTrackerRig(t)
 	noAddress := rig.visit
@@ -396,8 +373,7 @@ func TestAVisitWithoutAnAddressOrASessionIsNotTracked(t *testing.T) {
 	}
 }
 
-// Rule 5: one key per registration, however many sessions and addresses
-// touch it, and it expires.
+// CLAUDE.md rule 5.
 func TestTheTrailIsOneKeyPerRegistration(t *testing.T) {
 	rig := newTrackerRig(t)
 	for i := range 20 {
@@ -437,9 +413,8 @@ func TestTheSessionTagIsAHashNotTheToken(t *testing.T) {
 	}
 }
 
-// BenchmarkObserveUnchanged is what tracking adds to every console query in
-// the common case — same session, same address — over the in-process cache:
-// one read and one decode, no write.
+// BenchmarkObserveUnchanged measures the common case over the in-process
+// cache: one read and one decode, no write.
 func BenchmarkObserveUnchanged(b *testing.B) {
 	store := cache.NewMemory(0)
 	b.Cleanup(func() { _ = store.Close() })
@@ -463,10 +438,8 @@ func BenchmarkObserveUnchanged(b *testing.B) {
 	}
 }
 
-// A session that ended — signed out, past its lifetime, retired — is not a
-// second device: the next session takes over silently, even inside the
-// window. A false "second device" on an honest participant is the costliest
-// mistake this signal can make.
+// A false "second device" on an honest participant is the costliest mistake
+// this signal can make.
 func TestASessionThatEndedIsNotAParallelOne(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -476,8 +449,6 @@ func TestASessionThatEndedIsNotAParallelOne(t *testing.T) {
 	if got := rig.kinds(); len(got) != 0 {
 		t.Fatalf("a new session after the old one ended wrote %v, want nothing", got)
 	}
-	// And the new one is tracked now: a third session while it is live is
-	// the parallel one.
 	rig.now = rig.now.Add(time.Second)
 	rig.observe(rig.from("10.0.0.3", "session-c"))
 	if got := rig.kinds(); len(got) != 1 || got[0] != monitor.KindParallelSession {
@@ -485,8 +456,6 @@ func TestASessionThatEndedIsNotAParallelOne(t *testing.T) {
 	}
 }
 
-// Whether the tracked session is alive is asked only when the sessions
-// differ: the common request costs one cache read and nothing more.
 func TestLivenessIsAskedOnlyWhenTheSessionsDiffer(t *testing.T) {
 	rig := newTrackerRig(t)
 	for range 5 {
@@ -502,7 +471,6 @@ func TestLivenessIsAskedOnlyWhenTheSessionsDiffer(t *testing.T) {
 	}
 }
 
-// Past the window nobody asks: the old session went quiet either way.
 func TestLivenessIsNotAskedPastTheWindow(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -513,8 +481,6 @@ func TestLivenessIsNotAskedPastTheWindow(t *testing.T) {
 	}
 }
 
-// When liveness cannot be answered, nothing is reported and nothing moves:
-// a guess either way would be wrong half the time.
 func TestAnUnanswerableLivenessReportsNothing(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))
@@ -530,9 +496,6 @@ func TestAnUnanswerableLivenessReportsNothing(t *testing.T) {
 	}
 }
 
-// A dual-stack browser or a NAT with several exits flips between addresses
-// on every request. The same pair of addresses is reported at most once in
-// ParallelReportEvery, and the tracked address still follows the requests.
 func TestAnAddressFlippingBackAndForthIsReportedOncePerPair(t *testing.T) {
 	rig := newTrackerRig(t)
 	v4, v6 := "10.0.0.1", "2001:db8::1"
@@ -550,8 +513,7 @@ func TestAnAddressFlippingBackAndForthIsReportedOncePerPair(t *testing.T) {
 		t.Fatalf("40 flips within %s wrote %d events, want 1", 400*time.Second, len(got))
 	}
 
-	// The tracked address followed: a third address is reported from the
-	// last one seen (v4), and at once, being a new pair.
+	// A third address is a new pair, reported from the last address (v4).
 	rig.now = rig.now.Add(time.Second)
 	rig.observe(rig.from("10.0.0.7", "session-a"))
 	events := rig.events.all()
@@ -562,8 +524,6 @@ func TestAnAddressFlippingBackAndForthIsReportedOncePerPair(t *testing.T) {
 		t.Fatalf("ip_changed from %v, want the last address seen (%s)", got.From, v4)
 	}
 
-	// After ten minutes the first pair is due again; the pair just
-	// reported (v4 and the third address) is not.
 	rig.now = start.Add(monitor.ParallelReportEvery + time.Minute)
 	rig.observe(rig.from(v4, "session-a"))
 	rig.now = rig.now.Add(time.Second)
@@ -573,8 +533,7 @@ func TestAnAddressFlippingBackAndForthIsReportedOncePerPair(t *testing.T) {
 	}
 }
 
-// slowCache stands in for Redis across a network: every call costs a round
-// trip before the in-process store answers it.
+// slowCache adds a network round trip to every call.
 type slowCache struct {
 	monitor.TrailCache
 	rtt   time.Duration
@@ -593,9 +552,8 @@ func (c *slowCache) Set(ctx context.Context, key string, value []byte, ttl time.
 	return c.TrailCache.Set(ctx, key, value, ttl)
 }
 
-// BenchmarkObserveUnchangedOverANetwork is the same request against a cache
-// a round trip away (250 µs, a loaded local network): the added cost is one
-// round trip, because the unchanged path makes exactly one call.
+// BenchmarkObserveUnchangedOverANetwork uses a 250 µs round trip; the
+// unchanged path makes exactly one call.
 func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
 	store := cache.NewMemory(0)
 	b.Cleanup(func() { _ = store.Close() })
@@ -617,11 +575,9 @@ func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
 	b.ReportMetric(float64(slow.calls)/float64(b.N), "cache-calls/op")
 }
 
-// BenchmarkObserveUnchangedOnRedis is the same request against a real Redis,
-// which is what the deployment's cache is when REDIS_ADDR is set: the
-// simulated round trip above, measured. Skipped unless MONITOR_BENCH_REDIS is
-// the address of a Redis this benchmark may write to (it writes only keys
-// named after fresh identifiers, and leaves them for their own expiry).
+// BenchmarkObserveUnchangedOnRedis runs against a real Redis named by
+// MONITOR_BENCH_REDIS, and is skipped otherwise. It writes only fresh keys
+// and leaves them to expire.
 func BenchmarkObserveUnchangedOnRedis(b *testing.B) {
 	addr := os.Getenv("MONITOR_BENCH_REDIS")
 	if addr == "" {
@@ -648,8 +604,6 @@ func BenchmarkObserveUnchangedOnRedis(b *testing.B) {
 	}
 }
 
-// A genuine parallel session already reported does not pay for liveness on
-// every request after: the pair is not due, so nobody asks.
 func TestAReportedPairIsNotAskedAboutAgainUntilItIsDue(t *testing.T) {
 	rig := newTrackerRig(t)
 	rig.observe(rig.from("10.0.0.1", "session-a"))

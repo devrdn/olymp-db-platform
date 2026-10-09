@@ -20,8 +20,7 @@ func TestDraftMovesToPublished(t *testing.T) {
 }
 
 func TestDraftCannotJumpStraightToRunning(t *testing.T) {
-	// Starting an unpublished contest would open it to participants who were
-	// never shown it, and skip the publish gate entirely.
+	// That would skip the publish gate.
 	c := contests.Contest{Status: contests.StatusDraft}
 
 	if err := c.CanTransitionTo(contests.StatusRunning); !errors.Is(err, contests.ErrInvalidTransition) {
@@ -30,8 +29,7 @@ func TestDraftCannotJumpStraightToRunning(t *testing.T) {
 }
 
 func TestPublishedGoesBackToDraft(t *testing.T) {
-	// Publishing is how an organizer finds out the gate passes; undoing that
-	// before anybody starts must not require deleting the contest.
+	// Undoing a publish before anybody starts must not require deleting it.
 	c := contests.Contest{Status: contests.StatusPublished}
 
 	if err := c.CanTransitionTo(contests.StatusDraft); err != nil {
@@ -58,9 +56,8 @@ func TestArchivedIsTerminal(t *testing.T) {
 }
 
 func TestContentIsEditableUntilTheContestStarts(t *testing.T) {
-	// An organizer publishes to see the contest as participants will, and may
-	// still fix a typo; once it runs, changing a question would change the
-	// task under people already answering it.
+	// Once it runs, changing a question changes the task under people
+	// already answering it.
 	editable := map[string]bool{
 		contests.StatusDraft:     true,
 		contests.StatusPublished: true,
@@ -77,8 +74,7 @@ func TestContentIsEditableUntilTheContestStarts(t *testing.T) {
 }
 
 func TestSettingsStayEditableWhileRunning(t *testing.T) {
-	// Extending the window after a power cut, or correcting a network range
-	// that turned out to be wrong, are exactly what a running contest needs.
+	// E.g. extending the window after a power cut, or fixing a network range.
 	if !(contests.Contest{Status: contests.StatusRunning}).SettingsEditable() {
 		t.Error("SettingsEditable() = false for a running contest, want true")
 	}
@@ -87,11 +83,6 @@ func TestSettingsStayEditableWhileRunning(t *testing.T) {
 	}
 }
 
-// Finding 4: Submit and Reader.Questions used to each repeat this same
-// two-field comparison rather than reading it from one place. This proves
-// the one place they now both call: sequential progression only takes hold
-// under QuestionModeMulti, since a single-question contest has nothing
-// before its one question to wait on.
 func TestSequentialActiveOnlyUnderMultiQuestionMode(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -143,8 +134,7 @@ func TestAddressOutsideEveryAllowedNetworkIsRefused(t *testing.T) {
 }
 
 func TestUnknownAddressIsRefusedWhenARestrictionIsInForce(t *testing.T) {
-	// The resolver could not name the caller. Failing open here would turn
-	// every proxy misconfiguration into an open door.
+	// Failing open would turn every proxy misconfiguration into an open door.
 	c := contests.Contest{AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}}
 
 	if c.AllowsAddress(netip.Addr{}) {
@@ -153,8 +143,7 @@ func TestUnknownAddressIsRefusedWhenARestrictionIsInForce(t *testing.T) {
 }
 
 func TestMappedIPv4AddressMatchesAnIPv4Network(t *testing.T) {
-	// A v4 client behind a v6 listener arrives as ::ffff:10.20.30.40; refusing
-	// it would lock out a whole lecture hall for a transport detail.
+	// A v4 client behind a v6 listener arrives as ::ffff:10.20.30.40.
 	c := contests.Contest{AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}}
 
 	if !c.AllowsAddress(netip.MustParseAddr("::ffff:10.20.30.40")) {
@@ -162,8 +151,6 @@ func TestMappedIPv4AddressMatchesAnIPv4Network(t *testing.T) {
 	}
 }
 
-// validContest is the smallest contest that satisfies Validate, so each test
-// below can state exactly the one thing it breaks.
 func validContest() contests.Contest {
 	return contests.Contest{
 		Status:       contests.StatusDraft,
@@ -205,8 +192,6 @@ func TestValidateAcceptsAWellFormedContest(t *testing.T) {
 }
 
 func TestValidateRejectsTwoDefaultLanguages(t *testing.T) {
-	// "Which language do we serve when the requested one is missing" must
-	// never have two answers.
 	c := validContest()
 	c.Languages = []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro", IsDefault: true}}
 
@@ -234,8 +219,7 @@ func TestValidateRejectsADuplicatedLanguage(t *testing.T) {
 }
 
 func TestValidateAcceptsAContestWithNoLanguagesYet(t *testing.T) {
-	// A contest is created before its languages are chosen; the publish gate
-	// is what insists on them, not the field validator.
+	// The publish gate insists on languages, not the field validator.
 	c := validContest()
 	c.Languages = nil
 
@@ -253,12 +237,8 @@ func TestValidateRejectsIndividualTimingWithoutADuration(t *testing.T) {
 	}
 }
 
-// The bound this closes (finding 5): Deadline computes
-// time.Duration(*DurationMin) * time.Minute in int64 nanoseconds, which wraps
-// to a deadline in the past well past this figure — silently locking out
-// every participant of the contest that carried it. A week is already far
-// longer than any real-time olympiad sitting, so this is refused at the
-// domain boundary rather than reaching storage to overflow later.
+// Deadline multiplies the minutes into int64 nanoseconds; a large enough
+// value wraps to a past deadline and locks out every participant.
 func TestValidateRejectsAnIndividualDurationPastTheBound(t *testing.T) {
 	c := validContest()
 	c.Timing = contests.TimingIndividual
@@ -270,7 +250,6 @@ func TestValidateRejectsAnIndividualDurationPastTheBound(t *testing.T) {
 	}
 }
 
-// The bound is inclusive: exactly a week is still accepted.
 func TestValidateAcceptsAnIndividualDurationAtTheBound(t *testing.T) {
 	c := validContest()
 	c.Timing = contests.TimingIndividual
@@ -282,10 +261,7 @@ func TestValidateAcceptsAnIndividualDurationAtTheBound(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 2: every field that reaches storage needs an explicit
-// bound. settings.grace_period_min governs how long a finished contest's
-// game databases outlive it (§2.4) and had only a floor before this — a
-// value entered without a ceiling would still reach make_interval.
+// CLAUDE.md rule 2: grace_period_min reaches make_interval.
 func TestValidateRejectsAGracePeriodPastTheBound(t *testing.T) {
 	c := validContest()
 	c.Settings.GracePeriodMin = 90*24*60 + 1
@@ -295,7 +271,6 @@ func TestValidateRejectsAGracePeriodPastTheBound(t *testing.T) {
 	}
 }
 
-// The bound is inclusive: exactly 90 days is still accepted.
 func TestValidateAcceptsAGracePeriodAtTheBound(t *testing.T) {
 	c := validContest()
 	c.Settings.GracePeriodMin = 90 * 24 * 60
@@ -336,12 +311,8 @@ func TestValidateRejectsAnUnknownEnrollmentType(t *testing.T) {
 	}
 }
 
-// The leaderboard settings (docs/ARCHITECTURE.md §10).
-
 func TestValidateRejectsAFreezeOutsideItsBounds(t *testing.T) {
-	// CLAUDE.md rule 2: a minute count that reaches storage has a range. Zero
-	// is not "no freeze" — that is nil — so a zero here is a client that
-	// meant something else.
+	// CLAUDE.md rule 2. Zero is not "no freeze"; nil is.
 	for _, freeze := range []int{0, -5, 10081} {
 		c := validContest()
 		c.LeaderboardFreezeMin = &freeze
@@ -351,8 +322,7 @@ func TestValidateRejectsAFreezeOutsideItsBounds(t *testing.T) {
 	}
 }
 
-// A freeze as long as the window would freeze the table before anybody
-// answered anything: the table would be empty for the whole contest.
+// Such a freeze would leave the table empty for the whole contest.
 func TestValidateRejectsAFreezeThatIsNotShorterThanTheWindow(t *testing.T) {
 	c := validContest()
 	start := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -381,8 +351,6 @@ func TestValidateRejectsAnUnknownLeaderboardLabel(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1).
-
 func TestValidateAcceptsICPCScoring(t *testing.T) {
 	c := validContest()
 	c.Scoring = contests.ScoringICPC
@@ -392,8 +360,7 @@ func TestValidateAcceptsICPCScoring(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 2: a minute count that reaches storage has a range, matching
-// the migration's own CHECK (icpc_penalty_min BETWEEN 0 AND 240).
+// CLAUDE.md rule 2; matches the migration's CHECK (BETWEEN 0 AND 240).
 func TestValidateRejectsAnICPCPenaltyOutsideItsBounds(t *testing.T) {
 	for _, penalty := range []int{-1, 241} {
 		c := validContest()
@@ -404,7 +371,6 @@ func TestValidateRejectsAnICPCPenaltyOutsideItsBounds(t *testing.T) {
 	}
 }
 
-// The bounds are inclusive: 0 (no penalty at all) and 240 are both accepted.
 func TestValidateAcceptsAnICPCPenaltyAtItsBounds(t *testing.T) {
 	for _, penalty := range []int{0, 240} {
 		c := validContest()
@@ -415,9 +381,8 @@ func TestValidateAcceptsAnICPCPenaltyAtItsBounds(t *testing.T) {
 	}
 }
 
-// The one filter that decides what somebody with no session may see, and the
-// test is written against the lifecycle rather than against a list: adding a
-// status to the product means deciding, here, whether a stranger sees it.
+// Written against the lifecycle, not a list: a new status must decide here
+// whether a stranger sees it.
 func TestOnlyADraftIsKeptFromAStranger(t *testing.T) {
 	all := []string{
 		contests.StatusDraft,

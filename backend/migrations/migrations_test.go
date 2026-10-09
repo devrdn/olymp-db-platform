@@ -39,8 +39,6 @@ func migrationNames(t *testing.T) []string {
 }
 
 func TestEmbeddedSetIsNotEmpty(t *testing.T) {
-	// A broken embed directive yields an empty FS and a silently unmigrated
-	// database.
 	if len(migrationNames(t)) == 0 {
 		t.Fatal("no migrations were embedded")
 	}
@@ -100,9 +98,8 @@ func TestUpMigrationsAreNotEmpty(t *testing.T) {
 	}
 }
 
-// lockConventionFrom is the first version written under the convention below.
-// Everything before it was applied long ago and, on a fresh database, runs on
-// empty tables.
+// lockConventionFrom is the first version held to the lock convention below.
+// Earlier ones run on empty tables on a fresh database.
 const lockConventionFrom = 34
 
 // statements counts the statements in a migration, ignoring comments and the
@@ -133,19 +130,12 @@ func statements(sql string) int {
 	return count
 }
 
-// The two halves of how a migration handles locks, which cmd/migrate cannot
-// enforce because it hands a whole file to PostgreSQL as one string.
-//
-// A file of several statements runs as one implicit transaction, and holds
-// every lock it takes until the last of them commits — so a file that takes a
-// heavy lock says for how long it is prepared to wait for one.
-//
-// `CREATE INDEX CONCURRENTLY` refuses to run inside a transaction block, so
-// such a file holds exactly one statement; and it must carry no lock timeout,
-// because it waits for every transaction older than itself through the lock
-// manager. A timeout would abort the build the moment any ordinary
-// transaction of this service — an export holds one for up to a minute —
-// outlived it, leaving an invalid index behind.
+// cmd/migrate sends a whole file as one string, so a multi-statement file runs
+// as one implicit transaction and holds every lock until it commits; such a
+// file must set lock_timeout. CREATE INDEX CONCURRENTLY cannot run in a
+// transaction block, so its file holds one statement and no lock timeout: the
+// build waits for every older transaction, and a timeout would abort it and
+// leave an invalid index.
 func TestAMigrationSaysHowLongItWaitsForALock(t *testing.T) {
 	for _, name := range migrationNames(t) {
 		version, _, direction := parseName(t, name)

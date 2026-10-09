@@ -6,18 +6,8 @@ import (
 	pg "github.com/pganalyze/pg_query_go/v6"
 )
 
-// Every name in the allow-list must be a node the grammar can actually
-// produce.
-//
-// A misspelt entry is the worst kind of mistake this package can make: it
-// allows nothing, refuses a construct that was meant to be permitted, and says
-// so only to whichever participant happens to write that query during a
-// contest. `sql_value_function` for `sqlvalue_function` cost exactly that —
-// `SELECT now()` was refused — and no behavioural test noticed, because a test
-// only covers the queries somebody thought to write down.
-//
-// The names come from the parse tree's own oneof, so this compares the list
-// against the parser rather than against another list.
+// A misspelt entry silently refuses a construct meant to be allowed, which
+// behavioural tests only catch for queries somebody wrote down.
 func TestEveryAllowedKindIsRealGrammar(t *testing.T) {
 	oneof := (&pg.Node{}).ProtoReflect().Descriptor().Oneofs().ByName("node")
 	if oneof == nil {
@@ -36,9 +26,8 @@ func TestEveryAllowedKindIsRealGrammar(t *testing.T) {
 	}
 }
 
-// The statements that write must not be reachable as nodes, at any depth.
-// This is the assertion that refuses a data-modifying CTE, and stating it
-// against the list directly keeps it true even if the walk is rewritten.
+// This is what refuses a data-modifying CTE, asserted on the list itself so
+// it holds even if the walk is rewritten.
 func TestNoStatementThatWritesIsAllowed(t *testing.T) {
 	for _, kind := range []string{
 		"insert_stmt", "update_stmt", "delete_stmt", "merge_stmt",

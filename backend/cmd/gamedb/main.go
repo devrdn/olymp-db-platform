@@ -1,17 +1,10 @@
-// Command gamedb prepares the game cluster: the two participant roles, the
-// role an organiser's game script runs as, their session defaults, and the
-// databases they may not reach.
+// Command gamedb prepares the game cluster: the participant roles, the game
+// script role, their session defaults, and the databases they may not reach.
 //
-// A one-shot job, run before the Query Runner starts, the way `migrate` runs
-// before the API. It is a program rather than an init script in the PostgreSQL
-// image for one reason: an init script runs once, when the data directory is
-// created, and is silently skipped ever after — so a restriction added in a
-// later release would never reach a cluster that already exists, and nothing
-// would say so. This is idempotent and runs on every deploy.
-//
-// It ships in the Query Runner's image because it reaches the same sensitive
-// catalog list the validator uses, which links PostgreSQL's parser and so
-// needs cgo. One list, two layers, as section 4.1 requires.
+// It runs idempotently on every deploy, before the Query Runner. An init
+// script would run only when the data directory is created, so later
+// restrictions would never reach an existing cluster. It ships in the Query
+// Runner's image to share the validator's sensitive catalog list (cgo).
 package main
 
 import (
@@ -37,8 +30,7 @@ func main() {
 }
 
 func run() error {
-	// The provisioning role, not the participant's: this creates roles and
-	// revokes privileges, neither of which game_reader can do.
+	// The provisioning role: this creates roles and revokes privileges.
 	dsn, err := required("GAME_DB_ADMIN_DSN")
 	if err != nil {
 		return err
@@ -50,16 +42,11 @@ func run() error {
 	if roles.WriterPassword, err = required("GAME_WRITER_PASSWORD"); err != nil {
 		return err
 	}
-	// The third role: the one an organiser's game script runs as. Created
-	// here with the other two because this is the only place any of them is
-	// defined, so a cluster that already exists picks it up on the next
-	// deploy rather than needing a hand-written CREATE ROLE.
+	// The game script role, defined here with the other two so an existing
+	// cluster picks it up on the next deploy.
 	if roles.AuthorPassword, err = required("GAME_AUTHOR_PASSWORD"); err != nil {
 		return err
 	}
-	// Same rule the API and the Query Runner hold their own credentials to:
-	// a deployment copied from deploy/.env.example and never edited must not
-	// come up on the password everybody who has read that file knows.
 	env := os.Getenv("ENV")
 	if env == "" {
 		env = "development"
@@ -95,25 +82,15 @@ func run() error {
 	return nil
 }
 
-// verifyMemory proves, at deploy time, that the game cluster is the cluster the
-// Query Runner's memory arithmetic was checked against. Three checks, in order:
+// verifyMemory proves at deploy time that the game cluster matches the Query
+// Runner's memory arithmetic: the per-process cap is enforced; game_author's
+// CONNECTION LIMIT, max_parallel_workers and autovacuum_max_workers match the
+// constants; and the container's cgroup limit is GAME_DB_MEMORY_BYTES. A
+// mismatch would only show as an OOM under load.
 //
-//   - the per-process cap (GAME_DB_PROCESS_MEMORY_BYTES) is the limit the
-//     backends run under and is enforced;
-//   - the settings the arithmetic restates as constants — game_author's
-//     CONNECTION LIMIT, max_parallel_workers, autovacuum_max_workers — are what
-//     the cluster actually runs with, so a pin changed on one side cannot drift;
-//   - the container's memory limit, read from its own cgroup, is
-//     GAME_DB_MEMORY_BYTES.
-//
-// Each fails silently in production if left unchecked — the cluster looks fine
-// and only OOMs under load — so the deploy refuses to finish instead.
-//
-// The deploy always sets both variables. A run with neither set is a
-// development run against a cluster not created by the compose file (make
-// game-roles), and the checks are skipped with a notice saying so; set either
-// and the other takes the same default the compose file and the Query Runner
-// use.
+// With neither variable set (a development cluster, make game-roles) the
+// checks are skipped with a notice; with one set, the other takes the shared
+// default.
 func verifyMemory(ctx context.Context, pool *pgxpool.Pool) error {
 	capRaw := os.Getenv("GAME_DB_PROCESS_MEMORY_BYTES")
 	limitRaw := os.Getenv("GAME_DB_MEMORY_BYTES")
@@ -165,8 +142,6 @@ func verifyMemory(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// bytesEnv reads a positive byte count, or the default when the variable is
-// unset or empty.
 func bytesEnv(key string, fallback int64) (int64, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
@@ -186,17 +161,10 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// hardenTheDefault applies the catalogue revocations to template1.
-//
-// Every database created without an explicit TEMPLATE comes from template1 and
-// copies its catalogue, ACLs included. Hardening it once means an instance
-// nobody remembered to harden is hardened anyway — which matters because the
-// alternative fails silently: an unhardened instance looks exactly like the
-// others, and only a participant would ever find out.
-//
-// The connection is closed before this returns, because CREATE DATABASE
-// refuses while anything is connected to its source. That is also why this is
-// a deploy-time job and not something the running system does.
+// hardenTheDefault applies the catalogue revocations to template1, which every
+// database without an explicit TEMPLATE copies, so a forgotten instance is
+// hardened anyway. The connection is closed before returning, because CREATE
+// DATABASE refuses while its source has connections.
 func hardenTheDefault(ctx context.Context, adminDSN string) error {
 	target, err := url.Parse(adminDSN)
 	if err != nil {
@@ -225,12 +193,8 @@ func required(key string) (string, error) {
 }
 
 // refusePlaceholderCredentials refuses, outside development, an admin DSN or
-// role password that still carries deploy/.env.example's placeholder. This
-// job runs before the Query Runner and the Core API ever connect to this
-// cluster, on credentials neither of them validates on this path (the
-// runner and the API only check the DSNs and passwords they themselves read),
-// so a deployment left on the example's values would otherwise prepare the
-// cluster successfully and only fail once something tries to use it.
+// role password still carrying deploy/.env.example's placeholder; nothing
+// else validates these credentials.
 func refusePlaceholderCredentials(env, adminDSN string, roles gamedb.Roles) error {
 	for _, cred := range []struct {
 		name, value string

@@ -7,10 +7,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// writing is a contest that permits writing to one table and nothing else.
 func writing() sqlpolicy.Policy { return sqlpolicy.ReadWrite("evidence") }
 
-// notes permits a participant their own tables and views as well.
 func notes() sqlpolicy.Policy {
 	p := sqlpolicy.ReadWrite("evidence")
 	p.AllowOwnTables = true
@@ -32,7 +30,6 @@ func TestWritingReachesTheTablesThePolicyNames(t *testing.T) {
 	}
 }
 
-// The table a policy does not name is the point of naming them.
 func TestWritingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
 	for _, sql := range []string{
 		`INSERT INTO suspects (name) VALUES ('someone')`,
@@ -50,8 +47,7 @@ func TestWritingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
 	}
 }
 
-// Everything that changes the shape of the contest stays refused however much
-// writing is permitted: a participant may edit the evidence, never the case.
+// A participant may edit the evidence, never the shape of the contest.
 func TestWritingNeverReachesTheShapeOfTheContest(t *testing.T) {
 	for _, sql := range []string{
 		`DROP TABLE evidence`,
@@ -67,7 +63,6 @@ func TestWritingNeverReachesTheShapeOfTheContest(t *testing.T) {
 	}
 }
 
-// Their own objects, in their own schema, and only when the contest says so.
 func TestOwnObjectsNeedTheirOwnPermission(t *testing.T) {
 	t.Run("allowed with the permission", func(t *testing.T) {
 		for _, sql := range []string{
@@ -101,12 +96,9 @@ func TestTemporaryTablesNeedTheirOwnPermission(t *testing.T) {
 
 	allow(t, `CREATE TEMP TABLE scratch (x int)`, temp)
 	refusal(t, `CREATE TEMP TABLE scratch (x int)`, writing())
-	// A temporary table is not a licence to make a permanent one.
 	refusal(t, `CREATE TABLE scratch (x int)`, temp)
 }
 
-// Permitting writing does not relax anything else: the walk still runs, the
-// function list still applies, and the catalogues are still the installation's.
 func TestPermittingWritingRelaxesNothingElse(t *testing.T) {
 	for name, sql := range map[string]string{
 		"a forbidden function in the values":  `INSERT INTO evidence (note) VALUES (pg_read_file('/etc/passwd'))`,
@@ -121,8 +113,6 @@ func TestPermittingWritingRelaxesNothingElse(t *testing.T) {
 	}
 }
 
-// Reading is unchanged by any of this, which is worth stating because the
-// read-only path is the one every contest uses.
 func TestReadingIsUnchangedByPermittingWriting(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT * FROM suspects`,
@@ -134,9 +124,6 @@ func TestReadingIsUnchangedByPermittingWriting(t *testing.T) {
 	}
 }
 
-// A table definition is made of expressions, and an expression is where a
-// forbidden function would hide if allowing column definitions had opened a
-// door. It has not: they are walked like any other expression.
 func TestATableDefinitionIsNotAWayPastTheFunctionList(t *testing.T) {
 	for name, sql := range map[string]string{
 		"in a default":      `CREATE TABLE work.notes (x text DEFAULT pg_read_file('/etc/passwd'))`,
@@ -154,24 +141,14 @@ func TestATableDefinitionIsNotAWayPastTheFunctionList(t *testing.T) {
 	}
 }
 
-// And a foreign key is not a way to reach a table the contest did not open:
-// referencing one is reading it, which every contest permits anyway, while
-// writing to it is still refused by the target check.
+// Referencing a table is reading it; writing to it is still refused.
 func TestAConstraintDoesNotWidenWhatMayBeWritten(t *testing.T) {
 	allow(t, `CREATE TABLE work.notes (id int REFERENCES suspects (id))`, notes())
 	refusal(t, `INSERT INTO suspects (name) VALUES ('x')`, notes())
 }
 
-// Emptying a table the contest already opened for writing is permitted, and
-// it is the only permitted statement that makes a database smaller rather
-// than larger.
-//
-// No new authority: DELETE already empties the same table, and the shape of
-// the contest is untouched — the table, its columns and its constraints are
-// all still there afterwards. What TRUNCATE adds is that the pages go back to
-// the database, which is what makes it a way out of a database at its size
-// limit; an ordinary DELETE leaves them allocated, so a participant who
-// filled their copy would be exactly as full afterwards.
+// TRUNCATE adds no authority over DELETE, but returns the pages, so it is the
+// way out of a database at its size limit.
 func TestEmptyingAWritableTableIsPermitted(t *testing.T) {
 	for _, sql := range []string{
 		`TRUNCATE evidence`,
@@ -184,7 +161,6 @@ func TestEmptyingAWritableTableIsPermitted(t *testing.T) {
 	}
 }
 
-// And it stops exactly where every other write does.
 func TestEmptyingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
 	for _, sql := range []string{
 		`TRUNCATE suspects`,
@@ -199,16 +175,12 @@ func TestEmptyingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
 		})
 	}
 
-	// Without the permission for their own tables, their own schema is no
-	// different from anywhere else.
 	t.Run("work without the permission", func(t *testing.T) {
 		refusal(t, `TRUNCATE work.notes`, writing())
 	})
 }
 
-// CASCADE is refused rather than followed. It reaches every table with a
-// foreign key to the one named — a list the policy never described and the
-// participant never wrote down — so a TRUNCATE stops at the table it names.
+// CASCADE would reach tables the policy never named.
 func TestEmptyingDoesNotCascade(t *testing.T) {
 	r := refusal(t, `TRUNCATE evidence CASCADE`, notes())
 	if r.Code != sqlpolicy.CodeNotPermitted {
@@ -216,9 +188,7 @@ func TestEmptyingDoesNotCascade(t *testing.T) {
 	}
 }
 
-// Statement.Frees is what the Query Runner turns on at the disk quota, so
-// which statements set it is worth asserting on its own: a write that can
-// only make the database smaller, and nothing else.
+// The Query Runner admits Statement.Frees at the disk quota.
 func TestTheCheckerSaysWhichStatementsCanOnlyFreeSpace(t *testing.T) {
 	for sql, want := range map[string]bool{
 		`TRUNCATE evidence`:     true,
@@ -228,8 +198,7 @@ func TestTheCheckerSaysWhichStatementsCanOnlyFreeSpace(t *testing.T) {
 
 		`INSERT INTO evidence (note) VALUES ('x')`: false,
 		`UPDATE evidence SET note = 'x'`:           false,
-		// The one that reads like a way out and is not: the rows go, the
-		// pages stay, and pg_database_size does not move.
+		// The rows go but the pages stay, so pg_database_size does not move.
 		`DELETE FROM evidence`:            false,
 		`CREATE TABLE work.notes (x int)`: false,
 		`SELECT * FROM evidence`:          false,

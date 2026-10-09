@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// monitorFixture is one participant of one contest.
 type monitorFixture struct {
 	contest, registration uuid.UUID
 }
@@ -98,7 +97,7 @@ func TestMonitorStoresABatchOfEventsInOrder(t *testing.T) {
 		if got[0].clientAt == nil || !got[0].clientAt.Equal(claimed) {
 			t.Fatalf("the browser's claimed time = %v, want %v", got[0].clientAt, claimed)
 		}
-		// Normalised on the way in, even by a caller that forgot to.
+		// Normalised even when the caller forgot to.
 		if text, _ := got[1].payload["text"].(string); got[1].kind != "paste" || utf8.RuneCountInString(text) != monitor.MaxPasteTextRunes {
 			t.Fatalf("second event = %s with %d characters of text", got[1].kind, utf8.RuneCountInString(text))
 		}
@@ -138,9 +137,8 @@ func TestMonitorRefusesABatchItCannotStoreWhole(t *testing.T) {
 	})
 }
 
-// A participant stores at most monitor.MaxStoredEvents events: the rate they
-// arrive at is bounded, but until now nothing bounded how many of them the
-// table ends up holding (CLAUDE.md rule 2).
+// A participant stores at most monitor.MaxStoredEvents events (CLAUDE.md
+// rule 2).
 func TestMonitorRefusesEventsPastWhatARegistrationStores(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)
@@ -150,14 +148,12 @@ func TestMonitorRefusesEventsPastWhatARegistrationStores(t *testing.T) {
 		if err := store.InsertEvents(ctx, batch); err != nil {
 			t.Fatalf("the first batch: %v", err)
 		}
-		// The counter the refusal is decided on is the one the journal keeps,
-		// not one this test invented.
+		// The refusal reads the counter the journal keeps.
 		if stored := storedCount(t, ctx, f.registration); stored != int64(len(batch)) {
 			t.Fatalf("after %d events the registration counts %d", len(batch), stored)
 		}
 
-		// Moved to the line rather than filled up to it: twenty thousand rows
-		// to prove a comparison is seconds nobody gets back.
+		// Set the counter near the limit instead of inserting that many rows.
 		setStoredCount(t, ctx, f.registration, monitor.MaxStoredEvents-int64(len(batch)))
 		if err := store.InsertEvents(ctx, batch); err != nil {
 			t.Fatalf("the batch that reaches the line exactly: %v", err)
@@ -172,11 +168,9 @@ func TestMonitorRefusesEventsPastWhatARegistrationStores(t *testing.T) {
 	})
 }
 
-// The ceiling bounds what a browser posts, and nothing the server observes is
-// refused by it. Otherwise a participant fills the budget with signals of
-// their own and then changes address or opens a second session unrecorded:
-// exactly what the monitoring exists to catch. A tab's life is the server's
-// record too, and the tab change it belongs to must not fail over it.
+// The ceiling refuses only browser events, or a participant could fill the
+// budget and then change address or open a second session unrecorded, and a
+// tab change would fail with its own event.
 func TestEventsTheServerObservesAreStoredPastTheBudget(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)
@@ -359,8 +353,6 @@ func TestMonitorRefusesAnInvalidRevision(t *testing.T) {
 	})
 }
 
-// A participant's events and history go with their registration, and a
-// contest's events with the contest.
 func TestMonitoringGoesWithTheRegistrationAndTheContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)
@@ -406,10 +398,8 @@ func TestMonitoringGoesWithTheRegistrationAndTheContest(t *testing.T) {
 	})
 }
 
-// An event names its contest twice — directly, for the contest-wide feed, and
-// through its registration — and the schema holds the two to agree, so a
-// caller's mix-up can never file one participant's pastes and addresses in
-// another contest's feed.
+// An event names its contest directly and through its registration; the
+// schema makes the two agree, so no event lands in another contest's feed.
 func TestAnEventCannotBeFiledUnderAnotherContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)
@@ -425,8 +415,8 @@ func TestAnEventCannotBeFiledUnderAnotherContest(t *testing.T) {
 	})
 }
 
-// A clock that stepped back extends the open revision, and must not move its
-// updated_at back before the save it already recorded — nor before its start.
+// A clock stepping back extends the open revision without moving updated_at
+// back, nor before started_at.
 func TestARevisionsUpdatedAtNeverMovesBack(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)

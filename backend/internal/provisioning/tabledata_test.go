@@ -17,18 +17,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Most of these run against the fake templateStore and buildCluster (see
-// games() in template_test.go) and a real gamefile.Store on a temp
-// directory — no CORE_DB_DSN, exactly the brief's own "parsing and
-// boundaries — without a database". The four rules PostgreSQL alone holds are the exception, and
-// they run against the real repository instead (tableDataGamesOnRepo, near
-// the end of this file). The assembly-with-real-data path that needs a real cluster is
-// TestAScriptSavedInTheCoreDatabase... in game_integration_test.go, the one
-// `make test-game-build` runs.
+// Most of these run against the fake repository and cluster with a real
+// gamefile.Store on a temp directory. Rules only PostgreSQL holds run against
+// the real repository (tableDataGamesOnRepo).
 
-// suspectsTable is the small definition every test below builds against:
-// one primary key column, one required column, one nullable one — enough to
-// exercise NOT NULL and every one of the scalar types this package checks.
+// suspectsTable has a primary key, a required column and a nullable one.
 func suspectsTable() provisioning.TableDefinition {
 	return provisioning.TableDefinition{
 		Name: "suspects",
@@ -41,26 +34,18 @@ func suspectsTable() provisioning.TableDefinition {
 	}
 }
 
-// tableDataGames assembles a *provisioning.Games with the fake repository
-// and cluster (games(), template_test.go) plus a real gamefile.Store on a
-// fresh temp directory for the table builder's own per-table files —
-// uploadsGames' own shape, for WithTableData instead of WithUploads.
 func tableDataGames(t testing.TB, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
 	t.Helper()
 	service, store, cluster, files, _ := tableDataGamesOnDisk(t, editable)
 	return service, store, cluster, files
 }
 
-// tableDataLimits are the ceilings the table builder's own store runs under
-// in these tests. Named rather than inline because the janitor's tests open a
-// second handle on the same directory (tableStoreOn) and two handles
-// disagreeing about MaxDirBytes would be a difference nothing here is about.
+// tableDataLimits is shared so a second handle (tableStoreOn) agrees with the
+// service's store.
 var tableDataLimits = gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20}
 
-// tableDataGamesOnDisk is tableDataGames with the volume's own directory
-// handed back too — what the janitor's tests need and a *gamefile.Store
-// alone cannot give them: planting a file behind the service's back is
-// Store.Begin on a second handle, but ageing one is os.Chtimes on a path.
+// tableDataGamesOnDisk also returns the directory, so janitor tests can age
+// files with os.Chtimes.
 func tableDataGamesOnDisk(t testing.TB, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store, string) {
 	t.Helper()
 	service, store, cluster := games(editable)
@@ -73,20 +58,10 @@ func tableDataGamesOnDisk(t testing.TB, editable bool) (*provisioning.Games, *te
 	return service, store, cluster, files, dir
 }
 
-// tableDataGamesOnRepo assembles a *provisioning.Games against the *real*
-// core database (this package's own standing pool) and a real
-// gamefile.Store — gamesWithUploads' own shape (upload_test.go), for the
-// table builder's volume instead of the dump's.
-//
-// The fake above is right for everything about parsing, bounds and file
-// mechanics, and wrong for four rules this feature has that PostgreSQL holds
-// and nothing else does: game_table_data_one_receiving_idx,
-// game_table_data_one_complete_idx, the GREATEST floors in
-// AppendTableDataRow, and migration 26's own source/definition pairing
-// CHECK. A fake can only reinvent those in Go — which is the check the index
-// exists to make unnecessary — so they are proved here, on the path a
-// deployment uses (CLAUDE.md rule 10), exactly as the dump's own
-// TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode does.
+// tableDataGamesOnRepo assembles Games against the real core database, for
+// rules only PostgreSQL holds: the one-receiving and one-complete indexes, the
+// GREATEST floors in AppendTableDataRow, and the source/definition CHECK
+// (CLAUDE.md rule 10).
 func tableDataGamesOnRepo(t *testing.T, editable bool) (*provisioning.Games, *gamefile.Store) {
 	t.Helper()
 	if testPool == nil {
@@ -101,9 +76,7 @@ func tableDataGamesOnRepo(t *testing.T, editable bool) (*provisioning.Games, *ga
 	return service, files
 }
 
-// tableStoreOn opens a second handle on a table-data directory a
-// *provisioning.Games is already using — storeOn's own job (upload_test.go)
-// under this store's own ceilings rather than the dump store's.
+// tableStoreOn opens a second handle on a table-data directory already in use.
 func tableStoreOn(t testing.TB, dir string) *gamefile.Store {
 	t.Helper()
 	store, err := gamefile.NewStore(dir, tableDataLimits)
@@ -113,15 +86,11 @@ func tableStoreOn(t testing.TB, dir string) *gamefile.Store {
 	return store
 }
 
-// anyAge is a cut-off no file a test has just written can be younger than —
-// what gamefile.Store.UploadIDs takes to list every id it holds. Its floor is
-// a floor and nothing else (its own doc): a zero Time lists nothing at all,
-// which is what "no file was left behind" used to be asserted against here.
+// anyAge is a cut-off that makes UploadIDs list every file; a zero Time would
+// list none.
 func anyAge() time.Time { return time.Now().Add(time.Hour) }
 
-// withSuspects saves a builder definition holding only suspectsTable, so a
-// call to BeginTableUpload or AppendTableRow finds a table to check its
-// upload against.
+// withSuspects saves a builder definition holding only suspectsTable.
 func withSuspects(t testing.TB, service *provisioning.Games, contest uuid.UUID) {
 	t.Helper()
 	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest,
@@ -130,9 +99,8 @@ func withSuspects(t testing.TB, service *provisioning.Games, contest uuid.UUID) 
 	}
 }
 
-// beginTableUploadWithContent begins a table upload sized exactly to
-// content and appends all of it in one chunk — beginWithContent's own shape
-// (upload_test.go) for a table's file instead of a whole dump.
+// beginTableUploadWithContent begins an upload sized to content and appends
+// it in one chunk.
 func beginTableUploadWithContent(t testing.TB, service *provisioning.Games, contest uuid.UUID, table, content string) provisioning.TableData {
 	t.Helper()
 	data, err := service.BeginTableUpload(t.Context(), contest, table, int64(len(content)))
@@ -145,10 +113,6 @@ func beginTableUploadWithContent(t testing.TB, service *provisioning.Games, cont
 	return data
 }
 
-// TestCurrentTableDataFindsAnUploadStillReceiving is CurrentTableData's own
-// happy path — Games.CurrentUpload's own doc, mirrored here: a reloaded
-// page's way to find a table's own chunked upload still in progress and
-// resume it.
 func TestCurrentTableDataFindsAnUploadStillReceiving(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -169,14 +133,7 @@ func TestCurrentTableDataFindsAnUploadStillReceiving(t *testing.T) {
 	}
 }
 
-// BeginTableUpload reserves the file before it writes the row, so a refused
-// row leaves both the file and the reservation Store.Begin counted for it
-// against the directory (gamefile committedBytes' own doc). Left behind,
-// they are the whole volume's budget spent by uploads nobody will ever send
-// a byte of — and this store's ceiling is the smaller of the two, so a
-// couple of refusals are enough. BeginUpload has the same defect and
-// bootstrapTableRow, a few dozen lines below the code under test, already
-// had the fix.
+// A refused row must not leave its file and directory reservation behind.
 func TestATableUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) {
 	t.Parallel()
 	service, _, _, files := tableDataGames(t, true)
@@ -186,9 +143,7 @@ func TestATableUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing
 	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024); err != nil {
 		t.Fatalf("first begin: %v", err)
 	}
-	// Every begin after the first is refused while that one is still
-	// receiving — migration 27's own partial index, and the fake repository
-	// answers exactly as it does.
+	// Refused while the first is still receiving.
 	for i := 0; i < 3; i++ {
 		if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024); !errors.Is(err, provisioning.ErrTableDataInProgress) {
 			t.Fatalf("begin %d answered %v, want ErrTableDataInProgress", i+2, err)
@@ -204,9 +159,8 @@ func TestATableUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing
 	}
 }
 
-// A table with nothing receiving answers ErrTableDataNotFound — the same
-// sentinel CurrentUpload itself answers with, which is what lets the
-// handler serve the shared "absent" shape either way.
+// The same sentinel CurrentUpload uses, so the handler serves one "absent"
+// shape.
 func TestCurrentTableDataAnswersNotFoundWhenNothingIsReceiving(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -219,10 +173,6 @@ func TestCurrentTableDataAnswersNotFoundWhenNothingIsReceiving(t *testing.T) {
 	}
 }
 
-// A table that is not part of the contest's current definition is
-// ErrTableUnknown, exactly as BeginTableUpload itself already refuses it —
-// currentDefinitionTable's own doc: every table-data method that is not a
-// pure id lookup calls it first.
 func TestCurrentTableDataRefusesATableOutsideTheDefinition(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -235,9 +185,6 @@ func TestCurrentTableDataRefusesATableOutsideTheDefinition(t *testing.T) {
 	}
 }
 
-// An installation with no table-data volume configured (WithTableData never
-// called) answers ErrTableDataDisabled for this method too, the identical
-// convention every other table-data method already follows.
 func TestCurrentTableDataIsDisabledWithoutATableDataVolume(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
@@ -248,15 +195,8 @@ func TestCurrentTableDataIsDisabledWithoutATableDataVolume(t *testing.T) {
 	}
 }
 
-// TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk is the brief's
-// own requirement read literally: "a header that does not match the
-// description's own columns is refused before the first byte of data is
-// accepted. Accepting a gigabyte and only then saying 'wrong columns' is
-// seven minutes of somebody else's time." The one chunk sent here is the
-// file's entirety, so if the check ran only at CompleteTableUpload (as it
-// did before this test existed), this call would succeed and only the
-// explicit CompleteTableUpload below would see the mismatch — this asserts
-// the rejection happens right here, on AppendTableChunk, one chunk in.
+// The refusal must come from AppendTableChunk, not wait for
+// CompleteTableUpload.
 func TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -275,21 +215,14 @@ func TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk(t *testing.T) {
 	}
 }
 
-// TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing is the
-// edge case the brief's own timing requirement runs into and must not
-// mishandle: a header line too long to fit inside one chunk. The first
-// chunk here ends mid-column-name, with no newline anywhere in it at all —
-// there is nothing yet for the early check to compare, and that must not be
-// mistaken for a mismatch (or for the chunk's own last line). The second
-// chunk completes the (correct) header and the one data row; the whole
-// upload must complete cleanly.
+// The first chunk ends mid-header with no newline; that is not a mismatch.
 func TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
-	first := "id,na" // no newline at all: the header has not arrived yet
+	first := "id,na"
 	second := "me,nickname\n1,Margot,\n"
 	content := first + second
 
@@ -309,13 +242,8 @@ func TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing(t *testi
 	}
 }
 
-// TestAppendTableChunkDoesNotRecheckAResentFirstChunk is the third edge
-// case: a chunk upload resumed after a dropped connection resends its first
-// chunk verbatim. gamefile.Store.Append's own idempotent-retry rule treats
-// that as a no-op (its own doc), and the early header check must ride along
-// with that rule rather than run a second time — a bad header must still be
-// caught, but exactly once, and a resend of a good one must not somehow
-// start failing on its second delivery.
+// A resumed upload resends its first chunk; Append treats it as a retry and
+// the resend must not fail.
 func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -330,8 +258,6 @@ func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
 	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
-	// The same chunk, resent at the same offset — exactly what a client that
-	// never saw the first response would do.
 	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("resend of the same first chunk was refused: %v", err)
 	}
@@ -341,10 +267,6 @@ func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
 	}
 }
 
-// TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived
-// mirrors gameuploads' own length check — the brief lists file size among
-// the bounds this feature owns, and this is the one that comes from
-// gamefile.Store rather than a number this package invented.
 func TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived(t *testing.T) {
 	t.Parallel()
 	service, _, _, files := tableDataGames(t, true)
@@ -363,11 +285,7 @@ func TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived(t *te
 	}
 }
 
-// TestAppendTableRowBootstrapsAndAppendsToTheSameFile is the brief's own
-// requirement that a row typed into a form and a row from a chunked upload
-// land in one file: here there is no upload at all, and the first row has
-// to create the file (with its own header) before the second is simply
-// appended to it.
+// With no upload, the first row creates the file and the second appends to it.
 func TestAppendTableRowBootstrapsAndAppendsToTheSameFile(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -405,21 +323,15 @@ func TestAppendTableRowBootstrapsAndAppendsToTheSameFile(t *testing.T) {
 	}
 }
 
-// TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline is the join between
-// the two ways a table's rows arrive. Plenty of exporters end a CSV without a
-// trailing newline, and validateTableFile accepts that file — its last line
-// is a whole row, tableLineScanner's own doc says so. A row added from the
-// form afterwards must still land as its own line rather than being glued to
-// the end of that last one, which would turn two rows into a single one of
-// five fields in a three-column table: garbage in the organiser's own window,
-// and `extra data after last expected column` on the build that follows.
+// A form row after an upload with no trailing newline must land on its own
+// line, not glued to the last row.
 func TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
-	content := "id,name,nickname\n1,Margot," // no trailing newline, exactly as many exporters write it
+	content := "id,name,nickname\n1,Margot," // no trailing newline
 	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
 	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
 		t.Fatalf("complete: %v", err)
@@ -448,16 +360,9 @@ func TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline(t *testing.T) {
 	}
 }
 
-// TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString is the other
-// half of the same promise AppendTableRow's own validation makes: an empty
-// value is checked as a NULL (it is refused outright in a NOT NULL column),
-// so it has to reach PostgreSQL as one. COPY ... WITH (FORMAT csv) reads a
-// bare empty field as NULL and a quoted one ("") as the empty string, and the
-// writer used to quote it — which for `age integer` is
-// `invalid input syntax for type integer: ""`, a build failure for a row the
-// API answered 201 to, and for a nullable text column an empty string stored
-// where the organiser meant nothing at all, so that the IS NULL a task asks
-// about finds no rows.
+// An empty value is validated as NULL, so it must be written as a bare empty
+// field: COPY csv reads a quoted "" as the empty string, which fails for an
+// integer column.
 func TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString(t *testing.T) {
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)
@@ -493,15 +398,7 @@ func TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString(t *testing.T) 
 	}
 }
 
-// TestAppendTableRowRefusesPastMaxTableDataRows is the same bound on the
-// other path: MaxTableDataRows is what this service publishes as max_rows and
-// what validateTableFile enforces for an uploaded file, so the form must not
-// be the way past it. Only the bookkeeping is grown to the limit — writing
-// two hundred thousand rows to prove a check that never reads them would be
-// the test's own cost and nobody else's. Unlike MaxTableDeletedRows, this
-// bound really is one this package checks — the comparison is in
-// AppendTableRow — so seeding the count is staging an input, not standing in
-// for the check itself.
+// Only the bookkeeping is grown to the limit; the check never reads the rows.
 func TestAppendTableRowRefusesPastMaxTableDataRows(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -524,9 +421,6 @@ func TestAppendTableRowRefusesPastMaxTableDataRows(t *testing.T) {
 	}
 }
 
-// TestAppendTableRowRefusesWhileAChunkedUploadIsReceiving is the race this
-// package's own doc names: the two paths must not both compute an append
-// offset from the same bookkeeping at once.
 func TestAppendTableRowRefusesWhileAChunkedUploadIsReceiving(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -541,18 +435,8 @@ func TestAppendTableRowRefusesWhileAChunkedUploadIsReceiving(t *testing.T) {
 	}
 }
 
-// TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable is the race
-// AppendTableRow's own doc did not cover: not the form against a chunked
-// upload (that one is refused outright), but two forms against each other.
-// Both read the same "the file is N bytes long" and both write there;
-// gamefile.Store.Append answers the second one with the idempotent-retry
-// success its own doc promises, having written nothing, and the second row is
-// gone while its author is told 201. Worse, the length written back is one no
-// file has, so every later append is ErrTableDataChunkOutOfOrder for ever.
-//
-// The gate makes that deterministic rather than hoping the scheduler
-// interleaves: both callers are held until both have read the table's current
-// data, which is exactly the state two browser tabs are in.
+// The gate holds both callers until both have read the table's data, so they
+// write at the same offset deterministically.
 func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -594,9 +478,8 @@ func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("window: %v", err)
 	}
-	// The invariant, whichever way the two interleaved: every append that was
-	// accepted is in the file, every one that was refused is not, and the
-	// bookkeeping counts exactly what is there.
+	// Accepted rows are in the file, refused ones are not, and the
+	// bookkeeping counts what is there.
 	if len(window.Rows) != 1+accepted {
 		t.Fatalf("the file holds %d row(s) after 1 + %d accepted appends: %+v", len(window.Rows), accepted, window.Rows)
 	}
@@ -604,19 +487,14 @@ func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
 		t.Fatalf("the file holds %d row(s), the bookkeeping says %d", len(window.Rows), window.TotalRows)
 	}
 
-	// And the table is not wedged: the next row still lands.
+	// The table is not wedged.
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"9", "C", ""}); err != nil {
 		t.Fatalf("the table stopped taking rows after the race: %v", err)
 	}
 }
 
-// TestAppendTableRowReconcilesBookkeepingThatLagsTheFile is the same
-// desynchronisation with no race at all: the bytes reached the file and the
-// transaction that was to record them rolled back afterwards (a failed audit
-// write is enough). The bookkeeping then names an offset the file is already
-// past, and an append taken from it is written nowhere — gamefile.Store.Append
-// reports the retry success its own doc promises. The row must not be lost,
-// and the table must not be stuck.
+// The bytes reached the file but the transaction recording them rolled back,
+// so the bookkeeping's offset is behind the file.
 func TestAppendTableRowReconcilesBookkeepingThatLagsTheFile(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -627,8 +505,7 @@ func TestAppendTableRowReconcilesBookkeepingThatLagsTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("row 1: %v", err)
 	}
-	// Back to what the row said before that append committed: the header
-	// alone, no data rows — the file itself keeps Margot.
+	// Roll the bookkeeping back to the header alone; the file keeps Margot.
 	store.mu.Lock()
 	rolledBack := store.tableData[data.ID]
 	rolledBack.ReceivedBytes, rolledBack.Lines = int64(len("id,name,nickname\n")), 0
@@ -654,19 +531,9 @@ func TestAppendTableRowReconcilesBookkeepingThatLagsTheFile(t *testing.T) {
 	}
 }
 
-// TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData closes the way
-// round ErrDefinitionTableLocked that its own doc describes and its own check
-// did not cover. The refusal is honest while the game stays builder-sourced —
-// but saving any script at all in the editor made the check skip itself
-// ("this game names no table such a row could belong to"), and nothing
-// anywhere deleted the rows, so the same file was still there when the
-// organiser came back and saved the table with another column type. The next
-// build then loaded values validated as text into a numeric column, silently,
-// because the file's header names columns and never their types.
-//
-// A game that is not built by the table builder has no tables for that data
-// to belong to, so the data goes when the game does — the same thing
-// replaceGame already does to a dump the new game displaces.
+// Saving a script in between must not let old rows survive into a table
+// redescribed with another column type: the file's header names columns, not
+// types, so the build would load them unchecked.
 func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 	t.Parallel()
 	service, _, cluster, files := tableDataGames(t, true)
@@ -677,8 +544,6 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 		t.Fatalf("row 1: %v", err)
 	}
 
-	// The way round: the organiser meets the honest refusal, saves a script
-	// instead, and comes back to the builder with the table redescribed.
 	if _, err := service.SetScript(t.Context(), uuid.New(), contest, "SELECT 1;"); err != nil {
 		t.Fatalf("save a script: %v", err)
 	}
@@ -695,7 +560,7 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 			Name: "suspects",
 			Columns: []provisioning.ColumnDefinition{
 				{Name: "id", Type: provisioning.ColumnInteger},
-				{Name: "name", Type: provisioning.ColumnNumeric}, // the type the old rows were never validated against
+				{Name: "name", Type: provisioning.ColumnNumeric}, // the old rows were never validated as numeric
 				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
 			},
 		}},
@@ -720,9 +585,6 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 	}
 }
 
-// AbortTableUpload's own path: the bytes go first, then the row, and a
-// second abort of the same upload is told the upload is no longer
-// 'receiving' rather than removing anything twice.
 func TestAbortTableUploadRemovesTheFileAndMarksTheRowAborted(t *testing.T) {
 	t.Parallel()
 	service, store, _, files := tableDataGames(t, true)
@@ -751,20 +613,13 @@ func TestAbortTableUploadRemovesTheFileAndMarksTheRowAborted(t *testing.T) {
 	if _, err := service.AbortTableUpload(t.Context(), uuid.New(), contest, begun.ID); !errors.Is(err, provisioning.ErrTableDataAlreadyComplete) {
 		t.Fatalf("second abort = %v, want ErrTableDataAlreadyComplete", err)
 	}
-	// A table freed by the abort takes a fresh upload: nothing is left
-	// 'receiving' behind migration 27's own partial index.
+	// Nothing is left 'receiving', so a fresh upload can begin.
 	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 32); err != nil {
 		t.Fatalf("begin after an abort: %v", err)
 	}
 }
 
-// The janitor's two sweeps on the table builder's own volume — the branch of
-// SweepUploads that WithTableData turns on. Every test of that janitor used
-// to assemble the service with WithUploads only, so this whole half of it
-// (sweepAbandonedTableData, sweepOrphanTableFiles, abortTableData) had never
-// once run: the leak SweepUploads' own doc calls the more dangerous of the
-// two — bytes on the volume no row names — was written for the table builder
-// and never executed.
+// The janitor's two sweeps on the table-data volume.
 func TestSweepUploadsAbandonsAStaleTableUploadAndRemovesATableFileWithNoRow(t *testing.T) {
 	t.Parallel()
 	service, store, _, files, dir := tableDataGamesOnDisk(t, true)
@@ -775,13 +630,9 @@ func TestSweepUploadsAbandonsAStaleTableUploadAndRemovesATableFileWithNoRow(t *t
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	// Aged rather than waited for, the same convention the dump janitor's own
-	// test uses against the real column.
 	store.ageTableData(stale.ID, 48*time.Hour)
 
-	// A file with no row at all: Store.Begin on a second handle, bypassing
-	// Games entirely — what a crash between the reservation and the INSERT
-	// leaves behind.
+	// A file with no row, as a crash between reservation and INSERT leaves.
 	orphanID := uuid.New()
 	if err := tableStoreOn(t, dir).Begin(orphanID.String(), 1<<16); err != nil {
 		t.Fatalf("reserve an orphan table file: %v", err)
@@ -813,10 +664,7 @@ func TestSweepUploadsAbandonsAStaleTableUploadAndRemovesATableFileWithNoRow(t *t
 	}
 }
 
-// The other side of the same two cut-offs: an upload begun moments ago, and a
-// file reserved moments ago, are both entirely ordinary and must survive.
-// Without this, a sweep with no cut-off at all — or one reading a zero
-// timestamp — passes the test above.
+// Without this, a sweep that ignores its cut-offs passes the test above.
 func TestSweepUploadsLeavesARecentTableUploadAndAYoungTableFileAlone(t *testing.T) {
 	t.Parallel()
 	service, _, _, files, dir := tableDataGamesOnDisk(t, true)
@@ -827,9 +675,8 @@ func TestSweepUploadsLeavesARecentTableUploadAndAYoungTableFileAlone(t *testing.
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	// Reserved this instant and never aged: the window BeginTableUpload opens
-	// between Store.Begin and its own INSERT, which orphanFileGrace exists to
-	// keep the sweep out of.
+	// Never aged: inside orphanFileGrace, like a file between Store.Begin and
+	// its INSERT.
 	youngOrphan := uuid.New()
 	if err := tableStoreOn(t, dir).Begin(youngOrphan.String(), 1<<16); err != nil {
 		t.Fatalf("reserve a young orphan table file: %v", err)
@@ -853,12 +700,7 @@ func TestSweepUploadsLeavesARecentTableUploadAndAYoungTableFileAlone(t *testing.
 	}
 }
 
-// wrapTableFileErr translates internal/gamefile's own refusals into this
-// package's sentinels, and until this test not one of its branches had ever
-// run: every one of them would have reached a handler as "internal error"
-// (CLAUDE.md rule 1) and no test would have noticed. Reached through the
-// public methods rather than the function directly, which is the only way a
-// caller ever reaches it.
+// Exercises wrapTableFileErr through the public methods (CLAUDE.md rule 1).
 func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
 	t.Parallel()
 	service, _, _, files, _ := tableDataGamesOnDisk(t, true)
@@ -892,9 +734,8 @@ func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
 		t.Fatalf("completing short = %v, want ErrTableDataLengthMismatch", err)
 	}
 
-	// ErrNotFound: a row whose bytes the volume no longer has. The row is left
-	// in place so the bookkeeping's own "no such upload" cannot be what
-	// answers — only the file is taken away.
+	// ErrNotFound: only the file is removed, so the answer comes from the
+	// volume and not the bookkeeping.
 	if _, err := service.AbortTableUpload(t.Context(), uuid.New(), contest, begun.ID); err != nil {
 		t.Fatalf("abort the short upload: %v", err)
 	}
@@ -908,11 +749,6 @@ func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
 	}
 }
 
-// TableDataLimits reports the table store's own ceilings, never the dump
-// store's — the whole reason WithTableData takes a second, independent
-// gamefile.Store. internal/api publishes these to the editor (CLAUDE.md
-// rule 11), so an installation whose two volumes are configured differently
-// must not be told the wrong one.
 func TestTableDataLimitsReportsTheTableStoresOwnCeilings(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -931,17 +767,8 @@ func TestTableDataLimitsReportsTheTableStoresOwnCeilings(t *testing.T) {
 	}
 }
 
-// The audit trail for a table's own data, action by action.
-//
-// This is a published contract — every action code is in audit.Actions, and
-// the journal is append-only, so an entry that stops being written cannot be
-// recovered afterwards from anything. Five of the six recording sites this
-// feature added were asserted by nothing at all: an early return, a `g.audit
-// == nil` that stopped being false, a Record moved outside the unit of work
-// — none of them failed a test.
-//
-// One test rather than five, because what has to hold is the same thing five
-// times, and because a sixth site added later is a row added to this table.
+// A missing audit entry cannot be recovered later, so every recording site is
+// asserted here; a new site is a new row in want.
 func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -951,10 +778,8 @@ func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
 	withSuspects(t, service, contest)
 	actor := uuid.New()
 
-	// One recording site each, in the order an organiser would reach them.
-	// The first row goes through bootstrapTableRow and the second through
-	// AppendTableRow's own append: two Record calls in two places, both
-	// writing ActionGameTableDataRowAdd.
+	// The first row goes through bootstrapTableRow, the second through the
+	// append path: two recording sites for the same action.
 	if _, err := service.AppendTableRow(t.Context(), actor, contest, "suspects", []string{"1", "Margot", ""}); err != nil {
 		t.Fatalf("bootstrap row: %v", err)
 	}
@@ -986,9 +811,7 @@ func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
 		{audit.ActionGameTableDataUploadAbort, map[string]any{"table": "suspects", "bytes": int64(0)}},
 		{audit.ActionGameTableDataUpload, map[string]any{"table": "suspects", "rows": int64(1), "bytes": int64(29)}},
 	}
-	// SetDefinition's own entry (contest.game_definition_set, asserted in
-	// template_test.go) is the first thing withSuspects above wrote, and is
-	// skipped here rather than restated.
+	// Skip withSuspects' SetDefinition entry.
 	entries := trail.entries[1:]
 	if len(entries) != len(want) {
 		t.Fatalf("the trail holds %d table-data entr(ies), want %d: %+v", len(entries), len(want), entries)
@@ -1012,9 +835,6 @@ func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
 	}
 }
 
-// The janitor's own abort is a system event: the entry is written with no
-// actor, the same convention the dump janitor keeps — an operator reading
-// "who cancelled this upload" must not be shown somebody who did not.
 func TestTheJanitorsOwnTableUploadAbortIsRecordedWithNoActor(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -1042,9 +862,6 @@ func TestTheJanitorsOwnTableUploadAbortIsRecordedWithNoActor(t *testing.T) {
 	}
 }
 
-// TestDeleteTableRowTombstonesWithoutTouchingTheFile is the brief's own
-// requirement for delete: the row disappears from a window read, but the
-// bytes on disk are untouched — no rewrite, whatever the file's size.
 func TestDeleteTableRowTombstonesWithoutTouchingTheFile(t *testing.T) {
 	t.Parallel()
 	service, _, _, files := tableDataGames(t, true)
@@ -1091,23 +908,9 @@ func TestDeleteTableRowTombstonesWithoutTouchingTheFile(t *testing.T) {
 	}
 }
 
-// MaxTableDeletedRows is not a bound this package checks: DeleteTableRow
-// holds no comparison against it at all. The bound is migration 27's own
-// CHECK on deleted_rows, and turning a constraint violation into
-// ErrTooManyDeletedRows is postgres.GameInstances.DeleteTableDataRow's job —
-// which is where it is proved, against a real database
-// (TestDeleteTableDataRowTombstonesAndRefusesADuplicateOrAnOverflow).
-//
-// What this level can honestly claim is the half the service does own: the
-// database's refusal reaches the caller as itself. DeleteTableRow wraps the
-// call in an audit entry and a unit of work, and both are places a sentinel
-// can be swallowed or rewritten into a bare 500 — so the fake is told to
-// answer exactly what the repository answers, and the assertion is that
-// nothing on the way out changed it.
-//
-// Deliberately not a fake reimplementing the CHECK in Go: a bound the test's
-// own stand-in invents is a test of the stand-in. Remove the CHECK from the
-// migration, or break the SQLSTATE mapping, and that version stayed green.
+// The bound itself is a database CHECK, proved against PostgreSQL in the
+// postgres package. This asserts only that the repository's refusal survives
+// the audit and unit-of-work wrapping unchanged.
 func TestDeleteTableRowSurfacesTheDatabasesOwnRefusalPastMaxTableDeletedRows(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -1127,12 +930,8 @@ func TestDeleteTableRowSurfacesTheDatabasesOwnRefusalPastMaxTableDeletedRows(t *
 	}
 }
 
-// TestBuildingATableBuilderGameLoadsEachTablesDataMinusItsHeaderAndTombstones
-// is the assembly half, without a real cluster: BuildTemplate is a fake that
-// only records bytes, but loadTableData's own filtering — dropping the
-// header line and any deleted row — is this package's own code, and this is
-// what proves a mutation that skipped it (or that stopped filtering) would
-// be caught without ever touching a real database.
+// The fake cluster records the bytes loaded, which proves the header and
+// tombstone filtering without a real database.
 func TestBuildingATableBuilderGameLoadsEachTablesDataMinusItsHeaderAndTombstones(t *testing.T) {
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)
@@ -1163,16 +962,12 @@ func TestBuildingATableBuilderGameLoadsEachTablesDataMinusItsHeaderAndTombstones
 		t.Fatalf("loaded table data = %q, want %q (header stripped, row 1 tombstoned)", got, want)
 	}
 
-	// A table nobody uploaded data for is left empty, not refused — the
-	// brief's own words.
+	// A table with no data is left empty, not refused.
 	if _, wasLoaded := cluster.tableData[built.Database+".nonexistent"]; wasLoaded {
 		t.Fatal("LoadTableData was called for a table that was never given any data")
 	}
 }
 
-// TestABuildToreDownTheTemplateWhenLoadingTableDataFailed proves
-// finishDefinitionBuild's own teardown: a data load that fails after the
-// schema already built must not leave a half-loaded template behind.
 func TestABuildToreDownTheTemplateWhenLoadingTableDataFailed(t *testing.T) {
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)
@@ -1199,23 +994,8 @@ func TestABuildToreDownTheTemplateWhenLoadingTableDataFailed(t *testing.T) {
 	}
 }
 
-// TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll is the fix for
-// a window whose byte budget is smaller than one legitimate row: a table
-// of wide text columns can have a single row past what a caller's own
-// maxBytes allows (MaxTableFieldBytes alone lets one row reach megabytes),
-// and returning an empty page for that — rows: [], truncated: true — reads
-// identically to "there is nothing left to see" even though total_rows
-// says otherwise, and the "next" button (windowFrom + len(rows)) computes
-// the very page it is already on. gamefile.Store.Window never does this to
-// a dump's own line window (TestWindowTruncatedByByteBudgetOnALongLine):
-// asked for more than its budget allows, it still returns one line, cut to
-// the budget, with Truncated set. This can't cut the line itself the same
-// way — a sliced CSV row would parse as fields nothing about the table's
-// real data, which is worse than a page with one row over budget — so a
-// row already collected is never discarded to fit; the first row of a page
-// is let through whole even when it alone is larger than maxBytes, exactly
-// so a table's own window can never show fewer than one row of data that
-// exists.
+// A first row larger than maxBytes is returned whole rather than as an empty
+// page, whose "next" offset would point back at itself.
 func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
@@ -1230,9 +1010,7 @@ func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	// Comfortably below the first row's own line length (id + a 200-byte
-	// name + the empty nickname field, plus separators), the way the brief's
-	// own scenario has max_field_bytes-sized columns exceed maxTableWindowBytes.
+	// Well below the first row's length (over 200 bytes).
 	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 50)
 	if err != nil {
 		t.Fatalf("TableDataWindow: %v", err)
@@ -1248,19 +1026,11 @@ func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
 	}
 }
 
-// The rules PostgreSQL holds, on the service path a deployment uses.
-//
-// Everything above this line runs against the fake repository, which
-// reinvents each of these in Go — a map scan under a mutex where the schema
-// has a unique partial index, a `max` where the statement has GREATEST. That
-// is precisely the check-then-write the index exists to make unnecessary, so
-// those tests say nothing at all about the real schema: drop either index
-// and every one of them stays green. These four do not (CLAUDE.md rule 10).
+// The rules PostgreSQL holds, on the real repository. The fake above
+// reimplements them in Go, so only these tests notice if the schema loses
+// them (CLAUDE.md rule 10).
 
-// The guarantee migration 27's own game_table_data_one_receiving_idx exists
-// for, at the service level rather than the repository's —
-// TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode's own
-// doc, at the finer grain of one table.
+// game_table_data_one_receiving_idx, per (contest, table).
 func TestASecondUploadForTheSameTableIsRejectedByTheDatabaseNotByGoCode(t *testing.T) {
 	service, files := tableDataGamesOnRepo(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -1277,22 +1047,15 @@ func TestASecondUploadForTheSameTableIsRejectedByTheDatabaseNotByGoCode(t *testi
 		t.Fatalf("the first, still-receiving upload's file disappeared: %v", err)
 	}
 
-	// The index is per (contest, table), not per contest: a second table of
-	// the same definition may be uploaded at the same time.
+	// Another table of the same contest may upload at the same time.
 	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "sightings", 1024); err != nil {
 		t.Fatalf("a second table's own upload was refused: %v", err)
 	}
 }
 
-// Completing a second upload for a table retires the first in the one
-// statement, and the bytes of the displaced file are freed rather than
-// stranded on the volume.
-//
-// Deliberately not claimed as a test of game_table_data_one_complete_idx:
-// this path never reaches the index, because tableDataToDisplace has already
-// named the row to retire and CompleteTableData retires it in the same
-// statement. Dropping the index leaves this test green, which is how it was
-// found out — the race the index is actually for is the one below.
+// This path never reaches game_table_data_one_complete_idx, since
+// CompleteTableData retires the displaced row in the same statement; the
+// index's race is tested below.
 func TestCompletingASecondUploadForATableRetiresTheFirstAndFreesItsBytes(t *testing.T) {
 	service, files := tableDataGamesOnRepo(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -1314,9 +1077,7 @@ func TestCompletingASecondUploadForATableRetiresTheFirstAndFreesItsBytes(t *test
 		t.Fatalf("the current file holds %d row(s), want 2 (the second upload's)", completed.Lines)
 	}
 
-	// The displaced file is gone from the volume, not merely unreferenced:
-	// this is the leak SweepUploads' own doc calls the more dangerous half,
-	// closed at the moment it is created rather than a tick later.
+	// The displaced file is removed now, not left for the janitor.
 	if _, err := files.Received(first.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
 		t.Fatalf("the displaced upload's file is still on the volume: %v", err)
 	}
@@ -1329,16 +1090,9 @@ func TestCompletingASecondUploadForATableRetiresTheFirstAndFreesItsBytes(t *test
 	}
 }
 
-// game_table_data_one_complete_idx, on the one path that really reaches it:
-// two forms adding the very first row of the same table at the same moment.
-// Neither has an upload to displace — bootstrapTableRow inserts a 'complete'
-// row outright — so the only thing that can stop the table ending up with
-// two current files, two sets of bytes and a build loading whichever the
-// query happened to pick, is the index.
-//
-// The two are made to read "no data yet" together rather than left to the
-// scheduler: heldReady releases its callers only once both have arrived,
-// which is exactly the snapshot two browser tabs share.
+// game_table_data_one_complete_idx: two forms bootstrapping the same table
+// both insert a 'complete' row, and only the index stops two current files.
+// heldReady makes both read "no data yet" before either writes.
 func TestTwoFormsBootstrappingTheSameTableAtOnceLeaveOneCurrentFileNotTwo(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -1382,9 +1136,7 @@ func TestTwoFormsBootstrappingTheSameTableAtOnceLeaveOneCurrentFileNotTwo(t *tes
 		t.Fatalf("%d caller(s) bootstrapped the table and %d were refused, want 1 and 1", won, refused)
 	}
 
-	// One current file, and one file on the volume: the refused caller's own
-	// bytes were written before its row was refused, and bootstrapTableRow
-	// gives them back rather than leaving them for the janitor.
+	// The refused caller's file was removed by bootstrapTableRow.
 	window, err := service.TableDataWindow(t.Context(), contest.ID, "suspects", 1, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("window: %v", err)
@@ -1401,10 +1153,8 @@ func TestTwoFormsBootstrappingTheSameTableAtOnceLeaveOneCurrentFileNotTwo(t *tes
 	}
 }
 
-// heldReady is the real repository with ReadyTableData gated: every caller
-// takes its answer and then waits until as many of them have arrived as the
-// gate was armed for. Everything else is the real statement, so what the
-// test above proves is the schema's own behaviour, not a stand-in's.
+// heldReady is the real repository with ReadyTableData gated: each caller gets
+// its answer, then waits until the gate's count of callers has arrived.
 type heldReady struct {
 	provisioning.TemplateRepository
 	gate *arrivalGate
@@ -1416,22 +1166,9 @@ func (h *heldReady) ReadyTableData(ctx context.Context, contestID uuid.UUID, tab
 	return data, err
 }
 
-// The GREATEST floors of postgres.GameInstances.AppendTableDataRow, reached
-// the way production reaches them: two forms adding a row to the same table,
-// recording their counts in the opposite order to the one they wrote in.
-//
-// AppendTableRow's own doc is explicit that this is what the floors are for —
-// "the two callers reaching storage in the opposite order to the one they
-// read in cannot leave the bookkeeping describing the shorter file" — and
-// until this ran on the real statement, nothing said so anywhere but in a
-// fake's own `max`. A plain assignment leaves the row counting three rows as
-// two, and every later append then writes at an offset the file already has,
-// which gamefile.Store.Append reports as a retry: the table takes no more
-// rows, for ever.
-//
-// The inversion is staged rather than raced: heldAppend holds the first
-// caller between writing its bytes and recording them, which is a window the
-// scheduler would otherwise open only now and then.
+// The GREATEST floors in AppendTableDataRow: two forms record their counts in
+// the opposite order to their writes. heldAppend holds the first caller
+// between writing its bytes and recording them.
 func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -1451,8 +1188,7 @@ func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile
 	contest, _ := contestFor(t, t.Context(), 0)
 	withTwoTables(t, service, contest.ID)
 
-	// Row 1 bootstraps the file (CreateReadyTableData, not the statement
-	// under test), so the two rows below are the first two appends.
+	// Row 1 bootstraps the file, so rows 2 and 3 are the appends under test.
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"1", "Margot", ""}); err != nil {
 		t.Fatalf("row 1: %v", err)
 	}
@@ -1464,8 +1200,8 @@ func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile
 	}()
 	<-held.arrived // row 2's bytes are on disk; its count is not recorded yet
 
-	// Row 3 reads the file rather than the stale bookkeeping (tableFileState),
-	// so it appends after row 2 and records three rows.
+	// Row 3 reads the file (tableFileState), appends after row 2 and records
+	// three rows.
 	third, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Someone", ""})
 	if err != nil {
 		t.Fatalf("row 3: %v", err)
@@ -1474,7 +1210,7 @@ func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile
 		t.Fatalf("row 3 recorded %d line(s), want 3", third.Lines)
 	}
 
-	close(held.release) // row 2 now records its own, smaller pair
+	close(held.release) // row 2 now records its smaller pair
 	if err := <-slow; err != nil {
 		t.Fatalf("row 2: %v", err)
 	}
@@ -1492,9 +1228,7 @@ func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile
 			current.Lines, current.ReceivedBytes, onVolume)
 	}
 
-	// And the table still takes rows: a bookkeeping that went backwards would
-	// send this append to an offset the file already covers, which
-	// gamefile.Store.Append answers as a retry — no row, no error, for ever.
+	// The table still takes rows.
 	fourth, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"4", "Later", ""})
 	if err != nil {
 		t.Fatalf("row 4: %v", err)
@@ -1504,10 +1238,8 @@ func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile
 	}
 }
 
-// heldAppend is the real repository with one call held open: the first
-// AppendTableDataRow waits on release, having announced itself on arrived.
-// Everything else — every statement, every constraint — is the real one, so
-// what the test below proves is the SQL's own behaviour and not a stand-in's.
+// heldAppend is the real repository whose first AppendTableDataRow closes
+// arrived and then waits on release.
 type heldAppend struct {
 	provisioning.TemplateRepository
 	once    sync.Once
@@ -1525,11 +1257,8 @@ func (h *heldAppend) AppendTableDataRow(ctx context.Context, id uuid.UUID, recei
 	return h.TemplateRepository.AppendTableDataRow(ctx, id, receivedBytes, lines)
 }
 
-// Migration 26's own source/definition pairing CHECK, on the service path:
-// a row may be 'builder' with a definition or 'editor'/'file' without one,
-// and never a leftover of the source it was replaced from. Nothing in Go
-// enforces that — SaveDefinition and SaveScript each clear the column the
-// other uses, and the constraint is what notices when one of them stops.
+// The source/definition CHECK: only 'builder' carries a definition. It catches
+// SaveDefinition or SaveScript failing to clear the other's column.
 func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
 	service, _ := tableDataGamesOnRepo(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -1543,8 +1272,7 @@ func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
 		t.Fatalf("the builder game stored %d table(s), want 2", len(stored.Definition.Tables))
 	}
 
-	// An editor script over a builder game: the definition has to go, or the
-	// CHECK refuses the upsert outright.
+	// The definition must be cleared, or the CHECK refuses the upsert.
 	if _, err := service.SetScript(t.Context(), uuid.New(), contest.ID, "CREATE TABLE t (id integer);"); err != nil {
 		t.Fatalf("switch to an editor script: %v", err)
 	}
@@ -1556,17 +1284,15 @@ func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
 		t.Fatalf("the editor game still carries a definition: %+v", stored.Definition)
 	}
 
-	// And back again: the definition returns, and the table the organiser had
-	// uploaded data for is theirs to fill again.
+	// Back to the builder: the table accepts uploads again.
 	withTwoTables(t, service, contest.ID)
 	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "suspects", 32); err != nil {
 		t.Fatalf("upload into the restored definition: %v", err)
 	}
 }
 
-// withTwoTables saves the definition the real-repository tests above work
-// against: suspects, plus a second table so a per-(contest, table) index can
-// be told from a per-contest one.
+// withTwoTables saves suspects plus a second table, so a per-(contest, table)
+// index can be told from a per-contest one.
 func withTwoTables(t *testing.T, service *provisioning.Games, contest uuid.UUID) {
 	t.Helper()
 	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
@@ -1585,8 +1311,7 @@ func withTwoTables(t *testing.T, service *provisioning.Games, contest uuid.UUID)
 	}
 }
 
-// benchmarkTable is ten columns of mixed type — the shape the review measured
-// the validation pass against, and wider than any of the tests' own tables.
+// benchmarkTable is ten columns of mixed type.
 func benchmarkTable() provisioning.TableDefinition {
 	return provisioning.TableDefinition{
 		Name: "records",
@@ -1616,11 +1341,7 @@ func benchmarkCSV(rows int) string {
 	return b.String()
 }
 
-// The pass CompleteTableUpload runs inside the HTTP request that finishes an
-// upload: the header, then every data row's field count and every field's
-// type. It is the whole of finding 5 — measured by the review at 178 ms and
-// 166 MB of garbage for two hundred thousand rows of ten columns, with 42% of
-// the time inside one regular expression.
+// The validation pass CompleteTableUpload runs inside the request.
 //
 // Run with `go test -bench CompleteTableUpload -benchmem ./internal/provisioning/`.
 func BenchmarkCompleteTableUpload(b *testing.B) {
@@ -1646,9 +1367,7 @@ func BenchmarkCompleteTableUpload(b *testing.B) {
 	}
 }
 
-// Paging through a table's rows: the last page of a file is what finding 6 is
-// about, since a scan that always starts at row 1 makes it cost the whole
-// file.
+// The last page is the worst case for a walk from the top of the file.
 //
 // Run with `go test -bench TableDataWindow -benchmem ./internal/provisioning/`.
 func BenchmarkTableDataWindowLastPage(b *testing.B) {
@@ -1678,21 +1397,8 @@ func BenchmarkTableDataWindowLastPage(b *testing.B) {
 	}
 }
 
-// TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain is
-// the order a deployment actually runs in, which no test in this package ran
-// before (CLAUDE.md rule 10).
-//
-// The game-build job (internal/app/background.go) claims any template that is
-// 'pending' and builds it within seconds of the definition being saved. An
-// organiser cannot have typed a row before that: AppendTableRow refuses a
-// table that is not in the contest's *saved* definition, so saving — and
-// therefore building — always comes first. Every row typed afterwards
-// therefore has to mark the template out of date, or the only database
-// participants ever copy is the empty one built before the data existed.
-//
-// Against the fake store, because nothing here is a rule PostgreSQL holds:
-// the question is whether the service writes the template's own row at all
-// when a row lands, and a fake that stores one template answers it exactly.
+// The definition is saved, and so built, before any row can be typed, so
+// every later row must mark the template out of date (CLAUDE.md rule 10).
 func TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -1715,8 +1421,6 @@ func TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain(t *
 	}
 }
 
-// TestACompletedTableUploadMarksTheGameOutOfDate is the same guarantee for the
-// other way rows arrive: a whole CSV, uploaded in chunks.
 func TestACompletedTableUploadMarksTheGameOutOfDate(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -1739,8 +1443,6 @@ func TestACompletedTableUploadMarksTheGameOutOfDate(t *testing.T) {
 	}
 }
 
-// TestADeletedRowMarksTheGameOutOfDate: a tombstone changes what a build
-// loads exactly as much as a new row does.
 func TestADeletedRowMarksTheGameOutOfDate(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -1765,9 +1467,7 @@ func TestADeletedRowMarksTheGameOutOfDate(t *testing.T) {
 	}
 }
 
-// TestBeginningATableUploadDoesNotMarkTheGameOutOfDate: an upload that has
-// only been reserved has changed no row a build would read, and a button
-// offered for it would rebuild the same database again.
+// A reserved upload changes no row a build reads.
 func TestBeginningATableUploadDoesNotMarkTheGameOutOfDate(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)

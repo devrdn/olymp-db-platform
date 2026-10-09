@@ -12,10 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// seedExportable stores a contest carrying one of everything a package has to
-// bring back: two languages with a default, a title per language, a story per
-// language, two questions in order — one with choices — their reference
-// answers, a configured SQL policy and a game script.
+// seedExportable stores a contest with one of everything a package carries.
 func seedExportable(t *testing.T, f *conteststest.Fixture) contests.Contest {
 	t.Helper()
 
@@ -72,9 +69,8 @@ func seedExportable(t *testing.T, f *conteststest.Fixture) contests.Contest {
 }
 
 func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
-	// The whole point of exporting first (docs/ARCHITECTURE.md §15, item 12):
-	// an organizer takes last year's olympiad and edits it. Anything missing
-	// here is something they would have to type again from memory.
+	// Anything missing here an organizer reusing last year's contest would
+	// have to retype (docs/ARCHITECTURE.md §15, item 12).
 	f := conteststest.NewFixture()
 	c := seedExportable(t, f)
 
@@ -112,8 +108,7 @@ func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
 	if len(pkg.Questions) != 2 {
 		t.Fatalf("package carries %d questions, want 2", len(pkg.Questions))
 	}
-	// In display order, because the order is part of the contest — the
-	// second question is the verdict and reads as nonsense first.
+	// Display order is part of the contest.
 	if pkg.Questions[0].Kind != contests.KindChoice || pkg.Questions[1].Kind != contests.KindFinal {
 		t.Fatalf("questions are out of order: %q then %q", pkg.Questions[0].Kind, pkg.Questions[1].Kind)
 	}
@@ -130,8 +125,7 @@ func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
 	if len(first.Answers) != 1 || first.Answers[0].Value != "a" {
 		t.Errorf("first question's reference answers are %v", first.Answers)
 	}
-	// The hidden question is in the package too: it is part of the contest,
-	// and this export is for the people who wrote it.
+	// The export is for authors, so hidden questions are included.
 	if pkg.Questions[1].IsVisible {
 		t.Error("the hidden question came back marked visible")
 	}
@@ -148,10 +142,8 @@ func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
 }
 
 func TestExportingThePackageIsRecordedWithCountsAndNoAnswers(t *testing.T) {
-	// A full answer key leaving the installation is exactly the event the
-	// trail exists for. What it must not become is a second copy of that key
-	// — §9.2 puts reference answers at "count only", and organizers read the
-	// trail.
+	// The trail records the export but must not copy the answer key: §9.2
+	// puts reference answers at "count only".
 	f := conteststest.NewFixture()
 	c := seedExportable(t, f)
 	actor := uuid.New()
@@ -184,10 +176,8 @@ func TestExportingThePackageIsRecordedWithCountsAndNoAnswers(t *testing.T) {
 }
 
 func TestAPackageWithMoreQuestionsThanTheBoundIsRefusedRatherThanTruncated(t *testing.T) {
-	// CLAUDE.md rule 2: a list reaching a response carries an explicit bound.
-	// Refused rather than cut short, because a package missing questions is
-	// not a smaller contest — it is a contest whose answer key no longer
-	// matches, and nothing in the file would say so.
+	// CLAUDE.md rule 2. A truncated package would silently mismatch its
+	// answer key.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	for i := range contests.MaxPackageQuestions + 1 {
@@ -206,9 +196,6 @@ func TestAPackageWithMoreQuestionsThanTheBoundIsRefusedRatherThanTruncated(t *te
 }
 
 func TestADraftWithNoStoryAndNoGameStillExports(t *testing.T) {
-	// Half a contest is the normal state of one being written, and an
-	// organizer moving a half-written draft between installations is exactly
-	// who this serves. An absent story is not a failure.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -222,27 +209,15 @@ func TestADraftWithNoStoryAndNoGameStillExports(t *testing.T) {
 	if pkg.HasGame {
 		t.Error("a contest with no game exported one")
 	}
-	// Never configured means read-only, the same answer the policy store
-	// gives everywhere else — not an empty policy the importer would have to
-	// guess at.
+	// Never configured means read-only, as the policy store answers elsewhere.
 	if pkg.Policy.Mode != contests.ModeReadOnly {
 		t.Errorf("unconfigured policy exported as %q", pkg.Policy.Mode)
 	}
 }
 
-// A game an organizer uploaded as a finished dump has no script column at all
-// — its SQL is gigabytes on the API host's own volume (provisioning.
-// SourceFile) — so the export cannot carry it, and the package must say so
-// rather than describe the contest as having a game and then hand over an
-// empty string.
-//
-// The two ways of being wrong are both real. A package claiming a game and
-// carrying none re-imports as ErrScriptEmpty, at which point last year's game
-// has quietly disappeared from an olympiad somebody is rebuilding. A package
-// claiming no game at all would be a lie in the other direction, and the
-// audit entry — which is what an organizer checks afterwards to see what left
-// the installation — would say the same thing. So the fact crosses the
-// boundary rather than being flattened at it (CLAUDE.md rule 11).
+// An uploaded dump lives on the API host's volume and cannot be exported.
+// An empty script would re-import as ErrScriptEmpty and "no game" would be
+// false, so the omission itself is carried, audit included (CLAUDE.md rule 11).
 func TestAGameUploadedAsAFileIsReportedAsOmittedRatherThanAsAnEmptyScript(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -276,7 +251,6 @@ func TestExportingAContestThatDoesNotExistIsNotFound(t *testing.T) {
 	}
 }
 
-// printable renders a payload value for the leak check above.
 func printable(value any) string {
 	switch v := value.(type) {
 	case string:

@@ -13,68 +13,46 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// MaxBulkAccounts bounds one operation. The request body is bounded at a
-// megabyte, which is thirty thousand identifiers: a bound on the body is not a
-// bound on the work.
+// MaxBulkAccounts bounds one operation (CLAUDE.md rule 2).
 const MaxBulkAccounts = 500
 
-// Why an account in a selection did not change. A closed vocabulary: the
-// client renders each of these, and anything else aborts the operation rather
-// than being reported as a row somebody has to go and fix.
+// Why an account in a selection did not change. A closed vocabulary; any
+// other failure aborts the operation (CLAUDE.md rule 8).
 const (
 	SkipNotFound          = "not_found"
 	SkipSelf              = "self"
 	SkipLastAdministrator = "last_administrator"
 	SkipAlreadyInStatus   = "already_in_status"
-	// SkipDeleted is unused by BulkSetStatus, which is expected to act on a
-	// deleted account (moving it to blocked or back to active). It belongs to
-	// the bulk operations that must not: bulk role changes and bulk password
-	// resets skip a deleted account rather than touch it.
+	// SkipDeleted is for bulk role changes and password resets;
+	// BulkSetStatus does act on deleted accounts.
 	SkipDeleted = "deleted"
 )
 
-// ErrTooManyAccounts refuses a selection above MaxBulkAccounts.
 var ErrTooManyAccounts = errors.New("too many accounts in one operation")
 
-// SkippedAccount is one account the operation did not touch.
 type SkippedAccount struct {
-	ID uuid.UUID
-	// Login identifies the account to a person reading the result, who chose
-	// the selection by name and not by identifier.
+	ID     uuid.UUID
 	Login  string
 	Reason string
 }
 
-// BulkResult reports what an operation did and what it declined to do.
 type BulkResult struct {
 	Changed []uuid.UUID
 	Skipped []SkippedAccount
 }
 
-// selection is the outcome of the deciding phase.
 type selection struct {
 	accepted []User
 	skipped  []SkippedAccount
 }
 
-// classify reads the selection once and asks decide about each account.
+// classify reads the selection once and asks decide about each account, in
+// the caller's order. Deciding must see the whole selection: a per-account
+// last-admin check would let the last two administrators through, each seeing
+// the other. So decisions are made in memory against one administrator
+// budget, and the caller applies the survivors in one transaction.
 //
-// This is the first of the two phases every bulk operation runs, and the
-// split is not an optimisation but a correctness requirement. Deciding who
-// may change has to see the selection as a whole: refuseIfLastAdmin asks
-// storage how many administrators remain, so a loop that called it per
-// account would let a selection holding the last two administrators through
-// — each call sees the other one still standing.
-//
-// So this phase resolves the selection with one read and decides everything
-// in memory, spending a single administrator budget as it goes (see
-// adminBudget); the caller then applies the survivors in one transaction
-// with one statement per kind of write. A selection of five hundred costs a
-// handful of queries rather than a couple of thousand.
-//
-// decide returns "" to accept an account or one of the skip reasons. It is
-// called in the order the caller gave the ids, so a budget it closes over is
-// spent predictably.
+// decide returns "" to accept an account, or a skip reason.
 func (s *Service) classify(ctx context.Context, ids []uuid.UUID, decide func(User) string) (selection, error) {
 	found, err := s.repo.ByIDs(ctx, ids)
 	if err != nil {
@@ -89,7 +67,7 @@ func (s *Service) classify(ctx context.Context, ids []uuid.UUID, decide func(Use
 	seen := make(map[uuid.UUID]bool, len(ids))
 	for _, id := range ids {
 		if seen[id] {
-			continue // The same account named twice is one account.
+			continue // a repeated id is one account
 		}
 		seen[id] = true
 
@@ -107,15 +85,8 @@ func (s *Service) classify(ctx context.Context, ids []uuid.UUID, decide func(Use
 	return sel, nil
 }
 
-// adminBudget is how many administrators may still be taken away.
-//
-// It asks storage for the count on its first spend rather than when
-// constructed, so a selection that never names an active administrator never
-// spends the query — deciding stays cheap for the common case of a selection
-// that turns out to be entirely not_found or already_in_status. Once asked,
-// though, the count is still taken exactly once for the whole selection: a
-// second spend reuses it rather than asking again, which is the defect a
-// per-account loop has and this design does not.
+// adminBudget is how many administrators may still be taken away. The count
+// is read lazily on the first spend, and only once per selection.
 type adminBudget struct {
 	ctx       context.Context
 	repo      Repository
@@ -128,10 +99,9 @@ func (s *Service) newAdminBudget(ctx context.Context) *adminBudget {
 	return &adminBudget{ctx: ctx, repo: s.repo}
 }
 
-// spend takes one administrator away, or refuses because it is the last. A
-// failure fetching the count is remembered on the budget rather than
-// returned here — decide has no way to report an error — and BulkSetStatus
-// checks it once classify has finished.
+// spend takes one administrator away, or refuses at the last. A count
+// failure is kept on the budget, since decide cannot return errors, and
+// checked after classify.
 func (b *adminBudget) spend() bool {
 	if !b.fetched {
 		b.fetched = true
@@ -149,13 +119,11 @@ func (b *adminBudget) spend() bool {
 	return true
 }
 
-// BulkSetStatus moves a selection of accounts to one status.
 func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID, status, reason string) (BulkResult, error) {
 	if !slices.Contains(Statuses, status) {
 		return BulkResult{}, fmt.Errorf("%w: %q is not an account status", ErrInvalidAccount, status)
 	}
-	// Returning to the ordinary state needs no justification, and an empty
-	// reason is what clears the old one.
+	// Returning to active needs no reason, and clears the old one.
 	if status != StatusActive {
 		checked, err := validateReason(reason)
 		if err != nil {
@@ -171,12 +139,9 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 
 	budget := s.newAdminBudget(ctx)
 
-	// Moving a deleted account to any other status — active or blocked alike
-	// — releases the partial unique index's hold on its login and email
-	// (the index is WHERE status <> 'deleted'), so both destinations can
-	// collide with a live account that has since reclaimed one. Asked once,
-	// before the transaction, so one collision skips its own account instead
-	// of failing the whole operation.
+	// Leaving "deleted" puts the login and email back under the partial
+	// unique index, so they may collide with a live account. Asked before
+	// the transaction, so a collision skips only its own account.
 	taken := map[uuid.UUID]string{}
 	if status != StatusDeleted {
 		conflicting, err := s.repo.TakenAmong(ctx, ids)
@@ -184,8 +149,7 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 			return BulkResult{}, err
 		}
 		for _, c := range conflicting {
-			// Both may collide; the login is what an administrator searches
-			// by, so it is the one reported.
+			// When both collide, report the login.
 			switch {
 			case c.Login:
 				taken[c.ID] = SkipLoginTaken
@@ -195,17 +159,10 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		}
 	}
 
-	// TakenAmong only ever compares a deleted account in the selection
-	// against a LIVE one — the partial index has nothing to say about two
-	// deleted rows sharing a login, since both are exempt from it today. But
-	// the moment two such rows leave "deleted" in the same batch, the second
-	// one to land collides with the first: "delete ivanov, create ivanov,
-	// delete again" produces exactly that pair. So the accepted set is
-	// folded against itself as it is built: a login or email already claimed
-	// by an earlier account in this same selection is taken exactly as if a
-	// live account held it. The ids are visited in the order the caller gave
-	// them, so the first one named wins and the outcome does not depend on
-	// map iteration order.
+	// Two deleted rows may share a login, and leaving "deleted" together
+	// they would collide with each other, which TakenAmong cannot see. So a
+	// login or email claimed by an earlier account in this selection counts
+	// as taken; the first id named wins.
 	reclaimedLogins := map[string]bool{}
 	reclaimedEmails := map[string]bool{}
 
@@ -213,20 +170,13 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		switch {
 		case u.ID == actorID:
 			return SkipSelf
-		// Already in the target status is only a no-op when the reason is
-		// unchanged too: the reason is part of what the operation sets, and an
-		// administrator giving a new one for an account already in that status
-		// (re-blocking with stronger evidence, say) is a decision that has to
-		// land, not a status transition that has to happen. A move to active
-		// always forces reason to "", so an already-active account compares
-		// empty to empty here and stays a no-op.
+		// A no-op only when the reason is unchanged too: a new reason for the
+		// same status must still land.
 		case u.Status == status && u.StatusReason == reason:
 			return SkipAlreadyInStatus
 		case taken[u.ID] != "":
 			return taken[u.ID]
 		}
-		// Only an account actually leaving "deleted" reclaims anything; one
-		// already skipped above never gets here, so it never blocks another.
 		releasesIndex := status != StatusDeleted && u.Status == StatusDeleted
 		var loginKey string
 		if releasesIndex {
@@ -238,15 +188,12 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 				return SkipEmailTaken
 			}
 		}
-		// Only an account that can administer today is one to protect, and
-		// only a status that cannot administer takes it away.
 		if holdsAdmin(u.Roles) && u.IsActive() && !budget.spend() {
 			return SkipLastAdministrator
 		}
 		if releasesIndex {
 			reclaimedLogins[loginKey] = true
-			// An empty email is "no email", not a value every empty account
-			// shares — it must never collide with another empty one.
+			// An empty email never collides.
 			if u.Email != "" {
 				reclaimedEmails[u.Email] = true
 			}
@@ -276,8 +223,7 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		if err := s.repo.SetStatus(ctx, changed, status, change); err != nil {
 			return err
 		}
-		// A status nobody can work in has to stop the tabs that are already
-		// open, which is the situation blocking and deletion exist to end.
+		// Blocking or deleting ends open sessions.
 		if status != StatusActive {
 			if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
 				return err
@@ -288,30 +234,22 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 	if err != nil {
 		return BulkResult{}, err
 	}
-	// Every move, a return to active included: the authentication path
-	// must not keep deciding on a status the account no longer has, in
-	// either direction.
+	// Every move, including to active.
 	s.forget(ctx, changed...)
 	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
 }
 
-// BulkReplaceRoles sets the same roles on a selection of accounts.
-//
-// The demotion guard mirrors the single-account ReplaceRoles: the budget is
-// only at risk when the new role set does not keep the administrator role,
-// and only an account that can administer today is one to protect.
+// BulkReplaceRoles sets the same roles on a selection of accounts, with the
+// same last-administrator guard as ReplaceRoles.
 func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID, roleCodes []string) (BulkResult, error) {
 	if err := boundSelection(ids); err != nil {
 		return BulkResult{}, err
 	}
-	// Lazy, exactly as BulkSetStatus's: a selection that turns out to hold no
-	// active administrator never spends the count query.
 	budget := s.newAdminBudget(ctx)
 	keepsAdmin := slices.Contains(roleCodes, RoleAdmin)
 
 	sel, err := s.classify(ctx, ids, func(u User) string {
-		// A deleted account cannot sign in, so giving it roles is pointless —
-		// and it must not spend the administrator budget either.
+		// Also keeps a deleted account off the administrator budget.
 		if u.Status == StatusDeleted {
 			return SkipDeleted
 		}
@@ -343,8 +281,7 @@ func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids [
 		if err := s.repo.ReplaceRolesMany(ctx, changed, roleCodes); err != nil {
 			return err
 		}
-		// New limits have to bite immediately: a demotion that waited for the
-		// next login would leave someone exercising rights they no longer hold.
+		// A demotion must bite now, not at the next login.
 		if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
 			return err
 		}
@@ -357,45 +294,30 @@ func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids [
 	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
 }
 
-// IssuedPassword is one account's new one-time password, to be handed over.
 type IssuedPassword struct {
-	ID    uuid.UUID
-	Login string
-	// OneTimePassword is shown once and never stored in the clear.
+	ID              uuid.UUID
+	Login           string
 	OneTimePassword string
 }
 
-// BulkPasswordResult reports the passwords issued and the accounts skipped.
 type BulkPasswordResult struct {
 	Issued  []IssuedPassword
 	Skipped []SkippedAccount
 }
 
-// hashWorkers bounds the parallel hashing.
-//
-// argon2id is deliberately expensive — tens of milliseconds and a large
-// buffer per call — so five hundred of them in sequence is most of a minute,
-// and five hundred at once is a memory spike an administrator can trigger
-// from a form. The same reasoning, and the same number, as
-// provisioning.DefaultWorkers.
+// hashWorkers bounds the parallel hashing: argon2id is expensive in time and
+// memory.
 const hashWorkers = 3
 
-// BulkResetPassword issues a new one-time password per selected account.
-//
-// Every account gets its own password: one password issued to a group would
-// be one password to share. Hashing runs on a bounded pool of workers ahead
-// of the transaction, because it is the expensive part; a failure there —
-// the machine, not the account — aborts the whole operation rather than
-// turning into a skipped row, matching CLAUDE.md's rule that only a
-// row-level reason from the closed skip vocabulary may become a skip.
+// BulkResetPassword issues each selected account its own one-time password.
+// Hashing runs on bounded workers before the transaction; a hashing failure
+// aborts the whole operation rather than becoming a skip (CLAUDE.md rule 8).
 func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID) (BulkPasswordResult, error) {
 	if err := boundSelection(ids); err != nil {
 		return BulkPasswordResult{}, err
 	}
 
 	sel, err := s.classify(ctx, ids, func(u User) string {
-		// A deleted account cannot sign in, so a new password for it is
-		// pointless.
 		if u.Status == StatusDeleted {
 			return SkipDeleted
 		}
@@ -425,7 +347,7 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 			if err != nil {
 				return fmt.Errorf("hash password: %w", err)
 			}
-			// Each goroutine writes only its own index, so this needs no lock.
+			// Each goroutine writes only its own index.
 			issued[i] = IssuedPassword{ID: u.ID, Login: u.Login, OneTimePassword: oneTime}
 			creds[i] = Credential{UserID: u.ID, Hash: hash}
 			return nil
@@ -469,11 +391,8 @@ func boundSelection(ids []uuid.UUID) error {
 	return nil
 }
 
-// statusAction names the audit action this move is.
-//
-// It takes both ends because coming back to active is two different events:
-// an account returning from a block was unblocked, one returning from deletion
-// was restored, and the trail has to say which.
+// statusAction names the audit action of a move. It takes both ends, since a
+// return to active is an unblock or a restore.
 func statusAction(from, to string) string {
 	switch {
 	case to == StatusBlocked:

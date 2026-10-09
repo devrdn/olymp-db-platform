@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// okHandler is a trivial handler used as the "next" link in middleware chains.
 var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 })
@@ -171,9 +170,6 @@ func TestStatusRecorderDefaultsToOKWhenHandlerNeverWritesHeader(t *testing.T) {
 }
 
 func TestAddressSubjectGroupsAnIPv6NetworkAndLeavesIPv4Alone(t *testing.T) {
-	// One IPv6 subscriber is routinely handed a whole /64, so an address
-	// taken verbatim is a fresh rate-limit budget per address they care to
-	// use. IPv4 is one address per machine or NAT and stays exact.
 	for name, tc := range map[string]struct{ in, want string }{
 		"ipv4":                    {"203.0.113.7", "203.0.113.7"},
 		"ipv4-mapped ipv6":        {"::ffff:203.0.113.7", "203.0.113.7"},

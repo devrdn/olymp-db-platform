@@ -13,7 +13,6 @@ type payload struct {
 	Count int    `json:"count"`
 }
 
-// decode runs DecodeJSON over a body, the way a handler does.
 func decode(body string, v any) error {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	return DecodeJSON(httptest.NewRecorder(), req, v)
@@ -31,8 +30,6 @@ func TestDecodeReadsAValidBody(t *testing.T) {
 }
 
 func TestDecodeRejectsAnOversizedBody(t *testing.T) {
-	// The login endpoint is unauthenticated, so an unbounded body is memory
-	// anyone who can reach the service may spend.
 	var got payload
 	huge := `{"login":"` + strings.Repeat("a", 2*maxBodyBytes) + `"}`
 
@@ -46,8 +43,6 @@ func TestDecodeRejectsAnOversizedBody(t *testing.T) {
 	}
 }
 
-// An endpoint whose bodies are small by nature takes a tighter bound, and
-// can tell a body refused for its size from one refused for its shape.
 func TestDecodeWithinATighterLimitNamesAnOversizedBody(t *testing.T) {
 	const limit = 64
 	var got payload
@@ -72,8 +67,6 @@ func TestDecodeWithinATighterLimitNamesAnOversizedBody(t *testing.T) {
 }
 
 func TestDecodeRejectsAnUnknownField(t *testing.T) {
-	// A client sending "new_pasword" must be told, not silently left with an
-	// unchanged password.
 	var got payload
 
 	err := decode(`{"login":"ivanov","typo":"x"}`, &got)
@@ -84,8 +77,6 @@ func TestDecodeRejectsAnUnknownField(t *testing.T) {
 }
 
 func TestDecodeRejectsASecondJSONDocument(t *testing.T) {
-	// Acting on the first document and dropping the rest would let a client
-	// believe a request was applied that never was.
 	var got payload
 
 	err := decode(`{"login":"ivanov"}{"login":"petrov"}`, &got)
@@ -122,7 +113,6 @@ func TestDecodeRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestDecodeReportsAWrongFieldType(t *testing.T) {
-	// The message names the field, so the client can fix the right one.
 	var got payload
 
 	err := decode(`{"count":"not a number"}`, &got)
@@ -136,7 +126,6 @@ func TestDecodeReportsAWrongFieldType(t *testing.T) {
 }
 
 func TestDecodeErrorNeverExposesInternals(t *testing.T) {
-	// Messages reach the client verbatim in invalid_request responses.
 	var got payload
 
 	err := decode(`{"login":`, &got)
@@ -149,9 +138,6 @@ func TestDecodeErrorNeverExposesInternals(t *testing.T) {
 }
 
 func TestDecodeRejectsANULCharacterAnywhereInTheBody(t *testing.T) {
-	// PostgreSQL cannot store a NUL byte and refuses one by failing the
-	// statement: a name pasted with one was a 500 for what is the client's
-	// own malformed value.
 	type nested struct {
 		Rows []payload         `json:"rows"`
 		Tags map[string]string `json:"tags"`

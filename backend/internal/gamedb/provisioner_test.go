@@ -12,8 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// The detective's own database: a small schema and some data, the way an
-// author would upload it.
+// A small schema and some data, as an author would upload it.
 const detectiveScript = `
 CREATE TABLE suspects (id serial PRIMARY KEY, name text NOT NULL, city text);
 CREATE TABLE evidence (id serial PRIMARY KEY, note text);
@@ -35,14 +34,11 @@ func provisioner(t *testing.T) *gamedb.Provisioner {
 	return p
 }
 
-// named returns a database name unique to this test, dropped afterwards.
 func named(t *testing.T, suffix string) string {
 	t.Helper()
 
-	// PostgreSQL stops at 63 characters, and a Go test name is easily longer.
-	// The suffix is appended *after* trimming, or two names in one test trim to
-	// the same thing — which is how a template and an instance once ended up
-	// as one database, the instance's creation dropping the template first.
+	// PostgreSQL stops at 63 characters. The suffix goes on after trimming,
+	// or two names in one test could trim to the same database.
 	base := strings.ToLower("gamedb_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
 	if room := 55 - len(suffix); len(base) > room {
 		base = base[:room]
@@ -82,8 +78,6 @@ func TestATemplateHoldsTheAuthorsSchemaAndData(t *testing.T) {
 	}
 }
 
-// The whole reason a template exists: copying it is what a participant gets,
-// and the copy must be theirs alone.
 func TestTwoInstancesDoNotShareData(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
 
@@ -109,9 +103,7 @@ func TestTwoInstancesDoNotShareData(t *testing.T) {
 	}
 }
 
-// A read-only contest must produce a template whose privileges say so, whatever
-// the validator does. This is the layer that has to hold when the validator
-// does not.
+// The template's privileges must hold even if the validator does not.
 func TestAReadOnlyTemplateGrantsNothingThatWrites(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -136,13 +128,9 @@ func TestAReadOnlyTemplateGrantsNothingThatWrites(t *testing.T) {
 	}
 }
 
-// The way out of the disk quota has to work on a contest that already
-// existed, not only on one whose template was built after TRUNCATE joined the
-// policy's grants. A participant who fills their database is told, in their
-// own language, to empty a table; an instance copied from an older template
-// would answer that instruction with "permission denied" for the rest of the
-// olympiad. Revoking the privilege on the template is what an older template
-// is: everything else about it is the same.
+// A template built before TRUNCATE joined the policy's grants must still
+// yield instances that can truncate: it is how a participant gets out of
+// the disk quota.
 func TestAnInstanceMayTruncateAlthoughItsTemplateCouldNot(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
 	asOwner(t, template, `REVOKE TRUNCATE ON evidence FROM `+gamedb.RoleWriter)
@@ -156,15 +144,11 @@ func TestAnInstanceMayTruncateAlthoughItsTemplateCouldNot(t *testing.T) {
 	if _, err := writer.Exec(t.Context(), `TRUNCATE evidence`); err != nil {
 		t.Fatalf("the writable table could not be emptied: %v", err)
 	}
-	// And the privilege reaches no further than the policy does: settling an
-	// instance grants what the policy names, never more than the template
-	// would have.
+	// Settling grants only what the policy names.
 	refused(t, writer, `TRUNCATE suspects`)
 }
 
-// Settling an instance grants nothing at all in a contest that permits no
-// writing: the statements only run when the policy has writable tables, so a
-// read-only copy is untouched by the step above.
+// In a contest with no writable tables, settling grants nothing.
 func TestAReadOnlyInstanceMayNotTruncate(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -180,8 +164,6 @@ func TestAReadOnlyInstanceMayNotTruncate(t *testing.T) {
 	refused(t, reader, `TRUNCATE evidence`)
 }
 
-// Writing is granted table by table, so the tables the policy does not name
-// stay untouchable even in a contest that permits writing.
 func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
 
@@ -201,8 +183,6 @@ func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
 	refused(t, writer, `DROP TABLE evidence`)
 }
 
-// Their own objects go in `work`, and only there — the game's own schema stays
-// structurally untouchable.
 func TestOwnObjectsLiveInWorkAndNowhereElse(t *testing.T) {
 	policy := sqlpolicy.ReadWrite()
 	policy.AllowOwnTables = true
@@ -225,8 +205,6 @@ func TestOwnObjectsLiveInWorkAndNowhereElse(t *testing.T) {
 	refused(t, writer, `CREATE TABLE public.mine (x int)`)
 }
 
-// The hardening travels with the template, so an instance is not a place where
-// the catalogue rules quietly lapse.
 func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -240,9 +218,8 @@ func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
 	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
 }
 
-// Rebuilding replaces the template, and a template with a connection cannot be
-// copied — the discipline section 4.2 asks for. Both are the provisioner's job
-// to keep, not the caller's to remember.
+// A template with a connection cannot be copied; keeping it free is the
+// provisioner's job.
 func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -266,8 +243,6 @@ func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
 	}
 }
 
-// Resetting is how a participant who has ruined their own data carries on. It
-// has to work while they are still connected, which is what FORCE is for.
 func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
 
@@ -296,8 +271,6 @@ func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
 	}
 }
 
-// A script that does not run must fail the build rather than leave a template
-// that is half a contest.
 func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -318,18 +291,8 @@ func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	}
 }
 
-// PostgreSQL locates an error inside the statement it was given, and by the
-// time a statement reaches it this reader has already cut it out of a file
-// that may be gigabytes long. `POSITION: 42` then means "42 characters into
-// some statement", which is not a place anybody can go and look.
-//
-// The file line is what the rest of this feature is built on: ScriptReader
-// records Statement.Line for exactly this, ScriptSyntaxError already reports
-// `line N:` in front of its own message, the console's viewer parses that
-// prefix to jump to it, and the upload window exists so there is somewhere to
-// jump to. Until this, all of it worked only for refusals the reader made
-// itself — never for `relation does not exist`, which is the one an organiser
-// actually meets.
+// PostgreSQL's POSITION is relative to one statement; only the file line
+// tells an organiser where to look.
 func TestAScriptErrorNamesTheLineInTheFileTheStatementCameFrom(t *testing.T) {
 	t.Parallel()
 
@@ -341,23 +304,16 @@ func TestAScriptErrorNamesTheLineInTheFileTheStatementCameFrom(t *testing.T) {
 			refused.ScriptRejection())
 	}
 
-	// Zero is PostgreSQL's own "I could not locate this", and the same
-	// convention Position already uses: nothing is claimed rather than line
-	// nought being named.
+	// Zero means unlocated: no line is claimed.
 	unlocated := &gamedb.ScriptError{SQLState: "42P01", Message: `relation "suspects" does not exist`}
 	if strings.HasPrefix(unlocated.ScriptRejection(), "line ") {
 		t.Fatalf("a rejection with no line reads %q", unlocated.ScriptRejection())
 	}
 }
 
-// A failed build has two possible causes and one column to report them in, so
-// the two have to be told apart where they happen. PostgreSQL's verdict on a
-// statement the organiser wrote is theirs to read; it is also the only thing a
-// failed build is allowed to say, because the alternatives all print how this
-// service reaches the cluster.
-//
-// Run against the real cluster (CLAUDE.md rule 10): the shape of the error is
-// pgx's, not ours, and a fixture of it would only prove we can spell it.
+// PostgreSQL's verdict on the organiser's own SQL is theirs to read, and
+// carries nothing about how this service reaches the cluster. Run against
+// the real cluster (CLAUDE.md rule 10): the error's shape is pgx's.
 func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -375,12 +331,10 @@ func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
 	if !strings.Contains(refused.ScriptRejection(), "nosuchtype") {
 		t.Fatalf("the rejection reads %q; the type they misspelled is the whole point", refused.ScriptRejection())
 	}
-	// The offset PostgreSQL located it at, which is what an editor underlines.
 	if refused.Position <= 0 {
 		t.Fatalf("the rejection carries position %d, want the offset PostgreSQL reported", refused.Position)
 	}
-	// And nothing of ours. `connect`/`host`/`port` would come from
-	// Provisioner.connect's wrapper, the role name from pgx's own config dump.
+	// Nothing of ours: no role, connection wrapper text or database name.
 	for _, ours := range []string{gamedb.RoleAuthor, "failed to connect", "SASL", template} {
 		if strings.Contains(refused.ScriptRejection(), ours) {
 			t.Fatalf("the rejection names %q: %q", ours, refused.ScriptRejection())
@@ -388,20 +342,15 @@ func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
 	}
 }
 
-// Statements travel to the server in bounded batches now, one round trip for
-// a thousand of them rather than one each (maxBatchedStatements). Two things
-// about that must not have changed, and this is the first: a failure is still
-// blamed on the exact statement that caused it, with the line of the file it
-// started on — even when it is buried in the middle of a batch, behind two
-// thousand statements that were fine.
+// A failure in the middle of a batch is still blamed on its own statement
+// and line.
 func TestAFailureInsideABatchStillNamesItsOwnLine(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
 
 	var script strings.Builder
 	script.WriteString("CREATE TABLE notes (n int);\n")
-	// Comfortably more than one batch, so the bad statement is neither in the
-	// first batch nor at a batch boundary.
+	// More than one batch, with the bad statement away from a boundary.
 	for range 2500 {
 		script.WriteString("INSERT INTO notes (n) VALUES (1);\n")
 	}
@@ -423,11 +372,8 @@ func TestAFailureInsideABatchStillNamesItsOwnLine(t *testing.T) {
 	}
 }
 
-// And the second: a batch is one implicit transaction, and a few statements
-// cannot run inside one at all. VACUUM is the one an organiser might
-// plausibly write at the end of a script they wrote by hand, and it must
-// still build — the replay in runBatch is what makes that true without this
-// file keeping a list of SQLSTATEs that would go stale.
+// A batch is one implicit transaction, and VACUUM cannot run in one; the
+// replay in runBatch must still run it.
 func TestAStatementThatCannotRunInATransactionStillBuilds(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -450,10 +396,8 @@ func TestAStatementThatCannotRunInATransactionStillBuilds(t *testing.T) {
 	}
 }
 
-// A COPY block loads rows into tables the statements in front of it created,
-// so whatever is still buffered has to reach the server before the block does.
-// Batching is exactly the change that could get this wrong, and the failure
-// would be "relation does not exist" for a table the script plainly creates.
+// Buffered statements reach the server before the COPY block that needs
+// their tables.
 func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
@@ -477,11 +421,8 @@ func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
 	}
 }
 
-// The trap this separation exists for: pgx reports a refused login as a
-// *pgconn.ConnectError that carries a *pgconn.PgError inside it, so anything
-// deciding "was this the database's verdict?" by looking for a PgError says
-// yes — and hands over the role, the addresses and the database name with it.
-// internal/rpc.classify had to be rewritten around exactly this.
+// pgx reports a refused login as a ConnectError wrapping a PgError, which
+// names the role and the host. It must not become a ScriptError.
 func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
 	requireCluster(t)
 
@@ -498,8 +439,7 @@ func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
 		t.Fatal("a build ran the script over a connection that could not be made")
 	}
 
-	// The premise: there really is a PgError in here, which is what makes a
-	// type test at the far end the wrong instrument.
+	// The premise: a PgError really is inside.
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("a refused login came back without PostgreSQL's own error inside it: %v", err)
@@ -510,9 +450,7 @@ func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
 	}
 }
 
-// The name is interpolated into DDL, where SQL has no parameter binding. The
-// policy already refuses a table name that is not a plain identifier; a
-// database name has to be refused the same way and for the same reason.
+// The name is interpolated into DDL, which has no parameter binding.
 func TestADatabaseNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
 	p := provisioner(t)
 
@@ -532,11 +470,8 @@ func TestADatabaseNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
 
 var _ = pgx.ErrNoRows
 
-// Temporary tables are the one permission that cannot travel with the
-// template. PostgreSQL grants TEMPORARY on a database to PUBLIC by default,
-// and a database-level privilege lives on the pg_database row, which a copy
-// does not inherit — so a policy that only reached the template would leave
-// `allow_temp_tables: false` quietly meaning nothing.
+// TEMPORARY is a database-level privilege granted to PUBLIC by default,
+// and a copy does not inherit it, so each instance must apply the policy.
 func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
 	t.Run("refused when the policy does not allow them", func(t *testing.T) {
 		p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
@@ -567,9 +502,8 @@ func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
 	})
 }
 
-// Nothing should ever open a third connection to one participant's database.
-// The runner's semaphore is what enforces that; this is what holds if the
-// runner is wrong, which is the only reason to have it.
+// A backstop for the runner's semaphore: no third connection to one
+// participant's database.
 func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -578,7 +512,7 @@ func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	// Two is the allowance: a query running while its replacement is opened.
+	// Two: a running query plus its replacement being opened.
 	first := connectAs(t, roleReader, testReaderPassword(t), instance)
 	second := connectAs(t, roleReader, testReaderPassword(t), instance)
 	if err := first.Ping(t.Context()); err != nil {
@@ -593,9 +527,6 @@ func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
 	}
 }
 
-// Both strategies must actually produce a usable copy: the choice is a
-// measurement to be made on a real template, and a setting that only works one
-// way is not a choice.
 func TestEitherCopyStrategyProducesAUsableDatabase(t *testing.T) {
 	for _, strategy := range []gamedb.CopyStrategy{gamedb.StrategyWALLog, gamedb.StrategyFileCopy} {
 		t.Run(string(strategy), func(t *testing.T) {
@@ -622,20 +553,14 @@ func TestEitherCopyStrategyProducesAUsableDatabase(t *testing.T) {
 	}
 }
 
-// An unknown strategy is refused when it is set, not at the first copy — which
-// would be during a contest.
 func TestAnUnknownCopyStrategyIsRefusedUpFront(t *testing.T) {
 	if _, err := provisioner(t).WithCopyStrategy("MAGIC"); err == nil {
 		t.Fatal("an unknown copy strategy was accepted")
 	}
 }
 
-// The reclaim sweep (internal/provisioning.Service.Reclaim) must never sever
-// a connection to decide whether a database is safe to remove — only
-// PostgreSQL's own refusal proves that, and this is what has to provoke it
-// for real: a plain DROP DATABASE against a database with an open connection
-// really does refuse, and DropIdle's job is to read that refusal as "leave it
-// for next time" rather than as an error worth reporting.
+// The reclaim sweep must never sever a connection: a plain DROP DATABASE
+// refuses while one is open, and DropIdle reads that as "not now".
 func TestDropIdleLeavesABusyDatabaseAloneAndDropsAnIdleOne(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -644,8 +569,7 @@ func TestDropIdleLeavesABusyDatabaseAloneAndDropsAnIdleOne(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	// A live connection, standing in for a query the Query Runner is still
-	// executing against this instance.
+	// Stands in for a query the Query Runner is still running.
 	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	if _, err := reader.Exec(t.Context(), `SELECT 1`); err != nil {
 		t.Fatalf("using the connection: %v", err)
@@ -678,9 +602,7 @@ func TestDropIdleLeavesABusyDatabaseAloneAndDropsAnIdleOne(t *testing.T) {
 	}
 }
 
-// A name that has already been dropped, or never existed, is not an error —
-// the reclaim sweep must be able to retry a database it already removed
-// without that counting as a failure.
+// The reclaim sweep must be able to retry a database it already removed.
 func TestDropIdleOnANameThatDoesNotExist(t *testing.T) {
 	p := provisioner(t)
 
@@ -703,9 +625,6 @@ func instanceExists(t *testing.T, name string) bool {
 	return exists
 }
 
-// The organizer's database screen measures a whole contest's copies at once.
-// One statement rather than one per database, because that page asks about
-// every copy a contest owns and a round trip each would be hundreds of them.
 func TestDatabaseSizesMeasuresAWholeListAtOnce(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -731,11 +650,8 @@ func TestDatabaseSizesMeasuresAWholeListAtOnce(t *testing.T) {
 	}
 }
 
-// A name that is not on the cluster is left out of the answer rather than
-// failing it. pg_database_size raises an error for one, so measuring by
-// calling it per name would let a single database dropped between the
-// core-database read and this call cost a whole screen its sizes — and a
-// size is a decoration, not the thing the screen is for.
+// pg_database_size raises an error for a missing name; a database dropped
+// meanwhile must not cost the whole list its sizes.
 func TestDatabaseSizesLeavesOutANameThatIsNotThere(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -757,9 +673,6 @@ func TestDatabaseSizesLeavesOutANameThatIsNotThere(t *testing.T) {
 	}
 }
 
-// An empty list costs no round trip: the organizer's list is filtered to the
-// databases that still exist, and a contest whose copies are all reclaimed
-// leaves nothing to ask about.
 func TestDatabaseSizesOfNothingAsksNothing(t *testing.T) {
 	p := provisioner(t)
 
@@ -772,28 +685,13 @@ func TestDatabaseSizesOfNothingAsksNothing(t *testing.T) {
 	}
 }
 
-// A game script is staff-trusted, not platform-trusted.
-//
-// The route that accepts one is gated by a contest-scoped permission, so the
-// author of a script is any manager of any single contest — while the cluster
-// it runs on holds every other contest's template and every participant's
-// database. Running it with the provisioning role's own privileges therefore
-// made "manager of one draft contest" the same thing as "superuser on the
-// game cluster". It runs as game_author instead, and what follows is the list
-// of things that role cannot do.
-//
-// Each case asserts on the *refusal*, not merely on failure: SQLSTATE 42501
-// (insufficient_privilege) plus the phrase PostgreSQL uses. A test that only
-// checked "the build failed" would pass just as happily for a script with a
-// typo in it, which proves nothing about who ran it.
+// A game script's author is any manager of one contest, while the cluster
+// holds every contest's databases, so the script runs as game_author. Each
+// case asserts SQLSTATE 42501 and PostgreSQL's phrase, not mere failure,
+// which a typo would also produce.
 func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
-	// A second template on the same cluster, standing in for another
-	// olympiad's game. Its own suffix, not buildTemplate's "tpl": `named`
-	// trims a long test name to fit PostgreSQL's 63 characters *before*
-	// appending the suffix, and every subtest below shares this test's name,
-	// so a second "tpl" here would be the very same database the subtests
-	// build — and "cannot drop the currently open database" would look like
-	// a refusal without being one.
+	// Another olympiad's template. Its own suffix: the subtests share this
+	// test's name, so a second "tpl" would be the database they build.
 	sibling := named(t, "sib")
 	if err := buildTemplateString(provisioner(t),
 		t.Context(), sibling, detectiveScript, sqlpolicy.ReadOnly()); err != nil {
@@ -806,7 +704,6 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 		phrase string
 	}{
 		{
-			// A shell in the container.
 			name:   "a program run on the server",
 			script: `CREATE TABLE loot (line text); COPY loot FROM PROGRAM 'id';`,
 			phrase: "pg_execute_server_program",
@@ -827,8 +724,6 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 			phrase: "permission denied for function pg_read_file",
 		},
 		{
-			// The whole boundary in one statement: a participant role that is
-			// a superuser is a cluster with no boundary at all.
 			name:   "a participant role promoted to superuser",
 			script: `ALTER ROLE ` + gamedb.RoleReader + ` SUPERUSER;`,
 			phrase: "SUPERUSER attribute",
@@ -839,13 +734,12 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 			phrase: "permission denied to create role",
 		},
 		{
-			// Granting itself the role that would undo the first three cases.
+			// Would undo the file-reading cases.
 			name:   "the file-reading role granted to itself",
 			script: `GRANT pg_read_server_files TO ` + gamedb.RoleAuthor + `;`,
 			phrase: "permission denied to grant role",
 		},
 		{
-			// Reading the installation rather than the game.
 			name:   "the cluster's password hashes",
 			script: `CREATE TABLE loot AS SELECT * FROM pg_authid;`,
 			phrase: "permission denied for table pg_authid",
@@ -856,18 +750,14 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 			phrase: "permission denied for table pg_database",
 		},
 		{
-			// Reaching out of this database. dblink and postgres_fdw are the
-			// two ways SQL can open a connection of its own, and both are
-			// untrusted extensions.
+			// dblink and postgres_fdw can open connections of their own.
 			name:   "an extension that can open a connection",
 			script: `CREATE EXTENSION dblink;`,
 			phrase: `permission denied to create extension "dblink"`,
 		},
 		{
-			// One statement on purpose: a multi-statement simple query runs
-			// in an implicit transaction, and DROP DATABASE refuses inside
-			// one — which would make this pass without proving anything about
-			// privileges.
+			// One statement: DROP DATABASE refuses inside the implicit transaction
+			// of a multi-statement query, which would pass for the wrong reason.
 			name:   "another olympiad's template dropped",
 			script: `DROP DATABASE ` + sqlpolicy.QuoteIdentifier(sibling),
 			phrase: "must be owner of database",
@@ -889,28 +779,21 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 		})
 	}
 
-	// The sibling is still there: the point of the last case is that it was
-	// not dropped, which the error alone does not show.
+	// The error alone does not show the sibling survived.
 	if !instanceExists(t, sibling) {
 		t.Fatal("another contest's template was removed by a script in a different database")
 	}
 }
 
-// assertRefusedForPrivilege insists the build failed because PostgreSQL said
-// no, and said no for the stated reason.
 func assertRefusedForPrivilege(t *testing.T, err error, phrase string) {
 	t.Helper()
 
-	// A *ScriptError and not a bare *pgconn.PgError: the hostile script is the
-	// author's own SQL, so the refusal is one of the few a build may repeat
-	// back to them, and this is where that classification is made.
 	var refused *gamedb.ScriptError
 	if !errors.As(err, &refused) {
 		t.Fatalf("the build failed, but not with an error from the database: %v", err)
 	}
-	// 42501 is insufficient_privilege. A syntax error (42601) or an unknown
-	// table (42P01) would mean the script was merely malformed, which says
-	// nothing about the role that ran it.
+	// 42501 is insufficient_privilege; a syntax error would prove nothing
+	// about the role.
 	if refused.SQLState != "42501" {
 		t.Fatalf("refused with SQLSTATE %s (%s), want 42501 insufficient_privilege",
 			refused.SQLState, refused.Message)
@@ -921,9 +804,7 @@ func assertRefusedForPrivilege(t *testing.T, err error, phrase string) {
 	}
 }
 
-// The other half of the same boundary: an ordinary game still builds, and a
-// participant can still read it. A containment that broke real scripts would
-// be a contest nobody can run.
+// An ordinary game still builds and can be read by a participant.
 func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
 	const script = `
 		-- A schema of the author's own: CREATE on the database, which is the
@@ -975,7 +856,6 @@ func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
 		t.Fatalf("the lobby shows %d uses, want 2", uses)
 	}
 
-	// The foreign key came across, which is what the schema panel draws.
 	var constraints int
 	if err := reader.QueryRow(t.Context(),
 		`SELECT count(*) FROM pg_constraint WHERE contype = 'f'`).Scan(&constraints); err != nil {
@@ -986,9 +866,8 @@ func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
 	}
 }
 
-// What the author role was lent for the build is taken back before the
-// template ships, so a participant's copy does not carry a role that may
-// create objects in the game's own schema.
+// What game_author was lent for the build is taken back before the
+// template ships.
 func TestAnInstanceLendsTheAuthorRoleNothing(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -1002,13 +881,8 @@ func TestAnInstanceLendsTheAuthorRoleNothing(t *testing.T) {
 	refused(t, author, `CREATE SCHEMA planted`)
 }
 
-// A provisioner with no game_author credential refuses to build rather than
-// falling back to the provisioning role.
-//
-// The distinction is the whole fix: an unset GAME_AUTHOR_PASSWORD must not be
-// a way to have every game script run as a superuser again. A deployment is
-// stopped earlier still, when config.Load reads the environment, so this is
-// the last of two gates rather than the only one.
+// Without a game_author credential the build is refused rather than run
+// as the provisioning role. config.Load is the earlier gate.
 func TestBuildingWithoutTheAuthorCredentialIsRefusedRatherThanRunAsTheProvisioner(t *testing.T) {
 	requireCluster(t)
 
@@ -1028,9 +902,7 @@ func TestBuildingWithoutTheAuthorCredentialIsRefusedRatherThanRunAsTheProvisione
 	}
 }
 
-// The measurement the pool's byte budget is decided on. Against the real
-// cluster because that is the only place the number means anything: a fake
-// would only prove the SQL was spelled the way the fake expects.
+// Against the real cluster: a fake would only prove the SQL's spelling.
 func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
 	p := provisioner(t)
 
@@ -1042,8 +914,6 @@ func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
 		t.Fatalf("a cluster with databases on it measured %d bytes", before)
 	}
 
-	// A database this test makes has to move the number, or the total is not
-	// a total.
 	template := named(t, "tpl")
 	if err := buildTemplateString(p, t.Context(), template,
 		`CREATE TABLE bulk AS SELECT g, repeat('x', 400) AS pad FROM generate_series(1, 20000) g`,
@@ -1059,9 +929,7 @@ func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DatabaseSize: %v", err)
 	}
-	// The cluster is shared with whatever else is running, so the assertion
-	// is the direction and the floor rather than an equality: the new
-	// database is in the total.
+	// The cluster is shared, so assert the direction and the floor.
 	if after-before < own/2 {
 		t.Fatalf("the total went from %d to %d after adding a database of %d bytes", before, after, own)
 	}

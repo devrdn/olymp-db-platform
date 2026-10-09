@@ -9,8 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// publishable returns a contest that satisfies the gate, so each test states
-// exactly the one thing it takes away.
 func publishable() (contests.Contest, contests.Story, []contests.Question) {
 	start := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	end := start.Add(3 * time.Hour)
@@ -51,8 +49,6 @@ func publishable() (contests.Contest, contests.Story, []contests.Question) {
 	return c, story, questions
 }
 
-// problemCodes lists the codes reported, so a test can assert on the reason
-// rather than merely on failure.
 func problemCodes(t *testing.T, err error) []string {
 	t.Helper()
 
@@ -95,8 +91,7 @@ func TestGateRefusesAContestWithNoLanguages(t *testing.T) {
 }
 
 func TestGateNamesTheLanguageWhoseTitleIsMissing(t *testing.T) {
-	// A participant who picked Romanian must not reach an empty page, and the
-	// organizer has to be told which language to fix.
+	// The organizer must be told which language to fix.
 	c, story, questions := publishable()
 	delete(c.Translations, "ro")
 
@@ -141,9 +136,8 @@ func TestGateRefusesAContestWithNoQuestions(t *testing.T) {
 }
 
 func TestSingleQuestionContestRefusesTwoQuestions(t *testing.T) {
-	// The invariant the schema deliberately does not enforce: an organizer
-	// passes through two questions while replacing one, and only publication
-	// has to insist.
+	// The schema allows two while an organizer replaces one; only publication
+	// insists.
 	c, story, questions := publishable()
 	c.QuestionMode = contests.QuestionModeSingle
 	second := questions[0]
@@ -168,7 +162,6 @@ func TestMultiQuestionContestAcceptsSeveralQuestions(t *testing.T) {
 }
 
 func TestGateRefusesAQuestionWithNoReferenceAnswer(t *testing.T) {
-	// Ungradable, and nobody finds out until the contest is scored.
 	c, story, questions := publishable()
 	questions[0].Answers = nil
 
@@ -179,8 +172,7 @@ func TestGateRefusesAQuestionWithNoReferenceAnswer(t *testing.T) {
 }
 
 func TestHiddenQuestionStillNeedsItsTranslations(t *testing.T) {
-	// An organizer may reveal it later, and the payload must not depend on
-	// whether somebody happened to fill the text in.
+	// An organizer may reveal it later.
 	c, story, questions := publishable()
 	questions[0].IsVisible = false
 	delete(questions[0].Texts, "ro")
@@ -218,8 +210,6 @@ func TestGateRefusesAFixedContestWithNoSchedule(t *testing.T) {
 }
 
 func TestGateReportsEveryProblemAtOnce(t *testing.T) {
-	// An organizer fixing a contest one refusal at a time would need as many
-	// round trips as they have missing translations.
 	c, story, questions := publishable()
 	c.Translations = nil
 	story.Bodies = nil
@@ -230,11 +220,9 @@ func TestGateReportsEveryProblemAtOnce(t *testing.T) {
 	}
 }
 
-// §6.1.1: sequential progression opens the next question only when the
-// previous one is closed, and a question with no attempt cap can only ever
-// close by a correct answer — trapping a participant who is stuck for the
-// rest of the contest. The gate refuses this at publish, the one moment it
-// can still be caught rather than discovered live.
+// §6.1.1: an uncapped question closes only on a correct answer, so under
+// sequential progression a stuck participant is trapped for the rest of the
+// contest.
 func TestGateRefusesSequentialWithAQuestionWithNoMaxAttempts(t *testing.T) {
 	c, story, questions := publishable()
 	c.Progression = contests.ProgressionSequential
@@ -246,8 +234,6 @@ func TestGateRefusesSequentialWithAQuestionWithNoMaxAttempts(t *testing.T) {
 	}
 }
 
-// The same contest passes once every question carries an attempt cap: the
-// gate is about the trap, not about progression itself.
 func TestGateAcceptsSequentialOnceEveryQuestionHasMaxAttempts(t *testing.T) {
 	c, story, questions := publishable()
 	c.Progression = contests.ProgressionSequential
@@ -259,12 +245,8 @@ func TestGateAcceptsSequentialOnceEveryQuestionHasMaxAttempts(t *testing.T) {
 	}
 }
 
-// §6.1.1: a hidden question can never receive a submission — a participant is
-// never given its identifier — so it can never close, and everything ordered
-// after it in a sequential contest becomes unreachable for the rest of the
-// contest. That holds even with a perfectly good max_attempts on the hidden
-// question itself, which is the one shape ProblemSequentialNeedsMaxAttempts
-// does not catch.
+// §6.1.1: a hidden question never receives a submission, so it never closes
+// and blocks everything after it, whatever its max_attempts.
 func TestGateRefusesSequentialWithAHiddenQuestionBeforeAnother(t *testing.T) {
 	c, story, questions := publishable()
 	c.Progression = contests.ProgressionSequential
@@ -284,8 +266,6 @@ func TestGateRefusesSequentialWithAHiddenQuestionBeforeAnother(t *testing.T) {
 	}
 }
 
-// A hidden question with nothing ordered after it blocks nothing, and works
-// exactly as authored — the same as it would in free progression.
 func TestGateAcceptsSequentialWithAHiddenLastQuestion(t *testing.T) {
 	c, story, questions := publishable()
 	c.Progression = contests.ProgressionSequential
@@ -311,9 +291,7 @@ func TestNotPublishableMatchesItsSentinel(t *testing.T) {
 	}
 }
 
-// Winner mode names the winner by the final question (§6.1.1). Without one the
-// contest can end with nobody placed at all, which is exactly the day nobody
-// can fix it.
+// Winner mode names the winner by the final question (§6.1.1).
 func TestGateRefusesWinnerScoringWithNoFinalQuestion(t *testing.T) {
 	c, story, questions := publishable()
 	c.Scoring = contests.ScoringWinner
@@ -337,9 +315,8 @@ func TestGateAcceptsWinnerScoringWithAFinalQuestion(t *testing.T) {
 	}
 }
 
-// In winner mode the first correct final answer wins outright, and a wrong
-// one costs nothing. A final question with no attempt limit can therefore be
-// won by trying candidates until one is right, however slowly each is sent.
+// In winner mode a wrong final answer costs nothing, so an unlimited final
+// question can be won by trying candidates.
 func TestGateRefusesWinnerScoringWithAnUnlimitedFinalQuestion(t *testing.T) {
 	c, story, questions := publishable()
 	c.Scoring = contests.ScoringWinner
@@ -363,10 +340,6 @@ func TestGateRefusesWinnerScoringWithAnUnlimitedFinalQuestion(t *testing.T) {
 	}
 }
 
-// Only the final question decides a winner-mode contest, and only winner mode
-// makes one guess worth the whole contest: an unlimited text question beside
-// it, or an unlimited final question under points scoring, stays an ordinary
-// authoring choice.
 func TestGateAsksForAFinalAttemptLimitOnlyInWinnerMode(t *testing.T) {
 	c, story, questions := publishable()
 	limit := 3
@@ -389,21 +362,15 @@ func TestGateAsksForAFinalAttemptLimitOnlyInWinnerMode(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
-// a choice question needs an attempt limit of at most the number of choices
-// less the number of correct ones, or a participant can exhaust every wrong
-// option and still reach a right one for the cost of nothing but penalty time.
+// A choice question's attempt limit is at most choices less correct ones, or
+// a participant can exhaust every wrong option (docs/ARCHITECTURE.md §6.1.1).
 
-// asChoiceQuestion turns publishable()'s one question into a choice question
-// with ids "a", "b", "c" and "a" as its one correct choice — labelled in every
-// language it is asked in, so a test about the attempt limit does not also
-// trip ProblemMissingChoiceLabel.
+// asChoiceQuestion labels every choice in every language so attempt-limit
+// tests do not also trip ProblemMissingChoiceLabel.
 func asChoiceQuestion(q contests.Question) contests.Question {
 	return withChoices(q, []string{"a", "b", "c"}, "a")
 }
 
-// withChoices turns q into a choice question with the given option ids,
-// labelled in every language, whose reference answers are exactly correct.
 func withChoices(q contests.Question, ids []string, correct ...string) contests.Question {
 	q.Kind = contests.KindChoice
 	q.ChoiceIDs = ids
@@ -421,10 +388,8 @@ func withChoices(q contests.Question, ids []string, correct ...string) contests.
 	return q
 }
 
-// With several correct choices, fewer attempts are enough to be sure of one:
-// n options with k correct are always solved by attempt n-k+1. The limit is
-// held to n-k, and cases below and at the boundary pin it for one and for two
-// correct choices out of four.
+// n options with k correct are always solved by attempt n-k+1, so the limit
+// is held to n-k.
 func TestGateHoldsAnICPCChoiceLimitBelowTheWrongChoicesPlusOne(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -500,11 +465,8 @@ func TestGateAcceptsAnICPCChoiceQuestionWithALimitBelowTheChoiceCount(t *testing
 	}
 }
 
-// The same shape in points mode is refused too, and says so in its own
-// words. The gate was written for ICPC, where trying the options costs
-// penalty time; outside it the options are in the participant's page just the
-// same and the prize is the question's points, so the mode it was scoped to
-// was the one where the brute force costs something.
+// Outside ICPC brute force costs nothing at all, so it is refused too, with
+// its own problem code.
 func TestGateRefusesAnUncappedChoiceQuestionOutsideICPCMode(t *testing.T) {
 	c, story, questions := publishable()
 	questions[0] = asChoiceQuestion(questions[0])
@@ -519,8 +481,7 @@ func TestGateRefusesAnUncappedChoiceQuestionOutsideICPCMode(t *testing.T) {
 	}
 }
 
-// Saving already refuses a freeze as long as the window, but the window can
-// move after the freeze was saved; the gate is the last moment that is cheap.
+// The window can move after the freeze was saved.
 func TestGateRefusesAFreezeThatNoLongerFitsTheWindow(t *testing.T) {
 	c, story, questions := publishable()
 	freeze := 180 // publishable()'s window is exactly three hours
@@ -532,8 +493,7 @@ func TestGateRefusesAFreezeThatNoLongerFitsTheWindow(t *testing.T) {
 	}
 }
 
-// A freeze is measured back from ends_at. An individual-timing contest may
-// publish with no ends_at, and then there is nothing to measure from.
+// A freeze is measured back from ends_at.
 func TestGateRefusesAFreezeWithNoEndToMeasureFrom(t *testing.T) {
 	c, story, questions := publishable()
 	duration := 60
@@ -547,10 +507,8 @@ func TestGateRefusesAFreezeWithNoEndToMeasureFrom(t *testing.T) {
 	}
 }
 
-// An individual contest needed only a moment to open, and nothing to close
-// it: its status never became "finished", so the leaderboard never froze or
-// finalised and the game databases behind it were never reclaimed. An
-// organiser publishing one on the day was told nothing.
+// Without ends_at it never finishes: the leaderboard never finalises and its
+// game databases are never reclaimed.
 func TestGateRefusesAnIndividualContestWithNoEnd(t *testing.T) {
 	c, story, questions := publishable()
 	minutes := 120
@@ -564,10 +522,6 @@ func TestGateRefusesAnIndividualContestWithNoEnd(t *testing.T) {
 	}
 }
 
-// Outside ICPC the same arithmetic holds and costs even less: the options are
-// in the participant's own page, and an uncapped choice question is answered
-// by sending them one after another. In points scoring that is the whole
-// score, not penalty time.
 func TestGateRefusesAnUncappedChoiceQuestionInPointsScoring(t *testing.T) {
 	c, story, questions := publishable()
 	c.Scoring = contests.ScoringPoints

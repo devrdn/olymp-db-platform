@@ -12,10 +12,7 @@ import (
 // ErrStoryNotFound reports that the contest has no story yet.
 var ErrStoryNotFound = errors.New("story not found")
 
-// Story is the crime the participants investigate.
-//
-// A contest has at most one. The text is per language: the game database is
-// English, but the narrative around it is what a participant actually reads.
+// Story is the crime the participants investigate; a contest has at most one.
 type Story struct {
 	ID        uuid.UUID
 	ContestID uuid.UUID
@@ -34,10 +31,8 @@ func (s Story) Body(lang string) (string, bool) {
 type StoryRepository interface {
 	// ByContest returns the contest's story, or ErrStoryNotFound.
 	ByContest(ctx context.Context, contestID uuid.UUID) (Story, error)
-	// Save creates or replaces the story, setting its text to exactly these
-	// languages.
+	// Save creates or replaces the story with exactly these languages.
 	Save(ctx context.Context, contestID uuid.UUID, bodies map[string]string) (Story, error)
-	// Delete removes the story.
 	Delete(ctx context.Context, contestID uuid.UUID) error
 }
 
@@ -46,14 +41,9 @@ func (s *Service) Story(ctx context.Context, contestID uuid.UUID) (Story, error)
 	return s.stories.ByContest(ctx, contestID)
 }
 
-// SetStory writes the crime story in every language it was authored in.
-//
-// The whole set is replaced rather than patched one language at a time: it is
-// the set the publish gate reasons about, and a half-applied one is exactly
-// what it would then have to guess about.
+// SetStory replaces the story's whole language set, which the publish gate
+// checks as a unit.
 func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (Story, error) {
-	// Participants are reading it; changing it underneath them changes the
-	// task they are working on.
 	if _, err := s.editableContest(ctx, contestID); err != nil {
 		return Story{}, err
 	}

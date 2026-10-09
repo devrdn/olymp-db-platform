@@ -10,73 +10,36 @@ import (
 	"github.com/google/uuid"
 )
 
-// MaxDirectoryQueryLength bounds the text a person may type into the staff
-// and participant pickers before it reaches a query. A search box is filled
-// in by hand, a few characters at a time; nothing legitimate ever needs more
-// than this, and CLAUDE.md's rule 2 is explicit that every field that reaches
-// storage — including one that only ever reaches a WHERE clause — carries an
-// explicit bound rather than whatever a caller chose to send.
+// MaxDirectoryQueryLength bounds the picker search text, in runes (CLAUDE.md
+// rule 2).
 const MaxDirectoryQueryLength = 100
 
-// MinDirectoryQueryLength is the shortest text SearchPeople will turn into a
-// database query. Below it — including the empty string — the search behaves
-// exactly like nothing having been typed: no results, and no request reaches
-// the repository at all. It answered a concrete incident: `?q=a` used to
-// return a page of unrelated accounts to the very first keystroke a picker
-// sent.
-//
-// The number is 3, not a rounder-feeling 2, because 3 is what
-// migration 000016's trigram indexes actually need: pg_trgm pads a value with
-// two leading spaces and one trailing one before cutting it into
-// three-character trigrams, so a two-character pattern produces none, and
-// PostgreSQL cannot use a trigram index to serve a predicate it extracted no
-// trigram from — it falls back to a sequential scan of the whole users table,
-// on an endpoint every contest's staff reaches, on every debounced keystroke.
-// TestSearchPredicateUsesTheTrigramIndexes (internal/postgres/users_test.go)
-// proves this at exactly this length; lowering the constant for a friendlier
-// feel silently brings the sequential scan back.
-//
-// This is also a courtesy for the ordinary case, not a defence against
-// enumeration, and it must not be described as one — see SearchPeople's own
-// comment for what actually bounds who can run this search at all. Three
-// characters still leaves thousands of combinations for a determined
-// permission holder to walk through; it only stops the search from
-// answering a single keystroke with a page of strangers.
+// MinDirectoryQueryLength is the shortest text SearchPeople sends to the
+// database; shorter text returns nothing. It is 3 because a shorter pattern
+// yields no pg_trgm trigram, so the trigram indexes (migration 000016) cannot
+// serve it and the users table is scanned on every keystroke
+// (TestSearchPredicateUsesTheTrigramIndexes). It is not an enumeration
+// defence.
 const MinDirectoryQueryLength = 3
 
-// DirectorySearchDefaultLimit and DirectorySearchMaxLimit bound how many
-// candidates a picker gets back for one search. A typeahead needs enough
-// matches to tell two "Ivanov"s apart, not a page of the whole installation —
-// and unlike the administrator's own account listing (Filter, up to 200),
-// this search is reachable by every contest's staff, so the ceiling sits
-// deliberately lower.
+// DirectorySearchDefaultLimit and DirectorySearchMaxLimit bound a picker's
+// results, lower than the admin listing because every contest's staff can
+// search.
 const (
 	DirectorySearchDefaultLimit = 10
 	DirectorySearchMaxLimit     = 20
 )
 
-// ErrQueryTooLong refuses a search string longer than a picker's own input
-// could legitimately produce.
+// ErrQueryTooLong refuses search text over MaxDirectoryQueryLength.
 var ErrQueryTooLong = errors.New("search text is too long")
 
-// Person is what an organiser sees when searching for somebody to appoint or
-// enrol: a name to read, a login to act on, and — since the owner's decision
-// below — an email to tell two people of the same name apart.
+// Person is a search result for appointing or enrolling somebody: a narrow
+// view of users.User with no status, roles or password state.
 //
-// Deliberately still not the wider users.User: no status, no roles, no
-// password state, nothing the administrator screens carry that a picker has
-// no use for. The email is the one field that used to be withheld here too.
-// This search runs behind participant.manage rather than users.manage
-// (internal/rbac), so it reaches far more roles than the administrator
-// screens users.User was built for; publishing the email widens what every
-// one of those roles can read about any account in the installation, on
-// every contest they hold that permission on, not only the one they are
-// looking at. The owner weighed that against a login not always being enough
-// to tell two "Ivanov"s apart — a login is unique but not memorable, and a
-// full name is memorable but not unique — and decided the email is worth
-// showing anyway. It is not empty: an account with no email set reaches the
-// caller as Person.Email == "", never a value that reads as an address
-// somebody actually gave.
+// Email is an accepted exposure: the search runs behind participant.manage,
+// not users.manage, so any holder can read every account's email in the
+// installation. It is shown because a login and a full name do not always tell
+// two people apart. An account without an email has Email == "".
 type Person struct {
 	UserID   uuid.UUID
 	Login    string
@@ -84,43 +47,14 @@ type Person struct {
 	Email    string
 }
 
-// SearchPeople resolves the accounts an organiser might mean when appointing
-// staff or adding a participant — one picker behind both actions, since
-// either starts with finding a person by a few typed characters.
-//
-// It is not scoped to a contest: every account in the installation is a
-// candidate for staffing or joining any of them. What limits who may call it
-// is the contest-scoped participant.manage permission the HTTP layer checks
-// before this runs — every contest role that can view a contest's staff and
-// participants also carries participant.manage (see rbac's managerPermissions),
-// so this reaches exactly the people who already work the people screen, not
-// a wider audience than that.
-//
-// A query shorter than MinDirectoryQueryLength — including an empty one —
-// returns no results without ever reaching the database: search-as-you-type
-// only asks once somebody has typed something resembling a login or a name.
-// That is a guard against the cheap, accidental case, not against
-// enumeration: the actual boundary on who may run this search at all is the
-// contest-scoped participant.manage permission the HTTP layer checks before
-// SearchPeople runs. Somebody who already holds that permission can still
-// walk every short combination and, a search at a time, see every account's
-// login, full name and email in the installation. The login and the full
-// name are not a new capability this endpoint hands out — that permission
-// already lets its holder see both on any contest's own staff and
-// participant lists. The email is: it appears on no such list, so this is
-// the one place holding participant.manage on a single contest reads an
-// email address for every account in the installation, not only the ones
-// the holder actually shares a contest with. A security review named this
-// trade-off explicitly and the owner accepted it anyway, weighing it against
-// a login not always being enough to tell two people of the same name apart
-// — see Person's own comment for the fuller reasoning.
+// SearchPeople finds accounts by a few typed characters, for the staff and
+// participant pickers. It searches the whole installation, not one contest;
+// the HTTP layer's contest-scoped participant.manage check is what limits who
+// may call it (see Person for what that exposes).
 func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]Person, error) {
 	query = strings.TrimSpace(query)
-	// Both bounds count runes, not bytes: the message says "characters", and
-	// pg_trgm's own trigrams are cut on characters too (see
-	// MinDirectoryQueryLength's comment). len() counts bytes, so a hundred
-	// Cyrillic characters — about two hundred bytes in UTF-8 — used to be
-	// refused by a message claiming a limit the caller had not actually hit.
+	// Runes, not bytes: the message says characters, and trigrams are cut on
+	// characters.
 	if utf8.RuneCountInString(query) > MaxDirectoryQueryLength {
 		return nil, fmt.Errorf("%w: at most %d characters", ErrQueryTooLong, MaxDirectoryQueryLength)
 	}

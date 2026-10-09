@@ -10,18 +10,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// The authored content of a contest: its story, its questions and their
-// reference answers.
-//
-// Every endpoint here is staff-only and carries the reference answers with it.
-// The participant-facing view is a separate projection built by the game loop,
-// not this payload with a field removed — a filter is something somebody can
-// forget to apply.
+// The authored content of a contest: its story, questions and reference
+// answers. Every endpoint here is staff-only and carries the reference answers.
+// The participant view is a separate projection, not this payload with a field
+// removed: a filter can be forgotten.
 
 // StoryResponse is the crime story in every language it was authored in.
 type StoryResponse struct {
 	ID string `json:"id"`
-	// Translations map a language code to the markdown body.
+	// Translations maps a language code to the markdown body.
 	Translations map[string]string `json:"translations"`
 	UpdatedAt    string            `json:"updated_at,omitempty"`
 }
@@ -83,12 +80,11 @@ type QuestionResponse struct {
 	Kind        string `json:"kind"`
 	Points      int    `json:"points"`
 	MaxAttempts *int   `json:"max_attempts,omitempty"`
-	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1),
-	// always returned — zero is "no penalty", a meaningful value in its own
-	// right, not an absent one.
+	// PenaltyPct is the percent of Points a wrong attempt costs (§6.1.1);
+	// always returned, since zero means "no penalty".
 	PenaltyPct int `json:"penalty_pct"`
-	// IsVisible reports whether participants are shown the question text at
-	// all; a hidden question still scores (§6.1).
+	// IsVisible says whether participants see the question; a hidden question
+	// still scores (§6.1).
 	IsVisible bool                            `json:"is_visible"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`
@@ -175,14 +171,11 @@ type questionRequest struct {
 	Kind        string `json:"kind"`
 	Points      int    `json:"points"`
 	MaxAttempts *int   `json:"max_attempts"`
-	// PenaltyPct is a pointer so that omitting it means "leave the stored
-	// penalty alone" rather than "reset it to zero" (finding 1): zero is a
-	// meaningful value (no penalty), so absence has to read differently from
-	// it, the same distinction IsVisible already makes for its own field.
+	// PenaltyPct is a pointer so omitting it leaves the stored penalty alone;
+	// zero is a real value.
 	PenaltyPct *int `json:"penalty_pct"`
-	// IsVisible is a pointer so that omitting it means visible: hiding a
-	// question is the deliberate choice, and the ordinary case must not depend
-	// on remembering to say so.
+	// IsVisible is a pointer so omitting it means visible: hiding is the
+	// deliberate choice.
 	IsVisible *bool                           `json:"is_visible"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`
@@ -258,8 +251,8 @@ func (h *ContestsHandler) deleteQuestion(w http.ResponseWriter, r *http.Request)
 }
 
 type reorderRequest struct {
-	// Order names every question of the contest exactly once; a partial list
-	// would leave positions duplicated or missing.
+	// Order names every question exactly once; a partial list would duplicate
+	// or lose positions.
 	Order []string `json:"order"`
 }
 
@@ -317,20 +310,15 @@ func (h *ContestsHandler) setQuestionTexts(w http.ResponseWriter, r *http.Reques
 	httpx.NoContent(w, r)
 }
 
-// saveQuestionRequest is the whole question: its own fields, its wording and
-// its reference answers.
 type saveQuestionRequest struct {
 	questionRequest
 	Answers []AnswerResponse `json:"answers"`
 }
 
-// saveQuestion replaces a question whole.
-//
-// One request rather than three, so a save either lands entirely or leaves the
-// question as it was — and so a change spanning more than one part is
-// expressible at all. Converting a text question to a choice question could
-// not be done through the narrower endpoints: each saw half the change and
-// refused on account of the other half.
+// saveQuestion replaces a question whole, in one transaction: a save lands
+// entirely or not at all, and a change spanning several parts (text to choice
+// question, say) is expressible, where the narrower endpoints would each refuse
+// half of it.
 func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 	contestID, questionID, ok := h.questionRoute(w, r)
 	if !ok {
@@ -397,7 +385,6 @@ func (h *ContestsHandler) setAnswers(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// questionRoute reads both identifiers a question endpoint names.
 func (h *ContestsHandler) questionRoute(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {

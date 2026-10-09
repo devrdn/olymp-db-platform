@@ -15,9 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// contestWithSpares sets up a contest, some registrations and a pool. It runs
-// outside a test transaction because the point of most of these is what
-// happens between connections, which one transaction cannot show.
+// contestWithSpares sets up a contest, registrations and a pool outside a test
+// transaction, because these tests are about what happens between connections.
 func contestWithSpares(t *testing.T, spares, registrations int) (uuid.UUID, []uuid.UUID) {
 	t.Helper()
 
@@ -51,13 +50,8 @@ func contestWithSpares(t *testing.T, spares, registrations int) (uuid.UUID, []uu
 	return contest, people
 }
 
-// Two late registrations reaching for the last copy is the case the pool
-// exists for, and the one a naive claim gets wrong: read a free row, then
-// update it, and both take the same database.
-//
-// Twenty claimants, ten copies. Exactly ten must win, each with a different
-// database, and the other ten must be told there is none — not blocked, not
-// given a duplicate.
+// Twenty claimants, ten copies: exactly ten win, each with a different
+// database, and the other ten get ErrNoSpare.
 func TestClaimingSpareCopiesUnderContention(t *testing.T) {
 	contest, people := contestWithSpares(t, 10, 20)
 	repo := NewGameInstances(testPool)
@@ -108,8 +102,7 @@ func TestClaimingSpareCopiesUnderContention(t *testing.T) {
 	}
 }
 
-// A copy of an older template must not be handed out: it holds the previous
-// game's data and the previous policy's grants.
+// A stale copy holds the previous game's data and grants.
 func TestAStaleCopyIsNeverClaimed(t *testing.T) {
 	contest, people := contestWithSpares(t, 3, 1)
 	repo := NewGameInstances(testPool)
@@ -133,8 +126,7 @@ func TestThePoolDepthAndTheStartGate(t *testing.T) {
 		t.Fatalf("depth = %d (%v), want 4", depth, err)
 	}
 
-	// Claiming one takes it out of the pool without removing it from the
-	// contest: the depth falls, the gate is unaffected.
+	// A claimed copy leaves the pool but still belongs to the contest.
 	if _, err := repo.ClaimSpare(t.Context(), contest, people[0], 1); err != nil {
 		t.Fatalf("claiming: %v", err)
 	}
@@ -145,15 +137,11 @@ func TestThePoolDepthAndTheStartGate(t *testing.T) {
 	if ready, err := repo.AllCurrent(t.Context(), contest, 1); err != nil || !ready {
 		t.Fatalf("ready = %v (%v), want true", ready, err)
 	}
-	// A rebuild leaves every one of them behind, and the contest may not start.
 	if ready, err := repo.AllCurrent(t.Context(), contest, 2); err != nil || ready {
 		t.Fatalf("ready = %v (%v) after a rebuild, want false", ready, err)
 	}
 }
 
-// Both kinds of leftover have to be found: the claimed ones because somebody
-// would play on them, and the free ones because whoever registers next would
-// be handed one.
 func TestStaleFindsClaimedAndFreeAlike(t *testing.T) {
 	contest, people := contestWithSpares(t, 3, 1)
 	repo := NewGameInstances(testPool)
@@ -183,9 +171,7 @@ func TestStaleFindsClaimedAndFreeAlike(t *testing.T) {
 	}
 }
 
-// The composite reference is what makes it impossible to hand one contest's
-// spare copy to somebody registered for another. A check in the application
-// would be a check somebody eventually forgets.
+// The composite foreign key, not application code, refuses the claim.
 func TestACopyCannotBeGivenToAnotherContestsParticipant(t *testing.T) {
 	first, _ := contestWithSpares(t, 1, 0)
 	_, elsewhere := contestWithSpares(t, 0, 1)
@@ -210,9 +196,6 @@ func TestOfReportsWhenThereIsNothingYet(t *testing.T) {
 
 var _ = storage.QuerierFrom
 
-// The background job asks this for its work list, so what it leaves out
-// matters as much as what it returns: a draft has nobody to provision for, and
-// a template still building is not a contest to copy.
 func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -265,9 +248,7 @@ func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 	for _, c := range live {
 		if _, ours := made[c.ID]; ours {
 			found[c.ID] = true
-			// The policy has to arrive whole, or a pool is built with the
-			// wrong grants — the failure nobody sees until a participant
-			// writes to a table they should not have reached.
+			// A partial policy would build the pool with the wrong grants.
 			if c.Policy.Mode != sqlpolicy.ModeReadWrite || len(c.Policy.WritableTables) != 1 {
 				t.Fatalf("policy arrived as %+v", c.Policy)
 			}
@@ -288,28 +269,14 @@ func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 	}
 }
 
-// reclaimContest creates a contest already at status, with its updated_at
-// backdated by age. Reclaimable judges a contest's finish moment by that
-// column — SetStatus and AdvanceFinished (contests.go) both set it in the
-// same statement that moves status to finished — never by a moment computed
-// in this process, so backdating it here is what stands in for "finished
-// this long ago" without waiting for real time to pass. graceMin, when not
-// nil, becomes the contest's own settings.grace_period_min.
+// reclaimContest creates a contest at status with updated_at backdated by age,
+// which Reclaimable reads as the finish moment. graceMin, when not nil, sets
+// the contest's own grace_period_min.
 //
-// Every Reclaimable test below calls this from inside withTx, on purpose:
-// Reclaim is installation-wide (its own doc), and internal/provisioning's
-// own reclaim_test.go really drops whatever the shared database offers it,
-// on a schedule this package does not control. `go test ./...` runs that
-// package concurrently with this one against the same PostgreSQL, so a row
-// committed here would be a real, live candidate for somebody else's Reclaim
-// call before this test ever got to read it back — not merely crowded out
-// of a batch limit's window, but genuinely gone. Writing through
-// storage.QuerierFrom(ctx, testPool) keeps the insert on the caller's own
-// transaction, invisible to any other session until it commits, which it
-// never does — withTx always rolls back. That is the same lever
-// audit_test.go's writeTrail reaches for (scoping, not a wider limit or a
-// different pass order), applied one level earlier because here the shared
-// state a concurrent process could touch is mutable, not merely readable.
+// Callers run inside withTx. internal/provisioning's tests run Reclaim against
+// the same database concurrently and really drop what it offers, so a
+// committed row could vanish mid-test; the rolled-back transaction keeps it
+// invisible to them.
 func reclaimContest(t *testing.T, ctx context.Context, status string, age time.Duration, graceMin *int) uuid.UUID {
 	t.Helper()
 	if testPool == nil {
@@ -332,9 +299,8 @@ func reclaimContest(t *testing.T, ctx context.Context, status string, age time.D
 	return id
 }
 
-// reclaimableContestIDs is the set of contest ids Reclaimable actually
-// offered, so a test can ask "was mine in there" rather than trust the
-// result's raw length or order.
+// reclaimableContestIDs lets a test check its own contests, since the shared
+// database may offer others.
 func reclaimableContestIDs(candidates []provisioning.ReclaimCandidate) map[uuid.UUID]bool {
 	found := make(map[uuid.UUID]bool, len(candidates))
 	for _, c := range candidates {
@@ -343,9 +309,6 @@ func reclaimableContestIDs(candidates []provisioning.ReclaimCandidate) map[uuid.
 	return found
 }
 
-// A contest finished well past the installation's own default grace, with no
-// grace of its own configured, is exactly the ordinary case the sweep exists
-// for.
 func TestReclaimableFindsAFinishedContestPastItsGrace(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -364,8 +327,6 @@ func TestReclaimableFindsAFinishedContestPastItsGrace(t *testing.T) {
 	})
 }
 
-// The grace exists precisely to protect this: a contest finished a moment ago
-// must not be touched yet.
 func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 5*time.Minute, nil)
@@ -384,11 +345,7 @@ func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
 	})
 }
 
-// Archiving is the ordinary "put this away" action an organizer reaches for
-// once a contest is done — contests.allowedTransitions lets a finished
-// contest move straight to archived — and it must not exempt the contest's
-// instances from the sweep forever. That was the unbounded leak this widened
-// status filter exists to close.
+// Archiving a finished contest must not exempt its instances from the sweep.
 func TestReclaimableIncludesAnArchivedContestPastItsGrace(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "archived", 2*time.Hour, nil)
@@ -407,12 +364,8 @@ func TestReclaimableIncludesAnArchivedContestPastItsGrace(t *testing.T) {
 	})
 }
 
-// limit is what stops a fresh deployment's first tick from asking the
-// cluster to drop every historical instance in one call — the deploy-day
-// hazard provisioning.ReclaimBatchLimit's own doc explains. Two candidates of
-// its own guarantee at least two rows exist inside this test's own
-// transaction, regardless of anything else in the shared database, so a
-// limit of one must return exactly one either way.
+// The test's own two candidates guarantee at least two rows, so a limit of one
+// must return exactly one whatever else the database holds.
 func TestReclaimableLimitCapsHowManyInstancesOneCallReturns(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
@@ -433,10 +386,8 @@ func TestReclaimableLimitCapsHowManyInstancesOneCallReturns(t *testing.T) {
 	})
 }
 
-// A running or published contest is never a candidate, however old its
-// updated_at happens to be — that column moves for reasons other than
-// finishing (an organizer editing settings, §4.1), and none of them say the
-// contest is over.
+// updated_at also moves for reasons other than finishing, so its age alone
+// must never make a live contest a candidate.
 func TestReclaimableNeverTouchesARunningOrPublishedContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
@@ -458,25 +409,19 @@ func TestReclaimableNeverTouchesARunningOrPublishedContest(t *testing.T) {
 	})
 }
 
-// A contest's own grace_period_min is what actually governs it — the
-// installation's own figure is only what an unconfigured contest defers to.
 func TestReclaimableHonoursTheContestsOwnGracePeriod(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
 
 		short := 5
-		// Finished 10 minutes ago; its own 5-minute grace has passed although
-		// the installation default below would not have let it through on
-		// its own.
+		// Past its own 5-minute grace, within the installation's 60.
 		tighter := reclaimContest(t, ctx, "finished", 10*time.Minute, &short)
 		if err := repo.AddSpare(ctx, tighter, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
 			t.Fatalf("adding an instance: %v", err)
 		}
 
 		long := 1000
-		// Finished 10 minutes ago too, but its own grace is nowhere near
-		// over, although the installation default alone would have let it
-		// through.
+		// Within its own 1000-minute grace.
 		looser := reclaimContest(t, ctx, "finished", 10*time.Minute, &long)
 		if err := repo.AddSpare(ctx, looser, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
 			t.Fatalf("adding an instance: %v", err)
@@ -496,8 +441,6 @@ func TestReclaimableHonoursTheContestsOwnGracePeriod(t *testing.T) {
 	})
 }
 
-// An instance already marked dropped is history, not work: offering it again
-// would have the sweep asking the cluster to drop something twice.
 func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -520,14 +463,8 @@ func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
 	})
 }
 
-// A tight limit must spend itself on whoever has been overdue the longest,
-// not on whichever contest's UUID happens to sort first (finding 2:
-// contest_id is UUID order, unrelated to how overdue a candidate is, so a
-// large contest that sorts first used to consume every tick's whole batch
-// while everyone else waited behind it). Ordering by deadline instead of
-// contest_id is what this test proves: the contest finished longer ago comes
-// back before the one finished more recently, regardless of which of the two
-// randomly generated UUIDs is numerically smaller.
+// The limit goes to the longest-overdue contest first, whatever the UUID
+// order.
 func TestReclaimableOrdersTheOldestDeadlineFirst(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
@@ -564,9 +501,6 @@ func TestReclaimableOrdersTheOldestDeadlineFirst(t *testing.T) {
 	})
 }
 
-// The row survives, in the terminal status the schema has carried since
-// migration 3 for exactly this — an organizer's audit search has to have
-// something to find even once the database itself is gone.
 func TestMarkDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	contest, _ := contestWithSpares(t, 1, 0)
 	repo := NewGameInstances(testPool)
@@ -591,12 +525,9 @@ func TestMarkDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 7: the index lands with the query. Reclaimable and
-// ReclaimableTemplates both filter game_instances on `status <> 'dropped'`,
-// which the plain status index (migration 3) serves poorly once 'dropped'
-// becomes the majority of the table — this proves the partial index
-// migration 000021 added is actually on the schema the sweep runs against,
-// not merely described in a migration file nobody applied yet.
+// The reclaim queries filter on status <> 'dropped', which a plain status
+// index serves poorly once most rows are dropped; this partial index serves
+// it (CLAUDE.md rule 7).
 func TestTheActiveInstancesIndexExists(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
@@ -610,11 +541,8 @@ func TestTheActiveInstancesIndexExists(t *testing.T) {
 	}
 }
 
-// reclaimTemplate stores a template database for contest in the given
-// status, so a ReclaimableTemplates test has something to offer or exclude.
-// Like reclaimContest, it writes through the ctx's ambient transaction (or
-// the raw pool when there is none) — every call site below passes the ctx
-// withTx hands its body, for the same reason reclaimContest's own doc gives.
+// reclaimTemplate stores a template row for contest in the given status. Like
+// reclaimContest, it writes through ctx's transaction.
 func reclaimTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, status string) string {
 	t.Helper()
 	database := "reclaim_tpl_" + uuid.NewString()[:12]
@@ -626,8 +554,6 @@ func reclaimTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, statu
 	return database
 }
 
-// The largest single database a contest owns is offered once the contest is
-// finished past its grace and nothing is left that still needs it.
 func TestReclaimableTemplatesOffersATemplateWithNoInstancesLeft(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -653,9 +579,6 @@ func TestReclaimableTemplatesOffersATemplateWithNoInstancesLeft(t *testing.T) {
 	})
 }
 
-// A template must never be offered while one of its own instances could
-// still be recreated from it — dropping the source ahead of what depends on
-// it would be exactly the ordering Reclaim's own doc says is backwards.
 func TestReclaimableTemplatesExcludesATemplateWithALiveInstanceStillThere(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -677,9 +600,7 @@ func TestReclaimableTemplatesExcludesATemplateWithALiveInstanceStillThere(t *tes
 	})
 }
 
-// Only a built template ('ready') has a database on disk to remove; an
-// unbuilt or already-reclaimed one is nothing the cluster can be asked to
-// drop twice.
+// Only a 'ready' template has a database on disk to remove.
 func TestReclaimableTemplatesExcludesAnUnbuiltOrAlreadyDroppedTemplate(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
@@ -700,9 +621,6 @@ func TestReclaimableTemplatesExcludesAnUnbuiltOrAlreadyDroppedTemplate(t *testin
 	})
 }
 
-// The same fairness Reclaimable's own ordering test proves, for the largest
-// database a contest owns: the template belonging to the longer-overdue
-// contest comes back first, regardless of contest_id order.
 func TestReclaimableTemplatesOrdersTheOldestDeadlineFirst(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewGameInstances(testPool)
@@ -735,9 +653,6 @@ func TestReclaimableTemplatesOrdersTheOldestDeadlineFirst(t *testing.T) {
 	})
 }
 
-// The row survives as history, the same convention MarkDropped keeps for an
-// instance — an organizer's audit search has to have something to find even
-// once the database itself is gone.
 func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -759,15 +674,7 @@ func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	})
 }
 
-// What the operator's orphan sweep reads (provisioning.OrphanSweeper): every
-// database the installation has a row for, instances and templates alike,
-// with the status each carries.
-//
-// Both tables in one answer is the whole point. The sweep decides a database
-// may be destroyed by checking that nothing still calls it live, and a
-// per-table answer would let a name be gone in one and live in the other. A
-// dropped row has to come back too — those are the very rows an orphan is
-// found by.
+// Dropped rows must come back too: the orphan sweep finds orphans by them.
 func TestRecordedDatabasesCarriesInstancesAndTemplatesWithTheirStatus(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
@@ -790,8 +697,7 @@ func TestRecordedDatabasesCarriesInstancesAndTemplatesWithTheirStatus(t *testing
 			t.Fatalf("RecordedDatabases: %v", err)
 		}
 
-		// The read is installation-wide, so this asks about its own three rows
-		// by name rather than about the length of the answer.
+		// The read is installation-wide, so check only this test's rows.
 		found := map[string]provisioning.DatabaseRecord{}
 		for _, row := range recorded {
 			found[row.Database] = row
@@ -812,10 +718,6 @@ func TestRecordedDatabasesCarriesInstancesAndTemplatesWithTheirStatus(t *testing
 	})
 }
 
-// The organizer's list of a contest's databases. It has to carry both kinds
-// of row — a spare nobody holds and a participant's own copy — and it has to
-// name the holder, because "which of these is Ivan's" is the question the
-// screen exists to answer.
 func TestInstancesListsSparesAndClaimedCopiesAlike(t *testing.T) {
 	contest, people := contestWithSpares(t, 2, 1)
 	repo := NewGameInstances(testPool)
@@ -865,9 +767,6 @@ func TestInstancesListsSparesAndClaimedCopiesAlike(t *testing.T) {
 	}
 }
 
-// A contest-scoped screen must never show another contest's rows: db_name is
-// unique installation-wide, so scoping is the query's job and nothing above
-// it can add the scope back.
 func TestInstancesNeverCrossesIntoAnotherContest(t *testing.T) {
 	mine, _ := contestWithSpares(t, 1, 0)
 	theirs, _ := contestWithSpares(t, 3, 0)
@@ -882,8 +781,6 @@ func TestInstancesNeverCrossesIntoAnotherContest(t *testing.T) {
 	}
 }
 
-// The bound is the caller's, and the query has to honour it — otherwise the
-// "there are more than this" the service reports is a guess.
 func TestInstancesHonoursTheLimitItIsGiven(t *testing.T) {
 	contest, _ := contestWithSpares(t, 4, 0)
 	repo := NewGameInstances(testPool)
@@ -897,9 +794,6 @@ func TestInstancesHonoursTheLimitItIsGiven(t *testing.T) {
 	}
 }
 
-// A row already reclaimed still appears: it is what the trail's payload
-// points at, and an organizer who cannot find a database wants to see that it
-// was there and is gone, not an absence.
 func TestInstancesKeepsShowingADroppedRow(t *testing.T) {
 	contest, _ := contestWithSpares(t, 1, 0)
 	repo := NewGameInstances(testPool)
@@ -924,9 +818,8 @@ func TestInstancesKeepsShowingADroppedRow(t *testing.T) {
 	}
 }
 
-// The lookup a destructive action is decided on. Scoped to the contest, so
-// naming another contest's database is "no such database" rather than a way
-// to drop it with a permission over this one.
+// A destructive action is decided on this lookup, so another contest's
+// database must read as not found.
 func TestInstanceNamedIsScopedToItsOwnContest(t *testing.T) {
 	mine, _ := contestWithSpares(t, 1, 0)
 	theirs, _ := contestWithSpares(t, 1, 0)
@@ -957,12 +850,8 @@ func TestInstanceNamedIsScopedToItsOwnContest(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 7 again, in its weaker form: Instances above does not add a
-// predicate, it adds a second reader for one migration 12 already serves —
-// and the comment above the query says so. This is what stops that comment
-// from becoming a lie: the index has to exist, and contest_id has to be its
-// leading column, or `WHERE contest_id = $1` is a sequential scan of a table
-// that only ever grows.
+// Instances filters on contest_id alone, which this index serves only while
+// contest_id leads it (CLAUDE.md rule 7).
 func TestTheContestInstancesIndexLeadsWithTheContest(t *testing.T) {
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")

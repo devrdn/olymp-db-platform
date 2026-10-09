@@ -7,60 +7,46 @@ import (
 	"time"
 )
 
-// What a participant meets at the gate (Gate.StandingOf): the one refusal a
-// Standing gives when it does not let them act. The sixth, a network the
-// contest is not held on, is ErrAddressNotAllowed (enrollment.go), which
-// enrolment refuses for the same reason.
+// Refusals a Standing gives. A network the contest is not held on is
+// ErrAddressNotAllowed (enrollment.go).
 var (
-	// ErrNotAParticipant covers never having registered and having been
-	// disqualified alike: both mean this contest will not take anything from
-	// this person, and distinguishing them to the caller would tell somebody
-	// probing a contest whether an account is on its roster.
+	// ErrNotAParticipant covers both never registered and disqualified, so a
+	// caller cannot probe whether an account is on the roster.
 	ErrNotAParticipant = errors.New("not a participant of this contest")
-	// ErrContestNotRunning is a contest that is not open to this participant
-	// now, but may yet be: a draft (a published contest can be taken back to
-	// one), a published contest that has not started, a status this build
-	// does not know, an individual window that has not opened, or timing data
-	// no deadline can be computed from. A contest that will never open again
-	// is ErrContestEnded instead.
+	// ErrContestNotRunning is a contest not open to this participant now but
+	// able to open later: a draft, a published contest not yet started, an
+	// unknown status, an individual window not yet open, or timing data no
+	// deadline can be computed from.
 	ErrContestNotRunning = errors.New("the contest is not running")
-	// ErrContestEnded is a contest finished or archived: over for everybody,
-	// and it never opens again. Distinct from ErrContestNotRunning so that a
-	// participant waiting for a contest that is merely not open yet is never
-	// told it is over.
+	// ErrContestEnded is a contest finished or archived; it never opens again.
+	// Kept apart from ErrContestNotRunning so a waiting participant is never
+	// told the contest is over.
 	ErrContestEnded = errors.New("the contest has ended")
-	// ErrParticipantFinished is a registration that is finished. Their
-	// answers are in; everything closing with them is the point of finishing.
+	// ErrParticipantFinished is a finished registration.
 	ErrParticipantFinished = errors.New("the participant has finished")
-	// ErrDeadlinePassed is a participant whose own time is up: their deadline
-	// plus the grace has gone by, or, under individual timing, the contest's
-	// own window closed before they started.
+	// ErrDeadlinePassed is a participant whose deadline plus grace has gone
+	// by, or, under individual timing, whose window closed before they started.
 	//
-	// The same sentinel answers an answer that arrives after the deadline at
-	// the moment of the write, checked against the core database's own clock
-	// inside the same statement as the write (§8) — a second, authoritative
-	// check, not a repeat of the gate: the two happen at different moments,
-	// and only that one gets to be the last word on whether the write lands.
+	// Submit also returns it when the write itself lands at or after the
+	// deadline, checked against the core database's clock in the same
+	// statement (§8); that check, not the gate, is final.
 	ErrDeadlinePassed = errors.New("the deadline for this contest has passed")
 )
 
-// Standing is where one participant stands in one contest at one instant:
-// computed, never stored. The zero Standing refuses everything.
+// Standing is where one participant stands in one contest at one instant. It
+// is computed, never stored; the zero Standing refuses everything.
 //
-// Three questions are asked of it, and they cannot contradict each other:
-// MayAct (play reads, the console, answers, the workspace, signals), MayWait
-// (the events channel), and Over (it is over for them: their results may be
-// shown). Over implies neither of the others, MayAct implies MayWait, and
-// Refusal names why MayAct is false.
+// MayAct covers play reads, the console, answers, the workspace and signals;
+// MayWait covers the events channel; Over means their results may be shown.
+// MayAct implies MayWait, Over implies neither, and Refusal names why MayAct
+// is false.
 type Standing struct {
 	phase phase
-	// addressRefused is the contest's network restriction refusing the
-	// caller's address. Stored as a refusal rather than a permission so the
-	// zero Standing, with nothing known about the address, still refuses by
-	// its phase alone and names the contest rather than the network.
+	// addressRefused is a refusal rather than a permission so the zero
+	// Standing refuses by its phase and names the contest, not the network.
 	addressRefused bool
-	// draft is a contest that is not out yet: over for nobody, whatever a
-	// registration in it says.
+	// draft is a contest not out yet: over for nobody, whatever the
+	// registration says.
 	draft bool
 }
 
@@ -68,48 +54,34 @@ type Standing struct {
 type phase int
 
 const (
-	// phaseNotRunning is not open to them yet: a draft, a status this build
-	// does not know, a window of their own that has not opened, or timing
-	// data no deadline can be computed from. The zero value, so a Standing
-	// nobody computed is closed.
+	// phaseNotRunning is the zero value, so an uncomputed Standing is closed.
 	phaseNotRunning phase = iota
-	// phaseWaiting is a published contest that has not started: they may
-	// hold the events channel open for its start, and nothing else.
+	// phaseWaiting is a published contest not started: the events channel only.
 	phaseWaiting
-	// phaseOpen is the contest running and their time not up.
 	phaseOpen
-	// phaseTimeUp is their own deadline plus grace gone by, or, unstarted
-	// under individual timing, the contest's window closed before they began.
+	// phaseTimeUp is deadline plus grace gone by, or, unstarted under
+	// individual timing, the contest's window closed.
 	phaseTimeUp
 	// phaseEnded is the contest finished or archived, for everybody.
 	phaseEnded
-	// phaseFinished is their registration finished.
 	phaseFinished
-	// phaseExcluded is their registration disqualified.
+	// phaseExcluded is a disqualified registration.
 	phaseExcluded
 )
 
-// Gate is the participation rule bound to the installation's one deadline
-// grace (DEADLINE_GRACE): the network allowance an already-working
-// participant is given past their deadline. It is built once, by the
-// composition root, and the same *Gate is handed to everything that asks
-// "may this participant act" or "is it over for them" — the console, the
-// answer route, the profile — and to the scheduler that finishes a contest,
-// so none of them can hold a grace of its own that disagrees with the others.
-// Each of them refuses to be assembled without one.
+// Gate is the participation rule bound to the installation's deadline grace
+// (DEADLINE_GRACE), the allowance an already-working participant gets past
+// their deadline. The composition root builds one and hands the same *Gate to
+// every consumer, the scheduler included, so no two can disagree on the grace.
 //
-// The zero Gate is a gate with no grace at all; tests may use one, but the
-// installation builds its gate with NewGate, which refuses a negative grace.
+// The zero Gate has no grace; tests may use it.
 type Gate struct {
 	grace time.Duration
 }
 
-// NewGate returns the gate for an installation whose deadline grace is
-// grace. Zero is a valid grace — no allowance at all — and is honoured as
-// given; config.Load is where an unset DEADLINE_GRACE becomes five seconds.
-//
-// Panics on a negative grace: config.Load refuses one first, so a caller
-// passing one is a bug in the wiring, not input to fail closed on quietly.
+// NewGate returns the gate for the given grace. Zero means no allowance;
+// config.Load supplies the default. It panics on a negative grace, which
+// config.Load already refuses, so one here is a wiring bug.
 func NewGate(grace time.Duration) *Gate {
 	if grace < 0 {
 		panic(fmt.Sprintf("contests: negative deadline grace %s", grace))
@@ -117,33 +89,24 @@ func NewGate(grace time.Duration) *Gate {
 	return &Gate{grace: grace}
 }
 
-// StandingOf is the one participation rule: where participant stands in
-// contest at now, from addr, with the gate's grace allowed past their
-// deadline.
+// StandingOf is the participation rule: where participant stands in contest at
+// now, from addr.
 //
-// The registration is read first, because neither status it can carry here
-// ever changes back: disqualified, then finished. Then the contest: finished
-// or archived is over for everybody; published waits for its start; anything
-// but running is not open. A running contest is then a matter of the clock:
+// Precedence: disqualified, then finished (neither ever changes back); then a
+// contest finished or archived (over for everybody); published waits for its
+// start; any status but running is not open. In a running contest:
 //
-//   - a participant whose own clock has not started (ClockPending: individual
-//     timing) may start inside the contest's own window, [starts_at,
-//     ends_at), with no grace — grace is an allowance for a request already
-//     on its way from somebody working, not more time to begin. A nil bound
-//     is open on that side.
-//   - everybody else may act while now is before their Deadline plus grace,
-//     and not at that instant: the core database refuses an answer whose
-//     write happens at now() >= deadline, and the gate must not admit what
-//     the write would refuse. No deadline at all is broken timing data, and
-//     fails closed.
+//   - a participant whose clock has not started (ClockPending) may start
+//     inside [starts_at, ends_at), with no grace: grace covers a request
+//     already in flight, not more time to begin. A nil bound is open.
+//   - everybody else may act while now is before Deadline plus grace, not at
+//     that instant, because the database refuses a write at now() >= deadline.
+//     No deadline at all fails closed.
 //
-// A fixed contest is open as soon as its status is running, before its
-// starts_at too: the status is what an organiser or the scheduler moves to
-// open a shared window.
-//
-// The address is checked against the contest's own network restriction
-// separately from all of that, so that Over never depends on where the
-// caller happens to be; Refusal decides which of the two to name.
+// A fixed contest is open once its status is running, even before starts_at:
+// the status, moved by an organiser or the scheduler, is what opens a shared
+// window.
+// The address is checked separately so Over never depends on it.
 func (g *Gate) StandingOf(c Contest, p Participant, now time.Time, addr netip.Addr) Standing {
 	return Standing{
 		phase:          g.phaseOf(c, p, now),
@@ -152,7 +115,6 @@ func (g *Gate) StandingOf(c Contest, p Participant, now time.Time, addr netip.Ad
 	}
 }
 
-// phaseOf is StandingOf's rule without the address.
 func (g *Gate) phaseOf(c Contest, p Participant, now time.Time) phase {
 	switch {
 	case p.Status == RegistrationDisqualified:
@@ -179,10 +141,8 @@ func (g *Gate) phaseOf(c Contest, p Participant, now time.Time) phase {
 	return phaseOpen
 }
 
-// startPhase is where a participant who has not started their own clock
-// stands in a running contest: before its window, inside it, or too late to
-// begin. ends_at is the first instant they may no longer start at, with no
-// grace.
+// startPhase places a participant who has not started their clock. ends_at is
+// the first instant they may no longer start, with no grace.
 func startPhase(c Contest, now time.Time) phase {
 	if c.StartsAt != nil && now.Before(*c.StartsAt) {
 		return phaseNotRunning
@@ -193,37 +153,30 @@ func startPhase(c Contest, now time.Time) phase {
 	return phaseOpen
 }
 
-// closesAt is the instant an already-working participant may no longer act:
-// their deadline plus the grace. The one place a participant's deadline gets
-// the grace added, so the gate and Submit's write, which needs that instant
-// too, cannot disagree about it.
+// closesAt is the only place the grace is added to a deadline, so the gate and
+// Submit's write cannot disagree.
 func (g *Gate) closesAt(deadline time.Time) time.Time {
 	return deadline.Add(g.grace)
 }
 
-// MayAct reports whether the participant may act in the contest now: read
-// its story, questions, log and schema, run queries, answer, use the
-// workspace, send signals.
+// MayAct reports whether the participant may act in the contest now.
 func (s Standing) MayAct() bool {
 	return s.phase == phaseOpen && !s.addressRefused
 }
 
 // MayWait reports whether the participant may hold the events channel open:
-// whenever they may act, and also while a published contest they are
-// registered for has not started yet, so they can see it start.
+// whenever they may act, and while a published contest has not started.
 func (s Standing) MayWait() bool {
 	return s.MayAct() || (s.phase == phaseWaiting && !s.addressRefused)
 }
 
 // Over reports that the participant may never act in this contest again.
 //
-// A draft is over for nobody: a contest that is not out has nothing to be
-// over. In any other status their registration ends it, a published contest
-// included: disqualified or finished is over for them. The clock ends it only
-// through a window that has actually run — the contest finished or archived,
-// or their own time up in a running contest — so a published contest is never
-// over by time, however late it is. It never depends on the address: walking
-// out of the room does not end a contest.
+// A draft is over for nobody. Otherwise a disqualified or finished
+// registration ends it, even in a published contest. The clock ends it only
+// through a window that has run: the contest finished or archived, or their
+// time up in a running contest; a published contest is never over by time.
+// The address never matters.
 func (s Standing) Over() bool {
 	if s.draft {
 		return false
@@ -235,17 +188,12 @@ func (s Standing) Over() bool {
 	return false
 }
 
-// Refusal is why the participant may not act: nil exactly when MayAct, and
-// otherwise one of the gate's sentinels, unwrapped.
+// Refusal is nil exactly when MayAct, otherwise one of the gate's sentinels,
+// unwrapped. The play screen stops for good on ErrContestEnded and keeps
+// waiting on ErrContestNotRunning, so the two must stay distinct sentinels.
 //
-// A contest that has ended is ErrContestEnded and one that is merely not open
-// now is ErrContestNotRunning: the play screen stops for good on the first
-// and keeps waiting on the second, so the two must never share a sentinel.
-//
-// States that can never change come first, then the address, then "not yet":
-// a participant whose time is up is told so from anywhere, and one on the
-// wrong network is told that before being told to wait, since waiting will
-// not help them.
+// Order: states that never change, then the address, then "not yet", since
+// waiting will not help someone on the wrong network.
 func (s Standing) Refusal() error {
 	switch s.phase {
 	case phaseExcluded:

@@ -69,7 +69,6 @@ func TestMemoryDeleteRemovesValue(t *testing.T) {
 }
 
 func TestMemoryIncrCountsWithinWindow(t *testing.T) {
-	// Incr is the rate-limiting primitive: a counter that expires on its own.
 	c := NewMemory(10)
 	ctx := context.Background()
 
@@ -98,8 +97,6 @@ func TestMemoryIncrRestartsAfterWindowExpires(t *testing.T) {
 }
 
 func TestMemoryEvictsOldestWhenOverCapacity(t *testing.T) {
-	// Without a bound, anything keyed by user input would let a client grow
-	// the process until it is killed.
 	c := NewMemory(3)
 	ctx := context.Background()
 
@@ -142,14 +139,8 @@ func TestMemoryCloseIsSafe(t *testing.T) {
 }
 
 func TestFloodingTheCacheCannotSilentlyResetALoginThrottle(t *testing.T) {
-	// The counter behind the brute-force limit lives here. Under plain LRU an
-	// attacker could push a victim's counter out of the store simply by
-	// attempting logins against many other names, and guessing would resume
-	// from zero — with nothing in any log to say it had happened.
-	//
-	// Refusing is the right failure: Limiter.Allow reads a cache error as
-	// "the protection is not in place" and denies, so a full store becomes a
-	// visible refusal instead of an invisible bypass.
+	// Under plain LRU an attacker could evict a victim's brute-force counter
+	// by trying many other names (see ErrFull).
 	c := NewMemory(4)
 	ctx := context.Background()
 
@@ -168,7 +159,6 @@ func TestFloodingTheCacheCannotSilentlyResetALoginThrottle(t *testing.T) {
 		t.Fatal("the store absorbed every counter; something was evicted silently")
 	}
 
-	// The victim's counter is still there, still counting.
 	n, err := c.Incr(ctx, "rl:login:victim", time.Minute)
 	if err != nil {
 		t.Fatalf("Incr() on the victim = %v", err)
@@ -179,8 +169,6 @@ func TestFloodingTheCacheCannotSilentlyResetALoginThrottle(t *testing.T) {
 }
 
 func TestAFullStoreReclaimsWhatHasExpiredBeforeRefusing(t *testing.T) {
-	// A window that has passed is not occupying the store on merit. Reclaiming
-	// it first is what keeps the refusal above rare rather than routine.
 	c := NewMemory(2)
 	ctx := context.Background()
 
@@ -198,10 +186,7 @@ func TestAFullStoreReclaimsWhatHasExpiredBeforeRefusing(t *testing.T) {
 }
 
 func TestSessionsStillMakeRoomForEachOther(t *testing.T) {
-	// Set keeps least-recently-used eviction. A session store that refused new
-	// sessions once full would lock the installation out, and a lost session
-	// is a re-login rather than a security control that quietly stopped
-	// working.
+	// A store refusing new sessions once full would lock everyone out.
 	c := NewMemory(2)
 	ctx := context.Background()
 
@@ -219,13 +204,6 @@ func TestSessionsStillMakeRoomForEachOther(t *testing.T) {
 	}
 }
 
-// The reclaim walks a bounded number of entries, whatever the store holds.
-//
-// It runs under the one lock every session read and every rate-limit check
-// also takes, so its cost is paid by every request in flight. Walking a full
-// store — a hundred thousand entries by default — on every counter that finds
-// the store full turns one caller's flood into a stall for everybody, which is
-// the opposite of what the refusal above is for.
 func TestReclaimingWalksABoundedPartOfTheStore(t *testing.T) {
 	const capacity = reclaimScan * 4
 	c := NewMemory(capacity)
@@ -242,8 +220,7 @@ func TestReclaimingWalksABoundedPartOfTheStore(t *testing.T) {
 		t.Fatalf("Incr() = %v, want the expired windows to make room", err)
 	}
 
-	// Room was made, and it was made by examining the tail rather than the
-	// whole store: what is left is everything the walk did not reach.
+	// What is left is everything the walk did not reach.
 	if left := c.Len(); left < capacity-reclaimScan {
 		t.Errorf("Len() = %d after reclaiming, want at least %d: the walk swept the whole store",
 			left, capacity-reclaimScan)

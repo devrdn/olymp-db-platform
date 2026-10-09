@@ -1,24 +1,10 @@
-// Command testdb recreates the core database the DB-backed tests run
-// against: it drops the database CORE_DB_DSN names and creates it again,
-// empty. `make test-db` runs it and then `migrate up`, so every run starts
-// from a freshly migrated schema that nothing but the tests has ever touched.
+// Command testdb drops and recreates, empty, the test database CORE_DB_DSN
+// names; `make test-db` then runs `migrate up`. A clean slate makes leftovers
+// of earlier runs irrelevant and applies migrations from zero each time. It is
+// a command, not a test step, because test binaries run in parallel.
 //
-// Why drop and recreate rather than keep the database and clean it: a clean
-// slate costs about a second, and it makes whatever a previous run left behind
-// — a fixture a test forgot, the prov-player accounts contestFor never
-// deletes, a run killed half-way — irrelevant rather than something to hunt
-// for. It also means the migrations are applied from zero on every run, which
-// is the path a new installation takes.
-//
-// Why a command and not a step inside the test binaries: `go test` runs
-// packages in parallel, and three binaries each dropping the database the
-// other two are using would destroy each other's work. The reset has to
-// happen once, before any of them starts.
-//
-// It refuses any database whose name does not end in "_test" — the same rule
-// the tests connect under (internal/platform/storage/storagetest) — and it
-// refuses before connecting to anything, because this is the one place in the
-// test tooling that issues DROP DATABASE.
+// It refuses, before connecting, any database whose name does not end in
+// "_test", since it issues DROP DATABASE.
 //
 // Usage:
 //
@@ -36,9 +22,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// maintenanceDatabase is where the DROP and the CREATE are issued from:
-// PostgreSQL cannot drop the database a session is connected to, and every
-// cluster initdb makes has this one.
+// maintenanceDatabase is where DROP and CREATE are issued from, since
+// PostgreSQL cannot drop the database a session is connected to.
 const maintenanceDatabase = "postgres"
 
 func main() {
@@ -68,8 +53,7 @@ func run() error {
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
 	quoted := pgx.Identifier{name}.Sanitize()
-	// WITH (FORCE): the run this follows may have been killed with a
-	// connection still open, and a reset that waits for it never finishes.
+	// FORCE: a killed earlier run may have left a connection open.
 	if _, err := conn.Exec(ctx, `DROP DATABASE IF EXISTS `+quoted+` WITH (FORCE)`); err != nil {
 		return fmt.Errorf("dropping %s: %w", name, err)
 	}
@@ -81,13 +65,9 @@ func run() error {
 }
 
 // target parses dsn, refuses it unless it names a test database, and returns
-// a connection config for the same server's maintenance database together
-// with the name of the database to recreate.
-//
-// The check is on the name the DSN gives, not on the server's answer as the
-// tests' own guard does, because the database may not exist yet — and a
-// missing name (one left to PGDATABASE or to the role's name) is refused
-// rather than guessed at.
+// a config for the same server's maintenance database and the name to
+// recreate. The check is on the DSN's name, since the database may not exist
+// yet; a DSN with no name is refused.
 func target(dsn string) (*pgx.ConnConfig, string, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {

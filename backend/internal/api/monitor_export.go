@@ -17,62 +17,54 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 )
 
-// The monitoring CSV exports (design §4): the whole feed of one participant,
-// or of the whole contest, as a file, oldest first.
+// The monitoring CSV exports: one participant's feed, or the whole contest's,
+// oldest first.
 //
-// Streamed like the participant's own query log (queryLogCSV), and read as a
-// k-way merge of every source's own forward range (monitor.StreamFeed): each
-// source a page at a time in its own index order, each row read once, one
-// page per source in memory and no transaction held between pages.
+// Streamed as a k-way merge of each source's forward range
+// (monitor.StreamFeed): one page per source in memory, no transaction held
+// between pages.
 //
-// Bounded five ways: rows (maxMonitorExportRows) and bytes
-// (maxMonitorExportBytes, counted as rows are written — CLAUDE.md rule 12),
-// each ending the file with a line saying so; time (exportDeadline); one
-// download at a time per account (ExportGate); and, across the whole service,
-// as many downloads at once as the core pool can spare (ExportSlots, shared
-// with the participants' own exports, because the connections are). A file
-// that stops for any other reason — the deadline, a failed read — ends with a
-// line saying it is incomplete: the status line said 200 long before, and a
-// file that quietly stops reads as a complete record.
+// Bounded by rows and bytes (counted as written, CLAUDE.md rule 12), each
+// ending the file with a notice; by exportDeadline; by one download per account
+// (ExportGate); and by ExportSlots service-wide. A file that stops for any
+// other reason ends with an "incomplete" line, since the 200 went out long
+// before.
 //
-// Every export is recorded (contest.monitor_export) before the first byte
-// leaves; an export the trail cannot record is refused.
+// Every export is recorded (contest.monitor_export) before the first byte; one
+// the trail cannot record is refused.
 
-// maxMonitorExportRows and maxMonitorExportBytes bound one export. A
-// contest-wide feed of a busy three-hour olympiad is tens of thousands of
-// items, a few megabytes; a participant's is a few thousand.
+// maxMonitorExportRows and maxMonitorExportBytes bound one export. A busy
+// three-hour contest's feed is tens of thousands of items, a few megabytes.
 const (
 	maxMonitorExportRows  = 200_000
 	maxMonitorExportBytes = 64 << 20
 )
 
-// monitorCSVColumns is the header row. data is the item's details as JSON,
-// the same object the feed's response carries.
+// monitorCSVColumns is the header row; data is the item's details as JSON, as
+// in the feed response.
 var monitorCSVColumns = []string{"at", "kind", "login", "full_name", "registration_id", "data"}
 
 // monitorCSVTruncatedNotice is the last line of a file a bound cut.
 var monitorCSVTruncatedNotice = []string{"", "truncated", "", "", "",
 	"This file stops at the most one download may carry; narrow it to one participant or read the rest on the screen."}
 
-// monitorCSVIncompleteNotice is the last line of a file that stopped
-// because the download ran out of time or a read failed.
+// monitorCSVIncompleteNotice ends a file that ran out of time or hit a failed
+// read.
 var monitorCSVIncompleteNotice = []string{"", "incomplete", "", "", "",
 	"This file stopped early: the download ran out of time or a read failed. Download it again."}
 
-// monitorCSVTooLargeNotice is the whole of a contest export's body when the
-// contest has more participants than one export reads (monitor.ErrExportTooWide).
+// monitorCSVTooLargeNotice is the whole body of a contest export when the
+// contest has more participants than one export reads
+// (monitor.ErrExportTooWide).
 var monitorCSVTooLargeNotice = []string{"", "too_large", "", "", "",
 	"This contest is too large to export whole; export its participants one at a time."}
 
-// errExportBound stops the stream when a bound is reached.
 var errExportBound = errors.New("the export reached its bound")
 
-// contestCSV is GET /contests/{id}/monitor/export.csv.
 func (h *MonitorHandler) contestCSV(w http.ResponseWriter, r *http.Request) {
 	h.exportCSV(w, r, uuid.Nil, "monitor-"+monitorContest(r).String()+".csv")
 }
 
-// participantCSV is GET .../monitor/participants/{registrationID}/export.csv.
 func (h *MonitorHandler) participantCSV(w http.ResponseWriter, r *http.Request) {
 	registration, ok := h.registration(w, r)
 	if !ok {
@@ -89,18 +81,15 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	identity, _ := auth.IdentityFrom(r.Context())
 	release, free := h.exports.enter(identity.UserID)
 	if !free {
-		// A second download while the first still runs is asking faster
-		// than the installation allows.
+		// A second download while the first runs is refused as asking too fast.
 		httpx.Error(w, r, http.StatusTooManyRequests, codeMonitorTooOften,
 			"A monitoring export of this account is still running; wait for it to finish")
 		return
 	}
 	defer release()
 
-	// Before the trail is written and before the feed is read, so a refusal
-	// for load costs the pool nothing and leaves no record of an export that
-	// never happened (CLAUDE.md rule 13). The account's own read budget has
-	// already been spent for this request by the middleware above.
+	// Before the trail is written or the feed read, so a refusal for load costs
+	// the pool nothing and records no export (CLAUDE.md rule 13).
 	releaseSlot, err := h.exportSlots.enter()
 	if err != nil {
 		h.fail(w, r, err)
@@ -138,7 +127,7 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 			if err := writer.Write(record); err != nil {
 				return err
 			}
-			// Flushed as it goes, so the byte count is what really left.
+			// Flushed per row, so the byte count is what actually left.
 			writer.Flush()
 			return writer.Error()
 		})
@@ -161,7 +150,6 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	}
 }
 
-// countingWriter counts the bytes written through it.
 type countingWriter struct {
 	w io.Writer
 	n int64
@@ -173,8 +161,8 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// recordSize is a record's size on the wire, near enough: its cells, a
-// separator each, and room for quoting.
+// recordSize is a record's size on the wire, roughly: its cells, a separator
+// each, and room for quoting.
 func recordSize(record []string) int64 {
 	size := 0
 	for _, cell := range record {
@@ -183,8 +171,8 @@ func recordSize(record []string) int64 {
 	return int64(size)
 }
 
-// monitorCSVRow is one item as a row. Every cell a participant or an
-// organiser typed is defused for spreadsheets (spreadsheetSafe).
+// monitorCSVRow is one item as a row, with every typed cell defused
+// (spreadsheetSafe).
 func monitorCSVRow(item monitor.FeedItem) []string {
 	data, err := json.Marshal(feedData(item.Data))
 	if err != nil {
@@ -196,10 +184,9 @@ func monitorCSVRow(item monitor.FeedItem) []string {
 	}
 }
 
-// spreadsheetSafe keeps a cell from being read as a formula: a spreadsheet
-// evaluates a cell that starts with =, +, - or @, and a participant's full
-// name or pasted text is theirs to choose. A leading apostrophe is how a
-// spreadsheet is told "this is text".
+// spreadsheetSafe keeps a cell from being read as a formula: spreadsheets
+// evaluate a leading =, +, - or @, and names and pasted text are user-chosen. A
+// leading apostrophe marks the cell as text.
 func spreadsheetSafe(cell string) string {
 	if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
 		return "'" + cell

@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// collectingSink keeps audit entries for assertions.
 type collectingSink struct {
 	entries []audit.Entry
 	err     error
@@ -69,7 +68,6 @@ func newFixture(t *testing.T) *fixture {
 	}
 }
 
-// addUser stores an account with a known password.
 func (f *fixture) addUser(t *testing.T, login, plaintext string) users.User {
 	t.Helper()
 	return f.repo.Add(users.User{Login: login, FullName: "Test User", PasswordHash: passwordtest.Hash(t, plaintext)})
@@ -97,7 +95,6 @@ func TestCreateStoresTheAccount(t *testing.T) {
 }
 
 func TestCreateIssuesAOneTimePassword(t *testing.T) {
-	// The administrator never chooses somebody else's lasting password.
 	f := newFixture(t)
 
 	created, err := f.service.Create(context.Background(), users.CreateCommand{
@@ -146,13 +143,8 @@ func TestCreateRejectsADuplicateLogin(t *testing.T) {
 	}
 }
 
-// TestCreateAllowsRecreatingADeletedLogin is the recovery workflow deletion
-// exists for: a deleted account's login must not go on blocking the
-// duplicate-login pre-check, or an account deleted by mistake could never be
-// created again under the same login. ByLogin still resolves to the deleted
-// account here (nothing live has reclaimed the login), so what is under test
-// is that Create's pre-check looks at its Status rather than treating any
-// match as taken.
+// ByLogin still returns the deleted account here, so this tests that Create
+// checks its Status.
 func TestCreateAllowsRecreatingADeletedLogin(t *testing.T) {
 	f := newFixture(t)
 	gone := f.addUser(t, "petrov", "old password")
@@ -214,8 +206,6 @@ func TestAuditOfCreationCarriesNoPassword(t *testing.T) {
 }
 
 func TestBlockRetiresEverySessionOfTheAccount(t *testing.T) {
-	// Blocking that only prevents the next login would leave a disqualified
-	// participant working in the tab they already have open.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 	before, _ := f.repo.Get(user.ID)
@@ -245,8 +235,6 @@ func TestBlockIsAudited(t *testing.T) {
 }
 
 func TestAdministratorsCannotBlockThemselves(t *testing.T) {
-	// Locking the last administrator out of the installation is an easy
-	// mistake and an expensive one to undo.
 	f := newFixture(t)
 	user := f.addUser(t, "admin", "some password")
 
@@ -273,8 +261,6 @@ func TestUnblockRestoresAccess(t *testing.T) {
 }
 
 func TestBlockRequiresAReason(t *testing.T) {
-	// Blocking is a thing an administrator is answered to for later, and "no
-	// reason given" is not an answer the trail can carry.
 	f := newFixture(t)
 	target := f.addUser(t, "ivanov", "some password")
 
@@ -284,7 +270,6 @@ func TestBlockRequiresAReason(t *testing.T) {
 		t.Errorf("err = %v, want ErrReasonRequired", err)
 	}
 
-	// And the account was not touched on the way to refusing.
 	after, _ := f.repo.Get(target.ID)
 	if after.Status != users.StatusActive {
 		t.Errorf("Status = %q, want active; a refused block must not touch the account", after.Status)
@@ -319,12 +304,6 @@ func TestBlockKeepsTheReason(t *testing.T) {
 	}
 }
 
-// TestReblockingWithANewReasonUpdatesTheStoredReason guards the regression
-// the old unconditional-skip behaviour would reintroduce: an administrator
-// who blocks an account, then blocks it again with a stronger reason, must
-// see that second decision land. The old Block body wrote unconditionally;
-// routing through BulkSetStatus's "already in status" skip must not silently
-// discard it.
 func TestReblockingWithANewReasonUpdatesTheStoredReason(t *testing.T) {
 	f := newFixture(t)
 	target := f.addUser(t, "ivanov", "some password")
@@ -347,10 +326,6 @@ func TestReblockingWithANewReasonUpdatesTheStoredReason(t *testing.T) {
 	}
 }
 
-// TestReblockingWithTheIdenticalReasonIsANoOp is the other half of the same
-// rule: when nothing would actually change — same status, same reason — the
-// account is skipped, the stored reason is untouched, and nothing new is
-// audited.
 func TestReblockingWithTheIdenticalReasonIsANoOp(t *testing.T) {
 	f := newFixture(t)
 	target := f.addUser(t, "ivanov", "some password")
@@ -378,7 +353,6 @@ func TestReblockingWithTheIdenticalReasonIsANoOp(t *testing.T) {
 }
 
 func TestChangePasswordRequiresTheCurrentOne(t *testing.T) {
-	// Otherwise anyone who borrows an unlocked browser takes the account over.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "old password")
 
@@ -416,8 +390,6 @@ func TestChangePasswordReplacesTheDigest(t *testing.T) {
 }
 
 func TestChangePasswordRetiresOtherSessions(t *testing.T) {
-	// Changing a password is what someone does when they suspect their account
-	// is in use elsewhere; it has to end those sessions.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "old password")
 	before, _ := f.repo.Get(user.ID)
@@ -508,8 +480,6 @@ func TestResetPasswordIsAudited(t *testing.T) {
 }
 
 func TestReplaceRolesRecordsBothTheOldAndNewSet(t *testing.T) {
-	// A privilege change is exactly what an investigation asks about later, so
-	// the entry has to show what it changed from.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 	_ = f.repo.ReplaceRoles(context.Background(), user.ID, []string{"student"})
@@ -522,8 +492,6 @@ func TestReplaceRolesRecordsBothTheOldAndNewSet(t *testing.T) {
 	if entry.Action != audit.ActionUserRolesChange {
 		t.Fatalf("action = %q, want %q", entry.Action, audit.ActionUserRolesChange)
 	}
-	// Under the one shape every change now takes, so the panel can render a
-	// change without knowing which action produced it.
 	roles, ok := entry.Payload["changes"].(map[string]any)["roles"].(map[string]any)
 	if !ok || roles["from"] == nil || roles["to"] == nil {
 		t.Errorf("payload = %v, want both the previous and the new roles", entry.Payload)
@@ -531,8 +499,6 @@ func TestReplaceRolesRecordsBothTheOldAndNewSet(t *testing.T) {
 }
 
 func TestReplaceRolesRetiresSessionsSoNewLimitsApplyAtOnce(t *testing.T) {
-	// A demotion that only takes effect at the next login would leave someone
-	// exercising rights they no longer hold.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 	before, _ := f.repo.Get(user.ID)
@@ -558,13 +524,6 @@ func TestOperationsOnAMissingAccountReportNotFound(t *testing.T) {
 	}
 }
 
-// TestOperationsOnADeletedAccountReportAccountDeleted closes the gap the bulk
-// path already closed: BulkReplaceRoles and BulkResetPassword both skip a
-// deleted account in a selection (SkipDeleted), but until now the
-// single-account UpdateProfile, ResetPassword and ReplaceRoles had no such
-// guard at all — an administrator could reset a deleted account's password
-// through this endpoint and be refused through the bulk one for the identical
-// operation.
 func TestOperationsOnADeletedAccountReportAccountDeleted(t *testing.T) {
 	f := newFixture(t)
 	deleted := f.repo.Add(users.User{
@@ -582,7 +541,6 @@ func TestOperationsOnADeletedAccountReportAccountDeleted(t *testing.T) {
 		t.Errorf("ReplaceRoles() = %v, want ErrAccountDeleted", err)
 	}
 
-	// None of the refusals above may have changed anything.
 	stored, _ := f.repo.Get(deleted.ID)
 	if stored.FullName != "Gone Petrov" || len(stored.Roles) != 0 {
 		t.Errorf("stored = %+v, want the refused operations to leave the account untouched", stored)
@@ -595,8 +553,6 @@ func mustHash(t *testing.T, plaintext string) string {
 }
 
 func TestBootstrapCreatesTheFirstAdministrator(t *testing.T) {
-	// After migrations the installation has no accounts at all, so there has
-	// to be a way in that does not itself require being signed in.
 	f := newFixture(t)
 
 	result, err := f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
@@ -621,8 +577,6 @@ func TestBootstrapCreatesTheFirstAdministrator(t *testing.T) {
 }
 
 func TestBootstrapIsIdempotent(t *testing.T) {
-	// Running it again on a populated installation must not mint a second
-	// administrator or reset the first one's password.
 	f := newFixture(t)
 	first, err := f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
 	if err != nil {
@@ -647,11 +601,6 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestBootstrapCreatesAFreshAdminWhenTheOldOneWasDeleted is idempotency's
-// other half: a deleted administrator under that login is not the reachable
-// account BootstrapAdmin is idempotent about, so its login must not be
-// treated as already taken care of — the login is free, exactly as Create's
-// own duplicate check now treats it.
 func TestBootstrapCreatesAFreshAdminWhenTheOldOneWasDeleted(t *testing.T) {
 	f := newFixture(t)
 	first, err := f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
@@ -680,8 +629,6 @@ func TestBootstrapCreatesAFreshAdminWhenTheOldOneWasDeleted(t *testing.T) {
 }
 
 func TestBootstrapIsAudited(t *testing.T) {
-	// Creating a privileged account is exactly the kind of event the trail
-	// exists for, even when nobody was signed in to do it.
 	f := newFixture(t)
 
 	_, _ = f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
@@ -695,17 +642,13 @@ func TestBootstrapIsAudited(t *testing.T) {
 }
 
 func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
-	// The transactional seam existed but nothing used it: Block was three
-	// independent statements, and an audit failure after SetStatus left a
-	// blocked account with no trail. Each operation must run under one Do.
+	// Each operation must run under one unit of work.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 	ctx := context.Background()
 
-	// A slice, not a map: these are not independent. ChangePassword proves
-	// knowledge of the current password, and ResetPassword replaces it — so
-	// map iteration, whose order Go randomises per run, made this test fail
-	// on the runs where the reset happened to go first.
+	// A slice, not a map: ResetPassword replaces the password ChangePassword
+	// checks, so the order matters.
 	operations := []struct {
 		name string
 		run  func() error
@@ -740,8 +683,6 @@ func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
 }
 
 func TestAFailedAuditWriteAbortsTheOperation(t *testing.T) {
-	// Inside a transaction this becomes a rollback: the action must not
-	// survive without its trail.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 	f.sink.err = context.DeadlineExceeded
@@ -754,8 +695,6 @@ func TestAFailedAuditWriteAbortsTheOperation(t *testing.T) {
 }
 
 func TestImportCreatesAnAccountForEveryRow(t *testing.T) {
-	// A group arrives as a list from the department, and creating thirty
-	// accounts one request at a time is thirty chances to lose one.
 	f := newFixture(t)
 	svc, repo := f.service, f.repo
 
@@ -788,8 +727,6 @@ func TestImportCreatesAnAccountForEveryRow(t *testing.T) {
 }
 
 func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
-	// One duplicate must not reject the other twenty-nine, and whoever pasted
-	// the list has to see which line to fix.
 	f := newFixture(t)
 	svc := f.service
 	if _, err := svc.Create(context.Background(), users.CreateCommand{
@@ -826,8 +763,6 @@ func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
 }
 
 func TestImportRefusesARosterLargerThanAGroup(t *testing.T) {
-	// Every row costs an argon2id hash, which is deliberately expensive. An
-	// unbounded list is a way to spend the server's CPU with one request.
 	f := newFixture(t)
 	svc := f.service
 
@@ -844,8 +779,6 @@ func TestImportRefusesARosterLargerThanAGroup(t *testing.T) {
 }
 
 func TestImportRecordsEachAccountItCreated(t *testing.T) {
-	// Thirty accounts appearing at once with no trail is exactly the kind of
-	// thing the trail exists for.
 	f := newFixture(t)
 	svc := f.service
 
@@ -863,8 +796,6 @@ func TestImportRecordsEachAccountItCreated(t *testing.T) {
 }
 
 func TestUpdatingAProfileRecordsWhatMoved(t *testing.T) {
-	// It recorded the new name and nothing else — not what it replaced, and
-	// not that the email had changed at all.
 	f := newFixture(t)
 	user := f.addUser(t, "s.popescu", "correct horse battery staple")
 
@@ -885,8 +816,6 @@ func TestUpdatingAProfileRecordsWhatMoved(t *testing.T) {
 }
 
 func TestChangingRolesRecordsThemTheSameWayAsEverythingElse(t *testing.T) {
-	// It already carried from/to under its own keys. One shape for every
-	// change is what lets the panel render them without knowing the action.
 	f := newFixture(t)
 	user := f.addUser(t, "s.popescu", "correct horse battery staple")
 
@@ -902,7 +831,6 @@ func TestChangingRolesRecordsThemTheSameWayAsEverythingElse(t *testing.T) {
 	}
 }
 
-// lastChanges returns the change set of the newest entry with that action.
 func lastChanges(t *testing.T, f *fixture, action string) map[string]any {
 	t.Helper()
 
@@ -921,14 +849,6 @@ func lastChanges(t *testing.T, f *fixture, action string) map[string]any {
 }
 
 func TestTheLastAdministratorCannotBeDemoted(t *testing.T) {
-	// The lockout this guards. An administrator opens their own account,
-	// unchecks "admin" and saves; now nobody in the installation holds
-	// users.manage, so nobody can put it back. `bootstrap` does not help — it
-	// returns early for a login that exists and never looks at what roles the
-	// account still has — so recovery is hand-written SQL against production.
-	//
-	// The screen made this two clicks away. It was always reachable through
-	// the API, which is why the rule belongs here and not in the interface.
 	f := newFixture(t)
 	ctx := context.Background()
 	admin := f.addUser(t, "root", "some password")
@@ -944,9 +864,6 @@ func TestTheLastAdministratorCannotBeDemoted(t *testing.T) {
 }
 
 func TestAnAdministratorMayBeDemotedWhileAnotherRemains(t *testing.T) {
-	// The guard must protect the installation without freezing its staff: two
-	// administrators is the ordinary state, and removing one of them is an
-	// ordinary act.
 	f := newFixture(t)
 	ctx := context.Background()
 	first := f.addUser(t, "root", "some password")
@@ -963,8 +880,7 @@ func TestAnAdministratorMayBeDemotedWhileAnotherRemains(t *testing.T) {
 }
 
 func TestTheLastAdministratorCannotBeBlocked(t *testing.T) {
-	// The same lockout by the other door. Self-blocking is already refused,
-	// but two administrators can block each other down to none.
+	// Two administrators can block each other down to none.
 	f := newFixture(t)
 	ctx := context.Background()
 	admin := f.addUser(t, "root", "some password")
@@ -981,9 +897,6 @@ func TestTheLastAdministratorCannotBeBlocked(t *testing.T) {
 }
 
 func TestCreateRefusesAccountDetailsItCannotStore(t *testing.T) {
-	// Each of these used to surface as an undeclared error, which the HTTP
-	// layer could only answer with a 500; now they are one sentinel the
-	// handler maps to a bad request.
 	f := newFixture(t)
 	cases := map[string]users.CreateCommand{
 		"empty login":    {FullName: "Somebody"},
@@ -1015,11 +928,8 @@ func TestUpdateProfileRefusesAMalformedEmail(t *testing.T) {
 	}
 }
 
-// Delete and Restore are wrappers over BulkSetStatus with a selection of one
-// (see setStatus in service.go), so the guards below are the same ones
-// bulk_test.go exercises for a selection: what is new here is only that a
-// refusal comes back as the sentinel rather than a skip, because for a single
-// account the skip is the whole outcome.
+// Delete and Restore wrap BulkSetStatus; these tests check that a refusal
+// comes back as a sentinel rather than a skip.
 
 func TestDeleteRefusesTheLastAdministrator(t *testing.T) {
 	f := newBulkFixture(t)
@@ -1064,8 +974,6 @@ func TestDeleteRetiresTheSessions(t *testing.T) {
 }
 
 func TestDeleteRequiresAReason(t *testing.T) {
-	// Deletion is answered to exactly as blocking is: "no reason given" is not
-	// an answer the trail can carry.
 	f := newBulkFixture(t)
 	target := f.createUser(t, "ivanov")
 
@@ -1123,8 +1031,6 @@ func TestRestoreIsAudited(t *testing.T) {
 }
 
 func TestRestoreRefusesWhenTheLoginWasTaken(t *testing.T) {
-	// The direct price of releasing the login on deletion: it can be taken by
-	// somebody else before the account comes back.
 	f := newBulkFixture(t)
 	gone := f.createUser(t, "ivanov")
 	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "mistake"); err != nil {
@@ -1140,7 +1046,6 @@ func TestRestoreRefusesWhenTheLoginWasTaken(t *testing.T) {
 }
 
 func TestRestoreRefusesWhenTheEmailWasTaken(t *testing.T) {
-	// The same price, paid on the other field a deleted account releases.
 	f := newBulkFixture(t)
 	gone := f.repo.Add(users.User{
 		Login: "gone-by-email", Email: "shared@example.com", FullName: "Gone", PasswordHash: "x",
@@ -1157,9 +1062,8 @@ func TestRestoreRefusesWhenTheEmailWasTaken(t *testing.T) {
 	}
 }
 
-// busyService is a service whose only hashing slot is already taken, with a
-// sign-in wait short enough that a test can tell it from the longer wait the
-// administrative paths are given.
+// busyService has its only hashing slot taken and a short sign-in wait, to
+// tell it from the administrative wait.
 func busyService(t *testing.T, repo *userstest.Repository) (*users.Service, *password.Hasher, func()) {
 	t.Helper()
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
@@ -1172,9 +1076,6 @@ func busyService(t *testing.T, repo *userstest.Repository) (*users.Service, *pas
 }
 
 func TestChangePasswordReportsBusyHashingRatherThanAWrongPassword(t *testing.T) {
-	// A refusal for load is not a verdict on the password. Reporting it as
-	// ErrWrongPassword would tell somebody who typed their password correctly
-	// that they did not.
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "old password")
 	service, _, _ := busyService(t, f.repo)
@@ -1208,10 +1109,6 @@ func TestCreateReportsBusyHashingWhenNoSlotComesFree(t *testing.T) {
 }
 
 func TestImportWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
-	// An administrator's roster is authenticated, bounded and legitimate, and
-	// a refusal halfway through it discards the one-time passwords already
-	// issued. So it waits well past the sign-in wait rather than giving up
-	// the moment anonymous traffic fills the slots.
 	f := newFixture(t)
 	service, _, release := busyService(t, f.repo)
 	time.AfterFunc(200*time.Millisecond, release)
@@ -1229,16 +1126,13 @@ func TestImportWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
 	}
 }
 
-// recordingAccessCache is a users.AccessCache that notes every account it is
-// told to forget, and whether the unit of work was still open at the time.
+// recordingAccessCache notes every forgotten account and whether the unit of
+// work was still open.
 type recordingAccessCache struct {
-	uow *trackingUnitOfWork
-	// forgotten is every id named, in order.
-	forgotten []uuid.UUID
-	// duringTransaction counts calls made before the change committed.
+	uow               *trackingUnitOfWork
+	forgotten         []uuid.UUID
 	duringTransaction int
-	// cancelled counts calls whose context was already done.
-	cancelled int
+	cancelled         int
 }
 
 func (c *recordingAccessCache) Forget(ctx context.Context, ids []uuid.UUID) {
@@ -1251,9 +1145,8 @@ func (c *recordingAccessCache) Forget(ctx context.Context, ids []uuid.UUID) {
 	c.forgotten = append(c.forgotten, ids...)
 }
 
-// trackingUnitOfWork runs the function in place and knows whether it is
-// inside it. afterCommit, when set, runs once the function has returned
-// successfully — the moment a real transaction commits.
+// trackingUnitOfWork knows whether it is inside the function; afterCommit
+// runs where a real transaction would commit.
 type trackingUnitOfWork struct {
 	open        bool
 	afterCommit func()
@@ -1288,21 +1181,13 @@ func newAccessFixture(t *testing.T) *accessFixture {
 	return &accessFixture{service: service, repo: repo, access: access, uow: uow, admin: admin}
 }
 
-// TestEveryChangeToAccessForgetsTheCachedAccount covers each operation that
-// changes what the authentication path decides on — status, roles and with
-// them permissions, the password and its one-time flag, the session
-// generation. The cached copy of the account has to be dropped once the
-// change has committed: before, a request in between could cache the old
-// state again; not at all, and the old state keeps being served.
 func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
 	const plaintext = "some password"
 	operations := []struct {
-		name string
-		// prepare runs before the operation, outside what is recorded.
+		name    string
 		prepare func(t *testing.T, f *accessFixture, target users.User)
 		run     func(f *accessFixture, target, other users.User) error
-		// both is true for a bulk operation over target and other.
-		both bool
+		both    bool
 	}{
 		{name: "Block", run: func(f *accessFixture, target, _ users.User) error {
 			return f.service.Block(context.Background(), f.admin.ID, target.ID, "cheating")
@@ -1382,9 +1267,6 @@ func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
 	}
 }
 
-// TestForgettingOutlivesTheCallersContext: once the change has committed, the
-// caller hanging up must not leave the old state cached. The context handed
-// on is detached from the request's cancellation.
 func TestForgettingOutlivesTheCallersContext(t *testing.T) {
 	f := newAccessFixture(t)
 	target := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivanov"})
@@ -1404,8 +1286,6 @@ func TestForgettingOutlivesTheCallersContext(t *testing.T) {
 	}
 }
 
-// TestAFailedChangeLeavesTheCacheAlone: nothing changed, so there is nothing
-// to forget — and a failure must not be dressed up as one.
 func TestAFailedChangeLeavesTheCacheAlone(t *testing.T) {
 	f := newAccessFixture(t)
 	target := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivanov"})
@@ -1420,8 +1300,6 @@ func TestAFailedChangeLeavesTheCacheAlone(t *testing.T) {
 	}
 }
 
-// slotTakingRepository takes every slot of a hasher the moment the first
-// account is stored, so an import's later rows meet a hasher at capacity.
 type slotTakingRepository struct {
 	*userstest.Repository
 	hasher *password.Hasher
@@ -1445,9 +1323,6 @@ func (r *slotTakingRepository) Create(ctx context.Context, u users.User) (users.
 }
 
 func TestAnImportStoppedForLoadKeepsWhatItCreatedAndNamesTheRest(t *testing.T) {
-	// The accounts created before the hasher ran out of room are real, and
-	// their one-time passwords exist nowhere else: the result must still
-	// carry them, and say which rows were never tried, alongside the error.
 	f := newFixture(t)
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
 	repo := &slotTakingRepository{Repository: f.repo, hasher: hasher, t: t}

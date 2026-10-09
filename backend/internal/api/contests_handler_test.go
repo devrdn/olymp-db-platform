@@ -40,10 +40,9 @@ func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 	return newContestFixtureDenying(t, "", permissions...)
 }
 
-// newContestFixtureDenying is newContestFixture with one permission refused
-// on every contest, whatever the role: the real authoriser cannot express a
-// contest role that sees a contest but may not monitor it, and a field that
-// reports the difference needs a test that can make it.
+// newContestFixtureDenying refuses one permission on every contest, whatever
+// the role: the real authoriser cannot express a role that sees a contest but
+// may not monitor it.
 func newContestFixtureDenying(t *testing.T, denied string, permissions ...string) *contestFixture {
 	t.Helper()
 	return newContestFixtureAuthz(t, func(inner auth.Authorizer) auth.Authorizer {
@@ -51,8 +50,6 @@ func newContestFixtureDenying(t *testing.T, denied string, permissions ...string
 	}, permissions...)
 }
 
-// newContestFixtureAuthz is newContestFixture with the real authoriser
-// wrapped by wrap.
 func newContestFixtureAuthz(t *testing.T, wrap func(auth.Authorizer) auth.Authorizer, permissions ...string) *contestFixture {
 	t.Helper()
 
@@ -144,7 +141,6 @@ func (f *contestFixture) do(method, path, body string) *httptest.ResponseRecorde
 	return rec
 }
 
-// decode reads a JSON response body into a map.
 func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var body map[string]any
@@ -154,7 +150,6 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return body
 }
 
-// ownedContest seeds a contest the fixture's actor owns.
 func (f *contestFixture) ownedContest(t *testing.T, status string) contests.Contest {
 	t.Helper()
 	c := f.stores.SeedContest(status)
@@ -194,8 +189,7 @@ func TestCreatingAContestNeedsThePermission(t *testing.T) {
 }
 
 func TestReadingAContestNeedsToStaffIt(t *testing.T) {
-	// The second level of authorisation: an organizer who did not create this
-	// contest has no business reading its answers.
+	// An organizer who did not create this contest may not read its answers.
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	other := f.stores.SeedContest(contests.StatusDraft)
 
@@ -207,8 +201,8 @@ func TestReadingAContestNeedsToStaffIt(t *testing.T) {
 }
 
 func TestStaffSeeEveryTranslationOfTheirContest(t *testing.T) {
-	// They are authoring them: showing only the negotiated one would make the
-	// others invisible in the editor.
+	// They author them, so the editor needs every translation, not the
+	// negotiated one.
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID,
@@ -233,8 +227,7 @@ func TestStaffSeeEveryTranslationOfTheirContest(t *testing.T) {
 	}
 }
 
-// The workspace offers its monitoring tab from this field: it is the one
-// authority on whether the viewer holds contest.monitor on this contest.
+// The workspace offers its monitoring tab from this field alone.
 func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
 	t.Run("the owner may", func(t *testing.T) {
 		f := newContestFixture(t)
@@ -296,12 +289,11 @@ func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
 
 func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 	// The title lives only in the translations, so a listing has to negotiate
-	// one — this is the single place that decision is made (§6.2).
+	// one (§6.2).
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
-	// The contest has to offer the language, not merely have text in it: a
-	// title in Romanian over a story in English is the mixture the declared
-	// set exists to prevent.
+	// The contest has to offer the language, not merely have text in it, or a
+	// Romanian title could sit over an English story.
 	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID,
 		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}}); err != nil {
 		t.Fatalf("SetLanguages() returned error: %v", err)
@@ -349,10 +341,8 @@ func TestListingFallsBackWhenTheRequestedLanguageIsMissing(t *testing.T) {
 	}
 }
 
-// The picture above a story rides on the listing rather than on a request of
-// its own (design spec §10). The screen that shows it is the participant's
-// play screen, which opens under a timer and already reads this listing; a
-// second round trip for one hash is one this product cannot spend there.
+// The play screen opens under a timer and already reads this listing, so the
+// cover rides on it rather than costing a round trip (docs/design/SPEC.md §10).
 func TestListingCarriesTheCoverAContestWears(t *testing.T) {
 	f := newContestFixture(t)
 	_, cookie := f.asParticipant(t, "s.popescu")
@@ -381,9 +371,8 @@ func TestListingCarriesTheCoverAContestWears(t *testing.T) {
 	}
 }
 
-// A contest nobody uploaded a picture for wears a drawn cover, and the
-// listing says nothing rather than sending two empty strings for every row
-// of a register that shows no pictures at all (design spec §10).
+// No empty strings on every row of a register that shows no pictures
+// (docs/design/SPEC.md §10).
 func TestListingSaysNothingAboutTheCoverOfAContestThatWearsADrawnOne(t *testing.T) {
 	f := newContestFixture(t)
 	_, cookie := f.asParticipant(t, "s.popescu")
@@ -439,9 +428,8 @@ func TestPublishingAnIncompleteContestIsRefusedWithItsReasons(t *testing.T) {
 	if code := errorCode(t, rec); code != "not_publishable" {
 		t.Errorf("error code = %q, want not_publishable", code)
 	}
-	// The refusal names what is missing. The shared table answers the same
-	// status and code without it, so this is what keeps the typed error asked
-	// for before the table (ContestsHandler.fail).
+	// The shared table answers the same status and code without the problems,
+	// so this checks that ContestsHandler.fail handles the typed error first.
 	problems, _ := decode(t, rec)["problems"].([]any)
 	if len(problems) == 0 {
 		t.Errorf("problems = %v, want the missing story and questions named (%s)", problems, rec.Body.String())
@@ -470,10 +458,7 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
-// TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode asserts the
-// declared refusal, not the generic not_editable one: pulling ends_at in once
-// the leaderboard freeze has already been reached gets its own wire code so
-// the organiser is told why, not just that the contest is running.
+// The organiser is told why, not just that the contest is running.
 func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)
@@ -493,10 +478,9 @@ func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T
 	}
 }
 
-// TestExtendingEndsAtAfterTheFreezeLengthensTheFreeze is the settings form's
-// save after the table froze: a later ends_at and no freeze key (the locked
-// field submits none). The save succeeds, and the answer carries a freeze
-// lengthened by the extension, so the table stays frozen where it froze.
+// The settings form saves a later ends_at with no freeze key once the table
+// froze (the locked field submits none); the freeze lengthens with it so the
+// table stays frozen where it froze.
 func TestExtendingEndsAtAfterTheFreezeLengthensTheFreeze(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)
@@ -528,8 +512,6 @@ func TestExtendingEndsAtAfterTheFreezeLengthensTheFreeze(t *testing.T) {
 	}
 }
 
-// TestMovingStartsAtOnARunningICPCContestIsAConflictWithItsOwnCode is the
-// starts_at counterpart, for ICPC scoring.
 func TestMovingStartsAtOnARunningICPCContestIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)
@@ -548,17 +530,14 @@ func TestMovingStartsAtOnARunningICPCContestIsAConflictWithItsOwnCode(t *testing
 	}
 }
 
-// The one exception a finished contest's otherwise-frozen settings carry
-// (§2.4, contests.Service.ExtendGrace): an organizer who discovers late that
-// they need more time still has an endpoint to reach for.
+// The one setting a finished contest can still change (§2.4,
+// contests.Service.ExtendGrace).
 func TestExtendingTheGracePeriodOfAFinishedContestSucceeds(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusFinished)
 
-	// c never set an explicit grace, so the grace actually in force is the
-	// fixture's stand-in for the installation default
-	// (conteststest.FixtureDefaultGraceMin, 24h) — the requested value has to
-	// clear that, not merely be positive (finding 1).
+	// c has no explicit grace, so the grace in force is the fixture default
+	// (conteststest.FixtureDefaultGraceMin, 24h); the request must clear that.
 	grace := conteststest.FixtureDefaultGraceMin + 60
 	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace",
 		fmt.Sprintf(`{"grace_period_min": %d}`, grace))
@@ -576,12 +555,8 @@ func TestExtendingTheGracePeriodOfAFinishedContestSucceeds(t *testing.T) {
 	}
 }
 
-// The installation default is what actually governs a contest that never set
-// an explicit grace, so a value that does not clear it must be refused the
-// same as shortening an explicit one would be — not silently accepted as the
-// contest's "first explicit" value (finding 1: this door used to read 0 → 60
-// as an extension while it was really cutting a 24-hour default to one
-// hour).
+// Without an explicit grace the installation default governs, so a value below
+// it shortens the grace and is refused.
 func TestExtendingTheGracePeriodBelowTheInstallationDefaultIsRejected(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusFinished)
@@ -596,8 +571,8 @@ func TestExtendingTheGracePeriodBelowTheInstallationDefaultIsRejected(t *testing
 	}
 }
 
-// Every status but finished and archived already has its own ordinary
-// settings door open; this one must not become a second, wider way in.
+// Other statuses have the ordinary settings door; this one must not become a
+// wider second way in.
 func TestExtendingTheGracePeriodOfARunningContestIsAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)
@@ -609,8 +584,6 @@ func TestExtendingTheGracePeriodOfARunningContestIsAConflict(t *testing.T) {
 	}
 }
 
-// "Extend" means grow — shortening a grace an organizer already relied on
-// must be refused, not silently accepted as an ordinary edit.
 func TestShorteningAnAlreadyExtendedGracePeriodIsRejected(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusFinished)
@@ -679,10 +652,6 @@ func TestNetworkRestrictionsAreReadBackAsWritten(t *testing.T) {
 	}
 }
 
-// Finding 1: progression and scoring were decided and enforced in the
-// domain (§6.1.1) but had no field on the request or response DTO, so an
-// organizer could never reach either through the API. Round-tripped here the
-// same way the network restriction is above.
 func TestProgressionAndScoringSurviveARoundTripThroughTheAPI(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -702,9 +671,7 @@ func TestProgressionAndScoringSurviveARoundTripThroughTheAPI(t *testing.T) {
 	}
 }
 
-// An update that never mentions progression or scoring must leave both
-// alone — the same "absent means unchanged" rule enrollment and
-// question_mode already follow (contests.UpdateCommand's own doc).
+// Absent means unchanged, as for enrollment and question_mode.
 func TestUpdatingAContestPreservesUnmentionedProgressionAndScoring(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -728,10 +695,8 @@ func TestUpdatingAContestPreservesUnmentionedProgressionAndScoring(t *testing.T)
 	}
 }
 
-// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
-// icpc_penalty_min is a pointer on the wire the same way freeze_min is, so an
-// update that never mentions it leaves it alone — round-tripped here the same
-// way progression and scoring are above.
+// icpc_penalty_min is a pointer on the wire like freeze_min, so an update that
+// never mentions it leaves it alone.
 func TestICPCPenaltyMinSurvivesARoundTripThroughTheAPI(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -785,7 +750,6 @@ func (f *contestFixture) asParticipant(t *testing.T, login string) (users.User, 
 	return user, &http.Cookie{Name: auth.SessionCookieName, Value: token}
 }
 
-// asked sends a GET as whoever the cookie belongs to.
 func (f *contestFixture) asked(t *testing.T, path string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -795,7 +759,6 @@ func (f *contestFixture) asked(t *testing.T, path string, cookie *http.Cookie) *
 	return rec
 }
 
-// listed reads the items of a contest listing, keyed by identifier.
 func listed(t *testing.T, rec *httptest.ResponseRecorder) map[string]map[string]any {
 	t.Helper()
 	if rec.Code != http.StatusOK {
@@ -814,10 +777,8 @@ func listed(t *testing.T, rec *httptest.ResponseRecorder) map[string]map[string]
 }
 
 func TestTheListingSaysWhetherTheCallerIsOnEachContest(t *testing.T) {
-	// The catalogue has to tell "join" from "you are already in". Without it,
-	// the workaround it replaces — offer the button everywhere and let the API
-	// answer already_enrolled — turns an ordinary state into an error message
-	// as soon as the two lists become separate screens.
+	// The catalogue must tell "join" from "you are already in" without turning
+	// already_enrolled into an error message.
 	f := newContestFixture(t)
 	student, cookie := f.asParticipant(t, "s.popescu")
 	mine := f.stores.SeedContest(contests.StatusPublished)
@@ -875,8 +836,7 @@ func TestTheEnrolmentFlagIsAlwaysAboutTheCaller(t *testing.T) {
 }
 
 func TestAnUnreadableEnrolledParameterIsRefusedRatherThanIgnored(t *testing.T) {
-	// Dropping it silently would answer a different question from the one
-	// asked, and the screen would quietly show the wrong list.
+	// Dropping it would quietly show the wrong list.
 	f := newContestFixture(t)
 	_, cookie := f.asParticipant(t, "s.popescu")
 
@@ -888,9 +848,8 @@ func TestAnUnreadableEnrolledParameterIsRefusedRatherThanIgnored(t *testing.T) {
 }
 
 func TestStaffListingsCarryNoEnrolmentFlagWorthReading(t *testing.T) {
-	// An organizer's register answers "what do I run", and marking those rows
-	// with the organizer's own participation would be a fact about a different
-	// question. It is reported honestly as false rather than invented.
+	// An organizer's register answers "what do I run", so the flag is false
+	// rather than invented.
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	owned := f.ownedContest(t, contests.StatusPublished)
 
@@ -902,11 +861,9 @@ func TestStaffListingsCarryNoEnrolmentFlagWorthReading(t *testing.T) {
 }
 
 func TestTheEnrolmentNarrowingIsRefusedWhereItMeansNothing(t *testing.T) {
-	// Outside the participant scope there is no "me" for it to be about: an
-	// organizer's register answers "what do I run". Applied there the SQL
-	// compares against a null identity and quietly returns an empty list —
-	// which is the same sin as ignoring an unparseable value, answering a
-	// different question from the one asked.
+	// Outside the participant scope there is no "me": the SQL would compare
+	// against a null identity and return an empty list, answering a different
+	// question.
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	f.ownedContest(t, contests.StatusPublished)
 
@@ -933,14 +890,12 @@ func TestLeaderboardSettingsSurviveARoundTripThroughTheAPI(t *testing.T) {
 		t.Fatalf("leaderboard = %v, want freeze_min 30 and names full_name", board)
 	}
 
-	// An unrelated update leaves it alone.
 	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"enrollment": "open"}`)
 	board, _ = decode(t, rec)["leaderboard"].(map[string]any)
 	if board["freeze_min"] != float64(30) {
 		t.Fatalf("leaderboard = %v, want the freeze to survive an unrelated update", board)
 	}
 
-	// And null clears it.
 	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"leaderboard": {"freeze_min": null}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear status = %d, want 200 (%s)", rec.Code, rec.Body.String())

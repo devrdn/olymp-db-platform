@@ -10,12 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// What a single caller can observe of a contest's staff is the contract every
-// contests.ManagerRepository answers to, the in-memory one the service tests
-// use included (conteststest.ManagerRepositoryContract). Nothing is left for
-// this file to ask of the real database beyond it: the constraints on the
-// table (one owner per contest, a real account and a real contest) are
-// refused by the database and are not part of what the contract states.
 func TestContestManagersHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.ManagerRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ManagerTarget)) {
 		withTx(t, func(ctx context.Context) {

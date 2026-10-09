@@ -12,76 +12,51 @@ import (
 	"time"
 )
 
-// copyBufferSize is the fixed window Append copies a chunk through. Its size
-// is independent of the chunk's or the file's size — that independence is
-// the whole point of rule 12: a caller who sends a four-gigabyte chunk moves
-// this many bytes through the process at a time, never more.
+// copyBufferSize is the fixed buffer Append copies a chunk through, whatever
+// the chunk's size (CLAUDE.md rule 12).
 const copyBufferSize = 64 * 1024
 
-// maxUploadIDLen bounds the id before it becomes half a filename. A UUID is
-// 36 characters; this leaves headroom without leaving the bound unstated
-// (CLAUDE.md rule 2 — every string that reaches storage has an explicit
-// length).
+// maxUploadIDLen bounds the id before it becomes part of a filename
+// (CLAUDE.md rule 2). A UUID is 36 characters.
 const maxUploadIDLen = 128
 
-// dataSuffix and indexSuffix name the two files one upload occupies. Neither
-// is ever derived from anything but the id — see validateUploadID.
+// dataSuffix and indexSuffix name the two files one upload occupies.
 const (
 	dataSuffix  = ".data"
 	indexSuffix = ".idx"
 )
 
 // Store is a directory of in-progress and completed uploads on local disk.
-// One Store owns one directory; nothing about it is safe to share between
-// two directories, and nothing about a directory is safe to share between
-// two Stores that disagree on Limits.
+// One Store owns one directory, and two Stores must not share a directory.
 type Store struct {
 	dir    string
 	limits Limits
-	// locks serialises Append, Complete and Abort per upload id. See
-	// idLocks in lock.go for why this exists and why it is per-id rather
-	// than one mutex for the whole Store.
-	locks *idLocks
+	locks  *idLocks
 
-	// mu guards reserved, which maps an upload id to the total size Begin
-	// was told it would reach. See committedBytes for what it buys and
-	// what it deliberately does not.
+	// mu guards reserved: upload id to the total size Begin was told it would
+	// reach (committedBytes).
 	mu       sync.Mutex
 	reserved map[string]int64
 
-	// dirMu guards what the directory last measured and when it was measured —
-	// a zero dirMeasuredAt meaning "never, or not any more". See dirBytes for
-	// what Append asks of it and dirBytesMaxAge for why it may be asked at all.
+	// dirMu guards the cached directory size; a zero dirMeasuredAt means no
+	// valid measurement (dirBytes).
 	dirMu         sync.Mutex
 	dirTotal      int64
 	dirMeasuredAt time.Time
 }
 
 // dirBytesMaxAge is how long a measurement of the directory may stand before
-// Append pays for another one.
+// Append measures again.
 //
-// The measurement it replaces ran on every single chunk: a ReadDir plus an
-// Info per entry, which is 27 µs at two files, 3.3 ms at five hundred and
-// 36 ms at five thousand — against 2.7 ms for a whole 8 MiB Append including
-// the copy. At a couple of hundred uploads on the volume, walking it more than
-// doubled the cost of receiving a chunk, and a 3 GiB dump in 8 MiB chunks is
-// 384 of them.
-//
-// Thirty seconds is chosen against what can actually make the number wrong.
-// Nothing outside this process writes to the directory, and everything inside
-// it that changes the total says so: Append adds what it wrote, Complete and
-// Abort forget the measurement outright, and Begin takes a fresh one. So the
-// interval is not what keeps the figure honest — it is a backstop for the one
-// thing this Store cannot see, an operator or a crash leaving bytes behind,
-// and thirty seconds is short enough that such a directory is noticed within a
-// single upload.
+// Walking the directory costs 3.3 ms at five hundred files against 2.7 ms for
+// a whole 8 MiB Append, so it is not done per chunk. Every change this process
+// makes updates or clears the figure; the age only bounds how long bytes left
+// by an operator or a crash go unnoticed.
 const dirBytesMaxAge = 30 * time.Second
 
 // NewStore opens (creating if necessary) dir as an upload directory governed
-// by limits. This is a constructor-time configuration error, not a domain
-// refusal that reaches a client, so it returns a plain error rather than a
-// sentinel (CLAUDE.md rule 1 is about errors a service hands to the HTTP
-// layer; nothing here does).
+// by limits. Its errors are configuration errors, not client refusals, so
+// they are plain errors rather than sentinels.
 func NewStore(dir string, limits Limits) (*Store, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("gamefile: directory is required")
@@ -89,26 +64,17 @@ func NewStore(dir string, limits Limits) (*Store, error) {
 	if limits.MaxFileBytes <= 0 || limits.MaxDirBytes <= 0 || limits.MaxChunkBytes <= 0 {
 		return nil, fmt.Errorf("gamefile: limits must all be positive, got %+v", limits)
 	}
-	// 0o750, not the 0o755 os.MkdirAll's own default-shaped call would
-	// suggest: this directory holds an organiser's raw contest dump before
-	// anyone has had a chance to look at it, on the same host that serves
-	// the API to every contestant. "Other" gets nothing; "group" keeps read
-	// and traversal so an operator in the deployment's own service group can
-	// inspect the volume without needing to become the API's own user
-	// (gosec G301 wants 0o750 or stricter, which is also the bound this
-	// deployment's other MkdirAll calls already use — see cmd/apicontract).
+	// The directory holds unpublished contest dumps on the host contestants
+	// reach: no access for "other", read for the service group (gosec G301).
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("gamefile: create upload directory: %w", err)
 	}
 	return &Store{dir: dir, limits: limits, locks: newIDLocks(), reserved: map[string]int64{}}, nil
 }
 
-// validateUploadID is the one gate every exported method sends id through
-// before it touches a path. The allowed set is exactly [0-9a-fA-F-]: not
-// because ids happen to be UUIDs today, but because that set contains
-// neither '/' nor '.', which is what makes "id becomes half a filename"
-// safe regardless of what a caller passes through from an HTTP path
-// segment. ".." is rejected by the same charset check, not a special case.
+// validateUploadID is the gate every exported method sends id through before
+// it touches a path. The set [0-9a-fA-F-] holds neither '/' nor '.', so an id
+// from an HTTP path can never escape the directory.
 func validateUploadID(id string) error {
 	if id == "" || len(id) > maxUploadIDLen {
 		return ErrBadUploadID
@@ -134,36 +100,20 @@ func (s *Store) indexPath(id string) string {
 	return filepath.Join(s.dir, id+indexSuffix)
 }
 
-// Begin reserves an upload of declaredBytes. id is the caller's (a UUID
-// string); the store never invents one, and never uses the human's filename
-// as a path.
+// Begin reserves an upload of declaredBytes under the caller's id; the
+// organiser's filename is never used as a path.
 //
-// declaredBytes is what the whole upload will come to, and it is checked
-// against the space actually left rather than only against "is there any
-// space at all". The difference is what the organiser finds out and when: at
-// 15 GiB used of 16, the old check let a three-gigabyte upload start
-// happily, cut it off at whatever byte the directory budget ran out on, and
-// answered ErrStoreFull somewhere around the 129th chunk — after however
-// many minutes an office uplink takes to send the gigabyte that did fit, and
-// with those bytes already on disk waiting for the janitor. Refusing the
-// promise costs one comparison and is the same answer, given before anything
-// was sent.
+// declaredBytes is checked against the space left, so an upload that cannot
+// fit is refused before any chunk is sent rather than partway through.
 //
-// Calling Begin again for an id that already has data on disk is not an
-// error: it is how a resumed upload re-announces itself after a dropped
-// connection, and it must not truncate what was already received. A resume
-// re-states the reservation (the process may have restarted since the first
-// Begin) but is never refused for space — the bytes it is coming back for
-// were already admitted once, and refusing them now would only strand what
-// is on disk.
+// Begin for an id that already has data is a resume: it keeps the bytes,
+// restores the reservation (the process may have restarted), and is never
+// refused for space, since those bytes were admitted once.
 func (s *Store) Begin(id string, declaredBytes int64) error {
 	if err := validateUploadID(id); err != nil {
 		return err
 	}
-	// The same bound Append applies per chunk, applied to the promise: a
-	// declared size past MaxFileBytes cannot be honoured, so it is refused
-	// where it is made rather than at whichever chunk crosses the line
-	// (CLAUDE.md rule 12).
+	// Refused where the promise is made (CLAUDE.md rule 12).
 	if declaredBytes < 0 || declaredBytes > s.limits.MaxFileBytes {
 		return ErrFileTooLarge
 	}
@@ -184,24 +134,12 @@ func (s *Store) Begin(id string, declaredBytes int64) error {
 		return ErrStoreFull
 	}
 
-	// path is dataPath(id): id has already passed validateUploadID's
-	// charset gate above ([0-9a-fA-F-], neither '/' nor '.'), so this join
-	// can never escape s.dir or name anything but one file directly inside
-	// it — there is no path segment here for a caller to control (gosec
-	// G304 flags any variable reaching OpenFile; this one cannot vary
-	// outside the id's own validated charset).
-	//
-	// 0o600, not 0o644: the same contest dump this file will hold is what
-	// store.go's NewStore doc already treats as unpublished until the
-	// contest starts, so "other" (and here, "group" too — nothing about the
-	// deployment needs a second reader of an in-progress upload) get
-	// nothing (gosec G302).
+	// path comes from a validated id, so it cannot leave s.dir (gosec G304).
+	// 0o600: an unpublished contest dump needs no second reader (gosec G302).
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- see comment above
 	if err != nil {
 		if os.IsExist(err) {
-			// Lost a race with another Begin for the same id — which already
-			// reserved it, with the same declared size, so there is nothing
-			// to add.
+			// A concurrent Begin for the same id won and already reserved it.
 			return nil
 		}
 		return fmt.Errorf("gamefile: reserve upload: %w", err)
@@ -223,25 +161,13 @@ func (s *Store) release(id string) {
 	delete(s.reserved, id)
 }
 
-// committedBytes is what the directory holds plus what the uploads begun in
-// this process have promised and not yet sent — the number Begin admits a new
-// upload against.
+// committedBytes is what the directory holds plus what uploads begun in this
+// process have promised and not yet sent; Begin admits a new upload against
+// it, so several concurrent uploads cannot each pass on the same free space.
 //
-// Without it the directory budget is only ever spent by bytes that already
-// arrived, so three organisers each announcing four gibibytes onto a volume
-// with ten free all pass Begin and all three fail somewhere in the middle:
-// the check is real for one caller at a time and empty for several. Counting
-// the promise is what makes the refusal arrive before the upload does.
-//
-// Two things it deliberately is not. It is not durable: the map lives in this
-// process, so a restart forgets what was outstanding and the guarantee falls
-// back to what it was before — the actual bytes on disk, which are still
-// counted, plus a reservation restored by the first resume of each upload
-// (Begin's own doc). Making it durable means a third file per upload, or the
-// core database — and the core database is on the other side of this
-// package's boundary by design. And it is not applied to Append: a chunk is
-// admitted against what the disk holds now, exactly as before, because an
-// upload must never be refused its own reservation.
+// Reservations live in memory only: after a restart only bytes on disk count
+// until each upload resumes and re-reserves. Append is not checked against
+// reservations, so an upload is never refused its own.
 func (s *Store) committedBytes() (int64, error) {
 	sizes, total, err := s.usage()
 	if err != nil {
@@ -251,8 +177,7 @@ func (s *Store) committedBytes() (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, declared := range s.reserved {
-		// Only what has not arrived yet: the rest is already in total, and
-		// counting it twice would refuse an upload the volume can hold.
+		// What already arrived is in total; count only the rest.
 		if outstanding := declared - sizes[id]; outstanding > 0 {
 			total += outstanding
 		}
@@ -260,25 +185,16 @@ func (s *Store) committedBytes() (int64, error) {
 	return total, nil
 }
 
-// usedBytes sums the size of every file this Store's directory currently
-// holds, by walking it. This walks directory metadata, not file content — its
-// cost is proportional to the number of uploads in flight, never to their
-// size, so it does not reopen the rule 12 question Append and Complete answer.
-//
-// It is the exact answer and the expensive one; dirBytes below is what a hot
-// path asks instead.
+// usedBytes walks the directory and sums every file's size: exact, but its
+// cost grows with the number of files. Hot paths use dirBytes.
 func (s *Store) usedBytes() (int64, error) {
 	_, total, err := s.usage()
 	return total, err
 }
 
-// dirBytes is what the directory holds, measured if the last measurement is
-// missing or older than dirBytesMaxAge and remembered otherwise.
-//
-// The remembered figure is kept true by the three things that change it saying
-// so — see dirBytesMaxAge — and Append never lets it decide a refusal on its
-// own: the moment the directory budget is close enough to be what bounds a
-// chunk, Append measures for real (its own comment says where).
+// dirBytes is the directory's size, from the cached figure when it is younger
+// than dirBytesMaxAge and measured otherwise. Append never refuses on the
+// cached figure alone.
 func (s *Store) dirBytes() (int64, error) {
 	s.dirMu.Lock()
 	if !s.dirMeasuredAt.IsZero() && time.Since(s.dirMeasuredAt) < dirBytesMaxAge {
@@ -291,9 +207,7 @@ func (s *Store) dirBytes() (int64, error) {
 	return s.usedBytes()
 }
 
-// dirBytesGrew records bytes this process has just added to the directory, so
-// that the remembered figure follows the writes it already knows about instead
-// of going stale between measurements.
+// dirBytesGrew adds bytes this process just wrote to the cached figure.
 func (s *Store) dirBytesGrew(delta int64) {
 	s.dirMu.Lock()
 	defer s.dirMu.Unlock()
@@ -302,18 +216,15 @@ func (s *Store) dirBytesGrew(delta int64) {
 	}
 }
 
-// dirBytesChanged forgets the measurement — what Complete and Abort call,
-// because an index written or an upload removed changes the total by an
-// amount neither of them is in a position to state exactly.
+// dirBytesChanged drops the cached figure after a change of unknown size.
 func (s *Store) dirBytesChanged() {
 	s.dirMu.Lock()
 	defer s.dirMu.Unlock()
 	s.dirMeasuredAt = time.Time{}
 }
 
-// usage is the same walk, also reporting how large each upload's data file
-// is by id — what committedBytes needs to tell an outstanding reservation
-// from bytes that have already landed.
+// usage walks the directory, returning each upload's data size by id and the
+// total, and refreshes the cached figure.
 func (s *Store) usage() (map[string]int64, int64, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -335,9 +246,6 @@ func (s *Store) usage() (map[string]int64, int64, error) {
 		}
 	}
 
-	// Every walk of the directory records what it found, whoever asked for it:
-	// Begin's own committedBytes measurement seeds the figure Append will then
-	// reuse, rather than each of them paying separately for the same walk.
 	s.dirMu.Lock()
 	s.dirTotal, s.dirMeasuredAt = total, time.Now()
 	s.dirMu.Unlock()
@@ -345,33 +253,19 @@ func (s *Store) usage() (map[string]int64, int64, error) {
 	return sizes, total, nil
 }
 
-// Append writes at exactly offset. Returns the new length.
+// Append writes r at offset, which must equal the bytes received so far, and
+// returns the new length. A chunk already on disk (offset below the length) is
+// a no-op, so a client unsure whether its last chunk landed can resend it.
 //
-// Every call opens and closes its own file handle rather than keeping one in
-// a map on Store: a chunked upload is expected to span more than one
-// process lifetime (a redeploy between chunks must not lose progress), so
-// there is nothing for an in-memory handle to usefully outlive. The per-id
-// lock taken below is a different thing — held only for this one call, not
-// kept across calls — so it does not reopen that question.
+// Each call opens its own handle: an upload may span process restarts.
 func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	if err := validateUploadID(id); err != nil {
 		return 0, err
 	}
 
-	// Two goroutines can legitimately be in this method for the same id at
-	// once — a retried chunk racing the attempt that is still in flight —
-	// and without this, both would Stat the same length, Seek to the same
-	// offset, and overwrite each other's bytes. This is what makes "Append
-	// writes exactly at the end" a Store invariant instead of a hope about
-	// callers (see idLocks in lock.go).
 	unlock := s.locks.lock(id)
 	defer unlock()
 
-	// 0o600 for the same reason Begin creates the file that way: this is the
-	// same not-yet-public contest dump, opened again to append the next
-	// chunk (gosec G302). id is validated above, same as Begin's own
-	// OpenFile — no #nosec needed here, gosec only flagged the permission
-	// bits on this call, not the path.
 	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -387,13 +281,8 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	}
 	received := info.Size()
 
-	// Complete seals the upload by writing its index; an Append that lands
-	// after that would silently make the checksum and line count Complete
-	// already handed back describe bytes that no longer exist. Complete
-	// takes the same per-id lock as this method, so there is no window
-	// where Complete is mid-write and this check could pass just before the
-	// index appears — either Complete has already finished, or it has not
-	// started.
+	// The index is Complete's seal. Complete holds the same lock, so it has
+	// either finished or not started.
 	if _, err := os.Stat(s.indexPath(id)); err == nil {
 		return received, ErrUploadSealed
 	} else if !os.IsNotExist(err) {
@@ -402,12 +291,7 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 
 	switch {
 	case offset < received:
-		// A retry of a chunk already on disk. Idempotency here is what
-		// makes resuming after a dropped connection possible at all: the
-		// client cannot tell whether its last chunk was written before the
-		// connection died, so it will send it again, and that must be a
-		// no-op rather than a corruption.
-		return received, nil
+		return received, nil // a retry of a chunk already on disk
 	case offset > received:
 		return received, ErrChunkOutOfOrder
 	}
@@ -416,16 +300,8 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		return received, fmt.Errorf("gamefile: seek upload: %w", err)
 	}
 
-	// Bound the reader by whichever budget is tightest, decided before a
-	// single byte of this chunk reaches the file: the per-call chunk cap,
-	// what remains of this upload's own MaxFileBytes, and what remains of
-	// the whole directory's MaxDirBytes. This is rule 12's point applied to
-	// three limits instead of one — a limit checked after the bytes already
-	// landed on disk (write, then compare, then Truncate) is a limit
-	// applied after the allocation it exists to prevent, not before it.
-	//
-	// fileRemaining cannot be negative: every prior Append on this id kept
-	// received within MaxFileBytes, or refused before writing.
+	// The reader is bounded by the tightest of the chunk, file and directory
+	// budgets before any byte is written (CLAUDE.md rule 12).
 	fileRemaining := s.limits.MaxFileBytes - received
 
 	writeCap := s.limits.MaxChunkBytes
@@ -435,12 +311,8 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		reason = ErrFileTooLarge
 	}
 
-	// The remembered figure first (dirBytes), because walking the directory
-	// once per chunk is what finding 8 measured as more than doubling the cost
-	// of receiving one. It is only ever allowed to say "there is plenty of
-	// room": the moment what is left could be what bounds this chunk, the
-	// directory is measured for real, so the refusal itself is never decided on
-	// anything but a fresh walk.
+	// The cached figure may only say "plenty of room"; when the directory
+	// budget could bound this chunk, it is measured fresh.
 	used, err := s.dirBytes()
 	if err != nil {
 		return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
@@ -455,10 +327,7 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		reason = ErrStoreFull
 	}
 	if writeCap < 0 {
-		// Only possible if the directory (or this file) was already over
-		// budget before this call — e.g. a smaller Limits was applied to an
-		// existing directory. Accept nothing rather than turn that into a
-		// negative LimitReader.
+		// Already over budget, e.g. after Limits were lowered.
 		writeCap = 0
 	}
 
@@ -468,20 +337,14 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	if err != nil {
 		_ = f.Truncate(offset)
 		if source.err != nil {
-			// The caller's own body stopped arriving. Named, because the
-			// client can act on it — see ErrChunkIncomplete.
 			return offset, fmt.Errorf("%w: %w", ErrChunkIncomplete, source.err)
 		}
 		return offset, fmt.Errorf("gamefile: write chunk: %w", err)
 	}
 
 	if written == writeCap {
-		// The limited reader stopped at exactly the tightest cap; find out
-		// whether the caller's reader had more to give, without reading any
-		// of it into memory — let alone onto disk — beyond this one byte.
-		// This is what lets the right sentinel be reported (chunk, file, or
-		// directory, whichever was tightest) without ever holding, or
-		// writing, an over-budget chunk anywhere.
+		// Stopped at the cap: probe one byte to learn whether the chunk was
+		// over budget.
 		var probe [1]byte
 		n, probeErr := r.Read(probe[:])
 		switch {
@@ -490,34 +353,22 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 			return offset, reason
 
 		case probeErr != nil && !errors.Is(probeErr, io.EOF):
-			// The reader could not answer the question, which is not the
-			// same answer as "there was nothing more" — and discarding this
-			// error is how a refused chunk became a success. The deployment
-			// makes it the ordinary case rather than an exotic one: the
-			// transport's ceiling and MaxChunkBytes are deliberately the
-			// same number, so a caller sending one byte too many is stopped
-			// by the socket at exactly the byte this cap stopped at, the
-			// probe reads (0, "request body too large"), and reading that as
-			// EOF answered 200 OK to a request that had been refused —
-			// keeping what fitted and silently dropping the rest.
+			// Not the same as EOF. The transport's body limit equals
+			// MaxChunkBytes, so an oversized chunk usually surfaces here as
+			// "request body too large"; treating it as EOF would accept a
+			// truncated chunk.
 			_ = f.Truncate(offset)
 			return offset, fmt.Errorf("%w: %w", ErrChunkIncomplete, probeErr)
 		}
 	}
 
-	// What this call added, so the remembered figure follows the writes this
-	// process makes rather than waiting for the next walk to notice them. A
-	// chunk rolled back above never reaches here.
 	s.dirBytesGrew(written)
 	return offset + written, nil
 }
 
-// chunkSource remembers whether the failure that ended a copy came from the
-// caller's reader or from this process's own disk. io.Copy reports the two
-// identically, and they are not the same fact (CLAUDE.md rule 8): an
-// interrupted body is the client's to retry and is named as such, while a
-// write that failed is an outage of ours and must not be dressed up as
-// something the browser can fix by sending the chunk again.
+// chunkSource records whether a failed copy failed on the caller's reader
+// (the client can retry: ErrChunkIncomplete) or on our disk (an outage),
+// which io.Copy reports identically (CLAUDE.md rule 8).
 type chunkSource struct {
 	r   io.Reader
 	err error
@@ -534,26 +385,15 @@ func (s *chunkSource) Read(p []byte) (int, error) {
 // Complete seals the upload: verifies the length, returns the checksum, and
 // builds the line index.
 //
-// The checksum is computed here, in the single sequential pass Complete
-// already has to make to build the line index — not incrementally across
-// Append calls. Carrying a sha256.Hash's state between chunks is possible
-// (hash.Hash implements encoding.BinaryMarshaler) but it means persisting
-// that state to disk after every Append, restoring it correctly on the
-// offset<received idempotent-skip path, and getting all of that right across
-// a process restart mid-upload — real complexity bought for a saving that
-// does not exist, because Complete has to read every byte anyway to build
-// the index. One sequential local-disk read of a file that was just written
-// to the same disk is the cheap operation here; a second read of the whole
-// upload never happens.
+// The checksum is computed in the same pass that builds the index, not across
+// Append calls: the file must be read whole for the index anyway, and hash
+// state carried between chunks would have to survive restarts and retries.
 func (s *Store) Complete(id string, declaredBytes int64) (Summary, error) {
 	if err := validateUploadID(id); err != nil {
 		return Summary{}, err
 	}
 
-	// Same lock Append takes: holding it for the whole scan means an Append
-	// racing this call either finished before Complete started, or has not
-	// started yet by the time the index (Complete's seal, checked by
-	// Append) appears on disk.
+	// Held for the whole scan, so no Append lands before the seal appears.
 	unlock := s.locks.lock(id)
 	defer unlock()
 
@@ -579,23 +419,15 @@ func (s *Store) Complete(id string, declaredBytes int64) (Summary, error) {
 		return Summary{}, fmt.Errorf("gamefile: index upload: %w", err)
 	}
 	if built.totalBytes != declaredBytes {
-		// buildIndex read the file independently of the Stat above; a
-		// mismatch here means the file changed underneath us mid-read,
-		// which is a caller bug (nothing else writes to this path) but not
-		// one this package should paper over with a stale-looking summary.
+		// The file changed between the Stat and the scan.
 		return Summary{}, fmt.Errorf("%w: received %d, declared %d", ErrLengthMismatch, built.totalBytes, declaredBytes)
 	}
 
 	if err := writeIndex(s.indexPath(id), built); err != nil {
 		return Summary{}, fmt.Errorf("gamefile: save index: %w", err)
 	}
-	// An index of a size this call cannot state exactly now sits beside the
-	// data, so the remembered directory total is forgotten rather than adjusted.
 	s.dirBytesChanged()
-
-	// Everything this upload promised is now on disk and counted there, so
-	// the reservation has nothing left to hold (committedBytes' own doc).
-	s.release(id)
+	s.release(id) // everything promised is now on disk
 
 	return Summary{
 		Bytes:  built.totalBytes,
@@ -610,8 +442,6 @@ func (s *Store) Abort(id string) error {
 		return err
 	}
 
-	// Same lock Append and Complete take, so an Abort cannot remove the
-	// data file out from under either while they are mid-call.
 	unlock := s.locks.lock(id)
 	defer unlock()
 
@@ -625,22 +455,14 @@ func (s *Store) Abort(id string) error {
 	if err := os.Remove(s.indexPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove index: %w", err)
 	}
-	// And whatever a Complete killed mid-write left beside it: nothing else
-	// on this volume can ever name those again (clearIndexTemps' own doc), so
-	// retiring the upload is the last chance to reclaim their bytes.
+	// Abort is the last chance to reclaim a killed Complete's temporaries.
 	if err := clearIndexTemps(s.indexPath(id)); err != nil {
 		return err
 	}
 	if err := os.Remove(s.dataPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove upload: %w", err)
 	}
-	// Two files (and any leftover temporaries) are gone; how many bytes with
-	// them is not something this call measured, so the remembered total is
-	// forgotten rather than adjusted.
 	s.dirBytesChanged()
-	// The bytes are gone and so is the promise of the ones that never came —
-	// this is what keeps an abandoned upload the janitor cleared from holding
-	// its share of the directory budget until the process restarts.
 	s.release(id)
 	return nil
 }
@@ -661,35 +483,14 @@ func (s *Store) Received(id string) (int64, error) {
 	return info.Size(), nil
 }
 
-// UploadIDs lists the id of every upload this Store currently holds —
-// in-progress or completed, in no particular order. It exists so a caller
-// that needs to reconcile the volume against its own bookkeeping (the
-// provisioning package's orphan-file janitor is the one today) asks the
-// Store rather than walking the directory itself: the on-disk layout — one
-// data file plus, once sealed, one side index — is this package's own
-// convention, not something a caller should reverse-engineer by pattern
-// matching file names (see dataSuffix/indexSuffix above).
+// UploadIDs lists the id of every upload the Store holds, in progress or
+// completed, in no order, so a janitor can reconcile the volume without
+// knowing the on-disk layout. Each upload appears once.
 //
-// The result names uploads, never paths or filenames — a caller gets the
-// same id it would pass to Received, Open or Abort, nothing that leaks how
-// this Store lays out its directory. Each upload appears exactly once
-// regardless of how many files on disk belong to it: only the data file
-// (the one file that exists for every upload, in progress or sealed) is
-// counted, so a completed upload's index file is never mistaken for a
-// second upload.
-//
-// modifiedBefore is a floor on the age of what is listed: an upload whose
-// data file was written at or after it is left out. Reconciling a volume
-// against somebody else's bookkeeping is inherently a race — the caller
-// creates the file and records it in two steps, whichever order it picks —
-// and a listing with no age at all hands the janitor the reservation of an
-// upload whose row is at that instant still being inserted. The cut-off is
-// what makes that window a matter of time rather than of luck.
-//
-// It is a floor and nothing else, so there is no "list everything" value: a
-// zero Time lists nothing at all, since no file's modification time is before
-// it. A caller (a test, in practice) that wants every id passes a cut-off in
-// the future.
+// Only uploads whose data was last written before modifiedBefore are listed:
+// the caller creates a file and records it in two steps, and a fresh upload
+// must not look orphaned in between. A zero Time lists nothing; pass a future
+// time to list everything.
 func (s *Store) UploadIDs(modifiedBefore time.Time) ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -710,11 +511,7 @@ func (s *Store) UploadIDs(modifiedBefore time.Time) ([]string, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			// Gone between ReadDir and Info. Not this call's problem, and the
-			// same answer usedBytes gives: nothing to list and nothing to
-			// report — a caller told about an id whose file has already
-			// disappeared would only be sent to remove it again.
-			continue
+			continue // gone between ReadDir and Info
 		}
 		if !info.ModTime().Before(modifiedBefore) {
 			continue // younger than the caller's cut-off
@@ -724,9 +521,7 @@ func (s *Store) UploadIDs(modifiedBefore time.Time) ([]string, error) {
 	return ids, nil
 }
 
-// Open returns the upload's data file for the build step to stream from —
-// it is the caller's to Close, and this package never reads it as a whole
-// itself.
+// Open returns the upload's data file for streaming; the caller closes it.
 func (s *Store) Open(id string) (*os.File, error) {
 	if err := validateUploadID(id); err != nil {
 		return nil, err

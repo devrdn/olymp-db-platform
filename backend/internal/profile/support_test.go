@@ -19,15 +19,11 @@ var (
 	end   = start.Add(3 * time.Hour)
 )
 
-// grace is the rig's installation grace (DEADLINE_GRACE), the one its gate is
-// built with: what a participant already at work is given past their
-// deadline, and so how long after it the profile still keeps their results
-// shut.
+// grace is the rig's DEADLINE_GRACE, the one its gate is built with.
 const grace = 5 * time.Second
 
-// store is the profile's storage double. It holds the enrolments a test
-// arranged and counts how often each read was made, so "one aggregating
-// query" is a fact a test can assert rather than a promise in a comment.
+// store counts how often each read was made, so tests can assert one
+// aggregating query.
 type store struct {
 	summary    profile.Summary
 	enrolments []profile.Enrolment
@@ -58,8 +54,6 @@ func (s *store) Activity(context.Context, uuid.UUID) (profile.Activity, error) {
 	return s.activity, nil
 }
 
-// results is the leaderboard double: one answer per contest, and a count of
-// how many contests it was asked about.
 type results struct {
 	own  map[uuid.UUID]leaderboard.Own
 	asks int
@@ -74,7 +68,6 @@ func (r *results) Own(_ context.Context, contestID, _ uuid.UUID) (leaderboard.Ow
 	return own, nil
 }
 
-// attempts is the monitoring double: the answers tab, as the report reads it.
 type attempts struct {
 	answers monitor.Answers
 	asks    int
@@ -115,8 +108,6 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
-// seed stores a contest of the given status and enrols the rig's account in
-// it, returning both.
 func (r *rig) seed(t *testing.T, status string) (contests.Contest, contests.Participant) {
 	t.Helper()
 	s, e := start, end

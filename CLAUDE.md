@@ -36,7 +36,16 @@
 ## Code
 
 1. Write code in a clear and readable manner, following best practices for the programming language being used.
-2. Include comments to explain complex logic or important sections of the code.
+2. **Comments say what the code cannot.** Code documents itself through its
+   names and structure; a comment earns its place only by giving the reason
+   behind a non-obvious choice (a race, a security rule, a boundary such as
+   "refused at the instant, not after", a measured cost), or a contract a
+   caller must keep (units, bounds, what nil means, "inside a transaction").
+   Write it in one or two plain sentences, true on every path; a longer one
+   is for genuinely subtle reasoning. Leave out what the code already says,
+   history ("used to", review findings, task numbers), and the same reasoning
+   repeated in several places — state it once, where the rule lives. Every
+   package still carries its short doc comment (Go layout rule 6).
 
 ## Go layout conventions
 

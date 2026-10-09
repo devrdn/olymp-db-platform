@@ -18,8 +18,6 @@ func TestStatusRecorderCapturesExplicitStatus(t *testing.T) {
 }
 
 func TestStatusRecorderDefaultsToOKWithoutWriteHeader(t *testing.T) {
-	// net/http sends 200 when a handler writes a body without a status; the
-	// recorder must agree, or logs and metrics would report status 0.
 	sr := NewStatusRecorder(httptest.NewRecorder())
 
 	_, _ = sr.Write([]byte("body"))
@@ -41,8 +39,6 @@ func TestStatusRecorderCountsBytes(t *testing.T) {
 }
 
 func TestStatusRecorderUnwrapExposesTheUnderlyingWriter(t *testing.T) {
-	// http.ResponseController relies on Unwrap to reach Flush and friends;
-	// without it, streaming (SSE) breaks behind the middleware chain.
 	inner := httptest.NewRecorder()
 	sr := NewStatusRecorder(inner)
 

@@ -34,9 +34,7 @@ func TestSettingTheScriptStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	if !strings.HasPrefix(saved.Database, "game_tpl_c") {
 		t.Fatalf("database is %q", saved.Database)
 	}
-	// Building creates a database and runs an author's whole script inside
-	// it. Doing that inside the request that saved the script is what the
-	// pending status exists to avoid.
+	// The pending status keeps the build out of the saving request.
 	if len(cluster.names) != 0 {
 		t.Fatal("built the game inside the request that stored the script")
 	}
@@ -45,9 +43,8 @@ func TestSettingTheScriptStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	}
 }
 
-// Replacing a game bumps its version, every copy made from the old one is
-// then stale, and a stale copy is dropped and made again. In a running
-// olympiad that is every participant losing their database at once.
+// Replacing a game makes every copy stale, and in a running olympiad that
+// drops every participant's database at once.
 func TestTheGameOfARunningContestCannotBeReplaced(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(false)
@@ -100,9 +97,7 @@ func TestASecondScriptBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	}
 }
 
-// aDefinition is a small, valid game — the shape a detective game actually
-// needs (definition_test.go's own doc gives the same example): a suspects
-// table with a primary key, nothing more.
+// aDefinition is a small valid game: a suspects table with a primary key.
 func aDefinition() provisioning.Definition {
 	return provisioning.Definition{Tables: []provisioning.TableDefinition{
 		{
@@ -131,9 +126,6 @@ func TestSettingTheDefinitionStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	if saved.Source != provisioning.SourceBuilder {
 		t.Fatalf("stored as source %q, want builder", saved.Source)
 	}
-	// Building creates a database and runs a build inside it. Doing that
-	// inside the request that saved the definition is what the pending
-	// status exists to avoid, the same reasoning SetScript's own test gives.
 	if len(cluster.names) != 0 {
 		t.Fatal("built the game inside the request that stored the definition")
 	}
@@ -142,10 +134,7 @@ func TestSettingTheDefinitionStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	}
 }
 
-// A contest whose game may no longer be replaced must refuse the table
-// builder's own way in exactly as it refuses the editor's — replacing a
-// game bumps its version and makes every participant's copy stale, whatever
-// produced the replacement.
+// The table builder is refused the same way as the script editor.
 func TestTheGameOfARunningContestCannotHaveItsDefinitionReplaced(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(false)
@@ -159,10 +148,7 @@ func TestTheGameOfARunningContestCannotHaveItsDefinitionReplaced(t *testing.T) {
 	}
 }
 
-// SetDefinition's own validation runs before anything is asked of storage —
-// the same ordering TestAnEmptyOrOversizedScriptIsRefusedBeforeAnythingIsAsked
-// proves for SetScript. Definition.Validate's own tests (definition_test.go)
-// cover every refusal in depth; this is only the wiring between the two.
+// Only the wiring: definition_test.go covers each refusal.
 func TestAnInvalidDefinitionIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -195,12 +181,8 @@ func TestASecondDefinitionBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	}
 }
 
-// The table builder's own way of writing a game gets its own action code
-// (audit.ActionGameDefinitionSet), and nothing asserted it: a save that
-// stopped recording, or one folded back into contest.game_script_set, would
-// have left the trail unable to say which of the three ways built a game —
-// and the journal is append-only, so a missing entry cannot be filled in
-// afterwards.
+// The trail must say which of the three sources built a game, and being
+// append-only it cannot be filled in afterwards.
 func TestSavingADefinitionIsRecordedUnderItsOwnAction(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
@@ -230,9 +212,7 @@ func TestSavingADefinitionIsRecordedUnderItsOwnAction(t *testing.T) {
 		t.Fatalf("payload = %+v, want version %d and %d table(s)",
 			entry.Payload, saved.Version, len(aDefinition().Tables))
 	}
-	// The definition itself is not in the payload: the trail is a list of who
-	// did what, not a second copy of the row's own content (SetDefinition's
-	// own doc), and the version is what identifies which definition this was.
+	// The trail records who did what; the version identifies the definition.
 	for _, value := range entry.Payload {
 		if _, isDefinition := value.(provisioning.Definition); isDefinition {
 			t.Fatalf("the payload carries the whole definition: %+v", entry.Payload)
@@ -240,16 +220,9 @@ func TestSavingADefinitionIsRecordedUnderItsOwnAction(t *testing.T) {
 	}
 }
 
-// A table's own data is a CSV file whose first line names the table's
-// columns, in order (tabledata.go's own header check) — SetDefinition used
-// to replace the whole description with no check against that file at all,
-// so a rename, a type change or a column's removal saved cleanly and left
-// the file silently disagreeing with the new definition. This is the
-// boundary ErrDefinitionTableLocked now enforces: any of the three, once a
-// table holds a single row, is refused before anything is written — the
-// same freeze the table builder's own screen already enforces client-side
-// (game-builder.tsx's own doc, "Why a table with data locks its own
-// structure").
+// A table's data is a CSV whose header names its columns in order, so once
+// the table holds a row its structure is frozen; the builder screen applies
+// the same freeze client-side.
 func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -258,9 +231,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
 		t.Fatalf("save the first definition: %v", err)
 	}
-	// "suspects" now holds three rows, the way CompleteTableUpload leaves it
-	// — this test needs only the row saying so, never a real file on disk,
-	// to prove the refusal at the SetDefinition boundary.
+	// Only the row recording three lines is needed, not a file on disk.
 	dataID := uuid.New()
 	store.tableData = map[uuid.UUID]provisioning.TableData{
 		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
@@ -315,7 +286,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 					{Name: "id", Type: provisioning.ColumnInteger},
 					{Name: "name", Type: provisioning.ColumnText},
 				},
-				// No primary key at all now, where there was one.
+				// The primary key is dropped.
 			}}},
 		},
 	} {
@@ -324,8 +295,6 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 			if !errors.Is(err, provisioning.ErrDefinitionTableLocked) {
 				t.Fatalf("answered %v, want ErrDefinitionTableLocked", err)
 			}
-			// The version must not have moved: a refused save changed
-			// nothing about the game that was already there.
 			if store.template.Version != 1 {
 				t.Fatalf("version is %d after a refused save, want 1", store.template.Version)
 			}
@@ -333,9 +302,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 	}
 }
 
-// The freeze is per table, not per definition: a table that already holds
-// data locks its own structure, but an organiser may still add an entirely
-// new table beside it, or resave the locked table completely unchanged.
+// The freeze is per table: a new table may still be added beside a locked one.
 func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -364,10 +331,8 @@ func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
 	}
 }
 
-// A completed file with no data rows — a header with nothing under it — is
-// not locked: loadTableData's own copy reader always skips the header line
-// unconditionally (tableDataCopyReader.advance), so nothing a build would
-// ever read disagrees with a new structure while the table is still empty.
+// A header with no rows is not locked: the build skips the header, so nothing
+// it reads can disagree with a new structure.
 func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -417,23 +382,17 @@ func TestBuildingRunsTheScriptAndRecordsTheOutcome(t *testing.T) {
 	}
 }
 
-// scriptRefusal stands for gamedb.ScriptError: PostgreSQL's verdict on a
-// statement the organiser wrote, which is the one build failure whose words
-// are theirs to read. A bare errors.New here would be a test of the *other*
-// branch wearing this one's name — the mistake internal/rpc's own table of
-// failures records under "a database error".
+// scriptRefusal stands for gamedb.ScriptError, the one build failure whose
+// text the organiser may read. A bare errors.New would take the internal-fault
+// branch instead.
 type scriptRefusal struct{ says string }
 
 func (s scriptRefusal) Error() string           { return s.says }
 func (s scriptRefusal) ScriptRejection() string { return s.says }
 
-// connectFailure is the shape the game cluster really produces when a build
-// cannot reach it: gamedb.Provisioner.connect's own wrapper around pgx's
-// *pgconn.ConnectError, which prints the role it authenticated as, every
-// address it dialled and the database it asked for. Written out as a literal
-// rather than constructed, because what this file has to pin is the text —
-// these are the substrings that must not survive into a response body or an
-// audit payload.
+// connectFailureText is the text of a real *pgconn.ConnectError from the game
+// cluster: it names the role, the addresses and the database, none of which
+// may reach a response body or an audit payload.
 const connectFailureText = "connect to game_tpl_cabc123 as game_author: " +
 	"failed to connect to `user=game_author database=game_tpl_cabc123`: " +
 	`[::1]:5433 (pg-game): failed SASL auth: FATAL: password authentication ` +
@@ -468,13 +427,8 @@ func TestAFailedBuildKeepsThePostgresErrorForWhoeverWroteTheScript(t *testing.T)
 	}
 }
 
-// The other half of the same rule, and the one the review found open: a build
-// that failed for a reason of ours must not describe our cluster to a contest
-// manager, nor leave that description in a trail nobody can edit.
-//
-// Asserted on the two sinks and not on a log line: GameHandler.status serves
-// Template.BuildError verbatim behind contest.view, and the contest.game_built
-// payload is append-only.
+// A build that failed for our own reasons must not describe our cluster to the
+// organiser: BuildError is served verbatim and the audit payload is append-only.
 func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -496,7 +450,6 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 		t.Fatalf("finished as %q, want failed", built.Status)
 	}
 
-	// What the row says — which is what GET /contests/{id}/game serves.
 	if store.finished[0].err != provisioning.BuildFailedInternally {
 		t.Fatalf("recorded %q, want the fixed sentence", store.finished[0].err)
 	}
@@ -504,8 +457,7 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 		t.Fatalf("served %q, want the fixed sentence", built.BuildError)
 	}
 
-	// What the trail keeps. Saving the script recorded an entry of its own, so
-	// the build's is picked out by its action rather than by its position.
+	// Saving the script recorded an entry too, so find the build's by action.
 	var built0 *audit.Entry
 	for i, entry := range trail.entries {
 		if entry.Action == audit.ActionGameBuilt {
@@ -533,34 +485,17 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 	}
 }
 
-// A script refusal is the one build failure whose text is the author's own,
-// and it is also the only one whose *size* and *bytes* the author chooses:
-// the reader quotes their file back at them, and their file is untrusted
-// input up to GAME_UPLOAD_MAX_FILE_BYTES.
-//
-// Two bounds, one place. The length, because build_error is an unbounded
-// `text` column and the same string is copied into the append-only
-// contest.game_built payload as well (CLAUDE.md rule 2: the bound belongs in
-// the domain, at the field, not only in the request that carried it). And
-// storability, because a `text` column is UTF-8 *and* NUL-free while a dump
-// is raw bytes: PostgreSQL refuses either with SQLSTATE 22021, and that
-// refusal comes from FinishBuild — so the row is never moved out of
-// 'building', staleBuildAfter claims it again, and the game spends every
-// sweep doing a DROP DATABASE and a CREATE DATABASE on the cluster an
-// olympiad is running on, for ever, without ever becoming ready.
-//
-// The assertion is storability and not `utf8.ValidString`, which is the shape
-// this test had while the defect was open: \x00 is *valid* UTF-8 in Go and
-// forbidden in a `text` column, so the encoding check was green on the exact
-// byte that wedges the build. A `pg_dump -Fc` uploaded by mistake — the
-// commonest export error there is — is full of them.
+// A script refusal quotes the author's untrusted file back, so its size and
+// bytes are theirs. build_error is an unbounded `text` column copied into the
+// audit payload (CLAUDE.md rule 2), and a non-UTF-8 or NUL byte makes
+// FinishBuild fail with 22021, leaving the row 'building' to be rebuilt every
+// sweep. NUL is valid UTF-8 in Go, so it is checked on its own; a mistaken
+// `pg_dump -Fc` upload is full of them.
 func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	trail := &sink{}
 	service = service.WithAudit(audit.New(trail), directly{})
-	// What the reader hands back for a line of a dump it refused: the file's
-	// own bytes, in the file's own quantity.
 	cluster.fail = scriptRefusal{says: "line 1: \xff\xfe\x00 " + strings.Repeat("q", 4<<20)}
 
 	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
@@ -571,7 +506,7 @@ func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 		t.Fatalf("building: %v", err)
 	}
 
-	recordedEntry := "" // the audit payload's copy of the same string
+	recordedEntry := ""
 	for _, entry := range trail.entries {
 		if entry.Action == audit.ActionGameBuilt {
 			recordedEntry, _ = entry.Payload["error"].(string)
@@ -594,17 +529,15 @@ func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 			t.Fatalf("%s still carries a NUL byte, which `text` and `jsonb` both refuse "+
 				"with 22021 — the build can never be finished: %q", label, text)
 		}
-		// Bounded, but still the author's own verdict: the useful part is the
-		// front of it.
+		// Truncation keeps the front, which is the useful part.
 		if !strings.HasPrefix(text, "line 1: ") {
 			t.Fatalf("%s = %q, and no longer starts with what the reader said", label, text)
 		}
 	}
 }
 
-// The same rule for the *core* database's own failure, which reached the same
-// column by a different line: the policy read happens before the cluster is
-// touched at all, and its error text is a connection string of ours.
+// The policy read fails before the cluster is touched, and its error text
+// describes the core database.
 func TestAPolicyThatCouldNotBeReadIsNotDescribedToTheOrganiserEither(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -628,10 +561,8 @@ func TestAPolicyThatCouldNotBeReadIsNotDescribedToTheOrganiserEither(t *testing.
 	}
 }
 
-// The privileges a participant gets inside the game are the contest's own,
-// and the *first* build is the one most likely to get this wrong: the
-// template is not 'ready' yet, so the pool's own Game() lookup has no row to
-// answer from (CLAUDE.md rule 11).
+// On the first build the template is not 'ready', so the pool's Game() lookup
+// has no row to take the policy from (CLAUDE.md rule 11).
 func TestTheBuildGrantsTheContestsOwnPolicyAndNotTheDefault(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -652,7 +583,6 @@ func TestTheBuildGrantsTheContestsOwnPolicyAndNotTheDefault(t *testing.T) {
 	}
 }
 
-// A tick with nothing waiting must not be an error the log shouts about.
 func TestBuildingWithNothingWaitingSaysSoRatherThanFailing(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -666,10 +596,8 @@ func TestBuildingWithNothingWaitingSaysSoRatherThanFailing(t *testing.T) {
 	}
 }
 
-// uploadsGames is games(editable), plus a real gamefile.Store backing a
-// file-sourced game's build — the one thing games() itself never wires up
-// (WithUploads is left uncalled there on purpose, for the tests about an
-// installation with no upload volume configured at all).
+// uploadsGames is games(editable) with a real upload store; games() leaves
+// WithUploads uncalled to stand for an installation with no upload volume.
 func uploadsGames(t *testing.T, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
 	t.Helper()
 	service, store, cluster := games(editable)
@@ -682,9 +610,7 @@ func uploadsGames(t *testing.T, editable bool) (*provisioning.Games, *templateSt
 	return service, store, cluster, files
 }
 
-// sealedUpload writes dump to files under id, exactly as a completed browser
-// upload would have left it (internal/gamefile.Store's own three-call
-// lifecycle), so a build has real bytes on disk to open.
+// sealedUpload leaves dump on disk under id as a completed upload would.
 func sealedUpload(t *testing.T, files *gamefile.Store, id uuid.UUID, dump string) {
 	t.Helper()
 	if err := files.Begin(id.String(), 1<<16); err != nil {
@@ -698,9 +624,7 @@ func sealedUpload(t *testing.T, files *gamefile.Store, id uuid.UUID, dump string
 	}
 }
 
-// The point of BuildTemplate taking an io.Reader (its own doc explains why):
-// a file-sourced game's build opens the uploaded bytes straight off disk and
-// runs them through the identical path an editor's script uses, rather than
+// The uploaded bytes go through the same BuildTemplate path as a script, not
 // a second one that could drift from it.
 func TestBuildingAFileSourcedGameStreamsTheUploadedFileThroughTheSameClusterPathAScriptUses(t *testing.T) {
 	t.Parallel()
@@ -732,9 +656,6 @@ func TestBuildingAFileSourcedGameStreamsTheUploadedFileThroughTheSameClusterPath
 	}
 }
 
-// The other branch finishUploadBuild has in common with Build: PostgreSQL's
-// verdict on the uploaded SQL is the organiser's to read, exactly as it is
-// for a script written in the editor.
 func TestAFileSourcedBuildThatFailsKeepsThePostgresErrorForTheOrganiser(t *testing.T) {
 	t.Parallel()
 	service, store, cluster, files := uploadsGames(t, true)
@@ -761,9 +682,8 @@ func TestAFileSourcedBuildThatFailsKeepsThePostgresErrorForTheOrganiser(t *testi
 	}
 }
 
-// A redeploy that drops GAME_UPLOAD_DIR out from under a game still waiting
-// to build is an installation fault, not the organiser's — games() itself
-// never calls WithUploads, standing in for exactly that installation.
+// A redeploy without GAME_UPLOAD_DIR is an installation fault, not the
+// organiser's; games() never calls WithUploads.
 func TestBuildingAFileSourcedGameWithNoUploadVolumeConfiguredIsAnInternalFault(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -793,8 +713,8 @@ func TestBuildingAFileSourcedGameWithNoUploadVolumeConfiguredIsAnInternalFault(t
 	}
 }
 
-// migration 24's own CHECK ties SourceFile to a non-nil UploadID; a row that
-// somehow lacks one is corrupt, never something an organiser's upload did.
+// A CHECK constraint ties SourceFile to an UploadID, so a row without one is
+// corrupt, not the organiser's doing.
 func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
 	t.Parallel()
 	service, store, cluster, _ := uploadsGames(t, true)
@@ -817,11 +737,7 @@ func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
 	}
 }
 
-// A builder-sourced game is built the same way an editor-sourced one is:
-// Definition.SQL generates the CREATE TABLE statements and they reach
-// BuildTemplate exactly like claimed.Script already does — the fake cluster
-// cannot tell the two apart, which is the point (finishDefinitionBuild's own
-// doc: there is no third path).
+// Definition.SQL's output reaches BuildTemplate the same way a script does.
 func TestBuildingABuilderSourcedGameGeneratesSQLAndRunsItThroughTheSamePathAsAScript(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -853,13 +769,9 @@ func TestBuildingABuilderSourcedGameGeneratesSQLAndRunsItThroughTheSamePathAsASc
 	}
 }
 
-// A definition with no tables cannot be saved — Validate refuses it before a
-// build could ever be claimed for it (Definition.Validate's own doc) — but a
-// row that somehow reaches Build with one anyway must still refuse plainly,
-// as the organiser's own mistake, rather than run an empty script and mark a
-// tableless database 'ready'. Never BuildFailedInternally: this is not a
-// fault of this installation's cluster, so err must come back nil, the same
-// way finishDefinitionBuild treats a script PostgreSQL itself refused.
+// Validate refuses an empty definition on save, but one that reaches Build
+// anyway must fail as the organiser's mistake (err nil, not
+// BuildFailedInternally) rather than mark a tableless database 'ready'.
 func TestBuildingABuilderSourcedGameWithNoTablesRefusesAsTheOrganisersOwnMistake(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -889,9 +801,8 @@ func TestBuildingABuilderSourcedGameWithNoTablesRefusesAsTheOrganisersOwnMistake
 }
 
 func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *testing.T) {
-	// contests.GameSource, the narrow view the contest package's export asks
-	// for. A contest whose game has not been written yet exports without one
-	// rather than failing, so "no game" must not surface here as an error.
+	// The export (contests.GameSource) treats a missing game as absent, not as
+	// a failure.
 	service, _, _ := games(true)
 
 	script, ok, omitted, err := service.Script(t.Context(), uuid.New())
@@ -916,12 +827,8 @@ func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *tes
 	}
 }
 
-// The other half of the same method, and the one the export was getting
-// wrong: a game built from an uploaded dump has no script column to hand over
-// — its SQL is the file on the API host's own volume — and "" was
-// indistinguishable from a script an organiser had actually written. The
-// contest package cannot tell the two apart itself (it does not know
-// SourceFile exists), so this is where the fact has to be produced.
+// A dump's SQL lives on disk, not in the row, and the contest package cannot
+// tell that from an empty script, so Script() reports it as omitted.
 func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(t *testing.T) {
 	t.Parallel()
 	service, store, _, files := uploadsGames(t, true)
@@ -956,9 +863,7 @@ func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(
 	}
 }
 
-// The same fact, for the third source: a builder-sourced game has no SQL at
-// all yet (Definition's own doc), so Script() must report it as present but
-// omitted rather than as an empty script an organiser supposedly wrote.
+// A builder-sourced game has no stored SQL at all.
 func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
@@ -984,9 +889,7 @@ func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScri
 }
 
 func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
-	// The difference matters: "no game" makes the export succeed with a
-	// package that has none, so a storage failure quietly wearing that
-	// answer would ship an incomplete package as a complete one.
+	// Read as "no game", the export would ship an incomplete package.
 	store := &templateStore{templateErr: errors.New("the database is away")}
 	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true})
 
@@ -995,12 +898,8 @@ func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
 	}
 }
 
-// TestNeedsBuildOnlyWhenReadyAndMarked is every state the predicate has to
-// discriminate: only a `ready` template with a mark invites a rebuild. A
-// build already under way (`pending`, `building`) will pick the row up on
-// its own — offering to press a button that a build is already running
-// towards is nonsense — and a `failed` template's own error is what an
-// organiser needs to see next, not an invitation to replace it.
+// A pending or building template will pick the data up on its own, and a
+// failed one's error is what the organiser needs to see next.
 func TestNeedsBuildOnlyWhenReadyAndMarked(t *testing.T) {
 	t.Parallel()
 	mark := time.Now()
@@ -1028,9 +927,6 @@ func TestNeedsBuildOnlyWhenReadyAndMarked(t *testing.T) {
 	}
 }
 
-// TestABuildClearsAMarkItActuallySaw is the ordinary case: a row changed
-// before the build was ever claimed, so the build's own read of the table
-// data already included it, and the mark must not survive.
 func TestABuildClearsAMarkItActuallySaw(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -1048,19 +944,9 @@ func TestABuildClearsAMarkItActuallySaw(t *testing.T) {
 	}
 }
 
-// TestABuildLeavesAMarkThatAppearedAfterTheClaim is the race this feature
-// exists for: a row typed while a build is already running must still be
-// picked up by the next one.
-//
-// The fake cannot literally interleave a write with Games.Build's one call,
-// so the mark is set to a timestamp an hour in the future before Build ever
-// runs. That is the same situation a genuinely concurrent write would
-// produce: FinishBuild's own comparison (postgres/gametemplates.go and this
-// package's templateStore.FinishBuild) only ever looks at the two
-// timestamps — the mark's and the claim's — never at which call happened
-// first in wall-clock time. A mark timestamped after the claim behaves
-// identically whether it was written a millisecond after the claim or,
-// as here, deliberately stamped an hour ahead of it.
+// A row typed during a build must be picked up by the next one. The fake
+// cannot interleave a write, so the mark is stamped an hour ahead: FinishBuild
+// compares only the mark's and the claim's timestamps.
 func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -1078,16 +964,8 @@ func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
 	}
 }
 
-// TestAFailedBuildLeavesTheDataMarkWhereItFoundIt: the data never reached a
-// database, so the record that it is unbuilt has to outlive the attempt.
-//
-// A failed build drops its half-made template (finishBuild's own teardown),
-// which is what makes this different from every other clause of FinishBuild's
-// own comparison: the timestamps agree — nothing moved while the build ran —
-// and the mark still has to stay, because there is no database holding the
-// rows it stands for. Clearing it leaves an organiser with a 'failed' game,
-// three hundred typed rows on the volume, and nothing anywhere saying the two
-// have never met.
+// A failed build drops its template, so the mark stays even though the
+// timestamps say nothing moved: no database holds the rows it stands for.
 func TestAFailedBuildLeavesTheDataMarkWhereItFoundIt(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
@@ -1110,13 +988,8 @@ func TestAFailedBuildLeavesTheDataMarkWhereItFoundIt(t *testing.T) {
 	}
 }
 
-// TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion is the button
-// itself: the data is in, and the organiser asks for the database to be made
-// again from it.
-//
-// The version has to rise. Every copy carries the version it was made from,
-// and only a higher one makes the existing copies stale — a rebuild that left
-// it alone would build a template nobody is ever given.
+// Only a higher version makes existing copies stale; without it the rebuilt
+// template would never be handed out.
 func TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
@@ -1143,9 +1016,6 @@ func TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion(t *testing.T
 	}
 }
 
-// TestRequestBuildIsRefusedOnceTheContestIsRunning: raising the version drops
-// and remakes every participant's copy, which in a running olympiad is every
-// participant losing their database at once.
 func TestRequestBuildIsRefusedOnceTheContestIsRunning(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(false)
@@ -1161,9 +1031,8 @@ func TestRequestBuildIsRefusedOnceTheContestIsRunning(t *testing.T) {
 	}
 }
 
-// TestRequestBuildIsRefusedWhileOneIsAlreadyRunning: two organisers on the
-// same screen, or one impatient double click. The second is told so rather
-// than racing CREATE DATABASE against the first.
+// A second request (a double click, two organisers) must not race CREATE
+// DATABASE against the first.
 func TestRequestBuildIsRefusedWhileOneIsAlreadyRunning(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
@@ -1171,14 +1040,13 @@ func TestRequestBuildIsRefusedWhileOneIsAlreadyRunning(t *testing.T) {
 	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
 		t.Fatalf("save the definition: %v", err)
 	}
-	// SaveDefinition leaves the game 'pending': a build is already waiting.
+	// SetDefinition leaves the game 'pending': a build is already waiting.
 
 	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
 		t.Fatalf("RequestBuild = %v, want ErrBuildInProgress", err)
 	}
 }
 
-// TestRequestBuildWithoutAGameSaysSo: nothing has been written to build.
 func TestRequestBuildWithoutAGameSaysSo(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)

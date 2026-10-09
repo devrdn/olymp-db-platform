@@ -9,13 +9,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
 
-// What a single caller can observe of the language catalogue is the contract
-// every contests.LanguageCatalog answers to, the in-memory one the service
-// tests use included (conteststest.LanguageCatalogContract). It also holds the
-// seed the migrations insert, which nothing in the code names, to the three
-// languages the in-memory catalogue starts with. What the schema itself
-// enforces (the foreign keys naming a language) is not part of it, and has no
-// test here yet.
+// The shared contract (conteststest.LanguageCatalogContract) also pins the
+// migration seed to the in-memory catalogue's three languages.
 func TestLanguagesHonoursTheCatalogContract(t *testing.T) {
 	conteststest.LanguageCatalogContract(t, func(t *testing.T, run func(context.Context, conteststest.LanguageTarget)) {
 		withTx(t, func(ctx context.Context) {

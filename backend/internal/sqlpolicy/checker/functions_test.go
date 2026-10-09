@@ -8,14 +8,11 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// The functions that turn a SELECT into something else. None of these is
-// refused by a rule naming it — they are refused by not being on the list,
-// which is the property under test: the list is what is enumerated, not the
-// danger.
+// None of these is named by a rule; they are refused by being absent from the
+// allow-list.
 func TestTheFunctionsThatAreNotOnTheList(t *testing.T) {
 	for _, sql := range []string{
-		// Spending the server's time. A slot held for the whole timeout is a
-		// denial of service that costs the participant one line.
+		// Holding an execution slot for the whole timeout.
 		`SELECT pg_sleep(10)`,
 		`SELECT pg_sleep_for('5 minutes')`,
 		// Reading the host.
@@ -25,8 +22,7 @@ func TestTheFunctionsThatAreNotOnTheList(t *testing.T) {
 		`SELECT pg_stat_file('/etc/passwd')`,
 		`SELECT lo_import('/etc/passwd')`,
 		`SELECT lo_export(1, '/tmp/out')`,
-		// Reaching another server, which is a way out of the isolation the
-		// whole design rests on.
+		// Reaching another server, out of the sandbox.
 		`SELECT * FROM dblink('dbname=core', 'SELECT 1') AS t(x int)`,
 		`SELECT dblink_connect('dbname=core')`,
 		// Interfering with the installation or with other participants.
@@ -50,9 +46,7 @@ func TestTheFunctionsThatAreNotOnTheList(t *testing.T) {
 	}
 }
 
-// A refusal has to name the function, because the operator's next move is to
-// decide whether it belongs on the list, and "a function is not supported"
-// does not tell them which.
+// The operator needs the name to decide whether it belongs on the list.
 func TestARefusalNamesTheFunction(t *testing.T) {
 	r := refusal(t, `SELECT pg_sleep(1)`, sqlpolicy.ReadOnly())
 	if r.Code != sqlpolicy.CodeFunctionNotSupported {
@@ -63,8 +57,6 @@ func TestARefusalNamesTheFunction(t *testing.T) {
 	}
 }
 
-// A check that only looked at the top level of the select list would pass
-// every one of these.
 func TestAFunctionIsFoundWhereverItHides(t *testing.T) {
 	for name, sql := range map[string]string{
 		"in a WHERE":            `SELECT 1 FROM t WHERE pg_sleep(1) IS NOT NULL`,
@@ -83,11 +75,7 @@ func TestAFunctionIsFoundWhereverItHides(t *testing.T) {
 		"as an aggregate's arg": `SELECT count(pg_sleep(1)) FROM t`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			// The code is asserted, not just the refusal. Without it this
-			// suite passed while `FROM generate_series(…), pg_ls_dir('/')` was
-			// being refused for the FROM clause rather than for the function —
-			// a green test for a validator that could not run an ordinary
-			// query.
+			// Assert the code, so a refusal for the wrong reason fails.
 			r := refusal(t, sql, sqlpolicy.ReadOnly())
 			if r.Code != sqlpolicy.CodeFunctionNotSupported {
 				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeFunctionNotSupported)
@@ -98,8 +86,6 @@ func TestAFunctionIsFoundWhereverItHides(t *testing.T) {
 
 func TestNameFoldingAndQualification(t *testing.T) {
 	t.Run("case does not hide a function", func(t *testing.T) {
-		// PostgreSQL folds an unquoted name; a checker that did not would be
-		// bypassed by holding down shift.
 		for _, sql := range []string{`SELECT PG_SLEEP(1)`, `SELECT Pg_Sleep(1)`, `SELECT "pg_sleep"(1)`} {
 			refusal(t, sql, sqlpolicy.ReadOnly())
 		}
@@ -114,9 +100,7 @@ func TestNameFoldingAndQualification(t *testing.T) {
 	})
 
 	t.Run("any other qualification is somebody's own function", func(t *testing.T) {
-		// Whatever it is, it is not on a list of standard ones. Refused as
-		// written rather than reduced to its last part, which would let
-		// `evil.upper` through as `upper`.
+		// Reducing to the last part would let `evil.upper` through as `upper`.
 		for _, sql := range []string{
 			`SELECT public.upper(name) FROM suspects`,
 			`SELECT work.helper(1)`,
@@ -133,9 +117,6 @@ func TestNameFoldingAndQualification(t *testing.T) {
 	})
 }
 
-// The list is installation configuration, not a constant: a legitimate
-// function nobody anticipated is the expected operational cost of an
-// allow-list, and the way out must not be a release.
 func TestAnOperatorCanExtendTheList(t *testing.T) {
 	const sql = `SELECT soundex(name) FROM suspects`
 
@@ -151,11 +132,8 @@ func TestAnOperatorCanExtendTheList(t *testing.T) {
 	}
 }
 
-// CURRENT_DATE and CURRENT_USER are one node type with a different setting,
-// which is the single place in this package where checking the type is not
-// enough. The times belong to the game; the identities belong to the
-// installation — CURRENT_USER names the database role and CURRENT_CATALOG
-// names the database, whose name carries the contest and participant ids.
+// The times belong to the game; CURRENT_USER and CURRENT_CATALOG name the
+// role and the database, which identify the contest and participant.
 func TestTheValueFunctionsSplitTwoWays(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT current_date`, `SELECT current_time`, `SELECT current_timestamp`,

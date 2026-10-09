@@ -1,3 +1,6 @@
+// Package checker parses a participant's query with PostgreSQL's own parser
+// and decides whether it stays within a sqlpolicy.Policy. It does not run the
+// query; the database grants are a second layer behind it.
 package checker
 
 import (
@@ -12,34 +15,18 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// maxDepth bounds how deeply nested a query may be.
-//
-// Not a policy rule but a guard on this package itself: the walk is recursive,
-// and a query nested thousands of levels deep is a cheap way to end the
-// process with a stack overflow rather than a refusal. Far above anything a
-// person writes; the parser gives up before this on most shapes anyway.
+// maxDepth bounds how deeply nested a query may be, so the recursive walk
+// refuses a deeply nested query instead of overflowing the stack.
 const maxDepth = 100
 
-// maxQueryBytes bounds the text before it is parsed.
-//
-// Also a guard on this package rather than a rule about SQL. Parsing builds a
-// tree several times the size of its input, and the HTTP layer's own body
-// limit is a different layer's decision that this one should not depend on
-// being set. Far longer than any query a person writes by hand.
-//
-// sqlpolicy.MaxQueryBytes rather than a number of this package's own: the
-// façade in front of the Query Runner refuses an oversized query before
-// writing it anywhere, and the two bounds drifting apart would mean a query
-// that passed the façade's check reaching this one only to be refused for the
-// same reason a second time.
+// maxQueryBytes bounds the text before the C parser reads it: parsing builds
+// a tree several times the input's size, and this package must not rely on
+// the HTTP body limit. Shared with the façade so the two bounds agree.
 const maxQueryBytes = sqlpolicy.MaxQueryBytes
 
-// Checker decides whether a query stays within a policy.
-//
-// It exists as a type rather than a function because the function allow-list
-// is installation configuration: an operator extends it after a pilot without
-// waiting for a release (section 5, point 3). The policy comes per call, since
-// it belongs to the olympiad.
+// Checker decides whether a query stays within a policy. It holds the
+// function allow-list, which an operator may extend per installation; the
+// policy comes per call, since it belongs to the olympiad.
 type Checker struct{ functions map[string]struct{} }
 
 // NewChecker returns a checker whose allow-list is the standard one plus
@@ -67,14 +54,9 @@ func (c *Checker) Check(sql string, p sqlpolicy.Policy) error {
 	return err
 }
 
-// Analyse checks the query and reports what it is.
-//
-// The order is deliberate. The policy is validated first, because an incoherent
-// policy cannot decide anything and failing closed is the only safe answer.
-// Then the text must parse, and be exactly one statement — everything after
-// that reasons about a tree, and reasoning about a tree that represents only
-// the first half of what will run is how a checker gets walked past. Only then
-// the shape: the root statement, and then every node beneath it.
+// Analyse checks the query and reports what it is. An invalid policy fails
+// closed. The query must be one statement, so the tree checked is all of what
+// will run; then the root statement and every node beneath it are checked.
 func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error) {
 	if err := p.Validate(); err != nil {
 		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeInvalidPolicy, Subject: err.Error()}
@@ -88,12 +70,7 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{
 			Code:    sqlpolicy.CodeParseError,
 			Subject: err.Error(),
-			// The parser is PostgreSQL's own, so its Cursorpos is exactly the
-			// position a real connection would report for the same text — a
-			// 1-based character offset into sql as sent, not into any statement
-			// pg.Parse split it into (parsing fails before splitting). Left at
-			// zero when the error carries none, which pg_query's own convention
-			// (mirroring errposition()) also treats as "no position".
+			// A 1-based offset into sql as sent, as a server would report it.
 			Position: parsePosition(err),
 		}
 	}
@@ -111,9 +88,8 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 	if err != nil {
 		return sqlpolicy.Statement{}, err
 	}
-	// A write statement's own node is not in the allowed set — that is what
-	// refuses one hidden inside a CTE — so its children are walked without
-	// checking the node itself, which the root check has already decided.
+	// A write's own node is not in allowedKinds (that refuses one hidden in a
+	// CTE), so at the root only its children are walked.
 	if plan.checkSelf {
 		err = c.walkNode(plan.node, p, 0)
 	} else {
@@ -130,16 +106,7 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 	}, nil
 }
 
-// parsePosition reads the character offset a parse error carries, or zero
-// when it carries none.
-//
-// pg.Parse always fails with *pgparser.Error (it wraps the C parser's own
-// PgQueryError one-for-one), so the type assertion is not defensive
-// programming against a shape that cannot occur — errors.As is used anyway
-// because that is how this codebase reads a concrete error out of the error
-// interface, and because a future pg_query release that started wrapping the
-// error would otherwise turn this into a silent zero rather than a compile
-// error.
+// parsePosition reads the character offset a parse error carries, or zero.
 func parsePosition(err error) int {
 	var perr *pgparser.Error
 	if errors.As(err, &perr) {
@@ -148,16 +115,9 @@ func parsePosition(err error) int {
 	return 0
 }
 
-// statementText cuts the one statement out of the text it was parsed from,
-// using the bounds the parser recorded rather than guessing at them.
-//
-// The parser marks where a statement starts — whitespace and comments before
-// its first token are counted as part of it, which is harmless inside a
-// subquery — and, when a semicolon ends it, how long it is. A length of zero
-// means "to the end of the input", which is how the last statement of a script
-// is marked when nothing terminates it. Bounds that do not fit the input —
-// which cannot happen with a tree parsed from this very string — fall back to
-// the whole text rather than to a panic.
+// statementText cuts the statement out of sql using the parser's own bounds
+// (CLAUDE.md rule 14). A length of zero means "to the end of the input".
+// Bounds that do not fit fall back to the whole text rather than a panic.
 func statementText(sql string, raw *pg.RawStmt) string {
 	start, length := int(raw.GetStmtLocation()), int(raw.GetStmtLen())
 	if start < 0 || start > len(sql) {
@@ -169,24 +129,20 @@ func statementText(sql string, raw *pg.RawStmt) string {
 	return sql[start : start+length]
 }
 
-// rootAllowed checks the outermost statement and returns the node to walk.
-//
-// EXPLAIN returns its inner query rather than itself: its options are checked
-// here, once, so that DefElem never has to be a generally-allowed node type.
+// rootPlan is what rootAllowed decided about the outermost statement. For
+// EXPLAIN, node is the inner query: the options are checked once at the root,
+// so DefElem never has to be an allowed node kind.
 type rootPlan struct {
 	node *pg.Node
-	// checkSelf is false for a write, whose own node is deliberately absent
-	// from the allowed set so that it cannot appear anywhere but the root.
+	// checkSelf is false for a write, whose own node may appear only at the root.
 	checkSelf bool
 	explain   bool
 	writes    bool
-	// frees is a write that can only make the database smaller, which is what
-	// the Query Runner admits at the disk quota (see freesSpace).
-	frees bool
+	frees     bool
 }
 
 // explainOptions are the EXPLAIN options a participant may pass: the ones
-// that change how the plan is printed and nothing else.
+// that only change how the plan is printed.
 var explainOptions = map[string]struct{}{
 	"verbose": {},
 	"costs":   {},
@@ -201,18 +157,12 @@ func (c *Checker) rootAllowed(root *pg.Node, p sqlpolicy.Policy) (rootPlan, erro
 	case *pg.Node_ExplainStmt:
 		for _, option := range stmt.ExplainStmt.Options {
 			name := strings.ToLower(option.GetDefElem().GetDefname())
-			// ANALYZE is not a plan, it is a run — on a DML it *is* the DML.
-			// Named on its own because that is the sentence worth reading.
+			// ANALYZE runs the statement; on a DML it is the DML.
 			if name == "analyze" {
 				return rootPlan{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
 			}
-			// Everything else is admitted by name and not by exclusion. What
-			// an EXPLAIN option may do is PostgreSQL's to extend: SETTINGS
-			// prints the server settings that differ from their defaults —
-			// the configuration the catalogue rules and the revoked grants
-			// keep out of a participant's reach — and a future option that
-			// executes or reports would arrive allowed under a list of one
-			// forbidden name.
+			// An allow-list, since PostgreSQL adds options: SETTINGS prints
+			// non-default server settings, which the catalog rules hide.
 			if _, ok := explainOptions[name]; !ok {
 				return rootPlan{}, &sqlpolicy.Refusal{
 					Code:    sqlpolicy.CodeStatementNotSupported,
@@ -247,14 +197,8 @@ func (c *Checker) walkNode(node *pg.Node, p sqlpolicy.Policy, depth int) error {
 }
 
 // walkMessage descends through a message's fields, visiting every Node it
-// reaches.
-//
-// Driven by protobuf reflection rather than by a hand-written switch over the
-// grammar. A switch would list the fields somebody thought of, and the first
-// grammar node whose child field was forgotten would be a subtree nobody
-// checks — silently, and only for the queries that reach it. Reflection cannot
-// forget a field, so an unknown construct is refused by the visit below rather
-// than skipped by the walk.
+// reaches. It uses protobuf reflection rather than a hand-written switch,
+// which could forget a field and leave a subtree unchecked.
 func (c *Checker) walkMessage(m protoreflect.Message, p sqlpolicy.Policy, depth int) error {
 	var failed error
 
@@ -286,18 +230,8 @@ func (c *Checker) enter(m protoreflect.Message, p sqlpolicy.Policy, depth int) e
 	if node, ok := m.Interface().(*pg.Node); ok {
 		return c.walkNode(node, p, depth)
 	}
-	// A type name reaches here, rather than through walkNode above, whenever
-	// the grammar embeds it directly on a field typed *pg.TypeName instead of
-	// wrapping it in the generic Node oneof — ColumnDef.TypeName is the
-	// reachable case (a column's type, in a CREATE TABLE a contest that
-	// permits own or temporary tables allows), and the same shape recurs on a
-	// handful of constructs this package already refuses by kind before ever
-	// reaching their type name (XMLTABLE's columns, JSON_TABLE's, CREATE
-	// DOMAIN's). The walk found none of them checked: descending into a
-	// message that is not a Node skipped straight to its own fields, and
-	// nothing upstream of here ever classified a bare *pg.TypeName as
-	// anything to look at. Checked here, once, so a reg* cast cannot reach
-	// storage by riding a column definition instead of an expression.
+	// A TypeName on a typed field, not wrapped in a Node (ColumnDef.TypeName
+	// in CREATE TABLE), so a reg* type cannot ride a column definition.
 	if tn, ok := m.Interface().(*pg.TypeName); ok {
 		if err := castAllowed(tn); err != nil {
 			return err
@@ -314,12 +248,8 @@ func (c *Checker) enter(m protoreflect.Message, p sqlpolicy.Policy, depth int) e
 func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 	kind := kindOf(node)
 	if kind == "" {
-		// A node with nothing set is a placeholder the grammar leaves in a
-		// fixed-shape list — `FROM generate_series(…)` carries one where the
-		// column definitions would go. It holds no SQL, so there is nothing to
-		// allow or refuse; anything actually present would have a kind. Left
-		// unhandled it refused every set-returning function in a FROM clause,
-		// with an empty name in the message.
+		// An empty placeholder in a fixed-shape list (`FROM generate_series(…)`
+		// has one for column definitions). It holds no SQL.
 		return nil
 	}
 	if _, known := allowedKinds[kind]; !known {
@@ -338,43 +268,31 @@ func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 	case *pg.Node_TypeCast:
 		return castAllowed(n.TypeCast.GetTypeName())
 	case *pg.Node_TypeName:
-		// A type name can also arrive wrapped in the generic Node oneof
-		// rather than sitting on a typed *pg.TypeName field — enter's own
-		// check below only sees the latter shape, so this is the former's
-		// counterpart, for the same reason as the TypeCast case above.
+		// The Node-wrapped counterpart of the TypeName check in enter.
 		return castAllowed(n.TypeName)
 	}
 	return nil
 }
 
-// selectAllowed catches the two SELECTs that are not reads.
-//
-// Both matter at every level, not only at the root: a subquery may carry an
-// INTO, and a CTE may carry a locking clause.
+// selectAllowed catches the two SELECTs that are not reads, at every level:
+// a subquery may carry an INTO, and a CTE a locking clause.
 func selectAllowed(stmt *pg.SelectStmt) error {
 	if stmt.IntoClause != nil {
-		// `SELECT … INTO notes FROM …` is CREATE TABLE AS wearing a SELECT's
-		// node type. A check that trusted the root would let it through.
+		// `SELECT … INTO notes` is CREATE TABLE AS with a SELECT's node type.
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "SELECT INTO"}
 	}
 	if len(stmt.LockingClause) > 0 {
 		// FOR UPDATE / FOR SHARE take row locks. A read-only transaction
-		// refuses them anyway; saying so here turns a database error nobody
-		// can read into a sentence about the query.
+		// refuses them anyway; this gives a readable reason.
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "SELECT FOR UPDATE"}
 	}
 	return nil
 }
 
-// sqlValueAllowed splits one node type that carries two different things.
-//
-// `CURRENT_DATE` and `CURRENT_USER` are the same node with a different `op`,
-// which is the one place where a check by node type alone is too coarse. The
-// times are the game's; the identities are the installation's — `CURRENT_USER`
-// names the database role, and `CURRENT_CATALOG` names the database, whose
-// name encodes the contest and the participant. Those belong to the same class
-// as the sensitive catalogs, which are never readable however the policy is
-// set, so they are refused the same way.
+// sqlValueAllowed admits the time values and refuses the identities that
+// share their node type: CURRENT_USER names the role and CURRENT_CATALOG the
+// database, whose name encodes the contest and participant. Like the
+// sensitive catalogs, they are refused whatever the policy.
 func sqlValueAllowed(fn *pg.SQLValueFunction) error {
 	switch fn.GetOp() {
 	case pg.SQLValueFunctionOp_SVFOP_CURRENT_DATE,
@@ -392,8 +310,7 @@ func sqlValueAllowed(fn *pg.SQLValueFunction) error {
 	}
 }
 
-// sqlValueName spells the refused construct the way it was written, rather
-// than as the enum constant, so the journal reads like SQL.
+// sqlValueName spells the refused construct as SQL rather than the enum name.
 func sqlValueName(op pg.SQLValueFunctionOp) string {
 	name := strings.TrimPrefix(op.String(), "SVFOP_")
 	return strings.ReplaceAll(strings.TrimSuffix(name, "_N"), "_", " ")
@@ -413,13 +330,8 @@ func (c *Checker) functionAllowed(call *pg.FuncCall) error {
 	if _, allowed := c.functions[name]; !allowed {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: name}
 	}
-	// A first line against the functions that build a value, or a series of
-	// rows, from a size: a constant size plainly too large is refused here so
-	// the participant sees it at once, rather than after the query runs and
-	// the game cluster's per-process memory limit stops it (generators.go).
-	// Anything the checker cannot read as a constant is admitted and left to
-	// that limit. Run whatever the allow-list holds, so an operator extending
-	// it does not lose the first line.
+	// Applied whatever the allow-list holds, so an operator's additions keep
+	// the constant-size check (generators.go).
 	return sizeAllowed(name, call)
 }
 
@@ -429,8 +341,6 @@ func relationAllowed(rel *pg.RangeVar, p sqlpolicy.Policy) error {
 
 	switch {
 	case sensitive:
-		// Never, whatever the policy says: these describe the installation and
-		// the other participants, not the game.
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotReadable, Subject: rel.GetRelname()}
 	case catalog && !p.AllowCatalog:
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotAllowed, Subject: rel.GetRelname()}
@@ -438,16 +348,10 @@ func relationAllowed(rel *pg.RangeVar, p sqlpolicy.Policy) error {
 	return nil
 }
 
-// regTypes are the pseudo-types PostgreSQL resolves by looking a name up in
-// the catalog and handing back its OID: 'name'::regclass for a relation,
-// ::regrole for a role, and so on through functions, operators, namespaces
-// and the rest. A cast to one of these is not a value conversion, it is a
-// catalog lookup wearing a cast's syntax — and unlike a SELECT against the
-// catalog, the catalog rules never see it (kindOf classifies range_var, not
-// type_cast), so it reaches every object in the installation regardless of
-// what the contest's policy allows to be read directly. Refused
-// unconditionally, the same as the sensitive catalogs themselves: no policy
-// setting is meant to open this back up.
+// regTypes are the pseudo-types that resolve a name to an OID through the
+// catalog ('name'::regclass, ::regrole, ...). Such a cast is a catalog lookup
+// the relation rules never see, reaching every object in the installation,
+// so it is refused whatever the policy.
 var regTypes = names(
 	"regclass", "regproc", "regprocedure", "regoper", "regoperator",
 	"regtype", "regrole", "regnamespace", "regconfig", "regdictionary",
@@ -463,13 +367,9 @@ func castAllowed(tn *pg.TypeName) error {
 	return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotReadable, Subject: name}
 }
 
-// regTypeName reduces a parsed type name to its bare, lower-cased spelling
-// and reports whether that spelling is one of regTypes.
-//
-// The same reduction functionName makes for a call: PostgreSQL accepts both
-// `regclass` and the schema-qualified `pg_catalog.regclass` for the same
-// type, and a check that only caught one of them would be a check anyone gets
-// past by adding or removing eleven characters.
+// regTypeName reduces a type name, bare or pg_catalog-qualified (both name
+// the same type), to its lower-cased spelling and reports whether it is one
+// of regTypes.
 func regTypeName(tn *pg.TypeName) (string, bool) {
 	parts := make([]string, 0, len(tn.GetNames()))
 	for _, part := range tn.GetNames() {
@@ -492,9 +392,8 @@ func regTypeName(tn *pg.TypeName) (string, bool) {
 	return bare, isReg
 }
 
-// kindOf names a node by the grammar's own name for it — `select_stmt`,
-// `variable_set_stmt` — read off the protobuf oneof rather than from a table
-// this package would have to keep in step with the parser.
+// kindOf names a node by the grammar's own name (`select_stmt`), read off the
+// protobuf oneof so it cannot drift from the parser.
 func kindOf(node *pg.Node) string {
 	m := node.ProtoReflect()
 	oneof := m.Descriptor().Oneofs().ByName("node")

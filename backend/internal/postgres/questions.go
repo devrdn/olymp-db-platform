@@ -13,19 +13,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Questions implements contests.QuestionRepository and, separately,
-// contests.VisibleQuestionRepository — two narrow interfaces over one table,
-// backed by two different queries (see ForContest).
+// Questions implements contests.QuestionRepository and
+// contests.VisibleQuestionRepository, with separate queries (see ForContest).
 var (
 	_ contests.QuestionRepository        = (*Questions)(nil)
 	_ contests.VisibleQuestionRepository = (*Questions)(nil)
 )
 
-// questionColumns is the projection every question read shares.
-//
-// The reference answers ride along because every read here is a staff read.
-// The participant-facing path does not reuse this query: it needs a
-// language-resolved projection with the answers absent by construction.
+// questionColumns is the staff projection, reference answers included.
+// Participants are served by ForContest, which never reads the answers.
 const questionColumns = `
 	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.penalty_pct, q.is_visible, q.choice_ids,
 	COALESCE((
@@ -53,7 +49,7 @@ func (r *Questions) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// questionTextRow and answerRow are the JSON shapes the projection produces.
+// questionTextRow and answerRow are the JSON shapes questionColumns produces.
 type questionTextRow struct {
 	BodyMD  string            `json:"body_md"`
 	Choices map[string]string `json:"choices"`
@@ -128,26 +124,13 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 	return found, nil
 }
 
-// ForContest implements contests.VisibleQuestionRepository: the
-// participant-facing projection, and a genuinely different query from List
-// rather than the same one filtered in Go.
+// ForContest implements contests.VisibleQuestionRepository: the visible
+// questions in one language, for participants. The statement never names
+// question_answers, so reference answers cannot reach a participant through
+// it, and hidden questions and other languages never leave the database.
 //
-// The reference-answer table is not named anywhere in this statement — there
-// is no SELECT against question_answers to forget here, which is what makes
-// "never a reference answer over the wire" true at this boundary rather than
-// merely true of ParticipantQuestion's fields. Only is_visible rows are
-// selected, and only the one language asked for: the inner join to
-// question_translations on lang = $2 is what keeps a hidden question, every
-// other language's text, and every reference answer out of the result set
-// and out of the bytes PostgreSQL sends back, rather than reading all of it
-// and discarding what the caller did not want.
-//
-// A question with no translation in lang is simply absent from the result —
-// the inner join drops it — instead of coming back with an empty body. That
-// mirrors Story's own ErrStoryNotFound for the same defensive case (a
-// contest missing a declared language should not happen once it is running,
-// but a read here answers the same way "never authored" does rather than
-// showing an empty page as if it were the question).
+// A question with no translation in lang is dropped by the inner join rather
+// than returned with an empty body, as Story answers ErrStoryNotFound.
 func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT q.id, q.kind, q.points, q.max_attempts, q.choice_ids,
@@ -187,31 +170,17 @@ func (r *Questions) ByID(ctx context.Context, questionID uuid.UUID) (contests.Qu
 		`SELECT `+questionColumns+` FROM questions q WHERE q.id = $1`, questionID))
 }
 
-// Create appends a question, assigning it the next free position.
-//
-// The position is computed in the statement rather than read first and written
-// back: two organizers adding a question at the same moment would otherwise
-// both read the same number, and one of the inserts would fail.
-//
-// A contest that is not there is contests.ErrNotFound, answered by the lock
-// that comes first: it finds the contest row or does not, and a row it finds
-// cannot be deleted before the transaction ends, so the insert's own foreign
-// key never has the contest to refuse.
+// Create appends a question at the next free position. A missing contest is
+// contests.ErrNotFound, reported by lockContest; once locked, the contest
+// cannot be deleted before the insert.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
 	querier := r.querier(ctx)
 
-	// Two authors adding a question to the same contest at the same moment
-	// both read the same MAX(ord) and both write that position, which the
-	// unique constraint on (contest_id, ord) rejects — the loser sees a 500
-	// where they should simply have got the next number. Locking the contest
-	// row serialises the allocation.
-	//
-	// A separate statement, not a CTE, and the reason is subtle enough to be
-	// worth stating: under READ COMMITTED every statement takes its own
-	// snapshot, so the INSERT below is the first thing that can see rows the
-	// other transaction committed while we waited. Folded into one statement
-	// the MAX would be read from the snapshot taken before the lock was held,
-	// and the lock would buy nothing.
+	// Locking the contest row serialises MAX(ord) allocation; otherwise two
+	// concurrent authors read the same MAX and one insert fails the unique
+	// (contest_id, ord). The lock is a separate statement: under READ
+	// COMMITTED each statement takes its own snapshot, and a MAX folded into
+	// the locking statement would read the snapshot from before the wait.
 	if err := lockContest(ctx, querier, q.ContestID); err != nil {
 		return contests.Question{}, err
 	}
@@ -228,14 +197,9 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, stringList(q.ChoiceIDs)))
 }
 
-// lockContest serialises everything that allocates a position within one
-// contest, by taking the contest row itself, and reports
-// contests.ErrNotFound when there is no row to take.
-//
-// The lock lives until the surrounding transaction ends, so outside one it
-// would be released before the INSERT it is meant to protect and the guard
-// would be decoration. Refusing is the honest answer: the caller runs inside a
-// unit of work, and a silent no-op here is a race that only appears under load.
+// lockContest locks the contest row to serialise position allocation within
+// one contest, and reports contests.ErrNotFound when there is no row. It must
+// run inside a transaction, or the lock is gone before the INSERT.
 func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("adding a question must run inside a transaction")
@@ -273,12 +237,8 @@ func (r *Questions) Delete(ctx context.Context, questionID uuid.UUID) error {
 		return err
 	}
 
-	// One statement: the delete and the renumbering of everything after it are
-	// the same change, and a reader between the two would see a hole.
-	//
-	// The row count of the UPDATE says nothing about whether the question
-	// existed — it is zero whenever the deleted question was the last one — so
-	// the DELETE reports for itself through the returning CTE.
+	// One statement, so no reader sees the gap. Existence is counted from
+	// removed: the renumbering touches nothing when the last question goes.
 	var deleted int
 	err := r.querier(ctx).QueryRow(ctx, `
 		WITH removed AS (
@@ -324,15 +284,9 @@ func (r *Questions) Reorder(ctx context.Context, contestID uuid.UUID, ordered []
 	return nil
 }
 
-// deferQuestionOrder moves the uniqueness check on (contest_id, ord) to the
-// end of the transaction.
-//
-// Halfway through a swap two questions hold the same position, which is not a
-// state an immediate check tolerates and not one that can be avoided. Outside
-// a transaction SET CONSTRAINTS is silently ignored, so this refuses rather
-// than proceeding on an assumption that does not hold — the alternative is an
-// operation that works or fails depending on the order rows happen to be
-// visited.
+// deferQuestionOrder defers the unique (contest_id, ord) check to commit,
+// since mid-swap two questions share a position. SET CONSTRAINTS is ignored
+// outside a transaction, so it refuses to run there.
 func deferQuestionOrder(ctx context.Context, q storage.Querier) error {
 	if !storage.InTx(ctx) {
 		return errors.New("reordering questions must run inside a transaction")
@@ -381,8 +335,7 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 		SET body_md = EXCLUDED.body_md, choices = EXCLUDED.choices, updated_at = now()`,
 		questionID, langs, bodies, choices)
 	if err != nil {
-		// A question deleted since the caller read it is refused here, by
-		// the foreign key.
+		// A question deleted meanwhile trips the foreign key.
 		return fmt.Errorf("replace question translations: %w", missingParent(err, map[string]error{
 			"question_translations_question_id_fkey": contests.ErrQuestionNotFound,
 		}))
@@ -390,11 +343,8 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 	return nil
 }
 
-// ReplaceAnswers sets the reference answers to exactly these.
-//
-// Delete and reinsert rather than a diff: a stale reference answer would keep
-// accepting something the organizer has already decided is wrong, and the
-// rows carry no identity anybody outside this table refers to.
+// ReplaceAnswers sets the reference answers to exactly these, by delete and
+// reinsert: nothing outside the table refers to an answer row.
 func (r *Questions) ReplaceAnswers(ctx context.Context, questionID uuid.UUID, answers []contests.Answer) error {
 	const all = `DELETE FROM question_answers WHERE question_id = $1`
 	if len(answers) == 0 {

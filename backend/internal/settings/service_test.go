@@ -10,8 +10,6 @@ import (
 )
 
 func TestAFreshInstallationReadsAsSomethingRatherThanBlanks(t *testing.T) {
-	// Nothing has been set yet, and the sign-in screen still has to say what
-	// it is. A blank heading is worse than a plain one.
 	f := newFixture()
 
 	all, err := f.service.All(context.Background())
@@ -41,11 +39,6 @@ func TestSavedValuesReplaceTheFallback(t *testing.T) {
 }
 
 func TestOnlyTheSettingsMarkedPublicLeaveWithoutASession(t *testing.T) {
-	// The one that matters. The sign-in screen shows the installation's name
-	// before anybody is signed in, so something has to be readable by anyone —
-	// and the day a mail server's password is added here, an endpoint that
-	// returned the whole table would publish it. So the public read is an
-	// allow-list, and a key that is not on it never leaves.
 	ctx := context.Background()
 	f := newFixture()
 	f.repo.values["installation.smtp_password"] = "hunter2"
@@ -64,8 +57,6 @@ func TestOnlyTheSettingsMarkedPublicLeaveWithoutASession(t *testing.T) {
 }
 
 func TestASettingNothingReadsIsRefused(t *testing.T) {
-	// A store that accepted anything would fill with keys whose meaning died
-	// with whoever typed them — and a typo would look like a saved change.
 	f := newFixture()
 
 	err := f.service.Save(context.Background(), uuid.New(), settings.Values{
@@ -89,16 +80,13 @@ func TestAnInvalidValueIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	if !errors.Is(err, settings.ErrInvalid) {
 		t.Fatalf("Save() = %v, want ErrInvalid", err)
 	}
-	// The valid half of a refused save must not land: an administrator who is
-	// told "no" should not have to guess which half went through.
+	// The valid half of a refused save must not land.
 	if len(f.repo.values) != 0 {
 		t.Errorf("stored %v, want nothing written", f.repo.values)
 	}
 }
 
 func TestTheNameCannotBeEmptied(t *testing.T) {
-	// Every page carries it, so "" is not a value — it is a blank heading on
-	// every screen of the installation.
 	f := newFixture()
 
 	err := f.service.Save(context.Background(), uuid.New(), settings.Values{
@@ -111,8 +99,6 @@ func TestTheNameCannotBeEmptied(t *testing.T) {
 }
 
 func TestSavingRecordsWhatMovedAndWhatItWas(t *testing.T) {
-	// Changing what the whole installation is called is exactly the kind of
-	// thing somebody asks about afterwards (section 9.2).
 	ctx := context.Background()
 	f := newFixture()
 	if err := f.service.Save(ctx, uuid.New(), settings.Values{settings.KeyName: "Before"}); err != nil {
@@ -141,8 +127,6 @@ func TestSavingRecordsWhatMovedAndWhatItWas(t *testing.T) {
 }
 
 func TestASaveThatChangesNothingSaysSo(t *testing.T) {
-	// The same shape the rest of the trail uses: an empty change set is itself
-	// a fact, and it is not the same as an edit nobody can see.
 	ctx := context.Background()
 	f := newFixture()
 	if err := f.service.Save(ctx, uuid.New(), settings.Values{settings.KeyName: "Same"}); err != nil {

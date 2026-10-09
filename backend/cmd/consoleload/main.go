@@ -1,69 +1,21 @@
 // Command consoleload drives the participant's SQL console with synthetic
-// participants, the way an olympiad would, and reports what they experienced.
+// participants and reports what they experienced: latency over the whole HTTP
+// round trip, refusals by status and code, CPU and memory of watched processes
+// and containers, concurrent queries on the game cluster, and provisioning
+// time and disk.
 //
-// It answers one question: at a given number of participants, does the
-// console hold up with the limits the deployment is running? For each run it
-// reports latency (p50, p95, p99, max) as the participant sees it — the whole
-// HTTP round trip — every refusal by status and code, the CPU and memory of
-// the processes and containers it is told to watch, how many queries the game
-// cluster was actually running at once, and how long provisioning every
-// participant's copy of the game took and how much disk it used.
+// It uses the participant's real path (CLAUDE.md rule 10): POST
+// /api/v1/contests/{id}/query through the API and the Query Runner, with no
+// limit bypassed. Two load shapes: steady (query, think 10-30 s, repeat) and
+// burst (everybody presses Run within one second, to test the runner's
+// queue).
 //
-// # The path it drives
-//
-// The one a participant uses (CLAUDE.md rule 10): POST
-// /api/v1/contests/{id}/query on the API, which journals the query, calls the
-// Query Runner over gRPC, which checks it, admits it and runs it as the
-// participant role against that participant's own copy. Nothing is called
-// in-process and no limit is bypassed.
-//
-// Two shapes of load, because they fail differently:
-//
-//   - steady: every participant runs a query, waits for the answer, thinks
-//     for a random 10 to 30 seconds, and runs the next one — a normal round;
-//   - burst: every participant presses Run within the same second, several
-//     rounds apart — the start of a round, or a new question opening. This is
-//     where the Query Runner's queue behind its execution slots is tested.
-//
-// # What it deliberately does not do
-//
-// It does not start, stop or configure the API or the Query Runner: it
-// measures whatever is listening at -api, which is the point — the same
-// command run against the real hardware measures the real deployment. To
-// compare limits, restart the Query Runner with other settings and run it
-// again (-keep and -fixture avoid re-provisioning in between).
-//
-// It does not weaken authentication. Participants are ordinary accounts,
-// created through the repository the product itself uses, with a random
-// password this process generates, hashes with the product's own hasher and
-// never writes anywhere; they sign in through /auth/login like anybody else.
-// The product has no route to any of this — it is a separate command that
-// needs the core database's own credentials to run at all.
-//
-// It is a command and not a test, and it writes into the installation's own
-// databases on purpose: the installation is what it measures. The guard that
-// keeps tests off the product's database (storagetest) is for code that should
-// never be there; this is code that must be, and what makes that acceptable
-// is that it removes everything it wrote, below.
-//
-// # What it leaves behind
-//
-// Nothing. Every run creates one contest, one template copied from
-// -source-template, one account that owns the contest and one per
-// participant, and removes all of it at the end — databases on the game
-// cluster, rows in the core database, the sessions in the session store, and
-// the audit entries that the sign-ins wrote (they reference the accounts, so
-// the accounts cannot go without them). The counts before and after are part
-// of the report.
-//
-// The one thing it does not remove is the sign-in limiter's counter for its
-// own address: that is the product's record of attempts rather than the
-// harness's to erase, and it expires on its own a quarter of an hour after
-// the last sign-in.
-//
-// A run that was killed before it could clean up is removed by `consoleload
-// sweep`, which finds everything by the login prefix every account the
-// harness creates carries.
+// It measures whatever listens at -api and never configures it. Participants
+// are ordinary accounts with random passwords kept only in memory, signing in
+// through /auth/login. It writes into the installation's own databases and
+// removes everything it created at the end, except the sign-in limiter's
+// counter, which expires on its own. `consoleload sweep` cleans up a killed
+// run by login prefix.
 //
 // Usage:
 //
@@ -99,7 +51,6 @@ func main() {
 	}
 }
 
-// config is everything a run was asked to do.
 type config struct {
 	api            string
 	sourceTemplate string
@@ -125,8 +76,7 @@ type config struct {
 	watchPIDs       map[string]int
 	watchContainers map[string]string
 
-	// copySettings are run-time parameters set on the fixture's own copies
-	// only (applyCopySettings).
+	// copySettings apply to the fixture's own copies only.
 	copySettings map[string]string
 
 	out     string
@@ -145,10 +95,7 @@ func run(args []string) error {
 		return err
 	}
 
-	// Interrupting a run must still tear it down: the whole point of the
-	// command is to leave nothing behind, and a Ctrl+C is the likeliest way a
-	// run ends early. The load stops at once; teardown gets a context of its
-	// own below.
+	// Ctrl+C stops the load at once; teardown gets its own context below.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -158,8 +105,7 @@ func run(args []string) error {
 	}
 	defer st.close()
 
-	// Every file the run writes goes through this root, so a name can never
-	// land outside the directory the operator chose.
+	// Every file goes through this root, so none lands outside it.
 	if err := os.MkdirAll(cfg.out, 0o750); err != nil {
 		return fmt.Errorf("create the output directory: %w", err)
 	}
@@ -196,8 +142,7 @@ func parseFlags(args []string) (config, error) {
 	mixFlag := flags.String("mix", "50,30,20", "percentages of cheap, mid and expensive queries")
 	flags.Int64Var(&cfg.seed, "seed", 1, "random seed, so two runs send the same sequence of queries")
 
-	// The same defaults and the same variables the API's own pool tender
-	// uses, so the harness provisions what the product would.
+	// The pool tender's own defaults and variables.
 	flags.IntVar(&cfg.headroom, "headroom", envInt("GAME_POOL_DEPTH", 10),
 		"spare copies beyond the roster, as GAME_POOL_DEPTH")
 	flags.IntVar(&cfg.workers, "workers", envInt("GAME_PROVISION_WORKERS", 3),
@@ -260,8 +205,7 @@ func parseFlags(args []string) (config, error) {
 		return config{}, errors.New("-headroom cannot be negative")
 	}
 	for _, n := range cfg.participants {
-		// A bound on the list a flag carries (CLAUDE.md rule 2): every
-		// participant is an account, a registration and a database copy.
+		// CLAUDE.md rule 2: each participant is an account and a database.
 		if n < 1 || n > maxParticipants {
 			return config{}, fmt.Errorf("-participants: %d is outside 1..%d", n, maxParticipants)
 		}
@@ -269,8 +213,8 @@ func parseFlags(args []string) (config, error) {
 	return cfg, nil
 }
 
-// maxParticipants bounds one run. Far above the olympiad's forty, and low
-// enough that a typo cannot ask the game cluster for ten thousand copies.
+// maxParticipants bounds one run, so a typo cannot ask for ten thousand
+// copies.
 const maxParticipants = 500
 
 func envOr(name, fallback string) string {

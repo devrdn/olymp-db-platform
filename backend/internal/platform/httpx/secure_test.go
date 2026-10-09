@@ -7,8 +7,6 @@ import (
 )
 
 func TestSecureHeadersSetsNoSniff(t *testing.T) {
-	// The API returns JSON only; content sniffing turns a reflected value into
-	// an execution vector.
 	rec := httptest.NewRecorder()
 
 	SecureHeaders(okHandler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -39,8 +37,6 @@ func TestSecureHeadersSuppressesReferrer(t *testing.T) {
 }
 
 func TestSecureHeadersOmitsHSTSOnPlainHTTP(t *testing.T) {
-	// Sending HSTS over plain HTTP is ignored by browsers and would pin
-	// developers running the stack locally without TLS.
 	rec := httptest.NewRecorder()
 
 	SecureHeaders(okHandler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://localhost/", nil))
@@ -63,11 +59,6 @@ func TestSecureHeadersSendsHSTSForForwardedHTTPS(t *testing.T) {
 	}
 }
 
-// The same header from a peer nobody vouched for says nothing. HSTS is the
-// harmless half of what isTLS decides — announcing it over plain HTTP is
-// ignored by browsers — but the header goes through one gate, not two, so
-// that the answer here and the answer requestScheme (csrf.go) builds a
-// same-site comparison out of cannot drift apart (CLAUDE.md rule 9).
 func TestSecureHeadersIgnoresAForwardedProtoFromAnUntrustedPeer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -81,18 +72,11 @@ func TestSecureHeadersIgnoresAForwardedProtoFromAnUntrustedPeer(t *testing.T) {
 	}
 }
 
-// Nothing this API serves is cacheable, and one of the things it serves is
-// every reference answer of a contest in a single file (GET
-// /contests/{id}/export). With no directive a plain 200 GET is heuristically
-// cacheable, which puts an answer key in a browser's disk cache on whatever
-// machine an organizer downloaded it from.
 func TestSecureHeadersForbidsStoringTheResponse(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	SecureHeaders(okHandler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	// no-store and not no-cache: no-cache permits storing the response and
-	// only asks for it to be revalidated, which still leaves it on the disk.
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}

@@ -24,10 +24,6 @@ func writePackage(t *testing.T, files map[string]string) string {
 
 const header = "package odd\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nconst Max = 3\n\n"
 
-// Every exported Err… counts, however it is built — a message wrapped with
-// fmt.Errorf around a bound is as much a sentinel as errors.New. What Errors()
-// returns is read from its own body, so the two are compared by name.
-// Unexported values and test files are not the package's API.
 func TestScanReadsEverySentinelAndWhatErrorsReturns(t *testing.T) {
 	dir := writePackage(t, map[string]string{
 		"odd.go": header +
@@ -50,8 +46,6 @@ func TestScanReadsEverySentinelAndWhatErrorsReturns(t *testing.T) {
 	}
 }
 
-// Errors() has to be a plain list of the package's own sentinels; anything
-// else cannot be read, and is said so rather than taken as empty.
 func TestScanRefusesAnErrorsItCannotRead(t *testing.T) {
 	for name, body := range map[string]string{
 		"missing":  "",
@@ -69,7 +63,6 @@ func TestScanRefusesAnErrorsItCannotRead(t *testing.T) {
 	}
 }
 
-// A source that does not parse is an error, not an empty package.
 func TestScanRefusesSourceItCannotParse(t *testing.T) {
 	dir := writePackage(t, map[string]string{"broken.go": "package broken\n\nvar ErrX = \n"})
 	if _, _, err := sentineltest.Scan(dir); err == nil {
@@ -77,8 +70,7 @@ func TestScanRefusesSourceItCannotParse(t *testing.T) {
 	}
 }
 
-// recorder stands in for the test AssertListed is given, collecting what it
-// reports instead of failing the test that runs it.
+// recorder collects what AssertListed reports instead of failing the test.
 type recorder struct {
 	testing.TB
 	errors []string
@@ -94,8 +86,6 @@ func (r *recorder) Fatalf(format string, args ...any) {
 	r.errors = append(r.errors, fmt.Sprintf(format, args...))
 }
 
-// AssertListed reports a sentinel missing from both lists, one named twice,
-// and a name that is not one of the package's errors — each by name.
 func TestAssertListedNamesEveryMismatch(t *testing.T) {
 	dir := writePackage(t, map[string]string{
 		"odd.go": header +
@@ -118,7 +108,6 @@ func TestAssertListedNamesEveryMismatch(t *testing.T) {
 	}
 }
 
-// A package whose lists agree is reported clean.
 func TestAssertListedPassesWhenEverySentinelIsAccountedFor(t *testing.T) {
 	dir := writePackage(t, map[string]string{
 		"odd.go": header +

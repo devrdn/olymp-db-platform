@@ -28,7 +28,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
-// profileStore is an in-memory profile.Store.
 type profileStore struct {
 	summary    profile.Summary
 	enrolments []profile.Enrolment
@@ -110,12 +109,10 @@ func (w *profileWatch) Workspace(context.Context, uuid.UUID, uuid.UUID) (monitor
 // profileHistory is the query log the CSV download streams.
 type profileHistory struct {
 	rows []queryrunner.HistoryEntry
-	// started takes one value per export that has reached the first row, and
-	// hold blocks every one of them there until a test closes it. Together
-	// they let further requests arrive while downloads are genuinely open,
-	// which is the only state either export bound has an opinion about — one
-	// value rather than a close, so a test can hold several at once and count
-	// them.
+	// started takes one value per export that has reached its first row, and
+	// hold blocks them there until closed, so further requests arrive while
+	// downloads are open. One value rather than a close, so a test can hold
+	// several and count them.
 	started chan struct{}
 	hold    chan struct{}
 	// calls counts the reads of the log this fake was asked for, so a test
@@ -143,8 +140,8 @@ func (h *profileHistory) ExportHistory(_ context.Context, _ uuid.UUID, yield fun
 
 type profileFixture struct {
 	router http.Handler
-	// exports is the gate every handler this fixture mounts is given, and
-	// mount builds another handler over it.
+	// exports is the gate every mounted handler shares; mount builds another
+	// handler over it.
 	exports *api.ExportGate
 	// slots is the service-wide export bound every handler this fixture
 	// mounts is given. Nil leaves each handler the bound it builds itself; a
@@ -198,8 +195,7 @@ func newProfileFixture(t *testing.T) *profileFixture {
 		}
 		f.watch.registrations[p.ID] = contest.ID
 		// The store answers for the account asking, so only the student's own
-		// registrations are on their list — and it counts the row's own
-		// numbers with it.
+		// registrations are listed, with each row's numbers.
 		if who.ID == f.student.ID {
 			f.store.enrolments = append(f.store.enrolments, profile.Enrolment{Contest: contest, Participant: p,
 				Result: profile.Result{Scoring: contests.ScoringPoints, Points: 20, Solved: 2}})
@@ -224,10 +220,8 @@ func newProfileFixture(t *testing.T) *profileFixture {
 		// No grace: an instant past a deadline is past it.
 		Gate: contests.NewGate(0),
 	})
-	// One gate, and a factory for as many handlers over it as a test wants:
-	// the deployment hands the same gate to this handler and to the play
-	// screen's (app.go), and only a second handler can show that the bound
-	// crosses them.
+	// The deployment hands one gate to this handler and to the play screen's
+	// (app.go); only a second handler can show that the bound crosses them.
 	f.exports = api.NewExportGate()
 	f.mount = func() http.Handler {
 		router := chi.NewRouter()
@@ -239,11 +233,9 @@ func newProfileFixture(t *testing.T) *profileFixture {
 	return f
 }
 
-// finishedContest enrols the student in one more contest that has ended for
-// them, and answers it. A test that needs several downloads open at once uses
-// it so that each one is a different registration: the per-registration gate
-// then has no opinion about any of them, and what refuses a download is the
-// bound the test is actually about.
+// finishedContest enrols the student in one more ended contest and answers it.
+// Each download then has its own registration, so the per-registration gate
+// refuses none and the bound under test does.
 func (f *profileFixture) finishedContest(t *testing.T) contests.Contest {
 	t.Helper()
 	contest := f.stores.SeedContest(contests.StatusFinished)
@@ -284,9 +276,8 @@ func TestTheProfileIsForTheSignedInAccountOnly(t *testing.T) {
 	}
 }
 
-// One 404 for a contest that does not exist, one somebody else is on, one
-// still running for the caller, and an identifier that is not a UUID. The
-// profile never says which (design §2.2).
+// Missing, somebody else's, still running, or not a UUID: the profile never
+// says which.
 func TestEveryContestThatIsNotTheCallersFinishedOneIsTheSame404(t *testing.T) {
 	f := newProfileFixture(t)
 	f.now = conteststest.FixtureNow
@@ -385,9 +376,8 @@ func TestTheListCarriesTheResultOfAFinishedContestAndNothingOfARunningOne(t *tes
 	}
 }
 
-// The list names no place at all — not even on an open table — and costs no
-// standings computation to say so. What it carries is the participant's own
-// numbers and whether the report has a place to show (design §2.1).
+// The list carries the participant's own numbers and whether the report has a
+// place to show.
 func TestTheListNamesNoPlaceAndAsksTheLeaderboardNothing(t *testing.T) {
 	f := newProfileFixture(t)
 	rec := f.get("/me/contests", &f.student)
@@ -487,9 +477,8 @@ func TestTheReportCarriesTheResultTheActivityAndTheQuestions(t *testing.T) {
 	}
 }
 
-// In ICPC scoring a question carries the minutes it cost, not points: the
-// server writes points_awarded = 0 on every ICPC submission, so a report
-// without this field could only ever show nought.
+// ICPC questions carry minutes, not points: points_awarded is 0 on every ICPC
+// submission.
 func TestTheICPCReportCarriesEachQuestionsPenaltyMinutes(t *testing.T) {
 	f := newProfileFixture(t)
 	contest := f.finished
@@ -527,8 +516,6 @@ func TestTheICPCReportCarriesEachQuestionsPenaltyMinutes(t *testing.T) {
 	}
 }
 
-// The participant's own queries, without the address, and with the error
-// text the play screen shows rather than the organiser's.
 func TestTheQueriesTabHidesTheAddressAndRedactsLikeTheConsole(t *testing.T) {
 	f := newProfileFixture(t)
 	rec := f.get("/me/contests/"+f.finished.ID.String()+"/queries", &f.student)
@@ -583,8 +570,6 @@ func TestTheProfileQueriesTabPassesItsFiltersOnAndRefusesBadOnes(t *testing.T) {
 	}
 }
 
-// The answers tab shows the same attempts the organiser sees, and the
-// queries under them are redacted for the participant like their own log.
 func TestTheAnswersTabRedactsTheQueriesUnderEachAttempt(t *testing.T) {
 	f := newProfileFixture(t)
 	rec := f.get("/me/contests/"+f.finished.ID.String()+"/answers", &f.student)
@@ -596,8 +581,7 @@ func TestTheAnswersTabRedactsTheQueriesUnderEachAttempt(t *testing.T) {
 	}
 }
 
-// The notes and tabs as they were left. The revision history is the
-// organiser's, and is not on this route at all (design §2.2).
+// The revision history is the organiser's.
 func TestTheWorkspaceTabCarriesNoRevisionHistory(t *testing.T) {
 	f := newProfileFixture(t)
 	rec := f.get("/me/contests/"+f.finished.ID.String()+"/workspace", &f.student)
@@ -641,16 +625,11 @@ func TestTheLogIsDownloadedAsCSVAfterTheContest(t *testing.T) {
 	}
 }
 
-// One registration has one CSV download open at a time, and the bound is the
-// gate rather than the handler holding it.
-//
 // The deployment hands one api.ExportGate to this handler and to the play
-// screen's, which serves the same file during the contest (app.go). Two gates
-// would bound each route on its own and leave the pair resting on admission —
-// the two routes never letting the same registration through at the same
-// moment — which is a guarantee about two other rules, not about downloads.
-// Here the second request reaches a different handler over the same gate, and
-// is refused while the first is still streaming.
+// screen's, which serves the same file during the contest (app.go). Separate
+// gates would leave the pair relying on admission never letting both routes in
+// at once. Here the second request reaches a different handler over the same
+// gate and is refused while the first streams.
 func TestOneRegistrationHasOneLogDownloadAcrossHandlersSharingTheGate(t *testing.T) {
 	f := newProfileFixture(t)
 	f.history.rows = []queryrunner.HistoryEntry{{SQL: "select 1", Status: queryrunner.StatusOK,
@@ -679,8 +658,7 @@ func TestOneRegistrationHasOneLogDownloadAcrossHandlersSharingTheGate(t *testing
 		t.Fatalf("the first download: %d %s", done.Code, done.Body.String())
 	}
 
-	// And the slot is given back: once the first has finished, the next
-	// download is served.
+	// The slot is given back once the first finishes.
 	f.history.started, f.history.hold = nil, nil
 	if again := f.get(path, &f.student); again.Code != http.StatusOK {
 		t.Errorf("the download after the first finished: %d %s", again.Code, again.Body.String())
@@ -709,7 +687,7 @@ func TestTheProfilesReadsAreBudgeted(t *testing.T) {
 }
 
 // Reading one's own profile is not access to anybody else's data, so it
-// leaves no audit trail (design §3).
+// leaves no audit trail.
 func TestReadingOnesOwnProfileIsNotAudited(t *testing.T) {
 	f := newProfileFixture(t)
 	for _, path := range append([]string{"/me/summary", "/me/contests"}, contestRoutes(f.finished.ID)...) {
@@ -739,9 +717,7 @@ func (f *profileFixture) reportResult(t *testing.T) map[string]any {
 	return body.Result
 }
 
-// Winner mode has one place. Everybody else is on the table unplaced, and
-// an unplaced row's place is null — never nought, which reads as a place
-// (the contest's own table says it the same way).
+// An unplaced row's place is null, never 0, which would read as a place.
 func TestTheReportInWinnerModeNamesAPlaceOnlyForTheWinner(t *testing.T) {
 	f := newProfileFixture(t)
 	f.results.own[f.finished.ID] = leaderboard.Own{
@@ -770,7 +746,6 @@ func TestTheReportInWinnerModeNamesAPlaceOnlyForTheWinner(t *testing.T) {
 	}
 }
 
-// A frozen winner-mode table says nothing about who won.
 func TestTheReportSaysNothingOfAFrozenWinnerModeTable(t *testing.T) {
 	f := newProfileFixture(t)
 	f.results.own[f.finished.ID] = leaderboard.Own{
@@ -789,14 +764,10 @@ func TestTheReportSaysNothingOfAFrozenWinnerModeTable(t *testing.T) {
 	}
 }
 
-// A registration the table has no row for is sent result: null — never an
-// object of zeroes.
-//
-// The table is bounded (leaderboard.DefaultMaxRows), so every participant of
-// a large contest below the cut reaches this, as does one disqualified before
-// the table was computed. A zeroed object would carry scoring "" and state
-// "", neither of which any reader can name, and a client parsing them
-// strictly gets an error page instead of the report it asked for.
+// A row the table does not carry gets result: null, never zeroes. The table is
+// bounded (leaderboard.DefaultMaxRows), so participants below the cut reach
+// this, as does one disqualified before the table was computed; a zeroed object
+// would carry empty scoring and state that a strict client rejects.
 func TestTheReportOfARowTheTableDoesNotCarryHasNoResult(t *testing.T) {
 	f := newProfileFixture(t)
 	delete(f.results.own, f.finished.ID)
@@ -828,16 +799,10 @@ func TestTheReportOfARowTheTableDoesNotCarryHasNoResult(t *testing.T) {
 	}
 }
 
-// A published contest whose window has never opened has a table state of its
-// own, and the profile carries it rather than dressing it up as something
-// else.
-//
-// The combination is reachable: DisqualifyParticipant allows a published
-// contest, and a disqualified registration is over for its participant
-// (contests.Standing.Over), so the row is shown with a result — of a table
-// leaderboard.Decide calls not_started. Normalising it here would have the
-// API say the table is live or frozen when it is neither; what the interface
-// needs is the true state and a sentence of its own for it.
+// Reachable: DisqualifyParticipant allows a published contest, and a
+// disqualified registration is over (contests.Standing.Over), so its row shows
+// a result of a table leaderboard.Decide calls not_started. The profile carries
+// that state rather than calling it live or frozen.
 func TestAContestThatNeverStartedSaysSoOnTheListAndTheReport(t *testing.T) {
 	f := newProfileFixture(t)
 	c := f.stores.SeedContest(contests.StatusPublished)

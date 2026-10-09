@@ -27,8 +27,6 @@ func summary(rows []leaderboard.Row) []string {
 	return out
 }
 
-// More points first; equal points go to whoever reached them earlier; the same
-// score at the same moment shares a place, and the next place is skipped.
 func TestRankByPointsBreaksTiesByWhenTheScoreWasReached(t *testing.T) {
 	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
 		entry("slow", 30, at(50)),
@@ -45,7 +43,6 @@ func TestRankByPointsBreaksTiesByWhenTheScoreWasReached(t *testing.T) {
 			t.Fatalf("order = %v, want it to start %v", got, want)
 		}
 	}
-	// Nobody who scored nothing is ahead of anybody else who scored nothing.
 	if rows[3].Place != 4 || rows[4].Place != 4 {
 		t.Errorf("places of the two without points = %d, %d, want 4, 4", rows[3].Place, rows[4].Place)
 	}
@@ -60,8 +57,6 @@ func TestRankSharesAPlaceForTheSameScoreAtTheSameMoment(t *testing.T) {
 	}
 }
 
-// Winner mode has exactly one place: whoever answered the final question
-// first. Everybody else is listed by points and carries no place at all.
 func TestRankInWinnerModePlacesOnlyTheFirstFinalAnswer(t *testing.T) {
 	late := entry("late", 5, at(40))
 	late.FinalAt = at(40)
@@ -94,7 +89,6 @@ func TestRankInWinnerModeWithNoFinalAnswerPlacesNobody(t *testing.T) {
 	}
 }
 
-// Rank panics on icpc: ICPC tables are ranked by RankICPC, with the grid.
 func TestRankRefusesICPC(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -104,8 +98,6 @@ func TestRankRefusesICPC(t *testing.T) {
 	leaderboard.Rank(contests.ScoringICPC, []leaderboard.Entry{entry("alice", 0, nil)})
 }
 
-// The label follows the contest's choice, and a deleted account is never
-// shown under a login that may since belong to somebody else.
 func TestLabelFollowsTheContestsChoiceAndHidesADeletedAccount(t *testing.T) {
 	row := leaderboard.Row{Entry: leaderboard.Entry{Login: "ivanov", FullName: "Ivan Ivanov"}}
 	if got := row.Label(contests.LeaderboardNamesLogin); got != "ivanov" {
@@ -156,9 +148,6 @@ func sameMarks(a, b []bool) bool {
 	return true
 }
 
-// ICPC: more solved first, then less penalty; the same solved and penalty
-// share a place (1, 1, 3) whenever the last solve came. Points, which are
-// zero in this mode, decide nothing even when a row carries some.
 func TestRankICPCSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
 	fewer := icpcEntry("fewer", 1, 5, at(5))
 	fewer.Points = 100
@@ -180,10 +169,6 @@ func TestRankICPCSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
 	}
 }
 
-// A cell is first when its solve is the question's earliest solve as storage
-// computed it over the whole contest — not the earliest among the rows at
-// hand, which a row bound or the disqualified on the staff table would skew.
-// A disqualified row is never first, even in the same instant.
 func TestRankICPCMarksTheFirstSolverByTheContestsEarliestSolve(t *testing.T) {
 	banned := icpcEntry("banned", 2, 31, at(30), solvedCell(at(1)), solvedCell(at(30)))
 	banned.Disqualified = true
@@ -191,7 +176,6 @@ func TestRankICPCMarksTheFirstSolverByTheContestsEarliestSolve(t *testing.T) {
 	late := icpcEntry("late", 1, 10, at(10), solvedCell(at(10)), leaderboard.Cell{Wrong: 4})
 	entries := []leaderboard.Entry{banned, late, early}
 
-	// Somebody below the row bound solved A at minute 3, before anybody here.
 	rows := leaderboard.RankICPC(entries, grid(at(3), at(30)))
 
 	want := map[string][]bool{"banned": {false, false}, "early": {false, true}, "late": {false, false}}
@@ -201,13 +185,11 @@ func TestRankICPCMarksTheFirstSolverByTheContestsEarliestSolve(t *testing.T) {
 			t.Errorf("%s first marks = %v, want %v", login, got[login], marks)
 		}
 	}
-	// The mark is the ranking's, not storage's: the entries given are untouched.
 	if entries[2].Cells[1].First {
 		t.Error("RankICPC wrote the first mark into the entries it was given")
 	}
 }
 
-// Two solves in the same instant are both first: neither was earlier.
 func TestRankICPCMarksBothSolvesInTheSameInstantFirst(t *testing.T) {
 	rows := leaderboard.RankICPC([]leaderboard.Entry{
 		icpcEntry("a", 1, 7, at(7), solvedCell(at(7))),

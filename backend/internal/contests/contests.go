@@ -1,15 +1,10 @@
-// Package contests owns everything an organizer authors and runs: the contest
-// itself, its story, its questions and their reference answers, the people who
-// staff it, and the people who take part.
+// Package contests owns what an organizer authors and runs: the contest, its
+// story, questions and reference answers, its staff and its participants.
 //
-// It answers "what may be changed, by whom, and when" — the lifecycle rules,
-// the publish gate, the enrollment rules and the network restriction — and "may
-// this participant act in this contest now": the participation gate,
-// Gate.StandingOf, the one rule every participant-facing path asks (the
-// console, the play screen, the events channel, answers, the profile). It does
-// not answer "who is allowed to call this" (that is internal/rbac, applied by
-// the HTTP layer) and it contains no SQL: the storage interfaces are declared
-// here in the domain's own terms and implemented in internal/postgres.
+// It answers what may change and when (lifecycle, publish gate, enrollment,
+// network restriction) and whether a participant may act now (Gate.StandingOf).
+// It does not answer who may call an operation (internal/rbac) and holds no
+// SQL: its storage interfaces are implemented in internal/postgres.
 package contests
 
 import (
@@ -34,16 +29,9 @@ const (
 	StatusArchived  = "archived"
 )
 
-// PublicStatuses are the statuses a visitor with no session may be shown: a
-// contest that has been published and everything after it.
-//
-// Every status there is, less the draft. Written that way round on purpose —
-// a new status added to the lifecycle above lands in this list by default and
-// has to be taken out deliberately, which is the safe direction for a filter
-// that decides what a stranger sees. The other direction has been spelled out
-// three times in three repositories, and nothing made the three agree; a
-// status added to two of them and forgotten in the third is a contest
-// leaking.
+// PublicStatuses are the statuses a visitor with no session may be shown:
+// every status but the draft. It is the one list repositories filter on, so
+// they cannot disagree about what a stranger sees.
 var PublicStatuses = []string{StatusPublished, StatusRunning, StatusFinished, StatusArchived}
 
 // Enrollment types decide who creates the registration, and nothing else:
@@ -63,74 +51,50 @@ const (
 	QuestionModeSingle = "single"
 )
 
-// Progression models, see docs/ARCHITECTURE.md §6.1.1. Only meaningful when
-// QuestionMode is QuestionModeMulti — a single-question contest has no
-// "next" question for either one to say anything about.
+// Progression models, see docs/ARCHITECTURE.md §6.1.1. Meaningful only for
+// QuestionModeMulti.
 const (
-	// ProgressionFree lets a participant answer any still-open question in
-	// any order — today's behaviour, and the default.
+	// ProgressionFree lets a participant answer open questions in any order.
+	// The default.
 	ProgressionFree = "free"
-	// ProgressionSequential opens the next question only once the previous
-	// one is closed: answered correctly, or every attempt spent. The second
-	// condition is the one that matters — opening only on a correct answer
-	// would trap a participant who is stuck for the rest of the contest,
-	// clock still running. Enforced by Service.Submit, never by the
-	// interface alone.
+	// ProgressionSequential opens the next question once the previous one is
+	// closed: answered correctly or out of attempts. Opening only on a correct
+	// answer would trap a stuck participant for the rest of the contest.
+	// Enforced by Service.Submit, not only the interface.
 	ProgressionSequential = "sequential"
 )
 
-// Scoring models, see docs/ARCHITECTURE.md §6.1.1. Decides how a result is
-// derived from submissions, never what is written to them: every submission
-// is graded and scored identically in both modes, so switching between them
-// mid-contest cannot destroy data.
+// Scoring models, see docs/ARCHITECTURE.md §6.1.1. They decide how a result is
+// derived from submissions, not what is stored, so switching mode loses no
+// data. Settings a mode ignores stay stored, unapplied, in case it changes back.
 const (
-	// ScoringPoints sums points_awarded across a registration's submissions —
-	// today's behaviour, and the default.
+	// ScoringPoints sums points_awarded. The default.
 	ScoringPoints = "points"
-	// ScoringWinner has only a winner: whoever first answered the contest's
-	// final question correctly. The per-attempt penalty (questions.penalty_pct)
-	// is defined in points and stops meaning anything once points stop being
-	// the result, so Service.Submit skips it in this mode — not because the
-	// configured percentage is forbidden here, but because a contest's
-	// scoring mode may change and the setting must survive that.
+	// ScoringWinner ranks only a winner: whoever first answered the final
+	// question correctly. Service.Submit skips the per-attempt penalty here.
 	ScoringWinner = "winner"
-	// ScoringICPC ranks a registration by how many questions it solved and,
-	// to break ties, by how much penalty time solving them cost — the way
-	// ICPC itself scores (docs/ARCHITECTURE.md §6.1.1). A question's own points and
-	// percentage penalty stay in the data (the mode can be switched back
-	// before the contest starts) but mean nothing while this mode is in
-	// force: Service.Submit writes points_awarded = 0 for every submission,
-	// the same way it skips the penalty in ScoringWinner, and place is
-	// decided instead by ICPCPenaltyMin applied per wrong attempt on a
-	// question that is eventually solved.
+	// ScoringICPC ranks by questions solved, then by penalty time:
+	// ICPCPenaltyMin per wrong attempt on a solved question. Service.Submit
+	// writes points_awarded = 0 for every submission.
 	ScoringICPC = "icpc"
 )
 
-// DefaultICPCPenaltyMin is how many minutes one wrong attempt costs a solved
-// question in ICPC scoring, when nothing else was chosen — the migration's
-// own column default (000031), mirrored here so Service.Create and the test
-// stores can apply the identical default without hard-coding 20 twice.
+// DefaultICPCPenaltyMin mirrors the migration's column default (000031).
 const DefaultICPCPenaltyMin = 20
 
 // maxICPCPenaltyMin bounds Contest.ICPCPenaltyMin (CLAUDE.md rule 2), matching
-// the migration's own CHECK (icpc_penalty_min BETWEEN 0 AND 240). 240 minutes
-// is already four hours of penalty for a single wrong attempt — far beyond
-// anything a real contest window would make survivable to climb back from —
-// and staying at a round, generous ceiling rather than an arbitrary one keeps
-// the domain and the schema trivially readable as the same rule.
+// the migration's CHECK (icpc_penalty_min BETWEEN 0 AND 240).
 const maxICPCPenaltyMin = 240
 
-// Leaderboard labels: how a participant is named on a table somebody other
-// than the contest's staff reads (docs/ARCHITECTURE.md §10). The table is public, which is why the
-// login is the default and a full name is something an organiser chooses.
+// Leaderboard labels (docs/ARCHITECTURE.md §10). The table is public, so the
+// login is the default and a full name is the organiser's choice.
 const (
 	LeaderboardNamesLogin    = "login"
 	LeaderboardNamesFullName = "full_name"
 )
 
-// maxLeaderboardFreezeMin bounds leaderboard_freeze_min (CLAUDE.md rule 2): a
-// week, the same ceiling a session length has, and far beyond any window a
-// freeze could sensibly be measured back across.
+// maxLeaderboardFreezeMin bounds leaderboard_freeze_min (CLAUDE.md rule 2) at
+// a week.
 const maxLeaderboardFreezeMin = 7 * 24 * 60
 
 // Timing models, see docs/ARCHITECTURE.md §8.
@@ -141,36 +105,21 @@ const (
 	TimingIndividual = "individual"
 )
 
-// maxDurationMin bounds an individual contest's per-participant session.
-//
-// Deadline (deadline.go) computes time.Duration(*DurationMin) * time.Minute,
-// which is arithmetic in int64 nanoseconds: past roughly 1.5e8 minutes it
-// overflows and wraps to a deadline in the past, silently locking out every
-// participant of the contest that triggered it. A week — 7*24*60 minutes —
-// is already far longer than any real-time olympiad sitting, in person or
-// online, and staying orders of magnitude below the overflow point rather
-// than merely under it is what makes this a bound and not a near miss.
+// maxDurationMin bounds an individual contest's session at a week. Deadline
+// multiplies it into int64 nanoseconds, which overflows past about 1.5e8
+// minutes into a deadline in the past that locks everybody out.
 const maxDurationMin = 7 * 24 * 60
 
-// maxGracePeriodMin bounds settings.grace_period_min — CLAUDE.md rule 2: a
-// field that reaches storage needs an explicit bound, and this one governs
-// how long a finished contest's game databases outlive it (§2.4), read by
-// provisioning.Service.Reclaim through make_interval. 90 days is far beyond
-// any dispute or report an organizer would extend it for, and staying well
-// under the point make_interval's own arithmetic could misbehave at is the
-// same reasoning maxDurationMin above already applies to a duration in
-// minutes.
+// maxGracePeriodMin bounds settings.grace_period_min (CLAUDE.md rule 2) at 90
+// days, well inside what provisioning.Service.Reclaim's make_interval handles.
 const maxGracePeriodMin = 90 * 24 * 60
 
-// Errors the domain reports. They are the vocabulary the HTTP layer maps to
-// status codes, so each names a distinct situation a client can act on.
+// Errors the domain reports; the HTTP layer maps each to a status code.
 var (
 	ErrNotFound          = errors.New("contest not found")
 	ErrInvalidTransition = errors.New("contest cannot move to that status")
-	// ErrStatusChanged reports a move decided against a status that has since
-	// moved. Distinct from ErrInvalidTransition, which is about a step that is
-	// never legal: this one says the caller was right a moment ago and should
-	// look again, which is a different thing to tell a client.
+	// ErrStatusChanged is a move decided against a status that has since
+	// changed: unlike ErrInvalidTransition, the caller should look again.
 	ErrStatusChanged   = errors.New("contest status changed while the request was being decided")
 	ErrInvalidContest  = errors.New("contest is not valid")
 	ErrUnknownLanguage = errors.New("language is not available")
@@ -178,23 +127,14 @@ var (
 
 // Contest is one olympiad.
 type Contest struct {
-	ID     uuid.UUID
-	Status string
-	// Enrollment decides who may create a registration (see EnrollmentOpen).
-	Enrollment string
-	// QuestionMode decides whether the contest asks one question or several.
+	ID           uuid.UUID
+	Status       string
+	Enrollment   string
 	QuestionMode string
-	// Progression decides the order questions may be answered in (see
-	// ProgressionFree, ProgressionSequential).
-	Progression string
-	// Scoring decides how a result is derived from submissions (see
-	// ScoringPoints, ScoringWinner, ScoringICPC).
-	Scoring string
-	// ICPCPenaltyMin is how many minutes one wrong attempt costs a solved
-	// question when Scoring is ScoringICPC (see ScoringICPC's own doc).
-	// Meaningless in every other mode but always present and always bounded,
-	// so a contest that switches back to icpc later has a value ready rather
-	// than a fresh default nobody chose.
+	Progression  string
+	Scoring      string
+	// ICPCPenaltyMin is the minutes one wrong attempt costs a solved question
+	// under ScoringICPC. Kept and bounded in every mode.
 	ICPCPenaltyMin int
 	Timing         string
 	// DurationMin is the per-participant session length, set only for
@@ -214,52 +154,34 @@ type Contest struct {
 	// LeaderboardRevealedAt is when an organiser revealed a frozen table's
 	// final state. Set once, never cleared, and never through Update.
 	LeaderboardRevealedAt *time.Time
-	// Languages are the languages this contest is offered in, exactly one of
-	// which is the default.
+	// Languages has exactly one default.
 	Languages []ContestLanguage
 	// Translations hold the title and description per language code.
 	Translations map[string]Translation
-	// CoverHash names the picture this contest wears, and is empty for one
-	// wearing the drawn cover instead (design spec §10.3). Read-only: the
-	// cover is written through covers.Service, which owns both the row and
-	// the file, and a Contest carries it only so a listing can answer with
-	// it — the play screen puts a picture above the story and may not spend
-	// a second request on one hash.
+	// CoverHash names the contest's picture; empty means the drawn cover
+	// (docs/design/SPEC.md §10.3). Read-only here: covers.Service writes it.
 	CoverHash string
-	// CoverAttribution credits whoever made that picture. §10.1 makes the
-	// line part of the publish gate, so a non-empty CoverHash always arrives
-	// with one; empty means there is nobody to credit, because the cover is
-	// drawn and its author is us.
+	// CoverAttribution credits the picture's author. The publish gate
+	// requires one with a CoverHash (§10.1); empty for the drawn cover.
 	CoverAttribution string
 	CreatedBy        uuid.UUID
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
 
-// Settings are the tunables stored as jsonb on the contest row.
-//
-// A typed struct rather than a free-form map: the column is written straight
-// from an admin request, and an untyped blob would be both an unbounded write
-// and a set of keys nobody can enumerate afterwards.
+// Settings are the tunables stored as jsonb on the contest row. Typed rather
+// than a free-form map so an admin request cannot write unbounded or unknown
+// keys.
 type Settings struct {
-	// EnrollmentDeadline closes self-signup early, so a provisioning queue is
-	// not still working when the contest starts (see §4.2). Nil keeps signup
-	// open until the contest starts.
+	// EnrollmentDeadline closes self-signup early, so provisioning finishes
+	// before the start (§4.2). Nil keeps signup open until the start.
 	EnrollmentDeadline *time.Time `json:"enrollment_deadline,omitempty"`
-	// QueryRateLimitPerMin caps a participant's SQL queries; zero means the
-	// installation default. Read by queryproxy.Service, which enforces it
-	// ahead of the query journal — not by the Query Runner, which has no
-	// notion of one contest's settings and enforces only the installation's
-	// own QUERY_PER_MINUTE.
+	// QueryRateLimitPerMin caps a participant's SQL queries, enforced by
+	// queryproxy.Service; zero means the installation default.
 	QueryRateLimitPerMin int `json:"query_rate_limit_per_min,omitempty"`
-	// GracePeriodMin keeps game databases alive after the finish, so somebody
-	// who lost their connection at the buzzer is not wiped out immediately.
-	// Read by provisioning.Service.Reclaim (§2.4); zero defers to the
-	// installation's own default rather than meaning "no grace at all" — a
-	// grace of zero would reclaim a just-finished contest's databases on the
-	// very next tick. The one field of a finished (or archived) contest that
-	// stays writable past SettingsEditable's own line — see Service.
-	// ExtendGrace, and its own doc for why.
+	// GracePeriodMin keeps game databases alive after the finish (§2.4,
+	// provisioning.Service.Reclaim). Zero means the installation default, not
+	// no grace. Writable after the contest ends through Service.ExtendGrace.
 	GracePeriodMin int `json:"grace_period_min,omitempty"`
 }
 
@@ -277,11 +199,9 @@ type Translation struct {
 	Description string
 }
 
-// allowedTransitions maps a status to the ones reachable from it.
-//
-// Published → draft is the only step back, and it exists because publishing is
-// how an organizer finds out the gate passes: undoing that before anybody has
-// started must not require deleting the contest.
+// allowedTransitions maps a status to the ones reachable from it. Published →
+// draft is the only step back, so an organizer can undo a publish before the
+// start without deleting the contest.
 var allowedTransitions = map[string][]string{
 	StatusDraft:     {StatusPublished},
 	StatusPublished: {StatusDraft, StatusRunning, StatusArchived},
@@ -299,12 +219,8 @@ func (c Contest) CanTransitionTo(status string) error {
 }
 
 // ContentEditable reports whether the story, questions and answers may still
-// change.
-//
-// The line is the start, not the publication: an organizer publishes to see
-// the contest as participants will, and may still fix a typo. Once it is
-// running, changing a question would change the task under people already
-// answering it.
+// change. The line is the start, not the publication: once running, an edit
+// would change the task under people already answering it.
 func (c Contest) ContentEditable() bool {
 	return c.Status == StatusDraft || c.Status == StatusPublished
 }
@@ -319,10 +235,8 @@ func (c Contest) FreezeAt() (time.Time, bool) {
 	return c.EndsAt.Add(-time.Duration(*c.LeaderboardFreezeMin) * time.Minute), true
 }
 
-// FreezeFitsWindow reports whether the freeze begins after the window opens,
-// so the table is not frozen before anybody could have answered. A contest
-// with no freeze always fits; one with a freeze but no complete window does
-// not, because there is nothing to measure it against.
+// FreezeFitsWindow reports whether the freeze begins after the window opens.
+// No freeze always fits; a freeze without a complete window never does.
 func (c Contest) FreezeFitsWindow() bool {
 	if c.LeaderboardFreezeMin == nil {
 		return true
@@ -332,50 +246,35 @@ func (c Contest) FreezeFitsWindow() bool {
 }
 
 // SettingsEditable reports whether the contest's own fields may still change.
-//
-// Wider than ContentEditable on purpose: extending the window after a power
-// cut, or correcting a network range that turned out to be wrong, are exactly
-// the operations a running contest needs.
+// Wider than ContentEditable: a running contest may need its window extended
+// or a network range corrected.
 func (c Contest) SettingsEditable() bool {
 	return !c.Ended()
 }
 
-// Ended reports a contest that is over for everybody: finished, or archived
-// after it finished. Each participant may have finished earlier, by their
-// own deadline — that is Deadline's question, not this one.
+// Ended reports a contest over for everybody: finished or archived. A single
+// participant's time is Deadline's question.
 func (c Contest) Ended() bool {
 	return c.Status == StatusFinished || c.Status == StatusArchived
 }
 
-// SequentialActive reports whether sequential progression (§6.1.1) actually
-// governs answering this contest.
-//
-// Progression alone is not enough to ask: ProgressionSequential is
-// meaningless at QuestionModeSingle, where the one question has nothing
-// before it to wait on. Submit (submission.go) and Reader.Questions
-// (participant_view.go) both key their own sequential gating off this one
-// method rather than each repeating the two-field comparison — they agreed
-// with each other only because the publish gate happens to force a
-// single-mode contest down to exactly one question, and a rule that two
-// places restate is a rule that can drift the moment either one is edited
-// without the other.
+// SequentialActive reports whether sequential progression (§6.1.1) governs
+// this contest; it means nothing in single-question mode. Every sequential
+// check uses this method so the rule lives in one place.
 func (c Contest) SequentialActive() bool {
 	return c.Progression == ProgressionSequential && c.QuestionMode == QuestionModeMulti
 }
 
-// AllowsAddress reports whether a participant at addr may take part.
-//
-// An empty list means no restriction. Staff are never checked against it —
-// see §7.1: an administrator who mistypes a range must not be able to lock
-// themselves out of the contest they are configuring.
+// AllowsAddress reports whether a participant at addr may take part. An empty
+// list means no restriction. Staff are never checked (§7.1), so a mistyped
+// range cannot lock an administrator out.
 func (c Contest) AllowsAddress(addr netip.Addr) bool {
 	if len(c.AllowedCIDRs) == 0 {
 		return true
 	}
 	if !addr.IsValid() {
-		// The resolver could not name the caller. With a restriction in force,
-		// "unknown" has to mean "no": failing open here would turn every proxy
-		// misconfiguration into an open door.
+		// Unknown address under a restriction fails closed, or a proxy
+		// misconfiguration opens the contest.
 		return false
 	}
 
@@ -410,12 +309,9 @@ func (c Contest) LanguageCodes() []string {
 	return codes
 }
 
-// Validate checks the fields a contest must always satisfy.
-//
-// It mirrors the table's CHECK constraints rather than trusting them: the
-// database is the guarantee, but a violated constraint reaches the client as
-// an opaque 500, and an organizer filling in a form deserves to be told which
-// field is wrong.
+// Validate checks the fields a contest must always satisfy. It mirrors the
+// table's CHECK constraints so the client is told which field is wrong instead
+// of getting a 500.
 func (c Contest) Validate() error {
 	if !slices.Contains([]string{StatusDraft, StatusPublished, StatusRunning, StatusFinished, StatusArchived}, c.Status) {
 		return fmt.Errorf("%w: unknown status %q", ErrInvalidContest, c.Status)
@@ -484,10 +380,8 @@ func (c Contest) Validate() error {
 	return validateLanguages(c.Languages)
 }
 
-// validateLanguages enforces the one rule the set has to satisfy: exactly one
-// default, so the fallback language is never ambiguous. An empty set is legal —
-// a contest is created before its languages are chosen, and it is the publish
-// gate that insists on them.
+// validateLanguages requires unique codes and exactly one default. An empty set
+// is legal until the publish gate.
 func validateLanguages(langs []ContestLanguage) error {
 	seen := make(map[string]struct{}, len(langs))
 	defaults := 0
@@ -517,20 +411,13 @@ type Filter struct {
 	// Query matches a substring of any translated title.
 	Query  string
 	Status string
-	// ManagedBy limits the result to contests the user owns or manages. It is
-	// how an organizer's list stays their own without the repository needing
-	// to know anything about permissions.
+	// ManagedBy limits the result to contests the user owns or manages.
 	ManagedBy uuid.UUID
-	// VisibleTo limits the result to what a participant may see: contests they
-	// are registered for, plus open ones still accepting signups.
+	// VisibleTo limits the result to contests the participant is registered
+	// for, plus open ones still accepting signups.
 	VisibleTo uuid.UUID
-	// Enrolled narrows that set to one half or the other: true for the
-	// contests the person is on, false for the rest of what is offered to
-	// them. Nil leaves the whole visible set, which is what a catalogue wants.
-	//
-	// It narrows and never widens — the visibility rule above still decides
-	// what may be seen at all, so this cannot become a way to ask about
-	// somebody else's registrations.
+	// Enrolled splits the VisibleTo set: true for contests the person is on,
+	// false for the rest, nil for both. It only narrows that set.
 	Enrolled *bool
 	Limit    int
 	Offset   int
@@ -554,13 +441,8 @@ func (f Filter) Normalize() Filter {
 	return f
 }
 
-// Repository stores contests, the languages they are offered in and their
-// authored titles.
-//
-// Translations and languages are replaced as a whole rather than patched one
-// key at a time: it is the set that has to be consistent (exactly one default,
-// a title for every declared language), and a half-applied set is precisely
-// what the publish gate would then have to guess about.
+// Repository stores contests, their languages and their titles. Languages and
+// translations are replaced as a whole because the set must be consistent.
 type Repository interface {
 	Create(ctx context.Context, c Contest) (Contest, error)
 	// ByID returns a contest with its languages and translations, or
@@ -570,15 +452,9 @@ type Repository interface {
 	List(ctx context.Context, f Filter) ([]Contest, int, error)
 	// Update saves the contest's own fields; status is not among them.
 	Update(ctx context.Context, c Contest) error
-	// SetStatus moves the contest along its lifecycle, but only from the
-	// status the caller decided against.
-	//
-	// The expectation is a parameter rather than a convention because the
-	// decision and the write are two statements: the gate that permits a move
-	// runs against a contest read moments earlier, and between the two a
-	// concurrent request may have moved it. Reporting ErrStatusChanged makes
-	// the second writer look again instead of overwriting a state it never
-	// examined.
+	// SetStatus moves the contest from status from to status to, and reports
+	// ErrStatusChanged if a concurrent request moved it since the caller read
+	// it.
 	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
 	// Delete removes a contest and everything hanging off it.
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -586,25 +462,16 @@ type Repository interface {
 	ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []ContestLanguage) error
 	// ReplaceTranslations sets the contest's titles to exactly these.
 	ReplaceTranslations(ctx context.Context, id uuid.UUID, translations []Translation) error
-	// LockContest takes an exclusive, transaction-scoped lock on this
-	// contest row, held until the surrounding transaction ends. It exists to
-	// serialise writes that live in two different tables and must not race:
-	// GrantManager checks the roster before appointing staff, and
-	// Enroll/AddParticipants check the staff list before registering a
-	// participant, so that a contest's owner or manager can never also end
-	// up its participant no matter how the two requests interleave. Must run
-	// inside a unit of work; an implementation refuses otherwise rather than
-	// silently doing nothing.
+	// LockContest takes an exclusive lock on the contest row until the
+	// transaction ends. It serialises GrantManager against Enroll and
+	// AddParticipants so staff and roster checks cannot interleave and make a
+	// manager a participant. Must run inside a unit of work; refuses otherwise.
 	LockContest(ctx context.Context, id uuid.UUID) error
 }
 
-// auditFields is the part of a contest that may be written to the audit trail.
-//
-// One list, next to the type, rather than repeated wherever a change is
-// recorded: it reads as a decision about what the trail may hold, and a field
-// added to the contest is either added here deliberately or not recorded at
-// all. Authored text is absent on purpose — the trail records that titles
-// changed and in which languages, never the titles (§9.2).
+// auditFields is the part of a contest the audit trail may hold. A new field
+// is not recorded unless added here. Authored text is excluded: the trail
+// records which titles changed, never the text (§9.2).
 func (c Contest) auditFields() map[string]any {
 	return map[string]any{
 		"enrollment":               c.Enrollment,

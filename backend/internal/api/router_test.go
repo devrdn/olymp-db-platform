@@ -102,16 +102,11 @@ func TestPublicRouterSetsNoSniffHeader(t *testing.T) {
 	}
 }
 
-// The header the answer key needs, asserted on the assembled router rather
-// than on the middleware alone: a directive set by middleware is only worth
-// anything if it survives to the response, and this is the one route shape a
-// browser is free to cache heuristically — a plain 200 GET with no directive.
-//
-// GET /contests/{id}/export carries every reference answer of a contest, and
-// GET /contests/{id}/play/log.csv is a participant's own session as a file.
-// Neither is exercised here — they need a session and a database — which is
-// exactly why the guarantee is a property of the router and not of a handler
-// that could forget it.
+// Asserted on the assembled router: a directive only counts if it survives to
+// the response, and a plain 200 GET without one may be cached heuristically.
+// Routes such as /contests/{id}/export (every reference answer) need a session
+// and a database, so the guarantee belongs to the router, not to a handler that
+// could forget it.
 func TestPublicRouterForbidsCachingEveryAnswerItGives(t *testing.T) {
 	router := NewRouter(testDeps())
 	router.Get("/plain", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -165,8 +160,7 @@ func TestInternalRouterServesReadiness(t *testing.T) {
 	}
 }
 
-// depsWithoutAuth is the foundation-only wiring: no authentication module
-// attached. It must still produce a working router.
+// depsWithoutAuth wires the foundation only, with no authentication module.
 func depsWithoutAuth() Deps {
 	return Deps{
 		Logger:  logging.New("error", &bytes.Buffer{}),
@@ -270,8 +264,6 @@ func TestRouterIgnoresForwardedHeaderFromUntrustedPeer(t *testing.T) {
 }
 
 func TestAuditEntriesThroughTheRouterCarryTheClientAddress(t *testing.T) {
-	// The finding this guards: admin actions were audited with a NULL ip
-	// because nothing carried the request origin into the service layer.
 	captured := &capturingSink{}
 	recorder := audit.New(captured)
 	deps := depsWithoutAuth()
@@ -401,10 +393,9 @@ func TestPublicRouterWorksWithoutAnyOptionalDependency(t *testing.T) {
 	}
 }
 
-// A panic unwinds past anything that records after calling the next handler.
-// With the recoverer outermost, a panicking request produced its own error
-// line and nothing else — no access log entry, no metric, no 500 in the status
-// counts. Invisible to exactly the alert it should have fired.
+// A panic unwinds past anything that records after calling the next handler; if
+// the recoverer were outermost, the request would leave no access log, metric
+// or 500 count.
 func TestAPanickingRequestIsStillCountedAndLogged(t *testing.T) {
 	var logged bytes.Buffer
 	counted := &countingRecorder{}
@@ -427,8 +418,7 @@ func TestAPanickingRequestIsStillCountedAndLogged(t *testing.T) {
 	if !strings.Contains(logged.String(), `"status":500`) {
 		t.Fatalf("the access line did not record the 500: %s", logged.String())
 	}
-	// And the stack, without which the line says a panic happened and not
-	// where.
+	// And the stack, or the line does not say where.
 	if !strings.Contains(logged.String(), `"stack":`) {
 		t.Fatal("the panic was logged without a stack")
 	}
@@ -445,9 +435,9 @@ func (c *countingRecorder) ObserveRequest(_, _ string, status int, _ time.Durati
 }
 
 func TestPublicRouterRefusesAQueryNoStoredTextCanMatch(t *testing.T) {
-	// A NUL byte or bytes that are not UTF-8 in a query parameter would reach
-	// a comparison PostgreSQL refuses by failing the statement — a 500 for
-	// the client's own malformed address. Refused once, here, for every route.
+	// A NUL or invalid UTF-8 in a query parameter makes PostgreSQL fail the
+	// statement, a 500 for the client's own mistake; refused here for every
+	// route.
 	for _, target := range []string{
 		"/api/v1/version?status=%00",
 		"/api/v1/version?q=%FF%FE",

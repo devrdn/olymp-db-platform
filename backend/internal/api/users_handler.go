@@ -18,26 +18,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// userIDParam names the account in the URL.
 const userIDParam = "userID"
 
 // RoleCatalog lists the roles an account may hold.
-//
-// Declared here, by the consumer, and one method wide: this screen offers a
-// list to pick from and has no business with anything else about roles.
 type RoleCatalog interface {
 	Roles(ctx context.Context) ([]users.Role, error)
 }
 
-// SignInUnlocker clears an account's sign-in throttling — the one method of
-// auth.Service this handler needs, declared here by the consumer.
+// SignInUnlocker clears an account's sign-in throttling.
 type SignInUnlocker interface {
 	UnlockSignIn(ctx context.Context, actorID, userID uuid.UUID) error
 }
 
-// UsersHandler serves the account management endpoints. Every route requires the
-// installation-wide users.manage permission: these operations are not scoped
-// to a contest, and running one must never grant power over accounts.
+// UsersHandler serves account management. Every route requires the
+// installation-wide users.manage permission: no contest role may grant power
+// over accounts.
 type UsersHandler struct {
 	service  *users.Service
 	roles    RoleCatalog
@@ -53,10 +48,8 @@ func NewUsersHandler(service *users.Service, roles RoleCatalog, unlocker SignInU
 
 // Mount registers the routes under /users, and the role catalogue beside them.
 func (h *UsersHandler) Mount(r chi.Router) {
-	// A sibling of /users rather than /users/roles: it describes the
-	// installation, not an account. Behind the same permission, because which
-	// roles exist is a description of how this university is organised and it
-	// goes with the screen that uses it.
+	// Beside /users rather than under it: it describes the installation, not an
+	// account. Same permission, since it serves the same screen.
 	r.Route("/roles", func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionUsersManage))
 		r.Get("/", h.listRoles)
@@ -69,10 +62,8 @@ func (h *UsersHandler) Mount(r chi.Router) {
 		r.Post("/", h.create)
 		r.Post("/import", h.importRoster)
 
-		// A sibling of the single-account routes rather than a query on them:
-		// the selection is the subject. Registered before the /{userID} group
-		// so chi resolves the literal "bulk" segment here rather than reading
-		// it as an account identifier.
+		// Registered before /{userID} so chi does not read "bulk" as an account
+		// identifier.
 		r.Route("/bulk", func(r chi.Router) {
 			r.Post("/status", h.bulkStatus)
 			r.Post("/roles", h.bulkRoles)
@@ -103,12 +94,9 @@ type roleListResponse struct {
 	Items []RoleResponse `json:"items"`
 }
 
-// listRoles publishes the roles an account may hold.
-//
-// It exists so the interface never hard-codes "student, organizer, admin".
-// Roles are rows precisely so a new one is data; a list repeated in the client
-// takes that back, and the day somebody adds a role one of the two copies is
-// wrong without saying so.
+// listRoles publishes the roles an account may hold, so the interface never
+// hard-codes them: roles are rows, and a client copy would go stale when one is
+// added.
 func (h *UsersHandler) listRoles(w http.ResponseWriter, r *http.Request) {
 	catalogue, err := h.roles.Roles(r.Context())
 	if err != nil {
@@ -124,10 +112,8 @@ func (h *UsersHandler) listRoles(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, roleListResponse{Items: items})
 }
 
-// UserResponse is the account as the API describes it.
-//
-// A dedicated type rather than the domain object: serialising users.User directly
-// would publish PasswordHash the first time somebody forgets a json tag.
+// UserResponse is the account as the API describes it. A dedicated type, so a
+// forgotten json tag never publishes PasswordHash.
 type UserResponse struct {
 	ID       string   `json:"id"`
 	Login    string   `json:"login"`
@@ -135,24 +121,19 @@ type UserResponse struct {
 	FullName string   `json:"full_name"`
 	Status   string   `json:"status"`
 	Roles    []string `json:"roles"`
-	// MustChangePassword tells the interface to send the user to the password
-	// form after signing in.
+	// MustChangePassword sends the user to the password form after signing in.
 	MustChangePassword bool   `json:"must_change_password"`
 	LastLoginAt        string `json:"last_login_at,omitempty"`
 	CreatedAt          string `json:"created_at"`
-	// StatusReason, StatusChangedAt and StatusChangedBy explain the current
-	// status: why, when, and by whom. All three are empty for an account
-	// nobody has ever blocked or deleted — a fresh account has nothing to
-	// account for, and the account card reads their absence as exactly that
-	// rather than as an empty history to render.
+	// StatusReason, StatusChangedAt and StatusChangedBy say why, when and by
+	// whom the status last changed; all empty for an account never blocked or
+	// deleted.
 	StatusReason    string `json:"status_reason,omitempty"`
 	StatusChangedAt string `json:"status_changed_at,omitempty"`
 	// StatusChangedBy is the actor's id.
 	StatusChangedBy string `json:"status_changed_by,omitempty"`
-	// StatusChangedByLogin is that actor's login, resolved by the repository's
-	// own query (a LEFT JOIN against users, in internal/postgres/users.go) so
-	// the account card can name them without a second request for one login.
-	// Empty exactly when StatusChangedBy is.
+	// StatusChangedByLogin is that actor's login, joined in by the repository;
+	// empty exactly when StatusChangedBy is.
 	StatusChangedByLogin string `json:"status_changed_by_login,omitempty"`
 }
 
@@ -177,16 +158,9 @@ func toUserResponse(u users.User) UserResponse {
 	return out
 }
 
-// toIdentityResponse is what a signed-in account learns about itself.
-//
-// toUserResponse is shared with the account-management screens, which is
-// what let status_changed_at and status_changed_by ride along into the
-// sign-in response the account owner receives: an administrator's UUID and
-// the moment they acted, neither of which is that account owner's business.
-// The reason text needs no such stripping — an active account's reason is
-// always empty — but the metadata is cleared explicitly here so a future
-// field on UserResponse defaults to hidden on this path instead of leaking
-// by omission.
+// toIdentityResponse is what a signed-in account learns about itself. It clears
+// the status metadata explicitly: an administrator's id and the moment they
+// acted are not the owner's business.
 func toIdentityResponse(u users.User) UserResponse {
 	out := toUserResponse(u)
 	out.StatusChangedAt = ""
@@ -204,8 +178,8 @@ type createRequest struct {
 
 type createResponse struct {
 	User UserResponse `json:"user"`
-	// OneTimePassword is shown once, here. It is not stored in clear and
-	// cannot be fetched later; a lost one is reset.
+	// OneTimePassword is shown once, here; it is not stored in clear and a lost
+	// one is reset.
 	OneTimePassword string `json:"one_time_password"`
 }
 
@@ -234,14 +208,11 @@ func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// importRequest is a whole group at once.
-//
-// Accounts are created by an administrator rather than by self-registration
-// (§7), and a group arrives as a list from the department. One request per
-// student is thirty round trips and thirty chances to lose one.
+// importRequest is a whole group at once: accounts are created by an
+// administrator (§7), and a group arrives as a list from the department.
 type importRequest struct {
 	Rows []importRow `json:"rows"`
-	// Roles every created account receives, typically the single student role.
+	// Roles every created account receives, typically the student role.
 	Roles []string `json:"roles"`
 }
 
@@ -251,19 +222,14 @@ type importRow struct {
 	Email    string `json:"email"`
 }
 
-// importResponse reports the outcome row by row.
+// accountImportResponse reports the outcome row by row. Partial success: one
+// duplicate must not reject the rest, and the person who pasted the list must
+// see which line to fix. The one-time passwords appear here and nowhere else.
 //
-// Partial success, honestly: one duplicate must not reject the other
-// twenty-nine, and whoever pasted the list has to see which line to fix. The
-// one-time passwords appear here and nowhere else — they are not stored in
-// clear and cannot be fetched later.
-//
-// An import the hasher's load stops partway is still answered 200 with what it
-// did: the accounts created before it stopped exist, and their passwords are
-// shown here or never. NotImported names every row it never reached, and
-// Stopped carries the code saying why, so the rest can be imported again.
-// Nothing else that stops an import is answered this way: an outage is an
-// error, not a result.
+// If the hasher's load stops an import partway, it still answers 200 with what
+// was done: NotImported names the rows never reached and Stopped says why, so
+// they can be imported again. Any other failure is an error, not a result
+// (CLAUDE.md rule 8).
 type accountImportResponse struct {
 	Created     []createResponse `json:"created"`
 	Skipped     []skippedAccount `json:"skipped"`
@@ -328,10 +294,8 @@ type listResponse struct {
 }
 
 func (h *UsersHandler) list(w http.ResponseWriter, r *http.Request) {
-	// An unreadable status filters by a value nothing has, so the register
-	// comes back empty — "no account matches", a true answer to a question
-	// nobody asked. Refused instead, the same way the contest listing refuses
-	// an unreadable `enrolled`.
+	// An unknown status would filter by a value nothing has and return an empty
+	// list; refuse it instead.
 	status := r.URL.Query().Get("status")
 	if status != "" && !slices.Contains(users.Statuses, status) {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
@@ -397,8 +361,8 @@ func (h *UsersHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// blockRequest carries why the account is being blocked. The service refuses
-// an empty reason with users.ErrReasonRequired, which fail maps to a 400.
+// blockRequest carries why the account is being blocked; an empty reason is
+// refused (users.ErrReasonRequired).
 type blockRequest struct {
 	Reason string `json:"reason"`
 }
@@ -436,8 +400,8 @@ func (h *UsersHandler) unblock(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// deleteRequest carries why the account is being deleted. The service refuses
-// an empty reason with users.ErrReasonRequired, which fail maps to a 400.
+// deleteRequest carries why the account is being deleted; an empty reason is
+// refused (users.ErrReasonRequired).
 type deleteRequest struct {
 	Reason string `json:"reason"`
 }
@@ -494,11 +458,8 @@ func (h *UsersHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, resetResponse{OneTimePassword: issued})
 }
 
-// unlockSignIn clears the account's sign-in throttling, so an owner shut out
-// by somebody else's wrong guesses — a rival behind the same lab address, a
-// guess spread across many — can try again now rather than when the window
-// runs out. Answered 204: there is nothing to return but that it happened,
-// and the trail records who did it.
+// unlockSignIn clears the account's sign-in throttling, so an owner locked out
+// by someone else's guesses can sign in now. The trail records who did it.
 func (h *UsersHandler) unlockSignIn(w http.ResponseWriter, r *http.Request) {
 	id, ok := h.accountID(w, r)
 	if !ok {
@@ -536,7 +497,6 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// accountID reads and validates the account in the URL.
 func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, userIDParam))
 	if err != nil {
@@ -546,19 +506,17 @@ func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.U
 	return id, true
 }
 
-// fail maps a service error onto a response. Anything unrecognised becomes a
-// 500 with the detail kept in the log, never in the body.
+// fail maps a service error to a response; anything unknown is a 500 with the
+// detail only in the log.
 func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if usersErrors.answer(w, r, h.log, err) {
 		return
 	}
 	switch {
 	case errors.Is(err, password.ErrBusy):
-		// Issuing a password waits far longer for a hashing slot than a
-		// sign-in does, and still ran out — or the administrator's request
-		// ended first. The operation stops there: a single change writes
-		// nothing, and an import keeps the rows it had already created, as it
-		// does for any other failure partway through a roster.
+		// Issuing a password waits longer for a hashing slot than sign-in does,
+		// and still ran out (or the request ended). A single change writes
+		// nothing; an import keeps the rows it already created.
 		busy(w, r)
 	default:
 		h.log.ErrorContext(r.Context(), "account operation failed", "error", err)

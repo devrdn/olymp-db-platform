@@ -36,9 +36,6 @@ func TestBeginningAnUploadCreatesARowInReceiving(t *testing.T) {
 	})
 }
 
-// The guarantee migration 24's own unique partial index exists for: between
-// a SELECT and an INSERT in Go there is always room for a second request, and
-// only the database itself closes that gap.
 func TestASecondBeginForTheSameContestWhileOneIsReceivingIsRejectedByTheDatabase(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -55,8 +52,6 @@ func TestASecondBeginForTheSameContestWhileOneIsReceivingIsRejectedByTheDatabase
 	})
 }
 
-// A different contest's own upload is untouched by the index above — it is
-// scoped to (contest_id) WHERE status = 'receiving', not installation-wide.
 func TestTwoDifferentContestsMayEachHaveAnUploadReceiving(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		a, b := aContest(t, ctx), aContest(t, ctx)
@@ -118,9 +113,6 @@ func TestUpdateReceivedRecordsProgress(t *testing.T) {
 	})
 }
 
-// Completing an upload is the same event SaveScript records for the editor
-// path: the version bumps, the game goes back to pending, and this time the
-// row also says where it came from.
 func TestCompletingAnUploadMarksItCompleteAndReplacesTheGame(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -161,10 +153,6 @@ func TestCompletingAnUploadMarksItCompleteAndReplacesTheGame(t *testing.T) {
 	})
 }
 
-// The row a new completed upload displaces is retired here — marked
-// 'aborted' — in the same statement group that replaces the game, once its
-// file has already been removed from disk by the caller
-// (provisioning.Games.CompleteUpload's own doc explains the order).
 func TestCompletingAnUploadRetiresThePreviousOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -251,16 +239,9 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 			t.Fatalf("begin fresh: %v", err)
 		}
 
-		// Old enough for the cut-off, and no longer 'receiving' — the half of
-		// this query's name that was not being checked at all. Both rows above
-		// are 'receiving', so breaking the status predicate left the test
-		// green while the janitor started aborting completed uploads: the file
-		// a live game is built from is deleted, and every rebuild of that
-		// contest afterwards ends at BuildFailedInternally, permanently.
-		//
-		// One row per status the table can hold besides 'receiving', because
-		// "not receiving" is not one condition — a mistyped predicate that
-		// catches only 'complete' is as wrong as one that catches everything.
+		// Old enough but not 'receiving': listing these would let the janitor
+		// delete the file a built game needs. One row per other status, since
+		// a predicate that catches only one of them is as wrong as none.
 		settled := map[string]uuid.UUID{"complete": uuid.New(), "aborted": uuid.New()}
 		for status, id := range settled {
 			contest := aContest(t, ctx)
@@ -300,10 +281,6 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 	})
 }
 
-// The question the janitor's orphan sweep asks of a file it found on the
-// volume. "Does a row exist at all" — what this replaced — answered "keep it"
-// for every upload a later game displaced, and the bytes behind those were
-// then unreachable and permanent.
 func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -318,14 +295,10 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		// Still taking chunks: the bytes are the upload's own, and the row
-		// alone is what says so.
 		if inUse, err := repo.UploadInUse(ctx, id); err != nil || !inUse {
 			t.Fatalf("in use = %v, err = %v, want true while the upload is still receiving", inUse, err)
 		}
 
-		// Completed, and now the contest's game: the bytes are what a build
-		// streams.
 		summary := provisioning.UploadSummary{Bytes: 10, SHA256: "d0", Lines: 1}
 		if _, err := repo.CompleteUpload(ctx, contest, id, name, summary, nil); err != nil {
 			t.Fatalf("complete: %v", err)
@@ -334,9 +307,8 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 			t.Fatalf("in use = %v, err = %v, want true for the upload the game is built from", inUse, err)
 		}
 
-		// The organiser goes back to writing a script in the editor. The row
-		// is still there and still says 'complete'; nothing names the file any
-		// more, and this is the case the sweep exists to notice.
+		// A script replaces the game: the row stays 'complete' but no game
+		// names the file.
 		if _, err := repo.SaveScript(ctx, contest, name, `SELECT 1`); err != nil {
 			t.Fatalf("save script: %v", err)
 		}
@@ -346,18 +318,9 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 	})
 }
 
-// Migration 24 gave game_templates.upload_id `ON DELETE SET NULL` and, a few
-// lines above, a CHECK that a 'file' game names an upload. The two contradict
-// each other: SET NULL clears the reference and leaves source = 'file', which
-// is exactly what the CHECK forbids, so the deletion is refused —
-// `new row for relation "game_templates" violates check constraint
-// "game_templates_source_pairing"`.
-//
-// It has not broken deleting a contest only because PostgreSQL fires that
-// table's own RI trigger first, by creation order. Correctness resting on OID
-// order is not correctness, and nothing about it is visible to whoever adds
-// the next foreign key here. Migration 25 makes the reference say what the
-// CHECK already says: a file-sourced game cannot outlive its upload.
+// The CHECK game_templates_source_pairing requires a 'file' game to name an
+// upload, so upload_id cannot be ON DELETE SET NULL: deleting the upload must
+// cascade to the game rather than rely on RI trigger order.
 func TestDeletingAnUploadAFileSourcedGameNamesTakesTheGameWithIt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)

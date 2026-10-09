@@ -11,11 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestBulkRoutesAreNotSwallowedByTheAccountIDRoute proves that /users/bulk/...
-// is served by the dedicated /bulk group rather than being read as
-// /{userID}/... with userID literally "bulk". If the route ordering ever
-// regresses, this fails with a 400 invalid_user_id or a 404 instead of the
-// 200 a real bulk operation returns.
+// TestBulkRoutesAreNotSwallowedByTheAccountIDRoute fails with a 400 or 404 if
+// route ordering lets "bulk" be read as a userID.
 func TestBulkRoutesAreNotSwallowedByTheAccountIDRoute(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
@@ -54,9 +51,6 @@ func TestBulkStatusEndpointBlocksTheSelection(t *testing.T) {
 	}
 }
 
-// TestBulkReportsUnknownAccountsAsSkipped proves the rule that governs every
-// bulk response: one identifier naming no account is a row in the answer, not
-// a failure of the request. The rest of the selection still applies.
 func TestBulkReportsUnknownAccountsAsSkipped(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
@@ -118,9 +112,8 @@ func TestBulkRolesEndpointReplacesTheSet(t *testing.T) {
 	}
 }
 
-// TestBulkPasswordResetIssuesADistinctPasswordPerAccount is the point of
-// issuing one password per account rather than one for the whole group: a
-// shared password is a shared account.
+// TestBulkPasswordResetIssuesADistinctPasswordPerAccount: a shared password is
+// a shared account.
 func TestBulkPasswordResetIssuesADistinctPasswordPerAccount(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	first := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})

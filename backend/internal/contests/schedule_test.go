@@ -16,14 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// schedulerFixtureGrace is the grace of the gate newScheduler wires every
-// Scheduler up with, standing in for cfg.DeadlineGrace — a fixed,
-// recognisable value so a test can tell it apart from the zero value a
-// forgotten wiring would leave behind.
+// schedulerFixtureGrace stands in for cfg.DeadlineGrace; it is non-zero so a
+// test can tell it from a forgotten wiring.
 const schedulerFixtureGrace = 5 * time.Second
 
-// schedulerFixture is everything one Scheduler test needs, assembled so a
-// test only ever has to name the pieces it actually stages.
 type schedulerFixture struct {
 	scheduler   *contests.Scheduler
 	repo        *conteststest.Schedule
@@ -36,11 +32,6 @@ type schedulerFixture struct {
 	poolTrigger *conteststest.PoolTrigger
 }
 
-// newScheduler assembles a Scheduler over the in-memory fakes, mirroring
-// conteststest.NewFixture's own wiring for the pieces Scheduler actually
-// uses. poolTrigger is wired by default, the same way conteststest.Fixture
-// wires one for Service — a test about it asserts on
-// f.poolTrigger.Triggered, and every other test simply never looks.
 func newScheduler() schedulerFixture {
 	repo := conteststest.NewSchedule()
 	stories := conteststest.NewStories()
@@ -57,10 +48,9 @@ func newScheduler() schedulerFixture {
 	}
 }
 
-// newRoster is the registration store the gate reads, wired to an account
-// store the same way conteststest.NewFixture wires Service's — the permission
-// a participant holds is a fact about their account, and a roster fake that
-// invented it would let a test pass a gate the real one refuses.
+// newRoster wires the registrations to an account store: a participant's
+// permissions come from their account, and a fake that invented them could
+// pass a gate the real one refuses.
 func newRoster() (*conteststest.Registrations, *userstest.Repository) {
 	roster, users := conteststest.NewRegistrations(), userstest.New()
 	roster.Accounts = func(ctx context.Context, id uuid.UUID) (string, string) {
@@ -80,11 +70,6 @@ func newRoster() (*conteststest.Registrations, *userstest.Repository) {
 	return roster, users
 }
 
-// duePublishable stages a due contest that passes CheckPublishable, together
-// with the story and question a test's Stories/Questions fakes need to carry
-// to answer that way — the same fixture publish_test.go's own publishable()
-// builds, wired into the stores a Scheduler test reads from instead of
-// passed straight to CheckPublishable.
 func duePublishable(f schedulerFixture) contests.Contest {
 	c, story, questions := publishable()
 	f.stories.Save(context.Background(), c.ID, story.Bodies)
@@ -95,9 +80,6 @@ func duePublishable(f schedulerFixture) contests.Contest {
 	return putDue(f, c)
 }
 
-// putDue stores c in the schedule's contest store the way DueToStart finds
-// it: published, with its start at the schedule's clock. publishable() leaves
-// a contest a draft, which no tick is ever handed.
 func putDue(f schedulerFixture, c contests.Contest) contests.Contest {
 	c.Status = contests.StatusPublished
 	opens := f.repo.Contests.Clock()
@@ -105,20 +87,15 @@ func putDue(f schedulerFixture, c contests.Contest) contests.Contest {
 	return f.repo.Contests.Put(c)
 }
 
-// putRunning stores a running contest whose end is ago before the schedule's
-// clock, and returns its id.
 func putRunning(f schedulerFixture, ago time.Duration) uuid.UUID {
 	ended := f.repo.Contests.Clock().Add(-ago)
 	return f.repo.Contests.Put(contests.Contest{Status: contests.StatusRunning, EndsAt: &ended}).ID
 }
 
-// putOverdue stores a running contest whose end and grace have both passed by
-// the schedule's clock, the way AdvanceFinished finds it, and returns its id.
 func putOverdue(f schedulerFixture) uuid.UUID {
 	return putRunning(f, schedulerFixtureGrace+time.Minute)
 }
 
-// statusOf reads a contest's status back from the schedule's store.
 func statusOf(t *testing.T, f schedulerFixture, id uuid.UUID) string {
 	t.Helper()
 	c, err := f.repo.Contests.ByID(context.Background(), id)
@@ -128,10 +105,8 @@ func statusOf(t *testing.T, f schedulerFixture, id uuid.UUID) string {
 	return c.Status
 }
 
-// The scheduler finishes a contest by the participation gate's own grace, so
-// it cannot be assembled without one: a Scheduler with no gate would have to
-// invent a grace, and any it invented could disagree with the one the console
-// and the answer route refuse by.
+// Without the gate the Scheduler would have to invent a grace that could
+// disagree with the one the console and answer route use.
 func TestNewSchedulerRefusesToAssembleWithoutAGate(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -222,16 +197,12 @@ func TestAdvanceStartsAContestThatPassesThePublishGateAndFinishesAnOverdueOne(t 
 	}
 }
 
-// TestAdvanceBlocksAContestThatFailsThePublishGate is finding 1's own test:
-// the scheduler is the one door into a contest that admitted no gate before
-// this change, and a contest whose story disappeared after publication (an
-// organizer deleted it, or never wrote one at all) must not be let through
-// just because starts_at arrived.
+// A story can disappear after publication; starts_at arriving must not let
+// the contest through.
 func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 	f := newScheduler()
 	c, _, questions := publishable()
-	// Every question is staged, but the story never is — CheckPublishable's
-	// ProblemNoStory, the same refusal a manual Transition would hit.
+	// No story staged: ProblemNoStory.
 	for _, q := range questions {
 		q.ContestID = c.ID
 		f.questions.Put(q)
@@ -274,11 +245,7 @@ func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 	}
 }
 
-// The scheduler is the other door into a running contest, and it holds the
-// roster half of the gate too: a contest published before the rule existed,
-// with an account that administers every contest on its roster, must not be
-// opened by a tick just because starts_at arrived. The organizer finds out
-// from the trail, which is where a blocked start is already recorded.
+// The scheduler enforces the roster half of the gate too.
 func TestAdvanceBlocksAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 	f := newScheduler()
 	c := duePublishable(f)
@@ -312,12 +279,8 @@ func TestAdvanceBlocksAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 	}
 }
 
-// TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks is finding 1's own
-// regression test: a contest whose window opened but whose story disappeared
-// stays published, so DueToStart keeps matching it every tick until somebody
-// fixes it. Before this change each of those ticks appended its own
-// start_blocked entry — the trail growing without bound for exactly the
-// contest an organizer most needs to be able to find in it.
+// A blocked contest stays due every tick; one entry per tick would grow the
+// trail without bound.
 func TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks(t *testing.T) {
 	f := newScheduler()
 	c, _, questions := publishable()
@@ -342,12 +305,8 @@ func TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks(t *testing.T) {
 	}
 }
 
-// TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded proves the
-// point of the dedup above is to stop repetition, not to stop reporting: once
-// anything else has been recorded for the contest since the last block — here
-// an organizer's edit, which leaves it published and still blocked — the very
-// next refusal must get its own entry again, even carrying the same problem
-// codes as the first one did.
+// The dedup stops repetition, not reporting: after any other entry for the
+// contest, the same block is recorded again.
 func TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded(t *testing.T) {
 	f := newScheduler()
 	c, _, questions := publishable()
@@ -357,7 +316,6 @@ func TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded(t *testing.
 	}
 	putDue(f, c)
 
-	// First tick: no story, blocked and recorded.
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() first tick = %v", err)
 	}
@@ -373,9 +331,7 @@ func TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded(t *testing.
 		t.Fatalf("audit entries after a repeat of the same block = %d, want still 1", len(f.sink.Entries))
 	}
 
-	// The organizer edits the contest without adding the story: the entry
-	// Service.Update records for it, in its own transaction. The contest is
-	// still published, still due, and still refused for the same reason.
+	// An edit that leaves the contest still blocked for the same reason.
 	edit := audit.Entry{
 		Action: audit.ActionContestUpdate, Entity: "contest", EntityID: c.ID.String(),
 		Payload: map[string]any{"changes": map[string]any{}},
@@ -404,15 +360,9 @@ func TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded(t *testing.
 	}
 }
 
-// TestAdvanceFinishesWithTheSchedulersOwnGrace is a service-level test:
-// Scheduler must hand AdvanceFinished the exact grace it was constructed
-// with (cfg.DeadlineGrace in production), not compare ends_at bare — the
-// repository is what turns that into "ends_at + grace <= now()", but only
-// if the value actually arrives.
+// The repository applies "ends_at + grace <= now()" only if the grace arrives.
 func TestAdvanceFinishesWithTheSchedulersOwnGrace(t *testing.T) {
 	f := newScheduler()
-	// Two seconds and ten seconds past their end: inside and past the
-	// fixture's five-second grace.
 	insideGrace := putRunning(f, 2*time.Second)
 	pastGrace := putRunning(f, 10*time.Second)
 
@@ -496,11 +446,8 @@ func TestAdvanceFailsWhenAdvancingToFinishedFails(t *testing.T) {
 	}
 }
 
-// TestAdvanceFailsWhenThePublishGateItselfFails proves the gate's own
-// database reads are not mistaken for the gate's verdict: a story store that
-// is away must abort the tick (CLAUDE.md rule 8 — only a row-level sentinel
-// becomes "skipped"; anything else surfaces), not be read as "no story" and
-// audited as a blocked contest.
+// A failing story store aborts the tick rather than read as "no story"
+// (CLAUDE.md rule 8).
 func TestAdvanceFailsWhenThePublishGateItselfFails(t *testing.T) {
 	f := newScheduler()
 	c, _, _ := publishable()
@@ -520,11 +467,8 @@ func TestAdvanceFailsWhenThePublishGateItselfFails(t *testing.T) {
 	}
 }
 
-// TestAdvanceSkipsAContestThatRacedWithAManualTransition covers the other
-// reason SetStatus can fail beyond a real error: a concurrent manual
-// Transition (or a delete) moved the contest between DueToStart's read and
-// this tick's write. That is somebody else's decision and somebody else's
-// audit entry, not this tick's failure.
+// A concurrent Transition or delete is somebody else's decision, not this
+// tick's failure.
 func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	f := newScheduler()
 	duePublishable(f)
@@ -545,10 +489,6 @@ func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	}
 }
 
-// TestAdvanceTriggersThePoolForEveryContestItStarts is Advance's own claim: a
-// contest whose window opens is exactly the moment its pool's roster stops
-// being merely "published" and starts being played on, so the tender is
-// woken rather than left to its own next tick.
 func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 	f := newScheduler()
 	due := duePublishable(f)
@@ -565,9 +505,6 @@ func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 	}
 }
 
-// A tick that starts nothing — nothing was due, or the gate refused every
-// contest that was — must not wake the pool tender for a move that never
-// happened.
 func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
 	f := newScheduler()
 	c, _, questions := publishable()
@@ -575,8 +512,7 @@ func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
-	// The story never staged: the gate refuses this one (see
-	// TestAdvanceBlocksAContestThatFailsThePublishGate).
+	// No story staged, so the gate refuses it.
 	putDue(f, c)
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
@@ -587,9 +523,6 @@ func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
 	}
 }
 
-// A contest a concurrent manual Transition already started is not this
-// tick's move to announce: it raced this tick's own write, and this tick did
-// not actually start it.
 func TestAdvanceDoesNotTriggerThePoolForAContestThatRacedAManualTransition(t *testing.T) {
 	f := newScheduler()
 	duePublishable(f)
@@ -606,11 +539,7 @@ func TestAdvanceDoesNotTriggerThePoolForAContestThatRacedAManualTransition(t *te
 	}
 }
 
-// TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails is the ordering
-// this whole feature depends on: a tick that started a contest but then
-// failed to commit — here, the audit sink refusing the entry — must not wake
-// the pool tender for a move the database itself rolled back. The trigger
-// only ever fires after Advance's own transaction has actually committed.
+// The trigger fires only after Advance's transaction commits.
 func TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails(t *testing.T) {
 	f := newScheduler()
 	duePublishable(f)
@@ -625,9 +554,7 @@ func TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails(t *testing.T) {
 	}
 }
 
-// A Scheduler built without WithPoolTrigger — every deployment with no game
-// cluster, and every test above this one — must not panic reaching for a
-// trigger that was never wired.
+// Every deployment with no game cluster runs without one.
 func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	repo := conteststest.NewSchedule()
 	stories := conteststest.NewStories()

@@ -8,11 +8,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 )
 
-// baseMemory is what the process is assumed to need besides password hashing:
-// the runtime, connection pools, the in-process cache, console results relayed
-// from the Query Runner and upload chunks. It is the figure the deployment's
-// GOMEMLIMIT arithmetic starts from (deploy/docker-compose.yml), an estimate
-// rather than a measured peak.
+// baseMemory is the estimated memory need besides password hashing, the
+// figure the deployment's GOMEMLIMIT arithmetic starts from.
 const baseMemory int64 = 1 << 30
 
 // checkMemoryLimit warns when the runtime's memory limit, if one is set, is
@@ -22,13 +19,9 @@ func checkMemoryLimit(log *slog.Logger, concurrency int) {
 	warnIfMemoryLimitTooLow(log, debug.SetMemoryLimit(-1), concurrency)
 }
 
-// warnIfMemoryLimitTooLow is checkMemoryLimit with the limit passed in.
-//
-// A warning, not a refusal to start: the limit is a soft target, and an
-// operator who set it deliberately low on a small machine may have reasons.
-// What must not happen is that nobody notices — a burst of sign-ins then
-// holds more memory than the collector is told it may use, and it spends the
-// burst collecting instead of answering.
+// warnIfMemoryLimitTooLow is checkMemoryLimit with the limit passed in. It
+// warns rather than refuses, since GOMEMLIMIT is a soft target; a too-low
+// limit makes the collector thrash during a burst of sign-ins.
 func warnIfMemoryLimitTooLow(log *slog.Logger, limit int64, concurrency int) {
 	if limit == math.MaxInt64 {
 		return // GOMEMLIMIT is not set; there is nothing to compare against.

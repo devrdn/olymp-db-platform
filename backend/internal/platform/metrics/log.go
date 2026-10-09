@@ -6,17 +6,12 @@ import (
 	"time"
 )
 
-// defaultReportInterval is how often the log backend summarises traffic. It is
-// coarse on purpose: the point is a periodic digest, not a per-request echo of
-// what the access log already records.
+// defaultReportInterval is how often the log backend summarises traffic; the
+// access log already records each request.
 const defaultReportInterval = time.Minute
 
 // Log aggregates request statistics in memory and writes a periodic digest to
-// the logger.
-//
-// It is the fallback for deployments that collect logs but run no Prometheus:
-// counts and latency still reach the same place as everything else, at the
-// cost of resolution and of any query language over the numbers.
+// the logger, for deployments that collect logs but run no Prometheus.
 type Log struct {
 	log      *slog.Logger
 	interval time.Duration
@@ -30,9 +25,7 @@ type bucketKey struct {
 	route  string
 	status int
 	// streaming keeps a long-lived response's aggregate apart from ordinary
-	// requests on the same route (finding 5) — the same reasoning
-	// Prometheus.streamDuration exists for, applied to this backend's own
-	// digest instead of a histogram.
+	// requests on the same route (see Recorder).
 	streaming bool
 }
 
@@ -42,7 +35,6 @@ type bucket struct {
 	maxNs   int64
 }
 
-// NewLog returns a recorder that reports through log records.
 func NewLog(log *slog.Logger, interval time.Duration) *Log {
 	if interval <= 0 {
 		interval = defaultReportInterval
@@ -54,11 +46,8 @@ func NewLog(log *slog.Logger, interval time.Duration) *Log {
 	}
 }
 
-// ObserveRequest folds one request into its aggregate. streaming keeps a
-// long-lived response's own aggregate apart from ordinary requests on the
-// same route (finding 5) — Flush reports the two separately rather than
-// blending a connection that can last a whole contest into the same average
-// and max as everything else on that route.
+// ObserveRequest folds one request into its aggregate. A streaming response
+// gets its own aggregate, so Flush never blends it into the route's average.
 func (l *Log) ObserveRequest(method, route string, status int, d time.Duration, streaming bool) {
 	key := bucketKey{method: method, route: route, status: status, streaming: streaming}
 
@@ -79,8 +68,8 @@ func (l *Log) ObserveRequest(method, route string, status int, d time.Duration, 
 	}
 }
 
-// Run writes a digest every interval until stop is closed, then writes a final
-// one so the last window is not lost on shutdown.
+// Run writes a digest every interval until stop is closed, then a final one so
+// the last window is not lost on shutdown.
 func (l *Log) Run(stop <-chan struct{}) {
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
@@ -96,8 +85,8 @@ func (l *Log) Run(stop <-chan struct{}) {
 	}
 }
 
-// Flush writes the current window and resets the counters. Counters reset so
-// each record describes one interval rather than all history.
+// Flush writes the current window and resets the counters, so each record
+// describes one interval.
 func (l *Log) Flush() {
 	l.mu.Lock()
 	buckets := l.buckets

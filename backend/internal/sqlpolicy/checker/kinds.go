@@ -1,23 +1,11 @@
 package checker
 
-// The node types a query may be built from.
+// allowedKinds are the node types a query may be built from. Every node in
+// the tree is looked up here and anything absent is refused, so COPY, SET,
+// DO, CREATE ROLE and whatever a future release adds are refused unlisted.
 //
-// This is the list the whole package turns on. Every node in the parse tree is
-// looked up here, and anything absent is refused — not because it is known to
-// be dangerous, but because it is not known at all. `COPY`, `SET`, `DO`,
-// `CREATE ROLE`, and every construct a future PostgreSQL release adds are
-// refused by saying nothing about them, which is the only way a list stays
-// correct without being maintained against a moving target.
-//
-// The names are the grammar's own, read off the parse tree (kindOf), so they
-// cannot drift from what the parser actually produces the way a hand-kept
-// mapping would.
-//
-// Statements are conspicuous by their absence: `select_stmt` is here because a
-// subquery is a select, but there is no `insert_stmt`, `delete_stmt` or
-// `create_stmt`. That is what refuses a data-modifying CTE — the write sits
-// several levels inside a tree whose root is an honest SELECT, and the root
-// check cannot see it.
+// No write statement is listed (only select_stmt, for subqueries); that is
+// what refuses a data-modifying CTE under a SELECT root.
 var allowedKinds = names(
 	// The shape of a query.
 	"select_stmt", "with_clause", "common_table_expr", "join_expr",
@@ -34,12 +22,7 @@ var allowedKinds = names(
 	// Leaves the grammar spells as their own nodes.
 	"integer", "float", "boolean", "string", "bit_string",
 
-	// What a table definition is made of, for the contests that let a
-	// participant keep their own. Reachable only under a write statement,
-	// whose own node is checked at the root and refused anywhere else — so
-	// these being here does not make `CREATE TABLE` possible in a contest
-	// that did not permit it. A default or a check expression is still an
-	// expression, walked like any other, so a forbidden function inside one
-	// is refused exactly as it would be in a WHERE.
+	// Table definitions, reachable only under a CREATE TABLE the root check
+	// permitted. Defaults and checks inside are walked like any expression.
 	"column_def", "constraint",
 )

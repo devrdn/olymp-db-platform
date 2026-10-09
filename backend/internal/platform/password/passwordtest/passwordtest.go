@@ -1,6 +1,5 @@
 // Package passwordtest builds password digests for tests: ordinary ones for
-// fixtures, and ones with deliberately weak parameters so tests can exercise
-// the upgrade-on-login path with a digest that still verifies correctly.
+// fixtures, and valid ones with weak parameters for the upgrade-on-login path.
 package passwordtest
 
 import (
@@ -14,8 +13,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Cost below the current production parameters, but still a valid argon2id
-// digest: verification succeeds and NeedsRehash reports true.
+// Weaker than production: verification succeeds and NeedsRehash reports true.
 const (
 	weakMemory  uint32 = 8 * 1024
 	weakTime    uint32 = 1
@@ -23,19 +21,15 @@ const (
 	keyLength   uint32 = 32
 )
 
-// NewHasher returns a hasher for a test fixture: roomy enough that tests
-// running in parallel inside one package do not refuse each other, with a
-// wait long enough that a slow machine does not either.
+// NewHasher returns a hasher roomy enough that parallel tests on a slow
+// machine do not refuse each other.
 func NewHasher() *password.Hasher {
 	return password.NewHasher(password.HasherConfig{Concurrency: 4, MaxWait: time.Minute})
 }
 
-// shared serves Hash and Matches, so fixture digests across a test binary are
-// bounded the same way production ones are.
 var shared = NewHasher()
 
-// Hash returns a production-strength digest of plaintext, failing the test on
-// error.
+// Hash returns a production-strength digest of plaintext.
 func Hash(t testing.TB, plaintext string) string {
 	t.Helper()
 	hash, err := shared.Hash(context.Background(), plaintext)
@@ -45,8 +39,7 @@ func Hash(t testing.TB, plaintext string) string {
 	return hash
 }
 
-// Matches reports whether plaintext verifies against hash, failing the test
-// when the digest cannot be read at all.
+// Matches reports whether plaintext verifies against hash.
 func Matches(t testing.TB, hash, plaintext string) bool {
 	t.Helper()
 	ok, err := shared.Verify(context.Background(), hash, plaintext)

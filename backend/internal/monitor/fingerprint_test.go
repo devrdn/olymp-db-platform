@@ -36,9 +36,7 @@ func TestFingerprintTellsDifferentTextApart(t *testing.T) {
 }
 
 func TestFingerprintIsStable(t *testing.T) {
-	// The value is stored and compared across processes and releases, so it
-	// must not depend on anything but the text: this pins the algorithm.
-	// FNV-1a 64 of "select 1", worked out independently of this package.
+	// Pins the algorithm: FNV-1a 64 of "select 1", computed independently.
 	const want = int64(214897735614764786)
 	if got := monitor.Fingerprint("SELECT 1"); got != want {
 		t.Fatalf("Fingerprint(\"SELECT 1\") = %d, want %d", got, want)

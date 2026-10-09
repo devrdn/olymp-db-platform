@@ -1,9 +1,10 @@
-// Package api assembles the HTTP surface of the Core API.
+// Package api is the HTTP surface of the Core API: it adapts requests to the
+// domain packages and answers their errors with declared codes. Domain rules
+// live in the domain packages and HTTP plumbing in platform/httpx, not here.
 //
-// Two routers are built from the same dependencies. The public router serves
-// the participant and administrator API and is the only one published through
-// the reverse proxy. The internal router serves operational endpoints
-// (metrics, liveness, readiness) and stays on a port that is never exposed.
+// Two routers are built from the same dependencies. The public router is the
+// only one published through the reverse proxy; the internal router serves
+// metrics, liveness and readiness on a port that is never exposed.
 package api
 
 import (
@@ -23,17 +24,16 @@ import (
 // answers, even when a dependency hangs instead of refusing.
 const defaultReadinessTimeout = 3 * time.Second
 
-// Deps carries everything the routers need. Handlers receive their
-// collaborators explicitly rather than reaching for package-level state.
+// Deps carries everything the routers need.
 type Deps struct {
 	Logger *slog.Logger
 	// Metrics is any recorder; the router adapts to what the backend offers.
 	Metrics  metrics.Recorder
 	Version  string
 	Checkers []health.Checker
-	// ClientIPs resolves the real client address behind the reverse proxy.
-	// The zero value trusts nobody, which is the safe default: forwarded
-	// headers are then ignored and the TCP peer is the client.
+	// ClientIPs resolves the real client address behind the reverse proxy. The
+	// zero value trusts nobody: forwarded headers are ignored and the TCP peer
+	// is the client.
 	ClientIPs httpx.IPResolver
 	// PublicOrigins are the front origins CheckOrigin accepts on top of this
 	// service's own host. Empty means same-origin only.
@@ -42,9 +42,8 @@ type Deps struct {
 	// degraded install is visible to operators.
 	CacheMode        string
 	ReadinessTimeout time.Duration
-	// Modules contribute the routes of a feature area under /api/v1. The
-	// router knows nothing about what they serve, so a feature is added by
-	// wiring one in main rather than by editing this package.
+	// Modules contribute the routes of a feature area under /api/v1; a feature
+	// is added by wiring one in, not by editing this package.
 	Modules []Module
 }
 
@@ -56,7 +55,6 @@ type Module interface {
 // chiRouter is the router type a module receives.
 type chiRouter = chi.Router
 
-// moduleFunc adapts a function to Module.
 type moduleFunc func(r chi.Router)
 
 func (f moduleFunc) Mount(r chi.Router) { f(r) }
@@ -81,22 +79,17 @@ func (d Deps) recorder() metrics.Recorder {
 func NewRouter(deps Deps) *chi.Mux {
 	r := chi.NewRouter()
 
-	// Order matters: request identity first so every later record and error
-	// body can carry it, then the client's address, then observability, then
-	// response hardening, and recovery innermost so that everything above
-	// observes the 500 it turns a panic into.
+	// Order matters: request identity first so every later record carries it,
+	// then the client address, then observability and hardening, with recovery
+	// innermost.
 	r.Use(httpx.RequestID)
-	// Client IP is resolved once, before anything that records or limits by
-	// address, so every consumer sees the same answer.
+	// Resolved once, before anything that records or limits by address.
 	r.Use(deps.ClientIPs.Middleware)
 	// Every audit write below inherits the request origin from the context.
 	r.Use(requestMeta)
-	// Observability outside recovery, which is the other way round from the
-	// obvious order and is the point. A panic unwinds past anything that
-	// records *after* calling the next handler, so with the recoverer
-	// outermost a panicking request produced its own error line and nothing
-	// else: no access log entry, no metric, no 500 in the status counts —
-	// invisible to exactly the alert it should have fired.
+	// Observability outside recovery: a panic unwinds past anything that
+	// records after calling next, so with the recoverer outermost a panicking
+	// request would leave no access log line, metric or 500 in the counts.
 	r.Use(httpx.AccessLog(deps.Logger))
 	r.Use(metrics.Middleware(deps.recorder()))
 	r.Use(httpx.SecureHeaders)
@@ -130,9 +123,8 @@ func NewInternalRouter(deps Deps) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(httpx.Recoverer(deps.Logger))
 
-	// Only a backend with a pull endpoint gets /metrics. Serving an empty page
-	// for the log or disabled backends would tell a scraper the service is
-	// instrumented when its numbers live somewhere else entirely.
+	// Only a backend with a pull endpoint gets /metrics; an empty page would
+	// falsely suggest the numbers are here.
 	if scraper, ok := deps.recorder().(metrics.Scraper); ok {
 		r.Handle("/metrics", scraper.ScrapeHandler())
 	}
@@ -154,15 +146,11 @@ func versionHandler(version string) http.HandlerFunc {
 	}
 }
 
-// refuseUnstorableQuery answers 400 to an address — its decoded path or its
-// query string — holding a NUL byte or bytes that are not UTF-8, for every
-// route at once.
-//
-// No stored text can contain either, and PostgreSQL refuses both by failing
-// the statement that compares them: a status filter, a search or a path
-// segment naming a database was a 500 for the client's own malformed address.
-// JSON bodies are held to the same rule by httpx.DecodeJSON. A multipart
-// field, or a header the trail stores, is checked where it is read.
+// refuseUnstorableQuery answers 400 for a decoded path or query string holding
+// a NUL byte or invalid UTF-8, on every route. No stored text can contain
+// either, and PostgreSQL would fail the statement, turning the client's
+// malformed address into a 500. httpx.DecodeJSON applies the same rule to JSON
+// bodies; multipart fields and stored headers are checked where read.
 func refuseUnstorableQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !utf8.ValidString(r.URL.Path) || strings.ContainsRune(r.URL.Path, 0) {

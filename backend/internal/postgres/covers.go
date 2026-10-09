@@ -14,12 +14,9 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
 
-// Covers is the read and write side of contest_covers.
-//
-// The row only: the pictures themselves are files on a volume, and this
-// repository never opens one. What it does own is the one question the file
-// store cannot answer — whether the contest a file belongs to is one a
-// visitor with no session may see.
+// Covers is the read and write side of contest_covers. The pictures are files
+// on a volume that this repository never opens; it answers whether a cover's
+// contest is visible to an anonymous visitor.
 type Covers struct{ pool *pgxpool.Pool }
 
 var _ covers.Repository = (*Covers)(nil)
@@ -31,16 +28,10 @@ func (r *Covers) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// coverColumns is the projection every read below shares, so a column added
-// to the table is added to one list rather than to three statements that then
-// disagree.
 const coverColumns = `contest_id, hash, attribution, width, height, uploaded_at, COALESCE(uploaded_by, '00000000-0000-0000-0000-000000000000'::uuid)`
 
-// Save replaces whatever cover the contest had.
-//
-// One statement and one row: re-uploading replaces the row, so nothing has to
-// choose between two covers and no upload is left behind in the table. The
-// files the old row named are left for the sweep.
+// Save replaces whatever cover the contest had; a contest has at most one
+// row. Files the old row named are left for the sweep.
 func (r *Covers) Save(ctx context.Context, cover covers.Cover) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO contest_covers
@@ -68,14 +59,8 @@ func (r *Covers) ByContest(ctx context.Context, contestID uuid.UUID) (covers.Cov
 }
 
 // PublicByContest returns the cover only when the contest is one a visitor
-// may see.
-//
-// The join is the check, not a second round trip: asking for the row and then
-// asking whether the contest is published leaves a window in which the answer
-// changes between the two, and puts the rule in a caller that can forget it.
-// A draft's cover is as private as its questions — the file belongs to the
-// olympiad, so it answers to the olympiad's own visibility rather than to
-// whether somebody guessed a hash.
+// may see. The visibility check is a join in the same statement, so it cannot
+// race a status change or be forgotten by a caller.
 func (r *Covers) PublicByContest(ctx context.Context, contestID uuid.UUID) (covers.Cover, error) {
 	return r.scanOne(ctx, `
 		SELECT `+coverColumns+`
@@ -84,8 +69,7 @@ func (r *Covers) PublicByContest(ctx context.Context, contestID uuid.UUID) (cove
 		WHERE cc.contest_id = $1 AND `+publicStatusFilter("c.status", 2), contestID, contests.PublicStatuses)
 }
 
-// Delete removes the row. A contest with no cover is not an error: removing
-// one that is already gone is what a second click does.
+// Delete removes the row. A contest with no cover is not an error.
 func (r *Covers) Delete(ctx context.Context, contestID uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM contest_covers WHERE contest_id = $1`, contestID); err != nil {
 		return fmt.Errorf("remove the cover of contest %s: %w", contestID, err)
@@ -93,9 +77,6 @@ func (r *Covers) Delete(ctx context.Context, contestID uuid.UUID) error {
 	return nil
 }
 
-// scanOne reads the one row both reads above return, and turns its absence
-// into the domain's own sentinel rather than into a driver error the HTTP
-// layer would have to know about.
 func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID, args ...any) (covers.Cover, error) {
 	var cover covers.Cover
 	err := r.querier(ctx).QueryRow(ctx, sql, append([]any{contestID}, args...)...).
@@ -110,23 +91,13 @@ func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID, a
 	return cover, nil
 }
 
-// ReferencedHashes is every picture any contest still wears, once each.
+// ReferencedHashes is every cover hash any contest still uses, once each.
+// Files are named by content hash and shared between contests, so the orphan
+// sweep may remove only a hash no row names. It scans the whole table, run by
+// an operator, never on a request path.
 //
-// The whole table in one read, with no contest in the question. That is the
-// point: a file is named by the hash of its content, so two contests that
-// uploaded the same picture share one file on the volume, and the sweep that
-// removes files (internal/covers.OrphanSweeper) may only remove a hash no row
-// at all names. Asking per contest would be asking a question whose answer
-// cannot decide anything.
-//
-// No WHERE clause and therefore no index to serve one (CLAUDE.md, security
-// rule 7): this is a sequential scan of one row per contest that has a cover,
-// run by hand by an operator and by nothing on a request path.
-//
-// Deliberately outside covers.Repository, which is the service's own port: a
-// method only the sweep calls belongs to the narrow interface the sweep
-// declares for itself (CLAUDE.md, Go layout rule 3), exactly as Attribution
-// below belongs to the publish gate's.
+// Not part of covers.Repository: the sweep declares its own narrow interface
+// (CLAUDE.md, Go layout rule 3).
 func (r *Covers) ReferencedHashes(ctx context.Context) ([]string, error) {
 	rows, err := r.querier(ctx).Query(ctx, `SELECT DISTINCT hash FROM contest_covers`)
 	if err != nil {
@@ -148,15 +119,10 @@ func (r *Covers) ReferencedHashes(ctx context.Context) ([]string, error) {
 	return hashes, nil
 }
 
-// Attribution answers the publish gate's one question about a contest's
-// picture: is there an uploaded cover, and whose is it?
-//
-// Two values rather than a Cover, because the gate needs neither the hash nor
-// the size and a contest with no uploaded cover is not a failure — it wears a
-// drawn one, whose author is us. Deliberately outside covers.Repository: the
-// interface the domain's own service declares is what that service uses, and
-// a method only the contests package calls belongs to the narrow interface
-// that package declares for itself (CLAUDE.md, Go layout rule 3).
+// Attribution reports a contest's uploaded cover attribution and whether one
+// exists, for the publish gate. No cover is not an error: the contest uses a
+// drawn one. Not part of covers.Repository: the contests package declares its
+// own narrow interface (CLAUDE.md, Go layout rule 3).
 func (r *Covers) Attribution(ctx context.Context, contestID uuid.UUID) (string, bool, error) {
 	var attribution string
 	err := r.querier(ctx).QueryRow(ctx,

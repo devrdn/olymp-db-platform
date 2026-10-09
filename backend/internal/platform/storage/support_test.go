@@ -7,8 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeQuerier is a stand-in used to assert which querier a repository would
-// reach for. It is never executed against.
+// fakeQuerier identifies which querier was chosen; it is never executed.
 type fakeQuerier struct {
 	name string
 }

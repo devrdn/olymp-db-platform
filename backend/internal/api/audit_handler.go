@@ -14,16 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// AuditHandler serves the trail of who did what.
-//
-// Behind audit.view, and behind nothing else: the trail names who blocked
-// whom, from which address, and when. It is the record that answers "why did
-// this participant lose access" months later, which is exactly why reading it
-// is a privilege rather than a side effect of being signed in.
-//
-// Read-only by construction — there is no route here that writes. The trail is
-// append-only, and entries arrive in the same transaction as the action they
-// describe, never through HTTP.
+// AuditHandler serves the trail of who did what, behind audit.view: the trail
+// names who blocked whom, from where and when, so reading it is a privilege. It
+// is read-only; entries are written in the same transaction as their action,
+// never through HTTP.
 type AuditHandler struct {
 	trail audit.Reader
 	mw    *auth.Middleware
@@ -40,11 +34,9 @@ func (h *AuditHandler) Mount(r chi.Router) {
 	r.Route("/audit", func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionAuditView))
 		r.Get("/", h.list)
-		// A sibling of the trail rather than a value folded into it: it
-		// describes what this installation can record, not a page of what it
-		// has recorded, so the filter can offer the whole vocabulary before a
-		// single matching entry is on screen. Same permission as the trail
-		// itself — the roles catalogue beside /users is the same idea.
+		// Beside the trail, not folded into it: it lists what can be recorded,
+		// so the filter offers the whole vocabulary before any entry is on
+		// screen.
 		r.Get("/actions", h.listActions)
 	})
 }
@@ -53,14 +45,14 @@ func (h *AuditHandler) Mount(r chi.Router) {
 type AuditEntryResponse struct {
 	ID      int64  `json:"id"`
 	ActorID string `json:"actor_id,omitempty"`
-	// ActorLogin is empty for a system event, and for an account deleted since:
+	// ActorLogin is empty for a system event and for an account deleted since:
 	// the trail outlives the people in it.
 	ActorLogin string `json:"actor_login,omitempty"`
 	Action     string `json:"action"`
 	Entity     string `json:"entity,omitempty"`
 	EntityID   string `json:"entity_id,omitempty"`
-	// EntityLabel names the thing acted upon while it still exists. Absent
-	// once it is gone; the identifier stays either way.
+	// EntityLabel names the thing acted upon while it still exists; the
+	// identifier stays either way.
 	EntityLabel string         `json:"entity_label,omitempty"`
 	Payload     map[string]any `json:"payload,omitempty"`
 	IP          string         `json:"ip,omitempty"`
@@ -77,12 +69,9 @@ type auditActionsResponse struct {
 	Items []string `json:"items"`
 }
 
-// listActions publishes the vocabulary the trail can be filtered by.
-//
-// Read from audit.Actions() rather than built from the rows on the current
-// page: a filter offering only what is already on screen can never find a
-// deletion, say, until one happens to be in view — which is the defect this
-// endpoint exists to close.
+// listActions publishes the vocabulary the trail can be filtered by, from
+// audit.Actions() rather than the current page, so a filter can find an action
+// not yet on screen.
 func (h *AuditHandler) listActions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, auditActionsResponse{Items: audit.Actions()})
 }
@@ -123,11 +112,9 @@ func (h *AuditHandler) list(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, auditListResponse{Items: items, Total: total})
 }
 
-// auditFilter reads the query into a filter.
-//
-// A malformed value is refused rather than dropped: silently ignoring an
-// unparseable actor would answer a question about one person with the whole
-// trail, which is both wrong and the opposite of what was asked.
+// auditFilter reads the query into a filter. A malformed value is refused
+// rather than dropped: ignoring a bad actor would answer a question about one
+// person with the whole trail.
 func auditFilter(r *http.Request) (audit.Filter, error) {
 	query := r.URL.Query()
 
@@ -147,10 +134,8 @@ func auditFilter(r *http.Request) (audit.Filter, error) {
 		filter.Actor = actor
 	}
 
-	// A code that names no action would otherwise return an empty page —
-	// indistinguishable from a real search that matched nothing — for what is
-	// usually a typo in the address bar. Refused instead, the same way an
-	// unparseable actor is.
+	// An unknown action would return an empty page indistinguishable from no
+	// matches, usually for a typo; refuse it.
 	if filter.Action != "" && !audit.IsAction(filter.Action) {
 		return audit.Filter{}, errInvalidAction
 	}
@@ -177,14 +162,9 @@ func auditTime(value string) (*time.Time, error) {
 	return &utc, nil
 }
 
-// The ways a query can be malformed, named so the message the client sees is
-// written once.
+// The ways a query can be malformed, so each message is written once.
 var (
-	errInvalidActor = errors.New("actor must be a UUID")
-	// errInvalidAction is a filter naming a code audit.IsAction does not
-	// recognise. The same sentinel a service would return, here because the
-	// check itself is a query-parameter validation the handler owns rather
-	// than a rule any service enforces.
+	errInvalidActor  = errors.New("actor must be a UUID")
 	errInvalidAction = errors.New("action is not one this installation records")
 	errInvalidWindow = errors.New("from and to must be RFC 3339 timestamps")
 )

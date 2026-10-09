@@ -16,22 +16,13 @@ import (
 )
 
 // The participant's own workspace on the play screen: notes and SQL editor
-// tabs, stored per registration and autosaved by the interface
-// (docs/ARCHITECTURE.md §6.4).
+// tabs, stored per registration and autosaved (docs/ARCHITECTURE.md §6.4).
 //
-// Admitted like the rest of /play (admit, and queryproxy.Service.Access
-// behind it): once the contest has ended for the participant, every route
-// here answers contest_ended, deadline_passed or contest_finished exactly as
-// /play/story does. There is no read-only mode, because the play screen
-// itself is closed by then.
-//
-// Two differences from the other /play routes are the point of this file.
-// Nothing here starts an individual participant's clock: keeping notes is not
-// reading the contest. And a write does not spend the read budget admit
-// charges, which the SQL console shares — autosave during continuous typing
-// would otherwise take a participant's queries away from them. A write spends
-// the workspace's own budget instead (workspace.Service.AdmitWrite), before
-// anything is looked up.
+// Admitted like the rest of /play, so it closes with the contest; there is no
+// read-only mode. Unlike the other /play routes, nothing here starts the
+// participant's clock, and a write spends the workspace's own budget
+// (workspace.Service.AdmitWrite) instead of the read budget the console shares,
+// so autosave cannot take queries away.
 
 // Workspaces is the slice of workspace.Service these endpoints need.
 type Workspaces interface {
@@ -44,26 +35,22 @@ type Workspaces interface {
 	ReorderTabs(ctx context.Context, session workspace.Session, ids []uuid.UUID) error
 }
 
-// versionLayout formats a workspace document's updated_at. Unlike the rest of
-// the API it keeps the fractional seconds: the interface compares this value
-// for equality to tell whether a local draft was written against the copy
-// the server still holds, and two saves within one second must not look
-// like the same version.
+// versionLayout formats a workspace document's updated_at with fractional
+// seconds: the interface compares it for equality to detect a stale draft, and
+// two saves in one second must differ.
 const versionLayout = time.RFC3339Nano
 
-// tabIDParam names the tab in the URL.
 const tabIDParam = "tabId"
 
-// WithWorkspace serves the workspace endpoints from workspaces. Without it
-// they are not mounted at all.
+// WithWorkspace serves the workspace endpoints from workspaces; without it they
+// are not mounted.
 func (h *ParticipantHandler) WithWorkspace(workspaces Workspaces) *ParticipantHandler {
 	h.workspaces = workspaces
 	return h
 }
 
-// mountWorkspace registers the workspace routes on an authenticated router.
-// PUT .../tabs/order is a distinct static path; chi prefers it over the
-// {tabId} pattern, which only takes PATCH and DELETE anyway.
+// mountWorkspace registers the workspace routes. chi prefers the static PUT
+// .../tabs/order over the {tabId} pattern.
 func (h *ParticipantHandler) mountWorkspace(r chi.Router) {
 	if h.workspaces == nil {
 		return
@@ -77,17 +64,14 @@ func (h *ParticipantHandler) mountWorkspace(r chi.Router) {
 	r.Delete(prefix+"/tabs/{"+tabIDParam+"}", h.deleteTab)
 }
 
-// workspaceSession turns an admitted request into the session the workspace
-// service works in: whose workspace, and the language a server-named tab
-// takes. Whether the participant may use the workspace at all was decided by
-// Access, which also closes it with the contest.
+// workspaceSession turns an admitted request into the workspace session: whose
+// workspace, and the language a server-named tab takes.
 func (h *ParticipantHandler) workspaceSession(r *http.Request, participant contests.Participant, contest contests.Contest) workspace.Session {
 	return workspace.Session{Registration: participant.ID, Lang: h.languageFor(r, contest)}
 }
 
-// admitWorkspaceWrite spends a write of the caller's workspace budget, then
-// admits the request like every other /play route except for the read
-// budget, which a write does not spend (see the file's doc).
+// admitWorkspaceWrite spends a write of the workspace budget, then admits the
+// request like admit but without charging the read budget.
 func (h *ParticipantHandler) admitWorkspaceWrite(w http.ResponseWriter, r *http.Request) (workspace.Session, bool) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.workspaces.AdmitWrite(r.Context(), identity.UserID); err != nil {
@@ -108,7 +92,6 @@ func (h *ParticipantHandler) admitWorkspaceWrite(w http.ResponseWriter, r *http.
 	return h.workspaceSession(r, participant, contest), true
 }
 
-// tabID reads the tab named in the URL, answering the refusal itself.
 func tabID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, tabIDParam))
 	if err != nil {
@@ -142,13 +125,11 @@ func toWorkspaceTabResponse(tab workspace.Tab) workspaceTabResponse {
 	}
 }
 
-// workspaceResponse is everything the play screen restores.
 type workspaceResponse struct {
 	Notes workspaceNotesResponse `json:"notes"`
 	Tabs  []workspaceTabResponse `json:"tabs"`
 }
 
-// updatedResponse answers a write that changed one document.
 type updatedResponse struct {
 	UpdatedAt string `json:"updated_at"`
 }
@@ -157,8 +138,7 @@ func updated(at time.Time) updatedResponse {
 	return updatedResponse{UpdatedAt: at.UTC().Format(versionLayout)}
 }
 
-// getWorkspace serves GET .../play/workspace, creating the first tab when the
-// participant has none.
+// getWorkspace creates the first tab when the participant has none.
 func (h *ParticipantHandler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 	participant, contest, ok := h.admit(w, r)
 	if !ok {
@@ -294,8 +274,8 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 	if !h.decodeWorkspaceBody(w, r, &req) {
 		return
 	}
-	// Bounded before anything is parsed (CLAUDE.md rule 2): a list longer
-	// than a workspace can be is refused as the mismatch it is.
+	// Bounded before parsing (CLAUDE.md rule 2): a list longer than a workspace
+	// can hold is a mismatch.
 	if len(req.IDs) > workspace.MaxTabs {
 		h.failWorkspace(w, r, workspace.ErrOrderMismatch)
 		return
@@ -316,11 +296,9 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// decodeWorkspaceBody is decodeBody for the workspace's writes, which have a
-// refusal of their own for text no stored row can hold
-// (workspace.ErrTextInvalid, translated for the participant). A NUL that
-// arrives spelled in the JSON is the same refusal, so it gets the same
-// answer, not the generic one every other body gets.
+// decodeWorkspaceBody is decodeBody that answers a NUL spelled in the JSON with
+// workspace.ErrTextInvalid, the same refusal as any text a stored row cannot
+// hold.
 func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	err := httpx.DecodeJSON(w, r, v)
 	switch {
@@ -335,7 +313,6 @@ func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.
 }
 
 // failWorkspace maps a workspace refusal to a response (CLAUDE.md rule 1).
-// Anything else is ours, and an internal error.
 func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, workspace.ErrTooOften):

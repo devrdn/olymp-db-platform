@@ -12,8 +12,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 )
 
-// allBackends lists every recorder, so behaviour required of all of them is
-// asserted for all of them.
 func allBackends(t *testing.T) map[string]Recorder {
 	t.Helper()
 	return map[string]Recorder{
@@ -24,8 +22,6 @@ func allBackends(t *testing.T) map[string]Recorder {
 }
 
 func TestEveryBackendAcceptsObservationsWithoutFailing(t *testing.T) {
-	// The service records a metric on every request. No backend may panic or
-	// need special handling at the call site.
 	for name, rec := range allBackends(t) {
 		t.Run(name, func(t *testing.T) {
 			rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond, false)
@@ -36,8 +32,6 @@ func TestEveryBackendAcceptsObservationsWithoutFailing(t *testing.T) {
 }
 
 func TestOnlyPrometheusExposesAScrapeEndpoint(t *testing.T) {
-	// The internal router registers /metrics only when the backend has one,
-	// so a log-only deployment answers 404 instead of an empty page.
 	if _, ok := any(NewPrometheus()).(Scraper); !ok {
 		t.Error("prometheus backend does not expose a scrape endpoint")
 	}
@@ -58,8 +52,7 @@ func TestLogBackendReportsAggregatedCounts(t *testing.T) {
 	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 500, 20*time.Millisecond, false)
 	rec.Flush()
 
-	// One record per method+route+status group, not one per request: the
-	// access log already carries individual requests.
+	// One record per method+route+status group, not one per request.
 	records := decodeRecords(t, &buf)
 	var ok200, ok500 map[string]any
 	for _, r := range records {
@@ -103,8 +96,6 @@ func TestLogBackendReportsLatency(t *testing.T) {
 }
 
 func TestLogBackendResetsCountersAfterFlush(t *testing.T) {
-	// Counters must not accumulate across intervals, or every report would
-	// restate the whole history.
 	var buf bytes.Buffer
 	rec := NewLog(logging.New("info", &buf), time.Minute)
 	rec.ObserveRequest(http.MethodGet, "/x", 200, time.Millisecond, false)
@@ -149,10 +140,6 @@ func TestNewRejectsUnknownBackend(t *testing.T) {
 	}
 }
 
-// Finding 5: a long-lived response (an SSE channel that can stay open for the
-// length of a contest) must not land in the same histogram as ordinary
-// requests, or that one connection would own the service's own p99 the
-// moment it closes.
 func TestPrometheusRoutesAStreamingObservationToItsOwnHistogram(t *testing.T) {
 	p := NewPrometheus()
 	p.ObserveRequest(http.MethodGet, "/contests/{contestID}/events", 200, time.Hour, true)
@@ -173,8 +160,6 @@ func TestPrometheusRoutesAStreamingObservationToItsOwnHistogram(t *testing.T) {
 	}
 }
 
-// The other direction: an ordinary request must never appear in the stream
-// histogram just because that histogram now exists.
 func TestPrometheusLeavesOrdinaryRequestsOutOfTheStreamHistogram(t *testing.T) {
 	p := NewPrometheus()
 	p.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond, false)
@@ -187,9 +172,6 @@ func TestPrometheusLeavesOrdinaryRequestsOutOfTheStreamHistogram(t *testing.T) {
 	}
 }
 
-// The log backend's own version of the same split: one aggregate for the
-// streaming observations on a route, a separate one for the ordinary
-// requests on the same route, never folded into one count or one average.
 func TestLogBackendReportsStreamingSeparatelyFromOrdinaryRequests(t *testing.T) {
 	var buf bytes.Buffer
 	rec := NewLog(logging.New("info", &buf), time.Minute)
@@ -217,9 +199,6 @@ func TestLogBackendReportsStreamingSeparatelyFromOrdinaryRequests(t *testing.T) 
 	}
 }
 
-// MarkStreaming is how a handler tells Middleware which histogram its own
-// response belongs in; this proves the mailbox Middleware plants in the
-// context actually reaches ObserveRequest.
 func TestMarkStreamingReachesTheRecorderThroughMiddleware(t *testing.T) {
 	p := NewPrometheus()
 	handler := Middleware(p)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -236,9 +215,6 @@ func TestMarkStreamingReachesTheRecorderThroughMiddleware(t *testing.T) {
 	}
 }
 
-// A handler that never calls MarkStreaming must keep counting toward the
-// shared histogram — marking is opt-in per handler, not the default for
-// everything that happens to run through Middleware.
 func TestMiddlewareDefaultsToTheSharedHistogramWithoutMarkStreaming(t *testing.T) {
 	p := NewPrometheus()
 	handler := Middleware(p)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +247,6 @@ func TestMiddlewareWorksWithEveryBackend(t *testing.T) {
 	}
 }
 
-// decodeRecords parses every JSON line written to buf.
 func decodeRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any

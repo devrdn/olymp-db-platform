@@ -34,14 +34,8 @@ func TestTheContractListsEveryAction(t *testing.T) {
 	}
 }
 
-// TestTheCommittedContractIsCurrent is what makes an action added to
-// audit.go without regenerating this file a build failure rather than a
-// support ticket: `go test ./...` runs this, so a Go-only change to the
-// vocabulary — the constant added, Actions() updated, audit_test.go's own
-// guards satisfied — still fails here until `make audit-contract` is run and
-// the result committed. The frontend's dictionary test reads the file this
-// proves current, never a copy of it, so there is nothing on that side left
-// to fall behind either.
+// TestTheCommittedContractIsCurrent fails until `make audit-contract` is run
+// after the vocabulary changes.
 func TestTheCommittedContractIsCurrent(t *testing.T) {
 	generated, err := contract()
 	if err != nil {

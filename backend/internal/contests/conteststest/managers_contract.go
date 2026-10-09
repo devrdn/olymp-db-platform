@@ -12,39 +12,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// ManagerTarget is what one case of the contract runs against: a repository
-// holding no staff yet, and the means to create what a staff entry hangs off.
-// A real schema needs a contest and the accounts to exist before an entry can
-// name them, so each implementation fills these its own way: the in-memory
-// store mints identifiers and remembers the names, PostgreSQL inserts rows.
+// ManagerTarget is a repository holding no staff yet, and the means to create
+// the contest and accounts a staff entry names.
 type ManagerTarget struct {
 	Repo contests.ManagerRepository
-	// NewUser creates an account and returns its identifier. The login and
-	// full name are what a staff entry carries once appointed.
-	NewUser func(login, fullName string) uuid.UUID
-	// NewContest creates a contest and returns its identifier.
+	// NewUser's login and full name are what a staff entry carries.
+	NewUser    func(login, fullName string) uuid.UUID
 	NewContest func() uuid.UUID
-	// Now is what the store's clock reads when a row is written. An
-	// appointment's GrantedAt is that clock, so the contract can only state
-	// it in its terms.
+	// Now is the store's clock, which stamps GrantedAt.
 	Now func() time.Time
 }
 
-// ManagerRepositoryContract is what every contests.ManagerRepository must do,
-// run as subtests against one implementation. Both the in-memory Managers and
-// postgres.ContestManagers run it, so the store the service tests trust and
-// the store production uses are held to the same answers: a rule the fake got
-// wrong would otherwise pass every service test and fail only in a contest.
+// ManagerRepositoryContract is what every contests.ManagerRepository must do;
+// both the in-memory Managers and postgres.ContestManagers run it. each
+// prepares a fresh target for one case, calls run with it, and cleans up.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. What a database refuses by
-// constraint is left out on purpose: the contract does not ask a repository to
-// refuse a second owner, an unknown account or an unknown contest, which the
-// service rules out before it writes.
-//
-// Logins are lower-case letters throughout, because the staff list is ordered
-// by them and the order of anything else depends on the database's collation.
+// Constraint refusals (a second owner, an unknown account or contest) are
+// left out: the service rules them out before writing. Logins are lower-case
+// letters because the staff list is ordered by them, and anything else
+// depends on the collation.
 func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, ManagerTarget))) {
 	grant := func(t *testing.T, ctx context.Context, target ManagerTarget, contest, user uuid.UUID, role rbac.ContestRole, by uuid.UUID) {
 		t.Helper()
@@ -66,7 +52,6 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			t.Errorf("%s error = %v, want ErrManagerNotFound", what, err)
 		}
 	}
-	// logins lists the staff of a contest by login, in the order returned.
 	logins := func(t *testing.T, ctx context.Context, target ManagerTarget, contest uuid.UUID) []string {
 		t.Helper()
 		staff, err := target.Repo.List(ctx, contest)
@@ -113,8 +98,7 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			owner := target.NewUser("olga", "Olga Ostrovska")
 			helper := target.NewUser("hana", "Hana Horvat")
 
-			// Whatever name and time the caller carries, the entry is the
-			// account's own and the store's clock.
+			// The caller's name and time are ignored.
 			err := target.Repo.Grant(ctx, contests.Manager{
 				ContestID: contest, UserID: helper, Role: rbac.RoleManager, GrantedBy: owner,
 				Login: "carried-login", FullName: "Carried Name",
@@ -142,9 +126,8 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			helper := target.NewUser("hana", "hana")
 			grant(t, ctx, target, contest, helper, rbac.RoleManager, first)
 
-			// Appointed again, not refused for already being staff: first in
-			// the same role, the service's ordinary path for an existing
-			// manager, then in another.
+			// Re-appointing in the same role is the service's ordinary path
+			// for an existing manager.
 			grant(t, ctx, target, contest, helper, rbac.RoleManager, first)
 			grant(t, ctx, target, contest, helper, rbac.RoleOwner, second)
 
@@ -168,8 +151,8 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	t.Run("List names the owner first and the rest by login", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ManagerTarget) {
 			contest := target.NewContest()
-			// The owner's login sorts after every other, so only the role can
-			// put them first.
+			// The owner's login sorts last, so only the role can put them
+			// first.
 			owner := target.NewUser("zoya", "zoya")
 			grant(t, ctx, target, contest, target.NewUser("carol", "carol"), rbac.RoleManager, owner)
 			grant(t, ctx, target, contest, owner, rbac.RoleOwner, owner)
@@ -224,7 +207,6 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			if names, want := logins(t, ctx, target, theirs), []string{"hana"}; !slices.Equal(names, want) {
 				t.Errorf("their staff = %v, want %v", names, want)
 			}
-			// The same person holds a role in each contest of their own.
 			if got := get(t, ctx, target, ours, shared); got.Role != rbac.RoleManager {
 				t.Errorf("role in our contest = %q, want %q", got.Role, rbac.RoleManager)
 			}
@@ -274,7 +256,6 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			}
 			get(t, ctx, target, other, leaving)
 
-			// Gone means free to be appointed again.
 			grant(t, ctx, target, contest, leaving, rbac.RoleManager, owner)
 			get(t, ctx, target, contest, leaving)
 		})

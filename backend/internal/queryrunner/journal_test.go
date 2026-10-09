@@ -15,10 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// recorder is the query log, in memory. The SQL that writes it is tested in
-// internal/postgres, where it lives; what is under test here is the ordering —
-// what gets written, when, and whether the answer survives a journal that
-// cannot be written.
+// recorder is an in-memory query log. The SQL is tested in internal/postgres;
+// here the ordering is under test.
 type recorder struct {
 	mu sync.Mutex
 
@@ -27,8 +25,8 @@ type recorder struct {
 	next      int64
 	beginErr  error
 	finishErr error
-	// order records the sequence of calls, so a test can insist that the row
-	// exists before the query runs rather than after.
+	// order records the call sequence, to show the row exists before the
+	// query runs.
 	order []string
 }
 
@@ -87,9 +85,7 @@ func TestTheRowIsWrittenBeforeTheQueryRuns(t *testing.T) {
 	}
 }
 
-// Everything is recorded, including what never reached the database. That is
-// half the point: the journal is the record of what a participant tried, not
-// only of what worked.
+// Queries that never reached the database are recorded too.
 func TestHowEachEndingIsRecorded(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
@@ -118,9 +114,6 @@ func TestHowEachEndingIsRecorded(t *testing.T) {
 	}
 }
 
-// A query that cannot be recorded is not run. The journal is what the report
-// of "how many queries this participant needed" is built from, and an
-// execution missing from it is a quietly wrong answer later.
 func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.beginErr = errors.New("the core database is unreachable")
@@ -129,10 +122,8 @@ func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("the query ran without being recorded")
 	}
-	// Wrapped as ours rather than left as the bare error Begin returned: the
-	// caller has to be able to tell "the journal could not be opened" apart
-	// from "the database refused the participant's SQL", and errors.Is is how
-	// it does that.
+	// Wrapped, so the caller can tell a journal failure from the database
+	// refusing the participant's SQL.
 	if !errors.Is(err, queryrunner.ErrJournalUnavailable) {
 		t.Fatalf("error = %v, want it to wrap ErrJournalUnavailable", err)
 	}
@@ -141,9 +132,8 @@ func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 	}
 }
 
-// Failing to *close* the row is the other way round: the query has already
-// run, and the participant is owed the answer. The row is left for the
-// sweeper, which is why it was written first.
+// The query has already run, so the participant still gets the answer; the
+// sweeper closes the row.
 func TestAnAnswerSurvivesAJournalThatCannotBeClosed(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.finishErr = errors.New("the core database went away")
@@ -157,9 +147,6 @@ func TestAnAnswerSurvivesAJournalThatCannotBeClosed(t *testing.T) {
 	}
 }
 
-// A participant who navigates away cancels the request's context. The query
-// may well have finished; the row must not be left saying `running` because
-// nobody was still listening for the answer.
 func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
@@ -172,8 +159,7 @@ func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
 	}
 }
 
-// And the journal must not record it as a timeout either: that column is what
-// a report of "how often did queries run out of time" is built from.
+// The timeout status feeds load reports, so a caller leaving must not count.
 func TestACancelledRequestIsNotJournalledAsATimeout(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 30 * time.Second
@@ -194,18 +180,15 @@ func TestACancelledRequestIsNotJournalledAsATimeout(t *testing.T) {
 	}
 }
 
-// answering is an Executor that answers without a database, for the tests
-// here that are about what the journal is told rather than about a query.
+// answering is an Executor that answers without a database.
 type answering struct{}
 
 func (answering) Run(context.Context, queryrunner.Request) (*queryrunner.Result, error) {
 	return &queryrunner.Result{}, nil
 }
 
-// Where the query came from and which request carried it reach the journal
-// row: the address is the Core API's to know and the Query Runner's to never
-// see, so it travels beside the request rather than inside it (design §2.3,
-// CLAUDE.md rule 11).
+// The address and request id travel beside the Request, not inside it, since
+// the Query Runner never sees them (section 2.3, CLAUDE.md rule 11).
 func TestTheRowCarriesTheOriginOfTheQuery(t *testing.T) {
 	rec := newRecorder()
 	journalled := queryrunner.NewJournalled(answering{}, rec, slog.New(slog.NewTextHandler(io.Discard, nil)))

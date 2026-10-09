@@ -21,8 +21,6 @@ func kinds(events []monitor.Event) []monitor.Kind {
 	return out
 }
 
-// One bad signal must not cost the browser the good ones beside it: every
-// per-event refusal is a drop, and only the batch's own size refuses it.
 func TestCleanBatchDropsBadEventsAndKeepsTheRest(t *testing.T) {
 	contest, registration := uuid.New(), uuid.New()
 	at := func(p monitor.Payload) monitor.Event {
@@ -71,8 +69,6 @@ func TestCleanBatchBoundsTheKeptEvents(t *testing.T) {
 	}
 }
 
-// A claimed time more than a day away from the server's is not a clock, it
-// is noise: the event stays, the claim goes.
 func TestCleanBatchIgnoresAClaimedTimeFarFromTheServers(t *testing.T) {
 	near := signalsNow.Add(-23 * time.Hour)
 	past := signalsNow.Add(-25 * time.Hour)
@@ -96,9 +92,7 @@ func TestCleanBatchIgnoresAClaimedTimeFarFromTheServers(t *testing.T) {
 	}
 }
 
-// A participant holding down paste stores one line with a count, not fifty:
-// consecutive pastes of the same text into the same place fold into the
-// first. A different paste, or anything else, between them ends the run.
+// A different paste, or anything else, between repeats ends the run.
 func TestCleanBatchFoldsRepeatedPastes(t *testing.T) {
 	contest, registration := uuid.New(), uuid.New()
 	at := func(p monitor.Payload) monitor.Event {
@@ -139,8 +133,6 @@ func TestCleanBatchFoldsRepeatedPastes(t *testing.T) {
 	}
 }
 
-// However the pastes differ, a batch stores at most MaxBatchPastes of them;
-// the rest are dropped, and the other kinds beside them are kept.
 func TestCleanBatchKeepsAtMostTenPastes(t *testing.T) {
 	contest, registration := uuid.New(), uuid.New()
 	batch := make([]monitor.Event, 0, 21)
@@ -180,8 +172,6 @@ func TestCleanBatchRefusesABatchOverTheLimitBeforeLookingAtIt(t *testing.T) {
 	}
 }
 
-// countingLimiter allows the first limit calls of each subject and refuses
-// the rest, counting every call.
 type countingLimiter struct {
 	calls    map[string]int
 	subjects []string
@@ -249,7 +239,6 @@ func TestRecordStoresOnlyWhatIsKeptInOneInsert(t *testing.T) {
 		t.Fatalf("%d inserts of %d events, want one insert of two", log.inserts, len(log.all()))
 	}
 
-	// Nothing kept is nothing written.
 	if kept, err := signals.Record(t.Context(), []monitor.Event{event(monitor.PageLeft{AwayMs: 10})}); err != nil || kept != 0 {
 		t.Fatalf("Record() = %d, %v; want 0, nil", kept, err)
 	}

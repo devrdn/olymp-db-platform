@@ -212,11 +212,9 @@ func TestWindowUnknownID(t *testing.T) {
 	}
 }
 
-// longLinesAfterAMark is a file with a thousand ordinary lines — so the index
-// records a mark at line 1 and another at line 1001 — followed by ten lines
-// of a megabyte each. It is the shape a dump has where a COPY block holds
-// wide rows, and it is the shape that made max_bytes a promise about nothing:
-// the lines it bounds come *after* a walk it never described.
+// longLinesAfterAMark completes a file of a thousand short lines (marks at
+// lines 1 and 1001) followed by ten 1 MiB lines, so reaching line 1010 means
+// walking 9 MiB from the mark.
 func longLinesAfterAMark(t *testing.T, s *Store, id string) {
 	t.Helper()
 	var b strings.Builder
@@ -245,13 +243,6 @@ func bigFileLimits() Limits {
 	return Limits{MaxFileBytes: 64 << 20, MaxDirBytes: 128 << 20, MaxChunkBytes: 64 << 20}
 }
 
-// `?from=1010&max_bytes=1` asks for one byte and, before this bound existed,
-// read the nine megabytes between the mark at line 1001 and line 1010 to
-// produce it — on a real dump, up to the whole of a four-gigabyte file, on
-// the process serving the olympiad, with no rate limit on the route. The
-// doc-comment on Window promised it never read more than maxBytes, and the
-// handler clamps max_bytes in reliance on that promise; this is the promise
-// being made true, and refused by name where it cannot be kept.
 func TestWindowRefusesToWalkPastItsSkipBudget(t *testing.T) {
 	s := newTestStore(t, bigFileLimits())
 	const id = "70000009-0000-0000-0000-000000000000"
@@ -262,8 +253,6 @@ func TestWindowRefusesToWalkPastItsSkipBudget(t *testing.T) {
 	}
 }
 
-// The bound is on the walk, not on the file: the same file's first page, and
-// a page inside the reach of a mark, are still served.
 func TestWindowStillServesAPageWithinReachOfAMark(t *testing.T) {
 	s := newTestStore(t, bigFileLimits())
 	const id = "7000000a-0000-0000-0000-000000000000"
@@ -280,10 +269,6 @@ func TestWindowStillServesAPageWithinReachOfAMark(t *testing.T) {
 	}
 }
 
-// A console the organiser navigated away from, or a browser that hung up
-// mid-request: the read has to stop. Store.Window took no context at all
-// before this, so the goroutine kept walking the file for a client that was
-// already gone.
 func TestWindowStopsWhenTheCallerHasGoneAway(t *testing.T) {
 	s := newTestStore(t, bigFileLimits())
 	const id = "7000000b-0000-0000-0000-000000000000"
@@ -297,19 +282,12 @@ func TestWindowStopsWhenTheCallerHasGoneAway(t *testing.T) {
 	}
 }
 
-// The other half of skipLines' own EOF branch: the index says the file has
-// this many lines and the file no longer does. That is the index and the
-// bytes beside it disagreeing, which is what ErrCorruptIndex names — and,
-// before this change, the one shape of that disagreement that reached the
-// organiser as "internal error" instead.
 func TestWindowSurfacesADataFileThatNoLongerMatchesItsIndex(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "7000000c-0000-0000-0000-000000000000"
 	content := buildNumberedLines(1500)
 	completeUpload(t, s, id, content)
 
-	// Half the data file goes away after it was sealed — a damaged disk, or
-	// a file substituted underneath the volume.
 	if err := os.Truncate(s.dataPath(id), int64(len(content)/2)); err != nil {
 		t.Fatalf("truncate the data file: %v", err)
 	}

@@ -11,38 +11,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// PolicyTarget is what one case of the contract runs against: a store holding
-// no policies yet, and the means to create what a policy hangs off. A real
-// schema needs the contest to exist, and the account that last changed the
-// policy, so each implementation fills these its own way: the in-memory store
-// mints identifiers (and remembers the contests), PostgreSQL inserts rows.
+// PolicyTarget is a store holding no policies yet, and the means to create
+// the contest and account a policy names.
 type PolicyTarget struct {
-	Store contests.PolicyStore
-	// NewContest creates a contest and returns its identifier.
+	Store      contests.PolicyStore
 	NewContest func() uuid.UUID
-	// NewUser creates an account and returns its identifier.
-	NewUser func() uuid.UUID
-	// Now is what the store's clock reads when a policy is written. A policy's
-	// UpdatedAt is that clock, so the contract can only state it in its terms.
+	NewUser    func() uuid.UUID
+	// Now is the store's clock, which stamps UpdatedAt.
 	Now func() time.Time
 }
 
-// PolicyStoreContract is what every contests.PolicyStore must do, run as
-// subtests against one implementation. Both the in-memory Policies and
-// postgres.SQLPolicies run it, so the store the service tests trust and the
-// store production uses are held to the same answers: a rule the fake got
-// wrong would otherwise pass every service test and fail only in a contest.
+// PolicyStoreContract is what every contests.PolicyStore must do; both the
+// in-memory Policies and postgres.SQLPolicies run it. each prepares a fresh
+// target for one case, calls run with it, and cleans up.
 //
-// each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the store with, and cleans up afterwards. Only the
-// behaviour a single caller can observe is here. What a database refuses by
-// constraint (a mode it does not know, write permissions under read_only, a
-// table name of the wrong shape, an unknown account) is left out on purpose:
-// the contract does not ask a store to refuse a policy, which
-// SQLPolicy.Validate rules out before it is written, and every policy it saves
-// is a coherent one. A contest that is not there is the exception, because no
-// validation rules it out: one deleted while its policy was being edited is
-// reported as ErrNotFound.
+// What the database refuses by constraint is left out: SQLPolicy.Validate
+// rules those policies out before a write. A missing contest is the
+// exception, since no validation catches it, and is reported as ErrNotFound.
 func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.Context, PolicyTarget))) {
 	save := func(t *testing.T, ctx context.Context, target PolicyTarget, p contests.SQLPolicy) {
 		t.Helper()
@@ -58,9 +43,8 @@ func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.
 		}
 		return p
 	}
-	// sameAs fails the case unless got carries every field of want. The
-	// writable tables are compared as lists, in order; UpdatedAt is compared
-	// to the store's clock, not to want.
+	// sameAs compares writable tables in order, and UpdatedAt against the
+	// store's clock rather than want.
 	sameAs := func(t *testing.T, got, want contests.SQLPolicy, updatedAt time.Time, what string) {
 		t.Helper()
 		if got.ContestID != want.ContestID {
@@ -134,9 +118,8 @@ func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.
 
 	t.Run("each flag is kept on its own", func(t *testing.T) {
 		each(t, func(ctx context.Context, target PolicyTarget) {
-			// One flag set at a time under read_write, the catalogs closed:
-			// a store that swapped two of them, or ignored one, shows in
-			// exactly one of these.
+			// One flag at a time, so a store that swapped or ignored one
+			// shows.
 			flags := []struct {
 				name string
 				set  func(*contests.SQLPolicy)
@@ -248,8 +231,7 @@ func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.
 				ContestID: contest, Mode: contests.ModeReadWrite, WritableTables: tables, DiskQuotaRatio: 5,
 			})
 
-			// Neither the slice handed to Save nor the one handed back may be
-			// the store's own: writing to them later is not saving.
+			// Writing to a slice after Save or a read is not saving.
 			tables[0] = "scribbled"
 			loaded := load(t, ctx, target, contest).WritableTables
 			if len(loaded) < 2 {

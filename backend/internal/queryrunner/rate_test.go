@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// A fixed clock, because a rate limit tested by waiting is a test that is slow
-// when it passes and flaky when the machine is busy.
 type clock struct{ at time.Time }
 
 func (c *clock) now() time.Time       { return c.at }
@@ -34,7 +32,6 @@ func TestARateLimitCountsWithinItsWindowAndForgetsPast(t *testing.T) {
 	}
 }
 
-// One participant hitting the limit must not slow anybody else down.
 func TestTheRateIsPerParticipant(t *testing.T) {
 	c := &clock{at: time.Unix(1_700_000_000, 0)}
 	w := newWindow(1, time.Minute, c.now)
@@ -50,9 +47,6 @@ func TestTheRateIsPerParticipant(t *testing.T) {
 	}
 }
 
-// A refused query is not counted, or somebody who keeps clicking extends their
-// own penalty for ever — which turns slowing them down into removing them from
-// the contest.
 func TestARefusedQueryDoesNotExtendThePenalty(t *testing.T) {
 	c := &clock{at: time.Unix(1_700_000_000, 0)}
 	w := newWindow(1, time.Minute, c.now)
@@ -63,8 +57,7 @@ func TestARefusedQueryDoesNotExtendThePenalty(t *testing.T) {
 		_ = w.admit("p") // all refused
 	}
 
-	// The single accepted query was 21 seconds ago; the window is a minute, so
-	// it still counts and the next is still refused...
+	// The accepted query was 21 seconds ago and still counts...
 	if err := w.admit("p"); !errors.Is(err, ErrTooManyQueries) {
 		t.Fatal("the limit lapsed early")
 	}
@@ -84,9 +77,6 @@ func TestNoLimitMeansNoLimit(t *testing.T) {
 	}
 }
 
-// The map must not keep a key for everybody who ever asked anything: a process
-// meant to run for months across a term of olympiads would leak one per
-// participant.
 func TestTheWindowForgetsParticipantsItNoLongerCounts(t *testing.T) {
 	c := &clock{at: time.Unix(1_700_000_000, 0)}
 	w := newWindow(10, time.Minute, c.now)

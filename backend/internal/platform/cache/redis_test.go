@@ -9,8 +9,6 @@ import (
 )
 
 func TestRedisMissIsReportedAsNotFoundRatherThanError(t *testing.T) {
-	// redis.Nil means "no such key"; treating it as a failure would turn every
-	// cache miss into a request error.
 	value, found, err := classifyGet("", redis.Nil)
 
 	if err != nil {
@@ -60,7 +58,6 @@ func TestOptionsRejectsMalformedAddress(t *testing.T) {
 }
 
 func TestOptionsAcceptsHostPortForm(t *testing.T) {
-	// docker-compose passes a bare host:port; the URL form is optional.
 	opts, err := Options("redis:6379")
 	if err != nil {
 		t.Fatalf("Options() returned error: %v", err)
@@ -85,12 +82,6 @@ func TestOptionsAcceptsURLForm(t *testing.T) {
 	}
 }
 
-// A cache call sits in the middle of an ordinary request: a session read, a
-// rate-limit check. The client's own defaults retry three times with a
-// three-second read timeout apiece, so one slow server turns every request
-// into a dozen seconds of waiting and the requests behind it into goroutines
-// that never leave. The bound is the client's, because the caller's context
-// may carry no deadline of its own.
 func TestOptionsBoundHowLongACacheCallCanTake(t *testing.T) {
 	opts, err := Options("redis://localhost:6379/0")
 	if err != nil {
@@ -111,7 +102,6 @@ func TestOptionsBoundHowLongACacheCallCanTake(t *testing.T) {
 	}
 }
 
-// An operator who names timeouts in the URL means them.
 func TestOptionsKeepTimeoutsTheAddressNames(t *testing.T) {
 	opts, err := Options("redis://localhost:6379/0?read_timeout=4s")
 	if err != nil {

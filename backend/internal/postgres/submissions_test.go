@@ -13,15 +13,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// farDeadline is a deadline no test in this package means to trip, so an
-// unrelated failure never reads as "the deadline check misfired".
+// farDeadline is a deadline no test here means to trip.
 var farDeadline = time.Now().UTC().Add(24 * time.Hour)
 
-// What a single caller can observe of Insert is the contract every
-// contests.SubmissionRepository answers to, the in-memory one the service
-// tests use included (conteststest.SubmissionRepositoryContract). What
-// follows it here is what only the real statement can be asked: its int4
-// arithmetic, and the race between two transactions.
+// The shared contract also run against the in-memory repository; the tests
+// below cover what only the real statement can: int4 arithmetic and races.
 func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.SubmissionRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.SubmissionTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -42,15 +38,8 @@ func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
 	})
 }
 
-// Finding 4 (corrected): the penalty multiplication used to run in
-// PostgreSQL's own int4 arithmetic, which a question anywhere near the
-// domain's own points ceiling overflows well before any contest could
-// plausibly need this many attempts on one question — the maxPoints doc
-// comment in internal/contests/question.go used to claim otherwise. Insert
-// now casts that multiplication to bigint, so the combination this test
-// drives at — the largest penalty the domain allows on the largest question
-// it allows — still succeeds instead of surfacing "integer out of range" as
-// a 500 for whichever student's attempt happens to tip it over.
+// The largest points and penalty the domain allows must not overflow the
+// penalty product into "integer out of range".
 func TestInsertNeverOverflowsInt4AtTheDomainsOwnPointsAndPenaltyCeiling(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-submit-8")
@@ -62,17 +51,11 @@ func TestInsertNeverOverflowsInt4AtTheDomainsOwnPointsAndPenaltyCeiling(t *testi
 			t.Fatalf("Create() = %v", err)
 		}
 
-		// A 100% penalty (the largest questions.penalty_pct permits) on a
-		// question worth the domain's own points ceiling — the combination
-		// that makes the penalty multiplication as large as it can ever get
-		// for a single attempt.
+		// A 100% penalty on a question worth the points ceiling.
 		const points = 10_000_000
 		const penaltyPerAttempt = points
 
-		// 215 already-committed wrong attempts is exactly where
-		// 215 * 10,000,000 first exceeds int4's own ceiling
-		// (2,147,483,647) — the count Insert's own statement multiplies the
-		// penalty by for whichever attempt comes next.
+		// 215 * 10,000,000 is the first product above int4's 2,147,483,647.
 		const alreadyCommitted = 215
 		repo := NewSubmissions(testPool)
 		for i := 0; i < alreadyCommitted; i++ {
@@ -97,24 +80,10 @@ func TestInsertNeverOverflowsInt4AtTheDomainsOwnPointsAndPenaltyCeiling(t *testi
 	})
 }
 
-// The guarantee finding 3 asks for, proven under real contention rather than
-// asserted from the SQL alone: many goroutines racing Insert against the very
-// same registration and question, each in its own transaction and its own
-// connection — a single enclosing transaction (withTx) would serialise every
-// statement through one connection and the race would never have a chance to
-// happen, which is why this runs outside one (see
-// TestStartingConcurrentlyProducesOneStartTimeNotTwo's own doc for the
-// identical reasoning).
-//
-// This test does not retry a racer that loses (Insert's own contract does
-// not promise that a caller who keeps calling it will eventually get in —
-// that is contests.Service.Submit's job, proven at the service level in
-// internal/contests/submission_test.go). What it proves here is the safety
-// property Insert alone is responsible for: however the racers interleave,
-// every attempt number that lands is unique, they are exactly {1, ..., N}
-// with no gaps, and N never exceeds max_attempts — see submissions.go's own
-// doc for why that holds under any interleaving, not only the one this test
-// happens to schedule.
+// Racers each use their own connection; withTx would serialise them through
+// one. Losers are not retried (that is contests.Service.Submit's job): the
+// test checks only that the landed attempt numbers are 1..N, unique, and
+// N <= max_attempts.
 func TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -131,10 +100,8 @@ func TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber(t 
 	})
 	registrationID := makeRegistration(t, ctx, contestID, student.ID)
 
-	// Questions.Create takes a lock that is only meaningful inside a
-	// transaction (lockContest, questions.go) and refuses outside one; this
-	// commits its own, separate from the race below, which must run with no
-	// enclosing transaction of its own (see the doc above).
+	// Questions.Create refuses to run outside a transaction, so it gets its
+	// own committed one.
 	var question contests.Question
 	err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -185,9 +152,7 @@ func TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber(t 
 			succeeded++
 			seen[r.submission.AttemptNo]++
 		case errors.Is(r.err, contests.ErrQuestionClosed), errors.Is(r.err, contests.ErrAttemptConflict):
-			// Expected outcomes for a racer that arrived too late, or that
-			// lost the race for a specific attempt number and was not
-			// retried by this test on purpose (see the doc above).
+			// Too late, or lost the race for an attempt number.
 		default:
 			t.Fatalf("Insert() = %v, want nil, ErrQuestionClosed or ErrAttemptConflict", r.err)
 		}
@@ -207,8 +172,7 @@ func TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber(t 
 		}
 	}
 
-	// The table itself agrees with what the racers saw: nobody's row was
-	// silently lost, and nothing beyond max_attempts ever landed.
+	// The table agrees with what the racers saw.
 	var stored int
 	if err := testPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM submissions WHERE registration_id = $1 AND question_id = $2`,

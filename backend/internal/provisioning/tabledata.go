@@ -13,26 +13,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// This file is the table builder's own data: one CSV file per table of a
-// builder-sourced game (Definition), on the same volume an uploaded dump
-// lives on (upload.go) but in its own directory and its own bookkeeping
-// table (migration 27) — game_table_data.go's own doc explains why a second
-// table rather than a nullable column on game_uploads.
+// The table builder's data: one CSV file per table of a builder-sourced game,
+// stored like an uploaded dump (gamefile id, bookkeeping row) but in its own
+// directory and table. Completing a table's CSV never replaces the game; the
+// file is loaded into a built database by Games.loadTableData.
 //
-// A table's file is addressed exactly the way an upload's is: an id that
-// names two files on disk (internal/gamefile's own convention) and one row
-// that survives the request that started it. What differs is what "done"
-// means. An uploaded dump becomes the contest's game the moment it
-// completes; a table's CSV never does — it is data for one table of a
-// definition that was already saved, and completing it only ever changes
-// this file's own row. Loading it into a built database is
-// Games.loadTableData, called from finishDefinitionBuild (template.go) once
-// the schema exists.
-//
-// Row numbers, throughout this file, count data rows only (the header is
-// not row 1) and are 1-based and never reused: DeleteTableRow tombstones a
-// row number rather than removing the line it names, so the numbering a
-// participant... no, an organiser... sees never shifts under them mid-review.
+// Row numbers count data rows only (the header is not row 1), are 1-based and
+// never reused: DeleteTableRow tombstones a row number rather than removing
+// its line, so the numbering an organiser sees never shifts.
 
 // TableDataStatus is where one table's CSV file has got to.
 type TableDataStatus string
@@ -40,41 +28,34 @@ type TableDataStatus string
 const (
 	// TableDataReceiving is a chunked upload still taking bytes.
 	TableDataReceiving TableDataStatus = "receiving"
-	// TableDataComplete is a file whose header and every row have been
-	// validated against the table's own columns — the one status a build
-	// will ever load rows from.
+	// TableDataComplete is a fully validated file, the only status a build
+	// loads rows from.
 	TableDataComplete TableDataStatus = "complete"
 	// TableDataAborted is a chunked upload cancelled before it completed.
 	TableDataAborted TableDataStatus = "aborted"
 )
 
-// TableData is one table's CSV file, as far as the database's own
-// bookkeeping goes. Its bytes are never here — internal/gamefile holds
-// those, addressed by this row's own ID, exactly the way Upload's are.
+// TableData is the bookkeeping row for one table's CSV file; the bytes live in
+// internal/gamefile under ID.
 type TableData struct {
 	ID            uuid.UUID
 	ContestID     uuid.UUID
 	Table         string
 	DeclaredBytes int64
 	ReceivedBytes int64
-	// Lines is the number of data rows the file holds — the header does not
-	// count. Valid once Status is TableDataComplete; zero until then.
+	// Lines is the number of data rows, header excluded. Zero until Status is
+	// TableDataComplete.
 	Lines int64
-	// DeletedRows are the row numbers (1-based, data rows only) an organiser
-	// has tombstoned. Bounded at MaxTableDeletedRows.
+	// DeletedRows are tombstoned row numbers, bounded at MaxTableDeletedRows.
 	DeletedRows []int64
 	Status      TableDataStatus
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
-// ActiveRows is how many of the file's rows have not been deleted — what an
-// organiser's own screen shows as "N rows", rather than the raw line count a
-// tombstone leaves unchanged.
+// ActiveRows is how many of the file's rows have not been deleted.
 func (d TableData) ActiveRows() int64 { return d.Lines - int64(len(d.DeletedRows)) }
 
-// deletedSet is DeletedRows as a lookup a window read or a build's own load
-// can test in O(1) per row rather than scanning the slice per line.
 func (d TableData) deletedSet() map[int64]struct{} {
 	set := make(map[int64]struct{}, len(d.DeletedRows))
 	for _, row := range d.DeletedRows {
@@ -83,23 +64,19 @@ func (d TableData) deletedSet() map[int64]struct{} {
 	return set
 }
 
-// Why a table's data could not be received, completed, read back or edited.
-// Declared sentinels (CLAUDE.md rule 1), the same shape upload.go's own
-// block takes for the dump it mirrors.
+// Why a table's data could not be received, completed, read back or edited
+// (CLAUDE.md rule 1).
 var (
-	// ErrTableDataDisabled is every table-data method's answer on an
-	// installation with no upload volume configured — Games was never given
-	// WithTableData.
+	// ErrTableDataDisabled means Games was never given WithTableData.
 	ErrTableDataDisabled = errors.New("table data uploads are not configured on this installation")
-	// ErrTableUnknown is a table name that does not appear, exactly as
-	// spelled, in the contest's current definition.
+	// ErrTableUnknown is a table name not in the contest's current definition,
+	// compared as spelled.
 	ErrTableUnknown = errors.New("the table is not part of the contest's current definition")
-	// ErrTableDataInProgress is a second upload begun for a table that
-	// already has one 'receiving', or a race between two callers bootstrapping
-	// the same table's first row at once.
+	// ErrTableDataInProgress is a second upload for a table that already has
+	// one 'receiving', or two callers bootstrapping the same table at once.
 	ErrTableDataInProgress = errors.New("this table already has an upload in progress")
-	// ErrTableDataNotFound is an id, or a (contest, table) pair, that names
-	// no table-data row of the state being asked for.
+	// ErrTableDataNotFound is an id, or a (contest, table) pair, with no
+	// table-data row in the requested state.
 	ErrTableDataNotFound = errors.New("no such table data upload")
 	// ErrTableDataAlreadyComplete is an Append, Complete or Abort against an
 	// upload no longer 'receiving'.
@@ -116,36 +93,23 @@ var (
 	ErrTableDataStoreFull = errors.New("the table data directory is full")
 	// ErrTableDataLengthMismatch mirrors gamefile.ErrLengthMismatch.
 	ErrTableDataLengthMismatch = errors.New("the received bytes do not match the declared length")
-	// ErrTableDataChanged is an AppendTableRow whose row is not the one that
-	// ended up at the end of the file: another form's row landed between this
-	// call reading the table's current data and writing its own, and
-	// gamefile.Store.Append reported that as the success it reports for any
-	// retry of an offset it already has. Only one row can be written at the
-	// file's end, and the caller whose row was not has to be told so —
-	// answering it 201 would drop that row silently (AppendTableRow's own
-	// doc). Also what a row that is no longer a table's current file answers,
-	// when a game was replaced under the call.
+	// ErrTableDataChanged is an AppendTableRow whose row did not land because
+	// another form's row took the same offset (see AppendTableRow), or whose
+	// table file was replaced under the call.
 	ErrTableDataChanged = errors.New("the table's data changed while this row was being added")
-	// ErrTableRowNotFound is a row number DeleteTableRow or a window read was
-	// asked for that the file does not have.
+	// ErrTableRowNotFound is a row number the file does not have.
 	ErrTableRowNotFound = errors.New("no such row")
 	// ErrTableRowAlreadyDeleted is a DeleteTableRow for a row already
-	// tombstoned — repeating a delete is not an error a client needs telling
-	// twice, but this lets a caller that cares (an audit entry that must not
-	// claim a second deletion) tell the two apart.
+	// tombstoned, kept distinct so a caller need not audit a second deletion.
 	ErrTableRowAlreadyDeleted = errors.New("the row has already been deleted")
-	// ErrTooManyDeletedRows is a delete past MaxTableDeletedRows — migration
-	// 27's own CHECK, surfaced as a sentinel rather than a raw constraint
-	// violation.
+	// ErrTooManyDeletedRows is a delete past MaxTableDeletedRows, the
+	// database CHECK surfaced as a sentinel.
 	ErrTooManyDeletedRows = errors.New("too many rows have been deleted from this table")
 )
 
-// wrapTableFileErr turns one of internal/gamefile's own sentinels into this
-// package's, the same job upload.go's wrapGamefileErr does for a dump —
-// mapped separately (not shared) because the two carry different words for
-// the same underlying fact, and a handler's fail switch for a table's CSV
-// must not have to recognise an upload's own sentinel to serve the right
-// status.
+// wrapTableFileErr maps gamefile's sentinels to this file's. It is separate
+// from wrapGamefileErr so a table-data handler never has to recognise an
+// upload's sentinels.
 func wrapTableFileErr(err error) error {
 	switch {
 	case errors.Is(err, gamefile.ErrNotFound), errors.Is(err, gamefile.ErrBadUploadID):
@@ -169,37 +133,24 @@ func wrapTableFileErr(err error) error {
 	}
 }
 
-// WithTableData turns on the table builder's own per-table CSV storage.
-// store is a *second*, independent gamefile.Store — its own directory,
-// never the one WithUploads was given — so that the orphan sweep for one
-// kind of file can never mistake the other's id for a file nothing needs any
-// more (gamefile.Store's own doc: "nothing about a directory is safe to
-// share between two Stores"). Both directories live on the one volume the
-// task's own brief asks for; they are simply not the same Store.
+// WithTableData turns on per-table CSV storage. store must be a separate
+// gamefile.Store from the one given to WithUploads, with its own directory, so
+// neither orphan sweep mistakes the other's files for orphans.
 func (g *Games) WithTableData(store *gamefile.Store, limits gamefile.Limits) *Games {
 	g.tableFiles, g.tableLimits = store, limits
 	return g
 }
 
-// TableDataLimits reports the ceilings a chunked table-data upload must
-// respect — UploadLimits' own doc, for the table builder's own store rather
-// than the dump's. Two independent gamefile.Store values means two
-// independent ceilings even on a deployment that happens to configure them
-// identically today (WithTableData's own doc: "never the one WithUploads
-// was given") — so this reads g.tableLimits, never g.limits, and internal/api
-// reaches it through this method rather than a constant of its own
-// (CLAUDE.md rule 11), exactly as it already does for UploadLimits.
+// TableDataLimits reports the table-data store's ceilings, which are
+// independent of UploadLimits. internal/api reads them here rather than from a
+// constant of its own (CLAUDE.md rule 11).
 func (g *Games) TableDataLimits() (gamefile.Limits, bool) {
 	return g.tableLimits, g.tableFiles != nil
 }
 
-// currentDefinitionTable reads the contest's current definition and returns
-// the TableDefinition named table, exactly as spelled — or ErrTableUnknown
-// when the game is not builder-sourced, or names no such table. Every
-// table-data method that is not a pure id lookup calls this first: an
-// organiser cannot upload data for a table that does not (or no longer)
-// exist, and Validate already refused any name that would not round-trip
-// through an exact comparison.
+// currentDefinitionTable returns the current definition's table named table,
+// or ErrTableUnknown when the game is not builder-sourced or has no such
+// table. Every table-data method that is not a pure id lookup calls it first.
 func (g *Games) currentDefinitionTable(ctx context.Context, contestID uuid.UUID, table string) (TableDefinition, error) {
 	tmpl, err := g.repo.Template(ctx, contestID)
 	if err != nil {
@@ -219,17 +170,9 @@ func (g *Games) currentDefinitionTable(ctx context.Context, contestID uuid.UUID,
 	return TableDefinition{}, ErrTableUnknown
 }
 
-// CurrentTableData lets a reloaded page find a table's own chunked CSV
-// upload still 'receiving' and offer to resume it, rather than a second
-// BeginTableUpload refusing with no way to explain why —
-// Games.CurrentUpload's own doc (upload.go), for a table's own file instead
-// of a whole dump.
-//
-// Symmetric with every other table-data method that is not a pure id lookup
-// (currentDefinitionTable's own doc): the table must actually be part of
-// the contest's current definition before this answers for it, so an
-// unknown or since-removed table name is ErrTableUnknown rather than being
-// folded into "nothing in progress".
+// CurrentTableData returns the table's upload still 'receiving', so a reloaded
+// page can resume it. An unknown table is ErrTableUnknown, not "nothing in
+// progress".
 func (g *Games) CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error) {
 	if g.tableFiles == nil {
 		return TableData{}, ErrTableDataDisabled
@@ -241,14 +184,8 @@ func (g *Games) CurrentTableData(ctx context.Context, contestID uuid.UUID, table
 }
 
 // checkTableDataCompatibility refuses a definition that would change the
-// structure of a table that already holds data — ErrDefinitionTableLocked's
-// own doc (definition.go) explains why the freeze covers a whole table
-// (its name, every column, and the primary key) rather than only the one
-// field an organiser happened to touch.
-//
-// Called from SetDefinition (template.go) right after Definition.Validate,
-// before anything is written — the identical "before the click" ordering
-// that check already follows for a definition whose shape alone is wrong.
+// structure of a table that already holds data (see ErrDefinitionTableLocked).
+// SetDefinition calls it before anything is written.
 func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.UUID, next Definition) error {
 	current, err := g.repo.Template(ctx, contestID)
 	switch {
@@ -258,18 +195,10 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 		return fmt.Errorf("read the contest's current game: %w", err)
 	}
 	if current.Source != SourceBuilder {
-		// A game that is not builder-sourced holds no table data: replaceGame
-		// (template.go) discards it in the same transaction that stops the
-		// game being the builder's, and migration 28 retired what predated
-		// that rule. This used to return here on that reasoning alone — that
-		// such a game "names no table any such row could belong to" — which
-		// was true of the definition and false of the rows: nothing deleted
-		// them, so saving any script at all was a way round the lock below,
-		// and the redescribed table then loaded values validated against
-		// another type. The loop is the backstop for that invariant rather
-		// than a second copy of it: it costs one read per table of a
-		// definition being saved over a game that is not the builder's, and
-		// it refuses instead of silently loading data no check can vouch for.
+		// A non-builder game should hold no table data (replaceGame discards
+		// it). This loop is the backstop: leftover rows would otherwise let a
+		// script save bypass the lock and load values validated against
+		// another column type.
 		for _, table := range next.Tables {
 			data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
 			switch {
@@ -300,7 +229,7 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 			return fmt.Errorf("read %s's own data: %w", table.Name, err)
 		}
 		if data.Lines == 0 {
-			continue // a header with nothing under it: ErrDefinitionTableLocked's own doc on why this is not locked
+			continue // a header alone does not lock the table
 		}
 		replacementTable, stillThere := replacement[table.Name]
 		if !stillThere || !table.sameStructure(replacementTable) {
@@ -311,15 +240,9 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 }
 
 // BeginTableUpload reserves a new chunked CSV upload for one table of the
-// contest's current definition.
-//
-// GameEditable is checked here for the same reason BeginUpload checks it:
-// starting to receive a file into a contest that is already running is disk
-// and time nobody gets back. The reservation on disk happens before the
-// database row (Store.Begin, then the INSERT), so a database refusal — most
-// often ErrTableDataInProgress, from migration 27's own partial index —
-// leaves at worst an empty file with no row, exactly what the orphan sweep
-// exists to find.
+// contest's current definition. The file is reserved before the row is
+// inserted, so a refused insert leaves at worst a rowless file for the orphan
+// sweep.
 func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table string, declaredBytes int64) (TableData, error) {
 	if g.tableFiles == nil {
 		return TableData{}, ErrTableDataDisabled
@@ -341,12 +264,8 @@ func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table
 	}
 	data, err := g.repo.BeginTableData(ctx, id, contestID, table, declaredBytes)
 	if err != nil {
-		// The same removal BeginUpload makes on the same refusal, and for the
-		// same reason: Store.Begin counted declaredBytes against the
-		// directory as well as creating the file, and a promise nobody will
-		// keep must not hold the volume's budget until the janitor sweeps.
-		// This store's ceiling is the smaller of the two, so one stranded
-		// reservation is enough to matter here.
+		// Store.Begin counted declaredBytes against the directory; release
+		// it now rather than hold the budget until the janitor sweeps.
 		_ = g.retireTableDataFile(id)
 		if errors.Is(err, ErrTableDataInProgress) {
 			return TableData{}, ErrTableDataInProgress
@@ -356,21 +275,11 @@ func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table
 	return data, nil
 }
 
-// AppendTableChunk writes one chunk of a table-data upload already begun —
-// AppendChunk's own doc, for a table's file instead of a whole dump.
+// AppendTableChunk writes one chunk of a table-data upload already begun.
 //
-// The chunk that lands at offset 0 gets one extra check once it is written:
-// whether the file's first line, if it has arrived in full, names the
-// table's own columns. This is the brief's own requirement read for what it
-// actually asks: a header that does not match is refused before the whole
-// file is accepted, not before any byte of it is — the header is itself
-// data, so "before the first byte" can only ever mean "after the first
-// chunk", never literally before any bytes exist. An organiser who uploaded
-// the wrong file this way finds out having spent one chunk's own transfer
-// and wait, not the whole file's. CompleteTableUpload's own full pass
-// (validateTableFile) still checks the header again when the upload
-// finishes — this early check only ever adds an earlier chance to refuse,
-// it never replaces that one.
+// After the chunk at offset 0 is written, the header is checked if it arrived
+// in full, so a wrong file is refused after one chunk rather than the whole
+// upload. CompleteTableUpload still checks it again.
 func (g *Games) AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
 	if g.tableFiles == nil {
 		return 0, ErrTableDataDisabled
@@ -388,21 +297,14 @@ func (g *Games) AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, o
 		return received, wrapTableFileErr(err)
 	}
 	if received == data.ReceivedBytes {
-		return received, nil // the idempotent-skip path (gamefile.Store.Append's own doc)
+		return received, nil // a retried chunk Append skipped
 	}
 	if err := g.repo.UpdateTableDataReceived(ctx, id, received); err != nil {
 		return received, fmt.Errorf("record the upload's progress: %w", err)
 	}
 
-	// offset == 0 names exactly the chunk that just wrote the start of the
-	// file. It is the only offset this branch can ever see for a given
-	// upload: every later chunk's own offset is wherever the file's length
-	// stood before it, which is never 0 again once a byte has landed — and
-	// a resend of this same first chunk took the idempotent-skip return
-	// above instead of reaching here, since gamefile.Store.Append reports
-	// the file's unchanged length for a chunk it already has. So this runs
-	// at most once per upload: never on a retry, never on any chunk after
-	// the first.
+	// Runs at most once per upload: a resent first chunk took the retry
+	// return above.
 	if offset == 0 {
 		if err := g.checkTableHeaderOnFirstChunk(ctx, contestID, id, data.Table); err != nil {
 			return received, err
@@ -411,13 +313,9 @@ func (g *Games) AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, o
 	return received, nil
 }
 
-// checkTableHeaderOnFirstChunk is AppendTableChunk's own early half of the
-// header check validateTableFile runs in full at CompleteTableUpload: it
-// reads only as far as it takes to find the first line's own newline
-// (firstLineIfComplete, tablecsv.go), never the whole chunk, and says
-// nothing when that newline has not arrived yet — a header that does not
-// fit inside the first chunk is not this call's business, only
-// CompleteTableUpload's own full pass is.
+// checkTableHeaderOnFirstChunk validates the header if its line has fully
+// arrived, reading no further than the first newline; otherwise it says
+// nothing and leaves the check to CompleteTableUpload.
 func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id uuid.UUID, tableName string) error {
 	table, err := g.currentDefinitionTable(ctx, contestID, tableName)
 	if err != nil {
@@ -434,7 +332,7 @@ func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id 
 		return err
 	}
 	if !complete {
-		return nil // the header has not fully arrived in this chunk; nothing to check yet
+		return nil
 	}
 	fields, err := splitHeaderLine(line)
 	if err != nil {
@@ -449,30 +347,17 @@ func (g *Games) tableDataByIDForContest(ctx context.Context, contestID, id uuid.
 		return TableData{}, err
 	}
 	if data.ContestID != contestID {
-		// Same reasoning as Games.currentContestUpload: a row that exists but
-		// names another contest reads identically to one that does not exist,
-		// so as not to leak that somebody else's upload is there.
+		// Another contest's upload reads as missing, so its existence does
+		// not leak.
 		return TableData{}, ErrTableDataNotFound
 	}
 	return data, nil
 }
 
 // CompleteTableUpload finalises a chunked CSV upload: checks the received
-// length against what was declared, then runs one streaming pass over the
-// file (never the whole file at once — tableLineScanner's own bound) that
-// checks the header before it reads a single data row, and every data row's
-// field count and column types after that.
-//
-// The header is checked again here even though AppendTableChunk's own early
-// check (its own doc) already looked at it once the first chunk landed —
-// that early check is best-effort, not exhaustive: a header that did not fit
-// inside the first chunk, or a file whose bytes reached the store some other
-// way than AppendTableChunk (a test writing to it directly, say), reaches
-// this pass having never been checked at all. This full pass is the one a
-// build actually depends on; within it, the header is still checked before a
-// single data row is read, so a mistaken upload does not spend the CPU (or
-// the organiser's own wait) validating rows against columns the file was
-// never really describing.
+// length, then streams the file once, validating the header and then every
+// row. This pass is authoritative; AppendTableChunk's header check is only an
+// early refusal and may not have run.
 func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (TableData, error) {
 	if g.tableFiles == nil {
 		return TableData{}, ErrTableDataDisabled
@@ -503,10 +388,8 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 		return TableData{}, err
 	}
 
-	// Whichever ready file this one displaces — this table's own, if it has
-	// one. Retired inside the write below and removed from disk only once it
-	// commits, the same deferred-removal order Games.replaceGame uses for a
-	// displaced dump.
+	// The displaced file is retired inside the write and removed from disk
+	// only after it commits.
 	previous, err := g.tableDataToDisplace(ctx, contestID, data.Table, id)
 	if err != nil {
 		return TableData{}, err
@@ -523,8 +406,7 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 	return completed, nil
 }
 
-// completeTableDataAndAudit runs the write and its audit entry as one unit,
-// the same shape replaceGame gives SetScript and CompleteUpload.
+// completeTableDataAndAudit runs the write and its audit entry as one unit.
 func (g *Games) completeTableDataAndAudit(
 	ctx context.Context, actorID, contestID uuid.UUID, table string, id uuid.UUID, bytes, lines int64, previous *uuid.UUID,
 ) (TableData, error) {
@@ -548,9 +430,8 @@ func (g *Games) completeTableDataAndAudit(
 	return completed, err
 }
 
-// tableDataToDisplace names the table's current 'complete' file, if it has
-// one and it is not the id being completed — the file the new upload is
-// about to replace.
+// tableDataToDisplace returns the table's current 'complete' file, or nil when
+// there is none or it is keeping.
 func (g *Games) tableDataToDisplace(ctx context.Context, contestID uuid.UUID, table string, keeping uuid.UUID) (*uuid.UUID, error) {
 	ready, err := g.repo.ReadyTableData(ctx, contestID, table)
 	switch {
@@ -565,17 +446,9 @@ func (g *Games) tableDataToDisplace(ctx context.Context, contestID uuid.UUID, ta
 	return &ready.ID, nil
 }
 
-// validateTableFile is the streaming pass CompleteTableUpload and the
-// bootstrap half of AppendTableRow both run: header first, then every data
-// row's field count and column types, never holding more of the file than
-// tableLineScanner's own bound. It returns the number of data rows found.
-//
-// It runs synchronously inside the HTTP request that completes an upload, on
-// the process serving the olympiad, and there is no timeout middleware in
-// front of the router — so it watches the request's own context, the same
-// reasoning TableDataWindow gives for its own walk: a caller who has hung up
-// must not leave this loop running, and a context nothing looks at is a
-// context nobody has.
+// validateTableFile streams the file, validating the header and then every
+// row, and returns the number of data rows. It runs inside the request with
+// no timeout middleware, so it stops when ctx is cancelled.
 func (g *Games) validateTableFile(ctx context.Context, id string, table TableDefinition) (int64, error) {
 	f, err := g.tableFiles.Open(id)
 	if err != nil {
@@ -601,9 +474,8 @@ func (g *Games) validateTableFile(ctx context.Context, id string, table TableDef
 
 	var lines int64
 	for {
-		// Not every row: the check itself is cheap but a row is cheaper still,
-		// and a batch of a thousand bounds how long a hung-up caller's file
-		// goes on being read to a few milliseconds.
+		// Checked every thousand rows: a few milliseconds of wasted reading
+		// at most.
 		if lines%1000 == 0 {
 			if err := ctx.Err(); err != nil {
 				return 0, err
@@ -645,9 +517,8 @@ func (g *Games) AbortTableUpload(ctx context.Context, actorID, contestID, id uui
 	return g.abortTableData(ctx, &actorID, data)
 }
 
-// abortTableData is AbortTableUpload's own work, factored out so the janitor
-// (sweepAbandonedTableData) can call it with a nil actor — a system event,
-// the same convention abortUpload's own doc gives for the dump janitor.
+// abortTableData aborts an upload; a nil actor records a system event (the
+// janitor).
 func (g *Games) abortTableData(ctx context.Context, actor *uuid.UUID, data TableData) (TableData, error) {
 	mark := func(ctx context.Context) error {
 		if err := g.repo.AbortTableData(ctx, data.ID); err != nil {
@@ -678,50 +549,23 @@ func (g *Games) retireTableDataFile(id uuid.UUID) error {
 	return nil
 }
 
-// AppendTableRow adds one row that came from a form — the organiser typing a
-// suspect's row directly rather than uploading a file — to the same file a
-// chunked upload's rows land in. values are the field text in the table's
-// own column order.
+// AppendTableRow adds one row typed into a form to the table's file. values
+// are the field text in column order. The first row creates the file; later
+// rows are appended and only the new row is validated.
 //
-// Refused while a chunked upload is 'receiving' for this table: both paths
-// would otherwise compute the append offset from the same
-// bookkeeping-reported length and race gamefile.Store.Append's own
-// idempotent-retry logic, which treats a second write at an offset already
-// covered as a no-op rather than as a second row — silently dropping it.
-// Requiring the chunked upload to finish or be cancelled first is what keeps
-// "the row from the form and the row from the batch land in the same file"
-// (the brief's own words) true without that race.
+// Refused while a chunked upload is 'receiving' for the table: both would
+// append at the same offset, and gamefile.Store.Append treats a second write
+// at a covered offset as a retry, silently dropping one of them.
 //
-// Two forms racing each other are a different matter, and are not refused —
-// they are decided. Both read the same "the file is N bytes long" and both
-// write there; gamefile.Store.Append answers the second one with the
-// idempotent-retry success its own doc promises, having written nothing, so
-// without a check that row is silently gone and the length recorded for it is
-// one no file has, which makes every later append out of order for ever. Two
-// things prevent that. The bytes just written are read back before anything
-// is recorded (rowLanded), so a caller whose row is not the one at that
-// offset is told ErrTableDataChanged rather than 201 for a row nobody will
-// ever see. And the length and row count are recorded as floors rather than
-// assignments (AppendTableDataRow), so the two callers reaching storage in
-// the opposite order to the one they read in cannot leave the bookkeeping
-// describing the shorter file: the second caller's own row has by then
-// already been counted by the recount below, and its smaller pair is
-// discarded rather than written.
+// Two forms racing are decided, not refused. The bytes are read back
+// (rowLanded), so the loser gets ErrTableDataChanged rather than a 201 for a
+// row that is not there. Length and count are stored as floors
+// (AppendTableDataRow), so callers committing out of order cannot leave the
+// bookkeeping describing the shorter file.
 //
-// The bytes go first and the row that counts them second, which is the order
-// whose failure is recoverable: an interruption (or a rolled-back
-// transaction — a failed audit write is enough) leaves a file holding one
-// more validated row than the bookkeeping counts, and the next call notices
-// that and reconciles it (tableFileState). The other order would leave a row
-// counted whose bytes never arrived, and no later call could tell what was
-// meant to be there.
-//
-// The very first row for a table bootstraps its file: there is no upload to
-// begin first, because a single validated row already satisfies everything
-// CompleteTableUpload's own pass checks. Every row after that is appended to
-// the existing file directly — O(1), no reseal, unlike CompleteTableUpload's
-// own full pass, because this validates only the one new row rather than
-// re-reading everything already accepted.
+// The bytes are written before the row that counts them: an interruption then
+// leaves one uncounted valid row, which tableFileState reconciles. The other
+// order would count a row whose bytes never arrived.
 func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID, tableName string, values []string) (TableData, error) {
 	if g.tableFiles == nil {
 		return TableData{}, ErrTableDataDisabled
@@ -770,10 +614,8 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, err
 	}
 	if lines >= MaxTableDataRows {
-		// The same ceiling validateTableFile enforces for an uploaded file and
-		// the same number this service publishes to its clients as max_rows —
-		// a limit that holds on one of the two ways in is not a limit
-		// (CLAUDE.md rule 2).
+		// The same ceiling validateTableFile enforces for uploads (CLAUDE.md
+		// rule 2).
 		return TableData{}, fmt.Errorf("%w: the table already holds %d rows, the limit is %d",
 			ErrTableTooManyRows, lines, MaxTableDataRows)
 	}
@@ -792,11 +634,7 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, err
 	}
 	if !landed {
-		// Another form's row is at this offset: gamefile.Store.Append treats a
-		// write at an offset already covered as a retry of it and reports
-		// success without writing a byte (its own doc). Nothing of this row
-		// reached the file, so this caller is told so rather than being
-		// answered 201 for a row nobody will ever see.
+		// Another form's row took this offset; nothing of this row was written.
 		return TableData{}, ErrTableDataChanged
 	}
 	newLines := lines + 1
@@ -824,22 +662,11 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 	return updated, nil
 }
 
-// rowLanded reports whether the bytes now at offset are this call's own row.
-//
-// gamefile.Store.Append answers a write at an offset it already has with the
-// file's unchanged length and no error — the idempotent retry a resumed
-// chunk upload depends on (its own doc), and exactly what a second form
-// adding a row at the same moment gets. The length alone does not settle it,
-// because two rows of the same table are often the same number of bytes, so
-// the bytes themselves are read back and compared. One row's worth of them,
-// never more: this reads what was just written and nothing else.
-//
-// Two callers writing byte-identical rows both read their own payload back
-// and both believe they wrote, and the file holds that row once. Harmless,
-// and the one case where the length alone would have been enough: the two
-// asked for the same row, and the same row is what is there. What is not
-// harmless — one caller's row overwritten by another's, or counted as if it
-// were there — is exactly what comparing the bytes rules out.
+// rowLanded reports whether the bytes now at offset are this call's row.
+// Append reports a write at a covered offset as a successful retry, and two
+// rows often have the same length, so the bytes are read back and compared.
+// Two byte-identical rows both report success and the file holds one; that is
+// harmless.
 func (g *Games) rowLanded(id uuid.UUID, offset int64, payload string, written int64) (bool, error) {
 	if written != offset+int64(len(payload)) {
 		return false, nil
@@ -857,25 +684,11 @@ func (g *Games) rowLanded(id uuid.UUID, offset int64, payload string, written in
 	return string(got) == payload, nil
 }
 
-// tableFileState reports the offset the next row goes at and how many data
-// rows the file holds — the file's own answer to both, not the bookkeeping's
-// copy of it.
-//
-// The two normally agree, and then this costs one stat. When they do not, the
-// file is the one telling the truth: its bytes are what a build loads and
-// what a window read pages through. The bytes always go first
-// (AppendTableRow's own doc on the order), so the only way the two can
-// disagree is a file holding one more already-validated row than the
-// bookkeeping counts — a transaction that rolled back, or a process that died,
-// after that row had landed. Appending at an offset taken from the stale side
-// would write nowhere at all (gamefile.Store.Append reports the retry success
-// its own doc promises for an offset already covered), so the disagreement is
-// resolved here rather than carried into every later call as a table that
-// takes no more rows.
-//
-// Recounting means one streaming pass over the file (never more of it than
-// tableLineScanner's own bound), which is why it is done only on the path
-// where the two disagree.
+// tableFileState reports the offset for the next row and the data row count,
+// as the file has them rather than the bookkeeping. Normally they agree and
+// this is one stat. When the file is longer (a row landed but its count rolled
+// back), the rows are recounted; appending at the stale offset would be
+// swallowed as a retry and the table would accept no more rows.
 func (g *Games) tableFileState(ready TableData) (offset, lines int64, err error) {
 	offset, err = g.tableFiles.Received(ready.ID.String())
 	if err != nil {
@@ -891,11 +704,9 @@ func (g *Games) tableFileState(ready TableData) (offset, lines int64, err error)
 	return offset, lines, nil
 }
 
-// countTableDataRows counts the file's data rows — every line but the header,
-// tombstoned ones included, since DeletedRows names row numbers this count
-// has to keep naming the same rows. Nothing is validated here: these rows
-// were validated when they were written, and this is a recount, not a second
-// opinion on their contents.
+// countTableDataRows counts every line but the header, tombstoned rows
+// included so DeletedRows keeps naming the same rows. The rows were validated
+// when written and are not validated again.
 func (g *Games) countTableDataRows(id string) (int64, error) {
 	f, err := g.tableFiles.Open(id)
 	if err != nil {
@@ -918,17 +729,10 @@ func (g *Games) countTableDataRows(id string) (int64, error) {
 	}
 }
 
-// rowPayload is the bytes one row is appended as: the row itself and the
-// newline that ends it, preceded by one more newline when the file does not
-// already end in one.
-//
-// A CSV whose last line has no trailing newline is what a good many
-// exporters write, and validateTableFile accepts it — that last line is a
-// whole row (tableLineScanner.next's own doc). Appending to such a file
-// without this would glue the new row onto the end of the last one: two rows
-// of three fields becoming one row of six, garbage in the organiser's own
-// window and `extra data after last expected column` on the build that
-// follows.
+// rowPayload is the bytes one row is appended as: the row and its newline,
+// preceded by a newline when the file does not end in one. Many exporters omit
+// the final newline, and without this the new row would be glued onto the
+// last one.
 func (g *Games) rowPayload(id uuid.UUID, offset int64, rowLine string) (string, error) {
 	if offset == 0 {
 		return rowLine + "\n", nil
@@ -949,9 +753,8 @@ func (g *Games) rowPayload(id uuid.UUID, offset int64, rowLine string) (string, 
 	return "\n" + rowLine + "\n", nil
 }
 
-// bootstrapTableRow creates a table's very first data file: the header this
-// package's own brief requires as the file's first line, followed by the one
-// row already validated by the caller.
+// bootstrapTableRow creates a table's first data file: the header, then the
+// one row the caller already validated.
 func (g *Games) bootstrapTableRow(
 	ctx context.Context, actorID, contestID uuid.UUID, tableName string, table TableDefinition, rowLine string,
 ) (TableData, error) {
@@ -988,10 +791,8 @@ func (g *Games) bootstrapTableRow(
 	}
 	err = g.atomically(ctx, run)
 	if err != nil {
-		// The database refused to record a file already written — most often
-		// the partial unique index, when a second caller bootstrapped the
-		// same table first. The file this call wrote is nobody's; remove it
-		// rather than leave it for the orphan sweep to find minutes later.
+		// Most often another caller bootstrapped the same table first. The
+		// file this call wrote is nobody's; remove it now.
 		_ = g.retireTableDataFile(id)
 		if errors.Is(err, ErrTableDataInProgress) {
 			return TableData{}, ErrTableDataInProgress
@@ -1001,11 +802,8 @@ func (g *Games) bootstrapTableRow(
 	return created, nil
 }
 
-// TableRow is one data row of a window read — its stable row number and its
-// field text, in the table's own column order. A field that was NULL in the
-// file (an unquoted empty field, csvField.Null's own doc) reads back as an
-// empty string here: this package's console shows a row for review, not a
-// value editor that must tell "empty" from "absent" apart.
+// TableRow is one data row of a window read: its stable row number and its
+// field text in column order. A NULL field reads back as an empty string.
 type TableRow struct {
 	Row    int64
 	Fields []string
@@ -1015,37 +813,21 @@ type TableRow struct {
 type TableRowWindow struct {
 	FromRow int64
 	Rows    []TableRow
-	// TotalRows is the file's own row count — Lines, not ActiveRows — so
-	// that "row 37 of 40" still means the 40 the file was completed with,
-	// with the deleted ones simply missing from the page rather than
-	// silently renumbering everything after them.
+	// TotalRows is Lines, not ActiveRows, so row numbers stay stable and
+	// deleted rows are simply absent from the page.
 	TotalRows int64
-	// Truncated says the byte budget stopped the window before maxRows was
-	// reached, gamefile.Window's own Truncated field for the same reason.
+	// Truncated says the byte budget stopped the window before maxRows.
 	Truncated bool
 }
 
-// TableDataWindow reads up to maxRows surviving (not tombstoned) rows of a
-// table's current data, starting at fromRow, never reading more than
-// maxBytes of the file and never reading past what it returns — the
-// console's own paginated look at a table's rows.
+// TableDataWindow reads up to maxRows non-tombstoned rows of a table's current
+// data from fromRow, within maxBytes of row text except that the first row is
+// always returned whole.
 //
-// It does not reuse gamefile.Store.Window's own persisted index, for the
-// reason that index cannot serve this file: it is sealed the moment it is
-// built, and a table's file is written to again by every AppendTableRow after
-// the first. What replaced the linear scan from the top of the file is
-// tableRowIndex — marks kept in this process, added as pages are read, never
-// persisted and never sealed. See that type for why an append-only file makes
-// that sound.
-//
-// The scan it replaced was not merely O(fromRow); paging through a whole file
-// with it was quadratic. A file of N bytes read in P pages read about N×P/2
-// bytes altogether: two hundred thousand rows at a hundred a page is two
-// thousand pages, so a twenty-one megabyte file cost about twenty-one
-// gigabytes of reading to page through, and the last page alone cost a scan of
-// the whole file — off the same volume that is at that moment accepting
-// chunks. At this platform's own four-gibibyte file ceiling the figure is
-// terabytes.
+// gamefile's persisted line index cannot serve this file because it is sealed
+// and a table's file keeps growing. The walk instead starts from the nearest
+// tableRowIndex mark; without marks, paging through a whole file is quadratic
+// in its size.
 func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (TableRowWindow, error) {
 	if g.tableFiles == nil {
 		return TableRowWindow{}, ErrTableDataDisabled
@@ -1056,7 +838,7 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 	data, err := g.repo.ReadyTableData(ctx, contestID, table)
 	if err != nil {
 		if errors.Is(err, ErrTableDataNotFound) {
-			return TableRowWindow{FromRow: fromRow}, nil // no file yet: an empty table, not an error
+			return TableRowWindow{FromRow: fromRow}, nil // no file yet: an empty table
 		}
 		return TableRowWindow{}, fmt.Errorf("read the table's current data: %w", err)
 	}
@@ -1087,18 +869,11 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 	var remaining = maxBytes
 	window := TableRowWindow{FromRow: fromRow, TotalRows: data.Lines}
 	for {
-		// The same reason gamefile.Store.Window checks it: this walk still has
-		// to read every row between the nearest mark and fromRow, and fromRow
-		// is a query parameter with no ceiling of its own — the very first read
-		// of a large file has no marks to start from at all. A caller that has
-		// hung up must not leave this loop running on the process serving the
-		// olympiad — accepting a context and never looking at it is the same as
-		// not having one.
+		// fromRow has no ceiling and a cold read has no marks, so the walk
+		// can be long; stop when the caller hangs up.
 		if err := ctx.Err(); err != nil {
 			return TableRowWindow{}, err
 		}
-		// Where the line about to be read begins, taken before reading it: this
-		// is the offset a later page would want to seek to for that row.
 		lineAt := scanner.offset
 		line, err := scanner.next()
 		if errors.Is(err, io.EOF) {
@@ -1107,9 +882,8 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 		if err != nil {
 			return TableRowWindow{}, fmt.Errorf("read the table's data: %w", err)
 		}
-		// The line just read is data row row+1, so it begins a mark exactly
-		// when row is a multiple of the interval — mark number row/interval.
-		// Anything already held, or out of order, record drops.
+		// The line just read is data row row+1, which begins mark
+		// row/interval when row is a multiple of the interval.
 		if row%tableRowMarkInterval == 0 {
 			marks.record(row/tableRowMarkInterval, lineAt, scanner.offset)
 		}
@@ -1120,23 +894,10 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 		if _, isDeleted := deleted[row]; isDeleted {
 			continue
 		}
-		// A row over budget stops the window here — except when it is the
-		// page's own first row, which is let through anyway. Without this,
-		// a table whose rows sit near MaxTableFieldBytes (columns wide
-		// enough that one row alone can reach megabytes) answers every
-		// window smaller than that with an empty page and truncated=true —
-		// indistinguishable from "no more rows", and the "next" offset
-		// (fromRow + rows shown) then computes right back to fromRow, since
-		// zero rows were shown. gamefile.Store.Window (readWindowLines) never
-		// does this to a dump's own line window: asked for more than its
-		// budget allows, it still returns the one line it has, cut to the
-		// budget, with Truncated set — a caller told the truth about a page
-		// that cost more than it asked for, rather than one told nothing was
-		// there. A CSV row can't be cut the same way (a sliced row would
-		// parse as fields belonging to no real data), so instead of
-		// shortening it, this lets the whole row through once, then stops:
-		// a page can therefore go over its own byte budget, but it can never
-		// show fewer than one row of data that exists.
+		// A row over budget ends the window, except the page's first row,
+		// which is always shown whole. Otherwise a row wider than the budget
+		// yields an empty page whose "next" offset is fromRow again, and a
+		// CSV row cannot be cut. A page may therefore exceed its budget.
 		if int64(len(line)) > remaining && len(window.Rows) > 0 {
 			window.Truncated = true
 			return window, nil
@@ -1159,14 +920,8 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 }
 
 // openTableRowScan positions f for a walk towards fromRow and reports how many
-// data rows lie behind the position it chose.
-//
-// With a usable mark, that is a seek: the returned scanner starts at the mark's
-// own byte offset and rowsBefore is the row count it stands for. With none —
-// the first time a file is paged through, or a file the marks no longer
-// describe — it is the top of the file with the header read past, which is
-// where the walk always used to start. Either way the caller's loop is
-// unchanged; only where it begins differs.
+// data rows lie before that position: at the nearest usable mark, or else
+// just past the header.
 func openTableRowScan(f io.ReadSeeker, size int64, marks *tableRowMarks, fromRow int64) (*tableLineScanner, int64, error) {
 	if offset, rowsBefore, ok := marks.nearest(fromRow, size); ok {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
@@ -1176,29 +931,16 @@ func openTableRowScan(f io.ReadSeeker, size int64, marks *tableRowMarks, fromRow
 	}
 
 	scanner := newTableLineScanner(f)
-	if _, err := scanner.next(); err != nil { // the header; already validated, only skipped here
+	if _, err := scanner.next(); err != nil { // skip the header
 		return nil, 0, fmt.Errorf("read the table's data: %w", err)
 	}
 	return scanner, 0, nil
 }
 
-// DeleteTableRow tombstones one row of a table's current data.
-//
-// Not a rewrite of the file. Removing a row from the middle of a file this
-// platform expects to hold gigabytes of rows would mean reading and
-// rewriting everything after it, on every click, for a file whose whole
-// reason to live on disk rather than in the core database is that it can be
-// exactly that large. A tombstone is a single append to a small bounded list
-// (game_table_data.deleted_rows, MaxTableDeletedRows) instead: the delete
-// costs one UPDATE regardless of the file's own size, and every reader
-// (TableDataWindow, and Games.loadTableData at build time) simply skips the
-// row number when it streams past it.
-//
-// What an interruption leaves behind: nothing partial. The tombstone is one
-// UPDATE in the core database, and PostgreSQL's own transaction either
-// applies it whole or not at all — there is no file write here to leave
-// half-done, which a physical delete could not promise without its own
-// journal.
+// DeleteTableRow tombstones one row of a table's current data. The file is
+// not rewritten: the row number goes into a bounded list
+// (MaxTableDeletedRows) with one UPDATE, readers skip it, and an interruption
+// leaves nothing partial.
 func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID, table string, row int64) error {
 	if g.tableFiles == nil {
 		return ErrTableDataDisabled
@@ -1242,15 +984,9 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 	return g.atomically(ctx, run)
 }
 
-// loadTableData is finishDefinitionBuild's own seam (template.go): after
-// BuildTemplate has created every table and before the build is marked
-// ready, this loads each table's own completed CSV, if it has one, through
-// cluster.LoadTableData — the same COPY ... FROM STDIN protocol path an
-// uploaded dump's own data already runs through
-// (gamedb.Provisioner.runScript), not a second, row-at-a-time way in.
-//
-// A table with no completed file is left empty, not refused — the brief's
-// own words: an organiser may have described a table and not yet filled it.
+// loadTableData loads each table's completed CSV into a freshly built
+// database through COPY FROM STDIN (cluster.LoadTableData). A table with no
+// completed file is left empty.
 func (g *Games) loadTableData(ctx context.Context, contestID uuid.UUID, database string, definition Definition) error {
 	if g.tableFiles == nil {
 		return nil
@@ -1258,7 +994,7 @@ func (g *Games) loadTableData(ctx context.Context, contestID uuid.UUID, database
 	for _, table := range definition.Tables {
 		data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
 		if errors.Is(err, ErrTableDataNotFound) {
-			continue // no file for this table yet: an empty table, not a refusal
+			continue
 		}
 		if err != nil {
 			return fmt.Errorf("read %s's own data: %w", table.Name, err)
@@ -1281,16 +1017,8 @@ func (g *Games) loadTableData(ctx context.Context, contestID uuid.UUID, database
 	return nil
 }
 
-// tableDataCopyReader streams a table's CSV file into a COPY ... FROM STDIN
-// with its header line and its tombstoned rows removed — the one filtering
-// this feature does at build time, so that LoadTableData (gamedb) never has
-// to know what a header or a deleted row is and can simply hand bytes to
-// PostgreSQL's own COPY protocol exactly as runScript's own copyDataReader
-// does for an uploaded dump's COPY blocks.
-//
-// One line at a time, from tableLineScanner's own bound: never the whole
-// file, whatever its own size — the same rule 12 reasoning gamedb's
-// copyDataReader gives for a dump.
+// tableDataCopyReader streams a table's CSV into COPY FROM STDIN without the
+// header and tombstoned rows, one line at a time (CLAUDE.md rule 12).
 type tableDataCopyReader struct {
 	scanner *tableLineScanner
 	deleted map[int64]struct{}
@@ -1327,7 +1055,7 @@ func (c *tableDataCopyReader) Read(p []byte) (int, error) {
 func (c *tableDataCopyReader) advance() {
 	if !c.started {
 		c.started = true
-		if _, err := c.scanner.next(); err != nil { // the header, always skipped
+		if _, err := c.scanner.next(); err != nil { // skip the header
 			c.err = err
 			return
 		}
@@ -1347,10 +1075,8 @@ func (c *tableDataCopyReader) advance() {
 	}
 }
 
-// sweepAbandonedTableData aborts every table-data upload still 'receiving'
-// past olderThan — SweepUploads' own janitor, at the finer grain of one
-// table's file. Batched the same size as the dump janitor's own, for the
-// same reason (abandonedUploadBatchLimit's own doc).
+// sweepAbandonedTableData aborts table-data uploads still 'receiving' past
+// olderThan, in batches of abandonedUploadBatchLimit.
 func (g *Games) sweepAbandonedTableData(ctx context.Context, olderThan time.Duration) (int, error) {
 	abandoned, err := g.repo.AbandonedTableData(ctx, g.now().Add(-olderThan), abandonedUploadBatchLimit)
 	if err != nil {
@@ -1368,12 +1094,9 @@ func (g *Games) sweepAbandonedTableData(ctx context.Context, olderThan time.Dura
 	return count, errors.Join(failures...)
 }
 
-// sweepOrphanTableFiles removes every table-data file on the volume that
-// nothing needs any more — sweepOrphanFiles' own doc, for
-// TableDataRepository.TableDataInUse instead of UploadInUse. Its own age
-// floor (orphanFileGrace) for the identical reason: BeginTableUpload and
-// AppendTableRow's own bootstrap both reserve a file before the row that
-// names it exists.
+// sweepOrphanTableFiles removes table-data files no row uses. Files younger
+// than orphanFileGrace are spared: BeginTableUpload and bootstrapTableRow
+// create a file before the row naming it.
 func (g *Games) sweepOrphanTableFiles(ctx context.Context) (int, error) {
 	ids, err := g.tableFiles.UploadIDs(g.now().Add(-orphanFileGrace))
 	if err != nil {

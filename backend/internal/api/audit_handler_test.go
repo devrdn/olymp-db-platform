@@ -21,8 +21,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// stubTrail answers with what it was given, and remembers the filter it was
-// asked for — which is the part the handler is responsible for building.
+// stubTrail answers with what it was given and remembers the filter it was
+// asked for, which is the part the handler builds.
 type stubTrail struct {
 	records []audit.Record
 	total   int
@@ -120,8 +120,7 @@ func TestTheTrailIsReturnedWithItsTotal(t *testing.T) {
 }
 
 func TestTheFiltersReachTheQuery(t *testing.T) {
-	// Every one of them narrows an index the table already carries; a filter
-	// the handler drops silently would be a panel that ignores what was asked.
+	// A filter the handler drops would answer with rows nobody asked for.
 	actor := uuid.New()
 	trail := &stubTrail{}
 	router, cookie := newAuditFixture(t, trail, rbac.PermissionAuditView)
@@ -170,9 +169,8 @@ func TestAMalformedTimeIsABadRequest(t *testing.T) {
 }
 
 func TestAnUnknownActionIsABadRequest(t *testing.T) {
-	// Without this, a typo in the address bar returns an empty page — the
-	// same answer as a real search that matched nothing — and the person
-	// filtering has no way to tell the two apart.
+	// Otherwise a typo returns an empty page, indistinguishable from a search
+	// that matched nothing.
 	router, cookie := newAuditFixture(t, &stubTrail{}, rbac.PermissionAuditView)
 
 	rec := getAudit(t, router, cookie, "/audit?action=user.evaporate")
@@ -197,10 +195,8 @@ func TestAKnownActionFiltersTheQuery(t *testing.T) {
 }
 
 func TestActionsEndpointPublishesTheWholeVocabulary(t *testing.T) {
-	// The interface has to offer every action the server can record, not only
-	// the ones on the current page — a filter that can only find what is
-	// already found is not a filter (this is the same idea as /roles beside
-	// /users).
+	// The interface must offer every action the server can record, not only
+	// those on the current page.
 	router, cookie := newAuditFixture(t, &stubTrail{}, rbac.PermissionAuditView)
 
 	rec := getAudit(t, router, cookie, "/audit/actions")
@@ -241,7 +237,7 @@ func TestActionsEndpointIsClosedWithoutThePermission(t *testing.T) {
 }
 
 func TestTheTrailAnswersWithWhatWasActedUpon(t *testing.T) {
-	// The identifier alone made the panel say "Contest" and nothing more.
+	// An identifier alone leaves the panel nothing to show but the entity type.
 	trail := &stubTrail{
 		total: 1,
 		records: []audit.Record{{

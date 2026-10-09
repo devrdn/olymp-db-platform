@@ -28,10 +28,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
-// watchStore is an in-memory monitor.WatchStore: it knows which contest each
-// registration belongs to, answers with one of everything, and remembers the
-// last feed and queries filters it was asked, so a test can see a parameter
-// arrive.
+// watchStore is an in-memory monitor.WatchStore that remembers the last feed
+// and queries filters it was asked, so a test can see a parameter arrive.
 type watchStore struct {
 	mu            sync.Mutex
 	registrations map[uuid.UUID]uuid.UUID // registration → contest
@@ -228,7 +226,6 @@ func (f *monitorFixture) one(reg uuid.UUID) string {
 	return f.base() + "/participants/" + reg.String()
 }
 
-// Every route, as the organiser asks it.
 func (f *monitorFixture) routes() []string {
 	one := f.one(f.reg)
 	return []string{

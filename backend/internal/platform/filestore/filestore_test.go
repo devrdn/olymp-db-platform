@@ -12,9 +12,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 )
 
-// newStore opens a store on dir, failing the test rather than returning an
-// error: every test here is about what a working store does, and a store that
-// could not be opened has nothing to say about any of it.
 func newStore(t *testing.T, dir string) *filestore.Store {
 	t.Helper()
 
@@ -48,9 +45,6 @@ func TestGettingWhatIsNotThereIsNotFound(t *testing.T) {
 	}
 }
 
-// A key is a name, never a path: the caller's hash is data, and data that can
-// walk out of the directory it is written into is how an upload becomes a
-// write to /etc.
 func TestAKeyCannotClimbOutOfTheDirectory(t *testing.T) {
 	root := t.TempDir()
 	store := newStore(t, root)
@@ -65,9 +59,6 @@ func TestAKeyCannotClimbOutOfTheDirectory(t *testing.T) {
 	}
 }
 
-// A half-written file is worse than no file: a reader would serve a truncated
-// picture forever, because the name is a content hash and nothing ever
-// rewrites it.
 func TestPutIsAllOrNothing(t *testing.T) {
 	root := t.TempDir()
 	store := newStore(t, root)
@@ -87,11 +78,8 @@ func TestPutIsAllOrNothing(t *testing.T) {
 	}
 }
 
-// The refusal a key that is not a name earns is a declared sentinel, so a
-// handler's fail switch can name it instead of reporting the caller's own
-// mistake as an internal error (CLAUDE.md, security rule 1). Get and Delete
-// refuse the same keys Put does: a read is as much a way out of the directory
-// as a write.
+// Get and Delete refuse the same keys Put does: a read is as much a way out of
+// the directory as a write.
 func TestARefusedKeyIsErrBadKeyOnEveryOperation(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -108,9 +96,6 @@ func TestARefusedKeyIsErrBadKeyOnEveryOperation(t *testing.T) {
 	}
 }
 
-// The content type comes from the extension rather than from a second file
-// kept beside the picture: one file on disk is one thing to write, one thing
-// to back up, and one thing that cannot disagree with itself.
 func TestTheContentTypeComesFromTheExtension(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -129,11 +114,6 @@ func TestTheContentTypeComesFromTheExtension(t *testing.T) {
 	}
 }
 
-// An extension the store does not serve is refused on the way in. Whatever a
-// later reader would guess for it — text/html above all — is served from the
-// same origin as the application, so the set of types this directory can ever
-// hand back is decided here, once, rather than by mime.TypeByExtension on a
-// machine whose /etc/mime.types nobody has read.
 func TestAnUnservableExtensionIsRefused(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -158,10 +138,6 @@ func TestDeleteRemovesTheFile(t *testing.T) {
 	}
 }
 
-// Deleting what is already gone is not an error: the caller — a sweep for
-// files no contest refers to any more — would otherwise have to distinguish
-// "nothing to do" from "the disk refused", and it has no use for the
-// difference.
 func TestDeletingWhatIsNotThereSucceeds(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -170,9 +146,7 @@ func TestDeletingWhatIsNotThereSucceeds(t *testing.T) {
 	}
 }
 
-// Overwriting is not something the covers themselves ever do — the name is a
-// content hash — but two organisers uploading the same picture at the same
-// moment do write the same name twice, and neither may see a torn file.
+// Two organisers uploading the same picture at once write the same name twice.
 func TestPutOverAnExistingKeyReplacesItWhole(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -192,9 +166,6 @@ func TestPutOverAnExistingKeyReplacesItWhole(t *testing.T) {
 	}
 }
 
-// The directory is created at start-up, so an operator who mounted a volume
-// but never made the directory inside it gets a working service rather than a
-// failure on the first upload.
 func TestNewCreatesTheDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "covers", "nested")
 
@@ -209,9 +180,6 @@ func TestNewCreatesTheDirectory(t *testing.T) {
 	}
 }
 
-// A directory nobody can write to must refuse at start-up, not on the day of
-// the olympiad: Ping writes and removes a probe file rather than merely
-// stat-ing the directory, because a read-only mount stats perfectly well.
 func TestPingFailsOnADirectoryItCannotWriteTo(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes to a 0500 directory regardless of its mode")
@@ -228,8 +196,6 @@ func TestPingFailsOnADirectoryItCannotWriteTo(t *testing.T) {
 	}
 }
 
-// Ping leaves nothing behind: it runs on every readiness probe, and a probe
-// file per probe would fill the volume it is checking.
 func TestPingLeavesNothingBehind(t *testing.T) {
 	dir := t.TempDir()
 	store := newStore(t, dir)
@@ -249,10 +215,6 @@ func TestPingLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// Every body that reaches storage carries an explicit bound (CLAUDE.md,
-// security rule 2). The covers this directory holds are re-encoded by the
-// service itself and run to a few hundred kilobytes; anything near the
-// ceiling is a caller that has lost track of what it is writing.
 func TestPutRefusesABodyBeyondTheCeiling(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -262,10 +224,7 @@ func TestPutRefusesABodyBeyondTheCeiling(t *testing.T) {
 	}
 }
 
-// The same ceiling on the way out, and for a reason Put's own check does not
-// cover: the directory is a volume an operator can write to by hand, and Get
-// reads a whole file into the memory of the process serving the olympiad.
-// The size is read from the file's metadata, before the bytes are allocated.
+// An operator can write to the volume by hand, so Get checks the size too.
 func TestGetRefusesAFileBeyondTheCeiling(t *testing.T) {
 	dir := t.TempDir()
 	store := newStore(t, dir)
@@ -280,17 +239,12 @@ func TestGetRefusesAFileBeyondTheCeiling(t *testing.T) {
 	}
 }
 
-// An empty directory is a configuration mistake, and one this package refuses
-// rather than resolves: a store rooted at the process's working directory
-// would write covers wherever the container happened to start.
 func TestNewRefusesAnEmptyDirectory(t *testing.T) {
 	if _, err := filestore.New(""); err == nil {
 		t.Error("New(\"\") = nil, want an error")
 	}
 }
 
-// The sweep for files no contest refers to any more has to start somewhere,
-// and a directory nobody can enumerate is one whose contents only grow.
 func TestListReturnsEveryFileTheStoreHolds(t *testing.T) {
 	store := newStore(t, t.TempDir())
 
@@ -320,10 +274,6 @@ func TestListReturnsEveryFileTheStoreHolds(t *testing.T) {
 	}
 }
 
-// A listing a sweep acts on may only name files that sweep is allowed to
-// remove. This store's own temporary and probe files are not: a .tmp-* is an
-// upload in flight, and offering it to a caller that deletes what it is given
-// would make the sweep the one thing that can tear a write.
 func TestListSkipsWhatIsNotAKeyOfThisStore(t *testing.T) {
 	dir := t.TempDir()
 	store := newStore(t, dir)
@@ -353,9 +303,6 @@ func TestListSkipsWhatIsNotAKeyOfThisStore(t *testing.T) {
 	}
 }
 
-// The age of a file is what tells an upload in flight apart from an orphan,
-// so a listing that loses the modification time is a listing a sweep cannot
-// be safe with.
 func TestListReportsTheModificationTime(t *testing.T) {
 	dir := t.TempDir()
 	store := newStore(t, dir)
@@ -380,9 +327,6 @@ func TestListReportsTheModificationTime(t *testing.T) {
 	}
 }
 
-// An empty directory is the healthy answer, not an error: a sweep run on an
-// installation where nobody has uploaded a cover yet is told there is nothing
-// to do.
 func TestListOfAnEmptyDirectoryIsEmpty(t *testing.T) {
 	store := newStore(t, t.TempDir())
 

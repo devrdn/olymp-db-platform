@@ -15,23 +15,15 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 )
 
-// standings is the storage double: it answers every query with the same
-// entries and remembers what it was asked.
 type standings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
-	// release, when set, is waited on inside a read before it returns — a
-	// test's way of holding the single flight's leader in place long enough
-	// to prove what joins it and what a cancelled waiter does not disturb.
-	release <-chan struct{}
-	// panicOnce makes the first read panic instead of answering, to prove a
-	// panicking leader does not wedge the key for the call after it.
+	// release, when set, holds every read until closed.
+	release   <-chan struct{}
 	panicOnce bool
 
-	mu      sync.Mutex
-	queries []leaderboard.Query
-	// grid is what ICPCStandings answers beside the entries; icpcReads counts
-	// its calls.
+	mu        sync.Mutex
+	queries   []leaderboard.Query
 	grid      leaderboard.Grid
 	icpcReads int
 }
@@ -74,9 +66,7 @@ func (s *standings) wait() {
 	}
 }
 
-// callCount is queries read under the same lock its writers use, so a test
-// synchronising through a WaitGroup or a channel (rather than through this
-// lock) still reads a value the writes happened before.
+// callCount reads under the writers' lock, so it is race-free.
 func (s *standings) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,8 +175,6 @@ func TestADraftAndAMissingContestAreTheSameNotFound(t *testing.T) {
 	}
 }
 
-// However many people watch, the database computes a contest's table once
-// per TTL.
 func TestOneComputationServesEveryViewerWithinTheTTL(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, nil)
@@ -209,8 +197,6 @@ func TestOneComputationServesEveryViewerWithinTheTTL(t *testing.T) {
 	}
 }
 
-// A live table cached a second before the freeze must not be served after it,
-// or the table would still read "live" into the freeze.
 func TestALiveTableIsNotServedPastTheFreeze(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, minutes(30))
@@ -258,8 +244,6 @@ func TestAParticipantSeesTheSharedTableAndWhichRowIsTheirs(t *testing.T) {
 	}
 }
 
-// The staff table is the one that ignores the freeze, and it says what
-// everybody else is being shown.
 func TestTheStaffTableIsLiveAndSaysWhatOthersSee(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, minutes(30))
@@ -298,7 +282,6 @@ func TestRevealOpensTheFinalTableAndIsRecordedOnce(t *testing.T) {
 	c := r.seed(contests.StatusFinished, minutes(30))
 	r.now = end.Add(time.Hour)
 
-	// Warm the cache with the frozen table, which the reveal must replace.
 	if view, _ := r.service.Public(context.Background(), c.ID); view.State != leaderboard.StateFrozen {
 		t.Fatalf("setup: State = %s, want frozen", view.State)
 	}
@@ -350,9 +333,6 @@ func (r *rig) seedICPC(status string, freezeMin *int) contests.Contest {
 	return r.contests.Put(c)
 }
 
-// Pending attempts are the one thing a frozen ICPC table tells after the
-// freeze, so they are asked for exactly there: from the freeze to the moment
-// of computing, by the public table and the participant's copy of it.
 func TestAFrozenICPCTableAsksForTheAttemptsSinceTheFreeze(t *testing.T) {
 	r := newRig(t)
 	r.standings.grid = leaderboard.Grid{Questions: 3, FirstSolves: make([]*time.Time, 3)}
@@ -377,10 +357,6 @@ func TestAFrozenICPCTableAsksForTheAttemptsSinceTheFreeze(t *testing.T) {
 	}
 }
 
-// Sequential progression opens a question only once the one before it is
-// closed, so a pending attempt on a later question would say that the earlier
-// one was closed after the freeze. A frozen sequential ICPC table asks for no
-// pending attempts; the same table under free progression still does.
 func TestAFrozenSequentialICPCTableAsksForNoPendingAttempts(t *testing.T) {
 	r := newRig(t)
 	r.standings.grid = leaderboard.Grid{Questions: 2, FirstSolves: make([]*time.Time, 2)}
@@ -411,9 +387,6 @@ func TestAFrozenSequentialICPCTableAsksForNoPendingAttempts(t *testing.T) {
 	}
 }
 
-// Nothing else asks for pending attempts: not a live or a final table, where
-// the cutoff is now and a result is simply shown, and never the staff table,
-// which is cut off now whatever the freeze and sees the result itself.
 func TestOnlyAFrozenPublicTableAsksForPendingAttempts(t *testing.T) {
 	r := newRig(t)
 	live := r.seedICPC(contests.StatusRunning, nil)
@@ -436,7 +409,6 @@ func TestOnlyAFrozenPublicTableAsksForPendingAttempts(t *testing.T) {
 	}
 }
 
-// The points table does not read the ICPC standings: its response has no grid.
 func TestAPointsTableReadsNoGrid(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, minutes(30))
@@ -452,8 +424,6 @@ func TestAPointsTableReadsNoGrid(t *testing.T) {
 	}
 }
 
-// The first-solver mark survives the row bound: the question's first solver
-// is cut off the table, and nobody left on it is marked in their place.
 func TestAnICPCFirstSolverMarkSurvivesTheRowBound(t *testing.T) {
 	r := newRig(t)
 	r.service = leaderboard.NewService(leaderboard.Config{
@@ -485,8 +455,6 @@ func TestAnICPCFirstSolverMarkSurvivesTheRowBound(t *testing.T) {
 	}
 }
 
-// The question letters and every row's cells come from one computation and
-// must agree; a grid that does not is refused rather than served misaligned.
 func TestAnICPCGridWhoseRowsDoNotMatchItsWidthIsRefused(t *testing.T) {
 	r := newRig(t)
 	c := r.seedICPC(contests.StatusRunning, nil)
@@ -498,13 +466,8 @@ func TestAnICPCGridWhoseRowsDoNotMatchItsWidthIsRefused(t *testing.T) {
 	}
 }
 
-// waitForCallCount polls until the fake has recorded n reads, or fails the
-// test. It exists because a repository call the test means to hold open is
-// started on a goroutine the test does not otherwise synchronise with —
-// spinning on the fake's own counter is the one thing that tells the test the
-// call has actually begun (and, since fn's registration with the single
-// flight happens before it is ever called, that any waiter started from this
-// point on is joining rather than racing it).
+// waitForCallCount polls until the fake has recorded n reads. Once it has,
+// the flight is registered, so any waiter started afterwards joins it.
 func waitForCallCount(t *testing.T, s *standings, n int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -517,17 +480,12 @@ func waitForCallCount(t *testing.T, s *standings, n int) {
 	t.Fatalf("the repository was not called %d time(s) within a second (got %d)", n, s.callCount())
 }
 
-// Concurrent misses on the same contest must not each recompute the table:
-// the whole point of the shared cache is one aggregate per contest per
-// window, however many people are asking at once.
 func TestConcurrentMissesOnTheSameContestShareOneComputation(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, nil)
 	release := make(chan struct{})
 	r.standings.release = release
 
-	// The leader: started first and alone, so it is certainly the one that
-	// reaches the repository below.
 	leaderDone := make(chan struct{})
 	var leaderView leaderboard.View
 	var leaderErr error
@@ -537,9 +495,6 @@ func TestConcurrentMissesOnTheSameContestShareOneComputation(t *testing.T) {
 	}()
 	waitForCallCount(t, r.standings, 1)
 
-	// Every one of these joins the same in-flight computation rather than
-	// starting its own, because the repository has not answered yet and the
-	// leader's key is still in flight.
 	const followers = 4
 	var wg sync.WaitGroup
 	results := make([]leaderboard.View, followers)
@@ -551,11 +506,7 @@ func TestConcurrentMissesOnTheSameContestShareOneComputation(t *testing.T) {
 			results[i], errs[i] = r.service.Public(context.Background(), c.ID)
 		}(i)
 	}
-	// x/sync/singleflight's own tests use the same allowance to let
-	// concurrently started goroutines reach Do before the flight is released
-	// (singleflight_test.go, TestDoDupSuppress) — joining a flight is a
-	// couple of uncontended mutex operations, so this is generous rather than
-	// exact.
+	// Let the followers join the flight, as singleflight's own tests do.
 	time.Sleep(20 * time.Millisecond)
 	close(release)
 	wg.Wait()
@@ -577,9 +528,6 @@ func TestConcurrentMissesOnTheSameContestShareOneComputation(t *testing.T) {
 	}
 }
 
-// A waiter that gives up must not wait for the flight it joined, and must
-// not take the flight down with it: the computation belongs to the key, not
-// to whichever caller happened to start it.
 func TestACancelledWaiterDoesNotDisturbTheFlightItJoined(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, nil)
@@ -613,8 +561,6 @@ func TestACancelledWaiterDoesNotDisturbTheFlightItJoined(t *testing.T) {
 		t.Fatal("the cancelled waiter never returned")
 	}
 
-	// The cancellation must not have reached the leader: it is still blocked
-	// in the repository, exactly as if the waiter had never joined.
 	select {
 	case <-leaderDone:
 		t.Fatal("the leader finished before being released — the waiter's cancellation reached it")
@@ -635,8 +581,6 @@ func TestACancelledWaiterDoesNotDisturbTheFlightItJoined(t *testing.T) {
 	}
 }
 
-// A leader that panics must not wedge the key: the next call has to try
-// again rather than hang behind a flight that can never finish.
 func TestAPanickingLeaderDoesNotWedgeLaterCalls(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, nil)
@@ -656,9 +600,6 @@ func TestAPanickingLeaderDoesNotWedgeLaterCalls(t *testing.T) {
 	}
 }
 
-// The staff table is cached too, briefly — just long enough that several
-// staff tabs refreshing together share one computation rather than each
-// recomputing the same heavy query.
 func TestTheLiveTableIsCachedForItsOwnShortTTL(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, nil)
@@ -681,12 +622,6 @@ func TestTheLiveTableIsCachedForItsOwnShortTTL(t *testing.T) {
 	}
 }
 
-// A reveal must not leave the staff table saying "frozen" for as long as its
-// own cache TTL after the result is already public — the one view a reveal
-// exists to change is exactly the one it must not leave stale. A settings
-// change (moving the freeze, say) gets no equivalent hook: it is eventually
-// reflected within the same short TTL, the same guarantee the table already
-// gives everyone else, so nothing beyond that TTL is asked of it here.
 func TestRevealInvalidatesTheLiveCacheTooSoStaffSeeItAtOnce(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, minutes(30))
@@ -707,12 +642,8 @@ func TestRevealInvalidatesTheLiveCacheTooSoStaffSeeItAtOnce(t *testing.T) {
 	}
 }
 
-// A computation that started before a reveal — it read the contest while the
-// table was still frozen, and only then got blocked inside the repository —
-// must not win the race against the reveal and store its stale answer over
-// it. The read it already had in hand is allowed to come back frozen (it is
-// not wrong, only overtaken); what matters is that nothing it does afterwards
-// can poison the cache for the very next, distinct call.
+// The in-flight computation may itself return frozen; it must not cache that
+// answer for the next call.
 func TestAComputationStartedBeforeARevealDoesNotCacheItsStaleAnswerOverIt(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusFinished, minutes(30))
@@ -750,9 +681,6 @@ func TestAComputationStartedBeforeARevealDoesNotCacheItsStaleAnswerOverIt(t *tes
 		}
 	}
 
-	// The one guarantee that matters: the next, distinct call must see the
-	// reveal, not a stale frozen answer the computation above wrote back
-	// after Reveal had already cleared it.
 	view, err := r.service.Public(context.Background(), c.ID)
 	if err != nil || view.State != leaderboard.StateFinal {
 		t.Fatalf("Public() after the stale computations = %+v, %v, want final", view, err)
@@ -763,14 +691,7 @@ func TestAComputationStartedBeforeARevealDoesNotCacheItsStaleAnswerOverIt(t *tes
 	}
 }
 
-// A follower that joins a flight long after the leader started must not
-// stretch the cache: the expiry has to be anchored to when the view was
-// actually generated, not to whichever caller's own clock happened to store
-// it.
-// syncClock is a clock several goroutines can read and advance safely — a
-// plain field mutated from one goroutine while another's Public() call reads
-// it through the service's Now func is itself a data race, which would only
-// hide the real one this test exists to catch.
+// syncClock is a clock several goroutines can read and advance safely.
 type syncClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -811,11 +732,8 @@ func TestTheCacheExpiryIsAnchoredToWhenTheViewWasGeneratedNotAFollowersOwnClock(
 	}()
 	waitForCallCount(t, r.standings, 1)
 
-	// Several followers join well after the leader started, their own clocks
-	// increasingly far into the ten-second TTL — several of them, and spread
-	// across the window, so that whichever one happens to be the last to
-	// write still exposes a caller's-own-clock bug (a single follower's
-	// write race against the leader's is not decisive on its own).
+	// Several followers spread across the TTL, so whichever writes last
+	// still exposes a caller's-own-clock bug.
 	const followers = 8
 	var wg sync.WaitGroup
 	wg.Add(followers)
@@ -833,10 +751,7 @@ func TestTheCacheExpiryIsAnchoredToWhenTheViewWasGeneratedNotAFollowersOwnClock(
 	<-leaderDone
 	wg.Wait()
 
-	// Just past the leader's own TTL (leaderStart + 10s): if a follower's
-	// later clock read had become the expiry base instead, the entry would
-	// still have several seconds left to live and this would wrongly hit the
-	// cache.
+	// Just past the leader's TTL: a follower-based expiry would still hit.
 	clock.set(leaderStart.Add(10*time.Second + time.Millisecond))
 	if _, err := r.service.Public(context.Background(), c.ID); err != nil {
 		t.Fatal(err)

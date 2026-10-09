@@ -15,14 +15,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// These tests are about the connections the runner keeps between queries, and
-// they observe them the only way that proves anything: as the participant's
-// role, through the real driver, and from the server's side of the socket
-// (pg_backend_pid, pg_stat_activity). A counter inside the pool would say what
-// the pool believes; the server says what it holds.
+// These tests observe kept connections from the server's side
+// (pg_backend_pid, pg_stat_activity), not from a counter inside the pool.
 
-// The handshake is the cost being removed: a participant's next read is served
-// by the backend their last one left.
 func TestAReadIsServedByTheConnectionThePreviousReadLeft(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
 
@@ -32,15 +27,8 @@ func TestAReadIsServedByTheConnectionThePreviousReadLeft(t *testing.T) {
 	}
 }
 
-// Nothing one query leaves on a session is visible to the next one served by
-// the same backend.
-//
-// The statements here are ones the checker refuses, run through a validator
-// that admits anything: the pool's isolation is the layer under the checker and
-// has to hold on its own. Each case first proves the backend really was reused,
-// or a passing check would prove nothing. Every case is state a read's rollback
-// leaves in place, so what each one proves is the reset; the reset's known
-// residue is listed in pool's doc.
+// The statements are ones the checker refuses, run through `anything`, so the
+// reset is proved on its own. Each case first proves the backend was reused.
 func TestSessionStateDoesNotOutliveTheQueryThatLeftIt(t *testing.T) {
 	for name, tc := range map[string]struct{ leave, check string }{
 		"a session advisory lock": {
@@ -52,14 +40,12 @@ func TestSessionStateDoesNotOutliveTheQueryThatLeftIt(t *testing.T) {
 			leave: `PREPARE left_behind AS SELECT 1`,
 			check: `SELECT count(*) FROM pg_prepared_statements`,
 		},
-		// Like the exclusive lock above, a session lock outlives the read's
-		// rollback: only the reset releases it.
+		// A session lock outlives the read's rollback; only the reset frees it.
 		"a shared session advisory lock": {
 			leave: `SELECT pg_advisory_lock_shared(43)`,
 			check: `SELECT count(*) WHERE pg_advisory_unlock_shared(43)`,
 		},
-		// The driver's own statement cache would name and keep every query
-		// text on the server; the check's count would then include itself.
+		// A driver statement cache would make the count include the check.
 		"a statement the driver prepared": {
 			leave: `SELECT id FROM evidence WHERE id = 1`,
 			check: `SELECT count(*) FROM pg_prepared_statements`,
@@ -87,10 +73,8 @@ func TestSessionStateDoesNotOutliveTheQueryThatLeftIt(t *testing.T) {
 	}
 }
 
-// A contest that permits writing never shares a connection. What a write can
-// leave on a session — a temporary table, committed with it — is not something
-// a reset is trusted to find, so those queries are served as before: a
-// connection each, closed after.
+// A reset is not trusted to find what a write leaves, such as a committed
+// temporary table.
 func TestAReadWriteContestNeverSharesAConnection(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
 	gamedbtest.Run(t, database, `GRANT TEMPORARY ON DATABASE `+sqlpolicy.QuoteIdentifier(database)+` TO `+gamedb.RoleWriter)
@@ -116,10 +100,7 @@ func TestAReadWriteContestNeverSharesAConnection(t *testing.T) {
 	}
 }
 
-// A connection whose query did not finish cleanly is closed, never handed to
-// the next query. An abandoned query may have a cancel still on its way to the
-// server, which would land on whatever that backend runs next, and a failed
-// one leaves a session in a state nothing here inspects.
+// An abandoned query may have a cancel in flight that would hit the next query.
 func TestAConnectionWhoseQueryDidNotFinishCleanlyIsNotReused(t *testing.T) {
 	for name, end := range map[string]func(t *testing.T, runner *queryrunner.Runner, database string){
 		"cancelled by the caller": func(t *testing.T, runner *queryrunner.Runner, database string) {
@@ -159,9 +140,7 @@ func TestAConnectionWhoseQueryDidNotFinishCleanlyIsNotReused(t *testing.T) {
 	}
 }
 
-// An idle connection goes away on its own, so a participant who stopped asking
-// does not keep a backend — or keep the reclaim sweep's plain DROP DATABASE,
-// which refuses while anything is connected, from ever succeeding.
+// A kept connection must not stop the reclaim sweep's plain DROP DATABASE.
 func TestAnIdleConnectionIsClosedAfterItsIdleTimeout(t *testing.T) {
 	limits := unlimited()
 	limits.IdleTimeout = 300 * time.Millisecond
@@ -175,18 +154,14 @@ func TestAnIdleConnectionIsClosedAfterItsIdleTimeout(t *testing.T) {
 		t.Fatalf("after the idle timeout the runner still holds %d connections", n)
 	}
 
-	// Without FORCE, exactly as the reclaim sweep drops.
+	// Without FORCE, as the reclaim sweep drops.
 	if _, err := gamedbtest.Admin(t).Exec(t.Context(), `DROP DATABASE `+sqlpolicy.QuoteIdentifier(database)); err != nil {
 		t.Fatalf("a plain DROP DATABASE after the idle timeout: %v", err)
 	}
 }
 
-// The runner holds no more game-cluster backends than it may run queries at
-// once, kept connections included. The cluster's memory is sized for
-// QUERY_CONCURRENT backends at the per-process cap (config.Runner), and a
-// kept backend can be holding what its last query grew to; so a read that
-// needs a new connection while the runner is at its bound closes the least
-// recently used kept one first.
+// At the bound, a read needing a new connection closes the least recently used
+// kept one first.
 func TestTheRunnerKeepsNoMoreConnectionsThanItRunsQueries(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 2
@@ -207,9 +182,7 @@ func TestTheRunnerKeepsNoMoreConnectionsThanItRunsQueries(t *testing.T) {
 	}
 }
 
-// The same bound with participants asking at once, which is the case it exists
-// for: sampled from the server's side for the whole run, the runner never holds
-// more participant backends than it may run queries.
+// Sampled from the server's side for the whole run.
 func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 2
@@ -266,11 +239,8 @@ func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 	}
 }
 
-// The pool refuses to open a connection past its bound when there is no idle
-// one to close, rather than open it anyway. The gate makes that unreachable
-// through Run, so the pool is driven directly here; what is proved is that a
-// broken gate shows up as a refusal and not as a cluster holding more backends
-// than its memory is sized for.
+// The gate makes this unreachable through Run, so the pool is driven directly:
+// a broken gate must show up as a refusal, not as extra backends.
 func TestThePoolRefusesToGoPastItsBound(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 1
@@ -288,8 +258,7 @@ func TestThePoolRefusesToGoPastItsBound(t *testing.T) {
 		t.Fatalf("the runner holds %d connections, want 1", n)
 	}
 
-	// Handed back clean, the connection is kept idle, and an idle one is what
-	// may be closed to make room.
+	// Kept idle, so it may now be closed to make room.
 	release(true)
 	again, err := queryrunner.HoldConnection(t.Context(), runner, second)
 	if err != nil {
@@ -301,11 +270,8 @@ func TestThePoolRefusesToGoPastItsBound(t *testing.T) {
 	}
 }
 
-// A write to a database whose read connection is being kept closes the kept
-// one first. A write never takes a kept connection (it runs as another role),
-// and an instance allows two connections, one of which the schema panel may be
-// borrowing: the runner holding a second of its own there would turn that
-// ordinary overlap into a refusal.
+// A write runs as another role, and holding two connections to one instance
+// would use up its CONNECTION LIMIT 2.
 func TestAWriteClosesTheReadConnectionKeptForItsDatabase(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
 
@@ -324,7 +290,6 @@ func TestAWriteClosesTheReadConnectionKeptForItsDatabase(t *testing.T) {
 	}
 }
 
-// Closing the runner closes what it kept.
 func TestClosingTheRunnerClosesItsIdleConnections(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
 

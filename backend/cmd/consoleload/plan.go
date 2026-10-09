@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// report is everything a run of the command found, as report.json holds it.
 type report struct {
 	Label        string            `json:"label,omitempty"`
 	API          string            `json:"api"`
@@ -31,8 +30,6 @@ type report struct {
 	Kept         bool              `json:"kept,omitempty"`
 }
 
-// execute is one invocation: the fixture, the runs, and the teardown that
-// follows them whether they succeeded or not.
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
 	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix}
 	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
@@ -51,8 +48,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 	}
 
 	var parts []*participant
-	// The way out, taken however the run ended: a failure half-way through
-	// setup, an interrupted run, or a finished one. Only -keep skips it.
+	// Teardown runs however the run ended; only -keep skips it.
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
 		defer cancel()
@@ -73,7 +69,6 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 				err = errors.Join(err, fmt.Errorf("teardown: %w (run `consoleload sweep`)", downErr))
 			}
 			if cfg.fixture != "" {
-				// The operator named this file; what it described is gone.
 				_ = os.Remove(cfg.fixture) // #nosec G703 -- the operator's own -fixture path.
 			}
 		}
@@ -125,10 +120,8 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 
 	l := load{api: cfg.api, contest: f.ContestID, mix: cfg.mix, inFlight: &gauge{}}
 
-	// Every participant's first query, a few at a time: it is the one that
-	// claims their copy from the pool (provisioning.Service.Ensure), so it is
-	// measured apart, and it is kept out of the runs so that none of them is
-	// measuring a claim instead of a query.
+	// The first query claims each participant's copy, so it is measured
+	// apart from the runs.
 	first, err := firstQueries(ctx, l, parts)
 	if err != nil {
 		return err
@@ -143,8 +136,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 	}
 	for _, n := range cfg.participants {
 		for _, shape := range cfg.shapes {
-			// Between runs, so that one run's tail — a rate window, a cache,
-			// a queue — does not become the next one's head.
+			// So one run's tail does not become the next one's head.
 			if !sleep(ctx, cfg.cooldown) {
 				return ctx.Err()
 			}
@@ -184,7 +176,6 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 	return nil
 }
 
-// firstQueries sends every participant one cheap query, four at a time.
 func firstQueries(ctx context.Context, l load, parts []*participant) (runSummary, error) {
 	const atOnce = 4
 	var (
@@ -210,8 +201,6 @@ func firstQueries(ctx context.Context, l load, parts []*participant) (runSummary
 	wg.Wait()
 	summary := summarise("first-query", "first", len(parts), started, time.Now(), outcomes)
 	if summary.Outcomes["200"] != len(parts) {
-		// Every later number would be about participants who cannot query at
-		// all; better to stop and say why.
 		return summary, fmt.Errorf("not every participant could run a first query: %s (first refusal: %s)",
 			joinCounts(summary.Outcomes), firstRefusal(outcomes))
 	}
@@ -227,8 +216,7 @@ func firstRefusal(outcomes []outcome) string {
 	return "none"
 }
 
-// writeOutcomes keeps every query of a run, one JSON object per line, for
-// whoever wants to look past the percentiles.
+// writeOutcomes writes every query of a run as JSON lines.
 func writeOutcomes(out *os.Root, name string, outcomes []outcome) error {
 	file, err := out.OpenFile(name+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -244,8 +232,6 @@ func writeOutcomes(out *os.Root, name string, outcomes []outcome) error {
 	return nil
 }
 
-// writeReport writes report.json, everything measured, and report.md, the
-// tables made of it.
 func writeReport(out *os.Root, rep *report) error {
 	body, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {

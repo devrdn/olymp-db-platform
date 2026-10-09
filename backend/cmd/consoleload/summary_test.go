@@ -6,8 +6,6 @@ import (
 )
 
 func TestDistributionIsNearestRank(t *testing.T) {
-	// 1..100 ms: the nearest-rank p50 is the 50th value, p95 the 95th, p99
-	// the 99th — values somebody actually waited, never an interpolation.
 	var values []time.Duration
 	for i := 100; i >= 1; i-- {
 		values = append(values, time.Duration(i)*time.Millisecond)
@@ -20,8 +18,7 @@ func TestDistributionIsNearestRank(t *testing.T) {
 }
 
 func TestDistributionOfFewValuesReportsTheWorst(t *testing.T) {
-	// With fewer than a hundred samples p99 is the maximum, which is what a
-	// report of forty bursts should say rather than something smaller.
+	// With fewer than a hundred samples p99 is the maximum.
 	got := distribution([]time.Duration{3 * time.Millisecond, time.Millisecond, 2 * time.Millisecond})
 	if got.P99 != 3 || got.P50 != 2 {
 		t.Fatalf("distribution = %+v, want p50 2 and p99 3", got)

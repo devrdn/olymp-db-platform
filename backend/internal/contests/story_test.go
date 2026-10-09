@@ -46,8 +46,7 @@ func TestStoryRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 }
 
 func TestStoryCannotChangeOnceTheContestIsRunning(t *testing.T) {
-	// Participants are reading it; changing it underneath them changes the
-	// task they are working on.
+	// Participants are reading it; changing it changes their task mid-contest.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 

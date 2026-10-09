@@ -6,10 +6,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 )
 
-// TestNormalizeHistoryPageDefaultsAndClamps mirrors audit.Filter.Normalize's
-// own test: a caller that asks for nothing gets the default page, a caller
-// that asks for too much is clamped rather than refused, and a negative
-// offset never goes backwards past the start.
 func TestNormalizeHistoryPageDefaultsAndClamps(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

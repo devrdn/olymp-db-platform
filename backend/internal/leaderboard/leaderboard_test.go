@@ -25,8 +25,6 @@ func contest(status string, freezeMin *int, revealed *time.Time) contests.Contes
 
 func minutes(n int) *int { return &n }
 
-// The whole table of states from the design, one row each, including both
-// sides of the freeze boundary.
 func TestDecideNamesTheStateAndTheCutoff(t *testing.T) {
 	freezeAt := end.Add(-30 * time.Minute)
 	revealed := end.Add(time.Hour)
@@ -73,17 +71,12 @@ func TestDecideNamesTheStateAndTheCutoff(t *testing.T) {
 	}
 }
 
-// A draft has no table for anybody outside its staff, and says so the same way
-// a contest that does not exist does.
 func TestDecideRefusesADraft(t *testing.T) {
 	if _, err := leaderboard.Decide(contest(contests.StatusDraft, nil, nil), start); !errors.Is(err, leaderboard.ErrNotFound) {
 		t.Errorf("Decide() = %v, want ErrNotFound", err)
 	}
 }
 
-// A cell's state is decided by what it holds, in the design's order: a solve
-// before the cutoff wins, attempts waiting since the freeze come next, then
-// wrong attempts, and a question nobody touched is untried.
 func TestCellStateFollowsWhatTheCellHolds(t *testing.T) {
 	cases := []struct {
 		name string
@@ -108,11 +101,6 @@ func TestCellStateFollowsWhatTheCellHolds(t *testing.T) {
 	}
 }
 
-// What one cell costs its row: the minute it was solved on plus the
-// contest's penalty for every wrong attempt before that. An unsolved
-// question costs nothing at all — not its wrong attempts, not its waiting
-// ones — which is the whole of the ICPC rule, and the reason a row's
-// penalty is a sum over the solved cells alone.
 func TestACellCostsItsSolvingMinuteAndItsWrongAttempts(t *testing.T) {
 	cases := []struct {
 		name string
@@ -134,8 +122,6 @@ func TestACellCostsItsSolvingMinuteAndItsWrongAttempts(t *testing.T) {
 	}
 }
 
-// A question on the grid is named by its position among the visible ones,
-// never by an identifier, and the names do not run out after Z.
 func TestQuestionLetterNamesAQuestionByItsPosition(t *testing.T) {
 	cases := map[int]string{0: "A", 1: "B", 25: "Z", 26: "AA", 27: "AB", 701: "ZZ", 702: "AAA"}
 	for position, want := range cases {

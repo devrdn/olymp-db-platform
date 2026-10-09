@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// staticRoles answers every contest-role lookup with one value.
 type staticRoles struct{ role rbac.ContestRole }
 
 func (s staticRoles) ContestRole(context.Context, uuid.UUID, uuid.UUID) (rbac.ContestRole, error) {
@@ -64,7 +63,6 @@ func newMiddlewareFixture(t *testing.T, roles rbac.ContestRoleLoader, permission
 	return &mwFixture{mw: mw, repo: repo, sessions: sessions, user: user, token: token}
 }
 
-// authed builds a request carrying the session cookie.
 func authed(token string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
@@ -113,8 +111,6 @@ func TestAuthenticatePutsTheIdentityInContext(t *testing.T) {
 }
 
 func TestAuthenticateRejectsABlockedAccountHoldingAValidSession(t *testing.T) {
-	// Blocking has to take effect on the next request, not when the session
-	// happens to expire.
 	f := newMiddlewareFixture(t, staticRoles{})
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 	rec := httptest.NewRecorder()
@@ -137,11 +133,6 @@ func TestBlockedAccountLosesTheSessionEntirely(t *testing.T) {
 	}
 }
 
-// TestAuthenticateRejectsADeletedAccountHoldingAValidSession proves the
-// second door deletion closes: the account's password and session are both
-// still technically valid, but the middleware must refuse it on the strength
-// of its status alone, on the very next request — not whenever the session
-// happens to expire.
 func TestAuthenticateRejectsADeletedAccountHoldingAValidSession(t *testing.T) {
 	f := newMiddlewareFixture(t, staticRoles{})
 	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
@@ -166,7 +157,6 @@ func TestDeletedAccountLosesTheSessionEntirely(t *testing.T) {
 }
 
 func TestAuthenticateRejectsASessionFromAnEarlierGeneration(t *testing.T) {
-	// This is how "log out everywhere" reaches sessions on other devices.
 	f := newMiddlewareFixture(t, staticRoles{})
 	if _, err := f.repo.BumpSessionGeneration(context.Background(), f.user.ID); err != nil {
 		t.Fatalf("BumpSessionGeneration() returned error: %v", err)
@@ -222,8 +212,6 @@ func TestRequirePermissionDeniesWithoutIt(t *testing.T) {
 }
 
 func TestRequirePermissionWithoutAuthenticationIsUnauthenticatedNotForbidden(t *testing.T) {
-	// 403 would tell an anonymous caller that the endpoint exists and that
-	// they merely lack rights; 401 is both truthful and quieter.
 	f := newMiddlewareFixture(t, staticRoles{})
 	rec := httptest.NewRecorder()
 
@@ -235,8 +223,7 @@ func TestRequirePermissionWithoutAuthenticationIsUnauthenticatedNotForbidden(t *
 	}
 }
 
-// contestRouter mounts a handler under a contest id so the scoped middleware
-// can read the parameter the way it will in production.
+// contestRouter mounts a handler under {contestID} as production does.
 func contestRouter(f *mwFixture, permission string) http.Handler {
 	r := chi.NewRouter()
 	r.Route("/contests/{contestID}", func(r chi.Router) {
@@ -297,7 +284,6 @@ func TestSystemAdministratorPassesTheContestScope(t *testing.T) {
 }
 
 func TestAuthenticatedRequestCarriesTheUserIntoTheLogContext(t *testing.T) {
-	// Every log line from an authenticated request should be attributable.
 	f := newMiddlewareFixture(t, staticRoles{})
 	var seen string
 	handler := f.mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -312,8 +298,6 @@ func TestAuthenticatedRequestCarriesTheUserIntoTheLogContext(t *testing.T) {
 }
 
 func TestActiveSessionIsExtendedOnUse(t *testing.T) {
-	// Sliding expiry: someone working through a contest must not be logged out
-	// mid-answer.
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
@@ -338,8 +322,6 @@ func TestActiveSessionIsExtendedOnUse(t *testing.T) {
 }
 
 func TestOneTimePasswordAccountIsBlockedFromTheAPI(t *testing.T) {
-	// must_change_password was advisory: a client ignoring the UI kept the
-	// administrator-issued password as a working credential indefinitely.
 	f := newMiddlewareFixture(t, staticRoles{})
 	setMustChange(t, f)
 	rec := httptest.NewRecorder()
@@ -361,7 +343,6 @@ func TestOneTimePasswordAccountIsBlockedFromTheAPI(t *testing.T) {
 }
 
 func TestOneTimePasswordAccountMayStillChangeItsPassword(t *testing.T) {
-	// The enforcement must not wall off the only way out.
 	f := newMiddlewareFixture(t, staticRoles{})
 	setMustChange(t, f)
 
@@ -379,11 +360,7 @@ func TestOneTimePasswordAccountMayStillChangeItsPassword(t *testing.T) {
 }
 
 func TestTheWayOutIsNamedExactly(t *testing.T) {
-	// The exemption was a suffix match, so any route whose path happened to
-	// end in one of the three was exempt too. Nothing does today; the point is
-	// that adding /contests/{id}/auth/me tomorrow would silently reopen the
-	// API to an account still carrying somebody else's handover password, and
-	// nothing in that change would look like a security decision.
+	// A suffix match would exempt any route ending like an exempt one.
 	f := newMiddlewareFixture(t, staticRoles{})
 	setMustChange(t, f)
 
@@ -405,13 +382,7 @@ func TestTheWayOutIsNamedExactly(t *testing.T) {
 }
 
 func TestTheWayOutWorksWhereverTheAPIIsMounted(t *testing.T) {
-	// Production mounts under /api/v1 and the tests mount bare. Both have to
-	// reach the same three endpoints, which is what the suffix match bought
-	// and what the exact match must not lose.
-	//
-	// /api/v2 is in the list on purpose. Pinning the literal current prefix
-	// would mean that renaming the mount silently shuts the only way out of a
-	// one-time password — a change nobody would connect to this file.
+	// Bare, /api/v1 and /api/v2 must all reach the exempt paths.
 	f := newMiddlewareFixture(t, staticRoles{})
 	setMustChange(t, f)
 
@@ -428,7 +399,6 @@ func TestTheWayOutWorksWhereverTheAPIIsMounted(t *testing.T) {
 	}
 }
 
-// setMustChange flags the fixture account as still on its one-time password.
 func setMustChange(t *testing.T, f *mwFixture) {
 	t.Helper()
 	if err := f.repo.SetPassword(context.Background(), f.user.ID, "$argon2id$stub", true); err != nil {
@@ -462,7 +432,6 @@ func TestAuthenticateRefusesASessionPastItsMaximumLifetimeHoweverRecentlyUsed(t 
 	}
 }
 
-// countingUsers counts the account reads the middleware makes.
 type countingUsers struct {
 	*userstest.Repository
 	mu    sync.Mutex
@@ -482,16 +451,14 @@ func (c *countingUsers) readCount() int {
 	return c.reads
 }
 
-// cachedFixture is the middleware as the deployment assembles it: accounts
-// cached between requests, and the account service telling that cache about
-// every change, sharing one account store.
+// cachedFixture assembles the middleware as the deployment does, with the
+// account cache and the user service sharing one store.
 type cachedFixture struct {
 	mw       *Middleware
 	repo     *userstest.Repository
 	counted  *countingUsers
 	sessions *SessionStore
-	// store is the account cache's own backend, so a test can make it fail
-	// without failing the session store.
+	// store can fail without failing the session store.
 	store   *switchableCache
 	service *users.Service
 	user    users.User
@@ -540,8 +507,6 @@ func newCachedFixture(t *testing.T, ttl time.Duration) *cachedFixture {
 	}
 }
 
-// serve sends one request with the session token and answers its status and
-// the identity the handler saw, if any.
 func (f *cachedFixture) serve(token string) (int, rbac.Identity) {
 	var seen rbac.Identity
 	handler := f.mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -574,10 +539,7 @@ func TestACachedAccountSparesTheDatabaseReadAndTheCacheWrite(t *testing.T) {
 	}
 }
 
-// TestEveryChangeToAccessIsHonouredOnTheNextRequest is the promise the cache
-// must not weaken: blocking, deleting, changing roles or a password takes
-// effect on the account's very next request, not when a copy expires. The
-// lifetime here is far longer than the test, so only invalidation can pass it.
+// The TTL is far longer than the test, so only invalidation can pass it.
 func TestEveryChangeToAccessIsHonouredOnTheNextRequest(t *testing.T) {
 	actor := uuid.New()
 	operations := []struct {
@@ -639,8 +601,6 @@ func TestEveryChangeToAccessIsHonouredOnTheNextRequest(t *testing.T) {
 }
 
 func TestAChangeOfPermissionsIsSeenByTheNextSession(t *testing.T) {
-	// Roles retire the account's sessions, so the permissions a new session
-	// is built from have to be the new ones, not a cached copy of the old.
 	f := newCachedFixture(t, time.Hour)
 	if code, identity := f.serve(f.token); code != http.StatusOK || !identity.Has(rbac.PermissionUsersManage) {
 		t.Fatalf("before the change: status %d, identity %+v", code, identity)
@@ -667,10 +627,6 @@ func TestAChangeOfPermissionsIsSeenByTheNextSession(t *testing.T) {
 }
 
 func TestACachedCopyNeverRefusesWhatTheDatabaseWouldAdmit(t *testing.T) {
-	// A copy can be stale the other way too — the account's sessions were
-	// retired and it signed in again, or it was unblocked — and the change was
-	// made somewhere the cache was not told. A refusal is never decided on a
-	// copy: the account is read again first.
 	f := newCachedFixture(t, time.Hour)
 	if code, _ := f.serve(f.token); code != http.StatusOK {
 		t.Fatalf("warming request: status = %d, want 200", code)
@@ -703,8 +659,6 @@ func TestACachedCopyNeverRefusesWhatTheDatabaseWouldAdmit(t *testing.T) {
 }
 
 func TestAChangeTheCacheWasNotToldAboutAppliesWithinItsLifetime(t *testing.T) {
-	// The bound for everything invalidation cannot reach — SQL by hand, a
-	// Forget that failed: one lifetime, and not a moment longer.
 	const ttl = 50 * time.Millisecond
 	f := newCachedFixture(t, ttl)
 	if code, _ := f.serve(f.token); code != http.StatusOK {
@@ -736,8 +690,6 @@ func TestAnUnreachableAccountCacheFallsBackToTheDatabase(t *testing.T) {
 		t.Error("the account was not read from the database while its cache was down")
 	}
 
-	// Blocked where the cache cannot be told, and the cache cannot be read:
-	// the database decides, at once.
 	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{}); err != nil {
 		t.Fatalf("SetStatus() returned error: %v", err)
 	}
@@ -762,12 +714,6 @@ func TestAOneTimePasswordAccountIsHeldAtTheDoorFromACachedCopyToo(t *testing.T) 
 	}
 }
 
-// An event stream is authenticated once, when it opens, and asks
-// SessionStillValid before every push after that. The question has to be the
-// one Authenticate asks — is the account still allowed to use this session —
-// or a blocked account, or one whose sessions were retired by a password
-// change, keeps receiving a contest's events for as long as the connection
-// holds.
 func TestSessionStillValidEndsWithTheAccountNotOnlyWithTheSession(t *testing.T) {
 	cases := map[string]func(t *testing.T, f *mwFixture){
 		"blocked": func(t *testing.T, f *mwFixture) {
@@ -805,8 +751,6 @@ func TestSessionStillValidEndsWithTheAccountNotOnlyWithTheSession(t *testing.T) 
 	}
 }
 
-// A store that cannot be read says nothing about the account, the same as a
-// session store that cannot be read: the caller asks again later.
 func TestSessionStillValidReportsAnUnreadableAccountAsAnError(t *testing.T) {
 	f := newMiddlewareFixture(t, staticRoles{})
 	f.mw.users = failingUsers{UserStore: f.repo}

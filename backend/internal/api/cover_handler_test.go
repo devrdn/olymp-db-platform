@@ -52,10 +52,8 @@ func TestUploadingACoverStoresItAndSaysWhatWasStored(t *testing.T) {
 }
 
 func TestAnSVGIsRefusedByTheRoute(t *testing.T) {
-	// The refusal that matters most on this endpoint: the cover is shown to
-	// every visitor of the front page, none of whom has a session, and an SVG
-	// served from this origin is a cross-site script on the most public
-	// surface the installation has.
+	// The cover is shown to every front-page visitor, so an SVG served from
+	// this origin would be cross-site scripting on the most public surface.
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 
 	rec := f.upload(t, uuid.New(),
@@ -136,16 +134,12 @@ func TestUploadingACoverNeedsThePermissionToEditTheContest(t *testing.T) {
 }
 
 func TestUploadingTooOftenIsRefusedAndTheRefusalsCount(t *testing.T) {
-	// A refused upload has already been read off the socket and sniffed, so
-	// it costs what an accepted one costs up to that point; a budget that
-	// only counted the successes would be a budget on the wrong thing
-	// (CLAUDE.md, security rule 13).
+	// A refused upload has already been read and sniffed, so it counts too
+	// (CLAUDE.md rule 13).
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
 
 	for range api.CoverUploadsPerMinute {
-		// Every one of these is refused by the domain, and every one still
-		// spends a place in the budget.
 		f.upload(t, contest, []byte("not a picture"), "Photo: A. Organiser")
 	}
 	rec := f.upload(t, contest, coverJPEG(t, 800, 450), "Photo: A. Organiser")
@@ -180,8 +174,8 @@ func TestRemovingACoverLeavesTheContestItsDrawnOne(t *testing.T) {
 }
 
 func TestADraftsCoverIsNotServedToAVisitorWithNoSession(t *testing.T) {
-	// The file belongs to the olympiad and answers to the olympiad's own
-	// visibility: the same selection of statuses the public list makes.
+	// The file follows the olympiad's visibility: the statuses the public list
+	// shows.
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
 	if rec := f.upload(t, contest, coverJPEG(t, 1600, 900), "Photo: A. Organiser"); rec.Code != http.StatusOK {
@@ -198,9 +192,8 @@ func TestADraftsCoverIsNotServedToAVisitorWithNoSession(t *testing.T) {
 	}
 }
 
-// The address that names the file may be kept forever; the address that names
-// only the contest may not, because that is the one a replacement has to
-// travel through.
+// The contest-only address must not be cached forever: a replacement travels
+// through it.
 func TestTheAddressThatNamesTheFileIsTheOneCachedForever(t *testing.T) {
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
@@ -357,7 +350,7 @@ func newCoverFixture(t *testing.T, permissions ...string) *coverFixture {
 	}
 }
 
-// upload sends one multipart form, exactly as the organiser's panel will.
+// upload sends one multipart form, as the organiser's panel does.
 func (f *coverFixture) upload(t *testing.T, contest uuid.UUID, picture []byte, attribution string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -398,17 +391,16 @@ func (f *coverFixture) do(t *testing.T, method, path, body string, header http.H
 			req.Header.Add(name, value)
 		}
 	}
-	// The public read carries the cookie too: a signed-in organiser browsing
-	// the front page is an ordinary visitor there, and the route must not
-	// start behaving differently because a session happens to be present.
+	// The cookie too: a signed-in organiser on the front page is an ordinary
+	// visitor, and the route must not change because a session is present.
 	req.AddCookie(f.cookie)
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	return rec
 }
 
-// coverRepo is the covers table in memory, with the contest's own visibility
-// beside it — which is what the real repository joins for.
+// coverRepo is the covers table in memory, with the contest visibility the real
+// repository joins for.
 type coverRepo struct {
 	rows      map[uuid.UUID]covers.Cover
 	published map[uuid.UUID]bool
@@ -493,10 +485,8 @@ func coverPNGHeaderClaiming(t *testing.T, width, height int) []byte {
 	return append([]byte("\x89PNG\r\n\x1a\n"), chunk...)
 }
 
-// Without the hash the address is "this contest's cover", and that changes
-// the day an organiser replaces the picture. A year of immutable caching
-// there would make the replacement invisible to everybody who had seen the
-// old one — for a year, with no way to ask again.
+// Without the hash the address keeps its name when the picture is replaced, so
+// a year of immutable caching would hide the replacement.
 func TestTheAddressWithoutTheHashIsNotCachedForever(t *testing.T) {
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
@@ -518,8 +508,8 @@ func TestTheAddressWithoutTheHashIsNotCachedForever(t *testing.T) {
 	}
 }
 
-// A refusal must not be the thing that carries a year of caching: the headers
-// belong to the answer, and until the file has been read there is no answer.
+// Caching headers belong to the answer, and until the file is read there is no
+// answer.
 func TestARefusedSizeCarriesNoCachingOfItsOwn(t *testing.T) {
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
@@ -538,11 +528,9 @@ func TestARefusedSizeCarriesNoCachingOfItsOwn(t *testing.T) {
 	}
 }
 
-// An organiser editing a contest has to see the picture they uploaded, and
-// for a draft the public route refuses by design — it refuses everybody,
-// which is the point of it. Without a read of their own, the panel shows the
-// drawn cover over a contest that has a real one and offers no way to remove
-// it: the organiser is editing blind.
+// The public route refuses a draft to everybody, so without a read of their own
+// an organiser would see the drawn cover and have no way to remove the real
+// one.
 func TestAnOrganiserReadsTheCoverOfTheirOwnDraft(t *testing.T) {
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
@@ -550,7 +538,7 @@ func TestAnOrganiserReadsTheCoverOfTheirOwnDraft(t *testing.T) {
 	if upload.Code != http.StatusOK {
 		t.Fatalf("upload: status = %d (%s)", upload.Code, upload.Body.String())
 	}
-	// Deliberately not published: this is the state the panel is used in.
+	// Not published: the state the panel is used in.
 	f.repo.published[contest] = false
 
 	meta := f.do(t, http.MethodGet, "/contests/"+contest.String()+"/cover", "", nil)
@@ -574,7 +562,6 @@ func TestAnOrganiserReadsTheCoverOfTheirOwnDraft(t *testing.T) {
 	}
 }
 
-// The same two reads, asked by somebody with no rights on that contest.
 func TestAStrangerDoesNotReadADraftsCoverThroughTheStaffRoute(t *testing.T) {
 	f := newCoverFixture(t) // no permissions at all
 	contest := uuid.New()

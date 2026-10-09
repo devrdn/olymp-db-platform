@@ -12,8 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// The screen an organizer opens to find one database: the spare pool and the
-// participants' own copies, in one list, measured in one round trip.
 func TestInstancesListsThePoolAndTheParticipantsCopies(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -56,9 +54,7 @@ func TestInstancesListsThePoolAndTheParticipantsCopies(t *testing.T) {
 		t.Fatalf("%d spare copies, want the 1 left after the claim", spares)
 	}
 
-	// One call for the whole list, not one per database: an olympiad's
-	// contest owns a copy per participant, and a round trip each would be
-	// hundreds of them for one page.
+	// One call for the whole list, not one per database.
 	names, calls := fake.sizeReads()
 	if calls != 1 {
 		t.Fatalf("the cluster was measured in %d calls, want 1 for the whole list", calls)
@@ -68,9 +64,6 @@ func TestInstancesListsThePoolAndTheParticipantsCopies(t *testing.T) {
 	}
 }
 
-// The rows are the core database's and the sizes are the game cluster's. A
-// sick cluster is exactly when an organizer needs to see what exists, so the
-// list is served without them rather than refused with them.
 func TestInstancesIsStillServedWhenTheClusterCannotBeMeasured(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 0)
 	fake.sizesFail = errors.New("the game cluster is unreachable")
@@ -91,9 +84,7 @@ func TestInstancesIsStillServedWhenTheClusterCannotBeMeasured(t *testing.T) {
 	}
 }
 
-// pg_database_size raises an error for a name that is not there, so asking
-// about a database the sweep already dropped would cost the whole batch its
-// sizes — and it would be asking about something that does not exist.
+// pg_database_size errors on a missing name, failing the whole batch.
 func TestInstancesNeverAsksTheClusterAboutADroppedDatabase(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 0)
 
@@ -125,14 +116,10 @@ func TestInstancesNeverAsksTheClusterAboutADroppedDatabase(t *testing.T) {
 	}
 }
 
-// A list that quietly stopped would be read as "that is all there is", which
-// on this screen means "your database is gone".
 func TestInstancesSaysSoWhenThereAreMoreThanItWillShow(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 0)
 
-	// Written straight to the table rather than through TopUp: the point is
-	// the bound, and five hundred and one CREATE DATABASE calls through the
-	// fake would say nothing more about it than one INSERT does.
+	// Inserted directly: the bound is the point, not TopUp.
 	if _, err := testPool.Exec(t.Context(), `
 		INSERT INTO game_instances (contest_id, db_name, template_version, status)
 		SELECT $1, 'game_pool_bulk_' || n, 1, 'ready'
@@ -153,11 +140,7 @@ func TestInstancesSaysSoWhenThereAreMoreThanItWillShow(t *testing.T) {
 	}
 }
 
-// The choice this whole endpoint turns on. An organizer pressing "drop" has
-// decided the copy is broken, usually while its owner is still retrying
-// against it — and the Query Runner keeps their connection between queries, so
-// DropIdle would refuse for exactly as long as they keep trying. Drop forces
-// them closed; see Service.DropInstance's own doc for the full reasoning.
+// See Service.DropInstance for why it forces connections closed.
 func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -165,8 +148,7 @@ func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *test
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
-	// Busy is what DropIdle refuses on: if this used DropIdle, the drop would
-	// not happen at all.
+	// DropIdle would refuse a busy database.
 	fake.markBusy(database)
 
 	if _, err := service.DropInstance(t.Context(), uuid.New(), contest.ID, database); err != nil {
@@ -184,9 +166,6 @@ func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *test
 	}
 }
 
-// The reason the drop is safe to offer at all: whatever the participant was
-// doing, their next action gives them a working database back, under the
-// same name everything already points at.
 func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
@@ -200,8 +179,7 @@ func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) 
 		t.Fatalf("DropInstance: %v", err)
 	}
 
-	// Ensure is what the console calls on every query and the play screen's
-	// schema panel on every load.
+	// The console calls Ensure on every query.
 	after, err := service.Ensure(t.Context(), contest, people[0])
 	if err != nil {
 		t.Fatalf("ensure after the drop: %v", err)
@@ -217,10 +195,8 @@ func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) 
 	}
 }
 
-// The guarantee that bounds what a drop costs: the database contents, and
-// nothing else. Answers, score and clock are the olympiad's result and live
-// in the core database — an olympiad is not replayed because a database was
-// remade.
+// A drop costs the database contents only; answers, score and clock live in
+// the core database.
 func TestDroppingLeavesTheAnswersScoreAndClockAlone(t *testing.T) {
 	service, _, contest, people := serviceFor(t, 1)
 	registration := people[0]
@@ -281,15 +257,14 @@ func TestDroppingLeavesTheAnswersScoreAndClockAlone(t *testing.T) {
 	if answers != 1 {
 		t.Fatalf("%d answers survived the drop, want 1", answers)
 	}
-	// The registration itself is still there — a drop is not a way to remove
-	// somebody from a contest.
+	// A drop does not remove the participant from the contest.
 	if _, err := postgres.NewGameInstances(testPool).Of(t.Context(), registration); err != nil {
 		t.Fatalf("the participant lost their instance row entirely: %v", err)
 	}
 }
 
-// db_name is unique installation-wide, so scoping is the only thing standing
-// between a contest-scoped permission and somebody else's olympiad.
+// db_name is unique installation-wide, so only the contest scope stops an
+// organizer from dropping another contest's database.
 func TestDroppingADatabaseOfAnotherContestIsRefused(t *testing.T) {
 	mine, fake, contestA, _ := serviceFor(t, 0)
 	_, _, contestB, _ := serviceFor(t, 0)
@@ -311,9 +286,6 @@ func TestDroppingADatabaseOfAnotherContestIsRefused(t *testing.T) {
 	}
 }
 
-// Two organizers on the same page, or one page left open while the reclaim
-// sweep ran. "Already gone, reload" is a different sentence from "that is not
-// a database of this contest", so it is a different refusal.
 func TestDroppingSomethingAlreadyDroppedSaysSoRatherThanPretendingToWork(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 0)
 
@@ -331,9 +303,6 @@ func TestDroppingSomethingAlreadyDroppedSaysSoRatherThanPretendingToWork(t *test
 	}
 }
 
-// Removing somebody's database is exactly what the trail is for, and the
-// entry has to name the person who did it — the sweep's own entry has no
-// actor, so a shared action code could not answer "who took this away".
 func TestDroppingRecordsWhoDidItAgainstTheContest(t *testing.T) {
 	service, _, s, contest, people := serviceWithAudit(t, t.Context(), 1)
 	actor := uuid.New()
@@ -363,10 +332,7 @@ func TestDroppingRecordsWhoDidItAgainstTheContest(t *testing.T) {
 	}
 }
 
-// The order the drop and the mark happen in. A cluster that refuses must not
-// leave a row saying 'dropped' over a database that is still there: nothing
-// repairs that one, because Reclaimable skips dropped rows and the disk is
-// leaked for good.
+// A 'dropped' row over a live database would never be reclaimed.
 func TestARowIsNotMarkedDroppedWhenTheClusterRefused(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 0)
 
@@ -384,12 +350,6 @@ func TestARowIsNotMarkedDroppedWhenTheClusterRefused(t *testing.T) {
 	}
 }
 
-// The pool's depth is the roster's, not a number somebody guessed.
-//
-// A flat depth is a bet that no more than that many participants turn up, and
-// losing it does not degrade gracefully: everybody past it waits for CREATE
-// DATABASE inside their own page load, through a maintenance pool of ten
-// connections, at the one moment three hundred of them arrive at once.
 func TestThePoolIsSizedFromTheRosterAndNotFromAFlatNumber(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 10)
 
@@ -397,15 +357,12 @@ func TestThePoolIsSizedFromTheRosterAndNotFromAFlatNumber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sizing: %v", err)
 	}
-	// Everybody waiting, plus the headroom that makes a late enrolment free
-	// rather than a wait.
+	// Ten waiting plus a headroom of three.
 	if want != 13 {
 		t.Fatalf("asked for %d spares for ten waiting participants, want 13", want)
 	}
 }
 
-// A mistyped roster must not be able to ask the cluster for more than the
-// deployment is willing to hold.
 func TestTheRosterCannotAskForMoreThanTheDeploymentAllows(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 10)
 
@@ -418,8 +375,6 @@ func TestTheRosterCannotAskForMoreThanTheDeploymentAllows(t *testing.T) {
 	}
 }
 
-// Somebody who already holds a copy is not waiting for one, and counting them
-// would have the tender make a spare nobody will ever claim.
 func TestAParticipantWhoAlreadyHasACopyIsNotCountedAsWaiting(t *testing.T) {
 	service, _, contest, people := serviceFor(t, 1)
 	if _, err := service.Ensure(t.Context(), contest, people[0]); err != nil {
@@ -435,14 +390,9 @@ func TestAParticipantWhoAlreadyHasACopyIsNotCountedAsWaiting(t *testing.T) {
 	}
 }
 
-// A count is not a bound on a disk. GAME_POOL_MAX's five hundred copies is ten
-// gibibytes of a small template and a terabyte of a large one, and nothing
-// asked which — while self-enrolment lets the outside world write the roster
-// that count is derived from, on a cluster every olympiad shares.
 func TestThePoolIsBoundedByTheRoomOnTheClusterAndNotOnlyByACount(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
-	// A copy costs a gibibyte, the cluster already holds 97 GiB of a 100 GiB
-	// budget: three more copies fit and thirteen do not.
+	// 1 GiB per copy, 97 of 100 GiB used: three copies fit, not thirteen.
 	fake.templateBytes = 1 << 30
 	fake.clusterBytes = 97 << 30
 
@@ -458,8 +408,7 @@ func TestThePoolIsBoundedByTheRoomOnTheClusterAndNotOnlyByACount(t *testing.T) {
 		t.Fatalf("asked for %d copies with room for three; the count cap of 500 was never the bound", want)
 	}
 
-	// And the refusal is visible, with the numbers that explain it. A pool
-	// that stops growing silently is a support ticket nobody can answer.
+	// The refusal is reported with the numbers behind it.
 	if len(told) != 1 {
 		t.Fatalf("the refusal was reported %d times, want once", len(told))
 	}
@@ -474,10 +423,8 @@ func TestThePoolIsBoundedByTheRoomOnTheClusterAndNotOnlyByACount(t *testing.T) {
 	}
 }
 
-// The spares that already exist are already counted in what the cluster holds,
-// so the budget has to bound the copies TopUp would *make* rather than the
-// pool's whole depth — otherwise a contest with a deep pool is refused a top-up
-// it has already paid for, and the pool shrinks a little every tick.
+// Existing spares are already in the cluster's size, so the budget bounds
+// only the copies still to be made.
 func TestTheDiskBoundCountsTheCopiesStillToBeMadeAndNotTheOnesAlreadyThere(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
 	if made, err := service.TopUp(t.Context(), contest, 4); err != nil || made != 4 {
@@ -496,9 +443,7 @@ func TestTheDiskBoundCountsTheCopiesStillToBeMadeAndNotTheOnesAlreadyThere(t *te
 	}
 }
 
-// A cluster already past its budget grants nothing new. It does not go
-// negative, and it does not take the existing spares away — that is Reclaim's
-// job, and a depth below what exists would have TopUp do nothing anyway.
+// Over budget grants nothing new and never goes negative.
 func TestAClusterAlreadyOverItsBudgetIsAskedForNothingMore(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
 	fake.templateBytes = 1 << 30
@@ -514,9 +459,8 @@ func TestAClusterAlreadyOverItsBudgetIsAskedForNothingMore(t *testing.T) {
 	}
 }
 
-// A deployment that set no byte budget pays for no measurement: the two
-// catalogue reads are per live contest per tick, and a feature nobody turned
-// on should not cost them.
+// The measurement is two catalogue reads per live contest per tick, skipped
+// when no byte budget is set.
 func TestNoByteBudgetMeansTheClusterIsNeverMeasured(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
 
@@ -529,9 +473,7 @@ func TestNoByteBudgetMeansTheClusterIsNeverMeasured(t *testing.T) {
 	}
 }
 
-// A measurement that cannot be taken is not a licence to fill the disk. The
-// tick logs it and this contest's pool is left where it is, which is the
-// direction a failure to measure has to fail in.
+// A failed measurement fails closed: the pool is left where it is.
 func TestAClusterThatCannotBeMeasuredRefusesToSizeThePool(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
 	fake.clusterBytesFail = errors.New("the game cluster is away")
@@ -542,7 +484,6 @@ func TestAClusterThatCannotBeMeasuredRefusesToSizeThePool(t *testing.T) {
 	}
 }
 
-// The count cap still exists, still binds, and now says so.
 func TestTheCountCapReportsItselfWhenItIsWhatBound(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 10)
 
@@ -562,8 +503,6 @@ func TestTheCountCapReportsItselfWhenItIsWhatBound(t *testing.T) {
 	}
 }
 
-// And a pool that got what it asked for reports nothing: a warning on every
-// tick of every healthy contest is a warning nobody reads.
 func TestAPoolThatGotWhatItAskedForReportsNothing(t *testing.T) {
 	service, fake, contest, _ := serviceFor(t, 10)
 	fake.templateBytes = 1 << 20

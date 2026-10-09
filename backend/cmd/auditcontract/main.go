@@ -1,21 +1,7 @@
-// Command auditcontract writes the audit trail's action vocabulary to a file.
-//
-// The interface has to translate every action code the trail can be filtered
-// or displayed by, in every language it speaks. Before this existed, the
-// interface's own list of actions was typed
-// by hand from reading audit.go, and nothing tied the two together: an action
-// added to audit.Actions() and never copied into that list still passed both
-// the Go guard (audit_test.go, checked against the very same source) and the
-// frontend's own translation-coverage test (checked against that same
-// hand-typed list) — the vocabulary could drift on the interface side alone,
-// which is the same failure this project already closed once for error codes.
-//
-// This publishes audit.Actions() as data, the way cmd/apicontract publishes
-// httpx.Catalog(). The frontend's dictionary test reads the committed file
-// directly instead of a copy of it, so an action this repository declares but
-// never regenerates the contract for fails `go test ./...` here, and an
-// action the contract carries with no translation fails `npm test` there —
-// there is no longer a third, hand-kept list to fall behind either side.
+// Command auditcontract writes audit.Actions() to a file, as apicontract does
+// for error codes. The frontend's dictionary test reads it directly, so an
+// action not regenerated here fails `go test` and an untranslated one fails
+// `npm test`; no hand-kept list remains.
 //
 // It is generated, committed and checked by a test:
 //
@@ -32,21 +18,11 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 )
 
-// contractFile is where the published contract lives, relative to the
-// repository root.
-//
-// Under docs/api/, beside error-codes.json, for the same reason that one is:
-// it belongs to neither the backend nor the interface, and is what either
-// side would publish or consume first if they ever lived in separate
-// repositories.
+// contractFile is relative to the repository root, beside error-codes.json.
 const contractFile = "docs/api/audit-actions.json"
 
-// contractPath resolves contractFile against the repository root.
-//
-// Found by walking up to the directory holding go.mod rather than trusting the
-// working directory: `go run ./cmd/auditcontract` starts in the module root and
-// `go test` starts in the package's own directory, and a relative path cannot
-// be right for both.
+// contractPath resolves contractFile by walking up to go.mod, since `go run`
+// and `go test` start in different directories.
 func contractPath() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -65,14 +41,10 @@ func contractPath() (string, error) {
 	}
 }
 
-// document is the published shape. A wrapper object rather than a bare array
-// so the file can gain a field later without every consumer breaking.
+// document is an object rather than a bare array, so it can gain fields.
 type document struct {
-	// About says what the file is, to whoever opens it without context.
 	About string `json:"about"`
-	// Actions is exactly what audit.Actions() returns — no ordering or
-	// filtering of its own, so a diff of this file is a diff of the
-	// vocabulary and nothing else.
+	// Actions is exactly audit.Actions(), unsorted and unfiltered.
 	Actions []string `json:"actions"`
 }
 
@@ -102,10 +74,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// Narrow modes on purpose: git records neither directory permissions nor
-	// anything but the executable bit, so what is committed is unaffected and
-	// there is nothing to gain by asking for more on the machine that
-	// generates the file.
+	// Narrow modes: git records only the executable bit anyway.
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "create %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)

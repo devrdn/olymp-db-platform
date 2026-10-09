@@ -10,15 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// writeTrail stores a few entries for one actor and returns them.
-// writeTrail lays down one actor's two entries and one system entry, and
-// returns the contest identifier the system entry names.
-//
-// The identifier is fresh every call because the trail is append-only and this
-// database is shared: a test that asked "how many contest.status_change
-// entries are there" would be asking about every run that ever touched this
-// database, not about its own. Naming its own subject is what makes the
-// assertion true a second time.
+// writeTrail writes one actor's two entries and one system entry, and returns
+// the contest identifier the system entry names. The identifier is fresh each
+// call because the database is shared and the trail is append-only.
 func writeTrail(t *testing.T, ctx context.Context, actor uuid.UUID) string {
 	t.Helper()
 
@@ -38,8 +32,6 @@ func writeTrail(t *testing.T, ctx context.Context, actor uuid.UUID) string {
 }
 
 func TestTheTrailComesBackNewestFirst(t *testing.T) {
-	// An administrator opening the panel is looking at what just happened, not
-	// at what happened a year ago.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-order")
 		writeTrail(t, ctx, actor.ID)
@@ -61,7 +53,6 @@ func TestTheTrailComesBackNewestFirst(t *testing.T) {
 }
 
 func TestTheTrailNamesTheActorRatherThanItsIdentifier(t *testing.T) {
-	// A page of UUIDs answers nothing; the question is who did it.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-login")
 		writeTrail(t, ctx, actor.ID)
@@ -109,8 +100,6 @@ func TestASystemEventHasNoActorAndSaysSo(t *testing.T) {
 }
 
 func TestTheTrailFiltersToOneThing(t *testing.T) {
-	// "What happened to this contest" is the other question the panel is for,
-	// and the table carries an index for exactly it.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-entity")
 		writeTrail(t, ctx, actor.ID)
@@ -146,8 +135,6 @@ func TestTheTrailFiltersByTime(t *testing.T) {
 }
 
 func TestTheTotalCountsEveryMatchNotJustThePage(t *testing.T) {
-	// The panel pages through history; a total that counted only the page
-	// would tell an administrator there is nothing more to look at.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-total")
 		writeTrail(t, ctx, actor.ID)
@@ -165,8 +152,7 @@ func TestTheTotalCountsEveryMatchNotJustThePage(t *testing.T) {
 }
 
 func TestAPagePastTheEndStillCountsEveryMatch(t *testing.T) {
-	// A panel that went one page too far must be able to step back; a total
-	// of zero tells it the trail is empty.
+	// A total of zero would tell the panel the trail is empty.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-past-end")
 		writeTrail(t, ctx, actor.ID)
@@ -185,8 +171,7 @@ func TestAPagePastTheEndStillCountsEveryMatch(t *testing.T) {
 }
 
 func TestAFilterNoStoredEntryCanEqualFindsNothingRatherThanFailing(t *testing.T) {
-	// The entity filters are compared, never stored; a NUL byte in one was a
-	// failed statement and a 500 for whoever pasted it.
+	// A NUL byte or invalid UTF-8 would fail the statement.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-odd-filter")
 		writeTrail(t, ctx, actor.ID)
@@ -204,9 +189,6 @@ func TestAFilterNoStoredEntryCanEqualFindsNothingRatherThanFailing(t *testing.T)
 }
 
 func TestTheTrailNamesWhatWasActedUpon(t *testing.T) {
-	// "Changed the reference answers · Contest" answers half a question. Which
-	// contest is the half that matters, and a bare identifier is no more
-	// readable here than it was for the actor.
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "auditor-subject")
 		contestID := makeContest(t, ctx, author.ID)
@@ -243,7 +225,6 @@ func TestTheTrailNamesWhatWasActedUpon(t *testing.T) {
 }
 
 func TestTheTrailNamesAnAccountItWasAboutToo(t *testing.T) {
-	// "root blocked an Account" is not the sentence anybody needs.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-blocker")
 		subject := makeUser(t, ctx, "s.popescu-blocked")
@@ -267,9 +248,6 @@ func TestTheTrailNamesAnAccountItWasAboutToo(t *testing.T) {
 }
 
 func TestSomethingSinceDeletedKeepsItsEntryWithoutAName(t *testing.T) {
-	// The trail outlives what it describes — that is the point of keeping one.
-	// The identifier is still there for whoever needs it; the name is simply
-	// gone, and pretending otherwise would be inventing a record.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-gone")
 		gone := uuid.New()
@@ -347,10 +325,6 @@ func TestAppendManyDoesNothingForNoEntries(t *testing.T) {
 	})
 }
 
-// TestLatestStartBlockedFindsNothingForAContestWithNoEntries covers the
-// ordinary case contests.Scheduler hits on the very first tick a contest is
-// ever due: nothing has been recorded for it yet, so there is no prior block
-// to compare against.
 func TestLatestStartBlockedFindsNothingForAContestWithNoEntries(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		problems, found, err := NewAuditTrail(testPool).LatestStartBlocked(ctx, uuid.New())
@@ -363,11 +337,6 @@ func TestLatestStartBlockedFindsNothingForAContestWithNoEntries(t *testing.T) {
 	})
 }
 
-// TestLatestStartBlockedReturnsTheNewestBlocksCodes is finding 1's own
-// dedup query: contests.Scheduler compares this tick's refusal against
-// whatever it returns, so it must report the newest entry's codes, not the
-// first one's, when the contest was blocked more than once for different
-// reasons.
 func TestLatestStartBlockedReturnsTheNewestBlocksCodes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contestID := uuid.New()
@@ -398,12 +367,8 @@ func TestLatestStartBlockedReturnsTheNewestBlocksCodes(t *testing.T) {
 	})
 }
 
-// TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer proves the other
-// half of finding 1: once anything but a start_blocked entry becomes the
-// newest one on file for a contest — here, its status actually changing —
-// the prior block is no longer "the same refusal as last tick", so
-// contests.Scheduler must be told there is nothing to compare against and
-// write a fresh entry the next time this contest is blocked.
+// TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer: a newer entry
+// of another kind means the next block is recorded afresh.
 func TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contestID := uuid.New()
@@ -432,8 +397,8 @@ func TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer(t *testing.T) {
 }
 
 func TestAnEntityIdThatIsNotAnIdentifierDoesNotBreakTheQuery(t *testing.T) {
-	// entity_id is text, and nothing constrains it to a UUID. A cast in the
-	// join would turn one odd row into a failure for the whole page.
+	// entity_id is unconstrained text; casting it in the join would fail the
+	// whole page on one odd row.
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-odd")
 		if err := NewAuditSink(testPool).Append(ctx, audit.Entry{

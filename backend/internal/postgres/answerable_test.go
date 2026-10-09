@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// A participant who has answered nothing yet has everything left to answer.
 func TestAnswerableLeftIsTrueWhileAQuestionStandsUnanswered(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-1")
@@ -30,9 +29,7 @@ func TestAnswerableLeftIsTrueWhileAQuestionStandsUnanswered(t *testing.T) {
 	})
 }
 
-// A correct answer closes a question outright, whatever attempts remain. With
-// the contest's only question closed that way, nothing is left to work
-// towards and the console has no reason to stay open.
+// A correct answer closes a question whatever attempts remain.
 func TestAnswerableLeftIsFalseOnceEveryQuestionIsAnsweredCorrectly(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-2")
@@ -61,7 +58,6 @@ func TestAnswerableLeftIsFalseOnceEveryQuestionIsAnsweredCorrectly(t *testing.T)
 	})
 }
 
-// The other way a question closes: every attempt spent on it, none right.
 func TestAnswerableLeftIsFalseOnceEveryAttemptIsSpent(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-3")
@@ -94,9 +90,6 @@ func TestAnswerableLeftIsFalseOnceEveryAttemptIsSpent(t *testing.T) {
 	})
 }
 
-// A question with no attempt cap never closes by attempts, however many wrong
-// answers it has taken. The console stays open, because another try really is
-// still possible.
 func TestAnswerableLeftStaysTrueForAQuestionWithNoAttemptCap(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-4")
@@ -127,8 +120,6 @@ func TestAnswerableLeftStaysTrueForAQuestionWithNoAttemptCap(t *testing.T) {
 	})
 }
 
-// One open question among closed ones is enough. The console closes when
-// *nothing* is answerable, not when *something* is closed.
 func TestAnswerableLeftIsTrueWhileOneOfSeveralQuestionsStandsOpen(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-5")
@@ -160,9 +151,6 @@ func TestAnswerableLeftIsTrueWhileOneOfSeveralQuestionsStandsOpen(t *testing.T) 
 	})
 }
 
-// Another registration's submissions are not this one's. Two participants of
-// the same contest close their questions independently, and one finishing
-// must never close anybody else's console.
 func TestAnswerableLeftIsPerRegistration(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-6")
@@ -201,11 +189,8 @@ func TestAnswerableLeftIsPerRegistration(t *testing.T) {
 	})
 }
 
-// The attempt count is this registration's own, not the question's. A
-// question whose cap is spent by one participant is untouched for everybody
-// else — counting every registration's submissions together would close a
-// contest's console for a whole room the moment its fastest competitor ran
-// out of attempts.
+// Counting every registration's attempts together would close the console
+// for everyone once one participant ran out.
 func TestAnswerableLeftCountsOnlyThisRegistrationsAttempts(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-10")
@@ -248,9 +233,6 @@ func TestAnswerableLeftCountsOnlyThisRegistrationsAttempts(t *testing.T) {
 	})
 }
 
-// Another contest's open question is not this contest's. Without the
-// contest_id filter a participant would keep the console of a contest they
-// have finished for as long as any other contest anywhere had a question open.
 func TestAnswerableLeftIsScopedToTheContest(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-7")
@@ -263,7 +245,6 @@ func TestAnswerableLeftIsScopedToTheContest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create() = %v", err)
 		}
-		// Wide open, and in another contest entirely.
 		if _, err := questions.Create(ctx, contests.Question{ContestID: otherID, Kind: contests.KindText, IsVisible: true}); err != nil {
 			t.Fatalf("Create() other = %v", err)
 		}
@@ -284,11 +265,8 @@ func TestAnswerableLeftIsScopedToTheContest(t *testing.T) {
 	})
 }
 
-// A hidden question is one a participant is never given the identifier of, so
-// it can never be answered and can never close either (see
-// contests.ProblemSequentialHidesQuestion). Counting it would keep the console
-// open forever in every contest that has one, on the strength of a question
-// nobody can work towards.
+// A participant never gets a hidden question's identifier, so it can never
+// close; counting it would keep the console open forever.
 func TestAnswerableLeftIgnoresAHiddenQuestion(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-8")
@@ -320,11 +298,8 @@ func TestAnswerableLeftIgnoresAHiddenQuestion(t *testing.T) {
 	})
 }
 
-// A contest that shows a participant no question at all never took anything
-// away from them, so there is nothing for the console to close over. The
-// refusal means "you have answered everything you were given", not "this
-// contest gave you nothing" — and closing the console at minute zero of a
-// contest whose only questions are hidden would be the second of those.
+// The refusal means "you answered everything you were given"; a contest
+// that showed nothing gave nothing to finish.
 func TestAnswerableLeftIsTrueForAContestWithNoVisibleQuestionAtAll(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-11")
@@ -346,16 +321,10 @@ func TestAnswerableLeftIsTrueForAContestWithNoVisibleQuestionAtAll(t *testing.T)
 	})
 }
 
-// The agreement this whole check depends on, pinned against the real reader
-// rather than against a second copy of its rules: whenever
-// contests.Reader.Questions still shows this participant a question they may
-// answer, AnswerableLeft must say there is something left. If the two ever
-// disagree in that direction, a participant loses the console with work still
-// in front of them.
-//
-// Both sides are the production types over the same rows, walked through the
-// whole life of a two-question contest — nothing attempted, one wrong, one
-// spent, one solved, everything closed.
+// Whenever contests.Reader.Questions still offers an answer, AnswerableLeft
+// must be true, or the participant loses the console with work left. Both
+// sides are the production types over the same rows, at every step of a
+// two-question contest.
 func TestAnswerableLeftAgreesWithTheParticipantsOwnQuestionList(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		author := makeUser(t, ctx, "author-answerable-9")
@@ -387,9 +356,8 @@ func TestAnswerableLeftAgreesWithTheParticipantsOwnQuestionList(t *testing.T) {
 		repo := NewAnswerable(testPool)
 		submissions := NewSubmissions(testPool)
 
-		// After every step both sides are asked again, in both progression
-		// modes: sequential narrows CanAnswer to one question at a time, and
-		// the console must not close while that one is still waiting.
+		// Sequential progression narrows CanAnswer to one question; the
+		// console must not close while it waits.
 		agree := func(step string) {
 			t.Helper()
 			left, err := repo.AnswerableLeft(ctx, contestID, registrationID)
@@ -445,8 +413,7 @@ func TestAnswerableLeftAgreesWithTheParticipantsOwnQuestionList(t *testing.T) {
 		}
 		agree("everything closed")
 
-		// And the end state really is the closed one, so that the walk above
-		// cannot have agreed by never reaching it.
+		// The walk must actually reach the closed state.
 		left, err := repo.AnswerableLeft(ctx, contestID, registrationID)
 		if err != nil {
 			t.Fatalf("AnswerableLeft() = %v", err)

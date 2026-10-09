@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// Service holds the rules of the installation's own settings.
 type Service struct {
 	repo   Repository
 	images ImageRepository
@@ -18,17 +17,12 @@ type Service struct {
 	uow    storage.UnitOfWork
 }
 
-// NewService assembles the settings service.
 func NewService(repo Repository, images ImageRepository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
 	return &Service{repo: repo, images: images, audit: recorder, uow: uow}
 }
 
-// SaveImage stores a picture in one of the installation's slots.
-//
-// What arrives is bytes and a slot, and nothing else is believed: the declared
-// content type and the filename are written by whoever is uploading, so the
-// answer comes from sniffing and then decoding the bytes themselves. See
-// `inspect`, which is where the rules are.
+// SaveImage stores a picture in one of the installation's slots. Only the
+// bytes are believed (see inspect).
 func (s *Service) SaveImage(ctx context.Context, actorID uuid.UUID, kind string, data []byte) (Image, error) {
 	img, err := inspect(kind, data)
 	if err != nil {
@@ -52,7 +46,7 @@ func (s *Service) SaveImage(ctx context.Context, actorID uuid.UUID, kind string,
 }
 
 // RemoveImage empties a slot, so the installation falls back to the product's
-// own mark rather than keeping a picture nobody wants.
+// own mark.
 func (s *Service) RemoveImage(ctx context.Context, actorID uuid.UUID, kind string) error {
 	if !slices.Contains(ImageKinds, kind) {
 		return fmt.Errorf("%w: %q", ErrUnknownImageKind, kind)
@@ -75,7 +69,6 @@ func (s *Service) Images(ctx context.Context) (map[string]string, error) {
 	return present, nil
 }
 
-// Image returns one stored picture, for serving it.
 func (s *Service) Image(ctx context.Context, kind string) (Image, error) {
 	if !slices.Contains(ImageKinds, kind) {
 		return Image{}, fmt.Errorf("%w: %q", ErrUnknownImageKind, kind)
@@ -83,11 +76,8 @@ func (s *Service) Image(ctx context.Context, kind string) (Image, error) {
 	return s.images.ByKind(ctx, kind)
 }
 
-// All returns every setting the product knows about, with the fallback where
-// nothing has been saved.
-//
-// The catalogue decides what comes back, never the table: a row nothing reads
-// is not configuration, and it does not become configuration by existing.
+// All returns every setting in the catalogue, with the fallback where nothing
+// has been saved. Rows outside the catalogue are ignored.
 func (s *Service) All(ctx context.Context) (Values, error) {
 	stored, err := s.repo.All(ctx)
 	if err != nil {
@@ -105,14 +95,8 @@ func (s *Service) All(ctx context.Context) (Values, error) {
 	return out, nil
 }
 
-// Public returns the settings a page with no session may read.
-//
-// An allow-list, and it has to be. The sign-in screen carries the
-// installation's name and logo and is seen before anybody signs in, so some of
-// this is necessarily readable by anyone — which makes "return the table"
-// exactly the wrong shape. The day somebody adds a mail server's password
-// here, an endpoint that returned everything would publish it, and nothing in
-// that change would look like a disclosure.
+// Public returns the settings a page with no session may read
+// (Definition.Public).
 func (s *Service) Public(ctx context.Context) (Values, error) {
 	all, err := s.All(ctx)
 	if err != nil {
@@ -128,11 +112,9 @@ func (s *Service) Public(ctx context.Context) (Values, error) {
 	return out, nil
 }
 
-// Save replaces the given settings.
-//
-// Everything is checked before anything is written, and the write shares one
-// transaction with its audit entry: an administrator told "no" should not have
-// to work out which half of their change went through.
+// Save replaces the given settings. Everything is checked before anything is
+// written, and the write shares one transaction with its audit entry, so a
+// refused save changes nothing.
 func (s *Service) Save(ctx context.Context, actorID uuid.UUID, values Values) error {
 	known := Definitions()
 
@@ -151,10 +133,6 @@ func (s *Service) Save(ctx context.Context, actorID uuid.UUID, values Values) er
 		return err
 	}
 
-	// What moved, and what it was. Changing what the whole installation is
-	// called is exactly the kind of thing somebody asks about afterwards
-	// (section 9.2), and the change set is the same shape every other
-	// administrative edit records.
 	changes := audit.NewChanges()
 	for key, value := range values {
 		changes.Set(key, current[key], value)

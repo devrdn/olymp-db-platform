@@ -33,9 +33,8 @@ type settingsFixture struct {
 	cookie *http.Cookie
 }
 
-// settingsRepo is the storage, in memory. The service itself is the real one:
-// a hand-written stand-in would have its own idea of which keys are known and
-// which values are valid, and the endpoint's job is to carry the real answers.
+// settingsRepo is in-memory storage behind the real service, so the endpoint
+// carries the service's own answers about which keys and values are valid.
 type settingsRepo struct{ values settings.Values }
 
 func (r *settingsRepo) All(context.Context) (settings.Values, error) {
@@ -53,7 +52,6 @@ func (r *settingsRepo) Save(_ context.Context, _ uuid.UUID, values settings.Valu
 	return nil
 }
 
-// settingsImages is the picture store, in memory.
 type settingsImages struct{ byKind map[string]settings.Image }
 
 func (i *settingsImages) ByKind(_ context.Context, kind string) (settings.Image, error) {
@@ -153,9 +151,7 @@ func settingsOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]string 
 }
 
 func TestTheInstallationNamesItselfToAVisitorWithNoSession(t *testing.T) {
-	// The sign-in screen carries it, and that screen is seen before anybody
-	// has signed in. An endpoint behind the session would leave the first page
-	// of the product unable to say what the product is.
+	// The sign-in screen carries it and is seen before anybody signs in.
 	f := newSettingsFixture(t)
 
 	rec := f.do(http.MethodGet, "/settings", "")
@@ -169,11 +165,8 @@ func TestTheInstallationNamesItselfToAVisitorWithNoSession(t *testing.T) {
 }
 
 func TestThePublicReadPublishesOnlyWhatWasDeclaredPublic(t *testing.T) {
-	// The reason it is an allow-list and not the table. A setting nobody
-	// marked public must not leave, whatever ends up stored beside it — the
-	// day somebody adds a mail server's password, an endpoint returning
-	// everything would publish it, and nothing in that change would look like
-	// a disclosure.
+	// Why it is an allow-list: a setting nobody marked public must not leave,
+	// such as a secret added to the table later.
 	f := newSettingsFixture(t)
 	f.store.values["installation.smtp_password"] = "hunter2"
 
@@ -185,9 +178,8 @@ func TestThePublicReadPublishesOnlyWhatWasDeclaredPublic(t *testing.T) {
 }
 
 func TestChangingTheInstallationNeedsThePermissionToDoIt(t *testing.T) {
-	// Naming the university is not something contest staff do; an organizer
-	// who could would be rebranding an installation from inside a contest they
-	// happen to run.
+	// An organizer who could name the university would rebrand the installation
+	// from inside one contest.
 	f := newSettingsFixture(t)
 
 	rec := f.do(http.MethodPut, "/settings",
@@ -199,9 +191,7 @@ func TestChangingTheInstallationNeedsThePermissionToDoIt(t *testing.T) {
 }
 
 func TestEveryValueIsReadableOnlyByAnAdministrator(t *testing.T) {
-	// The full read is separate from the public one for the same reason the
-	// public one is an allow-list: everything, to anyone, is how a private
-	// setting becomes a published one.
+	// Everything, to anyone, is how a private setting becomes public.
 	f := newSettingsFixture(t)
 
 	if rec := f.do(http.MethodGet, "/settings/all", ""); rec.Code != http.StatusUnauthorized {
@@ -238,13 +228,10 @@ func TestASettingNothingReadsIsRefusedByTheAPI(t *testing.T) {
 	}
 }
 
-// pngBytes is a real one-pixel PNG, so the endpoint exercises the decoder.
 // pngBytes is a small real PNG, so the endpoint exercises the decoder rather
 // than a shape that happens to sniff right.
 func pngBytes(t *testing.T) []byte { return pngOf(t, 4, 4) }
 
-// pngOf builds one of a given size, for the tests about how large a picture
-// may be.
 func pngOf(t *testing.T, width, height int) []byte {
 	t.Helper()
 
@@ -277,10 +264,9 @@ func TestUploadingAPictureNeedsThePermission(t *testing.T) {
 }
 
 func TestAPictureIsServedWithoutASessionAndCannotBeOpenedAsADocument(t *testing.T) {
-	// The sign-in screen wears the logo and is seen before anybody signs in,
-	// so the read is open. What stops an uploaded file becoming a page on this
-	// origin is the disposition and the refusal to sniff — belt and braces
-	// behind a format that cannot carry script in the first place.
+	// The sign-in screen shows the logo before anybody signs in, so the read is
+	// open. The disposition and nosniff stop an upload becoming a page on this
+	// origin, behind a format that cannot carry script anyway.
 	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
 	if rec := f.upload(t, settings.ImageLogo, pngBytes(t), f.cookie); rec.Code != http.StatusOK {
 		t.Fatalf("upload = %d (%s)", rec.Code, rec.Body.String())
@@ -316,12 +302,8 @@ func TestSomethingThatIsNotAPictureIsRefusedByTheAPI(t *testing.T) {
 	}
 }
 
-// Each refusal needs its own code, because the interface answers with a
-// sentence chosen by the code and by nothing else. Under one shared
-// `invalid_request` a picture that was too heavy, one in a format the
-// installation does not store and one with too many pixels all read as the
-// same sentence — and the person uploading has no way to tell what to change.
-// That is what "a generic error" turned out to mean.
+// The interface picks its sentence by code alone, so each refusal needs its own
+// code or the uploader cannot tell what to change.
 func TestEachRefusalOfAPictureSaysWhichItWas(t *testing.T) {
 	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
 
@@ -330,9 +312,8 @@ func TestEachRefusalOfAPictureSaysWhichItWas(t *testing.T) {
 		want string
 	}{
 		"an icon file, which the format list does not include": {
-			// A real .ico: the header plus an embedded PNG. Named the way
-			// somebody uploading a favicon would name it, and refused — so
-			// the refusal has to say what to upload instead.
+			// A real .ico, named as a favicon would be; the refusal must say
+			// what to upload instead.
 			body: icoOf(t, 32, 32),
 			want: "image_not_accepted",
 		},
@@ -370,8 +351,8 @@ func TestEachRefusalOfAPictureSaysWhichItWas(t *testing.T) {
 	}
 }
 
-// icoOf builds a real icon file: the header, one directory entry, and a PNG
-// inside it, which is how a modern favicon is made.
+// icoOf builds a real icon file: a header, one directory entry and an embedded
+// PNG.
 func icoOf(t *testing.T, w, h int) []byte {
 	t.Helper()
 

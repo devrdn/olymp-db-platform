@@ -8,28 +8,19 @@ import (
 	"strings"
 )
 
-// IPResolver determines the address a request actually came from when the
-// service sits behind a reverse proxy.
+// IPResolver determines the address a request came from behind a reverse
+// proxy, where RemoteAddr is always the proxy (CLAUDE.md rule 9).
 //
-// The problem it solves is not cosmetic: every request reaches the API through
-// the proxy, so RemoteAddr is the proxy for every request, the per-address
-// login throttle collapses into one counter shared by the whole installation,
-// and the audit trail records the proxy instead of the participant.
-//
-// X-Forwarded-For cannot simply be believed either — a direct client writes
-// whatever it likes into it. The resolver therefore trusts the header only
-// when the TCP peer is a configured proxy, and within the header walks from
-// the right (the entry the nearest proxy appended) to the left, skipping
-// further trusted hops; the first entry that is not a trusted proxy is the
-// client. Everything left of it is client-controlled noise.
+// X-Forwarded-For is trusted only when the TCP peer is a configured proxy.
+// The header is walked from the right, skipping trusted hops; the first
+// untrusted entry is the client, and everything left of it is client noise.
 type IPResolver struct {
 	trusted []netip.Prefix
 }
 
-// NewIPResolver builds a resolver from CIDR prefixes; a bare address is
-// accepted as a single-host prefix. An unparseable entry is an error — a typo
-// in the deployment's TRUSTED_PROXIES must fail startup, not silently produce
-// a resolver that trusts nobody and reintroduces the shared-counter bug.
+// NewIPResolver builds a resolver from CIDR prefixes; a bare address is a
+// single-host prefix. An unparseable entry is an error, so a typo in
+// TRUSTED_PROXIES fails startup instead of silently trusting nobody.
 func NewIPResolver(trusted []string) (IPResolver, error) {
 	prefixes := make([]netip.Prefix, 0, len(trusted))
 	for _, entry := range trusted {
@@ -50,15 +41,13 @@ func NewIPResolver(trusted []string) (IPResolver, error) {
 	return IPResolver{trusted: prefixes}, nil
 }
 
-// Resolve returns the client address for the request.
 func (p IPResolver) Resolve(r *http.Request) string {
 	peer, ok := parseHostAddr(r.RemoteAddr)
 	if !ok {
 		return ""
 	}
 
-	// A peer that is not a trusted proxy speaks for itself; its headers are
-	// its own claims and stay ignored.
+	// An untrusted peer's forwarded headers are ignored.
 	if !p.isTrusted(peer) {
 		return peer.String()
 	}
@@ -72,8 +61,7 @@ func (p IPResolver) Resolve(r *http.Request) string {
 	for i := len(hops) - 1; i >= 0; i-- {
 		addr, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
 		if err != nil {
-			// A malformed hop poisons everything left of it; the peer is the
-			// last address that is actually known.
+			// A malformed hop poisons everything left of it.
 			return peer.String()
 		}
 		if !p.isTrusted(addr) {
@@ -81,13 +69,11 @@ func (p IPResolver) Resolve(r *http.Request) string {
 		}
 	}
 
-	// Every hop was one of our proxies: internal traffic.
 	return peer.String()
 }
 
 // Middleware resolves the client address once and stores it on the context,
-// so ClientIP callers all see the same answer. It also records, once, whether
-// the TCP peer is one of the configured proxies — see forwardedTrusted.
+// with whether the TCP peer is a configured proxy (see forwardedTrusted).
 func (p IPResolver) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), clientIPKey{}, p.Resolve(r))
@@ -96,32 +82,19 @@ func (p IPResolver) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// trustsPeer reports whether the request's TCP peer is a configured proxy —
-// the one question that decides whether any forwarded header on it is a
-// statement of ours or a string the caller invented.
+// trustsPeer reports whether the request's TCP peer is a configured proxy.
 func (p IPResolver) trustsPeer(r *http.Request) bool {
 	peer, ok := parseHostAddr(r.RemoteAddr)
 	return ok && p.isTrusted(peer)
 }
 
 // forwardedTrustKey marks a request whose peer this resolver vouched for.
-// Unexported, like clientIPKey, so only the middleware can set it.
 type forwardedTrustKey struct{}
 
 // forwardedTrusted reports whether this request's forwarded headers may be
-// believed at all.
-//
-// TRUSTED_PROXIES is the service's one trust boundary and IPResolver is the
-// one place that reads it (CLAUDE.md rule 9). X-Forwarded-For is not the only
-// header that comes from whoever was on the other end of the socket:
-// X-Forwarded-Proto is read too (isTLS, secure.go), and it decides the scheme
-// CheckOrigin compares an Origin against. So it goes through the same gate,
-// asked the same way ClientIP asks for the address rather than by a second
-// reading of the configuration.
-//
-// False when the middleware never ran, which is the safe answer and not a
-// silent degradation: it is what a direct caller gets, and every forwarded
-// header then counts for nothing.
+// believed at all. isTLS asks it too, so X-Forwarded-Proto passes the same
+// gate as X-Forwarded-For (CLAUDE.md rule 9). It is false when the middleware
+// never ran, which is the safe answer.
 func forwardedTrusted(r *http.Request) bool {
 	trusted, ok := r.Context().Value(forwardedTrustKey{}).(bool)
 	return ok && trusted
@@ -136,7 +109,6 @@ func (p IPResolver) isTrusted(addr netip.Addr) bool {
 	return false
 }
 
-// clientIPKey is unexported so only the middleware can set the resolved value.
 type clientIPKey struct{}
 
 func parseHostAddr(remoteAddr string) (netip.Addr, bool) {

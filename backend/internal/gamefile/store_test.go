@@ -16,15 +16,9 @@ import (
 	"time"
 )
 
-// permissiveLimits are large enough that no test relying on them is
-// exercising a bound — tests that care about a specific bound set it
-// themselves.
-// declaredForTest is the size an upload announces where the announcement is
-// not what the test is about. Deliberately tiny: several tests below run a
-// Store whose MaxDirBytes is a handful of bytes, and Begin now measures the
-// promise against that budget rather than only asking whether any space is
-// left at all. What a test then actually writes is Append's business — Append
-// bounds a chunk by what is on disk, never by what Begin was told.
+// declaredForTest is the size an upload announces where the announcement
+// is not under test. Tiny, because some tests run with a MaxDirBytes of a
+// few bytes and Begin checks the declared size against it.
 const declaredForTest = 5
 
 func permissiveLimits() Limits {
@@ -126,8 +120,7 @@ func TestBeginIsIdempotentAndDoesNotTruncate(t *testing.T) {
 	if _, err := s.Append(id, 0, strings.NewReader("hello")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	// Calling Begin again — as a client re-announcing a resumed upload —
-	// must not wipe out what was already received.
+	// A resumed upload's Begin must not wipe what was received.
 	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("second Begin: %v", err)
 	}
@@ -165,11 +158,8 @@ func TestBeginRefusesWhenStoreFull(t *testing.T) {
 	}
 }
 
-// The refusal that used to arrive on the 129th chunk. "Is there any space
-// left" is a different question from "is there space for this upload", and
-// only the second one can be answered before the organiser spends a quarter
-// of an hour of their uplink sending bytes the volume was never going to
-// keep.
+// Begin refuses an upload that cannot fit before any chunk is sent, not
+// only when the directory is already full.
 func TestBeginRefusesAnUploadLargerThanWhatIsLeftBeforeAnythingIsSent(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 100, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
@@ -182,8 +172,7 @@ func TestBeginRefusesAnUploadLargerThanWhatIsLeftBeforeAnythingIsSent(t *testing
 		t.Fatalf("Append(occupant): %v", err)
 	}
 
-	// Ten bytes of budget left, and the old check ("used >= MaxDirBytes")
-	// would have admitted this happily — there is *some* space.
+	// Ten bytes are left: some space, but not enough for this upload.
 	const tooBig = "c0000002-0000-0000-0000-000000000000"
 	if err := s.Begin(tooBig, 50); !errors.Is(err, ErrStoreFull) {
 		t.Fatalf("Begin(50 bytes with 10 left) = %v, want ErrStoreFull", err)
@@ -192,16 +181,12 @@ func TestBeginRefusesAnUploadLargerThanWhatIsLeftBeforeAnythingIsSent(t *testing
 		t.Fatalf("the refused upload left a file behind: Received = %v", err)
 	}
 
-	// What does fit is still admitted, so the check is a bound and not a
-	// second, stricter budget.
 	const fits = "c0000003-0000-0000-0000-000000000000"
 	if err := s.Begin(fits, 10); err != nil {
 		t.Fatalf("Begin(10 bytes with 10 left) = %v, want nil", err)
 	}
 }
 
-// A declared size past what one file may ever reach is refused where it is
-// declared, not at whichever chunk crosses the line.
 func TestBeginRefusesADeclaredSizePastTheFileCeiling(t *testing.T) {
 	s := newTestStore(t, Limits{MaxFileBytes: 10, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20})
 	const id = "c0000004-0000-0000-0000-000000000000"
@@ -210,11 +195,8 @@ func TestBeginRefusesADeclaredSizePastTheFileCeiling(t *testing.T) {
 	}
 }
 
-// Two uploads announced onto a volume that can hold one. Without the
-// reservation both pass Begin — the first has written nothing yet, so the
-// directory still looks empty — and both then fail somewhere in the middle,
-// which is the same outcome the check above exists to prevent, arrived at by
-// two callers instead of one.
+// Two uploads announced onto a volume that can hold one: the reservation
+// refuses the second even though the first has written nothing yet.
 func TestBeginCountsWhatAnotherUploadHasPromisedButNotYetSent(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 100, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
@@ -229,8 +211,7 @@ func TestBeginCountsWhatAnotherUploadHasPromisedButNotYetSent(t *testing.T) {
 		t.Fatalf("Begin(second) = %v, want ErrStoreFull — the first upload's 80 bytes are spoken for", err)
 	}
 
-	// Abandoning the first hands its share back, which is what keeps the
-	// janitor's Abort from leaving the budget spent for ever.
+	// Aborting the first releases its reservation.
 	if err := s.Abort(first); err != nil {
 		t.Fatalf("Abort(first): %v", err)
 	}
@@ -250,8 +231,7 @@ func TestBeginForExistingUploadIgnoresStoreFull(t *testing.T) {
 	if _, err := s.Append(id, 0, strings.NewReader("hello")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	// The directory is now at MaxDirBytes; resuming the same id must still
-	// work because it reserves nothing new.
+	// The directory is full; a resume reserves nothing new.
 	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin (resume) = %v, want nil", err)
 	}
@@ -304,9 +284,7 @@ func TestAppendRepeatOfLastChunkIsANoOp(t *testing.T) {
 		t.Fatalf("Append #1: %v", err)
 	}
 
-	// The connection "dropped" after this chunk landed but before the
-	// client saw the response, so it retries the same chunk at the same
-	// offset. This must be silently accepted, not double-written.
+	// A retry of the same chunk after a lost response is a no-op.
 	n, err := s.Append(id, 0, strings.NewReader("abc"))
 	if err != nil {
 		t.Fatalf("Append (retry) = %v, want nil error", err)
@@ -379,9 +357,8 @@ func TestAppendChunkTooLarge(t *testing.T) {
 	}
 }
 
-// infiniteReader never returns io.EOF. Append must not attempt to drain it —
-// if Append ever tried to read "everything" before deciding a chunk is too
-// large, this test would hang instead of returning ErrChunkTooLarge.
+// infiniteReader never returns io.EOF, so the test hangs if Append ever
+// reads a whole chunk before deciding it is too large.
 type infiniteReader struct{}
 
 func (infiniteReader) Read(p []byte) (int, error) {
@@ -415,18 +392,11 @@ func TestAppendChunkTooLargeStopsAtTheLimit(t *testing.T) {
 	}
 }
 
-// The arrangement the deployment actually runs: the transport's ceiling and
-// this Store's MaxChunkBytes are the same number (app.go's WithMaxChunkBody
-// call says why), so an over-sized chunk is stopped by the socket at exactly
-// the byte the write cap stops at. The reader is the real
-// http.MaxBytesReader for that reason — a hand-written stand-in would be
-// free to answer the probe read the convenient way, and answering it the
-// inconvenient way (0, error) is the whole case: read as "the caller had
-// nothing more", it made a refused 9 MiB chunk a 200 OK that quietly kept 8.
-//
-// A nil ResponseWriter is what net/http itself allows here: the writer is
-// only used for the server's own "request too large" bookkeeping, behind an
-// interface assertion that a nil interface simply fails.
+// The deployed arrangement: the transport's body limit equals MaxChunkBytes,
+// so an oversized chunk is stopped by http.MaxBytesReader at the same byte
+// as the write cap and the probe read returns (0, error). Treating that as
+// EOF once accepted a truncated chunk. net/http allows a nil ResponseWriter
+// here.
 func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
 	s := newTestStore(t, limits)
@@ -443,10 +413,8 @@ func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("Append returned length %d, want 0 (rolled back)", n)
 	}
-	// The transport's own error travels out intact, so the HTTP layer that
-	// created the MaxBytesReader can name it (CLAUDE.md rule 1: the handler's
-	// switch has to be able to tell what happened), and the domain sentinel
-	// says what happened to the bytes.
+	// The transport's error stays wrapped so the HTTP layer can recognise it
+	// (CLAUDE.md rule 1).
 	var tooLarge *http.MaxBytesError
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("Append error = %v, does not carry *http.MaxBytesError", err)
@@ -464,8 +432,7 @@ func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
 	}
 }
 
-// failingReader gives up part-way through, the way a request body does when
-// the connection drops or a read deadline expires mid-chunk.
+// failingReader fails part-way, like a request body whose connection drops.
 type failingReader struct {
 	remaining int
 	err       error
@@ -483,11 +450,8 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// A chunk body that stops arriving is a named refusal, not an internal
-// error: the rollback is right, but the error it comes back with has to be
-// one the HTTP layer can map to "your upload was interrupted, send that
-// chunk again" (CLAUDE.md rule 1). It reaches the client on a route whose
-// body is megabytes, so it is a normal event, not a bug of ours.
+// An interrupted chunk body is ErrChunkIncomplete, which the client can
+// retry, not an internal error (CLAUDE.md rule 1).
 func TestAppendNamesAChunkThatStoppedArrivingMidBody(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "aaaaaaaa-4444-0000-0000-000000000000"
@@ -612,12 +576,8 @@ func TestAbortRemovesIndexToo(t *testing.T) {
 	}
 }
 
-// The other half of clearIndexTemps' own doc. An upload whose Complete was
-// killed between CreateTemp and Rename is retired by the janitor or by an
-// organiser's own cancel, and Abort is the last code path that will ever name
-// this id: the orphan sweep reaches it through Store.UploadIDs, and that only
-// ever lists data files. A temporary index left here is bytes on the volume
-// that nothing can name again and that usage() still charges to MaxDirBytes.
+// Abort is the last code path that names an id, so it must also remove a
+// temporary index a killed Complete left behind.
 func TestAbortRemovesATemporaryIndexAnInterruptedCompleteLeftBehind(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "dddddddd-0000-0000-0000-000000000001"
@@ -627,7 +587,7 @@ func TestAbortRemovesATemporaryIndexAnInterruptedCompleteLeftBehind(t *testing.T
 	if _, err := s.Append(id, 0, strings.NewReader("a\nb\n")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	// Exactly what os.CreateTemp leaves when the process dies before Rename.
+	// What os.CreateTemp leaves when the process dies before Rename.
 	if err := os.WriteFile(s.indexPath(id)+".tmp-1174093", []byte("half an index"), 0o600); err != nil {
 		t.Fatalf("plant the leftover: %v", err)
 	}
@@ -657,31 +617,10 @@ func TestOpenUnknownID(t *testing.T) {
 	}
 }
 
-// TestAppendConcurrentChunksForSameUploadDoNotCorrupt is defect 1: without a
-// per-id lock, Append's Stat-then-Seek-then-Write is not atomic, so two
-// goroutines racing Append for the same upload can both read the same
-// "received so far" length, seek to the same offset, and write over each
-// other. Run with -race — that verifies the fix's own synchronisation (the
-// idLocks map in lock.go) is race-free; the corruption this test looks for
-// is a race on file content, which the Go race detector has no visibility
-// into on its own (nothing here is shared Go memory), which is why the
-// assertions below inspect the actual bytes on disk.
-//
-// Two goroutines both call Append(id, 0, ...) — the same offset — each with
-// its own several-megabyte chunk (well above copyBufferSize, so a single
-// Append call makes many separate Read/Write round trips: the window a
-// concurrent, unsynchronised Append for the same id can land writes inside
-// of). Both chunks are the same size but a different repeated byte, so any
-// interleaving between the two calls' writes is visible as a file that is
-// not uniformly one byte value throughout.
-//
-// This models the real trigger honestly rather than assuming which chunk
-// "should" win: two goroutines legitimately reach Append for the same id at
-// the same offset when a browser retries a chunk that is still in flight,
-// and Store cannot tell that case apart from two different chunks that
-// simply arrived out of order. Either way, the outcome must match some
-// valid sequential execution — one call's bytes fully on disk — never a mix
-// of both.
+// Two Appends at the same offset (a retried chunk racing the original)
+// must leave one call's bytes on disk, never a mix. Chunks are several
+// times copyBufferSize and use different bytes, so an interleaving shows in
+// the file content, which the race detector cannot see.
 func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
 	limits := Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 8 << 20, MaxChunkBytes: 8 << 20}
 	s := newTestStore(t, limits)
@@ -712,11 +651,8 @@ func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
 	close(start) // release both at once to maximise the chance they overlap
 	wg.Wait()
 
-	// Both calls describe the same offset, so a correct Store treats this
-	// exactly like a retried chunk racing the attempt still in flight:
-	// whichever it serialises first writes, and the other sees offset 0
-	// already received and returns the current length as a no-op — neither
-	// is an error.
+	// One call writes; the other sees offset 0 already received and is a
+	// no-op. Neither is an error.
 	if errA != nil {
 		t.Fatalf("Append A: %v", errA)
 	}
@@ -761,19 +697,14 @@ func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
 	}
 }
 
-// TestAppendRefusesWhenSecondUploadWouldExceedDirBudget is defect 2:
-// ErrStoreFull was checked only in Begin, so two uploads that both began on
-// an empty directory could each grow all the way to MaxFileBytes
-// independently — together well past MaxDirBytes. The budget has to be
-// checked in Append, where the bytes actually arrive.
+// The directory budget is checked in Append, not only in Begin: two
+// uploads begun on an empty directory must not together exceed it.
 func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
 
 	const id1 = "b0000001-0000-0000-0000-000000000000"
 	const id2 = "b0000002-0000-0000-0000-000000000000"
-	// Both begin on an empty directory: MaxFileBytes alone would let either
-	// one grow all the way to MaxDirBytes on its own.
 	if err := s.Begin(id1, declaredForTest); err != nil {
 		t.Fatalf("Begin(id1): %v", err)
 	}
@@ -785,9 +716,8 @@ func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
 		t.Fatalf("Append(id1): %v", err)
 	}
 
-	// The directory now holds 15 of its 20-byte MaxDirBytes. id2 growing by
-	// 10 more bytes would push the directory to 25 — over budget — even
-	// though id2's own MaxFileBytes has plenty of headroom left.
+	// The directory holds 15 of 20 bytes; 10 more for id2 would exceed it
+	// although id2's own file budget allows them.
 	n, err := s.Append(id2, 0, bytes.NewReader(bytes.Repeat([]byte("b"), 10)))
 	if !errors.Is(err, ErrStoreFull) {
 		t.Fatalf("Append(id2) = %v, want ErrStoreFull", err)
@@ -805,13 +735,9 @@ func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
 	}
 }
 
-// pausingReader hands out data a few bytes at a time and, once it has handed
-// out pauseAt bytes across previous calls, blocks on a channel before
-// producing any more — letting a test inspect the data file's on-disk size
-// from another goroutine while an Append call that is reading far more than
-// MaxFileBytes is still in progress. It is only ever driven by the single
-// goroutine running Append; paused/resume are the only fields the test
-// goroutine touches, and channels are what make that safe.
+// pausingReader hands out a few bytes at a time and blocks after pauseAt
+// bytes, so the test can check the file size while Append is still
+// running. Only paused and resume are shared with the test goroutine.
 type pausingReader struct {
 	data       []byte
 	step       int
@@ -844,16 +770,9 @@ func (r *pausingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt is defect 3: Append
-// used to write a chunk in full and only afterwards compare the new length
-// against MaxFileBytes, Truncating back if it was over. The excess bytes
-// reached disk before the limit was applied — the write rule 12 says must
-// not happen. This test drives a chunk that is much larger than
-// MaxFileBytes through Append a few dozen bytes at a time and, if the file
-// is ever observed to have grown past MaxFileBytes while Append is still
-// running, fails with that observation. The fixed Append bounds the reader
-// itself, so it never asks pausingReader for more than the remaining file
-// budget and the pause point is never reached at all.
+// Append bounds the reader before writing, so an oversized chunk never
+// puts bytes past MaxFileBytes on disk, even briefly (CLAUDE.md rule 12).
+// The test fails if it ever sees the file grow past the limit mid-call.
 func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 	limits := Limits{MaxFileBytes: 100, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
@@ -889,8 +808,6 @@ func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 		<-appendDone
 		t.Fatalf("data file grew to %d bytes while Append was still reading a chunk — MaxFileBytes is %d, so those bytes reached disk before the limit was enforced (rule 12: bound the reader, do not write then Truncate)", grewTo, limits.MaxFileBytes)
 	case <-appendDone:
-		// The reader was never asked for more than the remaining file
-		// budget, so it never reached the pause point at all.
 	}
 
 	if !errors.Is(gotErr, ErrFileTooLarge) {
@@ -908,13 +825,8 @@ func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 	}
 }
 
-// TestAppendAfterCompleteIsRefused is defect 4: Begin treats an id that
-// already has data on disk — including a completed one — as a resumed
-// upload, so Append would happily write into an upload Complete had already
-// sealed. The checksum and line index Complete already returned would then
-// describe bytes that no longer match the file, with nothing recording
-// that. Append must refuse by a named sentinel once Complete has run, and
-// Received/Window must keep answering for what Complete computed.
+// An Append after Complete is refused with ErrUploadSealed, and Received
+// and Window keep answering for what Complete computed.
 func TestAppendAfterCompleteIsRefused(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "e0000000-0000-0000-0000-000000000000"
@@ -946,14 +858,9 @@ func TestAppendAfterCompleteIsRefused(t *testing.T) {
 	}
 }
 
-// anyAge is a cut-off no file a test has just written can be younger than —
-// UploadIDs' own "list everything" case, spelled once here so the tests that
-// are not about the age floor do not each invent a time of their own.
+// anyAge is a cut-off later than any file a test has written.
 func anyAge() time.Time { return time.Now().Add(time.Hour) }
 
-// idSet turns a slice into a set for order-independent comparison — UploadIDs
-// promises no particular order, only which ids are present and how many
-// times.
 func idSet(ids []string) map[string]int {
 	set := make(map[string]int, len(ids))
 	for _, id := range ids {
@@ -962,9 +869,6 @@ func idSet(ids []string) map[string]int {
 	return set
 }
 
-// TestUploadIDsEmptyStore is the janitor's ordinary case: a fresh volume, or
-// one that currently has nothing in flight, must report no ids at all
-// rather than erroring on an empty directory.
 func TestUploadIDsEmptyStore(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	ids, err := s.UploadIDs(anyAge())
@@ -976,11 +880,8 @@ func TestUploadIDsEmptyStore(t *testing.T) {
 	}
 }
 
-// TestUploadIDsIncludesAnInProgressUpload is what makes the orphan sweep
-// work at all: an upload that has only been Begin'd (or partially Append'd,
-// never Complete'd) is exactly the shape a crash between Store.Begin
-// succeeding and the caller's own database row leaves behind, and it has to
-// show up here for the janitor to ever find it.
+// An upload begun but never completed is what a crash before the caller's
+// row leaves, so the orphan sweep must see it.
 func TestUploadIDsIncludesAnInProgressUpload(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "f0000001-0000-0000-0000-000000000000"
@@ -1000,18 +901,12 @@ func TestUploadIDsIncludesAnInProgressUpload(t *testing.T) {
 	}
 }
 
-// TestUploadIDsCountsACompletedUploadOnce is the guarantee the task's own
-// brief singles out: Complete leaves two files behind — the data file and
-// its side index — and both belong to the same upload. A caller reconciling
-// the volume against its own bookkeeping must see one id, not two, or a
-// sweep built on this would double-count (or, worse, treat the index as a
-// second orphan upload with no data of its own).
+// A completed upload has a data file and an index, and must be listed once.
 func TestUploadIDsCountsACompletedUploadOnce(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "f0000002-0000-0000-0000-000000000000"
 	completeUpload(t, s, id, "one\ntwo\n")
 
-	// Both files really are on disk — this test is pointless otherwise.
 	if _, err := os.Stat(s.dataPath(id)); err != nil {
 		t.Fatalf("data file missing after Complete: %v", err)
 	}
@@ -1028,10 +923,6 @@ func TestUploadIDsCountsACompletedUploadOnce(t *testing.T) {
 	}
 }
 
-// TestUploadIDsForgetsAnAbortedUpload is Abort's own promise (it "removes an
-// upload's data and any index it had, and forgets it") checked from
-// UploadIDs' side: nothing on disk should still answer to the id once Abort
-// has run, whether it was aborted mid-upload or after Complete sealed it.
 func TestUploadIDsForgetsAnAbortedUpload(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const midUpload = "f0000003-0000-0000-0000-000000000000"
@@ -1058,30 +949,20 @@ func TestUploadIDsForgetsAnAbortedUpload(t *testing.T) {
 	}
 }
 
-// TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume plants exactly the
-// kind of file the orphan sweep must not misread as an upload: a lone index
-// file with no data behind it (the tail of a crash between the two Complete
-// writes, or simply a stray leftover), and a file whose name has nothing to
-// do with this package's own naming convention at all. Neither must be
-// reported as an upload id — an id that is not [0-9a-fA-F-] cannot even
-// have been produced by validateUploadID, and a bare index file is a side
-// file, not the thing UploadIDs promises to list one-per-upload.
+// Neither a lone index file nor a file outside the naming convention is an
+// upload id.
 func TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const real = "f0000005-0000-0000-0000-000000000000"
 	completeUpload(t, s, real, "x\n")
 
-	// A lone index file: remove the data half by hand, leaving only the
-	// side file behind, exactly what "an id nothing about is confused with
-	// data" is testing for.
+	// A lone index file: remove the data half by hand.
 	const orphanIndexOnly = "f0000006-0000-0000-0000-000000000000"
 	completeUpload(t, s, orphanIndexOnly, "y\n")
 	if err := os.Remove(s.dataPath(orphanIndexOnly)); err != nil {
 		t.Fatalf("remove data file to leave a lone index: %v", err)
 	}
 
-	// Something that is not this package's naming convention at all —
-	// unrelated to any upload id.
 	if err := os.WriteFile(filepath.Join(s.dir, "README.txt"), []byte("not an upload"), 0o644); err != nil {
 		t.Fatalf("write stray file: %v", err)
 	}
@@ -1095,12 +976,9 @@ func TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume(t *testing.T) {
 	}
 }
 
-// The floor the janitor's orphan sweep stands on. Reconciling a volume
-// against bookkeeping kept somewhere else is a race whichever order the two
-// are written in — provisioning.Games.BeginUpload reserves the file first, on
-// purpose — so a listing that reports a file the instant it appears hands the
-// sweep a reservation whose row is still being inserted, and the sweep deletes
-// it. See provisioning.orphanFileGrace for what the caller does with this.
+// A file created at the cut-off is not listed: the caller writes the file
+// before its row, and the sweep must not delete an upload whose row is still
+// being inserted (provisioning.orphanFileGrace).
 func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	fresh, old := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "11111111-2222-3333-4444-555555555555"
@@ -1110,8 +988,7 @@ func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
 		}
 	}
 
-	// One of the two is made older than the cut-off; both were written in the
-	// same instant otherwise, which is exactly the case the floor decides.
+	// Only one of the two is older than the cut-off.
 	cutOff := time.Now().Add(-time.Minute)
 	when := cutOff.Add(-time.Minute)
 	if err := os.Chtimes(filepath.Join(s.dir, old+dataSuffix), when, when); err != nil {
@@ -1127,19 +1004,16 @@ func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
 	}
 }
 
-// dirWalks reports when the directory was last actually walked. A test asserting
-// that a chunk did not pay for a walk asserts on this rather than on a clock.
+// dirWalks reports when the directory was last walked, so a test can assert
+// that a chunk did not walk it.
 func (s *Store) lastDirWalk() time.Time {
 	s.dirMu.Lock()
 	defer s.dirMu.Unlock()
 	return s.dirMeasuredAt
 }
 
-// Receiving a chunk used to walk the whole upload directory — ReadDir plus an
-// Info per entry — every single time: 3.3 ms at five hundred files against
-// 2.7 ms for an entire 8 MiB Append, so on a volume with a couple of hundred
-// uploads on it the walk was more than the chunk. It stands measured between
-// chunks instead, with what each Append writes added to it.
+// Appending a chunk reuses the cached directory size instead of walking
+// the directory (dirBytesMaxAge).
 func TestAppendDoesNotWalkTheDirectoryForEveryChunk(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 8 << 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
@@ -1148,8 +1022,6 @@ func TestAppendDoesNotWalkTheDirectoryForEveryChunk(t *testing.T) {
 	if err := s.Begin(id, 300); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	// Begin's own measurement seeds the figure; nothing after it should walk
-	// again while the directory is nowhere near its budget.
 	walkedAt := s.lastDirWalk()
 	if walkedAt.IsZero() {
 		t.Fatal("Begin did not measure the directory at all")
@@ -1171,12 +1043,9 @@ func TestAppendDoesNotWalkTheDirectoryForEveryChunk(t *testing.T) {
 	}
 }
 
-// The remembered figure is never what a refusal rests on: the moment what is
-// left of the directory budget is small enough to bound a chunk, Append
-// measures for real. This is what keeps the cheap read from turning "the
-// directory is full" into a guess — here the bytes go away behind the Store's
-// back, and the chunk that would have been refused against a stale figure is
-// accepted against the true one.
+// A refusal never rests on the cached size: when the budget is close,
+// Append measures again. Here bytes vanish behind the Store's back and a
+// chunk the stale figure would refuse is accepted.
 func TestAppendMeasuresForRealOnceTheDirectoryBudgetCouldBind(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 200, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
@@ -1193,15 +1062,13 @@ func TestAppendMeasuresForRealOnceTheDirectoryBudgetCouldBind(t *testing.T) {
 		t.Fatalf("Begin(id): %v", err)
 	}
 
-	// The filler's bytes disappear without this Store being told: an operator
-	// clearing the volume, or anything else it cannot see. The remembered
-	// figure now says the directory holds 100 bytes it does not.
+	// The filler disappears without the Store knowing; the cached figure
+	// now overstates the directory by 100 bytes.
 	if err := os.Remove(s.dataPath(filler)); err != nil {
 		t.Fatalf("removing the filler: %v", err)
 	}
 
-	// 150 bytes fits the real directory (200 free) and does not fit the
-	// remembered one (100 free), so a figure nobody re-measured would refuse it.
+	// 150 bytes fits the real free space (200) but not the cached one (100).
 	if _, err := s.Append(id, 0, bytes.NewReader(bytes.Repeat([]byte("x"), 150))); err != nil {
 		t.Fatalf("Append: %v — the refusal was decided on a remembered figure", err)
 	}
@@ -1214,8 +1081,8 @@ func TestAppendMeasuresForRealOnceTheDirectoryBudgetCouldBind(t *testing.T) {
 	}
 }
 
-// What a chunk costs, against a directory holding as many uploads as a busy
-// volume does. Run with `go test -bench AppendChunk -benchmem ./internal/gamefile/`.
+// What a chunk costs on an empty and a busy directory. Run with
+// `go test -bench AppendChunk -benchmem ./internal/gamefile/`.
 func BenchmarkAppendChunkEmptyDirectory(b *testing.B)   { benchmarkAppendChunk(b, 0) }
 func BenchmarkAppendChunkBusyDirectory(b *testing.B)    { benchmarkAppendChunk(b, 500) }
 func BenchmarkAppendChunkCrowdedDirectory(b *testing.B) { benchmarkAppendChunk(b, 5000) }
@@ -1241,11 +1108,8 @@ func benchmarkAppendChunk(b *testing.B, neighbours int) {
 	b.SetBytes(chunk)
 	b.ReportAllocs()
 	for b.Loop() {
-		// Every iteration is the first chunk of the upload again, so the file
-		// on disk never outgrows one chunk however long the benchmark runs.
-		// Truncating outside the timer is exactly the kind of change behind
-		// this Store's back the remembered figure tolerates: the budget here is
-		// terabytes, so it never binds and never triggers a real walk.
+		// Each iteration rewrites the first chunk; the truncation outside the
+		// timer is invisible to the cache, which is fine with a terabyte budget.
 		b.StopTimer()
 		if err := os.Truncate(s.dataPath(id), 0); err != nil {
 			b.Fatalf("truncate: %v", err)
@@ -1258,15 +1122,7 @@ func benchmarkAppendChunk(b *testing.B, neighbours int) {
 	}
 }
 
-// Store.Complete: what it reports, what it refuses, and the index it leaves
-// behind for a later Window to use.
-//
-// These lived in index_test.go, next to the index format they happen to
-// write — which meant somebody changing Complete's own length check opened
-// this file, found nothing about it, and concluded the refusal was not
-// covered. The file a test belongs in is the one whose source it is about
-// (CLAUDE.md Go layout rule 5); the index format's own parsing tests stay
-// where they are.
+// Store.Complete.
 
 func completeUpload(t *testing.T, s *Store, id, content string) Summary {
 	t.Helper()
@@ -1362,9 +1218,7 @@ func TestCompleteUnknownID(t *testing.T) {
 }
 
 func TestCompletePersistsAnIndexUsableAcrossOpens(t *testing.T) {
-	// Complete's index is read back by a fresh os.Open in a later call
-	// (e.g. after a process restart), not carried in memory — this checks
-	// that round trip explicitly rather than only through Window.
+	// The index is read back from disk by a later call, not kept in memory.
 	s := newTestStore(t, permissiveLimits())
 	const id = "60000000-0000-0000-0000-000000000000"
 	var lines []string

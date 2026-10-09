@@ -15,58 +15,37 @@ import (
 // hits its RLIMIT_DATA cap reports this rather than being killed.
 const outOfMemory = "53200"
 
-// The range of caps this check can prove, and the unit its over-cap probe is
-// built from.
+// The range of caps VerifyProcessMemoryCap can prove. Below the minimum, the
+// quarter-cap probe fits in a backend's baseline and proves nothing. Above the
+// maximum, the probes run into PostgreSQL's 1 GiB value limit or the
+// container's memory before the cap.
 //
-// Below MinVerifiableCapBytes the "a quarter of the cap must succeed" probe is
-// small enough to fit in a backend's baseline and says nothing. Above
-// MaxVerifiableCapBytes the probes stop being honest: the quarter-cap value
-// approaches PostgreSQL's 1 GiB limit on a single value, and the over-cap
-// allocation, which must fail with out_of_memory specifically, starts to meet
-// that limit (a different error) or the container's memory before the cap. The
-// deployment's arithmetic is sized for 256–512 MiB; 1.5 GiB leaves room above.
-//
-// verifyChunkBytes is one value the over-cap probe holds. The probe collects
-// enough of them with array_agg to exceed the cap — separate values, so no
-// single one approaches the 1 GiB limit and no length overflows an int4.
+// verifyChunkBytes is one value of the over-cap probe; separate values keep
+// each under the 1 GiB limit and within int4.
 const (
 	MinVerifiableCapBytes = 256 << 20
 	MaxVerifiableCapBytes = 1536 << 20
 	verifyChunkBytes      = 64 << 20
 )
 
-// maxDataSize matches the "Max data size" line of a Linux /proc/*/limits file
-// and captures its soft (hard is the same for a ulimit) value in bytes.
+// maxDataSize captures the soft "Max data size" from /proc/*/limits, in bytes.
 var maxDataSize = regexp.MustCompile(`(?m)^Max data size\s+(\d+)`)
 
-// VerifyProcessMemoryCap checks, at deploy time, that the game cluster's
-// per-process memory cap is actually in force and is the value the deployment
-// configured. The whole memory story rests on it (config.Runner sizes the
-// container around it, and the sandbox's guarantee is that a runaway query
-// fails in its own backend rather than crashing the cluster), and a missing or
-// wrong cap fails silently — the cluster looks identical and only OOMs under
-// load. So the deploy proves it once and refuses to come up otherwise.
+// VerifyProcessMemoryCap checks at deploy time that the game cluster's
+// per-process memory cap is in force and equals capBytes. A missing or wrong
+// cap is silent until the cluster OOMs under load, and the sandbox relies on a
+// runaway query failing in its own backend.
 //
-// Two independent checks. First the exact limit: the backend reads its own
-// /proc/self/limits and the reported "Max data size" must equal capBytes — this
-// catches a ulimit dropped, or set to a different number than the arithmetic
-// assumes. Then enforcement: an allocation a quarter of the cap must succeed
-// and one over it must be refused with out_of_memory — this catches a limit
-// that is reported but not enforced (a kernel or image that ignores it).
-//
-// Reading /proc requires superuser (pg_read_file); PrepareCluster's caller is
-// the provisioning superuser, which is who runs this.
-//
-// Supported caps: MinVerifiableCapBytes (256 MiB) to MaxVerifiableCapBytes
-// (1.5 GiB). Anything else is refused as unsupported before a byte is
-// allocated, rather than proved by probes that no longer mean what they say.
+// It checks the limit the backend reports in /proc/self/limits, then that it
+// is enforced: a quarter-cap allocation must succeed and an over-cap one must
+// fail with out_of_memory. Reading /proc needs a superuser. Caps outside
+// MinVerifiableCapBytes..MaxVerifiableCapBytes are refused as unsupported.
 func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) error {
 	if capBytes < MinVerifiableCapBytes || capBytes > MaxVerifiableCapBytes {
 		return fmt.Errorf("unsupported cap: %d bytes is outside the %d–%d bytes (256 MiB–1.5 GiB) this check can verify",
 			capBytes, int64(MinVerifiableCapBytes), int64(MaxVerifiableCapBytes))
 	}
 
-	// The exact limit the kernel is enforcing on this backend.
 	var limits string
 	if err := conn.QueryRow(ctx, `SELECT pg_read_file('/proc/self/limits')`).Scan(&limits); err != nil {
 		return fmt.Errorf("reading the backend's own resource limits: %w", err)
@@ -84,18 +63,14 @@ func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) erro
 			"(ulimits.data on pg-game and GAME_DB_PROCESS_MEMORY_BYTES must agree)", got, capBytes)
 	}
 
-	// Well under the cap: this must succeed, or the cap is set so low it would
-	// refuse ordinary work. Within the supported range a quarter of the cap is
-	// at most 384 MiB, an int4 without a cast.
+	// Must succeed, or the cap refuses ordinary work. At most 384 MiB, an int4.
 	var scanned int64
 	small := int32(capBytes / 4)
 	if err := conn.QueryRow(ctx, `SELECT length(repeat('x', $1))`, small).Scan(&scanned); err != nil {
 		return fmt.Errorf("the game cluster refused a %d-byte allocation, well under the %d-byte cap: %w", small, capBytes, err)
 	}
 
-	// Over the cap: enough separate chunks held at once by array_agg to exceed
-	// it. This must be refused, and refused with out_of_memory specifically —
-	// any other error would mean it failed for some unrelated reason and proves
+	// Must fail with out_of_memory specifically; any other error proves
 	// nothing about the cap.
 	chunks := int32(capBytes/verifyChunkBytes + 2)
 	err = conn.QueryRow(ctx,
@@ -118,24 +93,17 @@ func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) erro
 // limit: a byte count, or "max" for none.
 const CgroupMemoryLimitFile = "/sys/fs/cgroup/memory.max"
 
-// ErrContainerLimitUnreadable means the game cluster could not report its own
-// container memory limit — a cgroup v1 host, or a container without a cgroup
-// namespace. The deploy fails on it unless the operator has explicitly opted
-// out (GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT), because the arithmetic the Query
-// Runner checked is only true if the limit is the one it was checked against.
+// ErrContainerLimitUnreadable means the game cluster could not report its
+// container memory limit (a cgroup v1 host, or no cgroup namespace). The deploy
+// fails on it unless GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT opts out.
 var ErrContainerLimitUnreadable = errors.New("the game cluster's container memory limit cannot be read")
 
-// VerifyContainerMemoryLimit checks, at deploy time, that the game cluster's
-// container runs with the memory limit the Query Runner's arithmetic was
-// checked against (GAME_DB_MEMORY_BYTES). The compose file interpolates both
-// from the same variable, but a container created before a change, or by
-// hand, keeps its old limit silently — and a limit smaller than the arithmetic
-// assumes is exactly how the OOM killer comes back. The backend reads its own
-// cgroup file (superuser, pg_read_file), so the number is the kernel's, not
-// the compose file's.
-//
-// limitFile is CgroupMemoryLimitFile in production; it is a parameter so the
-// unreadable case can be exercised.
+// VerifyContainerMemoryLimit checks at deploy time that the game cluster's
+// container runs with limitBytes (GAME_DB_MEMORY_BYTES), the limit the Query
+// Runner's memory arithmetic assumes. A container created before a change, or
+// by hand, keeps its old limit silently. The backend reads its own cgroup file,
+// so the number is the kernel's. limitFile is CgroupMemoryLimitFile in
+// production and a parameter for tests.
 func VerifyContainerMemoryLimit(ctx context.Context, conn Conn, limitFile string, limitBytes int64) error {
 	var raw string
 	if err := conn.QueryRow(ctx, `SELECT pg_read_file($1)`, limitFile).Scan(&raw); err != nil {
@@ -158,23 +126,16 @@ func VerifyContainerMemoryLimit(ctx context.Context, conn Conn, limitFile string
 }
 
 // MemorySettings are the cluster settings the Query Runner's memory arithmetic
-// restates as constants (config.MaxBuildSessions, config.MaxParallelWorkers,
-// config.AutovacuumWorkers). The platform layer cannot import this package, so
-// the caller passes its own numbers in and this compares them with the cluster.
+// restates as constants in config. The platform layer cannot import this
+// package, so the caller passes its numbers in.
 type MemorySettings struct {
-	// AuthorConnectionLimit is the build sessions the arithmetic counts; it
-	// must be game_author's CONNECTION LIMIT.
-	AuthorConnectionLimit int
-	// MaxParallelWorkers must be max_parallel_workers on the cluster.
-	MaxParallelWorkers int
-	// AutovacuumWorkers must be autovacuum_max_workers on the cluster.
-	AutovacuumWorkers int
+	AuthorConnectionLimit int // game_author's CONNECTION LIMIT
+	MaxParallelWorkers    int // max_parallel_workers
+	AutovacuumWorkers     int // autovacuum_max_workers
 }
 
-// VerifyMemorySettings reads each setting the memory arithmetic depends on back
-// from the cluster and reports every one that differs, so a pin changed on the
-// pg-game command, or a role limit changed here, cannot drift from the numbers
-// the runner sized the container with.
+// VerifyMemorySettings reads each setting back from the cluster and reports
+// every one that differs from want.
 func VerifyMemorySettings(ctx context.Context, conn Conn, want MemorySettings) error {
 	var drift []string
 

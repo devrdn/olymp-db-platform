@@ -8,21 +8,11 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
 
-// schemaQuery reads one database's shape: its relations, their columns in
-// declaration order, each column's type and nullability, and the table a
-// foreign key points at.
-//
-// pg_catalog rather than information_schema. The views in information_schema
-// are defined over the same tables with several joins and a privilege filter
-// each, and are markedly slower for exactly this shape of question; more to
-// the point, `attnum` is what gives declaration order, and information_schema
-// exposes it as `ordinal_position` only after doing the work to compute it.
-//
-// The lateral join takes the *first* foreign key a column participates in.
-// A column in two foreign keys is legal and vanishingly rare in a game, and
-// the panel has one line per column to say it in — `ORDER BY con.oid` at
-// least makes which one it is deterministic rather than whatever the planner
-// happened to produce.
+// schemaQuery reads one database's relations, their columns in declaration
+// order, each column's type and nullability, and the table a foreign key
+// points at. pg_catalog is used because information_schema is markedly slower
+// here. A column in two foreign keys shows the first by oid, so the answer is
+// deterministic.
 const schemaQuery = `
 SELECT c.relname,
        a.attname,
@@ -44,46 +34,32 @@ WHERE n.nspname = 'public' AND c.relkind = ANY ($1)
 ORDER BY c.relname, a.attnum
 LIMIT $2`
 
-// gameRelkinds are the relation kinds a participant can write a SELECT
-// against: ordinary and partitioned tables, views and materialised views.
-// Indexes, sequences, composite types and TOAST tables are how the game is
-// stored rather than what it is about.
+// gameRelkinds are the relation kinds a participant can SELECT from: tables,
+// partitioned tables, views and materialised views.
 var gameRelkinds = []byte{'r', 'p', 'v', 'm'}
 
-// maxSchemaRows bounds the catalogue read where the rows arrive, rather than
-// after they are all in memory (CLAUDE.md rule 12). The init script is an
-// organiser's own SQL, so the number of columns in a game is not this
-// platform's to assume; the shape-level bounds live in provisioning, and this
-// is the memory guard underneath them.
+// maxSchemaRows bounds the catalogue read as rows arrive (CLAUDE.md rule 12);
+// the init script is an organiser's SQL, so the column count is unbounded.
 const maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColumns
 
 // ReadSchema describes one game database, for the console's schema panel.
 //
-// Read from an instance and never from a template — connecting to a template
-// is what makes `CREATE DATABASE ... TEMPLATE` fail for everybody else
-// (SQLSTATE 55006). provisioning.SchemaReader is the caller that guarantees
-// that, and caches the answer so a console full of participants costs one
-// catalogue read per build rather than one connection each. It connects as
-// the provisioning role, a superuser, so an instance's `CONNECTION LIMIT 2`
-// (see grants.go) does not count it and it never takes a participant's slot.
+// It must read an instance, never a template: a connection to a template makes
+// `CREATE DATABASE ... TEMPLATE` fail (55006). provisioning.SchemaReader
+// guarantees that and caches the answer. It connects as the superuser
+// provisioning role, so it never takes a participant's connection slot.
 func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisioning.Schema, error) {
 	if !sqlpolicy.PlainIdentifier(database) {
 		return provisioning.Schema{}, fmt.Errorf("%w: %q", ErrBadName, database)
 	}
 
-	// As the provisioning role: this reads an instance's catalogue, which is
-	// nobody's uploaded SQL and needs no containment.
 	conn, err := p.connect(ctx, p.base.User, database)
 	if err != nil {
 		return provisioning.Schema{}, err
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
-	// This connection is opened for one statement and closed, so a session
-	// timeout is the whole of its life. Ten seconds is the core API's own
-	// figure and generous for a catalogue read; what it rules out is this
-	// holding a backend on the game cluster open indefinitely because the
-	// cluster is wedged (CLAUDE.md rule 15).
+	// Keeps a wedged cluster from holding this backend open (CLAUDE.md rule 15).
 	if _, err := conn.Exec(ctx, `SET statement_timeout = '10s'`); err != nil {
 		return provisioning.Schema{}, fmt.Errorf("bound the schema read of %s: %w", database, err)
 	}
@@ -107,14 +83,12 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 
 		seen++
 		if seen > maxSchemaRows {
-			// One row past the bound is how the query says there were more.
-			// The rest are not read.
+			// The query asks for one row past the bound to detect more.
 			schema.Truncated = true
 			break
 		}
 
-		// Rows arrive grouped by relation (ORDER BY c.relname), so the table
-		// being filled is always the last one appended.
+		// Rows arrive grouped by relation.
 		if len(schema.Tables) == 0 || schema.Tables[len(schema.Tables)-1].Name != table {
 			schema.Tables = append(schema.Tables, provisioning.Table{Name: table})
 		}

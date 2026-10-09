@@ -16,10 +16,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Submit asks the participation gate and writes against its closing instant,
-// so a Service cannot be assembled without one: zero used to be what a
-// forgotten grace silently became here, while the console defaulted to five
-// seconds.
+// Submit writes against the gate's closing instant; a missing gate must not
+// silently become a zero grace.
 func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -30,8 +28,7 @@ func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
 }
 
 func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
-	// Somebody has to be able to appoint managers from the first moment, and
-	// the only person who certainly exists then is the author.
+	// Somebody must be able to appoint managers from the first moment.
 	f := conteststest.NewFixture()
 	author := uuid.New()
 
@@ -54,7 +51,6 @@ func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
 }
 
 func TestCreateStoresAReadOnlyPolicy(t *testing.T) {
-	// A contest nobody configured must not hand out writes.
 	f := conteststest.NewFixture()
 
 	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
@@ -72,8 +68,6 @@ func TestCreateStoresAReadOnlyPolicy(t *testing.T) {
 }
 
 func TestCreateDefaultsToInviteOnlyAndSeveralQuestions(t *testing.T) {
-	// The safe default: a contest nobody has configured is not open to the
-	// whole installation.
 	f := conteststest.NewFixture()
 
 	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
@@ -131,7 +125,6 @@ func TestCreateRejectsIndividualTimingWithoutADuration(t *testing.T) {
 }
 
 func TestNothingIsWrittenWhenCreateIsRejected(t *testing.T) {
-	// The contest, its owner and its policy land together or not at all.
 	f := conteststest.NewFixture()
 
 	_, _ = f.Service.Create(context.Background(), contests.CreateCommand{
@@ -159,7 +152,6 @@ func TestUpdateRefusesAFinishedContest(t *testing.T) {
 }
 
 func TestUpdateRefusesToChangeTheQuestionModeWhileRunning(t *testing.T) {
-	// Participants are already answering under the rules they were shown.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
@@ -174,16 +166,14 @@ func TestUpdateRefusesToChangeTheQuestionModeWhileRunning(t *testing.T) {
 	}
 }
 
-// The organizer's recourse when they discover, after the contest already
-// finished, that the reports are not done or a dispute is open — the whole
-// point of the exception.
+// The recourse when, after the finish, reports are not done or a dispute is
+// open.
 func TestExtendGraceLengthensAFinishedContestsGracePeriod(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	// c never set an explicit grace, so the grace actually in force is the
-	// fixture's installation default (conteststest.FixtureDefaultGraceMin) —
-	// the requested value has to clear that, not merely be positive.
+	// With no explicit grace the installation default is in force, and the
+	// request must clear it.
 	grace := conteststest.FixtureDefaultGraceMin + 60
 	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, grace)
 	if err != nil {
@@ -194,8 +184,7 @@ func TestExtendGraceLengthensAFinishedContestsGracePeriod(t *testing.T) {
 	}
 }
 
-// Archived is the other status Reclaim now honours (§2.4), so the same
-// recourse has to still reach a contest an organizer already archived.
+// Reclaim honours archived contests too (§2.4).
 func TestExtendGraceAlsoReachesAnArchivedContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusArchived)
@@ -206,8 +195,7 @@ func TestExtendGraceAlsoReachesAnArchivedContest(t *testing.T) {
 	}
 }
 
-// Every other status already has its own ordinary settings door; this one
-// must not become a second, wider way through it.
+// Other statuses have the ordinary settings route; this must not widen it.
 func TestExtendGraceRefusesAnyStatusOtherThanFinishedOrArchived(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -218,8 +206,6 @@ func TestExtendGraceRefusesAnyStatusOtherThanFinishedOrArchived(t *testing.T) {
 	}
 }
 
-// "Extend" means grow: the one exception a finished contest's settings carry
-// must not become a way to shorten a grace an organizer already relied on.
 func TestExtendGraceRefusesToShortenAnExplicitlyConfiguredGrace(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -235,10 +221,8 @@ func TestExtendGraceRefusesToShortenAnExplicitlyConfiguredGrace(t *testing.T) {
 	}
 }
 
-// A contest that never configured an explicit grace reads as 0 — "defer to
-// the installation default" — and the first explicit value it accepts has to
-// actually clear that default (ServiceConfig.DefaultGraceMin), not merely be
-// positive.
+// A stored 0 means "defer to ServiceConfig.DefaultGraceMin"; the first
+// explicit value must clear that default.
 func TestExtendGraceAcceptsTheFirstExplicitValueWhenNoneWasConfigured(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -256,12 +240,8 @@ func TestExtendGraceAcceptsTheFirstExplicitValueWhenNoneWasConfigured(t *testing
 	}
 }
 
-// The finding this guards against: a contest that never set an explicit
-// grace is governed by the installation default, and ExtendGrace used to
-// compare a requested value against the stored zero instead of that default
-// — so any positive value, including one far below the real default, read as
-// an extension. ExtendGrace(…, 60) against a contest defaulting to 24 hours
-// used to cut retention to one hour outright; it must be refused instead.
+// Compared against the stored zero, 60 minutes would "extend" a 24-hour
+// default down to one hour.
 func TestExtendGraceRefusesAValueThatDoesNotClearTheInstallationDefault(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -273,8 +253,6 @@ func TestExtendGraceRefusesAValueThatDoesNotClearTheInstallationDefault(t *testi
 	if !errors.Is(err, contests.ErrInvalidContest) {
 		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
 	}
-	// And the stored settings must be untouched — a refused call is not a
-	// half-applied one.
 	stored, err := f.Contests.ByID(context.Background(), c.ID)
 	if err != nil {
 		t.Fatalf("ByID() = %v", err)
@@ -284,9 +262,6 @@ func TestExtendGraceRefusesAValueThatDoesNotClearTheInstallationDefault(t *testi
 	}
 }
 
-// A value exactly at the installation default does not extend it either —
-// the comparison is "does not extend", the same "<=" the explicit-grace path
-// above already uses, applied consistently to the default.
 func TestExtendGraceRefusesAValueEqualToTheInstallationDefault(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -297,8 +272,7 @@ func TestExtendGraceRefusesAValueEqualToTheInstallationDefault(t *testing.T) {
 	}
 }
 
-// A bound reaches this exception the same as everything else CLAUDE.md rule
-// 2 asks a stored field to carry.
+// CLAUDE.md rule 2.
 func TestExtendGraceRefusesAnUnboundedValue(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -309,8 +283,6 @@ func TestExtendGraceRefusesAnUnboundedValue(t *testing.T) {
 	}
 }
 
-// Nothing else about a finished contest is reachable through this door: it
-// is the grace period or nothing.
 func TestExtendGraceRecordsOnlyTheGraceField(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -340,8 +312,7 @@ func TestExtendGraceRecordsOnlyTheGraceField(t *testing.T) {
 }
 
 func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
-	// The operator response to a power cut. Refusing it would be a policy that
-	// only ever hurts participants.
+	// The operator response to a power cut.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 	later := f.Now.Add(4 * time.Hour)
@@ -360,9 +331,8 @@ func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	}
 }
 
-// frozenRunningContest seeds a running contest whose leaderboard freeze has
-// already been reached: SeedContest's EndsAt is FixtureNow+2h, and a 130-minute
-// freeze puts FreezeAt ten minutes before FixtureNow.
+// frozenRunningContest: EndsAt is FixtureNow+2h, so a 130-minute freeze puts
+// FreezeAt ten minutes before FixtureNow.
 func frozenRunningContest(t *testing.T, f *conteststest.Fixture) contests.Contest {
 	t.Helper()
 	c := f.SeedContest(contests.StatusRunning)
@@ -372,11 +342,8 @@ func frozenRunningContest(t *testing.T, f *conteststest.Fixture) contests.Contes
 	return c
 }
 
-// TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze: the freeze is
-// measured back from ends_at, so extending a contest whose table has already
-// frozen must lengthen the freeze by the same amount. The table then stays
-// frozen at the moment it froze, and the organiser still gets the extension a
-// power cut calls for.
+// The freeze is measured back from ends_at, so it lengthens by the same
+// amount and the frozen moment stays put.
 func TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := frozenRunningContest(t, f)
@@ -404,10 +371,8 @@ func TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze(t *testing.T) {
 	}
 }
 
-// TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds: the form sends
-// whole minutes, and the freeze is whole minutes. A stored ends_at with seconds
-// moves by the whole minutes the form's value moved, so the freeze can move by
-// exactly the same amount and the frozen moment stays put to the second.
+// The form and the freeze are in whole minutes; a stored ends_at with seconds
+// moves by whole minutes, so the frozen moment stays put to the second.
 func TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := frozenRunningContest(t, f)
@@ -432,9 +397,6 @@ func TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds(t *testing.T) {
 	}
 }
 
-// TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze: a client that
-// did the arithmetic itself sends the lengthened freeze along with ends_at,
-// and that is the same change.
 func TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := frozenRunningContest(t, f)
@@ -452,11 +414,8 @@ func TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze(t *testing.T)
 	}
 }
 
-// TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached: pulling the end
-// in after the freeze would need a shorter freeze to keep the frozen moment,
-// and a shorter freeze cannot reach back past a moment that already happened
-// without the table having been frozen for a stretch it was actually live.
-// Only an extension is paired with the freeze.
+// Keeping the frozen moment would need a shorter freeze, which cannot reach
+// back past a moment the table was already live for.
 func TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := frozenRunningContest(t, f)
@@ -470,9 +429,8 @@ func TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne: the freeze
-// itself still cannot move while the contest runs. Only the value that keeps
-// the frozen moment exactly where it is may accompany an extension.
+// Only the freeze that keeps the frozen moment in place may accompany an
+// extension.
 func TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := frozenRunningContest(t, f)
@@ -500,10 +458,6 @@ func TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne(t *testing.T) 
 	}
 }
 
-// TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached is the other half
-// of the freeze guard: the organizer response to a power cut must keep
-// working for as long as the freeze this change protects has not actually
-// happened yet.
 func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -524,26 +478,17 @@ func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
 	}
 }
 
-// TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze
-// is the resend case the minute-precision comparison exists for: the
-// settings form always resends every field, including ends_at, and a
-// contest whose ends_at carries seconds (set through the API rather than
-// the form) must not have every save of an unrelated field refused just
-// because the resent value, truncated to a minute by the form, does not
-// match the stored value byte-for-byte.
+// The form resends every field, truncated to the minute; an ends_at with
+// seconds (set through the API) must not make every unrelated save fail.
 func TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 	freeze := 130 // FreezeAt already reached, as above.
 	c.LeaderboardFreezeMin = &freeze
-	// A stored ends_at with seconds on it — set through the API directly,
-	// never something the settings form itself would have produced.
 	withSeconds := c.EndsAt.Add(17 * time.Second)
 	c.EndsAt = &withSeconds
 	f.Contests.Put(c)
 
-	// The form resends ends_at truncated to the minute, unchanged, while
-	// editing an unrelated field.
 	resent := withSeconds.Truncate(time.Minute)
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
 		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &resent,
@@ -555,26 +500,14 @@ func TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze(t
 	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
 		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
 	}
-	// The stored deadline itself must survive to the nanosecond: passing the
-	// minute-precision comparison must not mean the truncated, resent value
-	// is what actually gets written. A save that silently moved the
-	// deadline by up to 59 seconds would still show "no change" here if this
-	// only checked the same-minute comparison again instead of the exact
-	// stored value.
+	// Exact: the truncated resent value must not be what gets written.
 	if updated.EndsAt == nil || !updated.EndsAt.Equal(withSeconds) {
 		t.Errorf("EndsAt = %v, want the exact stored value %v unchanged", updated.EndsAt, withSeconds)
 	}
 }
 
-// TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute is the
-// regression this guards against directly: an explicit attempt to move
-// ends_at from one second within a minute to another, after the freeze has
-// been reached, must not silently succeed at moving the deadline by however
-// many seconds separate the two — the settings form cannot express that
-// distinction, so the service must not let it through by accident. Keeping
-// the stored value (rather than refusing outright) is the chosen behaviour:
-// an organiser saving the form after the freeze sees their save succeed, not
-// a spurious conflict over a difference of seconds they never intended.
+// The form cannot express a move within a minute, so the stored value is kept
+// rather than refused: saving the form after the freeze must still succeed.
 func TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -604,12 +537,8 @@ func TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute(t *tes
 	}
 }
 
-// TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning: ICPC penalty
-// minutes are counted from starts_at at read time (postgres/leaderboard.go),
-// never stored with a submission, so moving starts_at mid-run would
-// retroactively rescore every fixed-timing participant's penalty — the same
-// "no path may rescore a result nobody can see the reason for"
-// checkRunningChange already enforces for the penalty setting itself.
+// ICPC penalty minutes are counted from starts_at at read time, so moving it
+// mid-run would rescore every fixed-timing participant.
 func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -625,10 +554,6 @@ func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
 	}
 }
 
-// TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC is the
-// starts_at half of the resend case: an ICPC contest whose starts_at carries
-// seconds must still accept an unrelated save when the form resends
-// starts_at at its own minute precision.
 func TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -648,19 +573,11 @@ func TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC(t *test
 	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
 		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
 	}
-	// Same exactness requirement as the ends_at case: the stored starts_at
-	// must survive to the nanosecond, not merely stay within the same
-	// minute as before.
 	if updated.StartsAt == nil || !updated.StartsAt.Equal(withSeconds) {
 		t.Errorf("StartsAt = %v, want the exact stored value %v unchanged", updated.StartsAt, withSeconds)
 	}
 }
 
-// TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute is
-// the starts_at half of the same regression: on a running ICPC contest, an
-// explicit move from one second within a minute to another must not
-// silently rescore every fixed-timing participant's penalty by however many
-// seconds separate the two.
 func TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -689,11 +606,7 @@ func TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute(t *t
 	}
 }
 
-// TestUpdateAllowsChangingStartsAtOutsideICPCScoringWhileRunning proves the
-// new starts_at guard is scoped to ICPC: a points or winner contest has
-// nothing keyed off starts_at the way ICPC's penalty formula is, so extending
-// or correcting the window's start stays the ordinary "fix it after a power
-// cut" operation SettingsEditable exists for.
+// Nothing outside ICPC scoring is keyed off starts_at.
 func TestUpdateAllowsChangingStartsAtOutsideICPCScoringWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -735,14 +648,9 @@ func TestPublishAcceptsACompleteContest(t *testing.T) {
 	}
 }
 
-// An account that administers every contest reads this one's reference
-// answers and its unfrozen leaderboard, so it cannot also compete in it. Both
-// registration paths refuse it now, but neither can undo a registration made
-// before that rule existed or one whose account was granted the permission
-// afterwards — and such a participant otherwise keeps playing and keeps
-// scoring with the answer key in reach. Publication is where it is caught,
-// because that is the last moment before anybody is let in and the organizer
-// is looking at the gate anyway.
+// An administrator reads the answer key. Registration refuses one, but the
+// permission can be granted after registering; publication is the last
+// moment before anybody is let in.
 func TestPublishRefusesAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -758,16 +666,13 @@ func TestPublishRefusesAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 	if !errors.As(err, &notReady) {
 		t.Fatalf("Transition(published) = %v, want a *contests.NotPublishableError", err)
 	}
-	// The login, because an organizer has to know whom to take off the
-	// roster; a count would leave them searching a list of four hundred.
+	// The login tells the organizer whom to take off the roster.
 	want := contests.PublishProblem{Code: contests.ProblemStaffRegistered, Detail: "inspector"}
 	if !slices.Contains(notReady.Problems, want) {
 		t.Errorf("problems = %v, want one of %v", notReady.Problems, want)
 	}
 }
 
-// And an ordinary roster publishes, so the check above reads the permission
-// rather than merely the presence of participants.
 func TestPublishAcceptsAContestWithOrdinaryParticipants(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -779,15 +684,9 @@ func TestPublishAcceptsAContestWithOrdinaryParticipants(t *testing.T) {
 	}
 }
 
-// An uploaded picture belongs to somebody, and a contest that wears one
-// without saying whose does not publish (design spec §10.1). The upload route
-// refuses an empty credit line and the column carries a check of its own, so
-// this is the third lock rather than the first — and it is the one that holds
-// for a row this build did not write: a restore from an older dump, a repair
-// made by hand, or a credit line that is whitespace and so passes a length
-// check while saying nothing. Publication is the right moment, because
-// publication is when the picture starts being shown to people who never
-// agreed to anything.
+// docs/design/SPEC.md §10.1. The upload route and a column check also refuse
+// this, but not for a row restored from an older dump, repaired by hand, or
+// credited with whitespace only.
 func TestPublishRefusesAnUploadedCoverWithNobodyCredited(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -808,8 +707,6 @@ func TestPublishRefusesAnUploadedCoverWithNobodyCredited(t *testing.T) {
 	}
 }
 
-// And a credited cover publishes, so the check above reads the credit line
-// rather than merely the presence of a picture.
 func TestPublishAcceptsACreditedCover(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -820,8 +717,6 @@ func TestPublishAcceptsACreditedCover(t *testing.T) {
 	}
 }
 
-// A contest with no uploaded cover wears a drawn one, whose author is us, and
-// is never asked to credit anybody.
 func TestPublishAcceptsAContestWithNoUploadedCover(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -831,10 +726,6 @@ func TestPublishAcceptsAContestWithNoUploadedCover(t *testing.T) {
 	}
 }
 
-// TestTransitionTriggersThePoolWhenPublishingOrStarting is the manual door
-// into the same moment Scheduler.Advance triggers the pool tender for on its
-// own tick: an organizer publishing or starting a contest by hand is exactly
-// as much reason for the pool to be tended soon as the scheduler doing it.
 func TestTransitionTriggersThePoolWhenPublishingOrStarting(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
@@ -857,8 +748,6 @@ func TestTransitionTriggersThePoolWhenPublishingOrStarting(t *testing.T) {
 	}
 }
 
-// Moving on to finished or archived is not the moment a pool needs tending —
-// nobody is arriving to query a contest that is closing, not opening.
 func TestTransitionDoesNotTriggerThePoolForFinishingOrArchiving(t *testing.T) {
 	f := conteststest.NewFixture()
 	running := f.SeedContest(contests.StatusRunning)
@@ -879,8 +768,6 @@ func TestTransitionDoesNotTriggerThePoolForFinishingOrArchiving(t *testing.T) {
 	}
 }
 
-// A transition the publish gate refuses must not wake the pool for a move
-// that never happened.
 func TestTransitionDoesNotTriggerThePoolOnRefusal(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -905,7 +792,7 @@ func TestStartingAnUnpublishedContestIsRefused(t *testing.T) {
 }
 
 func TestDeleteRefusesAContestThatWasPublished(t *testing.T) {
-	// Once people could see it, it is a record: archiving is how it goes away.
+	// Once people could see it, it is a record: it is archived instead.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 
@@ -930,8 +817,8 @@ func TestDeleteRemovesADraft(t *testing.T) {
 }
 
 func TestPolicyCannotChangeWhileTheContestIsRunning(t *testing.T) {
-	// Participants would end up with different powers depending on when they
-	// connected, and the template grants would no longer match the validator.
+	// Powers would depend on when a participant connected, and the template
+	// grants would no longer match the validator.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
@@ -962,8 +849,7 @@ func TestPolicyChangesBeforeTheStart(t *testing.T) {
 }
 
 func TestSetLanguagesRefusesOnceTheContestIsRunning(t *testing.T) {
-	// Adding a language mid-contest would leave everything authored in it
-	// empty for whoever picked it.
+	// Everything in a language added mid-contest would be empty.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
@@ -984,10 +870,8 @@ func TestUnknownContestIsReportedAsNotFound(t *testing.T) {
 }
 
 func TestAContestCanBeSwitchedBackToAFixedWindow(t *testing.T) {
-	// The session length belongs to individual timing. Switching to a fixed
-	// window has to take it away, or the change is unreachable: the client has
-	// no way to send "no duration", and the contest refuses to validate with a
-	// duration it is not allowed to carry.
+	// The client cannot send "no duration", and fixed timing refuses one, so
+	// switching must drop it.
 	f := conteststest.NewFixture()
 	minutes := 90
 	c := f.Contests.Put(contests.Contest{
@@ -1015,10 +899,8 @@ func TestAContestCanBeSwitchedBackToAFixedWindow(t *testing.T) {
 }
 
 func TestStartingRefusesAContestWhoseContentWasTakenApartAfterPublishing(t *testing.T) {
-	// Content stays editable while published, deliberately — an organizer
-	// publishes to see the contest as participants will, and may still fix a
-	// typo. That leaves a window: publish, remove the story, start. The gate
-	// has to hold at the moment participants are actually let in.
+	// Content stays editable while published, so the gate must hold again at
+	// start.
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
 	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
@@ -1035,7 +917,6 @@ func TestStartingRefusesAContestWhoseContentWasTakenApartAfterPublishing(t *test
 	}
 }
 
-// changesIn returns the recorded change set of the last entry with that action.
 func changesIn(t *testing.T, f *conteststest.Fixture, action string) map[string]any {
 	t.Helper()
 
@@ -1054,9 +935,7 @@ func changesIn(t *testing.T, f *conteststest.Fixture, action string) map[string]
 }
 
 func TestAnEditRecordsWhatMovedAndWhatItWas(t *testing.T) {
-	// "Who moved the deadline, and what was it before" is the question asked
-	// months later. Recording the new state alone cannot answer the second
-	// half, and recording every field cannot answer the first.
+	// "Who moved the deadline, and what was it before" needs both halves.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	later := f.Now.Add(9 * time.Hour)
@@ -1085,9 +964,7 @@ func TestAnEditRecordsWhatMovedAndWhatItWas(t *testing.T) {
 }
 
 func TestAnEditDoesNotRecordFieldsTheFormMerelyResent(t *testing.T) {
-	// The settings form sends everything it holds. If all of it were recorded,
-	// every save would read as a rewrite of the contest and bury the one line
-	// that actually moved.
+	// The form resends everything; recording it all would bury what moved.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -1115,8 +992,7 @@ func TestAnEditDoesNotRecordFieldsTheFormMerelyResent(t *testing.T) {
 }
 
 func TestChangingTheSQLPolicyRecordsWhatWasLoosened(t *testing.T) {
-	// The one setting that decides how much power a participant gets. What it
-	// was before is the whole question after an incident.
+	// After an incident, the previous policy is the whole question.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -1160,8 +1036,7 @@ func TestChangingTheLanguagesRecordsTheSetItReplaced(t *testing.T) {
 }
 
 func TestAStatusChangeRecordsItTheSameWayAsEverythingElse(t *testing.T) {
-	// It already carried from/to under its own keys. One shape for every
-	// change is what lets the panel render them without knowing the action.
+	// One shape lets the panel render any change without knowing the action.
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
 
@@ -1179,9 +1054,7 @@ func TestAStatusChangeRecordsItTheSameWayAsEverythingElse(t *testing.T) {
 }
 
 func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
-	// It recorded nothing at all — an entry that says only that somebody
-	// touched the titles. The languages are the part worth keeping; the titles
-	// themselves are authored text, and the trail is not a version history.
+	// The trail is not a version history for authored text.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
@@ -1206,8 +1079,8 @@ func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
 	t.Fatalf("no %s entry", audit.ActionContestTranslations)
 }
 
-// Moving the freeze while the contest runs would either open the live table
-// for a moment or hide a table participants already saw; neither is a setting.
+// Moving the freeze while running would either briefly open the live table or
+// hide one participants saw.
 func TestUpdateRefusesToMoveTheFreezeWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -1223,8 +1096,7 @@ func TestUpdateRefusesToMoveTheFreezeWhileRunning(t *testing.T) {
 	}
 }
 
-// The label is the organiser's choice about names, not a property of the
-// result, and it may change while the contest runs.
+// The label is about names, not the result.
 func TestUpdateChangesTheLeaderboardLabelWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -1240,8 +1112,6 @@ func TestUpdateChangesTheLeaderboardLabelWhileRunning(t *testing.T) {
 	}
 }
 
-// A draft sets its freeze, and clears it again: "no freeze" has to be
-// sayable, not only "a different freeze".
 func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -1262,11 +1132,7 @@ func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1).
-
-// A contest that never mentions the penalty gets the same 20 minutes the
-// column default would give it, so a seed created before an organizer ever
-// opens the ICPC settings still has a sane value.
+// Matches the column default.
 func TestCreateDefaultsTheICPCPenaltyToTwenty(t *testing.T) {
 	f := conteststest.NewFixture()
 
@@ -1294,10 +1160,7 @@ func TestCreateHonoursAnExplicitICPCPenalty(t *testing.T) {
 	}
 }
 
-// UpdateCommand.ICPCPenaltyMin is a pointer for the same reason
-// LeaderboardFreezeMin's setting half is: nil has to mean "leave it alone",
-// and the field's own zero value (no penalty at all) is a configuration an
-// organizer can mean.
+// Nil means "leave it alone"; zero is a real setting (no penalty).
 func TestUpdateLeavesTheICPCPenaltyAloneWhenNotMentioned(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -1331,10 +1194,7 @@ func TestUpdateSetsTheICPCPenalty(t *testing.T) {
 	}
 }
 
-// The penalty is applied per submission, at the moment of answering; moving
-// it mid-run would make earlier answers disagree with later ones about how
-// much a wrong attempt cost, for a reason no participant could see — the
-// same reasoning that already refuses a scoring-mode change while running.
+// Earlier and later answers would disagree about what a wrong attempt cost.
 func TestUpdateRefusesToChangeTheICPCPenaltyWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)

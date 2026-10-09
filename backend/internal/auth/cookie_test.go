@@ -19,8 +19,6 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestSessionCookieIsNotReadableByScript(t *testing.T) {
-	// The single most valuable property of the cookie: an XSS bug on the page
-	// still cannot read the session token.
 	rec := httptest.NewRecorder()
 
 	NewCookieWriter(true).Set(rec, "token-value", time.Hour)
@@ -31,8 +29,6 @@ func TestSessionCookieIsNotReadableByScript(t *testing.T) {
 }
 
 func TestSessionCookieIsRestrictedToSameSiteRequests(t *testing.T) {
-	// SameSite is the first line against cross-site request forgery; the
-	// Origin check on mutating requests is the second.
 	rec := httptest.NewRecorder()
 
 	NewCookieWriter(true).Set(rec, "token-value", time.Hour)
@@ -53,8 +49,6 @@ func TestSessionCookieIsScopedToTheWholeSite(t *testing.T) {
 }
 
 func TestSessionCookieIsSecureWhenConfiguredSo(t *testing.T) {
-	// Whether the deployment is served over TLS is a deployment fact, not
-	// something to infer per request from a header the proxy may not set.
 	rec := httptest.NewRecorder()
 	writer := NewCookieWriter(true)
 
@@ -66,8 +60,6 @@ func TestSessionCookieIsSecureWhenConfiguredSo(t *testing.T) {
 }
 
 func TestSessionCookieIsNotSecureWhenConfiguredForPlainHTTP(t *testing.T) {
-	// A Secure cookie is dropped by the browser over plain HTTP, which would
-	// make a local stack without a certificate impossible to log into.
 	rec := httptest.NewRecorder()
 	writer := NewCookieWriter(false)
 
@@ -93,8 +85,6 @@ func TestClearSessionCookieExpiresIt(t *testing.T) {
 }
 
 func TestTheDeviceCookieIsHttpOnlySameSiteAndLongLived(t *testing.T) {
-	// The same protections as the session cookie: a script must not read it
-	// and a cross-site request must not carry it. Its lifetime is its own.
 	rec := httptest.NewRecorder()
 
 	NewCookieWriter(true).SetDevice(rec, "device-token", 30*24*time.Hour)

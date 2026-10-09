@@ -13,11 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// newReader assembles a Reader over in-memory stores. Its attempt stats and
-// its sequential gate both derive from the one submission store it returns,
-// as production derives both from the submissions table, so a test records
-// what a participant tried the way Submit does — through Insert, once — and
-// both read it back.
+// newReader derives attempt stats and the sequential gate from the one
+// submission store it returns, as production does from the submissions table.
 func newReader() (*contests.Reader, *conteststest.Stories, *conteststest.Questions, *conteststest.Submissions) {
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
@@ -28,8 +25,6 @@ func newReader() (*contests.Reader, *conteststest.Stories, *conteststest.Questio
 	return contests.NewReader(stories, questions, attempts, sequence), stories, questions, submissions
 }
 
-// submit records one answer through the submission store, with the question's
-// own cap and a deadline still ahead of the store's clock.
 func submit(t *testing.T, submissions *conteststest.Submissions, registrationID uuid.UUID, q contests.Question, correct bool, penalty int) {
 	t.Helper()
 	if _, err := submissions.Insert(t.Context(), contests.SubmissionRequest{
@@ -60,9 +55,8 @@ func TestStoryReturnsTheBodyInTheResolvedLanguage(t *testing.T) {
 	}
 }
 
-// The publish gate guarantees a body for every declared language while the
-// contest is running, but a defensive read must still refuse honestly rather
-// than show an empty page as if it were the story.
+// The publish gate makes this unreachable while running; the read must still
+// refuse rather than show an empty story.
 func TestStoryIsNotFoundWhenTheLanguageHasNoBody(t *testing.T) {
 	reader, stories, _, _ := newReader()
 	contestID := uuid.New()
@@ -83,8 +77,7 @@ func TestStoryIsNotFoundWhenTheContestHasNone(t *testing.T) {
 	}
 }
 
-// The one requirement section 6.1 is explicit about: a hidden question exists
-// fully but never reaches the participant's list.
+// §6.1.
 func TestQuestionsOmitsHiddenQuestions(t *testing.T) {
 	reader, _, questions, _ := newReader()
 	contestID := uuid.New()
@@ -113,10 +106,8 @@ func TestQuestionsOmitsHiddenQuestions(t *testing.T) {
 	}
 }
 
-// The reference answer must never appear on the participant's own type: there
-// is no field for it, which is the guarantee, not a filter that could be
-// forgotten. This test proves the visible question's wording came through
-// while nothing about answers did, by construction of ParticipantQuestion.
+// ParticipantQuestion has no field for reference answers; that, not a filter,
+// is the guarantee.
 func TestQuestionsNeverCarryReferenceAnswers(t *testing.T) {
 	reader, _, questions, _ := newReader()
 	contestID := uuid.New()
@@ -133,9 +124,7 @@ func TestQuestionsNeverCarryReferenceAnswers(t *testing.T) {
 	if len(found) != 1 || found[0].BodyMD != "Who did it?" {
 		t.Fatalf("found = %+v", found)
 	}
-	// ParticipantQuestion has no Answers field at all — if this ever compiles
-	// again with one added, the reviewer adding it should read this comment
-	// before wiring reference answers into it.
+	// Do not add an Answers field to ParticipantQuestion.
 }
 
 func TestQuestionsResolvesTheWordingToTheRequestedLanguage(t *testing.T) {
@@ -183,8 +172,7 @@ func TestQuestionsReportsAttemptsRemainingAndClosed(t *testing.T) {
 	submit(t, submissions, registrationID, capped, false, 0)
 	submit(t, submissions, registrationID, capped, false, 0)
 	submit(t, submissions, registrationID, solved, true, 0)
-	// unlimited and, implicitly, a fresh registration on capped: no entry at
-	// all, which must read as "never attempted" rather than an error.
+	// No entry for unlimited must read as "never attempted", not an error.
 
 	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", false)
 	if err != nil {
@@ -220,9 +208,7 @@ func TestQuestionsReportsAttemptsRemainingAndClosed(t *testing.T) {
 	}
 }
 
-// Finding 5: a reloaded screen has no other way to tell "closed because
-// solved" from "closed because every attempt is spent" — both looked like a
-// bare "Closed." before Correct and PointsAwarded existed on this type.
+// A reloaded screen needs these to tell "solved" from "out of attempts".
 func TestQuestionsReportsCorrectAndPointsAwarded(t *testing.T) {
 	reader, _, questions, submissions := newReader()
 	contestID := uuid.New()
@@ -244,8 +230,7 @@ func TestQuestionsReportsCorrectAndPointsAwarded(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Where?"}},
 	})
 
-	// Won on the second attempt, at 10 points less one wrong attempt's
-	// penalty of 2; and every attempt on the other one spent.
+	// Solved on the second attempt (10 less a penalty of 2); the other spent.
 	submit(t, submissions, registrationID, solved, false, 2)
 	submit(t, submissions, registrationID, solved, true, 2)
 	for range maxAttempts {
@@ -272,9 +257,7 @@ func TestQuestionsReportsCorrectAndPointsAwarded(t *testing.T) {
 	}
 }
 
-// A participant who exhausted every attempt without ever answering correctly
-// is closed too — the other half of "closed" (§6.1.1: answered correctly or
-// out of attempts).
+// §6.1.1: closed means answered correctly or out of attempts.
 func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	reader, _, questions, submissions := newReader()
 	contestID := uuid.New()
@@ -301,12 +284,8 @@ func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	}
 }
 
-// Finding 5: a question missing the resolved language is left out of the
-// list rather than served with an empty body — the same defensive choice
-// Story makes with ErrStoryNotFound, applied per question because this is a
-// list rather than one resource. The publish gate makes this unreachable for
-// a running contest, but the reader must still answer this way rather than
-// leak an empty-bodied entry.
+// Unreachable while running (publish gate), but the reader still drops it
+// rather than serve an empty body, as Story does with ErrStoryNotFound.
 func TestQuestionsOmitsAQuestionMissingTheResolvedLanguage(t *testing.T) {
 	reader, _, questions, _ := newReader()
 	contestID := uuid.New()
@@ -348,10 +327,7 @@ func TestQuestionsIsEmptyForAContestWithNoVisibleQuestions(t *testing.T) {
 	}
 }
 
-// Outside sequential progression nothing else gates a submission beyond
-// "closed", so CanAnswer must simply agree with !Closed for every question —
-// free progression and single-question mode have no frontier of their own
-// (finding 3).
+// Without a sequential frontier, CanAnswer is exactly !Closed.
 func TestQuestionsCanAnswerMatchesClosedOutsideSequentialProgression(t *testing.T) {
 	reader, _, questions, submissions := newReader()
 	contestID := uuid.New()
@@ -386,10 +362,7 @@ func TestQuestionsCanAnswerMatchesClosedOutsideSequentialProgression(t *testing.
 	}
 }
 
-// §6.1.1, finding 3: sequential progression only ever lets one question be
-// answered at a time — the one lowest in display order that is not yet
-// closed. A participant looking at several unclosed questions must be able
-// to tell which one that is without probing each and collecting refusals.
+// §6.1.1: only the lowest unclosed question in display order is answerable.
 func TestQuestionsMarksOnlyTheSequentialFrontierAnswerable(t *testing.T) {
 	reader, _, questions, _ := newReader()
 	contestID := uuid.New()
@@ -421,8 +394,6 @@ func TestQuestionsMarksOnlyTheSequentialFrontierAnswerable(t *testing.T) {
 	}
 }
 
-// The frontier moves forward, by exactly one question, once the question
-// holding it closes.
 func TestQuestionsMovesTheSequentialFrontierOnceAQuestionCloses(t *testing.T) {
 	reader, _, questions, submissions := newReader()
 	contestID := uuid.New()
@@ -437,8 +408,6 @@ func TestQuestionsMovesTheSequentialFrontierOnceAQuestionCloses(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
 	})
 
-	// Close the first question with a correct answer, which both the attempt
-	// stats Reader reads and the sequential gate derive from.
 	submit(t, submissions, registrationID, first, true, 0)
 
 	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)

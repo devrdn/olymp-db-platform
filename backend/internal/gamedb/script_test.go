@@ -13,8 +13,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 )
 
-// readAllStatements drains a ScriptReader, failing the test on any error
-// other than the io.EOF that means "no more statements".
 func readAllStatements(t *testing.T, src string) []gamedb.Statement {
 	t.Helper()
 
@@ -39,9 +37,7 @@ func TestAnEmptyScriptYieldsNoStatements(t *testing.T) {
 	}
 }
 
-// A semicolon means nothing while the reader is inside a string, an
-// identifier or a dollar-quoted body — this is the one property a naive
-// strings.Split(";") does not have, and the whole reason this file exists.
+// A semicolon means nothing inside a string, identifier or dollar-quote.
 func TestASemicolonInsideASingleQuotedLiteralDoesNotEndTheStatement(t *testing.T) {
 	t.Parallel()
 	const script = `SELECT ';' AS x;`
@@ -78,9 +74,7 @@ func TestASemicolonInsideANamedTagDollarQuoteDoesNotEndTheStatement(t *testing.T
 	}
 }
 
-// A parameter placeholder must never be mistaken for the start of a
-// dollar-quote: PostgreSQL's own tag grammar forbids a tag starting with a
-// digit, which is what tells $1 apart from the opening of $1...$1.
+// A tag cannot start with a digit, which tells $1 apart from a dollar-quote.
 func TestADollarPlaceholderInAFunctionBodyIsNotMistakenForADollarQuote(t *testing.T) {
 	t.Parallel()
 	const script = `CREATE FUNCTION f(int) RETURNS int LANGUAGE sql AS $$SELECT $1 + 1;$$;`
@@ -99,10 +93,6 @@ func TestADoubledQuoteInsideALiteralIsALiteralQuoteNotTheEnd(t *testing.T) {
 	}
 }
 
-// An extended string can hold a literal quote escaped with a backslash
-// rather than by doubling — the one place a bare backslash inside a string
-// actually means something in PostgreSQL (standard_conforming_strings is on
-// everywhere else).
 func TestABackslashEscapedQuoteInAnExtendedStringDoesNotEndTheString(t *testing.T) {
 	t.Parallel()
 	const script = `SELECT E'\'' AS x;`
@@ -112,14 +102,8 @@ func TestABackslashEscapedQuoteInAnExtendedStringDoesNotEndTheString(t *testing.
 	}
 }
 
-// The semicolon between the inner comment's own "*/" and the outer's real
-// one is the part that actually proves nesting: without it, a reader that
-// closed on the first "*/" (C's rule, not PostgreSQL's) would still produce
-// the same Text for this script by accident — there would be nothing after
-// the wrongly-early close but more comment text and the statement's real
-// terminator. With a semicolon sitting right there, closing early hands it
-// back as a second, truncated statement instead of leaving it inside the
-// comment where it belongs.
+// The ';' between the inner and outer "*/" is what proves nesting: a reader
+// closing on the first "*/" (C's rule) would return it as a second statement.
 func TestBlockCommentsNestUnlikeC(t *testing.T) {
 	t.Parallel()
 	const script = `SELECT /* outer /* inner */ ; still outer */ 1;`
@@ -147,9 +131,7 @@ func TestAStatementWithNoTrailingSemicolonAtEOFIsStillReturned(t *testing.T) {
 	}
 }
 
-// The same case, but as the second statement of a file that simply was never
-// given a final newline — the shape a hand-saved script is very likely to
-// have.
+// The shape of a hand-saved script.
 func TestAFileWithNoFinalNewlineStillYieldsItsLastStatement(t *testing.T) {
 	t.Parallel()
 	got := readAllStatements(t, "SELECT 1;\nSELECT 2")
@@ -161,17 +143,13 @@ func TestAFileWithNoFinalNewlineStillYieldsItsLastStatement(t *testing.T) {
 	}
 }
 
-// The line a build failure is reported against is what the console's viewer
-// jumps to, so it has to survive blank lines, comments and multi-line
-// statements between the file's start and the one that matters.
+// The console's viewer jumps to this line.
 func TestEachStatementRemembersTheLineItStartedOn(t *testing.T) {
 	t.Parallel()
 	const script = "SELECT 1;\n\n-- a comment\nSELECT 2;\nSELECT\n  3;\n"
 	got := readAllStatements(t, script)
-	// Statement 2 starts on the comment line: Line marks the first
-	// non-whitespace byte after the previous ';', and a leading comment is
-	// content, not whitespace — the same rule that lets a pg_dump comment
-	// stay attached to the COPY it precedes (see copyFromStdinHeader).
+	// Statement 2 starts on the comment line: a leading comment is content,
+	// not whitespace.
 	want := []int{1, 3, 5}
 	if len(got) != len(want) {
 		t.Fatalf("got %d statements, want %d: %+v", len(got), len(want), got)
@@ -183,12 +161,8 @@ func TestEachStatementRemembersTheLineItStartedOn(t *testing.T) {
 	}
 }
 
-// pg_dump can write \connect into its plain-text output — psql's own
-// command, never SQL, and PostgreSQL's "syntax error at or near \" explains
-// nothing about what actually went wrong. The reader has to refuse it
-// itself, by line, before Exec ever sees it. (\restrict and \unrestrict are
-// the one pair of backslash commands this does *not* apply to — see
-// TestRestrictAndUnrestrictAreSkippedRatherThanRefused.)
+// pg_dump can write \connect, which is psql's, not SQL; PostgreSQL's
+// "syntax error at or near \" would explain nothing.
 func TestABackslashCommandAtLineStartIsRefusedByLineAndName(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader("SELECT 1;\n\\connect otherdb\nSELECT 2;\n"))
@@ -213,14 +187,8 @@ func TestABackslashCommandAtLineStartIsRefusedByLineAndName(t *testing.T) {
 	}
 }
 
-// \restrict and \unrestrict are the exception: pg_dump 16.10/17.6/18 and
-// newer write \restrict <token> right after the dump header and
-// \unrestrict <token> as the very last line, unconditionally and with no
-// flag to suppress it (see script.go's own comment on this case for why
-// letting just this pair through is not a weaker check than refusing every
-// other backslash command). The reader must skip the line silently rather
-// than refuse the script — an organiser exporting a dump with a stock
-// pg_dump has no way to remove it.
+// pg_dump 16.10/17.6/18+ always writes \restrict and \unrestrict, and an
+// organiser cannot turn them off.
 func TestRestrictAndUnrestrictAreSkippedRatherThanRefused(t *testing.T) {
 	t.Parallel()
 	const script = "\\restrict abc123\n" +
@@ -233,19 +201,14 @@ func TestRestrictAndUnrestrictAreSkippedRatherThanRefused(t *testing.T) {
 	if got[0].Text != "SELECT 1;" {
 		t.Fatalf("statement text = %q", got[0].Text)
 	}
-	// The skipped \restrict line must not be counted: the statement starts
-	// on line 2, not line 1.
+	// The skipped line is not counted: the statement starts on line 2.
 	if got[0].Line != 2 {
 		t.Fatalf("statement line = %d, want 2", got[0].Line)
 	}
 }
 
-// Skipping the directive is only safe where pg_dump writes it: between two
-// statements, with nothing of a statement buffered yet. A file assembled by
-// hand, or two dumps concatenated, can put it in the middle of one — and
-// dropping the line there would drop everything read before it, executing a
-// lone ';' instead of the INSERT. A build that "succeeded" without part of
-// its data is the one outcome worse than a refusal.
+// Mid-statement, dropping the line would drop the buffered INSERT and run
+// a lone ';'.
 func TestARestrictInsideAStatementIsRefusedRatherThanDroppingIt(t *testing.T) {
 	t.Parallel()
 	const script = "INSERT INTO answers VALUES (1, 'secret')\n" +
@@ -269,11 +232,8 @@ func TestARestrictInsideAStatementIsRefusedRatherThanDroppingIt(t *testing.T) {
 	}
 }
 
-// The other side of the same boundary, and the layout every real dump has:
-// pg_dump writes its header comment block *before* the \restrict line, so
-// "nothing accumulated" has to mean "nothing but whitespace and comments" —
-// counting a comment as content would refuse every dump the tool produces
-// (TestARealPgDumpFileIsReadInFull is the same claim against the real file).
+// Every real dump has a header comment block before \restrict, so comments
+// must not count as a buffered statement.
 func TestARestrictAfterOnlyCommentsIsStillSkipped(t *testing.T) {
 	t.Parallel()
 	const script = "--\n-- PostgreSQL database dump\n--\n\n" +
@@ -288,9 +248,7 @@ func TestARestrictAfterOnlyCommentsIsStillSkipped(t *testing.T) {
 	}
 }
 
-// A backslash that is not the very first byte of its line is not a psql
-// command, even when the text right after it reads like one — only column
-// zero, outside every quote and comment, means that.
+// Only column zero, outside every quote and comment, marks a command.
 func TestABackslashNotAtLineStartIsNotMistakenForACommand(t *testing.T) {
 	t.Parallel()
 	const script = "SELECT 1 -- see \\connect below, but this is a comment\n;"
@@ -300,13 +258,8 @@ func TestABackslashNotAtLineStartIsNotMistakenForACommand(t *testing.T) {
 	}
 }
 
-// The other unbounded reader in this file, and the one with no ceiling at
-// all until this test: readPsqlCommandWord accumulated bytes until it met a
-// space, a tab or a newline, so a line that opens with a backslash and never
-// meets one took the rest of the file — up to GAME_UPLOAD_MAX_FILE_BYTES of
-// it — into a single []byte inside the API process serving participants, and
-// then copied it a second time into the refusal's own message (CLAUDE.md rule
-// 12: the bound belongs where the bytes arrive).
+// Without a ceiling the word would buffer the rest of the file (CLAUDE.md
+// rule 12).
 func TestABackslashCommandWordWithNoTerminatorIsRefusedRatherThanBuffered(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader(`\` + strings.Repeat("x", 8<<20)))
@@ -316,8 +269,7 @@ func TestABackslashCommandWordWithNoTerminatorIsRefusedRatherThanBuffered(t *tes
 	if !errors.As(err, &syn) {
 		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
 	}
-	// The refusal is the only place the word survives to, so its size is what
-	// says whether the word itself was ever allowed to grow.
+	// The refusal is where the word survives, so its size shows whether it grew.
 	if len(syn.Message) > 512 {
 		t.Fatalf("the refusal carries %d bytes of the script back", len(syn.Message))
 	}
@@ -338,9 +290,6 @@ func TestAStatementLongerThanTheBufferIsRefused(t *testing.T) {
 	}
 }
 
-// An open quote, comment or dollar-quote that never closes before EOF is a
-// script the reader must refuse, not a statement it silently hands back
-// truncated.
 func TestAnUnterminatedStringAtEOFIsRefused(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader(`SELECT 'never closes`))
@@ -351,9 +300,8 @@ func TestAnUnterminatedStringAtEOFIsRefused(t *testing.T) {
 	}
 }
 
-// The core case: a COPY block's data streams through unmodified — \N stays
-// \N, an escaped tab stays escaped, and a row that merely starts with a
-// backslash (but is not exactly "\.") is data, not the terminator.
+// \N and escapes stream unmodified, and a row merely starting with a
+// backslash is data, not the terminator.
 func TestACopyFromStdinBlockStreamsItsDataAndStopsAtTheTerminator(t *testing.T) {
 	t.Parallel()
 	const script = "COPY t (a, b) FROM stdin;\n" +
@@ -394,8 +342,6 @@ func TestACopyFromStdinBlockStreamsItsDataAndStopsAtTheTerminator(t *testing.T) 
 	}
 }
 
-// pg_dump always precedes a table's data with a comment block; the reader
-// has to see past it to recognise the COPY that follows.
 func TestACopyFromStdinIsRecognisedAfterALeadingComment(t *testing.T) {
 	t.Parallel()
 	const script = "--\n-- Data for Name: suspects; Type: TABLE DATA\n--\n\n" +
@@ -408,10 +354,7 @@ func TestACopyFromStdinIsRecognisedAfterALeadingComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next(): %v", err)
 	}
-	// The comment stays part of CopyHeader (see copyFromStdinHeader's own
-	// doc) — PostgreSQL parses a leading comment before a real statement
-	// exactly as if it were not there, so the header remains valid SQL to
-	// hand to CopyFrom either way.
+	// The comment stays in CopyHeader; PostgreSQL ignores it.
 	if !strings.HasSuffix(stmt.CopyHeader, "COPY public.suspects (id, name) FROM stdin") {
 		t.Fatalf("CopyHeader = %q", stmt.CopyHeader)
 	}
@@ -424,18 +367,9 @@ func TestACopyFromStdinIsRecognisedAfterALeadingComment(t *testing.T) {
 	}
 }
 
-// What decides a COPY block is the statement's first *token*, and a comment
-// is not one.
-//
-// The pattern that used to answer this looked at the statement's raw text,
-// where an alternative matching a line comment can be backtracked into: RE2
-// stopped it halfway through the comment, found `copy` inside the comment
-// itself, and then reached across the newline into the statement's own body
-// for `from stdin`. The price is not a missed COPY but the opposite — an
-// organiser's perfectly good CREATE TABLE handed to pgconn.PgConn.CopyFrom,
-// which answers with an error that is not a *pgconn.PgError at all, so the
-// author is told "internal error, ask an administrator" about SQL that works
-// (CLAUDE.md rule 1).
+// Only the first token decides, and a comment is not one. Matching raw text
+// once found `copy` in a comment and `from stdin` in the statement body,
+// sending a plain CREATE TABLE to CopyFrom.
 func TestOnlyTheFirstRealTokenDecidesWhetherAStatementIsACopyBlock(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -491,12 +425,8 @@ func TestOnlyTheFirstRealTokenDecidesWhetherAStatementIsACopyBlock(t *testing.T)
 	}
 }
 
-// The same reasoning the \restrict case in this file already applies, at the
-// one other place the reader throws bytes away: after a COPY header the rest
-// of its line was discarded outright, so a file writing
-// `COPY t FROM stdin; SELECT setval(...);` lost the second statement without
-// a word. "A game that built successfully without part of its data is worse
-// than one that refused" — script.go's own sentence, for the identical case.
+// A statement after the header on the same line cannot run; dropping it
+// silently would build a game missing part of its data.
 func TestAStatementAfterACopyHeaderOnTheSameLineIsRefusedRatherThanDropped(t *testing.T) {
 	t.Parallel()
 	const script = "COPY t (a) FROM stdin; SELECT setval('t_id_seq', 100);\n" +
@@ -517,8 +447,6 @@ func TestAStatementAfterACopyHeaderOnTheSameLineIsRefusedRatherThanDropped(t *te
 	}
 }
 
-// The whitespace pg_dump itself can leave after the header's semicolon is
-// not a statement, and must not be refused as one.
 func TestTrailingWhitespaceAfterACopyHeaderIsNotAStatement(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader("COPY t (a) FROM stdin;  \t\r\n1\n\\.\n"))
@@ -539,9 +467,6 @@ func TestTrailingWhitespaceAfterACopyHeaderIsNotAStatement(t *testing.T) {
 	}
 }
 
-// Next refuses to run again while a COPY block's data has not been drained
-// — the reader has no way to skip it itself without duplicating CopyData's
-// own job of finding "\.".
 func TestNextRefusesWhileACopyBlocksDataIsUnread(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader("COPY t FROM stdin;\n1\n\\.\nSELECT 1;\n"))
@@ -553,8 +478,6 @@ func TestNextRefusesWhileACopyBlocksDataIsUnread(t *testing.T) {
 	}
 }
 
-// A COPY block truncated before its terminator is a malformed file, not
-// silently accepted data.
 func TestACopyBlockWithNoTerminatorIsRefused(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader("COPY t FROM stdin;\n1\tfirst\n"))
@@ -568,11 +491,8 @@ func TestACopyBlockWithNoTerminatorIsRefused(t *testing.T) {
 	}
 }
 
-// endlessBytes yields the same byte for ever. It stands in for COPY data
-// that never reaches a newline without putting a multi-megabyte string
-// literal in the test binary — and, wrapped in an io.LimitReader, it is also
-// how the test below stays deterministic instead of running until something
-// runs out of memory.
+// endlessBytes yields one byte forever; under io.LimitReader it stands in
+// for COPY data with no newline.
 type endlessBytes byte
 
 func (b endlessBytes) Read(p []byte) (int, error) {
@@ -582,11 +502,8 @@ func (b endlessBytes) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// The bound COPY data is read under (CLAUDE.md rule 12). A dump whose data
-// line never ends is untrusted input like any other, and the reader must
-// refuse it with a line number rather than grow one buffer until the API
-// process — the same one serving the olympiad, since the build runs as a
-// background task inside it — is killed for the memory.
+// CLAUDE.md rule 12: a never-ending data line is refused with a line number,
+// not buffered.
 func TestALineOfCopyDataPastTheBoundIsRefused(t *testing.T) {
 	t.Parallel()
 	src := io.MultiReader(
@@ -612,10 +529,8 @@ func TestALineOfCopyDataPastTheBoundIsRefused(t *testing.T) {
 	}
 }
 
-// The other side of that bound: a long row is ordinary in a real dump — one
-// text or bytea column is enough — so the limit must be well clear of what a
-// dump legitimately contains, and a line under it must stream through
-// untouched.
+// A long row is ordinary (one text or bytea column), so the bound must sit
+// well above it.
 func TestALongLineOfCopyDataUnderTheBoundIsStreamedWhole(t *testing.T) {
 	t.Parallel()
 	const wide = 1 << 20 // 1 MiB in one column
@@ -638,22 +553,12 @@ func TestALongLineOfCopyDataUnderTheBoundIsStreamedWhole(t *testing.T) {
 	}
 }
 
-// One Read is one CopyData message on the wire and one write(2) into the
-// socket: pgconn.PgConn.CopyFrom offers this exact buffer and hands whatever
-// comes back straight to pgproto3, which flushes and writes it unbuffered.
-// So a Read that returns one hundred-byte row because that is the first row
-// it read is a dump sent to PostgreSQL one syscall at a time — thirty million
-// of them for a three-gigabyte dump, in the process that is also serving the
-// olympiad.
-//
-// Asserted as "the buffer comes back nearly full" rather than as a count of
-// syscalls, because the buffer is the only thing this side controls; the row
-// size below is deliberately a divisor of nothing in particular, so passing
-// requires actually packing rows rather than getting lucky.
+// CopyFrom sends each Read as one unbuffered CopyData message, so a Read
+// returning one row is one syscall per row. The row size divides nothing in
+// particular, so passing requires packing rows.
 func TestOneReadOfCopyDataFillsTheCallersBuffer(t *testing.T) {
 	t.Parallel()
-	// The buffer pgconn.PgConn.CopyFrom actually offers, and a row length no
-	// wider than a dump's ordinary ones.
+	// The buffer CopyFrom offers, and an ordinary row length.
 	const copyFromBuffer = 65531
 	row := strings.Repeat("x", 99) + "\n"
 	rows := (copyFromBuffer / len(row)) * 4
@@ -676,15 +581,12 @@ func TestOneReadOfCopyDataFillsTheCallersBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Read: %v", err)
 	}
-	// A whole row may not fit at the end, so the last partial one is split
-	// rather than left out: what must never happen is coming back after one
-	// row of a block that has thousands left.
+	// The last row may be split, but one row per Read must never happen.
 	if n <= copyFromBuffer-len(row) {
 		t.Fatalf("one Read returned %d of %d bytes — about %d rows, not a full buffer",
 			n, copyFromBuffer, n/len(row))
 	}
 
-	// And the block still streams through byte for byte.
 	rest, err := io.ReadAll(data)
 	if err != nil {
 		t.Fatalf("reading the rest: %v", err)
@@ -697,14 +599,9 @@ func TestOneReadOfCopyDataFillsTheCallersBuffer(t *testing.T) {
 	}
 }
 
-// TestARealPgDumpFileIsReadInFull is the regression this package was
-// missing: every earlier test constructs its own script by hand, so all of
-// them agreed with what the reader expects a dump to look like. This one
-// instead reads an actual `pg_dump --no-owner --no-privileges` text-format
-// dump (PostgreSQL 16.15, one table) byte for byte off disk — the
-// \restrict / \unrestrict pair included, since that is what the real tool
-// writes and organisers cannot turn off. If the reader ever refuses this
-// file again, this test is the one that will say so.
+// TestARealPgDumpFileIsReadInFull reads an actual `pg_dump --no-owner
+// --no-privileges` dump (PostgreSQL 16.15), \restrict pair included, rather
+// than a hand-made script.
 func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 	t.Parallel()
 
@@ -716,17 +613,10 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 
 	r := gamedb.NewScriptReader(f)
 
-	// Every statement the file contains, by the source line it starts on —
-	// which is both the count and the identity of each one, so a statement
-	// dropped, split or invented shows up as a line rather than as a number
-	// nobody can place. Reading down testdata/pg_dump_16_languages.sql:
-	// eleven SET, one SELECT pg_catalog.set_config, CREATE TABLE, the COPY
-	// header, and ALTER TABLE ... ADD CONSTRAINT — fifteen. The first starts
-	// at 7 rather than 10 because pg_dump's "Dumped from database version"
-	// comment block belongs to the statement that follows it (Statement.Text
-	// keeps a leading comment). The \restrict on line 4 and the \unrestrict
-	// on line 62 must add none of their own, which is what this file is
-	// here to prove; blank lines between SETs must not add any either.
+	// Each statement by its start line, so a dropped, split or invented one
+	// shows up as a line: eleven SET, one set_config, CREATE TABLE, the COPY
+	// header and ALTER TABLE. The first starts at 7 because the header comment
+	// belongs to it; \restrict (line 4) and \unrestrict (line 62) add none.
 	wantLines := []int{7, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 23, 25, 38, 49}
 	const wantCopyAt = 38
 
@@ -774,27 +664,9 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 	}
 }
 
-// The lexer above reads a script in exactly one dialect: the one
-// standard_conforming_strings=on defines, where a backslash inside '...' is
-// an ordinary character and only E'...' processes escapes (see
-// isExtendedStringPrefix's own doc). That is an assumption about the *server*,
-// not about the file, and a dump can move the server out from under it: a
-// pg_dump taken from a database that had the setting off writes
-// `SET standard_conforming_strings = off;` at the top, and from that
-// statement onward the two disagree about where a literal ends.
-//
-// The disagreement is not cosmetic. `INSERT INTO notes VALUES ('a\'); SELECT
-// 1;` is two statements to this reader and, to a server with the setting off,
-// one unterminated literal that swallows the second — so at best the build
-// fails with a message about the wrong line, and at worst two statements are
-// executed as text neither the author nor this reader intended. Pinning the
-// setting on the build connection does not help: the script's own SET runs
-// after ours and wins.
-//
-// So the reader refuses it, by name and with the line, which is the same
-// answer it gives a psql meta-command a dump left in — a fact about the file
-// that a person can act on (re-export it), not a verdict PostgreSQL could
-// have explained.
+// The reader assumes standard_conforming_strings=on. With it off,
+// `('a\'); SELECT 1;` is one literal to the server and two statements here,
+// and the script's SET would override the connection's. Refused by line.
 func TestASetThatTurnsOffStandardConformingStringsIsRefusedByLine(t *testing.T) {
 	t.Parallel()
 	r := gamedb.NewScriptReader(strings.NewReader(
@@ -820,11 +692,8 @@ func TestASetThatTurnsOffStandardConformingStringsIsRefusedByLine(t *testing.T) 
 	}
 }
 
-// The form every modern pg_dump writes says on, which is the dialect this
-// reader already assumes — nothing to refuse, and refusing it would turn away
-// every correctly exported dump there is. RESET is refused, though: it hands
-// the setting back to whatever the cluster's own configuration says, which
-// this process does not decide and cannot read from here.
+// On is the dialect already assumed, and every modern pg_dump writes it.
+// RESET is refused: it defers to the cluster's configuration.
 func TestSettingStandardConformingStringsOnIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	for _, statement := range []string{
@@ -844,11 +713,8 @@ func TestSettingStandardConformingStringsOnIsLeftAlone(t *testing.T) {
 	}
 }
 
-// The three shapes a game's own bytes reach this reader in, measured against
-// each other rather than in the abstract: the point of the third case is that
-// it holds the same bytes as the second in a hundredth of the statements, so a
-// gap between them says the cost is the per-statement work and a gap between
-// both and the first says the cost is the scanning loop itself.
+// The third case holds the second's bytes in a hundredth of the statements,
+// separating per-statement cost from scanning cost.
 //
 // Run with `go test -bench Reader -benchmem ./internal/gamedb/`.
 func BenchmarkScriptReaderCopyDump(b *testing.B) {
@@ -887,8 +753,7 @@ func benchmarkScriptReader(b *testing.B, script string) {
 	}
 }
 
-// copyDumpBytes is roughly bytes of a pg_dump COPY block — the shape whose
-// rows never touch the statement loop at all.
+// copyDumpBytes is roughly bytes of a pg_dump COPY block.
 func copyDumpBytes(size int) string {
 	var b strings.Builder
 	b.WriteString("COPY public.guests (id, full_name, city) FROM stdin;\n")
@@ -899,9 +764,8 @@ func copyDumpBytes(size int) string {
 	return b.String()
 }
 
-// insertDumpBytes is roughly bytes of the same data written as INSERTs, with
-// rowsPerStatement rows in each — one row each is what pg_dump --inserts and
-// every MySQL or SQLite conversion produces.
+// insertDumpBytes is roughly bytes of the same data as INSERTs, with
+// rowsPerStatement rows in each (1 is what pg_dump --inserts writes).
 func insertDumpBytes(size, rowsPerStatement int) string {
 	var b strings.Builder
 	for i := 0; b.Len() < size; {
@@ -918,21 +782,11 @@ func insertDumpBytes(size, rowsPerStatement int) string {
 	return b.String()
 }
 
-// Both ways a script can be refused name the line in one shape, and it is
-// the shape the upload console parses.
-//
-// `frontend/app/(admin)/contests/[contestId]/game/game-upload.tsx` runs
-// `/^line (\d+):/i` over build_error to offer "jump to line" over the file
-// an organiser has just uploaded. That regular expression is repeated here
-// verbatim (Go's own syntax for it) because a format written on one side and
-// parsed on the other has nothing holding the two together otherwise: change
-// the prefix and the console simply stops offering the jump, with no error
-// on either side and no test failing anywhere.
-//
-// The two error types live in two files and used to write the literal each;
-// scriptErrorLinePrefix is now the single place, and this is what says so.
+// Both refusals name the line in the shape the upload console parses
+// (game-upload.tsx). The regular expression is repeated here because
+// nothing else holds the two sides together.
 func TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses(t *testing.T) {
-	// Exactly the console's own regular expression.
+	// The console's regular expression.
 	console := regexp.MustCompile(`(?i)^line (\d+):`)
 
 	for name, err := range map[string]error{
@@ -952,9 +806,7 @@ func TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses(t *testing.T) {
 		})
 	}
 
-	// An error PostgreSQL did not locate carries no prefix at all: the
-	// console must find nothing rather than be sent to a line that does not
-	// exist.
+	// An unlocated error carries no prefix.
 	unlocated := (&gamedb.ScriptError{Message: "the cluster is out of disk"}).Error()
 	if console.MatchString(unlocated) {
 		t.Fatalf("an unlocated failure offered the console a line to jump to: %q", unlocated)

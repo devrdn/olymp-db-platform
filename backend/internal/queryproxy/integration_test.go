@@ -25,21 +25,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Finding 2: every other test in this package hands queryproxy.Service a
-// fake for People, so the one case the deployment always hits on a fresh
-// registration — StartedAt is NULL — was exactly what the fakes hid. This
-// file assembles the façade against the real repositories instead
-// (postgres.NewRegistrations, postgres.NewContests), which is the only way
-// to prove queryproxy and the schema actually agree about what "started"
-// means (CLAUDE.md rule 10). Games, the database pool and the Query Runner
-// stay fake: they answer a question this test is not asking.
-//
-// `make test-db` is what runs this file against a real database; without
-// CORE_DB_DSN it skips, same as every test in internal/postgres.
+// These tests assemble the façade against the real repositories
+// (postgres.NewRegistrations, postgres.NewContests), because the fakes hide
+// what the schema does, such as a NULL started_at (CLAUDE.md rule 10). Games,
+// the database pool and the Query Runner stay fake. Without CORE_DB_DSN they
+// skip; `make test-db` runs them.
 
 // integrationPool opens the test database named by CORE_DB_DSN, or skips.
-// storagetest refuses a database that is not a test database, which matters
-// here more than anywhere: the fixtures below are committed, not rolled back.
+// storagetest refuses a non-test database, which matters here: these fixtures
+// are committed, not rolled back.
 func integrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, err := storagetest.OpenCore(context.Background(), nil)
@@ -53,7 +47,6 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// makeIntegrationUser stores an account the fixtures below hang off.
 func makeIntegrationUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, login string) uuid.UUID {
 	t.Helper()
 	created, err := postgres.NewUsers(pool).Create(ctx, users.User{
@@ -65,18 +58,10 @@ func makeIntegrationUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	return created.ID
 }
 
-// makeRunningIndividualContest inserts a contest already running under
-// individual timing, with the exact fields contests.Deadline (and, since
-// finding 1, the gate's own window check) read. Direct SQL rather than the
-// contests service: reaching "running" through the service means walking
-// draft → published → running, which is the lifecycle package's own concern
-// and only noise here.
-//
-// startsAt is a parameter rather than the database's own now() minus an
-// interval: the test below drives queryproxy with its own pinned clock
-// (WithClock), which has nothing to do with the wall-clock time this fixture
-// is created at, and the gate compares starts_at against that pinned
-// clock, not against when the row was inserted.
+// makeRunningIndividualContest inserts a running individual-timing contest
+// with direct SQL, skipping the lifecycle the contests service enforces.
+// startsAt is a parameter because the gate compares it against the test's
+// pinned clock, not the database's now().
 func makeRunningIndividualContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, durationMin int, startsAt, endsAt time.Time) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -90,12 +75,9 @@ func makeRunningIndividualContest(t *testing.T, ctx context.Context, pool *pgxpo
 	return id
 }
 
-// TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCannotAfterTheirDeadline
-// is the guarantee finding 2 asks for, proven against the real schema: the
-// first query from an individual-timing participant who has never started
-// succeeds and starts their clock, and a query after their own deadline —
-// started_at + duration_min — is refused, even though the contest's own
-// status and window are both still "running".
+// The first query of a never-started individual participant succeeds and
+// starts their clock; a query past started_at + duration_min is refused while
+// the contest itself is still running.
 func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCannotAfterTheirDeadline(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -103,15 +85,8 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
 	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
 	const durationMin = 10
-	// "Now" is pinned and advanced by the test rather than raced against the
-	// wall clock: Run uses the same clock for both starting the participant
-	// and comparing their deadline, so the two calls below are exactly ten
-	// minutes and one second apart from the façade's own point of view. The
-	// contest's own starts_at has to be pinned against this same clock, not
-	// the database's own now(): the gate (finding 1) compares starts_at
-	// to whatever clock Run is given, and a fixture stamped by the real wall
-	// clock would place a fixed 2026 test date outside a window that opened
-	// today.
+	// A pinned clock, which starts_at must also be set against, so the gate's
+	// window check uses the same time as the deadline check.
 	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	contestID := makeRunningIndividualContest(t, ctx, pool, author, durationMin, clock.Add(-time.Hour), clock.Add(24*time.Hour))
 	t.Cleanup(func() {
@@ -150,24 +125,18 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 		t.Fatalf("status = %q, want %q", stored.Status, contests.RegistrationActive)
 	}
 
-	// Still well inside the participant's own ten minutes: unaffected.
 	clock = clock.Add(5 * time.Minute)
 	if _, err := service.Run(ctx, cmd); err != nil {
 		t.Fatalf("a query within the participant's own window: %v", err)
 	}
 
-	// Past started_at + duration_min, even though the contest's own status
-	// and window are both still "running" — the defect finding 1 fixed, now
-	// proven against the schema rather than a fake that could not have hidden
-	// it either way.
+	// Past started_at + duration_min while the contest is still running.
 	clock = clock.Add(durationMin * time.Minute)
 	if _, err := service.Run(ctx, cmd); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("a query past the participant's own deadline: error = %v, want ErrDeadlinePassed", err)
 	}
 }
 
-// makeRunningFixedContest inserts a contest already running under fixed
-// timing, sharing one window for every participant.
 func makeRunningFixedContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, endsAt time.Time) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -181,12 +150,8 @@ func makeRunningFixedContest(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	return id
 }
 
-// TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck proves, on
-// the real schema rather than a fake, the exact question the task brief ends
-// on: can a student read another contest's business, a disqualified
-// participant's own contest, or a contest that is not running, through
-// Access — the one admission this package now shares between the SQL console
-// and the participant-facing story/questions endpoints.
+// Access refuses another contest's stranger, a disqualified participant and
+// a contest past its end, against the real schema.
 func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -237,45 +202,34 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 		fiveSecondGate,
 	)
 
-	// The enrolled participant of the running contest gets in.
 	if _, _, err := service.Access(ctx, running, enrolled, netip.Addr{}); err != nil {
 		t.Fatalf("an enrolled participant of a running contest was refused: %v", err)
 	}
 
-	// A stranger to this contest — enrolled somewhere else entirely — gets
-	// exactly the same refusal a caller naming a contest ID that names
-	// nothing at all would (ErrNotAParticipant), never a 404 that would
-	// confirm this contest exists and never anything else about it.
+	// A stranger gets the same refusal as a contest that does not exist, so the
+	// answer never confirms the contest exists.
 	if _, _, err := service.Access(ctx, running, stranger, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a stranger to this contest: error = %v, want ErrNotAParticipant", err)
 	}
 
-	// A contest ID that names nothing at all reads the same way.
 	if _, _, err := service.Access(ctx, uuid.New(), enrolled, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a contest that does not exist: error = %v, want ErrNotAParticipant", err)
 	}
 
-	// A disqualified participant of this very contest is refused the same
-	// way — disqualification must not read as "not registered" to the
-	// caller, but it must read as the same code a stranger gets.
+	// Disqualified reads as the same code a stranger gets.
 	if _, _, err := service.Access(ctx, running, disqualified, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a disqualified participant: error = %v, want ErrNotAParticipant", err)
 	}
 
-	// A contest past its own ends_at is refused even though nothing here ever
-	// flips contests.status to finished — the same deadline formula Run
-	// checks before taking a query.
+	// Past ends_at is refused although nothing flips status to finished.
 	if _, _, err := service.Access(ctx, notRunningAnymore, enrolled, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("a contest past its own deadline: error = %v, want ErrDeadlinePassed", err)
 	}
 }
 
-// TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema is the
-// same guarantee CLAUDE.md rule 11 asks for: the fact that closes the console
-// is decided in SQL (postgres.Answerable) and applied in Go
-// (queryproxy.Service.Run), so it is proven across that boundary rather than
-// on either side of it. The fakes elsewhere in this package cannot see a
-// disagreement between the query and the schema; this can.
+// The fact that closes the console is decided in SQL (postgres.Answerable) and
+// applied in Go (Run), so it is tested across that boundary (CLAUDE.md
+// rule 11).
 func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -289,9 +243,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
 	})
 
-	// Direct SQL for the same reason the contest fixtures above use it:
-	// postgres.Questions.Create insists on the authoring transaction, which
-	// is the contest module's own concern and only noise here.
+	// Direct SQL: postgres.Questions.Create requires the authoring transaction.
 	max := 1
 	var questionID uuid.UUID
 	if err := pool.QueryRow(ctx, `
@@ -318,12 +270,10 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 
 	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
 
-	// One question, one attempt, nothing spent: the console is open.
 	if _, err := service.Run(ctx, cmd); err != nil {
 		t.Fatalf("a query while the contest's only question is still open: %v", err)
 	}
 
-	// Spending that one attempt closes the question, and with it the console.
 	if _, err := postgres.NewSubmissions(pool).Insert(ctx, contests.SubmissionRequest{
 		RegistrationID: registration.ID, QuestionID: questionID, Value: "wrong", IsCorrect: false,
 		Points: 5, MaxAttempts: &max, Deadline: time.Now().Add(24 * time.Hour),
@@ -335,19 +285,17 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		t.Fatalf("a query with every question closed: error = %v, want ErrNothingLeftToAnswer", err)
 	}
 
-	// And nothing else closed with it: the play screen's own admission still
-	// admits them, which is the whole reason this is not ErrParticipantFinished.
+	// Only the console closes: Access still admits them, which is why this is
+	// not ErrParticipantFinished.
 	if _, _, err := service.Access(ctx, contestID, student, netip.Addr{}); err != nil {
 		t.Fatalf("Access() = %v, want nil — only the console closes", err)
 	}
 }
 
-// Under individual timing the first read of the contest's content starts the
-// participant's clock, against the real registrations table: reading the
-// questions starts it, the events channel's admission never does, and a
-// second read later does not move started_at (CLAUDE.md rule 10 — the
-// once-only guarantee lives in the repository's own WHERE clause, which the
-// fakes cannot show).
+// The first read of content starts an individual clock, the events channel
+// never does, and a later read does not move started_at. The once-only
+// guarantee lives in the repository's WHERE clause, which fakes cannot show
+// (CLAUDE.md rule 10).
 func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelNever(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -388,9 +336,8 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 		t.Fatalf("after the first read: StartedAt = %v, err = %v; want %v", stored.StartedAt, err, clock)
 	}
 
-	// A later read by a request still holding the participant as it was
-	// before the start, the way a racing read would: the stored start stays
-	// where it is.
+	// A later read holding the participant as it was before the start, as a
+	// racing read would: started_at stays put.
 	clock = clock.Add(7 * time.Minute)
 	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
 		t.Fatalf("second StartOnRead() = %v", err)
@@ -401,10 +348,7 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	}
 }
 
-// countingTracer counts every statement pgx sends over the wire, through the
-// same pgx.QueryTracer hook storagetest.Open's own `configure` callback
-// exists to install — a count of round trips a real connection actually
-// made, not of Go-level calls into a fake.
+// countingTracer counts every statement pgx sends over a real connection.
 type countingTracer struct {
 	mu    sync.Mutex
 	count int
@@ -431,10 +375,9 @@ func (c *countingTracer) get() int {
 	return c.count
 }
 
-// panicCluster is a provisioning.Cluster that fails the test if Run ever
-// reaches it: the fixture below gives every participant an existing, current
-// game_instances row, so Ensure must answer from repo.Of alone and never ask
-// the game cluster for anything.
+// panicCluster fails the test if Run reaches the game cluster: every fixture
+// participant already has a current game_instances row, so Ensure must answer
+// from repo.Of alone.
 type panicCluster struct{ t *testing.T }
 
 func (p panicCluster) CreateInstance(context.Context, string, string, sqlpolicy.Policy) error {
@@ -462,21 +405,17 @@ func (p panicCluster) DropIdle(context.Context, string) (bool, error) {
 	return false, nil
 }
 
-// noOpExecutor stands in for the Query Runner: what happens once the SQL
-// actually leaves this process is a gRPC call, never a core database round
-// trip, so it is faked out rather than measured.
+// noOpExecutor stands in for the Query Runner, which is a gRPC call and never
+// a core database round trip.
 type noOpExecutor struct{}
 
 func (noOpExecutor) Run(context.Context, queryrunner.Request, queryrunner.Origin) (*queryrunner.Result, error) {
 	return &queryrunner.Result{Columns: []string{"a"}}, nil
 }
 
-// roundTrips is the steady state an olympiad spends almost all of its
-// requests in, against dbcontest_core_test with a pgx.QueryTracer counting
-// every statement a real connection sends: a fixed-timing, read-only contest
-// with a ready template, and a participant who has already started and
-// already holds a current copy of it — so neither Start nor Quota adds a
-// round trip of its own, and Ensure answers without the game cluster.
+// roundTrips measures the steady state: a fixed-timing, read-only contest with
+// a ready template and a participant already started with a current copy, so
+// neither Start, Quota nor the game cluster adds a round trip.
 type roundTrips struct {
 	tracer    *countingTracer
 	service   *queryproxy.Service
@@ -509,10 +448,8 @@ func roundTripFixture(t *testing.T) roundTrips {
 		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
 	})
 
-	// The names are unique per run: the fixture is committed, a game
-	// database's name is unique across the installation, and a template
-	// name that looks like another run's would make any leftover row
-	// ambiguous to whoever reads the test database afterwards.
+	// Unique names: the fixture is committed and game database names are unique
+	// across the installation.
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO game_templates (contest_id, template_db, version, init_script, status)
@@ -541,9 +478,8 @@ func roundTripFixture(t *testing.T) roundTrips {
 	return roundTrips{tracer: tracer, service: service, contestID: contestID, student: student}
 }
 
-// measure runs call once to warm the connection up — so any statement pgx
-// itself issues while establishing the session does not inflate the count —
-// and then counts the statements an otherwise identical second call sends.
+// measure runs call once to warm the connection, then counts the statements a
+// second identical call sends.
 func (r roundTrips) measure(t *testing.T, call func() error) int {
 	t.Helper()
 	if err := call(); err != nil {
@@ -556,11 +492,8 @@ func (r roundTrips) measure(t *testing.T, call func() error) int {
 	return r.tracer.get()
 }
 
-// One steady-state query costs the core database two statements: the
-// combined lookup (participant, contest, game and the participant's own
-// copy of it) and AnswerableLeft. Before the lookup was merged the same
-// query measured 5 — People, Contests, Games, Answerable and Ensure's own
-// read of the instance each a round trip of their own.
+// A steady-state query costs the core database two statements: the combined
+// lookup and AnswerableLeft.
 func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	r := roundTripFixture(t)
 	cmd := queryproxy.Command{ContestID: r.contestID, UserID: r.student, SQL: `SELECT 1`, RequestID: uuid.New()}
@@ -574,10 +507,8 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	}
 }
 
-// Every participant-facing read (the story, the questions, the query log,
-// the workspace, every autosave and signal) is admitted through Access, so
-// its cost is paid on every one of them: one statement for who is asking and
-// the contest they are asking about, where it used to be two.
+// Every participant-facing read is admitted through Access, so its single
+// statement is paid on each one, autosaves and signals included.
 func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
 	r := roundTripFixture(t)
 
@@ -590,11 +521,7 @@ func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
 	}
 }
 
-// The schema panel is admitted by Access, like every other /play read, and
-// then reads the game and the participant's copy of it through the combined
-// lookup Run uses: two statements. It was one while Schema admitted the
-// caller itself over that lookup; the second is what one admission for every
-// read costs here. Before the lookup was merged, the same read cost four.
+// The schema panel costs two statements: Access, then the combined lookup.
 func TestTheSchemaReadCostsTwoCoreRoundTrips(t *testing.T) {
 	r := roundTripFixture(t)
 
@@ -611,19 +538,16 @@ func TestTheSchemaReadCostsTwoCoreRoundTrips(t *testing.T) {
 	}
 }
 
-// answeringRunner stands in for the Query Runner service behind the journal:
-// it answers without a game database, which is not what this test is about.
+// answeringRunner answers without a game database.
 type answeringRunner struct{}
 
 func (answeringRunner) Run(context.Context, queryrunner.Request) (*queryrunner.Result, error) {
 	return &queryrunner.Result{Columns: []string{"a"}}, nil
 }
 
-// TestAQueryRowRecordsTheClientAddressAndTheFingerprint follows the address a
-// console query came from across every boundary it has to cross to reach its
-// journal row (CLAUDE.md rule 11) — the façade's command, the journal wrapped
-// around the runner as the composition root wraps it, and the real query_log
-// insert — and checks the fingerprint written by the same insert.
+// The client address crosses the façade's command, the journal wrapper and
+// the real query_log insert to reach its row (CLAUDE.md rule 11); the same
+// insert writes the fingerprint.
 func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()

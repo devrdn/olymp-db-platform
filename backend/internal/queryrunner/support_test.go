@@ -13,10 +13,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// These tests run against a real game cluster, as the participant's own role.
-// Nothing here is faked: the whole component is about what happens between a
-// deadline, a semaphore and a database, and none of those has a useful
-// stand-in. Without GAME_DB_DSN they skip — see gamedbtest.
+// These tests run against a real game cluster as the participant roles, since
+// a deadline, a semaphore and a database have no useful stand-in. Without
+// GAME_DB_DSN they skip (see gamedbtest).
 
 func setup(t *testing.T) (*queryrunner.Runner, string) {
 	t.Helper()
@@ -30,8 +29,8 @@ func setupWith(t *testing.T, limits queryrunner.Limits, validator queryrunner.Va
 	return runnerFor(t, database, limits, validator), database
 }
 
-// seeded creates a scratch database holding the fixture every runner test
-// reads, granted to both participant roles.
+// seeded creates a scratch database with the shared fixture, granted to both
+// participant roles.
 func seeded(t *testing.T) string {
 	t.Helper()
 
@@ -48,17 +47,15 @@ func seed(t *testing.T, database string) {
 		`INSERT INTO evidence VALUES (1, 'a knife'), (2, 'a letter')`,
 		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
 		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
-		// The writer may keep its own objects, as a read-write template grants
-		// (internal/gamedb), and nothing else: which game tables it may write
-		// is granted by the tests that are about writing.
+		// The writer may create its own objects, as a read-write template
+		// grants; write access to game tables is granted by the write tests.
 		`CREATE SCHEMA work`,
 		`GRANT USAGE, CREATE ON SCHEMA work TO `+gamedb.RoleWriter,
 	)
 }
 
-// runnerFor assembles a runner over both participant roles and closes it when
-// the test ends, before the scratch database is dropped: cleanups run in
-// reverse, and the database was created first.
+// runnerFor assembles a runner over both participant roles and closes it
+// before the scratch database is dropped (cleanups run in reverse).
 func runnerFor(t *testing.T, database string, limits queryrunner.Limits, validator queryrunner.Validator) *queryrunner.Runner {
 	t.Helper()
 
@@ -67,8 +64,6 @@ func runnerFor(t *testing.T, database string, limits queryrunner.Limits, validat
 	return runner
 }
 
-// clusterFor connects as both participant roles, so a test may run either
-// kind of contest against the same database.
 func clusterFor(t *testing.T, database string) *queryrunner.Cluster {
 	t.Helper()
 
@@ -81,8 +76,7 @@ func clusterFor(t *testing.T, database string) *queryrunner.Cluster {
 	return cluster
 }
 
-// oneParticipant is fixed because most tests are about the query rather than
-// about who asked; the tests that are about who use `other`.
+// oneParticipant asks most queries; tests about who asks use `other`.
 var oneParticipant = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
 func request(database, sql string) queryrunner.Request {
@@ -96,27 +90,23 @@ func request(database, sql string) queryrunner.Request {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-// anything is a validator that admits every statement unwrapped, for the tests
-// about what a statement the real checker would refuse could leave behind on a
-// connection. The pool's isolation must not rest on the checker: it is the
-// layer underneath it.
+// anything is a validator that admits every statement, so tests can show the
+// pool's isolation does not rest on the checker.
 type anything struct{}
 
 func (anything) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error) {
 	return sqlpolicy.Statement{Text: sql, Explain: true, Writes: p.Mode == sqlpolicy.ModeReadWrite}, nil
 }
 
-// unlimited is the default limits without the per-participant rate, which
-// these tests exceed on purpose and are not about.
+// unlimited is the default limits without the per-participant rate.
 func unlimited() queryrunner.Limits {
 	limits := queryrunner.DefaultLimits()
 	limits.PerMinute = 0
 	return limits
 }
 
-// backend runs a query that answers with the server process serving it. The
-// runner must have been built with the anything validator: the checker
-// refuses a server function like this one.
+// backend returns the server process serving the runner's connection. It
+// needs a runner built with the anything validator.
 func backend(t *testing.T, runner *queryrunner.Runner, database string) int32 {
 	t.Helper()
 
@@ -127,8 +117,8 @@ func backend(t *testing.T, runner *queryrunner.Runner, database string) int32 {
 	return result.Rows[0][0].(int32)
 }
 
-// participantBackends counts the connections the reader role holds to these
-// databases, whatever state they are in.
+// participantBackends counts the reader role's connections to these
+// databases, in any state.
 func participantBackends(t *testing.T, databases ...string) int {
 	t.Helper()
 
@@ -141,9 +131,8 @@ func participantBackends(t *testing.T, databases ...string) int {
 	return n
 }
 
-// eventually polls until the count of participant backends is want, and
-// reports the last count it saw. Closing a connection is a message to the
-// server, not a wait for its process to exit, so the count lags by a moment.
+// eventually polls until the participant backend count is want and returns
+// the last count seen. A closed connection's backend exits a moment later.
 func eventually(t *testing.T, want int, databases ...string) int {
 	t.Helper()
 
@@ -157,8 +146,8 @@ func eventually(t *testing.T, want int, databases ...string) int {
 	return got
 }
 
-// recreate makes a database of this name again, hardened and seeded as
-// Scratch and seed made the first one.
+// recreate makes a database of this name again, hardened and seeded like
+// the first.
 func recreate(t *testing.T, database string) {
 	t.Helper()
 

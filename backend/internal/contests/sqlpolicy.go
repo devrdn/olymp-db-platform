@@ -22,24 +22,17 @@ const (
 // ErrInvalidPolicy reports a policy that cannot be enforced as written.
 var ErrInvalidPolicy = errors.New("sql policy is not valid")
 
-// tableName is the shape a writable table may take: an optionally
-// schema-qualified lowercase identifier.
-//
-// Stricter than PostgreSQL allows, on purpose. These names are turned into
-// GRANT statements when the game template is built, where they cannot be
-// passed as parameters; the narrow form is what keeps that construction safe
-// whatever an organizer types into the form.
+// tableName is an optionally schema-qualified lowercase identifier. Stricter
+// than PostgreSQL because these names are spliced into GRANT statements, where
+// parameters cannot be used.
 var tableName = regexp.MustCompile(`^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$`)
 
 // maxWritableTables bounds the list, since every entry becomes a grant on
 // every participant's database.
 const maxWritableTables = 100
 
-// SQLPolicy is how much SQL power a contest hands its participants.
-//
-// One row per contest, and the single description both the AST validator and
-// the database grants are derived from — they cannot drift apart because there
-// is nothing for them to drift from.
+// SQLPolicy is how much SQL power a contest hands its participants. Both the
+// AST validator and the database grants derive from it, so they cannot drift.
 type SQLPolicy struct {
 	ContestID uuid.UUID
 	Mode      string
@@ -50,10 +43,9 @@ type SQLPolicy struct {
 	// AllowOwnTables lets a participant keep notes in tables of their own.
 	AllowOwnTables  bool
 	AllowTempTables bool
-	// AllowCatalog covers the structural catalogs (pg_class, information_schema)
-	// that make browsing the schema possible. The sensitive ones — other
-	// people's databases and activity — are closed in every mode and are not
-	// represented here at all.
+	// AllowCatalog covers the structural catalogs (pg_class,
+	// information_schema). Catalogs exposing other databases and activity are
+	// closed in every mode.
 	AllowCatalog bool
 	// DiskQuotaRatio caps an instance at N times the template size.
 	DiskQuotaRatio int
@@ -81,9 +73,8 @@ func (p SQLPolicy) Validate() error {
 		return fmt.Errorf("%w: the disk quota ratio must be positive", ErrInvalidPolicy)
 	}
 
-	// A read-only contest carrying write permissions is not a policy but a
-	// contradiction: one of the two halves would have to win silently when the
-	// template grants are generated.
+	// Write permissions on a read-only contest are a contradiction one half
+	// would silently win when grants are generated.
 	if p.Mode == ModeReadOnly {
 		switch {
 		case len(p.WritableTables) > 0:
@@ -109,22 +100,16 @@ func (p SQLPolicy) Validate() error {
 	return nil
 }
 
-// PolicyStore stores the SQL access policy of a contest.
-//
-// Separate from Repository because it has a different consumer: the game loop
-// reads the policy to build grants and configure the validator, and has no
-// business with titles or schedules.
+// PolicyStore stores the SQL access policy of a contest, apart from
+// Repository because the game loop reads it and needs nothing else.
 type PolicyStore interface {
-	// ByContest returns the contest's policy. A contest that has never been
-	// configured reports DefaultSQLPolicy rather than an error: read-only is
-	// what an unconfigured contest means.
+	// ByContest returns the contest's policy, or DefaultSQLPolicy for a
+	// contest never configured.
 	ByContest(ctx context.Context, contestID uuid.UUID) (SQLPolicy, error)
-	// Save stores the policy.
 	Save(ctx context.Context, p SQLPolicy) error
 }
 
-// auditFields is the part of a policy that may be written to the audit trail —
-// which is all of it, since a policy is nothing but configuration.
+// auditFields is the whole policy, for the audit trail.
 func (p SQLPolicy) auditFields() map[string]any {
 	return map[string]any{
 		"mode":              p.Mode,

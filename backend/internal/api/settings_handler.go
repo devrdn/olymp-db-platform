@@ -38,22 +38,17 @@ func NewSettingsHandler(store SettingsStore, mw *auth.Middleware, log *slog.Logg
 	return &SettingsHandler{settings: store, mw: mw, log: log}
 }
 
-// Mount registers the routes under /settings.
-//
-// Two doors of different widths, and the difference is the point. The sign-in
-// screen carries the installation's name and logo and is seen before anybody
-// signs in, so the read has to be open — and an open read must therefore
-// return an allow-list rather than the table. The write is behind
-// `settings.manage`, which only administrators hold: naming the university is
-// not something an organizer does from inside a contest they happen to run.
+// Mount registers the routes under /settings. The read is open because the
+// sign-in screen shows the installation's name and logo, so it returns an
+// allow-list, not the table. The write needs settings.manage, held only by
+// administrators.
 func (h *SettingsHandler) Mount(r chi.Router) {
 	r.Route("/settings", func(r chi.Router) {
-		// Deliberately outside the authentication middleware. What it returns
-		// is decided by the domain's Public catalogue, never by the caller.
+		// Outside authentication; the domain's Public catalogue decides what it
+		// returns.
 		r.Get("/", h.public)
 
-		// The pictures are as public as the name for the same reason: the
-		// sign-in screen wears them.
+		// The pictures are public for the same reason.
 		r.Get("/images/{kind}", h.image)
 
 		r.Group(func(r chi.Router) {
@@ -69,18 +64,15 @@ func (h *SettingsHandler) Mount(r chi.Router) {
 type settingsResponse struct {
 	Values settings.Values `json:"values"`
 	// Images maps a slot to the hash its URL carries, so a page can link a
-	// picture without fetching it to find out whether there is one.
+	// picture without fetching it.
 	Images map[string]string `json:"images"`
 }
 
-// maxUploadBytes bounds the request body before any of it is held.
-//
-// Larger than the domain's own limit on purpose: the domain refuses an
-// oversized picture with a message somebody can act on, and this only stops a
-// body too large to be worth reading in order to say so.
+// maxUploadBytes bounds the request body before any of it is held. Larger than
+// the domain limit, so an oversized picture still gets the domain's actionable
+// message.
 const maxUploadBytes = 2 << 20
 
-// public serves what an unauthenticated page may read.
 func (h *SettingsHandler) public(w http.ResponseWriter, r *http.Request) {
 	values, err := h.settings.Public(r.Context())
 	if err != nil {
@@ -91,8 +83,8 @@ func (h *SettingsHandler) public(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values, Images: h.presentImages(r)})
 }
 
-// presentImages reports which slots hold a picture, and never fails the
-// request: a page that cannot learn about the logo should still get the name.
+// presentImages reports which slots hold a picture and never fails the request:
+// a page that cannot learn about the logo should still get the name.
 func (h *SettingsHandler) presentImages(r *http.Request) map[string]string {
 	present, err := h.settings.Images(r.Context())
 	if err != nil {
@@ -102,20 +94,16 @@ func (h *SettingsHandler) presentImages(r *http.Request) map[string]string {
 	return present
 }
 
-// image serves one of the installation's pictures.
+// image serves one of the installation's pictures, openly, since the sign-in
+// screen shows them:
 //
-// Open, because the sign-in screen wears them and is seen before anybody signs
-// in. Three headers matter and each for its own reason:
-//
-//   - `nosniff`, so a browser uses the type that was read out of the bytes
-//     when they were stored rather than guessing at them again here.
-//   - `Content-Disposition: attachment`, so opening the address directly
-//     downloads the file instead of rendering it as a document on this origin.
-//     An `<img>` is unaffected — that is the point — and the raster formats
-//     accepted cannot carry script anyway, so this is the second lock rather
-//     than the first.
-//   - immutable caching, which is safe because the address carries the hash:
-//     a replaced picture is a different URL and no cache has to be told.
+//   - `nosniff`, so the browser uses the type detected when the bytes were
+//     stored.
+//   - `Content-Disposition: attachment`, so opening the address downloads the
+//     file instead of rendering it on this origin; an `<img>` is unaffected.
+//     The accepted raster formats cannot carry script, so this is a second
+//     lock.
+//   - immutable caching, safe because the address carries the hash.
 func (h *SettingsHandler) image(w http.ResponseWriter, r *http.Request) {
 	img, err := h.settings.Image(r.Context(), chi.URLParam(r, "kind"))
 	switch {
@@ -147,14 +135,13 @@ func (h *SettingsHandler) image(w http.ResponseWriter, r *http.Request) {
 func (h *SettingsHandler) uploadImage(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
-	// Bounded before anything is held: the body arrives from the network and
-	// its declared length is the sender's claim, not a fact.
+	// Bounded before anything is held: the declared length is only the sender's
+	// claim.
 	body := http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	data, err := io.ReadAll(body)
 	if err != nil {
-		// The body outran the reader's limit. It is the same thing to the
-		// person uploading as a picture over the domain's own limit, and
-		// telling them apart would mean explaining our two ceilings.
+		// Over the reader's limit; to the uploader it is the same refusal as
+		// the domain's.
 		httpx.Error(w, r, http.StatusBadRequest, codeImageTooLarge, "The upload is too large to read")
 		return
 	}
@@ -199,7 +186,6 @@ func (h *SettingsHandler) removeImage(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// all serves every setting, for the screen that edits them.
 func (h *SettingsHandler) all(w http.ResponseWriter, r *http.Request) {
 	values, err := h.settings.All(r.Context())
 	if err != nil {

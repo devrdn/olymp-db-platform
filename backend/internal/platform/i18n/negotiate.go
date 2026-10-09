@@ -1,14 +1,7 @@
-// Package i18n picks which language to answer a request in.
-//
-// It knows nothing about contests, users or HTTP: it takes an ordered list of
-// what the caller wants, the list of what actually exists, and a fallback, and
-// returns one language code. Everything language-shaped in the service — the
-// story, the questions, the interface — resolves through this one function, so
-// "which language did they get, and why" has a single answer.
-//
-// The set of languages is data (the `languages` table), never a constant here:
-// adding a fourth language is an INSERT, and this code keeps working because
-// it only ever compares the codes it is handed.
+// Package i18n picks which language to answer a request in, from the
+// caller's preferences, the languages that exist and a fallback. It knows
+// nothing about contests, users or HTTP, and holds no list of languages: they
+// are data (the `languages` table), so adding one needs no code change.
 package i18n
 
 import (
@@ -16,23 +9,19 @@ import (
 	"strings"
 )
 
-// maxAcceptedTags bounds how much of an Accept-Language header is honoured.
-// The header is client-supplied and reaches endpoints that need no
-// authentication, so an unbounded list would become an unbounded loop over the
-// available languages.
+// maxAcceptedTags bounds how much of an Accept-Language header is honoured:
+// the header reaches unauthenticated endpoints, and each tag is a loop over
+// the available languages.
 const maxAcceptedTags = 16
 
 // Match returns the best available language for the given preferences.
 //
 // Preferences are tried in order; for each, an exact match wins, then a match
-// on the base language ("ro-MD" accepts "ro", and "ru" accepts "ru-KZ"), since
-// a region is a refinement of a language rather than a different one.
+// on the base language ("ro-MD" accepts "ro", "ru" accepts "ru-KZ").
 //
-// When nothing matches, fallback is used if it is actually available, and the
-// first available language otherwise — a contest whose declared default was
-// later removed must still serve something it has. With nothing available at
-// all the result is empty: there is no honest answer, and the caller has to
-// treat that as missing content rather than serve a language nobody authored.
+// When nothing matches, fallback is used if available, else the first
+// available language. With nothing available the result is empty, and the
+// caller must treat that as missing content.
 func Match(preferred, available []string, fallback string) string {
 	if len(available) == 0 {
 		return ""
@@ -41,7 +30,7 @@ func Match(preferred, available []string, fallback string) string {
 	for _, want := range preferred {
 		want = normalize(want)
 		if want == "" || want == "*" {
-			// "*" means "anything"; the fallback is the most sensible reading.
+			// "*" means anything: use the fallback.
 			break
 		}
 
@@ -59,7 +48,6 @@ func Match(preferred, available []string, fallback string) string {
 	return available[0]
 }
 
-// exact reports an available language equal to want, ignoring case.
 func exact(want string, available []string) (string, bool) {
 	for _, have := range available {
 		if normalize(have) == want {
@@ -70,8 +58,7 @@ func exact(want string, available []string) (string, bool) {
 }
 
 // byBaseLanguage matches on the part before the region subtag, in either
-// direction: a request for "ro-MD" accepts an available "ro", and a request
-// for "ru" accepts an available "ru-KZ".
+// direction.
 func byBaseLanguage(want string, available []string) (string, bool) {
 	wantBase := baseOf(want)
 	for _, have := range available {
@@ -94,11 +81,8 @@ func normalize(tag string) string {
 }
 
 // ParseAcceptLanguage returns the language tags of an Accept-Language header,
-// most-wanted first.
-//
-// Tags with q=0 are dropped — that is the client saying "explicitly not this
-// one". Anything unparseable is skipped rather than guessed at: the header is
-// attacker-controlled, and a malformed tag must never reach a query.
+// most-wanted first. Tags with q=0 are dropped. Anything unparseable is
+// skipped: the header is attacker-controlled and must never reach a query.
 func ParseAcceptLanguage(header string) []string {
 	if header == "" {
 		return nil
@@ -135,10 +119,7 @@ func ParseAcceptLanguage(header string) []string {
 		}
 	}
 
-	// Highest quality first, preserving document order within a quality — Go's
-	// sort.SliceStable would do, but an insertion pass over at most
-	// maxAcceptedTags entries avoids pulling in the dependency for a list this
-	// small.
+	// Highest quality first, keeping header order within a quality.
 	tags := make([]string, 0, len(parsed))
 	for len(parsed) > 0 {
 		best := 0
@@ -153,7 +134,6 @@ func ParseAcceptLanguage(header string) []string {
 	return tags
 }
 
-// qualityOf reads the q-value out of an Accept-Language parameter list.
 func qualityOf(params string) (float64, bool) {
 	for _, param := range strings.Split(params, ";") {
 		name, value, found := strings.Cut(param, "=")
@@ -166,6 +146,5 @@ func qualityOf(params string) (float64, bool) {
 		}
 		return quality, true
 	}
-	// Parameters that carry no q at all leave the default weight in place.
 	return 1, true
 }

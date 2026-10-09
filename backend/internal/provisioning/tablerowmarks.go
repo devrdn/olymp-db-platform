@@ -2,40 +2,21 @@ package provisioning
 
 import "sync"
 
-// tableRowMarkInterval is how often a table's file records the byte offset of
-// a row: every 500th data row, so a page anywhere in the file is a seek plus a
-// walk of at most 499 rows rather than a walk from the beginning.
-//
-// A table's file is bounded at MaxTableDataRows rows, so this is at most 400
-// offsets per file however large the file's bytes are — a few kilobytes beside
-// a file the same package expects to hold megabytes.
+// tableRowMarkInterval is how often the byte offset of a data row is recorded,
+// so any page is a seek plus a walk of at most 499 rows. MaxTableDataRows
+// bounds this to 400 offsets per file.
 const tableRowMarkInterval = 500
 
-// maxTableRowMarkFiles bounds how many files' marks are kept at once. One
-// entry per table an organiser is currently paging through, which is one; the
-// ceiling exists because the key is a file id from a row an organiser writes,
-// and a map fed from stored data with no ceiling is a leak rather than a
-// cache. Past it the whole map is dropped rather than one entry chosen, for
-// the reason templateSizes gives for the same choice: the cost of being wrong
-// is one page read the slow way.
+// maxTableRowMarkFiles bounds how many files' marks are kept, since the keys
+// come from stored data. Past it the whole map is dropped; the cost is one
+// slow page read.
 const maxTableRowMarkFiles = 64
 
-// tableRowIndex is the marks kept for each table-data file, across requests.
-//
-// Why this is not gamefile's own persisted line index — the one an uploaded
-// dump's preview pages through — is the thing TableDataWindow's own doc
-// already says: that index is written once, when Complete seals the upload,
-// and a table's file is written to again by every AppendTableRow after it.
-// This is the other half of that answer rather than a contradiction of it:
-// nothing is persisted, nothing is sealed, and a mark is only ever *added*.
-//
-// What makes that sound is that a table's file is append-only under its own
-// id. AppendTableRow writes at the end; DeleteTableRow does not touch the file
-// at all (it tombstones a row number in the core database); and a file that is
-// replaced is replaced by an upload with a new id, the old one retired from
-// disk. So a byte offset recorded for a row can never come to name a different
-// row — it can only stop existing, along with the file, and then nothing asks
-// for it again.
+// tableRowIndex holds the row marks for each table-data file, in memory and
+// across requests. Marks are only added, which is sound because a table's file
+// is append-only under its id: rows are appended, deletes are tombstones in
+// the database, and a replaced file gets a new id. A recorded offset can
+// therefore never come to name a different row.
 type tableRowIndex struct {
 	mu      sync.Mutex
 	byFile  map[string]*tableRowMarks
@@ -46,13 +27,11 @@ type tableRowIndex struct {
 type tableRowMarks struct {
 	mu sync.Mutex
 	// offsets[i] is the byte offset at which data row i*tableRowMarkInterval+1
-	// begins. offsets[0] is therefore the first byte after the header line, and
-	// a file with no marks at all has not been read even that far.
+	// begins; offsets[0] is the first byte after the header.
 	offsets []int64
-	// size is how large the file was when the last mark was added. A file that
-	// has since shrunk is not the file these offsets were taken from, and the
-	// marks are dropped rather than trusted — append-only is an argument about
-	// this package's own callers, and this is what makes it a check.
+	// size is the file's length when the last mark was added. If the file has
+	// since shrunk, the marks are dropped: this checks the append-only
+	// assumption rather than trusting it.
 	size int64
 }
 
@@ -72,14 +51,9 @@ func (x *tableRowIndex) of(id string) *tableRowMarks {
 	return marks
 }
 
-// nearest is where a walk towards row may start: the byte offset of the
-// closest recorded mark at or before it, and the number of data rows that lie
-// before that offset. ok is false when there is no usable mark — the file has
-// never been paged through, or it is not the file the marks were taken from —
-// and the caller starts from the top, header and all.
-//
-// size is the file's current length, which is what makes the second of those
-// checkable rather than assumed.
+// nearest returns the offset of the closest mark at or before row and the
+// number of data rows before it. ok is false when there is no usable mark,
+// including when size (the file's current length) shows the file shrank.
 func (m *tableRowMarks) nearest(row, size int64) (offset, rowsBefore int64, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -98,11 +72,9 @@ func (m *tableRowMarks) nearest(row, size int64) (offset, rowsBefore int64, ok b
 	return m.offsets[index], index * tableRowMarkInterval, true
 }
 
-// record keeps the offset of the row that begins mark number index, if that is
-// the next mark this file is missing. Anything else — a mark already held, or
-// one past the end of what has been walked — is dropped: the offsets have to
-// stay a dense run from the start of the file, because nearest indexes them by
-// arithmetic rather than by search.
+// record keeps the offset for mark number index only if it is the next one
+// missing. The offsets must stay dense because nearest indexes them by
+// arithmetic.
 func (m *tableRowMarks) record(index, offset, size int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

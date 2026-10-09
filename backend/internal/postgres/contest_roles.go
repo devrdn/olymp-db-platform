@@ -25,10 +25,8 @@ func NewContestRoles(pool *pgxpool.Pool) *ContestRoles {
 	return &ContestRoles{pool: pool}
 }
 
-// ContestRole reports whether the user owns or manages the contest.
-//
-// Not being staff on a contest is an ordinary answer, not an error: most
-// authorisation checks are for people who legitimately have no role there.
+// ContestRole reports whether the user owns or manages the contest. Having no
+// role is an ordinary answer, not an error.
 func (r *ContestRoles) ContestRole(ctx context.Context, userID, contestID uuid.UUID) (rbac.ContestRole, error) {
 	var role string
 	err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
