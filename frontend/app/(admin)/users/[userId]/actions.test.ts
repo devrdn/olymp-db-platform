@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — those would not exist yet when the factory
-// actually runs.
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -29,10 +26,8 @@ beforeEach(() => {
 });
 
 /**
- * `blockAction` used to send no `reason` at all, which the server has
- * required since early in this branch (`users.ErrReasonRequired`) — every
- * block from the account card failed. These tests pin both halves of the
- * fix: an empty reason never reaches the server, and a real one is sent.
+ * The server requires a reason (`users.ErrReasonRequired`): an empty one never
+ * leaves, a real one is sent.
  */
 describe("blockAction", () => {
   test("refuses an empty reason without ever calling the server", async () => {
@@ -84,12 +79,8 @@ describe("deleteAction", () => {
 });
 
 /**
- * Restoring can fail because a live account has since taken the login or the
- * email — the direct price of releasing them on deletion. The two failures
- * carry different codes on the wire (`login_taken`, `email_taken`), and this
- * pins that `restoreAction` passes each straight through rather than
- * collapsing them into one generic failure — `Outcome` in `account-card.tsx`
- * looks the code up and shows the administrator which field to go fix.
+ * `login_taken` and `email_taken` pass through separately, so `Outcome` can
+ * name the field to fix.
  */
 describe("restoreAction", () => {
   test("restores with no body — there is nothing else to say about it", async () => {

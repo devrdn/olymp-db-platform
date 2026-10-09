@@ -4,9 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The list's actions are Server Actions ("use server"): importing the real
-// module pulls Next's server runtime into a component test, the same reason
-// `question-editor.test.tsx` fakes its own.
+// The real Server Actions would pull in Next's server runtime.
 vi.mock("./actions", () => ({
   addQuestionAction: vi.fn(async () => ({})),
   deleteQuestionAction: vi.fn(async () => ({})),
@@ -37,9 +35,8 @@ function question(overrides: Partial<Question> = {}): Question {
   } as Question;
 }
 
-// docs/ARCHITECTURE.md §6.1.1: a
-// question has no points in ICPC scoring, so the list shows no points column
-// there, the same way the question editor disables the field.
+// ICPC has no per-question points (docs/ARCHITECTURE.md §6.1.1), so no points
+// column.
 describe("QuestionList, the points column", () => {
   test("shows each question's points in points scoring", () => {
     render(
@@ -75,7 +72,7 @@ describe("QuestionList, the points column", () => {
       within(table).queryByRole("columnheader", { name: dict.workspace.questions.columns.points }),
     ).not.toBeInTheDocument();
     expect(within(table).queryByText("37")).not.toBeInTheDocument();
-    // The row keeps a cell under every remaining header.
+    // One cell per remaining header.
     const headers = within(table).getAllByRole("columnheader").length;
     const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell").length;
     expect(cells).toBe(headers);

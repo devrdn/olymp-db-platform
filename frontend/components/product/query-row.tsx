@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 import { CopyButton, SqlBlock } from "./sql-block";
 
-/** The status of a query in the colour of what it means; running is the one live thing. */
+/** Status colours; running is the one live tone. */
 export const QUERY_TONE: Record<string, string> = {
   running: "text-accent",
   ok: "text-good",
@@ -18,10 +18,8 @@ export const QUERY_TONE: Record<string, string> = {
 };
 
 /**
- * The words one row is written in. Passed rather than read from the
- * dictionary, because the two screens that show these rows say them to two
- * different people: a contest's staff read the monitoring page, and a
- * participant reads their own report.
+ * Labels for one query row, passed in rather than read from the dictionary:
+ * staff and the participant see these rows in different words.
  */
 export type QueryRowLabels = {
   durationMs: string;
@@ -32,24 +30,18 @@ export type QueryRowLabels = {
   copied: string;
   copyFailed: string;
   shortened: string;
-  /** Only wanted where the address is shown at all. */
+  /** Only needed where the address is shown. */
   noAddress?: string;
 };
 
 /**
- * One query, as a queries list and an answer's attempt show it: when, how it
- * ended, how long, how many rows, its first line and its error; expanded, the
- * whole statement read-only with a copy button.
+ * One query: time, outcome, duration, rows, first line and error; expanded, the
+ * whole statement with a copy button. The address is a staff column, so the
+ * caller decides.
  *
- * The address is a staff column. A participant's own report leaves it out —
- * it is their own address, it explains nothing to them, and it is in the way
- * (design §2.2) — so the row is asked for it rather than deciding.
- *
- * Memoised on the query object, and its expansion is its own state: opening
- * one statement renders one row, and a refresh that changed another query
- * leaves this one alone. `content-visibility` lets the browser skip laying
- * out and painting rows out of view, which keeps a long list of rows of
- * uneven height cheap without a fixed-height window.
+ * Memoised on the query with its own expansion state, so a refresh or an
+ * expansion re-renders one row. `content-visibility` lets the browser skip
+ * off-screen rows without a fixed-height window.
  */
 export const QueryRow = memo(function QueryRow({
   query,
@@ -60,10 +52,9 @@ export const QueryRow = memo(function QueryRow({
 }: {
   query: LoggedQuery;
   labels: QueryRowLabels;
-  /** Each status in words; one this build does not know is shown as it came. */
+  /** Each status in words; an unknown one is shown as it came. */
   statuses: Record<string, string>;
   locale: string;
-  /** Whether the row carries the address the query was run from. */
   address?: boolean;
 }) {
   const [open, setOpen] = useState(false);

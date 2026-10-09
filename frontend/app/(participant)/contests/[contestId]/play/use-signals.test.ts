@@ -241,7 +241,7 @@ describe("sending", () => {
     start(send);
     const notes = field("notes");
 
-    // Fifty pastes of 500 three-byte characters would be about 75 KiB.
+    // Fifty pastes of 500 three-byte characters: about 75 KiB.
     for (let i = 0; i < SIGNAL_BATCH_MAX; i++) pasteInto(notes, "я".repeat(SIGNAL_PASTE_TEXT_MAX));
     window.dispatchEvent(new Event("pagehide"));
     await vi.advanceTimersByTimeAsync(0);
@@ -334,8 +334,7 @@ describe("sending", () => {
     ["contest_finished", 409],
     ["contest_ended", 409],
     ["not_a_participant", 403],
-    // The session ended: signed out, expired or revoked. Every later batch
-    // would be refused alike, and the screen is on its way to the sign-in page.
+    // The session ended; every later batch would be refused alike.
     ["unauthenticated", 401],
   ])("%s stops the collector for good", async (code, status) => {
     const { send } = recorder(async () => {
@@ -411,8 +410,8 @@ describe("the edges of leaving and sending", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(sent).toHaveLength(1);
 
-    // Back after 2 s, and away again 1 s later: that hide is too soon after
-    // the last batch to send one of its own.
+    // Back after 2 s, away again 1 s later: too soon after the last batch to
+    // send one.
     vi.advanceTimersByTime(2000);
     setVisibility("visible");
     vi.advanceTimersByTime(1000);
@@ -459,8 +458,8 @@ describe("the edges of leaving and sending", () => {
 });
 
 describe("refusals that may pass and pages that come back", () => {
-  // A laptop briefly on a hotspot is outside the contest's network for a
-  // moment; stopping would silence monitoring until a reload.
+  // A laptop briefly on a hotspot must not silence monitoring until a
+  // reload.
   test("address_not_allowed drops the batch and keeps collecting", async () => {
     let refuse = true;
     const { send, sent } = recorder(async () => {

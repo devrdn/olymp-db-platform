@@ -20,22 +20,9 @@ import { saveTranslationsAction, type TitleState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The form inside the dialog: one open field for the language the contest
- * falls back to, every other declared language behind a disclosure.
- *
- * That split is the whole point of moving the name up here. The old settings
- * panel gave every declared language an equal-sized block in a grid, which
- * read fine at two languages and became a wall of fields at three — the
- * "trim what is cumbersome" ask from the owner. An author almost always
- * means the default language when they reach for "the title"; the others are
- * still one click away under `otherLanguages`, never hidden, just not what
- * has to be scanned past to get to the common case.
- *
- * A native `<details>` rather than client-managed open state: the fields
- * inside it are still part of the form while it is collapsed — nothing but
- * `disabled` removes an input from what a submit sends — so a save made
- * without ever opening it still carries every other language's current text
- * untouched, exactly what the whole-set replace on the wire requires.
+ * One open field for the default language, the others behind a native
+ * `<details>`. Collapsed inputs are still submitted, so a save without opening
+ * it keeps every other language's text, as the whole-set replace requires.
  */
 function TitleForm({
   contest,
@@ -59,16 +46,12 @@ function TitleForm({
     {},
   );
 
-  // Only a request in flight blocks dismissal here — a save that succeeds
-  // closes this form itself (below), so there is never a result left on
-  // screen that would need its own acknowledgement.
+  // Only a pending request blocks dismissal; a success closes the form.
   useEffect(() => {
     reportDismissible(!pending);
   }, [pending, reportDismissible]);
 
-  // The header behind this dialog reads the same revalidated contest this
-  // action just saved, so once it has, there is nothing left to show here —
-  // closing is the confirmation.
+  // The header shows the saved title, so closing is the confirmation.
   useEffect(() => {
     if (state.saved) onClose();
   }, [state.saved, onClose]);
@@ -84,9 +67,8 @@ function TitleForm({
       <input type="hidden" name="contestId" value={contest.id} />
 
       <DialogHeader>
-        {/* The "?" beside the title rather than inside it, so the dialog's
-            name stays the title alone. Its Escape closes the bubble and not
-            the dialog — see `Tooltip` for how. */}
+        {/* The '?' sits beside the title, so the dialog's name is the title
+           alone; its Escape closes only the bubble. */}
         <div className="flex items-center gap-2">
           <DialogTitle>{t.heading}</DialogTitle>
           <Tooltip label={dict.chrome.helpLabel}>{t.help}</Tooltip>
@@ -161,22 +143,9 @@ function TitleForm({
 }
 
 /**
- * The name, reachable from the one place every screen of a contest already
- * shows it: the heading at the top of its workspace.
- *
- * It used to live in a settings panel, a per-language grid an author had to
- * open a whole configuration screen to reach — "buried in settings," in
- * the owner's own words. The name is the single most
- * identifying thing about a contest and the field an administrator hunts
- * longest for; it belongs beside the heading that already carries it, not
- * four fields into an unrelated screen.
- *
- * Offered only while the content may still change — the same line
- * `TranslationPanel` used to draw (`contentEditable`, passed in from
- * `layout.tsx`) — and only when the contest has declared at least one
- * language to write a title in. Neither condition is worth a disabled button
- * here: the title is already visible in the heading either way, and a dialog
- * with nothing actionable inside it is not a control worth showing.
+ * Edits the contest name from the workspace heading. Offered only while content
+ * is editable and at least one language is declared; otherwise there is nothing
+ * to act on and no disabled button is shown.
  */
 export function TitleEditor({
   contest,
@@ -206,10 +175,7 @@ export function TitleEditor({
         {dict.workspace.titleEditor.edit}
       </Button>
 
-      {/* The popup only actually mounts while `open` is true (the portal
-          defaults to `keepMounted={false}`), so `TitleForm`'s own
-          `useActionState` starts fresh every time this reopens rather than
-          showing a previous run's result. */}
+      {/* Mounts only while open, so `useActionState` starts fresh on every reopen. */}
       <Dialog open={open} onOpenChange={setOpen} dismissible={dismissible}>
         <DialogContent closeLabel={dict.workspace.titleEditor.close} dismissible={dismissible}>
           <TitleForm

@@ -6,26 +6,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 /**
- * Where the signed-in visitor can go, in the bar.
- *
- * Not the administrator's: a participant has two destinations too — the
- * contests they are in and the ones open to them — and nothing in here was
- * ever about the constructor.
- *
- * Only what the account may actually open: a link that answers 403 teaches
- * somebody that a screen exists and that they are not welcome on it, which is
- * both rude and a small disclosure. The layout decides from the permissions
- * the API reports, so a role added as data changes what is offered without a
- * change here.
- *
- * A client component for one reason: the current destination has to be marked,
- * and only the browser knows which one that is. Everything it renders was
- * decided on the server.
- *
- * Words, with no glyph beside them. Two destinations are told apart by reading
- * them, so an icon here adds a mark to look past rather than a shape to aim
- * at — and the design system's first rule is that the interface around the
- * data is rules and typography (SPEC section 2).
+ * Destinations in the bar, for any signed-in role. Only what the account may
+ * open, decided by the layout from the permissions the API reports; a link that
+ * answers 403 discloses the screen. A client component only to mark the current
+ * destination.
  */
 export function SectionNav({ items }: { items: { href: string; label: string }[] }) {
   const pathname = usePathname();
@@ -33,9 +17,7 @@ export function SectionNav({ items }: { items: { href: string; label: string }[]
   return (
     <nav className="flex min-w-0 items-center gap-1">
       {items.map((item) => {
-        // A section stays marked while inside it: /contests/<id>/story is
-        // still contests, and a mark that disappears one level in would leave
-        // the reader with no idea where they are.
+        // Stays marked anywhere inside the section.
         const current = pathname === item.href || pathname.startsWith(`${item.href}/`);
 
         return (

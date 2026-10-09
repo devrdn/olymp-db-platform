@@ -19,12 +19,9 @@ import { ReportTabs, tabFromParam, type ReportTab } from "./report-tabs";
 import { ResultSummary } from "./result-summary";
 
 /**
- * The tab in the address is the tab in the title. A student who opened the
- * result, their queries and their notes in three browser tabs would
- * otherwise have three called "Result".
- *
- * Not the contest's name: that would be a read of its own before the page's,
- * and a title for a contest the caller may not be allowed to know exists.
+ * The tab's name in the title, so several browser tabs are distinguishable. Not
+ * the contest name, which would need a read and could reveal a contest the
+ * caller may not see.
  */
 export async function generateMetadata(props: PageProps<"/profile/contests/[contestId]">) {
   const [dict, search] = await Promise.all([activeDictionary(), props.searchParams]);
@@ -32,21 +29,13 @@ export async function generateMetadata(props: PageProps<"/profile/contests/[cont
 }
 
 /**
- * One finished contest, as the participant who sat it reads it (design §2.2):
- * what it came to, every query they ran, every answer they gave, and the
- * notes they left.
+ * A finished contest as its participant reads it (SPEC.md §5.2): result,
+ * queries, answers and notes.
  *
- * **It opens only for a contest that has ended for this reader.** Somebody
- * else's, one still running, one that never existed — the API answers all
- * three with one 404 and one code, and this page answers all three with the
- * not-found page. Telling them apart would say what exists and who is on it,
- * and a profile that did that would be a way around the rules the contest's
- * own screen keeps while it runs.
- *
- * The tab is in the address, and the server reads that tab's data and only
- * that tab's. The registration is never in the address: it comes from the
- * session on the server's side, so no request from here can name anybody
- * else's.
+ * Only for a contest that has ended for this reader. Someone else's, a running
+ * one and a missing one all get the same 404, so the page cannot reveal what
+ * exists. The tab is in the address and only its data is read; the registration
+ * comes from the session, never the address.
  */
 export default async function ReportPage(props: PageProps<"/profile/contests/[contestId]">) {
   const [{ contestId }, search, locale, dict] = await Promise.all([
@@ -55,19 +44,13 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
     activeLocale(),
     activeDictionary(),
   ]);
-  // A segment that is not an identifier is answered here rather than spending
-  // a request to be told the same thing.
+  // A non-id segment is not worth a request.
   if (!isId(contestId)) notFound();
   const tab = tabFromParam(search.tab);
 
-  // Both reads run together, and both are awaited to the end even when one of
-  // them throws. `notFound()` and `redirect()` work by throwing, and
-  // Promise.all rejects on whichever throws first while the other read is
-  // still in flight — so a tab that failed for its own reason could be the
-  // answer the reader gets instead of the report's 404, and the loser's
-  // rejection would be left with nobody to receive it. allSettled gives both
-  // an owner, and the report decides: it is the read the whole screen depends
-  // on, and its refusal is the one this page exists to answer with.
+  // allSettled, not Promise.all: `notFound()` and `redirect()` throw, and with
+  // Promise.all a tab's own failure could win over the report's 404 and leave
+  // the other rejection unhandled. The report's outcome decides.
   const [reported, panelled] = await Promise.allSettled([
     read(contestId, "/report", (payload) => profileReportSchema.parse(payload)),
     loadTab(tab, contestId),
@@ -93,9 +76,7 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
           </Link>
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-8 gap-y-3">
             <div className="flex min-w-0 flex-col gap-1.5">
-              {/* Broken rather than truncated: a contest's name is what this
-                  page is about, and an author may well have written a long
-                  one. It wraps inside the column and never widens it. */}
+              {/* Wrapped, not truncated, and never wider than the column. */}
               <h1 className="max-w-head text-h2 break-words text-ink">{report.title}</h1>
               <span className="font-mono text-data text-ink-3">
                 <ContestWindow
@@ -134,13 +115,9 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
 }
 
 /**
- * One read under `/me/contests/{id}`, with every 404 answered as the
- * not-found page.
- *
- * A dead session or an account still on its one-time password is not a
- * failure of this page and gets the recovery the guard decides. Everything
- * else is thrown: unlike the profile screen, where two independent sections
- * each survive the other's failure, a report with no report is not a screen.
+ * One read under `/me/contests/{id}`; any 404 is the not-found page. A dead
+ * session or one-time password gets the guard's recovery; anything else is
+ * thrown, since the report cannot stand without it.
  */
 async function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
   try {
@@ -153,7 +130,7 @@ async function read<T>(contestId: string, path: string, parse: (payload: unknown
   }
 }
 
-/** What the tab in the address shows, read on the server and nothing else. */
+/** The current tab's data, read on the server. */
 async function loadTab(tab: ReportTab, contestId: string) {
   switch (tab) {
     case "queries":
@@ -163,7 +140,7 @@ async function loadTab(tab: ReportTab, contestId: string) {
     case "notes":
       return { tab, data: await read(contestId, "/workspace", (p) => profileWorkspaceSchema.parse(p)) } as const;
     default:
-      // The result is the report itself, which the page reads anyway.
+      // The summary is the report, already read.
       return { tab: "summary" } as const;
   }
 }

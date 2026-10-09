@@ -3,19 +3,13 @@ import { z } from "zod";
 import { QUESTION_KINDS } from "./content-terms";
 
 /**
- * The wire shapes of a participant's own working view of a running contest:
- * the story in their language, the questions they may currently see, and what
- * answering one tells them back.
- *
- * Apart from content.ts, which is the same nouns as staff see them — every
- * translation, every reference answer, every hidden question. This module
- * never carries either: the server already narrowed both to what §6.1 allows
- * a participant to read, and parsing a narrower shape here is what would
- * catch the two ever being confused, rather than a client quietly rendering a
- * field the participant endpoint was never meant to send.
+ * The participant's view of a running contest: the story in their language,
+ * the questions they may see, and what answering one tells them. Kept apart
+ * from content.ts (the staff view) so the narrower shapes of
+ * docs/ARCHITECTURE.md §6.1 cannot be confused with it.
  */
 
-/** The story, negotiated to one language rather than every translation. */
+/** The story, negotiated to one language. */
 export const playStorySchema = z
   .object({ lang: z.string(), body_md: z.string() })
   .transform((raw) => ({ lang: raw.lang, bodyMd: raw.body_md }));
@@ -23,13 +17,8 @@ export const playStorySchema = z
 export type PlayStory = z.infer<typeof playStorySchema>;
 
 /**
- * One question as its participant sees it.
- *
- * No reference answer and no raw `max_attempts` field exist here, because
- * they cannot: the API's own response never carries them (participant_handler.go's
- * own doc). `attemptsRemaining` absent means no cap, not zero attempts left —
- * the API omits the field rather than sending zero for "unlimited", and this
- * schema keeps that distinction as `undefined` rather than collapsing it.
+ * One question as its participant sees it, with no reference answer or
+ * `max_attempts`. `attemptsRemaining` undefined means no cap, not zero left.
  */
 export const playQuestionSchema = z
   .object({
@@ -42,18 +31,13 @@ export const playQuestionSchema = z
     attempts_remaining: z.number().nullish(),
     closed: z.boolean(),
     /**
-     * Whether this exact question may be answered right now. False without
-     * `closed` also being true means a sequential contest has not reached it
-     * yet — a fact from the server, never inferred from the question's own
-     * position in the list.
+     * False while not `closed` means a sequential contest has not reached this
+     * question yet. Decided by the server, never inferred from list position.
      */
     can_answer: z.boolean(),
     /**
-     * Whether one of this participant's own attempts was right, and what it
-     * earned — finding 5: without these, a question reloaded after closing
-     * reads as "Closed." whether it was won or run out of attempts, and a
-     * student cannot tell which without spending another attempt to find
-     * out. Always present, never a reference answer or anyone else's score.
+     * Whether one of the participant's own attempts was right, and what it
+     * earned, so a closed question shows whether it was won or ran out.
      */
     correct: z.boolean(),
     points_awarded: z.number(),
@@ -81,11 +65,7 @@ export const playQuestionListSchema = z.object({
 
 export type PlayQuestionList = z.infer<typeof playQuestionListSchema>;
 
-/**
- * What answering a question tells the participant back — never a reference
- * answer, only the same two derived facts a follow-up read of the question
- * list would already show (answerResponse's own doc on the Go side).
- */
+/** What answering tells the participant: never a reference answer. */
 export const answerResultSchema = z
   .object({
     correct: z.boolean(),

@@ -16,46 +16,22 @@ import { messageForCode } from "@/lib/i18n/errors";
 import { refusalKind, showsReference } from "./refusals";
 
 /**
- * One question's data, paired with its wording already rendered — see
- * QuestionsPanel's own doc for why the rendering happens before this ever
- * reaches the client.
- *
- * `index` is the question's own place in this list, 1-based — rendered as a
- * sibling of `body` rather than folded into the Markdown that produced it
- * (finding 6): `body` is the result of running the question's own wording
- * through a Markdown parser, and a question that opens with a heading, a
- * list or a fenced block has that block broken by whatever text is
- * concatenated in front of it. Keeping the number as its own element means
- * it can never collide with the structure of whatever the question's own
- * wording turns out to be.
+ * One question's data with its wording already rendered on the server.
+ * `index` is its 1-based place in the list, rendered beside `body` rather
+ * than prepended to the Markdown, which would break a question opening with
+ * a heading, a list or a fenced block.
  */
 export type QuestionEntry = { question: PlayQuestion; index: number; body: ReactNode };
 
 /**
- * The questions, and the one field each has for answering.
- *
- * `body` arrives already rendered, from a Server Component (page.tsx), rather
- * than as `bodyMd` for this file to run through `StoryText` itself. `StoryText`
- * renders Markdown through `react-markdown` — a real parser, tens of
- * kilobytes gzipped — and every byte of it is free on the server and never
- * free in a client bundle. A question's wording is fixed the moment the page
- * loads, so there is nothing to gain and a whole parser to lose by asking the
- * browser to do this again.
- *
- * The state here is its own, seeded from what the page loaded and never
- * lifted higher: a submission touches this list and nothing else on the
- * screen, which is what keeps answering a question from re-rendering the
- * story or the console beside it — the smoothness the plan asks for is a
- * property of where the state lives, not something added on top.
+ * The questions, and the one field each has for answering. `body` arrives
+ * rendered by `page.tsx`. The list's state lives here and nowhere higher, so
+ * answering a question re-renders neither the story nor the console.
  */
 export function QuestionsPanel({
   contestId,
   items,
-  // Defaulted rather than required: most of this panel's own tests predate
-  // ICPC scoring and have nothing to do with it, and threading a mode
-  // through every one of them would only obscure what each is actually
-  // proving. Real callers (`play/page.tsx`) always pass the contest's own
-  // `scoring`.
+  // Defaulted for tests; `play/page.tsx` always passes it.
   scoring = "points",
   icpcPenaltyMin = 20,
   dict,
@@ -63,26 +39,19 @@ export function QuestionsPanel({
   contestId: string;
   items: QuestionEntry[];
   scoring?: Scoring;
-  /** Minutes added to the registration's penalty time for a wrong attempt on a question later solved. Read only while `scoring` is `icpc`. */
+  /** Minutes added to the penalty time per wrong attempt on a question later solved. Read only under `icpc`. */
   icpcPenaltyMin?: number;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.questions;
   const [entries, setEntries] = useState(items);
-  // Whether the last re-read this panel asked for was refused (finding 6): a
-  // sequential contest that just closed its open question depends on this
-  // refetch to unlock the next one, and a refusal here previously vanished
-  // silently — the next question stayed locked with nothing on screen saying
-  // a reload would fix it.
+  // Whether the last re-read was refused. A sequential contest needs it to
+  // unlock the next question, so a failure is shown with a hint to reload.
   const [refreshFailed, setRefreshFailed] = useState(false);
 
-  // A question closing is the one moment that can change what the rest of
-  // the list looks like — a sequential contest opens the next one the
-  // instant this one is done with — and the events channel has no push for
-  // that, so this asks once, directly, rather than guessing which other row
-  // to update. Only the mutable fields are replaced: `body` came from the
-  // server once and a question's own wording never changes underneath it, so
-  // there is no reason to ask for it — or to parse it — a second time.
+  // A closed question can open the next one in a sequential contest, and the
+  // events channel has no push for that, so the list is re-read once. Only
+  // the mutable fields are replaced; the wording never changes.
   const onClosed = useCallback(async () => {
     const result = await refreshQuestionsAction(contestId);
     if (result.kind !== "ok") {
@@ -101,9 +70,8 @@ export function QuestionsPanel({
     return <p className="text-body text-ink-2">{t.empty}</p>;
   }
 
-  // The question the participant is working on: the first one still open to
-  // them. Decided here rather than in the card, because a card cannot see the
-  // others and "current" is a fact about the list.
+  // The first question still open to the participant; decided here because
+  // "current" is a fact about the list.
   const currentIndex = entries.find(({ question }) => !question.closed && question.canAnswer)?.index;
 
   return (
@@ -113,25 +81,18 @@ export function QuestionsPanel({
           {t.refreshFailed}
         </p>
       ) : null}
-      {/* A ruled list, not a stack of boxes: this direction draws its
-          structure from dividers rather than cards (Band's own doc), and a
-          register of questions is exactly the register this system already
-          keeps everything else in. */}
+      {/* A ruled list rather than boxes: this design draws structure with
+          dividers (Band's doc). */}
       <div className="flex flex-col divide-y divide-line">
         {entries.map(({ question, index, body }) => (
           <div
             key={question.id}
-            // The mark the design draws as a wash, said out loud as well. A
-            // row distinguished only by a background is undistinguished for
-            // anybody not looking at it — the same reasoning the workspace
-            // navigation already applies to its own current section.
+            // The design's wash, also said to assistive technology.
             aria-current={index === currentIndex ? "step" : undefined}
             className={cn(
               "px-3 py-5 first:pt-3 last:pb-3",
-              // The one the participant is on, marked the way the design
-              // marks it: a wash, not a border. Everything on this screen is
-              // already separated by rules, and a second kind of line here
-              // would read as a nested box (SPEC.md §3: no nested plates).
+              // A wash, not a border: a second kind of line would read as a nested
+              // box (SPEC.md §5).
               index === currentIndex && "bg-accent-wash",
             )}
           >
@@ -149,9 +110,8 @@ export function QuestionsPanel({
           </div>
         ))}
       </div>
-      {/* Stated once, for the whole list, rather than repeated on every
-          question — the penalty is a property of the contest, not of any one
-          question (docs/ARCHITECTURE.md §6.1.1). */}
+      {/* Once for the list: the penalty belongs to the contest
+          (docs/ARCHITECTURE.md §6.1.1). */}
       {scoring === "icpc" ? (
         <p className="text-small text-ink-3">{t.icpcPenalty.replace("{n}", String(icpcPenaltyMin))}</p>
       ) : null}
@@ -187,15 +147,11 @@ function QuestionCard({
     kind: "idle",
   });
 
-  // The most recent submission's own word on attempts and closedness beats
-  // what the page loaded with — it is strictly newer — and falls back to the
-  // list's own reading until there has been one.
+  // The latest submission is newer than what the page loaded, so it wins.
   const attemptsRemaining = state.kind === "answer" ? state.result.attemptsRemaining : question.attemptsRemaining;
   const closed = state.kind === "answer" ? state.result.closed : question.closed;
-  // Same fallback for the verdict itself (finding 5): a page load or a
-  // reload has no submission of its own to read a verdict from, only what
-  // the server's own projection already carries for a question closed on an
-  // earlier visit — correct or not, and for how many points.
+  // Same fallback for the verdict: after a reload only the server's record
+  // of an earlier close can supply it.
   const correct = state.kind === "answer" ? state.result.correct : question.correct;
   const pointsAwarded = state.kind === "answer" ? state.result.pointsAwarded : question.pointsAwarded;
   const locked = !closed && !question.canAnswer;
@@ -205,22 +161,11 @@ function QuestionCard({
     onClosedRef.current = onClosed;
   }, [onClosed]);
 
-  // The field is controlled, rather than left to the browser (finding 3):
-  // React's own form Actions reset an uncontrolled field's DOM value the
-  // instant the action settles, for every outcome — a refusal included. Left
-  // alone, `attempt_conflict` and `query_too_often` both say "try again"
-  // while the very thing they ask the student to try again with has already
-  // been deleted out from under them. Controlling it is what lets this
-  // component decide, rather than the browser: cleared once an attempt is
-  // actually recorded (right or wrong — a wrong guess still spent one, and
-  // leaving it under the verdict reads as an answer waiting to be sent
-  // rather than one already judged), left untouched on a refusal.
-  //
-  // Bumped during render rather than from an Effect — the pattern React's own
-  // docs describe for "adjust state when something changes": comparing the
-  // latest value against what was last seen, and correcting the state that
-  // depends on it before this render commits, rather than committing once and
-  // scheduling a second render to fix it up.
+  // Controlled because React's form Actions reset an uncontrolled field when
+  // the action settles, refusals included, and `attempt_conflict` or
+  // `query_too_often` would then ask for a retry of text already erased.
+  // Cleared once an attempt is recorded, right or wrong; kept on a refusal.
+  // Adjusted during render, React's pattern for resetting state on a change.
   const [value, setValue] = useState("");
   const [seenState, setSeenState] = useState(state);
   if (state !== seenState) {
@@ -228,9 +173,7 @@ function QuestionCard({
     if (state.kind === "answer") setValue("");
   }
 
-  // Notifying the panel that this question closed *is* a side effect — a
-  // network call — so unlike the field-clearing above, it belongs in an
-  // Effect rather than in the render body.
+  // Notifying the panel is a network call, so it belongs in an Effect.
   const notified = useRef(false);
   useEffect(() => {
     if (state.kind === "answer" && state.result.closed && !notified.current) {
@@ -258,10 +201,8 @@ function QuestionCard({
             blockedBy={blockedBy}
             t={t}
           />
-          {/* ICPC scoring never awards points (decision 1 of the design
-              doc) — place is decided by how many questions are solved and,
-              at a tie, by penalty time — so a question's own points are not
-              shown at all rather than shown as a meaningless zero. */}
+          {/* ICPC never awards points (docs/ARCHITECTURE.md §6.1.1), so none
+              are shown rather than a meaningless zero. */}
           {scoring !== "icpc" ? (
             <span className="font-mono text-label text-ink-3 uppercase">
               {t.points.replace("{n}", String(question.points))}
@@ -273,11 +214,8 @@ function QuestionCard({
       {closed ? (
         <div className="flex flex-col gap-1.5">
           <p className="text-small text-ink-3">{t.closed}</p>
-          {/* The verdict from whatever closed it — the live submission if
-              this render followed one, or the server's own record of an
-              earlier one otherwise (finding 5): losing this the instant a
-              question closes, or the instant the page reloads, would hide
-              the one feedback a correct answer exists to give. */}
+          {/* The verdict from the live submission or, after a reload, the
+              server's record of it. */}
           <Verdict correct={correct} points={pointsAwarded} scoring={scoring} dict={dict} />
         </div>
       ) : (
@@ -289,12 +227,8 @@ function QuestionCard({
             <fieldset className="flex flex-col gap-1.5" disabled={pending || locked}>
               <legend className="sr-only">{t.answerLabel}</legend>
               {question.choiceIds.map((choiceId) => (
-                // `min-h-6`: the label *is* the target — clicking anywhere on
-                // it selects the choice — and the row measured 22px tall, so
-                // the whole answer to a multiple-choice question was a
-                // sub-24px strip on every screen size. The radio itself stays
-                // 16px because that is what the design draws; what has to be
-                // hittable is this box around it.
+                // `min-h-6`: the label is the click target and must reach 24px; the
+                // radio itself stays the design's 16px.
                 <label
                   key={choiceId}
                   className="flex min-h-6 cursor-pointer items-baseline gap-2.5 text-control text-ink"
@@ -364,9 +298,8 @@ function Verdict({
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.questions;
-  // ICPC awards no points at all (submissions.points_awarded is always 0 in
-  // this mode), so the verdict says nothing about them rather than
-  // announcing "+0 points" as though that were a fact worth stating.
+  // ICPC awards no points (`points_awarded` is always 0), so none are
+  // announced.
   const correctText = scoring === "icpc" ? t.correctIcpc : t.correct.replace("{n}", String(points));
   return (
     <p role="status" className={cn("text-small", correct ? "text-good" : "text-ink-2")}>
@@ -375,13 +308,13 @@ function Verdict({
   );
 }
 
-/** Why an answer did not go through — the same shape and the same reasoning as the console's own refusal. */
+/** Why an answer did not go through; the same shape as the console's refusal. */
 function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused" }>; dict: PlayDictionary }) {
   const t = dict.participant.play.questions;
   const message = messageForCode(state.code, dict.errors);
 
-  // A wait rather than a fault: asking again later is the whole remedy, so
-  // these read quietly.
+  // A wait rather than a fault: asking again later is the remedy, so these
+  // read quietly.
   const passing = refusalKind(state.code) === "passing";
 
   return (
@@ -399,12 +332,10 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
 }
 
 /**
- * Which question has to close before `index` opens.
- *
- * The one immediately before it that is still open — sequential progression
- * is what makes a question unanswerable, and §6.1.1 puts the rule on the
- * server; this only names the question the server is waiting on, so the
- * participant is told "after 4" instead of "not yet".
+ * The nearest earlier question still open, which must close before `index`
+ * opens. The server enforces sequential order (docs/ARCHITECTURE.md
+ * §6.1.1); this only names the question it waits on, so the participant
+ * reads "after 4", not "not yet".
  */
 function blockedBy(entries: QuestionEntry[], index: number): number | undefined {
   for (let i = index - 2; i >= 0; i--) {
@@ -414,12 +345,8 @@ function blockedBy(entries: QuestionEntry[], index: number): number | undefined 
 }
 
 /**
- * A question's state, in the one word the design's own card carries.
- *
- * Four states and not five: a question closed without a correct answer is
- * "attempts spent", which is a different sentence from "accepted" and a
- * different one again from "not answered yet" — collapsing the first two
- * would tell a participant they had solved something they had not.
+ * A question's state in one word. A question closed without a correct answer
+ * is "attempts spent", never "accepted".
  */
 function QuestionStatus({
   closed,

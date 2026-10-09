@@ -28,11 +28,8 @@ describe("Field", () => {
   });
 
   /**
-   * A sign-in failure belongs to the pair of fields, not to one of them: the
-   * API answers `invalid_credentials` without saying which was wrong, on
-   * purpose, so the form cannot be used to find out which logins exist. The
-   * message is therefore written once, and every field it concerns has to
-   * point at it.
+   * The API does not say which sign-in field was wrong, so logins cannot be
+   * probed; one message is shared by both fields.
    */
   test("marks the control invalid and points it at a message it does not own", () => {
     render(
@@ -65,10 +62,7 @@ describe("Field", () => {
   });
 });
 
-/**
- * The client's split: a rule the person needs before they get it wrong stays
- * under the field; why the field exists goes behind a "?" beside its label.
- */
+/** A rule needed beforehand stays under the field; why the field exists goes behind a "?". */
 describe("Field, with an explanation behind a question mark", () => {
   const RULE = "Leave empty for unlimited.";
   const WHY = "A participant stuck on a question with no limit has nothing left to move on to.";
@@ -102,11 +96,10 @@ describe("Field, with an explanation behind a question mark", () => {
   test("keeps the control's name the label, and describes it by the rule and then the explanation", () => {
     withHelp();
 
-    // Beside the label, not inside it: the "?" does not become "Attempts Hint".
+    // Beside the label, so the name is not "Attempts Hint".
     const control = screen.getByRole("textbox", { name: "Attempts" });
     expect(control).toHaveAccessibleName("Attempts");
-    // The rule first, because it is what somebody must know before typing;
-    // the explanation after, so a user moving between fields still hears it.
+    // The rule first, then the explanation.
     expect(control).toHaveAccessibleDescription(`${RULE} ${WHY}`);
   });
 
@@ -115,20 +108,12 @@ describe("Field, with an explanation behind a question mark", () => {
 
     const control = screen.getByRole("textbox", { name: "Attempts" });
     expect(control).toHaveAttribute("aria-invalid", "true");
-    // The error replaces the rule, not the explanation: why the field exists
-    // is still true when the value in it is wrong.
+    // The error replaces the rule, not the explanation.
     expect(control).toHaveAccessibleDescription(`Must be a whole number. ${WHY}`);
     expect(screen.queryByText(RULE)).toBeNull();
   });
 
-  /**
-   * A screen-reader user who moves between form fields — NVDA's F key, the
-   * form-control rotor in VoiceOver — lands on the control and never on the
-   * "?" beside its label. Before explanations moved behind a question mark
-   * that user heard the whole explanation on reaching the field; if the field
-   * stopped naming it, the redesign would have taken it away from exactly the
-   * people who could not see the clutter it was removing.
-   */
+  /** Screen-reader users moving between fields land on the control, never on the "?". */
   test("describes the control by its explanation, so moving between fields still reads it", () => {
     render(
       <Field id="penalty" label="Penalty" help="Taken off for every wrong attempt already made." helpLabel="Explain">

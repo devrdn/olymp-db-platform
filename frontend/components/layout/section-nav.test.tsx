@@ -19,9 +19,7 @@ describe("SectionNav", () => {
   });
 
   test("carries no glyph beside the words", () => {
-    // SPEC section 2, rule 1: the interface around the data is rules and
-    // typography. Two destinations are told apart by reading them, so an icon
-    // here is a mark to look past rather than a shape to aim at.
+    // SPEC §2, rule 1: words only, no icons.
     const { container } = render(<SectionNav items={items} />);
 
     expect(container.querySelectorAll("svg")).toHaveLength(0);

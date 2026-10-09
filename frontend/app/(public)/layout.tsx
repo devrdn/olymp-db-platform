@@ -4,14 +4,7 @@ import { imageHref } from "@/lib/api/settings";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
-/**
- * The frame a visitor without a session wears.
- *
- * A route group rather than a folder in the URL: `(public)` groups the screens
- * that share this shell without appearing in any address. The alternative was
- * each page wrapping itself, which is how sign-in and the constructor ended up
- * putting their shells on in two different places.
- */
+/** The frame for visitors without a session. `(public)` is a route group, absent from the URL. */
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
   const [brand, dict, locale, theme] = await Promise.all([
     branding(),

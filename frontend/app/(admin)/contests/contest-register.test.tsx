@@ -16,13 +16,11 @@ const nightInTheArchive: ContestSummary = {
   description: "Опись пропала между полуночью и рассветом.",
   startsAt: "2026-11-08T19:00:00Z",
   endsAt: "2026-11-08T21:00:00Z",
-  // The author's register ignores it — an organizer's own participation is a
-  // fact about a different question — but the shape it receives carries it.
+  // Unused by the author's register, but part of the shape.
   enrolled: false,
   scoring: "points",
   icpcPenaltyMin: 20,
-  // The register shows no pictures (design spec §10) and never reads these,
-  // but the listing it is handed carries them.
+  // Unused by the register (no pictures, SPEC.md §10), but part of the shape.
   coverHash: "",
   coverAttribution: "",
 };
@@ -61,7 +59,7 @@ describe("ContestRegister, nothing to show", () => {
   });
 
   test("offers a filter reset when a filter is what emptied the register", () => {
-    // Filters live in the URL, so clearing them is navigation, not a handler.
+    // Filters live in the URL, so the reset is a link.
     render(
       <ContestRegister
         contests={[]}
@@ -95,7 +93,7 @@ describe("ContestRegister, dates", () => {
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
-    // 19:00–21:00 UTC is one evening in Chisinau, so the date is said once.
+    // 19:00–21:00 UTC is one evening in Chisinau, so the date appears once.
     expect(within(row).getAllByText(/2026/)).toHaveLength(1);
     expect(within(row).getByText(/\d{2}:\d{2}.+\d{2}:\d{2}/)).toBeInTheDocument();
   });

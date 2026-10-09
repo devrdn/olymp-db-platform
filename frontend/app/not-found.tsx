@@ -11,12 +11,8 @@ export async function generateMetadata() {
 }
 
 /**
- * An address matching no route group at all.
- *
- * The one not-found that carries a shell, because there is no group layout
- * above it to supply one. Every group has its own `not-found.tsx` rendering
- * `NotFoundView` bare — see that component for why a second shell here was a
- * second header on screen.
+ * Not-found for addresses outside every route group; the only one with a shell,
+ * since no group layout supplies one.
  */
 export default async function NotFound() {
   const [brand, dict, locale, theme] = await Promise.all([

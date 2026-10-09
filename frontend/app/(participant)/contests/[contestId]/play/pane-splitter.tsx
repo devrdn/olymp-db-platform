@@ -5,37 +5,22 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The console's draggable edges and the sizes they leave behind — SPEC.md
- * §11's `ConsoleShell`, and §7 of the workspace design for the two horizontal
- * ones.
+ * The console's draggable edges and the sizes they leave behind (SPEC.md §5,
+ * and §11's `ConsoleShell`). How much room the questions or the result need
+ * depends on the contest and the participant, so no split is fixed. One
+ * store and one handle serve every edge; axis, unit and bounds are data.
  *
- * A fixed layout was shipped first and the reason it did not last is the one
- * §11 anticipated: how much room the questions need is a property of the
- * contest, not of the product. An olympiad whose questions are two lines and
- * one whose questions are a paragraph want different columns, and neither
- * number is mine to pick. The same argument decides the horizontal edges:
- * reading a forty-column row and writing a fifteen-line query want opposite
- * splits of the console's own height.
- *
- * One store and one handle serve all of them. What varies is stated as data
- * rather than as a second copy of the file: which axis the pointer moves
- * along, what unit the number is in, and what it may be clamped to.
- *
- * The drag does not go through React. A pointermove writes the size straight
- * onto the container as a custom property, which is one style recalculation;
- * putting it in state would be a render of the editor, the result table and
- * every question card per pointer event, and SPEC.md §6 asks this screen to
- * react within 120ms. State is written once, on release, and that is also
- * when the size is stored.
+ * A drag does not go through React: pointermove writes the size onto the
+ * container as a custom property, one style recalculation, where state would
+ * re-render the editor, the result table and every question per event
+ * (SPEC.md §6 asks for 120ms). State is written, and the size stored, once on
+ * release.
  */
 
 /**
- * Where a group of sizes lives between visits. Per contest is deliberate: a
- * wide-question olympiad and a narrow one are different screens.
- *
- * The group is part of the key so the widths and the shares are separate
- * records — a build that learns a new split does not have to migrate the one
- * already stored, and a stored value it cannot read falls back on its own.
+ * Per contest, since a wide-question olympiad and a narrow one are different
+ * screens. The group keeps widths and shares in separate records, so a new
+ * split needs no migration.
  */
 function storageKey(group: string, contestId: string) {
   return `dbcontest.console.${group}.${contestId}`;
@@ -44,34 +29,25 @@ function storageKey(group: string, contestId: string) {
 /** What a size may be clamped to, in that size's own unit. */
 export type PaneBounds = { min: number; max: number };
 
-/** The design's own starting widths (docs/design/preview.html): 212px and 252px. */
+/** The design's starting widths (docs/design/preview.html): 212px and 252px. */
 export const DEFAULT_SCHEMA_REM = 13.25;
 export const DEFAULT_SIDE_REM = 15.75;
 
 /**
- * What a column may be narrowed to before it stops being a pane.
- *
- * A hard floor rather than a percentage: below this the schema tree shows no
- * column names and the questions wrap every second word, and a participant
- * who dragged too far in a hurry should not have to drag back to read
- * anything.
+ * Column width limits in rem. A hard floor: below it the schema shows no
+ * column names and the questions wrap every other word.
  */
 export const WIDTH_BOUNDS: PaneBounds = { min: 8, max: 32 };
 
 /**
- * The editor's share of the console column, as a percentage — the 11:9 the
- * layout used to state as grid fractions, now a number somebody can move.
- *
- * A share rather than a length, because this column is as tall as the
- * viewport: a stored `rem` would mean a different split on every machine the
- * contest is sat in front of, and the classroom's screens are not one size.
+ * The editor's share of the console column, in percent. A share, not a
+ * length: the column is as tall as the viewport, and the screens differ.
  */
 export const DEFAULT_EDITOR_PCT = 55;
 
 /**
- * Neither of the two panes may be squeezed out of existence: below a fifth of
- * the column the editor holds about two lines of SQL, and the result below it
- * holds a header and nothing under it.
+ * The limits on a share, in percent: below a fifth of the column the editor
+ * holds about two lines and the result only its header.
  */
 export const SHARE_BOUNDS: PaneBounds = { min: 20, max: 80 };
 
@@ -81,7 +57,7 @@ function clampTo(value: number, bounds: PaneBounds): number {
   return Math.min(bounds.max, Math.max(bounds.min, value));
 }
 
-/** One stored group, or the defaults — a stored value this build cannot read is not a reason to fail. */
+/** One stored group, or the defaults when it cannot be read. */
 function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds: PaneBounds): Sizes<K> {
   const value = { ...defaults };
   if (!raw) return value;
@@ -100,17 +76,10 @@ function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds:
 }
 
 /**
- * The stored sizes, as an external store.
- *
- * `useSyncExternalStore` rather than an effect that writes state: the server
- * has no localStorage, so a size read during render would be a hydration
- * mismatch — and reading it in an effect is a second render of the whole
- * console on every visit, which React's own lint rule refuses for exactly
- * that reason. The server snapshot is the design's defaults, the client
- * snapshot is what was stored, and React reconciles the two once.
- *
- * The snapshot has to be referentially stable or React re-renders forever, so
- * the parsed group is cached against the raw string it came from.
+ * The stored sizes as an external store: storage read during render would
+ * mismatch hydration, and an effect would render the console twice. The
+ * server snapshot is the defaults. The snapshot must be referentially stable,
+ * so the parsed group is cached against its raw string.
  */
 const cache = new Map<string, { raw: string | null; value: Sizes<string> }>();
 
@@ -136,14 +105,13 @@ function snapshot<K extends string>(
   return value;
 }
 
-/** Listeners, so a commit in this tab re-renders without a round trip through storage events. */
+/** Lets a commit in this tab re-render without waiting for a storage event. */
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  // Another tab of the same contest moving its own divider is not this tab's
-  // business to follow live, but a reload should not undo it either — the
-  // storage event keeps the two from fighting.
+  // Another tab's divider is not followed live, but the storage event keeps
+  // the cached snapshot from fighting it.
   const onStorage = () => listener();
   window.addEventListener("storage", onStorage);
   return () => {
@@ -154,11 +122,8 @@ function subscribe(listener: () => void) {
 
 /**
  * One group of remembered sizes and the container they are written on.
- *
- * `defaults` and `bounds` are read on every render and must therefore be the
- * same objects every time — module constants, not literals written at the
- * call site. React compares the store's snapshot by identity, and a fresh
- * defaults object would be a fresh snapshot on a server render.
+ * `defaults` and `bounds` must be module constants: the server snapshot is
+ * compared by identity, and a fresh literal would be a fresh snapshot.
  */
 export function usePaneSizes<K extends string>(
   contestId: string,
@@ -179,9 +144,8 @@ export function usePaneSizes<K extends string>(
       try {
         window.localStorage.setItem(storageKey(group, contestId), raw);
       } catch {
-        // A browser refusing storage costs the participant nothing this
-        // session: the drag has already happened, and the container still
-        // carries the size the pointer left it at.
+        // Refused storage costs nothing this session: the container already
+        // carries the size.
       }
       cache.set(`${group}:${contestId}`, { raw, value: next });
       for (const listener of listeners) listener();
@@ -197,7 +161,7 @@ const PANE_WIDTHS: Sizes<"schema" | "side"> = {
   side: DEFAULT_SIDE_REM,
 };
 
-/** The two column widths, in rem — the oldest group, and the one whose storage key predates the others. */
+/** The two column widths, in rem. The `panes` key predates the other groups. */
 export function usePaneWidths(contestId: string) {
   return usePaneSizes(contestId, "panes", PANE_WIDTHS, WIDTH_BOUNDS);
 }
@@ -210,9 +174,8 @@ export function useConsoleRows(contestId: string) {
 }
 
 /**
- * The table's share of the result pane, once a row is open under it — two
- * thirds, because the table is what a participant navigates and the panel
- * under it is what they read one row in.
+ * The table's share of the result pane while a row is open under it: the
+ * table is navigated, the row only read.
  */
 export const DEFAULT_RESULT_TABLE_PCT = 65;
 
@@ -223,16 +186,9 @@ export function useResultRows(contestId: string) {
 }
 
 /**
- * One draggable edge.
- *
- * `role="separator"` with `aria-valuenow` and arrow keys, because a divider
- * that can only be moved with a mouse is a divider half the room cannot move
- * — and these ones decide how much of the screen the questions and the answer
- * get.
- *
- * `axis` is which way the pointer travels, so the separator *line* is the
- * other way round: an edge between two columns is dragged along `x` and reads
- * as a vertical rule, which is what `aria-orientation` names.
+ * One draggable edge: `role="separator"` with `aria-valuenow` and arrow keys,
+ * so it can be moved without a mouse. `axis` is the pointer's direction, so
+ * an `x` edge is a vertical rule (`aria-orientation`).
  */
 export function PaneHandle({
   label,
@@ -248,7 +204,7 @@ export function PaneHandle({
 }: {
   /** The accessible name, in the participant's language. */
   label: string;
-  /** The custom property this handle drives — never derived from the label, which is translated. */
+  /** The custom property this handle drives; never derived from the translated label. */
   property: string;
   value: number;
   /** Which way the pointer travels to move this edge. */
@@ -264,12 +220,9 @@ export function PaneHandle({
 }) {
   const dragging = useRef<{ start: number; startValue: number } | null>(null);
 
-  // How many pixels one unit is, read once when the drag starts rather than
-  // on every pointer event. `getComputedStyle` and `getBoundingClientRect`
-  // are both synchronous style reads, and reading on the next event flushes
-  // the write from the previous one — a forced recalculation of a grid whose
-  // middle column may hold a thousand-row table, per pointer event. Neither
-  // the root font size nor the container's own size changes mid-drag.
+  // Pixels per unit, read once when the drag starts: reading layout on each
+  // event would flush the previous write and recalculate the grid every
+  // time. Neither the root font size nor the container changes mid-drag.
   const scaleRef = useRef(16);
 
   const vertical = axis === "x";
@@ -278,7 +231,7 @@ export function PaneHandle({
 
   const pointAt = (event: React.PointerEvent) => (vertical ? event.clientX : event.clientY);
 
-  /** Ends a drag that was interrupted, putting the pane back on the size in force. */
+  /** Ends an interrupted drag, restoring the size in force. */
   const cancelDrag = () => {
     const had = dragging.current;
     dragging.current = null;
@@ -302,20 +255,11 @@ export function PaneHandle({
       aria-valuemax={bounds.max}
       tabIndex={0}
       className={cn(
-        // A hairline that widens to a grab area without taking layout space:
-        // the pane it separates is the thing, not the handle.
+        // A hairline with a grab area that takes no layout space.
         "relative shrink-0 bg-line",
         vertical ? "w-px cursor-col-resize" : "h-px cursor-row-resize",
-        // Nine pixels for a mouse, twenty-five for a finger. Measured, the
-        // handle is 1px wide and its grab area was 9px at every size — fine
-        // for a pointer that lands where it is aimed, and not a target a
-        // thumb can find on the tablets these dividers are visible on
-        // from 760px up. The wider area is behind `pointer-coarse` rather
-        // than applied to both, because it is not free: it is twelve pixels
-        // of the pane on either side that stop taking a click of their own,
-        // which is a real cost next to a result table's first column and the
-        // questions' own text. A finger already loses that much to its own
-        // contact patch; a mouse should not have to.
+        // 9px of grab area for a mouse, 25px for a finger (`pointer-coarse`).
+        // Not both: the wider area steals clicks from the panes on either side.
         "after:absolute after:content-['']",
         vertical
           ? "after:inset-y-0 after:-left-1 after:-right-1 pointer-coarse:after:-left-3 pointer-coarse:after:-right-3"
@@ -338,8 +282,7 @@ export function PaneHandle({
         if (unit === "rem") {
           scaleRef.current = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
         } else {
-          // A point of share is a hundredth of the container it is a share
-          // of, so the same arithmetic serves both units.
+          // A point of share is a hundredth of the container.
           const box = containerRef.current?.getBoundingClientRect();
           const span = (vertical ? box?.width : box?.height) ?? 0;
           scaleRef.current = Math.max(1, span / 100);
@@ -350,8 +293,7 @@ export function PaneHandle({
         const container = containerRef.current;
         if (!dragging.current || !container) return;
 
-        // Straight onto the DOM: see this file's own doc for why this does not
-        // go through state until the pointer is released.
+        // Straight onto the DOM; state waits for release (see the file doc).
         container.style.setProperty(property, `${movedTo(event)}${unit}`);
       }}
       onPointerUp={(event) => {
@@ -360,16 +302,10 @@ export function PaneHandle({
         dragging.current = null;
         if (had && containerRef.current) onResize(next);
       }}
-      // A touch drag ends in ways a mouse drag does not: a second finger, a
-      // browser deciding the gesture was a scroll after all, a call
-      // arriving. The pointer then never comes up, and left alone the handle
-      // stays in a drag nothing will ever end — the next pointer to cross it
-      // moves the edge with nothing pressed — while the pane keeps a size
-      // nobody committed. Both events, because a cancelled pointer loses its
-      // capture too and either may be the one that arrives; after an
-      // ordinary release there is no drag left to undo, which is what keeps
-      // the implicit loss of capture from taking back what `onPointerUp`
-      // just committed.
+      // A touch drag can end without a pointerup (a second finger, the browser
+      // taking it as a scroll), leaving a drag nothing ends and an uncommitted
+      // size. Either event may arrive, so both cancel; after a normal release
+      // there is no drag left, so losing capture undoes nothing.
       onPointerCancel={cancelDrag}
       onLostPointerCapture={cancelDrag}
     />

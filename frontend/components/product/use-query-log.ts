@@ -5,20 +5,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
 import { MAX_QUERY_SEARCH, type LoggedQuery, type QueriesPage, type QueriesParams, type ReadOptions } from "@/lib/api/journal";
 
-/** How long the search waits for the typing to stop. */
 export const SEARCH_DEBOUNCE_MS = 300;
 
-/** How long a refused read is waited out when the server named no delay. */
+/** Back-off after a refused read when the server named no delay. */
 const DEFAULT_QUIET_SECONDS = 60;
 
-/** What went wrong with the last read, in the three shapes a screen says out loud. */
 export type QueryLogProblem =
   | { kind: "forbidden" }
   | { kind: "tooOften"; seconds: number }
   | { kind: "failed" }
   | null;
 
-/** How a query that was still running ended. */
 export type QueryOutcome = {
   id: number;
   status: string;
@@ -27,23 +24,16 @@ export type QueryOutcome = {
   rowCount: number | null;
 };
 
-/**
- * How a screen learns that a running query has ended, for a screen where one
- * can. A finished contest has none, so a participant's own report passes
- * nothing and the list never asks again.
- */
+/** Polling for running queries. A finished contest passes none. */
 export type QueryLogRefresh = {
-  /** How long between asks. */
   everyMs: number;
-  /** How many times one running query is asked about before it is left alone. */
+  /** Polls per running query before it is left alone. */
   tries: number;
   outcomes(running: LoggedQuery[], options: ReadOptions): Promise<QueryOutcome[]>;
 };
 
 export type QueryLogSource = {
-  /** The first page the screen was rendered with. */
   initial: QueriesPage;
-  /** One page of queries, for the filters and the cursor given. */
   page(params: QueriesParams, options: ReadOptions): Promise<QueriesPage>;
   refresh?: QueryLogRefresh;
 };
@@ -51,23 +41,15 @@ export type QueryLogSource = {
 type Filter = { status: string; q: string };
 
 /**
- * A list of logged queries, newest first, whole.
+ * Logged queries, newest first, with filters, keyset paging and polling for
+ * running ones.
  *
- * - **Filters.** A status reads the first page afresh at once; the search
- *   waits for the typing to stop (`SEARCH_DEBOUNCE_MS`) and is cut to the
- *   length the API takes, so a pasted essay is one bounded question, not a
- *   400. An answer to a filter that has since changed is dropped.
- * - **More.** Keyset: the next page is asked after the last query held.
- * - **Running queries.** A query is journalled as `running` before it runs,
- *   and a queries route is keyset by position, so it would not deliver it
- *   again. Where the screen can find out how one ended (`refresh`), it asks
- *   while one is on screen and the tab is visible, and puts the outcome —
- *   status, error, duration, rows — in place; the whole statement already
- *   held stays. Each query is asked about at most `refresh.tries` times.
- *
- * The reads themselves belong to the caller: the two screens that show this
- * list read two different routes under two different rules, and what they
- * share is everything below that line.
+ * The search is debounced and cut to the length the API accepts, so a paste is
+ * not a 400; an answer for a filter that has since changed is dropped. A query
+ * is logged as `running` before it runs and keyset paging would not deliver it
+ * again, so with `refresh` the hook polls while one is on screen and the tab is
+ * visible, at most `refresh.tries` times per query. The caller owns the reads;
+ * the two screens use different routes.
  */
 export function useQueryLog({ initial, page, refresh }: QueryLogSource) {
   const [items, setItemsState] = useState(initial.items);
@@ -86,13 +68,12 @@ export function useQueryLog({ initial, page, refresh }: QueryLogSource) {
   const triesRef = useRef(new Map<number, number>());
   const abortRef = useRef<AbortController | null>(null);
 
-  // The reads, held rather than depended on: a caller that writes them inline
-  // hands over a new function every render, and a list that rebuilt its
-  // callbacks that often would restart the refresh with them.
+  // Held in a ref: inline callers pass a new function every render, which would
+  // restart the refresh.
   const pageRef = useRef(page);
   const refreshRef = useRef(refresh);
-  // How long a refusal that named no delay is waited out: the refresh's own
-  // interval where there is one, a minute where there is not.
+  // Back-off for a refusal with no delay: the refresh interval, or a minute
+  // without one.
   const quietRef = useRef(DEFAULT_QUIET_SECONDS);
   useEffect(() => {
     pageRef.current = page;
@@ -141,7 +122,6 @@ export function useQueryLog({ initial, page, refresh }: QueryLogSource) {
     }
   }, [failed, setItems]);
 
-  // The search's pending read: one at a time, the latest text wins.
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimerRef.current), []);
 
@@ -189,10 +169,9 @@ export function useQueryLog({ initial, page, refresh }: QueryLogSource) {
     }
   }, [failed, setItems]);
 
-  // The refresh of running queries: a chain of its own, alive while there is
-  // something running to ask about, quiet while the tab is hidden.
-  // Nought stands for "this screen does not refresh", so the effect depends on
-  // two numbers rather than on an object the caller rebuilds every render.
+  // Alive while something is running, paused while the tab is hidden. Zero
+  // means no refresh, so the effect depends on numbers rather than an object
+  // rebuilt every render.
   const everyMs = refresh?.everyMs ?? 0;
   const maxTries = refresh?.tries ?? 0;
   useEffect(() => {
@@ -274,5 +253,4 @@ export function useQueryLog({ initial, page, refresh }: QueryLogSource) {
   return { items, more, status, setStatus, search, setSearch, loading, loadMore, loadingMore, problem };
 }
 
-/** What the list hands the panel that shows it. */
 export type QueryLogState = ReturnType<typeof useQueryLog>;

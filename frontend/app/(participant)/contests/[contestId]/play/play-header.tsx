@@ -15,21 +15,9 @@ import { useContestEvents } from "./use-contest-events";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The thin bar above the workspace: the contest's title and the clock,
- * together — the one thing on this screen every panel sits below.
- *
- * It used to be `sticky`, compensating for `Band`'s own padding with a
- * negative margin so its border ran edge to edge within the content column
- * (a page that scrolled, with this bar pinned to the top of it). The
- * workspace it sits in now (Task 3) does not scroll as a whole — it is
- * itself exactly one screen tall below the product shell's own bar, with
- * every panel scrolling on its own — so this is simply the fixed first row
- * of that layout, full width already, needing neither.
- *
- * This is also the only place on the page that opens the events channel: the
- * one hook call lives here, and the countdown it drives is a leaf of this
- * component alone (see PlayClock below) — nothing about a participant typing
- * in the console or reading the story is affected by a tick.
+ * The thin bar above the workspace: the contest's title and the clock. It is
+ * the only place that opens the events channel, and the countdown is a leaf
+ * (PlayClock), so a tick re-renders nothing else.
  */
 export function PlayHeader({
   contestId,
@@ -40,19 +28,17 @@ export function PlayHeader({
   contestId: string;
   title: string;
   /**
-   * True when the server rendered this page before the contest had started —
-   * the only case where "the contest just started" means this screen has
-   * nothing loaded yet and has to ask the server for it.
+   * True when the server rendered this page before the contest started: the
+   * only case where a start means the page must be fetched again.
    */
   waitingForStart: boolean;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play;
   const router = useRouter();
-  // Whether the page under this bar is showing "not open now" in the
-  // workspace's place (content-loaded.tsx). Only that refusal can go stale
-  // under a running channel: a closed one never reopens, and the others are
-  // not about the contest's window at all.
+  // Whether the page below shows "not open now" in the workspace's place
+  // (content-loaded.tsx). Only that refusal can go stale under a running
+  // channel.
   const renderedRefusal = useRenderedRefusal();
   const renderedDormant = renderedRefusal !== null && refusalKind(renderedRefusal) === "dormant";
   const { offsetRef, deadlineRef, phase, channelError, resync, reopened } = useContestEvents(
@@ -61,33 +47,21 @@ export function PlayHeader({
     renderedDormant,
   );
 
-  // The workspace's content reads start an individual participant's clock on
-  // the server, and may have finished after this channel's first sync told
-  // the clock there was no deadline (content-loaded.tsx's own doc). Once they
-  // have succeeded, one fresh sync brings the deadline they created; the hook
-  // itself bounds the resync to one. Skipped when a deadline is already
-  // known: no read can change one that exists.
+  // Under individual timing the content reads start the clock on the server,
+  // possibly after the first sync reported no deadline. Once they succeed,
+  // one fresh sync brings the deadline (the hook bounds it to one). Skipped
+  // when a deadline is already known.
   const contentLoaded = useContentLoaded();
   useEffect(() => {
     if (contentLoaded && phase === "running" && typeof deadlineRef.current !== "number") resync();
   }, [contentLoaded, phase, resync, deadlineRef]);
 
-  // Refreshed once, the moment one of two specific transitions matters: a
-  // waiting room learning the contest started, or a running screen that
-  // shows "not open now" learning the contest has opened. The second is a
-  // running contest with individual timing whose own window had not opened
-  // when the page was rendered (an organiser started it early): the page
-  // under this bar shows that refusal, and nothing but a refresh replaces it
-  // with the workspace. The hook reports it as `reopened`, whichever side of
-  // this channel's first connection the window opened on: after it, that
-  // connection is refused as not open now and a later one is admitted;
-  // before it, the first connection is simply admitted, and only the page's
-  // own `renderedDormant` says there is anything stale to replace. Every
-  // other phase change (running while already showing the running screen,
-  // or finishing) needs no refetch: the story and the questions a
-  // participant has already have not become wrong, and the existing refusal
-  // flow already says what changed the moment an action is actually
-  // attempted.
+  // Refreshed once, on one of two transitions: a waiting room learning the
+  // contest started, or a page showing "not open now" learning the
+  // participant's window opened (`reopened`). Nothing but a refresh replaces
+  // that refusal with the workspace. Other phase changes need no refetch:
+  // the content already loaded is still right, and refusals say what changed
+  // when an action is attempted.
   const refreshed = useRef(false);
   useEffect(() => {
     const started = waitingForStart && phase === "running";
@@ -99,43 +73,25 @@ export function PlayHeader({
   }, [waitingForStart, phase, reopened, router]);
 
   return (
-    /* `print:hidden` lives on the bar itself now that `page.tsx` renders it
-       outside the workspace (finding 2): what a participant prints is the
-       story, never the chrome around it, and the tree that used to carry
-       that class no longer contains this one. */
+    /* `print:hidden`: a print is the story, never the chrome. */
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2.5 print:hidden">
       <div className="flex min-w-0 items-center gap-3">
-        {/* One line with an ellipsis where there is a row to share, wrapping
-            where there is not. On a phone the title already has the bar to
-            itself — the clock has wrapped onto its own line below it — and
-            truncating there buys nothing while costing the name of the
-            contest: measured at 375px, "Fire at the Kogalniceanu warehouse —
-            regional round" lost its last 75px with 343px of empty second line
-            underneath it. `whitespace-normal` is all that has to be undone;
-            with the text wrapping there is nothing for `text-ellipsis` to
-            apply to and nothing for `overflow-hidden` to cut, since the box
-            has no fixed height. */}
+        {/* One line with an ellipsis where the row is shared; below `narrow` the
+            clock wraps to its own line, so the title wraps instead of losing its
+            end to an ellipsis. */}
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-3">
             <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
             {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
           </div>
-          {/* Design §8: the participant is told, on this screen, that the
-              organiser sees what they do here — the queries, the answers,
-              the notes, and the signals this page reports (use-signals.ts).
-              Under the title rather than in a dismissible banner: it is a
-              standing fact about the screen, not news. */}
+          {/* The participant is told the organiser sees what they do here
+              (docs/ARCHITECTURE.md §9.4). A standing fact, so not a dismissible banner. */}
           <p className="text-small text-ink-2">{t.observed}</p>
         </div>
       </div>
-      {/* The clock and, beside it, §8's three panel toggles — the right end
-          of the bar, which is where VS Code puts its own. They are one flex
-          row of their own so `justify-between` above still has exactly two
-          things to push apart, and so the toggles stay with the clock rather
-          than wrapping away from it on a phone. `PanelToggles` draws nothing
-          at all unless there is a workspace below this bar (panel-toggles.tsx
-          for why that is a provider and not a prop), so the waiting room's
-          own header is unchanged. */}
+      {/* The clock and the panel toggles, one flex row so they wrap together
+          and `justify-between` has two things to push apart. `PanelToggles`
+          draws nothing without a workspace below (panel-toggles.tsx). */}
       <div className="flex shrink-0 items-center gap-3">
         <PlayClock
           offsetRef={offsetRef}
@@ -146,13 +102,9 @@ export function PlayHeader({
         />
         <PanelToggles dict={dict} />
       </div>
-      {/* Finding 1: the channel this clock runs on can fail outright (a
-          connection limit, a rate limit, this account losing access) and, per
-          the SSE spec, the browser then never retries on its own — see
-          use-contest-events.ts's own doc. Without this, that failure was
-          invisible: the clock simply stopped moving, with nothing on screen
-          to say why. `w-full` forces it onto its own line in this flex-wrap
-          row rather than squeezing the title or the clock. */}
+      {/* A channel the browser gave up on never retries by itself
+          (use-contest-events.ts); without this the clock would just stop.
+          `basis-full` puts it on its own line. */}
       {channelError ? (
         <p role="status" aria-live="polite" className="w-full basis-full text-small text-warn">
           {messageForCode(channelError, dict.errors)}
@@ -162,25 +114,14 @@ export function PlayHeader({
   );
 }
 
-/** What the countdown needs to compute a display: a moment, and the offset and deadline as of that moment. */
+/** A moment, and the offset and deadline as of that moment. */
 type ClockSnapshot = { now: number; offset: number; deadline: number | null | undefined };
 
 /**
- * The countdown itself.
- *
- * `Date.now()` and the two refs are read from inside the effect below, never
- * from the render body: render only ever looks at `snapshot`, a plain object
- * captured once a second. That is what keeps this component pure — the rules
- * of React ask for exactly this, not a style preference — and it costs
- * nothing extra: the effect's own `setState` is what causes the once-a-second
- * render this component already needs, so the snapshot is never a second
- * render for the price of the first.
- *
- * That render stops at this component regardless: `offsetRef` and
- * `deadlineRef` are mutable refs nothing above this subscribes to, and the
- * parent re-renders only on a `phase` change, a handful of times in two
- * hours. The once-a-second cost here is one `Date.now()`, one subtraction and
- * a short string, confined to a single `<span>`.
+ * The countdown. `Date.now()` and the refs are read in the effect, never in
+ * render, which only reads the `snapshot` captured once a second; that keeps
+ * render pure and costs no extra render. The tick stops at this component:
+ * nothing above subscribes to the refs.
  */
 function PlayClock({
   offsetRef,
@@ -192,7 +133,7 @@ function PlayClock({
   offsetRef: React.RefObject<number>;
   deadlineRef: React.RefObject<number | null | undefined>;
   phase: "waiting" | "running" | "finished";
-  /** The workspace's content reads have succeeded — see content-loaded.tsx. */
+  /** The workspace's content reads have succeeded (content-loaded.tsx). */
   contentLoaded: boolean;
   dict: PlayDictionary;
 }) {
@@ -200,55 +141,32 @@ function PlayClock({
   const [snapshot, setSnapshot] = useState<ClockSnapshot>({ now: 0, offset: 0, deadline: undefined });
 
   useEffect(() => {
-    // Nothing reads `snapshot` outside the running branch below — "waiting"
-    // and "finished" are fixed text — so a tick while either of those is
-    // showing would cost a render for a `<span>` that never changes (finding
-    // 6). The countdown itself catches up in one `tick()` the instant `phase`
-    // becomes "running", so nothing is lost by not ticking before then.
+    // Only the running branch reads `snapshot`; the first `tick()` catches up
+    // the moment `phase` becomes "running".
     if (phase !== "running") return;
 
     const tick = () => setSnapshot({ now: Date.now(), offset: offsetRef.current, deadline: deadlineRef.current });
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-    // offsetRef and deadlineRef are refs: stable for the component's whole
-    // life, and read through `.current` inside `tick` rather than captured
-    // here, so they need no place in this list to stay current.
+    // Refs are stable and read through `.current` inside `tick`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // What a screen reader is told without being asked, and when (finding 7).
-  // `role="timer"` below is `aria-live="off"`: reading the whole countdown
-  // out loud every second would turn a two-hour contest into two hours of
-  // chatter, so nothing is announced by default. But a participant who
-  // cannot glance at a sticky corner of the screen still needs to know the
-  // deadline is close, the same way the sighted tone changes below already
-  // say it in color — bad at five minutes, warn at fifteen. Five minutes is
-  // the threshold chosen to interrupt for: the earlier, fifteen-minute color
-  // change is a nudge a glance already covers, but five minutes is close
-  // enough that missing it matters, and late enough that only one
-  // interruption is ever owed for it. "Time is up" is the other: the
-  // countdown reaching zero, once, the same milestone the visible clock
-  // marks by turning "bad" for the second time. Computed once per render
-  // from `phase` and `snapshot` rather than duplicated across the branches
-  // below, so every path — including a deadline that resolves to already
-  // expired — shares the one place that decides whether this render just
-  // crossed a threshold.
+  // What a screen reader is told unasked. `role="timer"` is
+  // `aria-live="off"`, since announcing every second would be two hours of
+  // chatter; instead five minutes left and time up are announced once each,
+  // matching the visible tone changes.
   const milestone = clockMilestone(phase, snapshot);
-  // State, not a ref: the comparison below runs during render (the same
-  // "adjust state when something changes" pattern questions-panel.tsx's own
-  // formKey logic uses), and a ref's `.current` may not be read there — only
-  // state may.
+  // State, not a ref: it is compared during render, where a ref's `.current`
+  // may not be read.
   const [seenMilestone, setSeenMilestone] = useState<Milestone>("none");
   const [announcement, setAnnouncement] = useState("");
   if (milestone !== seenMilestone) {
     setSeenMilestone(milestone);
     setAnnouncement(milestone === "five" ? t.fiveMinutesLeft : milestone === "timeup" ? t.timeUp : "");
   }
-  // sr-only: present for assistive technology, invisible otherwise — the
-  // sighted clock beside it already shows every one of these facts in color
-  // and text, continuously, so this exists only for the reader that cannot
-  // see it.
+  // sr-only: the visible clock already shows all of this.
   const live = (
     <span aria-live="polite" className="sr-only">
       {announcement}
@@ -264,11 +182,9 @@ function PlayClock({
     );
   }
 
-  // The channel itself said the contest is over — a fact, not a guess this
-  // clock made by reaching zero (see the countdown branch below for why
-  // those two are deliberately not the same thing). Checked ahead of the
-  // deadline math so a participant who never started still reads "time is
-  // up" rather than "starts with your first action" once it is finished.
+  // The channel said the contest is over, which is a fact rather than the
+  // countdown reaching zero. Checked before the deadline math so a
+  // participant who never started reads "time is up".
   if (phase === "finished") {
     return (
       <>
@@ -280,9 +196,7 @@ function PlayClock({
 
   const { deadline } = snapshot;
   if (deadline === undefined) {
-    // No sync has arrived yet. The clock is a fact the server owns, and the
-    // honest thing to show while waiting for it is that we are waiting —
-    // not a claim about how this contest is timed.
+    // No sync yet: say so rather than guess how the contest is timed.
     return (
       <>
         {live}
@@ -291,11 +205,8 @@ function PlayClock({
     );
   }
   if (deadline === null && contentLoaded) {
-    // No deadline, but the workspace's content reads have succeeded, and
-    // under individual timing those reads are what start the clock: the sync
-    // that said "no deadline" predates them. The header has asked for a fresh
-    // one; until it arrives, the honest thing to say is that we are
-    // synchronising.
+    // The content reads that start an individual clock have succeeded since
+    // the sync that said "no deadline"; a fresh sync has been requested.
     return (
       <>
         {live}
@@ -304,10 +215,8 @@ function PlayClock({
     );
   }
   if (deadline === null) {
-    // A sync arrived and carried no deadline, which the server only does for
-    // an individual-timing participant who has not started: their deadline
-    // arrives with their first read of the contest, not with the contest's
-    // own start (Deadline's own doc on the Go side).
+    // Only an individual-timing participant who has not started has no
+    // deadline; it arrives with their first read of the contest.
     return (
       <>
         {live}
@@ -318,13 +227,10 @@ function PlayClock({
 
   const remainingMs = deadline - (snapshot.now + snapshot.offset);
   if (remainingMs <= 0) {
-    // The countdown reaching zero is not the same fact as `phase` becoming
-    // "finished": the deadline shown here deliberately excludes the grace
-    // period the server still holds before refusing a late answer
-    // (sendSync's own doc on the Go side), so a submission made right after
-    // this reads zero can still be accepted. Nothing here disables anything —
-    // the API's own refusal, if there is one, is what the console and the
-    // answer forms already show.
+    // Zero here is not `phase` "finished": the shown deadline excludes the
+    // server's grace period (sendSync on the Go side), so a submission just
+    // after zero may still be accepted. Nothing is disabled; the API refuses
+    // if it must.
     return (
       <>
         {live}
@@ -343,12 +249,12 @@ function PlayClock({
   );
 }
 
-/** The two moments PlayClock's live region ever interrupts a screen reader for, and "none" the rest of the time. */
+/** The moments PlayClock's live region interrupts a screen reader for. */
 type Milestone = "none" | "five" | "timeup";
 
-/** What PlayClock's own countdown math would show, reduced to just the milestone the live region cares about (see PlayClock's own doc, finding 7). */
+/** The milestone the countdown is at, for the live region. */
 function clockMilestone(phase: "waiting" | "running" | "finished", snapshot: ClockSnapshot): Milestone {
-  // `null` and `undefined` alike: there is no deadline to be near.
+  // `null` and `undefined` alike: no deadline to be near.
   if (phase !== "running" || snapshot.deadline == null) return "none";
   const remainingMs = snapshot.deadline - (snapshot.now + snapshot.offset);
   if (remainingMs <= 0) return "timeup";

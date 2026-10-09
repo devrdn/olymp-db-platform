@@ -12,20 +12,9 @@ export type NewContestState = { code?: string };
 
 
 /**
- * Creating a contest.
- *
- * Everything here is a choice that freezes later, which is why it is asked
- * once, up front: the question format and the timing model stop being editable
- * the moment the contest starts, and the language set decides what every
- * subsequent editor asks for. The schedule and the network rules are not
- * asked, because a draft has neither and the publish gate will demand them
- * when they actually matter.
- *
- * Only the languages the interface itself ships are offered. The API validates
- * the codes against its own catalogue — a table, so a fourth language is an
- * INSERT rather than a deploy — but it publishes no endpoint to read that
- * catalogue, so the interface cannot yet offer a language it has no
- * translation file for. That is a gap on the API's side, not a decision here.
+ * Creates a contest with the choices that freeze later: question format, timing
+ * model and languages. Only languages the interface ships are offered, since
+ * the API has no endpoint to read its catalogue.
  */
 export async function createContestAction(
   _previous: NewContestState,
@@ -38,8 +27,8 @@ export async function createContestAction(
   if (chosen.length === 0) return { code: "invalid_request" };
 
   const fallback = enumFromForm(form.get("defaultLanguage"), LOCALES) ?? chosen[0];
-  // A default that is not among the chosen languages would be accepted by the
-  // form and refused by a partial unique index nobody can read the message of.
+  // A default outside the chosen set would hit a partial unique index with an
+  // unreadable error.
   const defaultLanguage = chosen.includes(fallback) ? fallback : chosen[0];
 
   const translations: Record<string, { title: string; description?: string }> = {};
@@ -51,9 +40,8 @@ export async function createContestAction(
     translations[code] = description ? { title, description } : { title };
   }
 
-  // The contest is identified by its title everywhere it appears. Created
-  // without one in the language it falls back to, it is a blank row in the
-  // register that nobody can tell from the next blank row.
+  // A title in the default language is required, or the register shows an
+  // indistinguishable blank row.
   if (!translations[defaultLanguage]) return { code: "invalid_request" };
 
   const timing = enumFromForm<Timing>(form.get("timing"), TIMINGS) ?? "fixed";
@@ -88,7 +76,6 @@ export async function createContestAction(
 
   revalidatePath("/contests");
 
-  // Straight into the workspace: the next thing an author does is write the
-  // story, and the register would only be a stop on the way there.
+  // Straight to the workspace, where the author writes the story next.
   redirect(`/contests/${created.id}`);
 }

@@ -8,15 +8,8 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
 import { signOut } from "@/lib/auth/sign-out";
 
 /**
- * Signing out.
- *
- * A Server Action, so the control is an ordinary form: it works with
- * JavaScript switched off, and Next checks the request's Origin against its
- * Host before the action runs, which is what keeps a cross-site page from
- * signing our visitors out for fun.
- *
- * The decisions live in `signOut`; this is the wiring that gives it the
- * request and the cookie jar.
+ * Sign-out as a Server Action: works without JavaScript, and Next checks Origin
+ * against Host before it runs. The decisions live in `signOut`.
  */
 export async function signOutAction() {
   const jar = await cookies();

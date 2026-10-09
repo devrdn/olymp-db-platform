@@ -23,23 +23,16 @@ import { messageForCode } from "@/lib/i18n/errors";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
-/** `MAX_AUTO_RESYNCS` from `game-upload.tsx` — the identical bound, for a
- * table's own upload instead of a dump: how many consecutive out-of-order
- * refusals `runLoop` below resyncs from on its own, against
- * `currentTableUploadAction`'s own count, before giving up and asking a
- * person to press Retry. */
+/**
+ * Consecutive out-of-order refusals resynced automatically before asking for
+ * Retry (as in `game-upload.tsx`).
+ */
 const MAX_AUTO_RESYNCS = 3;
 
 /**
- * One chunk of a table's own CSV upload, sent straight to the API rather
- * than through a Server Action — `putChunk` in `game-upload.tsx`, for a
- * table's chunk endpoint instead of a dump's. That file's own doc gives the
- * reasoning in full: a Server Action's body is capped far below
- * `limits.chunkBytes`, which is this *installation's own* configured
- * ceiling (`provisioning.Games.TableDataLimits`), never a constant this file
- * could match, and a Server Action would buffer the whole chunk as
- * `FormData` before this code ever ran where `rawBody: Blob` lets the
- * browser stream the slice off disk instead.
+ * Sends one chunk straight to the API: a Server Action's body limit is far
+ * below the configured chunk size, and `rawBody: Blob` streams the slice from
+ * disk instead of buffering it as `FormData`.
  */
 async function putTableChunk(
   contestId: string,
@@ -62,33 +55,14 @@ async function putTableChunk(
 }
 
 /**
- * One table's own data: its rows, a page at a time, added by hand or loaded
- * from a CSV file in chunks — the table builder's own counterpart of
- * `GameUpload`, scoped to a single table rather than the whole game.
+ * One table's data: rows a page at a time, added by hand or loaded from a
+ * chunked CSV.
  *
- * Kept mounted for every table the definition currently names (its caller,
- * `GameBuilder`, renders one of these per table inside a `Tabs.Content` that
- * only *hides* the ones not selected), so switching tabs never loses an
- * upload already under way. `active` is what gates the very first fetch —
- * this component does nothing on mount until the organiser has actually
- * looked at it, the same "read only what the screen needs" reasoning
- * `page.tsx`'s own `tableRowCount` gives for a page load that would
- * otherwise fan out to every table at once.
- *
- * `GET .../data/current` (`game_handler.go`'s own route, mirroring
- * `.../uploads/current` for a dump) is what lets this component do two
- * things a table's own upload could not do before that route existed: a
- * page reload mid-upload can resume it (`initialTableData`, below, seeded
- * from `page.tsx`'s own best-effort read of that route, the identical
- * shape `game-upload.tsx`'s own `initialUpload` already takes for a dump),
- * and a chunk refused as out of order can resynchronise against the
- * server's own count instead of only offering "Retry" — `runLoop`'s own
- * `MAX_AUTO_RESYNCS`, `game-upload.tsx`'s own retry loop for a table
- * instead of a dump. `sentBytes` is still never advanced except from a
- * chunk response's own `received_bytes`, so an ordinary retry (the same
- * bytes, from the same offset) is still the idempotent no-op
- * `gamefile.Store.Append` already promises, and is still what "Retry"
- * below sends when a resync could not resolve the mismatch on its own.
+ * Stays mounted for every table (tabs only hide), so a running upload survives
+ * a tab switch; `active` gates the first fetch so a page load does not fan out
+ * to every table. A reload resumes from `initialTableData`, and an out-of-order
+ * chunk resyncs against the server's count. `sentBytes` only advances from a
+ * chunk response's `received_bytes`, so Retry resends idempotently.
  */
 export function GameBuilderTable({
   contestId,
@@ -103,39 +77,24 @@ export function GameBuilderTable({
   dict,
 }: {
   contestId: string;
-  /** The table's current, saved structure — never edited from here; only
-   * `GameBuilder`'s own definition editor changes it. */
+  /** The saved structure; only `GameBuilder` edits it. */
   table: TableDefinition;
-  /** Whether this table's tab is the one currently shown. */
   active: boolean;
   limits: BuilderLimits;
   editable: boolean;
-  /** Reports this table's current row count — `TableData.Lines`, lifted
-   * into `GameBuilder`'s own state so every tab agrees on it without a
-   * second read. Write-only from here: this component never has a reason
-   * to read the count back, only to report what a window fetch or a write
-   * just found it to be. Deliberately not the number this screen shows —
-   * a tombstoned row never rewrites the file's own header, so `Lines` is
-   * what stays true to what `GameBuilder`'s own structure lock actually
-   * checks (`checkTableDataCompatibility`, `tabledata.go`), and it must
-   * never move on a delete — see `activeRowCount` for the number that
-   * does. */
+  /**
+   * Reports `TableData.Lines`. Not the displayed number: a tombstone never
+   * rewrites the file, so `Lines` is what the structure lock checks and must
+   * not drop on a delete (see `activeRowCount`).
+   */
   onRowCountChange: (rowCount: number) => void;
-  /** This table's current *active* row count — `TableData.ActiveRows()`,
-   * `Lines` minus how many rows are tombstoned — the number this screen
-   * actually shows next to a locked table's own name, and the one value
-   * this component does read back (removeRow's own decrement). Kept apart
-   * from the count `onRowCountChange` reports on purpose: the two move
-   * independently (a delete lowers this without lowering the other at
-   * all), and a single shared variable for both is exactly what let one
-   * write's own report clobber the other's meaning a moment later. */
+  /**
+   * Active rows (`Lines` minus tombstones), the number shown. Kept apart from
+   * `onRowCountChange` because a delete lowers only this one.
+   */
   activeRowCount: number;
   onActiveRowCountChange: (activeRowCount: number) => void;
-  /** The chunked upload a reloaded page found still receiving for this
-   * table, or null — `page.tsx`'s own `tableCurrentUpload`, the identical
-   * shape `game-upload.tsx`'s own `initialUpload` prop takes for a dump.
-   * Read once, on mount: this component's own state is what stays current
-   * afterward, the same convention `initialUpload` itself follows. */
+  /** The upload still receiving at page load, or null. Read once on mount. */
   initialTableData: TableData | null;
   dict: Dictionary;
 }) {
@@ -145,34 +104,17 @@ export function GameBuilderTable({
   const router = useRouter();
 
   /**
-   * Brings the whole page back from the server after a write that changed
-   * what the server says about this game.
-   *
-   * Each of the three writes below (a typed row, a tombstone, a finished CSV)
-   * marks the contest's game out of date server-side — `tabledata.go`'s own
-   * three `MarkTableDataChanged` calls — and `GameBuild` renders that fact
-   * from a prop `page.tsx` computed on the server before any of them
-   * happened. Revalidating the path inside the Server Action is not enough on
-   * its own: a plain action call, unlike a `<form action={...}>` submit, does
-   * not refresh the tree that read it. `game-upload.tsx`'s own
-   * `router.refresh()` after `completeGameUploadAction` is the same pair for
-   * the same gap, and `GameBuild` itself already uses it after asking for a
-   * build.
-   *
-   * Nothing in this component's own state is reset by it — a refresh merges
-   * fresh server props into the existing client tree — so it is safe to call
-   * in the middle of an upload's own sequence.
+   * Refreshes server props after a write that marks the game out of date.
+   * Revalidating inside the action is not enough: a plain action call, unlike a
+   * form submit, does not refresh the tree. Safe mid-upload, since a refresh
+   * merges props without resetting state.
    */
   function refreshGameState() {
     router.refresh();
   }
 
-  // Only a chunked upload still `'receiving'` counts as something to
-  // resume — `game-upload.tsx`'s own `resumable`, for a table's file
-  // instead of a dump. A `'complete'` or `'aborted'` row never reaches here
-  // in practice (`CurrentTableData` on the server reads only `'receiving'`
-  // rows to begin with), but the same check costs nothing and keeps this
-  // component from trusting a status it does not itself expect.
+  // Only a `'receiving'` upload is resumable; the server returns no other, but
+  // this does not trust it.
   const resumable = initialTableData && initialTableData.status === "receiving" ? initialTableData : null;
 
   const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : "idle");
@@ -181,17 +123,12 @@ export function GameBuilderTable({
   const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? 0);
   const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? 0);
   const [rateBps, setRateBps] = useState(0);
-  // Set only while resuming an unfinished upload with a file whose size does
-  // not match it — `game-upload.tsx`'s own `mismatch`, for a table's file
-  // instead of a dump (which also checks the filename; a table's own upload
-  // carries none, so size is the one thing worth checking before spending a
-  // request).
+  // Set while resuming with a file whose size does not match; a table upload
+  // has no filename to compare.
   const [mismatch, setMismatch] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  // The server's own words, when the refusal is one of the table builder's
-  // own row/column-specific ones — `GameState.detail`'s own doc in
-  // `actions.ts` explains why this is the one class of error whose English
-  // text is worth showing beside the dictionary's own translated sentence.
+  // The server's row/column detail for a table-builder refusal (see
+  // `GameState.detail`).
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [hasFile, setHasFile] = useState(false);
 
@@ -229,32 +166,18 @@ export function GameBuilderTable({
     setWindowTotal(w.totalRows);
     setWindowTruncated(w.truncated);
     setGotoValue(String(w.fromRow));
-    // `w.totalRows` is `TableRowWindow.TotalRows` — `data.Lines` on the
-    // server (`tabledata.go`'s own `TableDataWindow`), never adjusted for a
-    // tombstoned row the way `TableData.ActiveRows()` is. That is the more
-    // conservative of the two counts, and deliberately the one this passes
-    // upward: `GameBuilder`'s own lock on a table's structure exists because
-    // its CSV file still names the *old* columns, and that stays true of a
-    // fully-deleted file exactly as much as a full one — nothing about a
-    // tombstone rewrites the header. `appendTableRowAction` and
-    // `completeTableUploadAction` report the exact, deletion-adjusted count
-    // (`TableData.ActiveRows()`) after a write that actually changes it,
-    // which is the more honest number for the row list's own heading.
+    // `totalRows` is `Lines`, not adjusted for tombstones: the structure lock
+    // must hold while the file still names the old columns.
     onRowCountChange(w.totalRows);
   }
 
-  // Loads the first page the moment this table's tab is actually looked at,
-  // and never again on its own afterward — `loadedRef` is this instance's
-  // own flag, not keyed on anything that changes while the component stays
-  // mounted (`GameBuilderTable`'s own doc explains why it stays mounted
-  // across a tab switch).
+  // Loads the first page once, when the tab is first shown.
   const loadedRef = useRef(false);
   useEffect(() => {
     if (!active || loadedRef.current) return;
     loadedRef.current = true;
     void fetchWindow(1);
-    // fetchWindow is stable enough for this effect's one-time call; see the
-    // identical choice in game-upload.tsx's own loadedForRef effect.
+    // One-time call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -266,10 +189,7 @@ export function GameBuilderTable({
     setSentBytes(newSent);
   }
 
-  /** Sends every remaining chunk of `file`, starting at `startOffset` —
-   * `runLoop` in `game-upload.tsx`, now with the identical out-of-order
-   * resync that file's own loop runs, since `currentTableUploadAction`
-   * gives this component something to ask (`MAX_AUTO_RESYNCS`'s own doc). */
+  /** Sends the remaining chunks from `startOffset`, resyncing on out-of-order refusals. */
   async function runLoop(file: File, id: string, startOffset: number, chunkBytes: number) {
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -283,19 +203,14 @@ export function GameBuilderTable({
       const chunk = file.slice(offset, end);
 
       try {
-        // One chunk at a time, on purpose — the identical reasoning
-        // game-upload.tsx's own runLoop gives: a parallel PUT would race the
-        // same offset and be refused as out of order regardless.
+        // One at a time: parallel PUTs would race the same offset.
         offset = await putTableChunk(contestId, table.name, id, offset, chunk, controller.signal);
         resyncs = 0;
         markProgress(offset);
       } catch (error) {
         if (isAbortError(error)) return;
 
-        // The server knows the true offset better than this tab's own
-        // count of what it sent — game-upload.tsx's own identical branch,
-        // for a table's upload now that there is a `.../data/current` to
-        // ask.
+        // The server knows the true offset better than this tab.
         if (
           error instanceof ApiError &&
           error.code === "game_table_data_chunk_out_of_order" &&
@@ -312,11 +227,8 @@ export function GameBuilderTable({
 
         setPhase("error");
         setErrorCode(failureCode(error));
-        // The chunk PUT is sent straight to the API (`putTableChunk`'s own
-        // doc), not through a Server Action, so the full `ApiError` — header
-        // mismatch and everything else `checkTableHeaderOnFirstChunk` can
-        // catch this early — is still right here to read `.message` off,
-        // never routed through `GameState.detail` at all.
+        // The PUT goes straight to the API, so the full `ApiError` (e.g. a
+        // header mismatch) is available here.
         setErrorDetail(error instanceof ApiError ? error.message : null);
         return;
       }
@@ -365,11 +277,7 @@ export function GameBuilderTable({
     await runLoop(file, begun.id, 0, begun.builderLimits.chunkBytes);
   }
 
-  /** Resumes the upload `resumable` describes after a reload — `beginResume`
-   * in `game-upload.tsx`, minus the filename check that file's own doc
-   * explains a table's upload has nothing to check (it carries no filename
-   * at all): only the reselected file's size has to agree with what the
-   * unfinished upload declared. */
+  /** Resumes after a reload; only the reselected file's size must match. */
   async function beginResume(file: File) {
     if (!resumable) return;
     setMismatch(false);
@@ -377,10 +285,8 @@ export function GameBuilderTable({
     setErrorDetail(null);
     setPhase("uploading");
 
-    // The reselected file only proves its own size matches — the server's
-    // own count of what it actually received is what a resend has to start
-    // from, not the number this page loaded with, which may already be
-    // stale (`currentTableUploadAction`'s own doc).
+    // Resend from the server's current count; the one loaded with the page may
+    // be stale.
     const fresh = await currentTableUploadAction(contestId, table.name);
     const offset =
       fresh && fresh.id === resumable.id && fresh.status === "receiving"
@@ -398,9 +304,7 @@ export function GameBuilderTable({
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const picked = event.target.files?.[0];
-    // Cleared immediately, not just after a successful read — game-upload.tsx's
-    // own identical doc explains why: without this, picking the very same
-    // file a second time to fix a mismatch never fires `onChange` at all.
+    // Cleared at once, so picking the same file again still fires `onChange`.
     event.target.value = "";
     if (!picked) return;
 
@@ -456,12 +360,7 @@ export function GameBuilderTable({
     setAddErrorCode(null);
     setAddErrorDetail(null);
 
-    // Checked before a request is made: an empty value in a column the
-    // definition marked NOT NULL is exactly what the server would refuse
-    // (`game_table_value_invalid`'s own translated sentence already says so
-    // — "The message says which row and column"), and this is the one such
-    // mistake cheap enough to name before the click rather than after it.
-    // There is no server detail to show for it: nothing was sent yet.
+    // An empty value in a NOT NULL column is refused before any request.
     const missing = table.columns.findIndex((col, i) => !col.nullable && rowValues[i].trim() === "");
     if (missing >= 0) {
       setAddErrorCode("game_table_value_invalid");
@@ -494,12 +393,8 @@ export function GameBuilderTable({
       setWindowError(result.code);
       return;
     }
-    // A tombstone never rewrites Lines (DeleteTableRow's own doc: "not a
-    // rewrite of the file"), so only the active count moves — rowCount
-    // (Lines) is left exactly as it was, on purpose: it is what GameBuilder's
-    // own structure lock reads, and a delete must never look like it
-    // unlocked a table the server still refuses to let this screen
-    // restructure.
+    // A tombstone never rewrites `Lines`, so only the active count moves; the
+    // structure lock must stay.
     onActiveRowCountChange(Math.max(0, activeRowCount - 1));
     refreshGameState();
     await fetchWindow(windowFrom);
@@ -781,14 +676,10 @@ export function GameBuilderTable({
   );
 }
 
-/** A value input shaped for one column's own type — the closed set
- * `provisioning.ColumnType.valid` accepts, read here off `col.type` as a
- * plain string the same way `columnDefinitionSchema` carries it (never a
- * second, hand-typed enum on this side — the reasoning that schema's own
- * doc gives). An unrecognised type (a future column type this build does
- * not know about yet) falls back to a plain text field rather than refusing
- * to render at all: the server is still what validates the value either
- * way. */
+/**
+ * An input shaped for the column type. An unknown type falls back to a text
+ * field; the server validates either way.
+ */
 function ColumnValueInput({
   type,
   value,
@@ -841,9 +732,7 @@ function ColumnValueInput({
       />
     );
   }
-  // "numeric" stays a plain text field rather than type="number": PostgreSQL's
-  // own numeric_in accepts digit-grouping underscores and the special values
-  // "NaN"/"Infinity", none of which a browser's number input would let
-  // through — validateScalar (tablecsv.go) is the actual check either way.
+  // Text, not type="number": PostgreSQL numeric accepts underscores, "NaN" and
+  // "Infinity", which a number input rejects.
   return <input type="text" value={value} onChange={(event) => onChange(event.target.value)} className={className} />;
 }

@@ -7,14 +7,8 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { useQueries } from "./use-queries";
 
 /**
- * The SQL queries tab (design §6): every statement the participant ran,
- * whole, newest first, with a status filter and a text search, fifty at a
- * time.
- *
- * The panel is `QueryLog`, which the participant's own report shows too; this
- * is the monitoring half — the route the pages come from (`useQueries`), the
- * organiser's words, and the address column, which is the one column a
- * participant's own copy of this list does not carry.
+ * The SQL queries tab (SPEC.md §5.1): `QueryLog` fed by `useQueries`, with staff
+ * wording and the address column the participant's copy lacks.
  */
 export function QueriesTab({
   contestId,

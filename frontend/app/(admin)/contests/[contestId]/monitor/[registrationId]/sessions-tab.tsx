@@ -11,12 +11,12 @@ import { cn } from "@/lib/utils";
 import { Problem } from "../monitor-view";
 import { useMonitor } from "../use-monitor";
 
-/** The timeline's kinds this tab is made of. */
+/** The timeline kinds this tab shows. */
 export const SESSION_KINDS = ["sign_in", "sign_out", "sign_in_failed", "ip_changed", "parallel_session"];
 
 type SessionsDict = Dictionary["workspace"]["monitor"]["participant"]["sessions"];
 
-/** The addresses an item names, in the order it names them. */
+/** The addresses an item names, in order. */
 function addressesOf(item: FeedItem): string[] {
   const d = item.detail;
   switch (d.type) {
@@ -32,11 +32,9 @@ function addressesOf(item: FeedItem): string[] {
 }
 
 /**
- * The sign-ins and networks tab (design §6): sign-ins, sign-outs and failed
- * sign-ins with their address and browser, address changes and parallel
- * sessions — the participant's timeline narrowed to those kinds, kept
- * current the way the timeline tab is (`useMonitor`), newest first, with
- * every address seen named once above.
+ * Sign-ins and networks (SPEC.md §5.1): the participant's timeline narrowed to
+ * session kinds, kept current by `useMonitor`, newest first, with every address
+ * seen listed once above.
  */
 export function SessionsTab({
   contestId,
@@ -119,7 +117,7 @@ export function SessionsTab({
 
 const CELL = "border-b border-line px-2 py-1.5 align-top";
 
-/** One event. Memoised on the item, which a poll that brought nothing new leaves as it was. */
+/** One event, memoised on the item. */
 const SessionRow = memo(function SessionRow({ item, t, locale }: { item: FeedItem; t: SessionsDict; locale: string }) {
   const d = item.detail;
   const event = (t.events as Record<string, string>)[item.kind] ?? item.kind;
@@ -129,8 +127,7 @@ const SessionRow = memo(function SessionRow({ item, t, locale }: { item: FeedIte
   const warn = item.kind === "sign_in_failed" || item.kind === "parallel_session" || item.kind === "ip_changed";
 
   return (
-    // Up to a thousand rows (the feed's bound): the browser skips laying out
-    // and painting those out of view, as the queries list does.
+    // Up to a thousand rows; the browser skips laying out those out of view.
     <tr className="[contain-intrinsic-size:auto_2.5rem] [content-visibility:auto]">
       <td className={cn(CELL, "font-mono text-label whitespace-nowrap text-ink-2 tabular-nums")}>
         <time dateTime={item.at}>{formatMoment(item.at, { locale })}</time>

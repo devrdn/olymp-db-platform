@@ -11,13 +11,8 @@ import { SignOutButton } from "./sign-out-button";
 import { ThemeToggle } from "./theme-toggle";
 
 /**
- * The bar every screen wears.
- *
- * Its contents sit on the same three-track grid the bands use, so the mark
- * lines up with the first character of the heading below it and the language
- * switcher with the right edge of the column. A bar that floats full-bleed
- * over a centred column is the small misalignment that makes a page look
- * assembled from parts, and it costs one grid to avoid.
+ * The bar every screen wears, on the bands' three-track grid so the mark and
+ * the switcher align with the column below.
  */
 export function AppBar({
   locale,
@@ -33,39 +28,24 @@ export function AppBar({
   locale: Locale;
   theme: Theme;
   dict: Dictionary;
-  /**
-   * Where the mark leads, when it leads anywhere.
-   *
-   * A mark that navigates is a promise that the destination exists, and `/`
-   * has no page: the public landing belongs to a later step. Each shell says
-   * where its own home is, and the sign-in screen says nothing, because a
-   * visitor without a session has nowhere to be sent but back here.
-   */
+  /** Where the mark links, if anywhere; each shell names its own home. */
   home?: string;
-  /** What this installation calls itself, from its own settings. */
   name?: string;
-  /** Where its own mark lives, when it has uploaded one. */
+  /** The installation's uploaded logo, if any. */
   logo?: string;
-  /**
-   * Who is signed in. Present, the bar carries the door to their profile,
-   * which is where signing out lives; absent, it carries neither.
-   */
+  /** When present, the bar links to the profile, where signing out lives. */
   account?: Account;
   /**
-   * A session with no profile to open. The forced password change is the only
-   * such screen: the API refuses that account every endpoint but three, so it
-   * needs the way out spelled directly in the bar.
+   * A session that cannot open a profile (the forced password change,
+   * refused nearly every endpoint), so sign-out goes in the bar.
    */
   signedIn?: boolean;
-  /** Screen-specific chrome: a contest title, a timer, a breadcrumb. */
   children?: React.ReactNode;
 }) {
   const mark = (
     <>
-      {/* The installation's own mark when it has uploaded one, the product's
-          otherwise. Not `next/image`: the address already carries a content
-          hash and is cached forever by the API, so there is nothing an
-          optimiser could add but a second copy and a second origin. */}
+      {/* Not `next/image`: the address is content-hashed and cached forever by
+         the API, so an optimiser would only add a second copy and origin. */}
       {logo ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={logo} alt="" aria-hidden className="h-5 w-auto max-w-32 shrink-0 object-contain" />
@@ -74,9 +54,7 @@ export function AppBar({
           <Mark className="size-3" />
         </span>
       )}
-      {/* What the installation calls itself, with the product's own name as
-          the fallback. A university that has not renamed anything still gets a
-          heading rather than a blank. */}
+      {/* The installation's name, falling back to the product's. */}
       {name?.trim() || dict.chrome.product}
     </>
   );

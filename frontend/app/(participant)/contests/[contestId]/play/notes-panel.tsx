@@ -14,24 +14,16 @@ import { useAutosave, type AutosaveStatus } from "./use-autosave";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The notes tab beside the console (§6 of the workspace design): one plain
- * field, no Markdown, that saves itself, with the save's status under it
- * and a character counter once the notes near the limit.
+ * The notes tab (docs/ARCHITECTURE.md §6.4): one plain, self-saving field
+ * with its save status and, near the limit, a character counter.
  *
- * The field is uncontrolled. Typing hands the text to the autosave engine
- * and re-renders nothing, unless the status changes or the notes are within
- * reach of the limit, where the counter has to follow every keystroke. This
- * component owns all of that state, so the tabs beside it never re-render
- * for it.
+ * The field is uncontrolled: typing re-renders nothing unless the status
+ * changes or the counter is showing. `initial` is null when the workspace
+ * could not be read, and then no field is offered, since typing into an
+ * empty one would save over notes the server still holds.
  *
- * `initial` is null when the page could not read the workspace. The field is
- * then not offered at all: whatever was typed into an empty field would be
- * saved over notes the server still holds.
- *
- * Two status lines, on purpose. The visible one follows every change,
- * "Saving…" included; the screen reader's live region carries only settled
- * outcomes, so a routine save after each pause in typing is not read out,
- * while a failure, the recovery from it and the contest closing are.
+ * The visible status follows every change; the live region carries only
+ * settled outcomes, so routine saves are not read aloud.
  */
 export function NotesPanel({
   accountId,
@@ -39,7 +31,7 @@ export function NotesPanel({
   initial,
   dict,
 }: {
-  /** Whose notes these are; the draft is keyed by it (`draftStorageKey`). */
+  /** Whose notes these are; the draft is keyed by it. */
   accountId: string | null;
   contestId: string;
   initial: WorkspaceNotes | null;
@@ -70,7 +62,7 @@ function NotesEditor({
   const statusId = useId();
   const counterId = useId();
 
-  // Null below the threshold, so an edit there sets the same value again and
+  // Null below the threshold, so an edit there sets the same value and
   // React skips the render.
   const [count, setCount] = useState<number | null>(() => countFor(initial.body));
 
@@ -94,9 +86,8 @@ function NotesEditor({
     onRestore,
   });
 
-  // The last settled outcome, for the live region: "saving" and "pending"
-  // are passing states and do not replace it. Adjusted during render, the
-  // way React recommends for state derived from a changing input.
+  // The last settled outcome, for the live region; "saving" and "pending"
+  // do not replace it.
   const [settled, setSettled] = useState<AutosaveStatus>(status);
   if (status.kind !== "saving" && status.kind !== "pending" && status !== settled) {
     setSettled(status);
@@ -115,12 +106,8 @@ function NotesEditor({
         id={fieldId}
         defaultValue={initial.body}
         maxLength={NOTES_MAX_CHARS}
-        // Not made read-only when the contest ends, which is what the SQL
-        // editor beside it already decided (§5): the saving stops, the draft
-        // stays, and the field goes on taking text. A field that turns to
-        // stone under a hand mid-sentence is the one answer that loses
-        // something, and the status line below says why nothing is being
-        // saved.
+        // Not read-only when the contest ends, as with the SQL editor:
+        // saving stops, the draft stays, and the status line says why.
         placeholder={t.placeholder}
         spellCheck={false}
         aria-describedby={describedBy}
@@ -139,8 +126,7 @@ function NotesEditor({
           "hover:border-ink-2 focus-visible:border-ink focus-visible:outline-none"
         }
       />
-      {/* Design §8: the notes are not private — the organiser sees them and
-          their history — and the field says so where it is used. */}
+      {/* The organiser sees the notes and their history (docs/ARCHITECTURE.md §6.4). */}
       <p className="text-small text-ink-2">{t.observed}</p>
       <div className="flex items-start justify-between gap-3">
         <p data-testid="notes-status" aria-hidden="true" className={`text-small ${toneOf(status)}`}>
@@ -159,12 +145,8 @@ function NotesEditor({
           </p>
         ) : null}
       </div>
-      {/* The field simply stops accepting text at the limit, which is
-          invisible to a screen reader. Said once, when the limit is
-          reached: the text only changes when the state does, so staying at
-          the limit is not repeated. Its own region rather than the status
-          line above, which is about the save and would be re-read for
-          this. */}
+      {/* At the limit the field silently stops taking text, so a screen reader
+          is told once, in a region apart from the save status. */}
       <p data-testid="notes-limit" aria-live="polite" className="sr-only">
         {full ? t.limitReached : ""}
       </p>
@@ -173,14 +155,14 @@ function NotesEditor({
 }
 
 /**
- * The counter is plain digits with no locale grouping. It renders on the
- * server as well as in the browser, and `Intl` groups by whichever ICU data
- * each side has: a separator that differs between the two is a hydration
- * mismatch on a screen that must not flicker.
+ * The counter value, or null below the threshold. Plain digits without
+ * locale grouping: server and browser ICU data may group differently, which
+ * would be a hydration mismatch.
  */
 function countFor(text: string): number | null {
-  // UTF-16 code units, the same measure `maxLength` enforces; never more
-  // characters than the server counts, so the field stops before it refuses.
+  // UTF-16 code units, as `maxLength` counts them: never fewer than the
+  // server's character count, so the field stops before the server would
+  // refuse.
   return text.length >= NOTES_COUNTER_FROM ? text.length : null;
 }
 

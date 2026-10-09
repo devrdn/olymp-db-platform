@@ -6,31 +6,24 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 /**
- * The contest's table, as a participant or anybody with the public link sees
- * it: a banner saying what state the table is in, a podium on the full page,
- * and the table itself.
+ * The standings as participants and public-link visitors see them: a state
+ * banner, a podium on the full page, and the table. Presentational, so the
+ * play tab and the public page share it.
  *
- * The one screen in the product read for its colour before its numbers, and
- * the one place the standings sub-palette is spent (docs/design/SPEC.md §3.5):
- * medals for places one to three, frost for a frozen table, a tint for your
- * own row, and an identity hue per participant for their initials and score
- * bar. None of it is the only carrier of a fact — the medal holds its number,
- * the freeze has its sentence, your row says "You", the winner says "Winner".
- *
- * Presentational and stateless, so the play tab and the public page share it
- * and each keeps its own fetching.
+ * The one place the standings sub-palette is spent (SPEC §3.5). No colour is
+ * the only carrier of a fact: the medal holds its number, the freeze has its
+ * sentence, your row says "You".
  */
 
+/** The part of the dictionary the standings read. */
 export type StandingsDictionary = Pick<Dictionary, "leaderboard">;
 
 type Medal = "gold" | "silver" | "bronze";
 
 const MEDALS: Record<number, Medal> = { 1: "gold", 2: "silver", 3: "bronze" };
 
-// Written out whole so Tailwind finds every class in the source.
-// A medal is a solid disc — the page ground on the medal colour, checked by
-// the contrast script — so the podium reads from across a hall, not only up
-// close. `row` tints a medal's whole row; your own row's tint wins over it.
+// Written out whole so Tailwind finds every class. `row` tints a medal's whole
+// row; your own row's tint wins over it.
 const MEDAL_CLASSES: Record<
   Medal,
   { disc: string; bar: string; edge: string; step: string; row: string }
@@ -71,13 +64,12 @@ function medalOf(row: { place: number | null }): Medal | undefined {
   return row.place === null ? undefined : MEDALS[row.place];
 }
 
-/** The left edge a medal row carries, for a table that is not StandingsView. */
+/** The left edge a medal row carries, for tables other than StandingsView. */
 export function medalEdge(place: number | null): string {
   const medal = medalOf({ place });
   return medal ? MEDAL_CLASSES[medal].edge : "border-l-transparent";
 }
 
-/** A place: a medal disc for one to three, a plain number after, a dash for none. */
 export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced: string }) {
   const medal = medalOf({ place });
   return (
@@ -105,7 +97,6 @@ export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced
   );
 }
 
-/** A person's initials on their identity hue; a deleted account gets neither. */
 export function Initials({ label, deleted }: { label: string; deleted: boolean }) {
   const hue = identityHue(label);
   return (
@@ -123,17 +114,13 @@ export function Initials({ label, deleted }: { label: string; deleted: boolean }
   );
 }
 
-/** Whether the contest's window has closed, read against the viewer's clock. */
 function ended(endsAt: string | undefined): boolean {
   return endsAt !== undefined && Date.parse(endsAt) <= Date.now();
 }
 
 type CellDictionary = StandingsDictionary["leaderboard"]["cells"];
 
-/**
- * The cell's accessible name: the question's letter and its state spelled
- * out in words, never colour alone (docs/design/SPEC.md §3.5, ICPC cells).
- */
+/** The question's letter and its state in words, never colour alone (SPEC §3.5). */
 function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictionary): string {
   switch (cell.state) {
     case "solved": {
@@ -149,10 +136,8 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
     case "pending": {
       const n = String(cell.pending ?? 0);
       const wrong = cell.attempts ?? 0;
-      // The design (not the brief's narrower wording) governs: a pending
-      // cell that already carried wrong attempts before the freeze keeps
-      // saying so — that was visible before the table froze, so repeating it
-      // leaks nothing about what happened after.
+      // Wrong attempts made before the freeze stay visible: they were public
+      // already, so this leaks nothing.
       return wrong > 0
         ? t.pendingWrong.replace("{letter}", letter).replace("{n}", n).replace("{w}", String(wrong))
         : t.pending.replace("{letter}", letter).replace("{n}", n);
@@ -163,12 +148,9 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
 }
 
 /**
- * The ICPC grid's fixed-width columns, named once: a `<th>`'s Tailwind class
- * and the rem number `gridMinWidthRem` sums are the same fact told from one
- * place, not two numbers a comment merely promises stay in sync. Both tables
- * (the public/participant view here, the staff view in `staff-standings.tsx`)
- * read from this — a place column is `place` on the public table and
- * `placeWide` on the staff one (which also names a login next to it).
+ * The ICPC grid's fixed columns: each Tailwind class next to the rem width
+ * `gridMinWidthRem` sums, so the two cannot drift. Shared with
+ * `staff-standings.tsx`.
  */
 export const ICPC_COLUMN = {
   place: { className: "w-14", rem: 3.5 },
@@ -176,48 +158,32 @@ export const ICPC_COLUMN = {
   login: { className: "w-28", rem: 7 },
   solved: { className: "w-20", rem: 5 },
   penalty: { className: "w-20", rem: 5 },
-  /** One grid cell — `GridHeaderCells` wears this class; `table-fixed` gives
-   * `GridCells`' own `<td>`s the same width from the header without needing
-   * the class repeated on every cell of every row. */
+  /** `table-fixed` gives the body cells the header's width, so only the header needs the class. */
   grid: { className: "w-12", rem: 3 },
 } as const;
 
 /**
- * A still-legible width for the name column once the grid has crowded it.
- * The name column carries no width class of its own — it is the one column
- * meant to give way — but with enough questions the grid's fixed columns
- * alone exceed the viewport, and an unconstrained column given no room left
- * collapses to nothing rather than "gives way". Past that point the table
- * needs a floor, so it scrolls inside its own `overflow-x-auto` instead.
+ * Floor for the name column. With many questions the fixed columns alone exceed
+ * the viewport and the name would collapse to nothing; past that point the
+ * table scrolls instead.
  */
 const GRID_NAME_MIN_REM = 12;
 
 /**
- * The `min-width` (in rem) a table needs once its ICPC grid is on screen:
- * every fixed column, in rem matching the Tailwind width classes the caller
- * actually applies to them (see `ICPC_COLUMN`), plus one grid cell per
- * question, plus the name column's floor above.
+ * Minimum table width in rem with the ICPC grid shown: fixed columns, one cell
+ * per question, and the name floor.
  */
 export function gridMinWidthRem(fixedColumnsRem: number, questionCount: number): number {
   return fixedColumnsRem + questionCount * ICPC_COLUMN.grid.rem + GRID_NAME_MIN_REM;
 }
 
-/** The CSS variable a table's `min-width` is read from — see `gridTableWidth`. */
 const GRID_MIN_WIDTH_VAR = "--grid-min-width";
 
 /**
- * The class and inline style a table needs to protect its name column once
- * its ICPC grid is on screen — `undefined` when there is no grid to protect
- * against (`points` mode, or ICPC without a grid on screen, the narrow
- * panel), so the table is left to size itself exactly as it already did.
- *
- * The value travels as a CSS custom property, read by a class scoped to
- * `narrow` and up — the same breakpoint `GridHeaderCells`/`GridCells`
- * themselves appear at (they are `max-narrow:hidden`). Setting `min-width`
- * itself unconditionally, rather than through this breakpoint-scoped class,
- * was the bug this replaced: a phone never shows the grid, so a `min-width`
- * sized for it forced every ICPC table into a sideways scroll on every
- * phone, grid or no grid to see.
+ * Class and style that protect the name column while the ICPC grid is shown, or
+ * `undefined` when there is no grid. The width is scoped to `narrow` and up,
+ * where the grid appears: a phone never shows it and must not scroll sideways
+ * for it.
  */
 export function gridTableWidth(
   fixedColumnsRem: number,
@@ -225,19 +191,17 @@ export function gridTableWidth(
 ): { className: string; style: React.CSSProperties } | undefined {
   if (!questionCount) return undefined;
   return {
-    // Written out whole, not assembled from GRID_MIN_WIDTH_VAR, so Tailwind's
-    // build-time scan of this file's literal text finds the exact class —
-    // a class built from a template string at runtime is invisible to it,
-    // and the rule it names would never be generated.
+    // Written out whole, not built from GRID_MIN_WIDTH_VAR, so Tailwind's scan
+    // finds it.
     className: "narrow:min-w-(--grid-min-width)",
     style: { [GRID_MIN_WIDTH_VAR]: `${gridMinWidthRem(fixedColumnsRem, questionCount)}rem` } as React.CSSProperties,
   };
 }
 
 /**
- * The ICPC grid's header row: one column per question letter, shown only on
- * the full page and only from the `narrow` breakpoint up — the play tab and
- * a phone get the plain "solved, penalty" columns instead (SPEC.md §3.5).
+ * The ICPC grid's header row, one cell per question; shown only on the full
+ * page from `narrow` up. The play tab and phones get the plain "solved,
+ * penalty" columns.
  */
 export function GridHeaderCells({ questions }: { questions: string[] }) {
   return (
@@ -256,14 +220,10 @@ export function GridHeaderCells({ questions }: { questions: string[] }) {
 }
 
 /**
- * One row's ICPC grid: a cell per visible question, coloured by state and
- * carrying a spelled-out accessible name so the state never rests on colour
- * alone. `solved` shows the attempt above the minute ("+" on the first try,
- * "+N" for N wrong attempts first); a first solve is a solid fill, not just
- * a tint. `failed` shows the wrong-attempt count; `pending` shows "?" and how
- * many attempts came after the freeze, plus a "−N" second mark for the wrong
- * attempts already known before the freeze, when there were any; `untried`
- * shows nothing visible.
+ * One row's ICPC cells. `solved` shows the attempt above the minute ("+" first
+ * try, "+N" after N wrong), a first solve as a solid fill; `failed` shows the
+ * wrong count; `pending` shows "?" with attempts after the freeze, plus "−N"
+ * for wrong attempts known before it; `untried` shows nothing.
  */
 export function GridCells({
   cells,
@@ -329,15 +289,14 @@ export function StandingsView({
   locale: string;
   /** `panel` is the narrow play tab; `page` is the public page with its podium. */
   variant: "panel" | "page";
-  /** The last refresh failed, and what is shown is the previous copy. */
+  /** The last refresh failed; the previous copy is shown. */
   failed?: boolean;
 }) {
   const t = dict.leaderboard;
   const { state, rows } = standings;
   const icpc = standings.scoring === "icpc";
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
-  // The grid only ever appears on `page` — never in the narrow panel — so
-  // only there does the table need protecting against it (see gridTableWidth).
+  // The grid only appears on `page`.
   const gridQuestions = variant === "page" && icpc ? standings.questions : undefined;
   const gridWidth = gridTableWidth(
     ICPC_COLUMN.place.rem + ICPC_COLUMN.solved.rem + ICPC_COLUMN.penalty.rem,
@@ -358,13 +317,9 @@ export function StandingsView({
             <Podium rows={rows} dict={dict} scoring={standings.scoring} />
           ) : null}
           <div className="overflow-x-auto">
-            {/* Fixed layout, so the name is the column that gives way: under an
-                automatic layout a long name pushed the points off a phone's
-                screen, into a sideways scroll nobody knows to try. The
-                `narrow`-scoped min-width class protects that same name
-                column from the opposite failure once a wide ICPC grid is on
-                screen — the table scrolls inside the wrapper above instead
-                of squeezing it. */}
+            {/* Fixed layout, so the name column gives way instead of pushing the
+               points off a phone. The `narrow` min-width keeps a wide ICPC grid
+               from squeezing it to nothing. */}
             <table
               className={cn("w-full table-fixed border-collapse", gridWidth?.className)}
               style={gridWidth?.style}
@@ -466,13 +421,11 @@ function Row({
   locale: string;
   variant: "panel" | "page";
   icpc: boolean;
-  /** The ICPC grid's letters — absent when the contest has none to show. */
   questions?: string[];
 }) {
   const t = dict.leaderboard;
   const medal = medalOf(row);
-  // Neither hue nor share means anything on the ICPC branch below — it has
-  // no score bar — so neither is worth computing there.
+  // The ICPC branch has no score bar, so neither is needed there.
   const hue = icpc ? 0 : identityHue(row.label);
   const share = !icpc && leader > 0 ? Math.round((row.points / leader) * 100) : 0;
 
@@ -572,10 +525,8 @@ function Row({
 }
 
 /**
- * The top three, raised above the table on the full page. Second, first,
- * third, at three heights, so it reads as a podium rather than as a row of
- * three identical cards (SPEC §15). Only rows that actually scored stand on
- * it: a podium of zeroes says nothing the table does not.
+ * The top three, second-first-third at three heights (SPEC §15). Only rows that
+ * scored stand on it.
  */
 function Podium({
   rows,

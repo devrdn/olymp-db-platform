@@ -26,15 +26,8 @@ import {
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * A titled block with its own save.
- *
- * Four forms, not one, because they are four endpoints: the contest's own
- * fields, the language set, the translations and the SQL policy. A single save
- * would send all four on every change, and a refusal from one would discard
- * the other three.
- *
- * What the block is for sits behind a "?" beside the heading (`help`); the
- * short rules stay under their own fields.
+ * A titled block with its own save. Four forms for four endpoints, so one
+ * refusal does not discard the others.
  */
 function Panel({
   title,
@@ -64,15 +57,9 @@ function Panel({
 }
 
 /**
- * A fieldset's legend with an explanation behind a "?".
- *
- * The "?" sits *inside* the `<legend>` on purpose. These fieldsets are
- * disabled once the contest starts, and a `<fieldset disabled>` disables every
- * button in it — except those in its first legend, which the HTML spec
- * exempts. Anywhere else the explanation of a frozen setting would become
- * unreadable exactly when the setting is frozen. Inside the legend, though,
- * the button's name would join the group's ("Question order Hint"), so the
- * fieldset takes its name from the legend's text alone, by id.
+ * A legend with a "?" inside it: a disabled fieldset disables every button
+ * except those in its first legend. The fieldset takes its name from the legend
+ * text by id, so the button's name does not join it.
  */
 function HelpLegend({
   id,
@@ -134,8 +121,7 @@ function SaveRow({
         ) : null}
       </div>
 
-      {/* The server answers one code for a bad policy; the entries that were
-          actually wrong are only knowable on this side, so they are named. */}
+      {/* The server answers one code; only this side knows which entries were wrong. */}
       {state.rejected && state.rejected.length > 0 ? (
         <p className="max-w-body font-mono text-data text-warn">{state.rejected.join(", ")}</p>
       ) : null}
@@ -143,7 +129,6 @@ function SaveRow({
   );
 }
 
-/** One choice from a short, closed set — a radio group, not a select. */
 function Choices<T extends string>({
   name,
   values,
@@ -191,14 +176,8 @@ function Choices<T extends string>({
 }
 
 /**
- * The contest's own fields.
- *
- * Two freezes apply and both are shown. Settings stay editable while the
- * contest runs — extending the window after a power cut is exactly what a
- * running contest needs — but the shape does not, because people are already
- * answering under it. The frozen controls stay in the form and stay disabled:
- * removing them would make the form's own values incomplete, and `PATCH` here
- * writes every field it is given.
+ * The contest's fields. While the contest runs settings stay editable but the
+ * shape freezes; frozen controls stay in the form, disabled.
  */
 export function ContestPanel({
   contest,
@@ -227,19 +206,10 @@ export function ContestPanel({
   const [freezeMode, setFreezeMode] = useState<string>(freezeInitial.mode);
   const [names, setNames] = useState<string>(contest.leaderboard.names);
 
-  // The form is keyed by the server's own version of what it renders.
-  //
-  // The fields are uncontrolled: a defaultValue is read once, when the input
-  // mounts, and ignored after that. A save revalidates the page and this panel
-  // re-renders with the saved contest — so without a fresh mount the field
-  // keeps whatever was in it and quietly disagrees with the server. Base UI
-  // notices the same thing from the other side and warns that a default
-  // changed after it was initialised.
-  //
-  // The key sits on the form element rather than on the panel, so the
-  // useActionState above survives and the "saved" confirmation is still there
-  // to read. And it moves only when the server's copy does: a re-render that
-  // is not a save leaves what somebody is typing alone.
+  // Keyed by the server's version: the fields are uncontrolled, so only a
+  // remount shows the saved values. The key is on the form, not the panel, so
+  // `useActionState` and the "saved" message survive, and it changes only when
+  // the server copy does.
   return (
     <form key={contest.updatedAt} action={formAction} className="contents">
       <Panel title={t.schedule.heading} help={t.schedule.help} dict={dict}>
@@ -352,10 +322,8 @@ export function ContestPanel({
           ) : null}
         </fieldset>
 
-        {/* §6.1.1: the order questions open in, and how a result is derived
-            from submissions. Both freeze with the rest of the shape — a
-            participant already mid-sequence, or already scored one way,
-            must not have the rule under them change. */}
+        {/* Order and scoring freeze with the shape (docs/ARCHITECTURE.md
+           §6.1.1); the rule must not change under a participant. */}
         <fieldset className="flex flex-col gap-3" disabled={!shapeOpen} aria-labelledby={orderLegendId}>
           <HelpLegend id={orderLegendId} help={t.shape.orderHelp} dict={dict}>
             {t.shape.order}
@@ -369,9 +337,8 @@ export function ContestPanel({
             onPick={setProgression}
           />
 
-          {/* The publish gate refuses this combination outright (§6.1.1) — said
-              here, where the setting is chosen, rather than left for an
-              organizer to discover once publishing is already refused. */}
+          {/* The publish gate refuses this combination
+             (docs/ARCHITECTURE.md §6.1.1); say so here. */}
           {progression === "sequential" ? (
             <p className="max-w-body text-small text-warn">{t.shape.sequentialWarning}</p>
           ) : null}
@@ -390,12 +357,9 @@ export function ContestPanel({
             onPick={setScoring}
           />
 
-          {/* ICPC's own penalty (docs/ARCHITECTURE.md §6.1.1):
-              minutes added to a registration's penalty time for every wrong
-              attempt on a question it later solves. Shown only in this mode —
-              the other two scorings have no use for it — and locked with the
-              rest of the shape, the same as the radio above: a disabled field
-              submits nothing, which the action reads as "leave it alone". */}
+          {/* ICPC penalty minutes per wrong attempt on a later-solved question
+             (docs/ARCHITECTURE.md §6.1.1). Only in this mode; locked with the
+             shape. */}
           {scoring === "icpc" ? (
             <Field id="icpcPenaltyMin" label={t.shape.icpcPenalty} hint={t.shape.icpcPenaltyHint}>
               <Input
@@ -414,10 +378,8 @@ export function ContestPanel({
       </Panel>
 
       <Panel title={t.leaderboard.heading} help={t.leaderboard.help} dict={dict}>
-        {/* Locked with the shape, and for a stronger reason: moving the
-            freeze mid-contest would open the live table for a moment or hide
-            one participants already saw. A disabled radio submits nothing,
-            and the action reads "nothing" as "leave it alone". */}
+        {/* Locked with the shape: moving the freeze mid-contest would briefly
+           open the live table or hide one participants already saw. */}
         <fieldset className="flex flex-col gap-3" disabled={!shapeOpen} aria-labelledby={freezeLegendId}>
           <HelpLegend id={freezeLegendId} help={t.leaderboard.freezeHelp} dict={dict}>
             {t.leaderboard.freeze}
@@ -469,7 +431,7 @@ export function ContestPanel({
             disabled={!editable}
             onPick={setNames}
           />
-          {/* Said where the choice is made: the table is public. */}
+          {/* The table is public. */}
           {names === "full_name" ? (
             <p className="max-w-body text-small text-warn">{t.leaderboard.namesPublicHint}</p>
           ) : null}
@@ -518,15 +480,7 @@ export function ContestPanel({
   );
 }
 
-/**
- * The language set the contest is authored in.
- *
- * The title itself moved to `TitleEditor`, at the top of the workspace — see
- * that file's own doc comment. This panel stays, because *which* languages
- * exist is still a configuration decision: dropping one here drops its title,
- * its story and its question texts with it, which is exactly the kind of
- * consequence a settings screen is for.
- */
+/** The contest's languages. Dropping one drops its title, story and question texts. */
 export function LanguagePanel({
   contest,
   editable,
@@ -603,8 +557,6 @@ export function LanguagePanel({
           })}
         </div>
 
-        {/* Dropping a language drops its texts with it. Said before the save,
-            not discovered after it. */}
         <p className="max-w-body text-small text-ink-3">{t.languages.warning}</p>
 
         <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
@@ -614,12 +566,9 @@ export function LanguagePanel({
 }
 
 /**
- * What participants may do to their copy of the game database.
- *
- * It freezes with the content, not with the settings: a policy that changed
- * mid-contest would give participants different rights depending on when they
- * connected, and the template's grants would drift from what the validator
- * enforces.
+ * What participants may do to their copy of the game database. Freezes with the
+ * content: a mid-contest change would grant different rights by connection
+ * time.
  */
 export function PolicyPanel({
   contest,
@@ -643,9 +592,7 @@ export function PolicyPanel({
     { name: "allowCatalog", on: policy.allowCatalog, label: t.policy.catalog },
   ];
 
-  // Keyed like the schedule above, and for the same reason: these fields are
-  // uncontrolled, so the saved copy only reaches them through a fresh mount.
-  // The policy carries its own stamp, since it is saved on its own endpoint.
+  // Keyed like the contest form; the policy has its own stamp.
   return (
     <form key={policy.updatedAt} action={formAction} className="contents">
       <Panel
@@ -670,9 +617,7 @@ export function PolicyPanel({
           />
         </fieldset>
 
-        {/* Only a read-write policy has writable tables. Offered under a
-            read-only mode, the field would describe access that mode does not
-            grant. */}
+        {/* Only read-write grants writable tables. */}
         {mode === "read_write" ? (
           <Field
             id="writableTables"

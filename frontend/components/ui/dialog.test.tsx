@@ -5,13 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "./dialog";
 
-/**
- * A small controlled harness: the real callers (`selection.tsx`'s
- * `ActionDialog`) hold `open` and `dismissible` in their own state and pass
- * both down, which is exactly what a caller of this component is expected to
- * do — `dismissible` is a prop of the dialog, not a fact it discovers on its
- * own.
- */
+/** Controlled harness: callers hold `open` and `dismissible` in their own state. */
 function Harness({ dismissible }: { dismissible: boolean }) {
   const [open, setOpen] = useState(true);
   return (

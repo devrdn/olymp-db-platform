@@ -19,40 +19,16 @@ import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
 /**
- * `detail` is the one field neither `saveGameScriptAction` nor any dump
- * action has ever needed: `ApiError.message` itself, for the handful of
- * table-builder refusals whose *dictionary* sentence is deliberately generic
- * ("the message says which row and column" — `errors.game_table_value_
- * invalid`'s own translated text says so directly) because the specific
- * table, column or row is a fact about *this* attempt, not a sentence any
- * translator could have written in advance. `game-builder.tsx` and
- * `game-builder-table.tsx` are what render it, labelled by `detailLabel`,
- * never in place of the dictionary sentence — only beside it (CLAUDE.md rule
- * 1 is about *codes*; this is the one place an English detail earns its own
- * line, the same way `game.buildError` already does for a build PostgreSQL
- * itself refused).
+ * `detail` is `ApiError.message`, shown beside (never instead of) the
+ * dictionary sentence for refusals whose sentence is generic because the table,
+ * column or row at fault is specific to this attempt.
  */
 export type GameState = { code?: string; saved?: boolean; detail?: string };
 
-/**
- * A refusal in the API's own words, or the thing the write actually produced.
- *
- * Shared by every action below that hands something back beyond "it worked":
- * beginning an upload needs its id back before a single chunk can be sent,
- * completing one needs the game's fresh status, and a refusal needs its code
- * either way. `saveGameScriptAction`'s `GameState` is not reused for these —
- * it carries `saved: boolean`, which none of these have a use for. `detail`
- * is `GameState`'s own field, explained above.
- */
+/** A refusal code, or what the write produced (an upload id, a game's status). */
 export type UploadActionResult<T> = { code?: string; value?: T; detail?: string };
 
-/**
- * `catch (error)` turned into the `{code, detail}` half of a refusal —
- * shared by every table-builder action whose own sentinel can carry a
- * row/column-specific message (`completeTableUploadAction`,
- * `appendTableRowAction`) so the two catch blocks read identically instead
- * of two copies of the same ternary drifting apart.
- */
+/** Turns a caught error into `{code, detail}` for the table-builder actions. */
 function refusal(error: unknown): { code: string; detail?: string } {
   return {
     code: failureCode(error),
@@ -61,20 +37,15 @@ function refusal(error: unknown): { code: string; detail?: string } {
 }
 
 /**
- * Storing the SQL a contest's game is built from.
- *
- * Storing, not building. The API answers 202 and a background worker does the
- * rest, because a build creates a database and runs the whole script inside
- * it — seconds at best, and not something to hold a form submission open for.
- * The screen watches the status afterwards.
+ * Stores the game's SQL. The API answers 202 and a background worker builds,
+ * which takes seconds; the screen watches the status afterwards.
  */
 export async function saveGameScriptAction(_previous: GameState, form: FormData): Promise<GameState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  // Not trimmed. Leading whitespace in somebody's SQL is theirs, and a script
-  // that is only whitespace is refused by the server as empty anyway — with a
-  // code this screen has a sentence for.
+  // Not trimmed: the SQL is the author's, and the server refuses a
+  // whitespace-only script with a known code.
   const script = String(form.get("script") ?? "");
 
   const failure = await serverRequest(`/contests/${contestId}/game/script`, {
@@ -87,20 +58,15 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
 
   if (failure) return { code: failureCode(failure) };
 
-  // The overview's publish gate and this section's own note both count on
-  // whether the game is built.
+  // The publish gate and this section both depend on whether the game is built.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return { saved: true };
 }
 
 /**
- * The build's current state.
- *
- * A Server Action rather than a fetch from the browser, the same way the
- * participant's query log refreshes itself: the session cookie and the API's
- * address are the server's business, and a second path to the API is a second
- * place for either to be wrong.
+ * The build's current state, through a Server Action so the session cookie and
+ * the API address stay server-side.
  */
 export async function gameStatusAction(contestId: string): Promise<Game | null> {
   if (!isId(contestId)) return null;
@@ -111,13 +77,8 @@ export async function gameStatusAction(contestId: string): Promise<Game | null> 
 }
 
 /**
- * Asking for the game to be built again — `POST .../game/build`.
- *
- * The table builder's rows are stored after the build that would have loaded
- * them and cannot be stored before it, so this is the only way data an
- * organiser typed reaches a database. 202 with the game as it now stands;
- * `refusal` carries a named "no" (the contest is running, a build is already
- * under way, there is no game yet) through to the screen.
+ * Requests a rebuild (`POST .../game/build`), the only way rows typed in the
+ * table builder reach a database. Answers 202 with the game.
  */
 export async function requestGameBuildAction(contestId: string): Promise<UploadActionResult<Game>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
@@ -133,27 +94,13 @@ export async function requestGameBuildAction(contestId: string): Promise<UploadA
   return { value };
 }
 
-/**
- * The second way to build a contest's game: an organiser's own finished
- * dump, sent in pieces, rather than a script typed into `GameEditor`.
- *
- * Only the small control calls live here — beginning, checking on, finishing
- * and cancelling an upload. The bytes themselves never do: a chunk is
- * `PUT .../uploads/{id}/chunk`, sent straight from the browser
- * (`game-upload.tsx`'s own doc explains why a Server Action cannot carry
- * them — its body is capped far below a configurable chunk size, and the API
- * origin the browser needs for that one request is the single thing the rest
- * of this file exists to keep server-side, which is why it is this file's
- * one deliberate exception rather than a precedent for more of them).
- */
+// Building from an uploaded dump. Only the control calls live here; chunks are
+// `PUT` straight from the browser (`game-upload.tsx`), because a Server
+// Action's body limit is far below the configured chunk size.
 
 /**
- * Reserving a place for a new upload — `POST .../uploads`.
- *
- * `filename` and `declaredBytes` are the browser's own claims about a `File`
- * object, taken on trust the same way `uploadImageAction` takes a picture's
- * bytes on trust: the server checks them again where it matters
- * (`declaredBytes` against what actually lands, in `completeGameUploadAction`).
+ * Begins an upload (`POST .../uploads`). `filename` and `declaredBytes` are the
+ * browser's claims; the server checks `declaredBytes` against what arrives.
  */
 export async function beginGameUploadAction(
   contestId: string,
@@ -173,23 +120,16 @@ export async function beginGameUploadAction(
     return { code: failureCode(error) };
   }
 
-  // A second tab, or a reload racing this one, must see the same "receiving"
-  // row rather than a stale "no upload yet".
+  // Another tab or a racing reload must see the "receiving" row.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return { value };
 }
 
 /**
- * The upload a reloaded page finds still receiving, if any — resuming
- * `game-upload.tsx`'s own state from the server's account of it rather than
- * from whatever the browser remembers, the same rule `PUT .../chunk`'s own
- * response follows for `received_bytes`.
- *
- * `null` on any failure, the same as `gameStatusAction`: an unreachable API
- * here is not news the resume banner has anything useful to say about, and
- * the page's own initial load already asked this question once and would
- * rather show what it has than nothing.
+ * The upload still receiving, if any, so a reloaded page resumes from the
+ * server's state rather than the browser's. `null` on any failure: the page
+ * already has its initial answer.
  */
 export async function currentGameUploadAction(contestId: string): Promise<Upload | null> {
   if (!isId(contestId)) return null;
@@ -199,12 +139,7 @@ export async function currentGameUploadAction(contestId: string): Promise<Upload
   );
 }
 
-/**
- * A slice of a completed upload's lines — `GET .../uploads/{id}/window`, the
- * console this screen's viewer pages through. Read-only, and asked for
- * often enough while somebody is scrolling that it stays a small, cheap
- * Server Action rather than growing a route of its own.
- */
+/** A slice of a completed upload's lines (`GET .../uploads/{id}/window`) for the viewer. */
 export async function gameUploadWindowAction(
   contestId: string,
   uploadId: string,
@@ -226,13 +161,8 @@ export async function gameUploadWindowAction(
 }
 
 /**
- * Finishing an upload once every byte has arrived — `POST .../complete`.
- *
- * Replaces the contest's game exactly the way `saveGameScriptAction` does
- * (`CompleteUpload`'s own doc: "the same path as `SetScript`"), so it
- * revalidates the same path for the same reason: the overview's publish
- * gate and this workspace's own tab both count on whether the game is
- * built.
+ * Completes an upload (`POST .../complete`), replacing the game like
+ * `saveGameScriptAction`, so it revalidates the same path.
  */
 export async function completeGameUploadAction(
   contestId: string,
@@ -256,10 +186,8 @@ export async function completeGameUploadAction(
 }
 
 /**
- * Cancelling an upload still receiving — `POST .../abort`. Never called on
- * one already finished: `game-upload.tsx` only offers this while its own
- * state is "uploading", and the server would refuse it anyway
- * (`game_upload_already_complete`).
+ * Cancels an upload still receiving (`POST .../abort`); the server refuses one
+ * already complete.
  */
 export async function abortGameUploadAction(
   contestId: string,
@@ -276,37 +204,20 @@ export async function abortGameUploadAction(
 
   if (failure) return { code: failureCode(failure) };
 
-  // Frees the "one receiving upload" slot a reload's own read would
-  // otherwise still see as taken.
+  // Frees the "one receiving upload" slot for a reload's read.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return {};
 }
 
-/**
- * The third way to build a contest's game: a structural description of its
- * tables and columns rather than SQL — `game-builder.tsx`'s own screen.
- *
- * Only the small control calls live here, the same split `actions.ts`'s own
- * doc draws for the dump's chunks above: a table's CSV bytes are `PUT`
- * straight from the browser (`game-builder-table.tsx`'s own doc gives the
- * identical reasoning `putChunk` already does in `game-upload.tsx` — a
- * chunk's size is this installation's own configured ceiling, read at
- * runtime, and a Server Action's body is capped far below it).
- */
+// Building from a structural description of tables and columns
+// (`game-builder.tsx`). A table's CSV chunks are `PUT` from the browser for the
+// same body-limit reason as dumps.
 
 /**
- * Storing the structural description one contest's game is built from —
- * `PUT .../game/definition`. Replaces the contest's game exactly the way
- * `saveGameScriptAction` does (`SetDefinition`'s own doc: "exactly like
- * SetScript"), so it revalidates the same path for the same reason: the
- * overview's publish gate and this workspace's own tabs both count on
- * whether the game is built.
- *
- * The draft travels as one JSON string in a hidden field, not as one form
- * field per table and column: it is a tree the organiser edits in memory,
- * the same reason `GameEditor`'s own mirror textarea carries a whole script
- * as one field rather than one control per line.
+ * Stores the definition (`PUT .../game/definition`), replacing the game like
+ * `saveGameScriptAction`. The draft is a tree edited in memory, so it travels
+ * as one JSON string in a hidden field.
  */
 export async function saveGameDefinitionAction(_previous: GameState, form: FormData): Promise<GameState> {
   const contestId = form.get("contestId");
@@ -330,13 +241,7 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
   if (failure) {
     return {
       code: failureCode(failure),
-      // Several of `Definition.Validate`'s own refusals name the table or
-      // column at fault (`ErrDefinitionInvalidName`, `ErrDefinitionDuplicate
-      // Name`, `ErrDefinitionInvalidType`, `ErrDefinitionInvalidPrimaryKey`
-      // — `definition.go`'s own `%w: table %q` formatting) — `GameState.
-      // detail`'s own doc explains why that text is worth carrying up
-      // alongside the dictionary's generic sentence rather than in place of
-      // it.
+      // Several validation refusals name the table or column at fault.
       detail: failure instanceof ApiError ? failure.message : undefined,
     };
   }
@@ -347,15 +252,8 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
 }
 
 /**
- * The chunked upload a reloaded page finds still receiving for one table,
- * if any — `GET .../game/tables/{table}/data/current`, `currentGameUploadAction`'s
- * own doc mirrored for a table's own CSV rather than a whole dump: resuming
- * `game-builder-table.tsx`'s own state from the server's account of it,
- * never from what the browser happens to remember.
- *
- * `null` on any failure, the identical reasoning `currentGameUploadAction`
- * gives: an unreachable API here is not news the resume banner has
- * anything useful to say about.
+ * A table's CSV upload still receiving, if any, so a reload resumes from the
+ * server's state. `null` on any failure.
  */
 export async function currentTableUploadAction(contestId: string, table: string): Promise<TableData | null> {
   if (!isId(contestId)) return null;
@@ -366,10 +264,8 @@ export async function currentTableUploadAction(contestId: string, table: string)
 }
 
 /**
- * Reserving a place for one table's own chunked CSV upload —
- * `POST .../game/tables/{table}/data`. Paced by the same shared budget
- * `beginGameUploadAction`'s own doc explains (`allowUploadBegin` on the
- * server, shared between a dump and a table's own upload).
+ * Begins a table's CSV upload (`POST .../game/tables/{table}/data`). Shares the
+ * server's begin budget (`allowUploadBegin`) with dump uploads.
  */
 export async function beginTableUploadAction(
   contestId: string,
@@ -393,13 +289,9 @@ export async function beginTableUploadAction(
 }
 
 /**
- * Finishing one table's chunked CSV upload — `POST .../data/{id}/complete`.
- *
- * 200 on the wire, not 202: a table's own CSV never builds anything by
- * itself (`tabledata.go`'s own doc — a table's data is loaded the next time
- * the *whole* game builds, not the moment this call returns), so there is no
- * pending build for this screen to watch afterwards the way
- * `completeGameUploadAction`'s own doc explains for a whole dump.
+ * Completes a table's CSV upload (`POST .../data/{id}/complete`). 200, not 202:
+ * table data is loaded at the next whole-game build, so there is nothing to
+ * watch.
  */
 export async function completeTableUploadAction(
   contestId: string,
@@ -416,32 +308,19 @@ export async function completeTableUploadAction(
     );
     value = tableDataSchema.parse(body);
   } catch (error) {
-    // `CompleteTableUpload`'s own full pass (`validateTableFile`) is where
-    // `game_table_header_mismatch`, `_row_field_count`, `_value_invalid`,
-    // `_field_too_long`, `_line_too_long` and `_too_many_rows` are actually
-    // detected — every one of them naming the row and column at fault in
-    // `err.Error()` itself (`tablecsv.go`'s own doc: "without that a refusal
-    // on a file of a million rows is useless"). `refusal`'s own `detail` is
-    // what carries that text up to the screen.
+    // The server's full validation names the row and column at fault; `detail`
+    // carries it.
     return refusal(error);
   }
 
-  // A finished file is one of the three writes that marks the contest's game
-  // out of date server-side (`CompleteTableUpload`, `tabledata.go`), and
-  // `GameBuild`'s own notice is rendered from that fact by `page.tsx` — a
-  // server component whose cached output would otherwise go on saying the
-  // built game holds the current data. `saveGameDefinitionAction` and
-  // `requestGameBuildAction` revalidate the same path for the same reason.
+  // The file marks the built game out of date on the server, and `page.tsx`
+  // renders that notice, so its cached output must be refreshed.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return { value };
 }
 
-/**
- * Cancelling one table's chunked CSV upload before it finished —
- * `POST .../data/{id}/abort`. Never called on one already finished — the
- * same convention `abortGameUploadAction`'s own doc states for a dump.
- */
+/** Cancels a table's CSV upload before it finished (`POST .../data/{id}/abort`). */
 export async function abortTableUploadAction(
   contestId: string,
   table: string,
@@ -463,11 +342,7 @@ export async function abortTableUploadAction(
   return { value };
 }
 
-/**
- * A page of one table's current rows — `GET .../data/window`, the console's
- * own preview of a table before it is ever built, the same role
- * `gameUploadWindowAction` plays for a dump's lines.
- */
+/** A page of a table's current rows (`GET .../data/window`), previewed before any build. */
 export async function gameTableDataWindowAction(
   contestId: string,
   table: string,
@@ -488,10 +363,7 @@ export async function gameTableDataWindowAction(
   return { value };
 }
 
-/**
- * Adding one row typed into a form directly, rather than uploaded in a file
- * — `POST .../game/tables/{table}/rows`.
- */
+/** Appends one typed row (`POST .../game/tables/{table}/rows`). */
 export async function appendTableRowAction(
   contestId: string,
   table: string,
@@ -507,28 +379,17 @@ export async function appendTableRowAction(
     });
     value = tableDataSchema.parse(body);
   } catch (error) {
-    // `validateRow` (`tablecsv.go`) is what `AppendTableRow` calls before
-    // storing this row, and its own refusal already names the column at
-    // fault — `refusal`'s own doc explains why that text travels as
-    // `detail`.
+    // The server's row validation names the column at fault.
     return refusal(error);
   }
 
-  // The row marks the contest's game out of date server-side, and the notice
-  // saying so is rendered by a server component — `completeTableUploadAction`
-  // above gives the reasoning in full.
+  // The row marks the game out of date; see `completeTableUploadAction`.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return { value };
 }
 
-/**
- * Tombstoning one row of a table's current data —
- * `DELETE .../game/tables/{table}/rows/{row}`. 204 on the wire, so there is
- * nothing to parse on success, the same shape `abortGameUploadAction`'s own
- * sibling calls take for a write that only ever answers success or a named
- * refusal.
- */
+/** Tombstones one row (`DELETE .../game/tables/{table}/rows/{row}`); 204 on success. */
 export async function deleteTableRowAction(
   contestId: string,
   table: string,
@@ -546,9 +407,7 @@ export async function deleteTableRowAction(
 
   if (failure) return { code: failureCode(failure) };
 
-  // A tombstone is a change to the data a build would load, so it marks the
-  // game out of date exactly as an added row does — `completeTableUpload
-  // Action` above gives the reasoning in full.
+  // Marks the game out of date, like an added row.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return {};

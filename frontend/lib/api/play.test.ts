@@ -57,9 +57,6 @@ describe("playQuestionSchema", () => {
     expect(() => playQuestionSchema.parse({ ...base, kind: "essay" })).toThrow();
   });
 
-  // Finding 5: a closed question must say whether it was won, and for how
-  // much — the only way a reloaded screen can tell "closed because solved"
-  // from "closed because every attempt is spent".
   test("carries correct and points_awarded as the server sent them", () => {
     const parsed = playQuestionSchema.parse({
       ...base,

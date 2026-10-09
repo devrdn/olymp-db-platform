@@ -1,27 +1,18 @@
-/**
- * The vocabulary a roster is read with, apart from the schemas that validate the wire.
- *
- * A schema module calls `z.object()` when it loads, so a bundler cannot drop
- * it — and a client component importing one string array from such a module
- * ships the whole of zod with it: 280 KB of parser for a row of buttons. The
- * schemas import these, so a term still has one definition.
- */
+/** The vocabulary of a roster, apart from the wire schemas (see content-terms.ts for why). */
 
 import type { Participant } from "./people";
 
+/**
+ * Whether the participant can be removed rather than disqualified. Once
+ * started, their queries and answers are part of the contest's record.
+ */
 export function removable(participant: Participant): boolean {
   return participant.status === "registered";
 }
 
 /**
- * The least a directory search box needs before it is worth asking the
- * server. Mirrors contests.MinDirectoryQueryLength
- * (backend/internal/contests/directory.go), which is set to what
- * migration 000016's trigram indexes actually need — below it PostgreSQL
- * cannot use them and falls back to a sequential scan, so the server always
- * answers a shorter query with nothing. One constant rather than a second
- * copy of the number: a search box that asked at two characters while the
- * server only answers from three would spend a round trip on every such
- * keystroke for an answer it already knows is empty.
+ * Mirrors `contests.MinDirectoryQueryLength`, the shortest query the trigram
+ * indexes can serve. The server answers anything shorter with nothing, so the
+ * search box does not ask.
  */
 export const MIN_DIRECTORY_QUERY_LENGTH = 3;

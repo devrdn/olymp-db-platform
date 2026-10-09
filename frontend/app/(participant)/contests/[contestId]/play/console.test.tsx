@@ -13,10 +13,10 @@ import { activeTabStorageKey } from "./use-sql-tabs";
 import type { ConsoleState } from "./actions";
 import { pasteTargetOf } from "./use-signals";
 
-/** Every run reports which tab it came from; these fixtures only ever have one open. */
+/** The tab every run reports in fixtures with only one open. */
 const FROM_THE_ONE_TAB = { tabTitle: "Query 1" };
 
-/** The tabs the page read. One, which is what the server creates on a first visit. */
+/** One tab, as the server creates on a first visit. */
 const ONE_TAB: WorkspaceTab[] = [
   { id: "t1", title: "Query 1", body: "", position: 0, updatedAt: "v0" },
 ];
@@ -26,13 +26,12 @@ const TWO_TABS: WorkspaceTab[] = [
   { id: "t2", title: "Suspects", body: "", position: 1, updatedAt: "v0" },
 ];
 
-/** Two tabs that already hold different text, so a mix-up between them shows. */
+/** Two tabs holding different text, so a mix-up shows. */
 const TWO_WRITTEN_TABS: WorkspaceTab[] = [
   { id: "t1", title: "Query 1", body: "SELECT * FROM suspects", position: 0, updatedAt: "v0" },
   { id: "t2", title: "Suspects", body: "SELECT * FROM alibis", position: 1, updatedAt: "v0" },
 ];
 
-/** Every save and every tab request; the editor's own behaviour is what these tests are about. */
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal(
@@ -51,11 +50,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The action is the boundary: what it returns is what this component has to
-// report through onResult, and what a caller does with it (ResultPanel,
-// the query log's own refresh) is tested where that lives.
+// The action is the boundary: these check what reaches onResult; what
+// callers do with it is tested where they live.
 const answer = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
-/** What the browser's own FormData carried into the last run. */
+/** What the browser's FormData carried into the last run. */
 const submitted = vi.hoisted(() => ({ current: null as FormData | null }));
 const runQueryAction = vi.hoisted(() =>
   vi.fn(async (_state: ConsoleState, form: FormData) => {
@@ -66,7 +64,7 @@ const runQueryAction = vi.hoisted(() =>
 
 vi.mock("./actions", () => ({ runQueryAction }));
 
-/** The hidden mirror field FormData actually reads — see console.tsx's doc. */
+/** The hidden mirror field FormData reads (console.tsx). */
 function mirror(container: HTMLElement): HTMLTextAreaElement {
   const el = container.querySelector('textarea[name="sql"]');
   if (!el) throw new Error("expected the hidden mirror textarea");
@@ -74,12 +72,8 @@ function mirror(container: HTMLElement): HTMLTextAreaElement {
 }
 
 /**
- * CodeMirror arrives through a dynamic `import()` (code-editor.tsx's own doc
- * comment says why), which resolves on a later microtask even when the
- * module is already cached. A test that needs the *real* editor — rather
- * than the always-typable fallback field CodeEditor shows until then — waits
- * for `.cm-editor`, CodeMirror's own root class, the same way a participant's
- * browser does.
+ * Waits for CodeMirror, which arrives through a dynamic `import()` on a later
+ * microtask, replacing the fallback field.
  */
 async function waitForRealEditor(container: HTMLElement) {
   await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
@@ -101,11 +95,8 @@ describe("the SQL editor", () => {
     const onResult = vi.fn();
     await run(onResult);
 
-    // Once for the initial idle state, once for the completed run — and
-    // waited for rather than asserted straight after the click, because the
-    // action settles on a later microtask than `userEvent.click` awaits.
-    // Asserting immediately passed on an idle machine and failed under a
-    // full-suite run, which is a flaky test rather than a caught bug.
+    // Waited for: the action settles on a later microtask than the click, and
+    // asserting at once was flaky under a full-suite run.
     await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current, FROM_THE_ONE_TAB));
   });
 
@@ -139,17 +130,9 @@ describe("the SQL editor", () => {
     resolve({ kind: "idle" });
   });
 
-  // Finding 2 (original): React 19 calls `requestFormReset` on this form once
-  // the action settles, regardless of whether it succeeded, and the native
-  // reset algorithm wipes an uncontrolled form field back to its
-  // `defaultValue`. That used to be the *visible* textarea; a refused query
-  // silently erased exactly what a participant was mid-debugging, for the
-  // whole two hours. CodeMirror's content div is not a form-associated
-  // element at all, so `requestFormReset` cannot reach it — the visible
-  // editor is architecturally immune now, not merely restored fast enough to
-  // avoid a flash. This is run through a real refusal end to end anyway (not
-  // a mock of the reset itself) so it proves the actual DOM behaviour rather
-  // than the architecture argument on its own.
+  // React 19 resets the form when the action settles, refusals included.
+  // CodeMirror's content is not a form control, so the visible text survives;
+  // this proves it through a real refusal rather than the argument alone.
   test("a run does not clear what the participant was typing, even on a refusal", async () => {
     answer.current = { kind: "refused", code: "query_syntax_error" };
     const onResult = vi.fn();
@@ -165,12 +148,8 @@ describe("the SQL editor", () => {
     expect(editor).toHaveTextContent("SELECT * FROM suspects WHERE");
   });
 
-  // What replaces finding 2's own restore, now aimed at the field nobody
-  // sees: `requestFormReset` still resets the *mirror* textarea (it is a
-  // real form control), and nothing stops that. Unlike the visible editor,
-  // losing sync there has a real, if invisible, consequence — the next "Run"
-  // click with nothing retyped would submit an empty string — so the mirror
-  // needs the same imperative fix-up finding 2's own textarea used to need.
+  // The reset still reaches the hidden mirror, a real form control; left
+  // alone, the next run without retyping would send an empty string.
   test("the hidden field FormData reads from is restored after a refusal, so a second run without retyping still sends the query", async () => {
     answer.current = { kind: "refused", code: "query_syntax_error" };
     const onResult = vi.fn();
@@ -185,17 +164,10 @@ describe("the SQL editor", () => {
     expect(mirror(container).value).toBe("SELECT * FROM suspects WHERE");
   });
 
-  // Finding 1 (regression from the finding-2 fix, original story): the
-  // restore effect seeded `lastTyped` to `""` and ran un-gated on mount. A
-  // browser restores form field values across a soft reload independently of
-  // React, and hydration reuses that server-rendered node rather than
-  // replacing it — so the mirror can already hold real text the instant this
-  // component's effects first run, before any change has been reported to
-  // populate `lastTyped`. This drives an actual `hydrateRoot` over
-  // server-rendered markup, not a mock, so it proves the real DOM behaviour —
-  // and, because CodeEditor reads the mirror's value as its own initial
-  // document, it proves the restored text actually reaches what the
-  // participant sees, not only the hidden field behind it.
+  // A browser restores form values across a soft reload before React
+  // attaches, and hydration reuses that node, so the mirror may hold text
+  // before any change is reported. Driven through a real `hydrateRoot`; the
+  // restored text must also reach the visible editor.
   test("a browser-restored value on the server-rendered node survives hydration and reaches the visible editor", async () => {
     const html = renderToString(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     const container = document.createElement("div");
@@ -204,8 +176,7 @@ describe("the SQL editor", () => {
     const textarea = container.querySelector('textarea[name="sql"]');
     if (!textarea) throw new Error("expected the hidden mirror in the server-rendered markup");
 
-    // Simulate the browser's own restore, which happens before React ever
-    // attaches — hydration must not treat this as stale content to discard.
+    // The browser's own restore, before React attaches.
     (textarea as HTMLTextAreaElement).value = "SELECT * FROM suspects";
 
     let root: ReturnType<typeof hydrateRoot> | undefined;
@@ -214,15 +185,11 @@ describe("the SQL editor", () => {
     });
 
     expect((textarea as HTMLTextAreaElement).value).toBe("SELECT * FROM suspects");
-    // The dynamic import CodeMirror arrives through has not resolved this
-    // soon after hydration, so what a participant sees right now is the
-    // fallback field — carrying the same restored text, read from the
-    // mirror above the instant this component's own effects first ran.
+    // CodeMirror has not loaded yet, so the fallback field shows the text,
+    // read from the mirror.
     expect(within(container).getByRole("textbox")).toHaveValue("SELECT * FROM suspects");
 
-    // And the value survives the rest of the journey too: once CodeMirror
-    // actually loads, it has to pick up what the fallback was holding, not
-    // whatever the mirror's own server-rendered `defaultValue` was.
+    // Once CodeMirror loads, it takes over the fallback's text.
     await waitForRealEditor(container);
     expect(within(container).getByRole("textbox")).toHaveTextContent("SELECT * FROM suspects");
 
@@ -230,17 +197,10 @@ describe("the SQL editor", () => {
     container.remove();
   });
 
-  // The property the review specifically asked not to be given up in fixing
-  // finding 2: the editor has no `onChange` wired to React state, and the fix
-  // must not add one in disguise. `Profiler`'s `onRender` only fires on an
-  // actual commit, so no call while typing is direct proof no re-render
-  // happened — not just that the DOM node survived, which reconciliation
-  // would preserve either way.
-  // The one commit typing may now cause is the save status settling — the
-  // first keystroke after a pause turns "Saved" into "Saving…", once per
-  // pause rather than once per keystroke, exactly as the notes field does.
-  // Everything after that keystroke has to be free, which is what this
-  // measures: the first character is typed before the counter is cleared.
+  // The editor keeps no React state per keystroke. `Profiler.onRender` fires
+  // only on a commit, so silence proves no re-render. The first keystroke
+  // after a pause may commit once (the status turns "Saving…"), so it is typed
+  // before the counter is cleared.
   test("typing still triggers no re-render of the editor", async () => {
     const onRender = vi.fn();
     const { container } = render(
@@ -259,10 +219,8 @@ describe("the SQL editor", () => {
     expect(onRender).not.toHaveBeenCalled();
   });
 
-  // Task 1's own second requirement: a syntax error's position, carried by
-  // the refusal, has to actually reach the editor a participant is looking
-  // at — this is the wiring between `ConsoleEditor` and `CodeEditor`;
-  // `code-editor.test.tsx` covers what the mark does once it gets there.
+  // The wiring from ConsoleEditor to CodeEditor; `code-editor.test.tsx`
+  // covers the mark itself.
   test("a syntax error's position reaches the editor as a mark", async () => {
     answer.current = { kind: "refused", code: "query_parse_error", position: 12 };
     const { container } = render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
@@ -277,12 +235,8 @@ describe("the SQL editor", () => {
 });
 
 /**
- * The shortcut the design prints on the Run button itself.
- *
- * Bound inside the editor's keymap rather than on the form, and ahead of
- * CodeMirror's own defaults: `Mod-Enter` there is `insertBlankLine`, so a
- * listener on the form would never see the key and a participant reaching for
- * it would get an empty line instead of an answer.
+ * The shortcut printed on the Run button, bound in the editor's keymap ahead
+ * of CodeMirror's defaults, where `Mod-Enter` would insert a blank line.
  */
 describe("⌘↵", () => {
   test("runs the query from inside the editor", async () => {
@@ -298,8 +252,7 @@ describe("⌘↵", () => {
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT 1");
     // Ctrl, not Cmd: CodeMirror resolves `Mod` by platform, and the test
-    // environment is not a Mac. A participant on a Mac presses ⌘↵ and reaches
-    // the same binding.
+    // environment is not a Mac.
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
 
     await waitFor(() => expect(runQueryAction).toHaveBeenCalled());
@@ -307,8 +260,7 @@ describe("⌘↵", () => {
 });
 
 describe("the SQL editor's one rule", () => {
-  // A second statement is refused (`query_not_one_statement`), so the rule is
-  // kept in sight on the toolbar rather than behind a "?".
+  // A second statement is refused, so the rule stays in sight.
   test("says one statement at a time, on screen", () => {
     render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
 
@@ -317,10 +269,9 @@ describe("the SQL editor's one rule", () => {
 });
 
 /**
- * The tabs the editor holds (§5 of the workspace design). What the strip
- * itself does is `sql-tabs.test.tsx`, and what keeps each tab's history is
- * `code-editor.test.tsx`; this is the wiring between them and the form —
- * above all which text a run actually sends.
+ * The wiring between the tab strip (`sql-tabs.test.tsx`), the per-tab
+ * documents (`code-editor.test.tsx`) and the form: above all, which text a
+ * run sends.
  */
 describe("the editor's tabs", () => {
   const te = en.participant.play.workspace.editor;
@@ -381,8 +332,7 @@ describe("the editor's tabs", () => {
     );
   });
 
-  // The result stays on screen while another tab is typed in, so it has to
-  // say which tab it came from (§5).
+  // The result outlives the tab switch, so it names its tab.
   test("says which tab a run came from", async () => {
     answer.current = {
       kind: "answer",
@@ -402,12 +352,9 @@ describe("the editor's tabs", () => {
     );
   });
 
-  // The ordinary way onto this screen is a client-side navigation from /my,
-  // where there is no hydration at all: the remembered tab is the one the
-  // very first render opens. Everything that carries the text has to open on
-  // that tab too — the visible editor, and the hidden field a run is built
-  // from. Getting this wrong showed the first tab's text under the second
-  // tab's name, ran it, and then saved it over the second tab's own work.
+  // A client-side navigation from /my has no hydration: the remembered tab
+  // opens on the first render, and the editor and the hidden field must both
+  // carry its text, or a run sends, and saves, the first tab's text.
   test("opens the tab that was open last time, text and all", async () => {
     window.localStorage.setItem(activeTabStorageKey("c1"), "t2");
     const { container } = render(
@@ -426,9 +373,7 @@ describe("the editor's tabs", () => {
     await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT * FROM alibis"));
   });
 
-  // The same, before CodeMirror's own chunk has arrived: the fallback field
-  // is what a participant types into in that window, and it has to be the
-  // remembered tab's text rather than the first tab's.
+  // The fallback field too, before CodeMirror's chunk arrives.
   test("opens the remembered tab in the fallback field too, before CodeMirror loads", () => {
     window.localStorage.setItem(activeTabStorageKey("c1"), "t2");
     render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={TWO_WRITTEN_TABS} onResult={vi.fn()} />);
@@ -438,8 +383,7 @@ describe("the editor's tabs", () => {
     );
   });
 
-  // Mirrors the notes panel: a workspace the page could not read does not
-  // take the editor away, it only stops promising to keep what is typed.
+  // As with the notes: an unreadable workspace stops saving, not editing.
   test("still edits, and says nothing is saved, when the workspace could not be read", async () => {
     const { container } = render(
       <ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={null} onResult={vi.fn()} />,

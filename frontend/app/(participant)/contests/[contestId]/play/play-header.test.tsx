@@ -16,10 +16,8 @@ type EventsSnapshot = {
   reopened?: boolean;
 };
 
-// The hook itself is tested on its own (use-contest-events.test.ts); this
-// stands in for it so the header can be proven against every phase without
-// waiting on a real EventSource. `real` hands the header the hook itself, for
-// the tests whose subject is the two of them together.
+// The hook is tested on its own; this stand-in drives the header through
+// every phase. `real` hands over the hook itself for tests of the pair.
 const events = vi.hoisted(() => ({
   current: { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" } as EventsSnapshot,
   real: false,
@@ -32,7 +30,7 @@ vi.mock("./use-contest-events", async (importOriginal) => {
   };
 });
 
-/** Just enough of EventSource for the real hook to open a channel and be sent a sync on it. */
+/** Just enough EventSource for the real hook to open a channel and receive a sync. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   static readonly CONNECTING = 0;
@@ -60,7 +58,7 @@ class FakeEventSource {
   }
 }
 
-/** Admits the channel: the server's first sync on the connection open now. */
+/** Admits the channel: the server's first sync on the open connection. */
 function admitChannel() {
   act(() => FakeEventSource.instances.at(-1)!.emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
 }
@@ -81,11 +79,8 @@ describe("PlayHeader", () => {
     expect(screen.getByRole("heading", { name: "The Greenhouse Case" })).toBeInTheDocument();
   });
 
-  // The title is one line with an ellipsis where it shares the bar with the
-  // clock, and wraps where it does not. Measured at 375px, where the clock
-  // has already wrapped onto its own line: the title lost its last 75px with
-  // an empty second line underneath it. jsdom cannot measure that; what it
-  // can hold is that both rules are still declared, and for which range.
+  // jsdom cannot measure wrapping, so this checks both rules are declared
+  // for the right ranges.
   test("the title truncates on a shared row and wraps on the narrow fallback", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
     render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
@@ -95,8 +90,6 @@ describe("PlayHeader", () => {
     expect(title.className).toMatch(/(^|\s)max-narrow:whitespace-normal(\s|$)/);
   });
 
-  // Design §8: the participant is told, on the screen itself, that the
-  // organiser sees what they do here.
   test("says under the title that the organiser sees this page", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
     render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart={false} dict={en} />);
@@ -125,10 +118,8 @@ describe("PlayHeader", () => {
     expect(screen.getByRole("timer")).toHaveTextContent(/1:2\d|1:3\d/);
   });
 
-  // The bug this separates two states to prevent. Before the events channel
-  // has synced once, nothing on the client knows this participant's deadline
-  // — and a fixed-window contest, which is most of them, was being told its
-  // countdown starts with the participant's first action. Not early: false.
+  // Before the first sync the deadline is unknown; claiming the countdown
+  // starts with the first action would be false in a fixed-window contest.
   test("says it is synchronising rather than claiming how the contest is timed", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: undefined }, phase: "running" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
@@ -137,11 +128,9 @@ describe("PlayHeader", () => {
     expect(screen.getByRole("timer")).not.toHaveTextContent(en.participant.play.clock.notStarted);
   });
 
-  // The page's own content reads start an individual participant's clock on
-  // the server, possibly after the channel's first sync said there was no
-  // deadline yet. Once the workspace has loaded, that sync is stale: the clock
-  // asks for one fresh sync, once, and says it is synchronising meanwhile
-  // rather than claiming the countdown has not started.
+  // The content reads can start an individual clock after a sync said there
+  // was no deadline; once loaded, the clock asks for one resync and says it
+  // is synchronising meanwhile.
   test("once the workspace has loaded, a sync with no deadline reads as synchronising and asks for one resync", () => {
     const resync = vi.fn();
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", resync };
@@ -188,8 +177,7 @@ describe("PlayHeader", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: Date.now() - 5_000 }, phase: "running" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
-    // The screen says time is up; it does not decide anything on its own —
-    // there is nothing here to disable, only a clock to read honestly.
+    // The screen only reads the clock; nothing is disabled.
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.timeUp);
   });
 
@@ -207,10 +195,8 @@ describe("PlayHeader", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  // A running contest whose own window had not opened when the page was
-  // rendered (individual timing, started early by the organiser) shows the
-  // "not open now" reason under this bar. When the channel reopens, the page
-  // under it is stale, and only a refresh replaces it with the workspace.
+  // A page rendered "not open now" is stale once the channel reopens; only a
+  // refresh brings the workspace.
   test("refreshes the page once when the channel reopens after the contest was not open", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", reopened: true };
     const { rerender } = render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
@@ -228,12 +214,9 @@ describe("PlayHeader", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  // The race the reopened path misses: the page under this bar was rendered
-  // "not open now", then the window opened before the channel's first
-  // connection, which is therefore simply admitted — never refused, never
-  // `reopened`. The page itself says what it rendered, and the header
-  // refreshes once that and an admitted channel are both true, in whichever
-  // order they arrive.
+  // The window may open before the channel's first connection, which is then
+  // simply admitted. The page says what it rendered, and the header refreshes
+  // once both facts are known, in either order.
   describe("the page under the bar says what it rendered", () => {
     beforeEach(() => {
       events.real = true;
@@ -266,8 +249,7 @@ describe("PlayHeader", () => {
       expect(refresh).toHaveBeenCalledTimes(1);
     });
 
-    // The page streams in under the bar, so the channel can be admitted
-    // before the page has said what it rendered.
+    // The page streams in, so the channel may be admitted first.
     test("a page that says it rendered dormant after its channel was admitted refreshes once", () => {
       const { rerender } = render(under(null));
       admitChannel();
@@ -303,9 +285,8 @@ describe("PlayHeader", () => {
     });
   });
 
-  // The waiting room already refreshes on contest_started and on nothing
-  // else; reopening alone (a contest taken back to draft and published
-  // again) leaves it a waiting room.
+  // The waiting room refreshes only on contest_started; a reopening alone
+  // (a contest republished after draft) leaves it waiting.
   test("leaves the waiting room alone when its channel reopens", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting", reopened: true };
     render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
@@ -320,10 +301,7 @@ describe("PlayHeader", () => {
     expect(screen.getByText(en.participant.play.finishedTag)).toBeInTheDocument();
   });
 
-  // Finding 1: the events channel this clock runs on can fail outright (a
-  // connection limit, a rate limit, this account losing access) and the
-  // hook exposes it as `channelError` — previously nothing on screen could
-  // render it at all.
+  // A failed channel (connection or rate limit, lost access) is shown.
   test("shows a translated reason when the events channel itself fails", () => {
     events.current = {
       offsetRef: { current: 0 },
@@ -343,9 +321,7 @@ describe("PlayHeader", () => {
     expect(screen.queryByText(en.errors.too_many_connections)).not.toBeInTheDocument();
   });
 
-  // Finding 6: nothing reads the clock's own snapshot while the contest is
-  // waiting or finished, so ticking an interval for either is a render for
-  // nothing.
+  // Nothing reads the snapshot while waiting or finished, so no interval.
   describe("the clock's own interval", () => {
     afterEach(() => {
       vi.restoreAllMocks();
@@ -376,10 +352,8 @@ describe("PlayHeader", () => {
     });
   });
 
-  // Finding 7: the clock is `aria-live="off"`, on purpose (reading a
-  // two-hour countdown aloud every second would drown a screen reader user
-  // in chatter) — but that means a threshold worth interrupting for has to
-  // be announced some other way.
+  // The clock is `aria-live="off"` so a screen reader is not read every
+  // second; thresholds are announced separately.
   describe("the clock's screen-reader announcement", () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -410,11 +384,8 @@ describe("PlayHeader", () => {
         vi.advanceTimersByTime(1_000);
       });
 
-      // Two elements now carry this exact text: the visible, aria-live="off"
-      // clock (unaffected — proven by the existing "does not disable
-      // anything" test) and the hidden live region this test is actually
-      // about. getAllByText, not getByText, is what that duplication calls
-      // for.
+      // Two elements carry this text: the visible clock and the hidden live
+      // region.
       const matches = screen.getAllByText(en.participant.play.clock.timeUp);
       expect(matches.some((el) => el.getAttribute("aria-live") === "polite")).toBe(true);
     });
@@ -422,11 +393,8 @@ describe("PlayHeader", () => {
 });
 
 /**
- * §8's three toggles live at the right end of this bar. They belong to the
- * workspace below it, which is a sibling behind a `<Suspense>` boundary, so
- * what the header actually renders is `PanelToggles` — a component that
- * draws nothing until there is a provider around the pair (panel-toggles.tsx
- * and its own tests).
+ * The panel toggles at the bar's right end. They control the workspace behind the
+ * Suspense boundary, so `PanelToggles` draws nothing without a provider.
  */
 describe("the panel toggles", () => {
   const t = en.participant.play.workspace.panels;
@@ -444,8 +412,7 @@ describe("the panel toggles", () => {
     expect(screen.getByRole("button", { name: t.bottom })).toBeInTheDocument();
   });
 
-  // The waiting room draws this same bar with no workspace under it, and a
-  // control for a panel that is not on the screen is a control for nothing.
+  // The waiting room has no panels to control.
   test("are absent in the waiting room", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);

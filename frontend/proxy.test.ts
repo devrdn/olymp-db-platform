@@ -7,18 +7,9 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
 import { config, proxy } from "./proxy";
 
 /**
- * These exercise the proxy rather than the guard beneath it, and that
- * distinction is the reason the file exists.
- *
- * `guardRedirect` has its own tests, and they were green throughout the week
- * in which every signed-out visitor met ERR_TOO_MANY_REDIRECTS. They passed
- * because each one builds the argument it then checks, so they agreed with
- * the guard about a string the proxy never sent it: the proxy was joining the
- * path and the query, which made `/login?next=…` stop matching the public
- * allow-list, and the sign-in page redirected to itself for ever.
- *
- * A test that assembles the call cannot catch a caller that assembles it
- * differently. So these start from a request, the way the runtime does.
+ * These start from a request, as the runtime does. `guardRedirect`'s own tests
+ * build their own argument, so they could not catch the proxy joining path and
+ * query, which made `/login?next=…` redirect to itself.
  */
 function request(url: string, session = false) {
   const req = new NextRequest(new URL(url, "http://localhost:3000"));
@@ -26,7 +17,7 @@ function request(url: string, session = false) {
   return req;
 }
 
-/** Where the proxy is sending this request, or null if it lets it through. */
+/** Where the proxy redirects this request, or null if it passes. */
 function destination(url: string, session = false): string | null {
   const response = proxy(request(url, session));
   return response.headers.get("location");
@@ -41,8 +32,7 @@ describe("proxy", () => {
     expect(destination("/contests", true)).toBeNull();
   });
 
-  // The web container's healthcheck asks this with no session and treats a
-  // redirect as a failure; followed, it would render /login and call the API.
+  // The healthcheck has no session and treats a redirect as failure.
   test("lets a signed-out liveness probe through, setting no cookie", () => {
     const response = proxy(request("/healthz"));
     expect(response.headers.get("location")).toBeNull();
@@ -50,17 +40,15 @@ describe("proxy", () => {
   });
 
   /**
-   * The redirect above lands here, and this is the assertion the loop broke:
-   * sign-in must stay reachable while carrying where to go next, or the guard
-   * bounces its own destination and the browser gives up counting.
+   * Sign-in must stay reachable while carrying `next`, or the guard redirects
+   * its own destination.
    */
   test("does not redirect the page it redirects to", () => {
     expect(destination("/login?next=%2Fcontests")).toBeNull();
   });
 
   test("terminates: following its own redirect reaches a page that stays put", () => {
-    // Written as a walk rather than a single assertion because what failed was
-    // not one wrong answer, it was that the sequence never ended.
+    // A walk, because the failure was a sequence that never ended.
     let url = "/contests";
     const seen = [url];
 
@@ -82,12 +70,8 @@ describe("proxy", () => {
 });
 
 /**
- * The API believes the forwarded address this server sends it, so a forwarded
- * address the reverse proxy did not vouch for is removed from every request
- * this proxy sees, whatever the path. Path-specific handling is what failed:
- * the `/api/*` rewrite in next.config.ts matches without regard to case, and a
- * check for the lower-case prefix alone let `/API/...` carry a browser-written
- * header through it.
+ * An unvouched forwarded address is removed on every path: the rewrite matches
+ * `/api` case-insensitively, so a lower-case-only check let `/API/...` through.
  */
 describe("proxy's forwarded headers", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
@@ -161,8 +145,8 @@ describe("proxy's forwarded headers", () => {
   );
 
   test("keeps a vouched address and its secret on a screen, where the server checks it again", () => {
-    // lib/api/forwarded.ts verifies the secret at the point it forwards the
-    // address; removing it here would make every vouched request unvouched.
+    // lib/api/forwarded.ts checks the secret when forwarding; removing it here
+    // would unvouch every request.
     vi.stubEnv("INGRESS_SECRET", SECRET);
 
     const out = passedOn("/contests", { "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
@@ -173,10 +157,7 @@ describe("proxy's forwarded headers", () => {
 });
 
 /**
- * The matcher, checked through the same door the runtime uses.
- *
- * `config.matcher` is a string the framework compiles, so nothing in the type
- * system says whether it covers what it should. These read it back as the
+ * `config.matcher` is a string the framework compiles, so these test it as the
  * regular expression it is.
  */
 describe("proxy's matcher", () => {
@@ -196,8 +177,7 @@ describe("proxy's matcher", () => {
     ["/api/v1/settings", "the API's: its forwarded address is checked, sign-in is not"],
     ["/api/v1/settings/images/logo", "public on purpose, and still passed through the same check"],
   ])("runs on %s — %s", (path) => {
-    // Named exclusions rather than "anything with a dot": the shorthand stops
-    // guarding the day a route legitimately carries one, and says nothing.
+    // Named exclusions: "anything with a dot" would silently skip such routes.
     expect(pattern.test(path)).toBe(true);
   });
 });

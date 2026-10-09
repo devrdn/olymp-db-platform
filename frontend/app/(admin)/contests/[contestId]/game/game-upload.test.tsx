@@ -26,10 +26,8 @@ vi.mock("./actions", () => ({
   gameStatusAction,
 }));
 
-// `request` (the direct-to-API chunk transport) is the one thing this
-// component talks to that is not a Server Action — everything else in
-// `@/lib/api/client` (ApiError, the codes) has to stay real, since the
-// component's own error handling branches on `instanceof ApiError`.
+// Only the chunk transport is mocked; `ApiError` must stay real because the
+// component branches on `instanceof`.
 const request = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/client")>();
@@ -44,10 +42,8 @@ const t = en.workspace.game;
 const tu = t.upload;
 
 /**
- * A build failure as `internal/gamedb` writes it — `scriptErrorLinePrefix`
- * plus PostgreSQL's own words. Named rather than inlined so there is one
- * place to change if the Go side ever does, and so a reader can see that the
- * prefix, not the message, is what this panel parses.
+ * A build failure as `internal/gamedb` writes it: `scriptErrorLinePrefix` plus
+ * PostgreSQL's message. The prefix is what the panel parses.
  */
 function buildFailureAtLine(line: number): string {
   return `line ${line}: the game script was refused: syntax error at or near "FRO" (SQLSTATE 42601)`;
@@ -71,9 +67,7 @@ function upload(overrides: Partial<Upload> = {}): Upload {
   };
 }
 
-/** An editor-sourced `Game`, the shape most of these tests exercise this
- * panel alongside — `page.tsx` always renders `GameUpload` next to
- * `GameEditor`, whichever of the two actually built the current game. */
+/** An editor-sourced `Game`; the page always renders `GameUpload` beside `GameEditor`. */
 function game(overrides: Partial<Game> = {}): Game {
   return {
     status: "absent",
@@ -99,8 +93,7 @@ function show({
   editable = true,
 }: {
   uploadLimits?: UploadLimits;
-  /** Overrides the whole `game` prop — for the file-sourced-reload tests,
-   * which need `source`/`upload` alongside a custom `uploadLimits`. */
+  /** Replaces the whole `game` prop, for the file-sourced reload tests. */
   initialGame?: Game;
   initialUpload?: Upload | null;
   editable?: boolean;
@@ -165,9 +158,7 @@ describe("the game upload panel", () => {
     ).toBeInTheDocument();
   });
 
-  // The mistake this guards against is resuming with a file that only looks
-  // right — a same-named file that was edited since, or the wrong contest's
-  // dump entirely.
+  // Guards against resuming with an edited same-named file or the wrong dump.
   test("refuses to resume with a file that does not match the unfinished upload", async () => {
     show({ initialUpload: upload({ receivedBytes: 5 }) });
     const wrongFile = new File([new Uint8Array(3)], "other.sql");
@@ -181,12 +172,8 @@ describe("the game upload panel", () => {
 
   test("sends a small file in chunks sized from upload_limits, then shows what was received", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    // A real server, not a canned sequence: it reports back exactly as many
-    // bytes as this piece actually carried. A chunk sliced to any size other
-    // than upload_limits.chunkBytes (5) still finishes the 12-byte file, but
-    // not in three pieces of 5, 5 and 2 — which is what the assertions below
-    // check, catching a chunk size taken from a constant instead of the
-    // server's own ceiling.
+    // The fake server reports exactly what each piece carried, so a constant
+    // chunk size would show up as pieces other than 5, 5 and 2.
     let received = 0;
     request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
       received += options.rawBody?.size ?? 0;
@@ -223,15 +210,11 @@ describe("the game upload panel", () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  // The brief's own rule: the next chunk's offset is the server's own
-  // received_bytes, not this tab's tally of what it has sent — the two can
-  // disagree (a slow write that landed more than this chunk's own length,
-  // a resend the server treated as an idempotent no-op), and the server is
-  // the one that actually knows.
+  // The server's received_bytes wins over this tab's tally; they can differ
+  // after an idempotent resend.
   test("resumes the next chunk from the server's own received_bytes, not from what this tab sent", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 12 }) });
-    // The first chunk is 5 bytes long, but the server reports 7 received —
-    // a bigger jump than this chunk's own length would explain.
+    // A 5-byte chunk, but the server reports 7.
     request
       .mockResolvedValueOnce({ received_bytes: 7 })
       .mockResolvedValueOnce({ received_bytes: 12 });
@@ -262,17 +245,10 @@ describe("the game upload panel", () => {
     expect(screen.getByRole("button", { name: tu.retry })).toBeInTheDocument();
   });
 
-  // The line the build failure names is exactly what a person opening this
-  // panel wants to jump to — it is only offered once there is one to jump to.
-  //
-  // `buildFailureAtLine` below is the format `internal/gamedb` writes, in
-  // one place (`scriptErrorLinePrefix`), for both ways a script can be
-  // refused. It is a wire format shared across two languages with no
-  // generator between them, so it is pinned on both sides: here, and by
-  // `TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses`, which
-  // runs this component's own regular expression over what Go produces.
-  // Changing the prefix on either side fails that Go test, which names this
-  // file.
+  // Offered only once a failing line exists. The failure format is shared with
+  // Go without a generator, so it is pinned on both sides;
+  // `TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses` runs this
+  // component's regex over Go's output.
   test("offers to jump to the failing line once the upload's own build has failed", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 5 }) });
     request.mockResolvedValueOnce({ received_bytes: 5 });
@@ -297,18 +273,12 @@ describe("the game upload panel", () => {
     expect(gameUploadWindowAction).toHaveBeenLastCalledWith(contestId, uploadId, 3);
   });
 
-  // Cancel has two halves and they fail separately: the server is told to
-  // forget the upload, and the request already on the wire is actually
-  // stopped. Only the first was checked here before — the stub ignored the
-  // `signal` it was handed, so deleting `controllerRef.current?.abort()` left
-  // the test green while a cancelled multi-gigabyte upload went on sending
-  // chunks to a contest the organiser had just abandoned. `signal` is in
-  // `lib/api/client.ts` for this line alone.
+  // Cancel must both tell the server and abort the chunk on the wire; a stub
+  // ignoring `signal` would let a removed `abort()` pass.
   test("cancels an upload in progress and lets the server know", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    // The chunk stays in flight until its signal says otherwise — the state
-    // the loop is in when "Cancel" is pressed, and the only state in which
-    // aborting is observable at all.
+    // The chunk stays in flight until aborted, the only state where aborting is
+    // observable.
     let chunkSignal: AbortSignal | undefined;
     request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
       chunkSignal = init.signal;
@@ -334,14 +304,9 @@ describe("the game upload panel", () => {
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
   });
 
-  // This is the reload this whole panel exists to survive: the tab that ran
-  // the upload is gone, and `game.upload` (from `GET .../game`, carried in
-  // by `page.tsx`) is the only thing left that still names the file. Before
-  // this, a reload of a file-sourced game showed the "Choose file" picker as
-  // if nothing had ever been uploaded — this proves it instead restores the
-  // viewer, not the transient "just finished" message a live completion
-  // shows (`sourceNote`, not `done`), and loads the file's own first window
-  // on its own, without a click.
+  // After a reload only `game.upload` names the file: the viewer is restored
+  // (with `sourceNote`, not the live `done` message) and loads its first window
+  // without a click.
   test("restores the file viewer for a file-sourced game after a reload, rather than an empty picker", async () => {
     gameUploadWindowAction.mockResolvedValueOnce({
       value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
@@ -367,12 +332,8 @@ describe("the game upload panel", () => {
     expect(await screen.findByText("CREATE TABLE guests (id uuid);")).toBeInTheDocument();
   });
 
-  // An organiser picks the wrong dump at least once. Before this, the only
-  // file picker lived in the idle and resumable states, so a game already
-  // built from a file had no way back to one: the panel showed the viewer
-  // and nothing else. Replacing is the server's decision to refuse or allow
-  // (game_not_editable, exactly as for the editor) — the interface's job is
-  // to make the attempt reachable.
+  // A built game must still offer the picker; whether replacing is allowed is
+  // the server's call.
   test("offers a way back to the picker so a different file can replace this one", async () => {
     gameUploadWindowAction.mockResolvedValueOnce({
       value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
@@ -395,10 +356,7 @@ describe("the game upload panel", () => {
     expect(screen.queryByText("dump.sql")).not.toBeInTheDocument();
   });
 
-  // The same reload, but for a build that had already failed before it —
-  // `completedGame.buildError` is seeded from `game.upload`'s own sibling
-  // field `game.buildError` (`game()`'s default `initialGame` here), and
-  // "jump to the failing line" reads it exactly the way it reads a live
+  // The restored build error comes from `game.buildError`, read like a live
   // completion's.
   test("offers to jump to the failing line for a file-sourced game restored after a reload", async () => {
     gameUploadWindowAction
@@ -427,16 +385,11 @@ describe("the game upload panel", () => {
 });
 
 /**
- * Finding 4: the bar animated `width`, a layout property, over a fixed 120ms
- * — longer than a chunk takes on a fast link, so it trailed the upload the
- * whole way and only reached the truth 120ms after the last chunk landed.
- *
- * jsdom runs no transitions and lays nothing out, so what is checked here is
- * the two decisions that were wrong: which property carries the movement,
- * and where its duration comes from.
+ * jsdom runs no transitions, so this checks which property moves (a transform,
+ * not `width`) and where the duration comes from.
  */
 describe("the upload's progress bar", () => {
-  /** Holds the first chunk open, so the uploading phase — the only one that draws the bar — stays on screen. */
+  /** Holds the first chunk open so the bar stays on screen. */
   function stall() {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 12 }) });
     request.mockImplementation(() => new Promise(() => {}));
@@ -457,10 +410,7 @@ describe("the upload's progress bar", () => {
     expect(fill.className).not.toContain("transition-[width]");
   });
 
-  // The token is the ceiling, not the value: a bar that takes longer to
-  // travel than the upload takes to move on is a bar showing yesterday's
-  // figure. Before the first chunk lands there is no cadence to measure yet,
-  // so the token is all there is.
+  // Before the first chunk there is no cadence, so the token is the duration.
   test("takes its duration from the token until there is a cadence to measure", async () => {
     stall();
     show();
@@ -479,7 +429,7 @@ describe("the upload's progress bar", () => {
     request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
       chunks += 1;
       received += options.rawBody?.size ?? 0;
-      // Two chunks land, then the upload hangs with the bar still on screen.
+      // Two chunks land, then the upload hangs with the bar on screen.
       if (chunks > 2) await new Promise(() => {});
       return { received_bytes: received };
     });

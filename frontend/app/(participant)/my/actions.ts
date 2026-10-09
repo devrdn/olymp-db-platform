@@ -9,22 +9,14 @@ import { serverRequest } from "@/lib/api/server";
 export type EnrollState = { code?: string; enrolled?: boolean };
 
 /**
- * Signing oneself up for a contest.
+ * Enrols the signed-in participant in a contest. The id comes from the form
+ * and goes into a request path, so it is validated first: a slash or `..`
+ * would address a different endpoint, which the API would not refuse.
  *
- * The identifier arrives in the form, which makes it a value a visitor
- * controls, and it goes straight into a request path. It is checked before it
- * gets there: `/contests/${id}/enroll` with a slash in `id` addresses a
- * different endpoint entirely, and `fetch` resolves the `..` away before the
- * request leaves, so nothing downstream could tell. The API would refuse an
- * unknown contest anyway; it would not refuse a well-formed request to the
- * wrong endpoint.
- *
- * Everything the contest's own rules say — enrolment closed, the deadline
- * passed, the address outside the university network — is decided by the API
- * and comes back as a code this form reports. None of it is re-implemented
- * here, and the network check in particular could not be: the address that
- * counts is the one the trusted proxy reports, which this process is not in a
- * position to know.
+ * The contest's own rules (enrolment closed, deadline passed, address
+ * outside the network) are the API's to decide and come back as codes. The
+ * network check could not be done here anyway: only the trusted proxy knows
+ * the address that counts.
  */
 export async function enrollAction(_previous: EnrollState, form: FormData): Promise<EnrollState> {
   const contestId = form.get("contestId");
@@ -38,16 +30,15 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
   if (failure) {
     const code = failureCode(failure);
 
-    // Two accepted answers wearing an error's clothes: a double-clicked button
-    // and a list that was already stale when it rendered. Both mean the
-    // account is enrolled, which is what it asked for.
+    // A double click or a stale list: either way the account is enrolled,
+    // which is what it asked for.
     if (code === "already_enrolled") return { enrolled: true };
 
     return { code };
   }
 
-  // The listing is rendered from the session's own scope, so the newly joined
-  // contest only appears once the server has been asked again.
+  // The listing is session-scoped, so the new contest appears only after
+  // a fresh request.
   revalidatePath("/my");
 
   return { enrolled: true };

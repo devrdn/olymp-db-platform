@@ -40,12 +40,8 @@ function contest(overrides: Partial<Contest> = {}): Contest {
 
 describe("ContestPanel, after the server's copy changes", () => {
   /**
-   * The fields are uncontrolled — they carry a defaultValue, which React reads
-   * once when the input mounts and ignores afterwards. A save revalidates the
-   * page and the panel re-renders with the saved contest, so without a remount
-   * the field keeps whatever was in it and quietly disagrees with the server.
-   * Base UI notices the same thing and warns about a default that changed
-   * after initialisation.
+   * Uncontrolled fields read `defaultValue` once, so a save must remount them
+   * to show the server's values.
    */
   test("shows the schedule the server now holds", () => {
     const { rerender } = render(
@@ -71,8 +67,7 @@ describe("ContestPanel, after the server's copy changes", () => {
   });
 
   test("leaves the fields alone when the server's copy did not change", () => {
-    // A re-render that is not a save — a theme switch, a parent's state — must
-    // not throw away what somebody is in the middle of typing.
+    // A re-render that is not a save must keep what is being typed.
     const { rerender } = render(
       <ContestPanel contest={contest()} editable shapeOpen dict={dict} />,
     );
@@ -88,12 +83,8 @@ describe("ContestPanel, after the server's copy changes", () => {
   });
 });
 
-// Finding 1: progression, scoring and the penalty they interact with used to
-// be configurable only by hand-crafted API calls — the settings panel offered
-// question_mode and timing, but neither of the contest-level settings. These
-// prove the two are now on the same screen as the shape settings they belong
-// beside, and that the publish gate's own sequential-progression refusal is
-// said here rather than only discovered at publish time.
+// Progression and scoring sit beside the shape settings, and the publish gate's
+// sequential-progression refusal is stated here.
 describe("ContestPanel, question order and scoring", () => {
   test("offers both settings, defaulted to what the contest already holds", () => {
     render(<ContestPanel contest={contest({ progression: "sequential", scoring: "winner" })} editable shapeOpen dict={dict} />);
@@ -129,11 +120,7 @@ describe("ContestPanel, question order and scoring", () => {
   });
 });
 
-/**
- * The client's split between what stays on screen and what moves behind a
- * "?": a format or a limit is needed before the mistake, an explanation is
- * read once.
- */
+/** Rules stay on screen; explanations move behind a "?". */
 describe("ContestPanel, rules on screen and explanations behind a question mark", () => {
   test("keeps the network and rate rules visible, and the access explanation closed", () => {
     render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
@@ -166,10 +153,8 @@ describe("ContestPanel, rules on screen and explanations behind a question mark"
   });
 
   /**
-   * A started contest disables these fieldsets, and a disabled fieldset
-   * disables every button in it except those in its legend. The question
-   * mark lives in the legend so that explaining a frozen setting still works
-   * when it is frozen — and the group keeps its name without "Hint" in it.
+   * A disabled fieldset spares only buttons in its legend, so the "?" lives
+   * there and still works when frozen; the group name stays free of "Hint".
    */
   test("still explains the question order once the shape is frozen", async () => {
     const user = userEvent.setup();
@@ -189,10 +174,8 @@ describe("ContestPanel, rules on screen and explanations behind a question mark"
   });
 });
 
-// The ICPC penalty (docs/ARCHITECTURE.md §6.1.1):
-// minutes, 0..240, shown only while ICPC scoring is picked and locked with
-// the rest of the shape once the contest starts — the same rule as the
-// scoring radio it sits beside.
+// ICPC penalty (docs/ARCHITECTURE.md §6.1.1): minutes 0..240, shown only for
+// ICPC and locked with the shape.
 describe("ContestPanel, the ICPC penalty", () => {
   test("is absent while another scoring mode is picked", () => {
     render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);

@@ -24,8 +24,7 @@ describe("readableDuration", () => {
     expect(readableDuration(3727)).toBe("1:02:07");
   });
 
-  // A rate that has not settled yet can hand this a negative or infinite
-  // estimate; the display must not read "-3:00" while the loop catches up.
+  // An unsettled rate can produce a negative or infinite estimate.
   test("never reads negative", () => {
     expect(readableDuration(-5)).toBe("0:00");
   });

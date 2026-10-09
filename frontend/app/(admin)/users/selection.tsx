@@ -38,44 +38,26 @@ import {
 } from "./bulk-actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** One picked account, as the selection panel below needs to name it. */
 export type SelectedAccount = { id: string; display: string };
 
 /**
- * Which accounts the administrator has picked.
+ * The administrator's picked accounts. An external store read through
+ * `useSyncExternalStore`, not context, so ticking one box re-renders one row
+ * rather than every consumer.
  *
- * An external store read through useSyncExternalStore rather than a context
- * value, because a context re-renders every consumer on every change: with
- * fifty rows on a page, ticking one box would re-render fifty checkboxes and
- * the bar. Here each checkbox subscribes to its own membership and the bar to
- * the count, so a click re-renders one row.
- *
- * The page itself stays a server component. Only the boxes, the bar and the
- * dialogs below it are client code, which is the whole of what needs state.
- *
- * This now lives one level up, in `layout.tsx`, rather than inside the page —
- * that is what lets a pick survive a search, which re-renders `page.tsx` but
- * not the layout above it. That is also why an id is kept with a `display`
- * label rather than bare: once a pick can outlive the page that showed it, an
- * account a later search has pushed off screen still has to be nameable in
- * the "who is selected" panel below, using the label captured when it was
- * checked rather than something only the current page's rows can supply.
+ * Held in `layout.tsx` so a pick survives a search, which re-renders only the
+ * page. Each id keeps the label captured when it was checked, so an account
+ * pushed off screen can still be named in the selection panel.
  */
 class SelectionStore {
   private entries = new Map<string, string>();
   private listeners = new Set<() => void>();
-  // Both `selected()` and `list()` hand back a cached snapshot rather than a
-  // fresh array on every read, which is what useSyncExternalStore needs: it
-  // calls the getSnapshot function on every render to check for change, and a
-  // fresh array each time never compares equal to the last one, so React
-  // treats every render as a fresh update and can loop. Rebuilding only on an
-  // actual mutation keeps the reference stable between emits.
+  // Snapshots are cached until a mutation: `useSyncExternalStore` compares them
+  // on every render, and a fresh array each time would loop.
   private cachedSelected: string[] | null = null;
   private cachedList: SelectedAccount[] | null = null;
-  // Whose selection this is, as of the last `syncOwner` call. `undefined`
-  // until that first call — deliberately distinct from every real value
-  // `owner` carries (`string | null`) so a fresh store's first sync always
-  // "matches" rather than clearing entries that cannot exist yet.
+  // `undefined` until the first `syncOwner`, distinct from every real owner, so
+  // the first sync never clears.
   private owner: string | null | undefined = undefined;
 
   subscribe = (listener: () => void) => {
@@ -91,8 +73,7 @@ class SelectionStore {
     return this.cachedSelected;
   };
 
-  /** Every picked account, by the label it was given when checked — what the
-   * "view selection" panel lists. */
+  /** Every picked account with its captured label. */
   list = () => {
     if (this.cachedList === null) {
       this.cachedList = [...this.entries.entries()].map(([id, display]) => ({ id, display }));
@@ -105,51 +86,29 @@ class SelectionStore {
     this.emit();
   };
 
-  /**
-   * Adds every row given, leaving anything already picked — on another page,
-   * from an earlier search — exactly as it was. This is what "select this
-   * page" has to do now that a pick can span pages: overwriting the whole
-   * store here would silently drop everything not currently on screen, which
-   * is the header checkbox reaching further than what it shows.
-   */
+  /** Adds rows without touching picks from other pages or searches. */
   selectMany = (rows: SelectedAccount[]) => {
     for (const row of rows) this.entries.set(row.id, row.display);
     this.emit();
   };
 
-  /** Removes exactly these ids and no others — "deselect this page", and a
-   * single row's own remove button in the selection panel, both go through
-   * this rather than through `clear`. */
+  /** Removes exactly these ids: "deselect this page" and a row's remove button. */
   deselectMany = (ids: readonly string[]) => {
     for (const id of ids) this.entries.delete(id);
     this.emit();
   };
 
-  /** Drops the whole selection — "Clear selection", and what a bulk run that
-   * actually changed something does on its way out. */
+  /** Drops the whole selection. */
   clear = () => {
     this.entries.clear();
     this.emit();
   };
 
   /**
-   * Scopes this store to whoever is signed in, clearing it the moment that
-   * changes.
-   *
-   * The store now lives in a layout precisely so a pick survives a search
-   * (see the class doc above) — the same React identity that makes that work
-   * is exactly what could let a pick survive further than that. Next keeps a
-   * client-side cache of previously rendered route segments to make
-   * back/forward navigation instant and avoid layout shift
-   * (`node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/staleTimes.md`:
-   * "This doesn't change back/forward caching behavior..."), and nothing
-   * about that cache is scoped to who is signed in. Rather than establishing
-   * whether it can actually resurrect this component's state across a
-   * sign-out and a different administrator signing in — in the same tab, a
-   * still-open back-navigation reaching a cached copy of this tree — `owner`
-   * is checked every time `SelectionProvider` runs, and a change clears the
-   * selection outright, regardless of *why* this instance is being asked
-   * about a different administrator than the one it last held picks for.
+   * Clears the selection when the signed-in administrator changes. Next's
+   * client router cache is not scoped to the user, so a back navigation after a
+   * sign-out and another sign-in could otherwise revive the previous
+   * administrator's picks.
    */
   syncOwner = (owner: string | null) => {
     if (this.owner === owner) return;
@@ -180,19 +139,11 @@ function useSelectionStore(): SelectionStore {
 }
 
 /**
- * Holds the one store instance for the accounts on this page.
- *
- * The instance itself travels through context, which is fine — it never
- * changes identity, so nothing that reads it re-renders when the selection
- * does. What must never live in context is the selected set itself.
- *
- * `owner` is the signed-in administrator's id, read fresh, server-side, by
- * `layout.tsx` on every request that reaches it — see `SelectionStore.syncOwner`
- * for why a plain `useState` here is not enough on its own to keep a
- * selection from outliving whoever made it. Optional and defaulted to
- * `null` for the many tests in this file that exercise the selection
- * mechanics and have no administrator identity to give it; `layout.tsx`
- * always passes a real one.
+ * Provides the store. The instance travels through context because it never
+ * changes identity; the selected set must not go through context, or every
+ * consumer would re-render on each tick. `owner` is the administrator id
+ * `layout.tsx` reads per request (see `SelectionStore.syncOwner`); it
+ * defaults to `null` for tests.
  */
 export function SelectionProvider({
   owner = null,
@@ -208,24 +159,16 @@ export function SelectionProvider({
   return <SelectionContext.Provider value={store}>{children}</SelectionContext.Provider>;
 }
 
-/** The ids currently picked, read by the bulk actions below. */
 export function useSelectedIds(): readonly string[] {
   const store = useSelectionStore();
   return useSyncExternalStore(store.subscribe, store.selected, () => EMPTY_SELECTION);
 }
 
 /**
- * One row's box. Subscribes only to its own membership, so ticking it
- * re-renders this row and nothing else on the page.
- *
- * `display` is what names this account in the "view selection" panel if it
- * is still picked once a later search has taken it off screen — it defaults
- * to `id`, which is enough for a checkbox nothing else reads by name (most
- * tests), but the register itself always passes the account's own login.
- *
- * `false` as the server snapshot: the server never knows about a selection,
- * so the first client render must agree with the server-rendered markup
- * (unchecked) or React reports a hydration mismatch.
+ * One row's box, subscribed only to its own membership. `display` names the
+ * account in the selection panel (defaults to `id`). The server snapshot is
+ * `false` because the server never knows the selection; anything else is a
+ * hydration mismatch.
  */
 export function RowCheckbox({
   id,
@@ -249,16 +192,9 @@ export function RowCheckbox({
 }
 
 /**
- * The header box: picks or clears every id on the visible page, and shows
- * the mixed state while only some of them are picked.
- *
- * Goes through `selectMany`/`deselectMany`, never `clear` or a full
- * overwrite: a selection can now hold accounts from other pages, and this
- * box speaks for the current page only — ticking it must add to whatever is
- * already picked elsewhere, and unticking it must remove only what it added,
- * not reach past what it shows. `pickedHere`/`allPicked`/`somePicked` are
- * already scoped to `ids` (this page), which is what keeps the box truthful
- * regardless of how much of the selection lives off it.
+ * The header box for the visible page, showing the mixed state when some are
+ * picked. Uses `selectMany`/`deselectMany`, never `clear`, so it never reaches
+ * picks on other pages.
  */
 export function SelectAllCheckbox({
   ids,
@@ -266,9 +202,7 @@ export function SelectAllCheckbox({
   label,
 }: {
   ids: string[];
-  /** id -> display label, used only when picking. Falls back to the id
-   * itself where omitted, which is enough for tests that never open the
-   * selection panel; the register always supplies real logins. */
+  /** id -> display label, used when picking; falls back to the id. */
   displays?: Record<string, string>;
   label: string;
 }) {
@@ -295,7 +229,6 @@ export function SelectAllCheckbox({
   );
 }
 
-/** Every selected id, as the hidden fields a bulk form sends. */
 function HiddenIds({ ids }: { ids: readonly string[] }) {
   return (
     <>
@@ -307,17 +240,9 @@ function HiddenIds({ ids }: { ids: readonly string[] }) {
 }
 
 /**
- * Every account a bulk operation declined to touch, named by login with its
- * reason in the interface's own words.
- *
- * An account the operation declined to touch is not an error and must never
- * be hidden — the administrator selected it deliberately. `reason` is looked
- * up in the closed vocabulary this build translates (`accounts.selection.bulk.reason`,
- * mirroring `SKIP_REASONS` in `lib/api/accounts-terms.ts`) and shown raw when
- * the lookup misses: a reason a newer server has shipped is still an outcome
- * the administrator has to see, under whatever name it arrived with. The same
- * shape the roster import panel uses for its own skipped rows
- * (`people-panels.tsx`'s `ImportParticipants`).
+ * Accounts a bulk operation declined, by login with the reason. Never hidden,
+ * since each was selected deliberately. An unknown reason from a newer server
+ * is shown raw.
  */
 function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; dict: Dictionary }) {
   if (skipped.length === 0) return null;
@@ -327,8 +252,7 @@ function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; di
     <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto border-t border-line pt-3">
       {skipped.map((row) => (
         <li key={row.id} className="font-mono text-data text-ink-2">
-          {/* A not_found row carries no login — the id is what is left to
-              name it by. */}
+          {/* A not_found row carries no login. */}
           {row.login || row.id}
           <span className="ml-3 text-warn">{reasons[row.reason] ?? row.reason}</span>
         </li>
@@ -338,16 +262,9 @@ function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; di
 }
 
 /**
- * Names every currently selected account, with a way to drop any one of them.
- *
- * Follows `SkippedList`'s own shape on purpose — the same scrollable list,
- * the same row layout, the same login-or-id naming — because it answers the
- * same kind of question ("which accounts, exactly") that list already
- * answers for a bulk outcome's skipped rows. Once a pick can span several
- * searches, "how many are selected" stops being enough on its own: an
- * account picked, then pushed off screen by a later search, is still fully
- * part of what a destructive bulk action will touch, and this is where it
- * stays visible without being hunted for.
+ * Names every selected account, with a remove button each. Picks can span
+ * searches, so a count alone would hide accounts a destructive bulk action will
+ * touch.
  */
 function SelectionList({ dict }: { dict: Dictionary }) {
   const store = useSelectionStore();
@@ -378,12 +295,7 @@ function SelectionList({ dict }: { dict: Dictionary }) {
   );
 }
 
-/**
- * The trigger and dialog that let the administrator see who, exactly, is
- * selected — not only how many. A plain read of the store, not a form: it
- * holds no pending state of its own, so it stays dismissible throughout,
- * unlike the bulk-action dialogs below.
- */
+/** Shows who is selected. A plain read of the store, so it stays dismissible. */
 function SelectionListDialog({ dict }: { dict: Dictionary }) {
   const [open, setOpen] = useState(false);
   const t = dict.accounts.selection;
@@ -405,7 +317,6 @@ function SelectionListDialog({ dict }: { dict: Dictionary }) {
   );
 }
 
-/** The "N changed / M skipped" line every bulk outcome shares. */
 function ChangedSkipped({
   changedCount,
   skipped,
@@ -430,7 +341,6 @@ function ChangedSkipped({
   );
 }
 
-/** One password issued in a bulk reset, with a way to copy it. */
 function IssuedRow({ row, dict }: { row: IssuedPassword; dict: Dictionary }) {
   const t = dict.accounts.selection.bulk.resetDialog;
   const [copied, setCopied] = useState(false);
@@ -450,9 +360,8 @@ function IssuedRow({ row, dict }: { row: IssuedPassword; dict: Dictionary }) {
             await navigator.clipboard.writeText(row.oneTimePassword);
             setCopied(true);
           } catch {
-            // Clipboard access can be refused (insecure origin, no
-            // permission). The password stays on screen and selectable by
-            // hand either way — see `select-all` above.
+            // Clipboard access can be refused; the password stays selectable on
+            // screen.
           }
         }}
       >
@@ -462,7 +371,6 @@ function IssuedRow({ row, dict }: { row: IssuedPassword; dict: Dictionary }) {
   );
 }
 
-/** A trigger button and the dialog it opens, closed by default. */
 function ActionDialog({
   triggerLabel,
   triggerVariant,
@@ -474,11 +382,8 @@ function ActionDialog({
   triggerVariant: "secondary" | "danger";
   disabled: boolean;
   closeLabel: string;
-  // `reportDismissible` lets the form inside say whether Escape, an outside
-  // click and the corner X may currently close this dialog — the form is the
-  // one that knows whether a request is pending or a result is on screen, so
-  // it is the one that decides, through this callback, rather than this
-  // component guessing from the outside.
+  // The form reports whether the dialog may be dismissed, since only it knows
+  // whether a request is pending or a result is showing.
   children: (close: () => void, reportDismissible: (value: boolean) => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -498,10 +403,8 @@ function ActionDialog({
       >
         {triggerLabel}
       </Button>
-      {/* The dialog's own content only actually mounts while `open` is true
-          — DialogPortal defaults to `keepMounted={false}` — so the form
-          inside, and the useActionState it holds, starts fresh every time
-          this reopens rather than showing the last run's result. */}
+      {/* Content mounts only while open, so the form and its `useActionState`
+         start fresh on every reopen. */}
       <Dialog open={open} onOpenChange={setOpen} dismissible={dismissible}>
         <DialogContent closeLabel={closeLabel} dismissible={dismissible}>
           {children(() => setOpen(false), setDismissible)}
@@ -512,10 +415,9 @@ function ActionDialog({
 }
 
 /**
- * The form behind block, unblock and delete: all three are the same status
- * change, and only block and delete are asked for a reason. The server
- * refuses an empty one for those two either way (`ErrReasonRequired`); this
- * is what stops the request from leaving in the first place.
+ * Block, unblock and delete: one status change. Block and delete require a
+ * reason, checked here before the request leaves (the server refuses an empty
+ * one too).
  */
 function StatusForm({
   ids,
@@ -540,18 +442,14 @@ function StatusForm({
 }) {
   const t = dict.accounts.selection.bulk;
   const store = useSelectionStore();
-  // Frozen at mount rather than read live: this form remounts fresh every
-  // time the dialog opens (see `ActionDialog`), and a successful run clears
-  // the selection on close (below) — the title and the submitted ids must
-  // not drift out from under an outcome that is still on screen.
+  // Frozen at mount: a successful run clears the selection, and the outcome on
+  // screen must not change under it.
   const [frozenIds] = useState(ids);
   const title = titleTemplate.replace("{n}", String(frozenIds.length));
   const [state, formAction, pending] = useActionState<BulkState, FormData>(action, {});
   const [reasonMissing, setReasonMissing] = useState(false);
 
-  // While a request is in flight, or while its result is on screen, Escape,
-  // an outside click and the corner X must not be able to discard it — only
-  // the explicit "Done" below can. Before that, dismissal stays open.
+  // While pending or showing a result, only "Done" may close the dialog.
   useEffect(() => {
     reportDismissible(!pending && !state.result);
   }, [pending, state.result, reportDismissible]);
@@ -569,10 +467,8 @@ function StatusForm({
           <Button
             type="button"
             onClick={() => {
-              // Nothing changed is not cleared, so a mistaken pick can be
-              // corrected and retried without reselecting everything by
-              // hand; a run that changed at least one account is done with
-              // this selection.
+              // Kept when nothing changed, so a mistaken pick can be fixed and
+              // retried.
               if (changedCount > 0) store.clear();
               onClose();
             }}
@@ -595,9 +491,7 @@ function StatusForm({
         if (!requireReason) return;
         const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
         if (reason === "") {
-          // Caught here, before the request ever leaves: an empty or
-          // whitespace-only reason must never reach the server, which is
-          // the one thing this handler exists to guarantee.
+          // An empty or whitespace-only reason never reaches the server.
           event.preventDefault();
           setReasonMissing(true);
         } else {
@@ -619,10 +513,8 @@ function StatusForm({
           <label htmlFor="bulk-reason" className="font-mono text-label text-ink-3 uppercase">
             {t.reasonLabel}
           </label>
-          {/* `required` stays for its ARIA semantics; the form carries
-              `noValidate` so the browser's own — unstyled, unlocalised —
-              validation bubble never fires, and the check above is what
-              actually decides whether the request leaves. */}
+          {/* `required` for ARIA only: the form is `noValidate`, so the
+             browser's unlocalised bubble never fires. */}
           <Textarea
             id="bulk-reason"
             name="reason"
@@ -630,9 +522,7 @@ function StatusForm({
             aria-invalid={reasonMissing || undefined}
             className="min-h-24 font-sans text-body"
             onChange={(event) => {
-              // Clear the error the moment it is corrected, rather than
-              // leaving the red line and `aria-invalid` on screen until the
-              // next submit attempt re-evaluates it.
+              // Clear the error as soon as it is corrected.
               if (reasonMissing && event.currentTarget.value.trim() !== "") {
                 setReasonMissing(false);
               }
@@ -664,38 +554,20 @@ function StatusForm({
 }
 
 /**
- * How long the confirmation screen's own submit button stays disabled once it
- * appears. That screen renders shorter than the one before it — no role
- * checkboxes, just a warning — so the button a first, empty submit was
- * intercepted from sits higher on screen than the "Remove all roles" button
- * that replaces it. A fast double-click aimed at the first button lands its
- * second hit here by pure layout accident, and until this delay, nothing
- * stopped that from going through: the screen looked like a fresh step but
- * behaved like an unconfirmed one. A person confirming on purpose waits this
- * long anyway; a stray click inside it does nothing.
+ * How long the "remove all roles" button stays disabled after appearing. The
+ * confirmation is shorter than the form, so the second click of a fast
+ * double-click can land on its button.
  */
 export const CONFIRM_EMPTY_ARM_MS = 400;
 
 /**
- * Replaces the role set on every selected account with what is checked here.
+ * Replaces the role set on every selected account. An empty set is legitimate
+ * but must not be the silent default: an empty submit is intercepted and
+ * replaced by an explicit confirmation naming the count.
  *
- * Sending an empty set is legitimate — that is how every role is deliberately
- * stripped from an account — but offering it as the dialog's silent default,
- * behind a button that reads as a question, is not: an administrator who
- * opens this to look, then confirms without ticking anything, would strip
- * every role from the whole selection in one click. A submit with nothing
- * checked is intercepted once and answered with a second, explicit step that
- * names the consequence and the count; ticking at least one role still
- * submits in a single step, exactly as before.
- *
- * That second step's own submit is guarded independently of the first: it
- * disarms itself whenever the empty-roles screen is not the one showing, and
- * only arms again after `CONFIRM_EMPTY_ARM_MS` of that screen actually being
- * on-screen (`confirmArmed`), with the emptiness re-checked from the form's
- * own data at the moment of submission rather than trusted from whichever
- * click first raised this screen. Nothing about reaching this step is
- * treated as consent to leave it — that is what makes the guard survive a
- * second click rather than being spent by the first.
+ * That confirmation's submit is armed only after `CONFIRM_EMPTY_ARM_MS` on
+ * screen, disarmed whenever it leaves, and re-checks emptiness from the form
+ * data at submit.
  */
 function RolesForm({
   ids,
@@ -718,25 +590,18 @@ function RolesForm({
     bulkReplaceRolesAction,
     {},
   );
-  // Set once an empty submit has been intercepted, to show the explicit
-  // "remove all roles" confirmation in place of the role picker.
+  // Set once an empty submit is intercepted.
   const [confirmingEmpty, setConfirmingEmpty] = useState(false);
-  // Whether that confirmation's own submit button may actually be pressed —
-  // see `CONFIRM_EMPTY_ARM_MS` above. False the instant the confirmation
-  // stops showing, so leaving and reopening it never inherits an earlier arm.
+  // False the instant the confirmation stops showing, so reopening never
+  // inherits an earlier arm.
   const [confirmArmed, setConfirmArmed] = useState(false);
 
   useEffect(() => {
     reportDismissible(!pending && !state.result);
   }, [pending, state.result, reportDismissible]);
 
-  // Arms the confirmation's submit button after it has genuinely been
-  // showing for `CONFIRM_EMPTY_ARM_MS`. The two places that flip
-  // `confirmingEmpty` — the interception below and "Go back" — reset
-  // `confirmArmed` to `false` themselves, in the same event, rather than this
-  // effect doing it on the way out: a `setState` call synchronous in an
-  // effect body is its own cascading-render footgun, and there is nothing
-  // here that needs the DOM to have committed first.
+  // The handlers that flip `confirmingEmpty` reset `confirmArmed` themselves; a
+  // synchronous `setState` in an effect would cascade renders.
   useEffect(() => {
     if (!confirmingEmpty) return;
     const timer = setTimeout(() => setConfirmArmed(true), CONFIRM_EMPTY_ARM_MS);
@@ -776,16 +641,8 @@ function RolesForm({
       <form
         action={formAction}
         onSubmit={(event) => {
-          // Re-checked here, at the moment of submission, rather than
-          // trusted from the click that raised this screen: this view
-          // renders no role checkboxes, so the set is empty by
-          // construction, but the guard belongs at the point of submit
-          // regardless of why it currently holds. `confirmArmed` is what
-          // actually stops a stray click — a second hit landing on this
-          // button before it has been showing long enough to be a
-          // deliberate press, most often the tail of a fast double-click
-          // whose first half only got this far because the screen it
-          // opened is shorter than the one it replaced.
+          // Re-checked at submit rather than trusted from the click that raised
+          // this screen; `confirmArmed` stops a stray double-click.
           const checked = new FormData(event.currentTarget).getAll("roles");
           if (checked.length > 0 || !confirmArmed) {
             event.preventDefault();
@@ -813,8 +670,7 @@ function RolesForm({
             variant="quiet"
             onClick={() => {
               setConfirmingEmpty(false);
-              // A later re-entry into this screen must start unarmed again,
-              // not inherit an arming this earlier visit already earned.
+              // A later visit must start unarmed.
               setConfirmArmed(false);
             }}
             disabled={pending}
@@ -835,9 +691,7 @@ function RolesForm({
       onSubmit={(event) => {
         const checked = new FormData(event.currentTarget).getAll("roles");
         if (checked.length === 0) {
-          // Nothing ticked: this is the dialog's silent default, and
-          // confirming it as-is would strip every role from the whole
-          // selection. Ask once, in plain words, before letting it through.
+          // Nothing ticked: ask before stripping every role from the selection.
           event.preventDefault();
           setConfirmingEmpty(true);
         }
@@ -880,12 +734,9 @@ function RolesForm({
 }
 
 /**
- * Issues a fresh one-time password for every selected account.
- *
- * A confirmation step first — this is the one bulk action with no reason to
- * type and an effect just as real, ending every open session of every
- * account it touches — and then the passwords themselves, each shown until
- * the administrator is done with it and never retrievable again.
+ * Issues a one-time password for every selected account after a confirmation,
+ * since it ends every session of each account. Each password is shown until
+ * dismissed and never retrievable again.
  */
 function ResetPasswordForm({
   ids,
@@ -982,12 +833,8 @@ function ResetPasswordForm({
 }
 
 /**
- * Says how many accounts are picked and offers what can be done to all of
- * them at once: block, unblock, delete, change roles, reset passwords.
- *
- * `roles` is the catalogue the server publishes (already fetched beside the
- * register), so the roles dialog offers exactly what the single-account card
- * does and nothing this build has to keep in step by hand.
+ * The selection count and the bulk actions. `roles` is the server's catalogue,
+ * so the dialog offers what the single-account card does.
  */
 export function SelectionBar({
   dict,
@@ -996,9 +843,10 @@ export function SelectionBar({
 }: {
   dict: Dictionary;
   roles: Role[];
-  /** The ids on the page currently shown — used only to say how much of the
-   * whole selection is not in view; never to limit what a bulk action below
-   * touches, which always acts on the entire selection. */
+  /**
+   * Ids on the current page, used only to report how much of the selection is
+   * off screen; bulk actions always act on the whole selection.
+   */
   pageIds: string[];
 }) {
   const store = useSelectionStore();
@@ -1011,15 +859,10 @@ export function SelectionBar({
   const ids = useSelectedIds();
   const t = dict.accounts.selection;
   const bulk = t.bulk;
-  // The register never offers more than MAX_BULK_ACCOUNTS in one pick today
-  // (a page is 50 rows), but the bar still refuses to send more than the
-  // backend will accept rather than relying on that staying true.
+  // A page is 50 rows, but picks span pages; never send more than the backend
+  // accepts.
   const tooMany = count > MAX_BULK_ACCOUNTS;
-  // How much of the selection this page cannot show — the honesty a
-  // selection that outlives a search now owes: an administrator who picked
-  // twelve accounts, searched for something else, and can currently see
-  // three of them needs to be told the other nine are still part of what
-  // "Delete" below would touch.
+  // Picks off this page are still touched by a bulk action, so say how many.
   const offPage = count - onThisPage;
 
   if (count === 0) return null;

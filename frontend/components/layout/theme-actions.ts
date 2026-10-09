@@ -6,11 +6,8 @@ import { revalidatePath } from "next/cache";
 import { THEME_COOKIE, THEMES, type Theme } from "@/lib/theme/config";
 
 /**
- * Records the chosen theme.
- *
- * A Server Action, so the control is a form and works with JavaScript off —
- * and so the next render already carries the right attribute rather than
- * correcting itself once hydration arrives.
+ * Records the chosen theme. A Server Action, so it works without JavaScript and
+ * the next render already carries the right attribute.
  */
 export async function chooseTheme(form: FormData) {
   const requested = String(form.get("theme") ?? "");

@@ -2,26 +2,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PlayDictionary } from "./dictionary";
 
 /**
- * What stands in for the workspace while it is still being built.
- *
- * Finding 2: this screen had neither a `loading.tsx` nor a Suspense
- * boundary, and the two are different waits. Next holds the *previous* page
- * on screen for the whole of a server render, so a participant who pressed
- * "Enter the contest" saw the register they had just left, unchanged, with
- * nothing to say a thing had happened — 100–200ms idle, seconds at the
- * minute a tour opens and three hundred people ask the API for a story, a
- * question list, a query log and a schema at once. On a hard reload the same
- * wait is a white screen. `loading.tsx` answers the first wait and this
- * component's own use inside `<Suspense>` answers the second, which is why
- * the shapes live here once rather than twice.
- *
- * Shaped like the workspace rather than spun: SPEC.md §7 asks the `loading`
- * state for "a skeleton shaped like the content to come", and this one is
- * built from the same three-pane grid `workspace.tsx` renders, so the
- * console, the result panel and the questions do not move when they arrive.
- *
- * A skeleton is `aria-hidden` (see `Skeleton`), so the wait is announced in
- * words beside it — one `role="status"`, not one per shape.
+ * Stands in for the workspace while it loads, both in `loading.tsx` (before
+ * the page renders at all) and inside the page's `<Suspense>`; without it Next
+ * keeps the previous page on screen, or a white one on a hard reload, for
+ * seconds when a round opens. Built on the same grid as `workspace.tsx`
+ * (SPEC.md §7: a skeleton shaped like the content), so nothing moves when the
+ * panes arrive. The shapes are `aria-hidden`; one `role="status"` announces
+ * the wait.
  */
 export function WorkspaceSkeleton({ dict }: { dict: PlayDictionary }) {
   return (
@@ -30,8 +17,7 @@ export function WorkspaceSkeleton({ dict }: { dict: PlayDictionary }) {
         aria-hidden
         className="grid min-h-0 grid-cols-1 narrow:flex-1 narrow:grid-cols-[minmax(0,1fr)_1px_15.75rem] wide:grid-cols-[13.25rem_1px_minmax(0,1fr)_1px_15.75rem]"
       >
-        {/* The schema pane: below the console until there is room beside it,
-            the same order the real grid places it in. */}
+        {/* The schema pane, placed as the real grid places it. */}
         <div className="flex min-h-0 flex-col gap-3 border-line p-3 max-wide:col-span-full max-wide:max-h-80 max-wide:border-t max-narrow:order-2 narrow:max-wide:order-4">
           <Skeleton className="h-3 w-24" />
           {[0, 1, 2, 3, 4].map((row) => (
@@ -40,8 +26,7 @@ export function WorkspaceSkeleton({ dict }: { dict: PlayDictionary }) {
         </div>
         <div className="bg-line max-wide:hidden" />
 
-        {/* The console column: the editor above, its result below, in the
-            same 11/9 split. */}
+        {/* The console column: editor above, result below, 11:9. */}
         <div className="grid min-h-0 grid-cols-1 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b">
           <div className="flex min-h-0 flex-col gap-3 border-b border-line p-3 max-narrow:min-h-80">
             <div className="flex items-center gap-2">
@@ -83,14 +68,9 @@ export function WorkspaceSkeleton({ dict }: { dict: PlayDictionary }) {
 }
 
 /**
- * The bar above it, for the one wait where even the contest's name is not
- * known yet — `loading.tsx`, which runs before the page has read the
- * participant's own enrolled listing.
- *
- * Inside the page itself the real `PlayHeader` is rendered instead, outside
- * the Suspense boundary: by then the title and the clock *are* known, and
- * handing a participant a live countdown in the first wave is the whole
- * point of splitting the boundary there (finding 2).
+ * The header's stand-in, for `loading.tsx` only, before the contest's name is
+ * known. Inside the page the real `PlayHeader` renders outside the Suspense
+ * boundary.
  */
 export function PlayHeaderSkeleton() {
   return (

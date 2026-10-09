@@ -21,30 +21,12 @@ export async function generateMetadata() {
 }
 
 /**
- * The account: who is signed in, what they have done, and which contests were
- * theirs.
+ * The account: who is signed in, their record and their contests (SPEC.md §5.2),
+ * plus sign-out and password change, kept out of the bar.
  *
- * It exists because the bar needed a door that leads somewhere: signing out
- * and changing a password are account actions, and putting them in the chrome
- * would spend the bar on controls most people touch twice a year — against the
- * design system's first rule, that the interface around the data is rules and
- * typography. What it grew into is the participant's own half of the product
- * (design §2.1): their record, their contests and, from a finished one, their
- * report.
- *
- * Roles rather than permissions. `/auth/me` reports both; permissions answer
- * "may I offer this button" and are the interface's business, while a role is
- * what a person would say they are. Twelve permission codes in a list tell a
- * student nothing they asked.
- *
- * There is no "member since": `/auth/me` does not report when the account was
- * created, and the profile reads are about contests rather than about the
- * account. A date invented from anything else would be a date.
- *
- * Server-rendered, so the session stays on the server and the first paint
- * carries the rows. The two reads are independent and are treated as such: a
- * failed one costs its own section a line of explanation, never the page. A
- * student whose summary times out still needs the sign-out button.
+ * Roles, not permissions: a role is what a person would say they are. No
+ * "member since": `/auth/me` does not report it. The two reads are independent,
+ * so a failure costs one section a line, never the page.
  */
 export default async function ProfilePage() {
   const [dict, locale, identity] = await Promise.all([
@@ -74,10 +56,7 @@ export default async function ProfilePage() {
             </div>
           </div>
 
-          {/* Still a definition list — a field and what it holds is what this
-              is — but laid along one line rather than stacked into a form.
-              Three labelled values are a header; three rows of them were the
-              screen the redesign was asked to replace. */}
+          {/* A definition list laid out on one line. */}
           <dl className="flex flex-wrap items-baseline gap-x-7 gap-y-2.5">
             <Pair label={t.login}>
               <span className="font-mono text-data text-ink-2">{identity.login}</span>
@@ -109,9 +88,8 @@ export default async function ProfilePage() {
             </Link>
             <span aria-hidden className="h-4 w-px bg-line-2" />
             <SignOutButton label={t.signOut} withLabel />
-            {/* Said rather than discovered: changing a password ends every
-                session, signing out ends only this one, and the difference is
-                what somebody on a shared machine needs to know. */}
+            {/* Changing the password ends every session, signing out only this
+               one; that matters on a shared machine. */}
             <span className="text-body text-ink-3">{t.signOutNote}</span>
           </div>
         </div>
@@ -124,13 +102,9 @@ export default async function ProfilePage() {
 }
 
 /**
- * One of the profile's reads, with its failure kept to itself.
- *
- * A dead session or an account still on its one-time password is not a failure
- * of this page and gets the recovery the guard decides; everything else — the
- * API being down, a body that does not parse — becomes `null`, which the
- * section renders as one line. The reason goes to the server log, because
- * otherwise it exists nowhere: the page will have rendered successfully.
+ * One profile read. A dead session or one-time password gets the guard's
+ * recovery; any other failure becomes `null` (one line in its section) and is
+ * logged, since the page still renders.
  */
 async function read<T>(path: string, parse: (payload: unknown) => T): Promise<T | null> {
   try {

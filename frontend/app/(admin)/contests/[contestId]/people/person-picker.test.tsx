@@ -2,8 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the mock
-// has to be built through `vi.hoisted` rather than a plain top-level `const`.
+// `vi.mock` factories are hoisted, so the mock is built with `vi.hoisted`.
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/lib/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/client")>();
@@ -24,9 +23,7 @@ beforeEach(() => {
   request.mockReset();
 });
 
-/** Renders the picker inside a real `<form>`, the way both callers in
- * people-panels.tsx do — the hidden input has to reach a submit, not just
- * exist in isolation. */
+/** Inside a real `<form>`, so the hidden input reaches a submit. */
 function renderInForm() {
   const onSubmit = vi.fn();
   render(
@@ -62,12 +59,8 @@ const candidate = {
 };
 
 describe("PersonPicker, debouncing", () => {
-  // Real timers, not fake ones: Base UI's combobox drives its own pointer and
-  // focus handling off real timers internally, and faking the clock out from
-  // under it (even with user-event's `advanceTimers` wired up) leaves its
-  // interactions never resolving. The debounce window is short enough
-  // (300ms) that waiting it out for real costs the suite a fraction of a
-  // second, not the flakiness of fighting the library's own clock.
+  // Real timers: Base UI's combobox stalls under fake ones, and waiting 300ms
+  // costs little.
   test("a burst of keystrokes is one request, not one per letter", async () => {
     request.mockResolvedValue({ items: [candidate] });
     const user = userEvent.setup();
@@ -75,7 +68,7 @@ describe("PersonPicker, debouncing", () => {
 
     await user.type(screen.getByRole("combobox"), "ivan");
 
-    // The pause has not elapsed yet: nothing has been asked.
+    // The pause has not elapsed yet.
     expect(request).not.toHaveBeenCalled();
 
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -89,18 +82,14 @@ describe("PersonPicker, debouncing", () => {
     renderInForm();
 
     await user.type(screen.getByRole("combobox"), "   ");
-    // Real time, past the debounce window, so this is not a false negative
-    // from the pause simply not having elapsed yet.
+    // Past the debounce window, so this is not a false negative.
     await new Promise((resolve) => setTimeout(resolve, 350));
 
     expect(request).not.toHaveBeenCalled();
   });
 
   test("a query shorter than the server's minimum asks nothing at all", async () => {
-    // MIN_DIRECTORY_QUERY_LENGTH mirrors contests.MinDirectoryQueryLength,
-    // which the directory endpoint always answers below with an empty list —
-    // a round trip the picker should not spend on an answer it already
-    // knows.
+    // Below the server's minimum the answer is always empty.
     const user = userEvent.setup();
     renderInForm();
 
@@ -144,8 +133,8 @@ describe("PersonPicker, choosing a result", () => {
   });
 
   test("the arrow keys move which match Enter would choose", async () => {
-    // Two candidates, so a plain "highlights the first automatically" pass
-    // cannot be mistaken for arrow-key movement actually working.
+    // Two candidates, so auto-highlighting the first cannot pass for arrow
+    // movement.
     const second = { user_id: "33333333-3333-3333-3333-333333333333", login: "s.ivanova", full_name: "Ivanova Ana" };
     request.mockResolvedValue({ items: [candidate, second] });
     const user = userEvent.setup();
@@ -154,7 +143,6 @@ describe("PersonPicker, choosing a result", () => {
     await user.type(screen.getByRole("combobox"), "ivan");
     await screen.findByText("Ivanova Ana");
 
-    // Down past the first match onto the second, then choose it.
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
@@ -192,11 +180,8 @@ describe("PersonPicker, choosing a result", () => {
 });
 
 describe("PersonPicker, showing the email", () => {
-  // The owner asked for the email in the picker so two same-named accounts
-  // can be told apart (backend/internal/api/contest_people_handler.go's
-  // PersonResponse now carries it). Both halves of that change get their own
-  // test: an account with one shows it, and an account without one does not
-  // render a stray separator pointing at nothing.
+  // The email tells same-named accounts apart; without one there must be no
+  // stray separator.
   test("an account with an email shows it next to the login", async () => {
     const withEmail = { ...candidate, email: "sergei@example.edu" };
     request.mockResolvedValue({ items: [withEmail] });
@@ -209,8 +194,7 @@ describe("PersonPicker, showing the email", () => {
   });
 
   test("an account with no email shows only the login, with no trailing separator", async () => {
-    // `candidate` carries no `email` key at all — exactly what PersonResponse
-    // sends for an account that never set one (its `omitempty` tag).
+    // No `email` key, as `omitempty` sends for an account without one.
     request.mockResolvedValue({ items: [candidate] });
     const user = userEvent.setup();
     renderInForm();
@@ -229,10 +213,7 @@ describe("PersonPicker, what it announces", () => {
     expect(screen.getByRole("combobox", { name: en.workspace.people.addOne.heading })).toBeInTheDocument();
   });
 
-  // The help paragraph carries an id (`${id}-help`) so it can double as the
-  // "Selected: …" announcement once a choice is made — but an id nothing
-  // points at is not wired to anything a screen reader would read out for
-  // the field itself. This pins the wiring, not just the id's existence.
+  // Pins the `aria-describedby` wiring, not just the id.
   test("the input is described by the paragraph beneath it", () => {
     renderInForm();
 
@@ -246,13 +227,8 @@ describe("PersonPicker, when a search fails", () => {
     vi.restoreAllMocks();
   });
 
-  // An ApiError (the request reached the server and it said no) is already
-  // shown in words via searchFailedText — nothing more to do. Anything else
-  // (a network failure, a bug in parseDirectory) is unexpected on top of
-  // that, and the failure handler used to rethrow it from inside a `.catch`
-  // with nothing further downstream to receive it: an unhandled promise
-  // rejection nobody building this screen would see. It has to land
-  // somewhere a developer can actually find it instead.
+  // An ApiError is already shown in words; anything else must be logged rather
+  // than become an unhandled rejection.
   test("an error that is not an ApiError is logged instead of becoming an unhandled rejection", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     request.mockRejectedValue(new TypeError("network is down"));

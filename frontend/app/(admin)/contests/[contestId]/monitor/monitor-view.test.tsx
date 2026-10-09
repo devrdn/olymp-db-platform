@@ -11,8 +11,7 @@ vi.mock("@/lib/api/monitor", async (importOriginal) => ({
   fetchFeed,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-// Every participant row formats its time away once per render, so counting
-// the calls counts the rows that rendered.
+// Each row formats its time once per render, so the calls count rendered rows.
 const { readableDuration } = vi.hoisted(() => ({ readableDuration: vi.fn() }));
 vi.mock("@/lib/format/bytes", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/format/bytes")>();
@@ -79,11 +78,7 @@ describe("the monitoring screen", () => {
     expect(screen.getByText(dict.workspace.monitor.notes.absenceAtEnd)).toBeInTheDocument();
   });
 
-  /**
-   * The screen is polled every five seconds for as long as a contest runs,
-   * and two hundred rows re-rendered for every poll that brought nothing is
-   * the cost this must not pay.
-   */
+  /** A quiet poll must not re-render hundreds of rows. */
   test("renders no row again for a poll that brought nothing new", async () => {
     renderView();
     expect(readableDuration).toHaveBeenCalledTimes(2);
@@ -119,8 +114,8 @@ describe("the monitoring screen", () => {
     const { ApiError } = await import("@/lib/api/client");
     fetchRoster.mockRejectedValueOnce(new ApiError("forbidden", 403, "no"));
     renderView();
-    // The live region is there, empty, before anything goes wrong: a region
-    // that appears together with its text is not announced by every reader.
+    // The live region exists before any error, or not every reader announces
+    // it.
     expect(screen.getByRole("status")).toHaveTextContent(/^$/);
 
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));

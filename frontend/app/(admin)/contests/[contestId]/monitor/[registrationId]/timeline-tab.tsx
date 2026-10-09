@@ -15,13 +15,10 @@ import { useMonitor } from "../use-monitor";
 const CONTROL = "h-(--control-h) w-full min-w-0 border border-edge bg-bg px-2.5 text-control text-ink";
 
 /**
- * The timeline tab (design §6): everything the participant did, merged, with
- * the contest feed's kind filters and a time range, kept current while the
- * tab is visible — the contest screen's own feed and polling
- * (`LiveFeed`, `useMonitor`), pointed at this participant's timeline.
- *
- * The range is typed as wall-clock time in the zone every time on screen is
- * shown in, and sent as instants; `until` is exclusive.
+ * The timeline tab (SPEC.md §5.1): the contest feed's `LiveFeed` and `useMonitor`
+ * pointed at one participant, with kind filters and a time range. The range is
+ * typed as wall-clock time in the display zone and sent as instants; `until` is
+ * exclusive.
  */
 export function TimelineTab({
   contestId,

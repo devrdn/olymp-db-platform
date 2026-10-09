@@ -9,24 +9,12 @@ import { MIN_DIRECTORY_QUERY_LENGTH } from "@/lib/api/people-terms";
 import { debounce, type Debounced } from "@/lib/format/debounce";
 
 /**
- * How long to wait after the last keystroke before asking the directory.
- *
- * The same window `app/(admin)/users/filters.tsx` already settled on, and for
- * the same reason (see its own comment): under roughly 200ms a burst of
- * keystrokes is not collapsed into one request, and past roughly 500ms the
- * results feel detached from the typing. That window is set by a person's
- * typing rhythm, not by which field is being searched, so the number carries
- * over unchanged to a lighter endpoint over a shorter string.
+ * Debounce for the directory search: under ~200ms bursts are not collapsed,
+ * past ~500ms results feel detached. Same as `users/filters.tsx`.
  */
 const SEARCH_PAUSE_MS = 300;
 
-/** What the directory returns: enough to tell two candidates apart, submit
- * the right one, and — since the owner decided the trade in
- * backend/internal/api/contest_people_handler.go's PersonResponse is worth
- * it — an email for when the login and the name alone still leave two
- * "Ivanov"s standing. Empty for an account that never set one; see
- * `describeCandidate` below for how that empty value is kept from showing up
- * as a stray separator in the popup. */
+/** A directory entry. `email` is empty for an account without one. */
 export type Candidate = { userId: string; login: string; fullName: string; email: string };
 
 function isRawCandidate(
@@ -43,10 +31,8 @@ function isRawCandidate(
 }
 
 /**
- * Parsed by hand rather than through `lib/api/people`'s zod schemas: this file
- * is a client component, and a schema module calls `z.object()` at load time,
- * which would ship zod's parser to every browser that opens this screen for
- * four fields it already trusts its own backend to shape correctly.
+ * Parsed by hand: importing the zod schemas would ship zod's parser to the
+ * browser for four fields.
  */
 function parseDirectory(payload: unknown): Candidate[] {
   if (!payload || typeof payload !== "object") return [];
@@ -58,19 +44,13 @@ function parseDirectory(payload: unknown): Candidate[] {
       userId: raw.user_id,
       login: raw.login,
       fullName: raw.full_name,
-      // PersonResponse omits the key entirely for an account with none
-      // (`omitempty`, so it never has to publish `"email": ""`) — read back
-      // here as the same empty string the rest of this file treats as
-      // "nothing to show", rather than as `undefined` needing its own check
-      // everywhere the value is used.
+      // Omitted (`omitempty`) for an account with none; read as an empty
+      // string.
       email: raw.email ?? "",
     }));
 }
 
-/** The popup's second line: a login always tells two accounts apart on its
- * own, and an email joins it now that the owner has accepted the trade of
- * showing one — but only when the account has one, so an account with none
- * shows a bare login rather than a separator pointing at nothing. */
+/** The popup's second line: the login, plus the email when there is one. */
 function describeCandidate(candidate: Candidate): string {
   return candidate.email ? `${candidate.login} · ${candidate.email}` : candidate.login;
 }
@@ -80,13 +60,9 @@ function toOption(candidate: Candidate): ComboboxOption<Candidate> {
 }
 
 /**
- * Search by login, name or email; choose one; submit their id.
- *
- * One control behind both the staff form and the one-person participant
- * form — see people-panels.tsx — because both are the same act: find a
- * person, then act on the account they turn out to be. The bulk roster
- * import stays a separate textarea (actions.ts's `importParticipantsAction`);
- * this is for adding one person, not a spreadsheet.
+ * Search by login, name or email, choose one, submit the id. Shared by the
+ * staff form and the one-person participant form; bulk import is a separate
+ * textarea.
  */
 export function PersonPicker({
   id,
@@ -104,7 +80,7 @@ export function PersonPicker({
   helpLabel,
 }: {
   id: string;
-  /** The hidden field's name — what the surrounding `<form>` submits. */
+  /** The hidden field's name. */
   name: string;
   contestId: string;
   label: string;
@@ -114,9 +90,9 @@ export function PersonPicker({
   noResultsText: string;
   searchFailedText: string;
   changeText: string;
-  /** "Selected: {name} ({login})", filled in once somebody is chosen. */
+  /** "Selected: {name} ({login})", filled in once someone is chosen. */
   selectedTemplate: string;
-  /** Passed through to `Combobox`: an explanation behind a "?" beside the label. */
+  /** Passed through to `Combobox`. */
   help?: string;
   helpLabel?: string;
 }) {
@@ -125,27 +101,17 @@ export function PersonPicker({
   const [chosen, setChosen] = useState<ComboboxOption<Candidate> | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
-  // Guards against an earlier, slower request overwriting a later, faster
-  // one — the out-of-order reply a plain debounce does not by itself
-  // prevent, since the debounce only spaces out when requests start, not
-  // when they return.
+  // Drops a slower earlier reply that returns after a later one; debouncing
+  // only spaces out the starts.
   const generation = useRef(0);
-  // Holds the debounced runner itself. Built inside an effect rather than
-  // `useMemo`, and called only from event handlers below: both are where refs
-  // may be read, render itself is not (see the react-hooks/refs rule this
-  // file used to trip — `generation.current`, read from inside a closure a
-  // `useMemo` factory returned, looked like a render-time read even though it
-  // only ever ran later, off a timer).
+  // Built in an effect and called only from handlers, where refs may be read
+  // (`react-hooks/refs`).
   const runSearchRef = useRef<Debounced<[string]> | null>(null);
 
   useEffect(() => {
     const debounced = debounce((query: string) => {
       const trimmed = query.trim();
-      // Mirrors the server's own floor (MIN_DIRECTORY_QUERY_LENGTH, from
-      // contests.MinDirectoryQueryLength): below it the directory endpoint
-      // always answers with an empty list, so asking is a round trip spent on
-      // an answer already known. An empty box is covered by the same check —
-      // it is shorter than the minimum too.
+      // Below the server's minimum the answer is always empty, so do not ask.
       if (trimmed.length < MIN_DIRECTORY_QUERY_LENGTH) {
         generation.current += 1;
         setOptions([]);
@@ -167,13 +133,8 @@ export function PersonPicker({
           if (thisGeneration !== generation.current) return;
           setOptions([]);
           setFailed(true);
-          // failed/searchFailedText already tells the person the search did
-          // not work; an error that is not even an ApiError (a network
-          // failure, a bug in parseDirectory) is unexpected on top of that,
-          // and worth a place a developer can actually see it. Rethrowing
-          // here would not do that — nothing downstream of this .catch
-          // handles a rethrow, so it would only become an unhandled
-          // rejection, visible to nobody in particular.
+          // The person already sees the failure; log anything unexpected for a
+          // developer. A rethrow would only be an unhandled rejection.
           if (!(error instanceof ApiError)) console.error("directory search failed", error);
         })
         .finally(() => {
@@ -182,8 +143,7 @@ export function PersonPicker({
     }, SEARCH_PAUSE_MS);
 
     runSearchRef.current = debounced;
-    // A timer that fires after this control is gone (unmounted, or about to
-    // rebuild for a new contestId) would set state nobody can see any more.
+    // Cancel a timer that would fire after unmount or a contest change.
     return () => {
       debounced.cancel();
       runSearchRef.current = null;
@@ -205,9 +165,8 @@ export function PersonPicker({
         inputValue={inputValue}
         onInputValueChange={(next) => {
           setInputValue(next);
-          // Editing the text after a choice was made means the choice no
-          // longer describes what is in the box; holding onto it would let a
-          // change of mind submit an id nobody can see chosen any more.
+          // Editing after a choice drops it, so an unseen id cannot be
+          // submitted.
           if (chosen && next !== chosen.label) setChosen(null);
           runSearch(next);
         }}
@@ -217,10 +176,7 @@ export function PersonPicker({
           if (next) runSearchRef.current?.cancel();
         }}
         placeholder={placeholder}
-        // Blank below the minimum a search actually runs at, or while one is
-        // in flight: "no matches" is only true once an answer has actually
-        // come back for what is currently in the box, and nothing shorter
-        // than MIN_DIRECTORY_QUERY_LENGTH ever asked.
+        // "No matches" only once an answer came back for the current text.
         emptyMessage={
           loading || inputValue.trim().length < MIN_DIRECTORY_QUERY_LENGTH ? "" : noResultsText
         }
@@ -230,10 +186,7 @@ export function PersonPicker({
         helpLabel={helpLabel}
       />
 
-      {/* `role="status"` + `aria-live="polite"`: the moment a choice is made
-          this is the one place that says so in words a screen reader
-          announces on its own, since the input's own text (the chosen
-          option's name) does not carry the login that disambiguates it. */}
+      {/* Announces the choice with its login, which the input text lacks. */}
       <p id={`${id}-help`} role="status" aria-live="polite" className="text-small text-ink-3">
         {chosen
           ? selectedTemplate.replace("{name}", chosen.value.fullName).replace("{login}", chosen.value.login)

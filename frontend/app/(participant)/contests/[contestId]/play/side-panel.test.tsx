@@ -36,7 +36,6 @@ describe("the side panel", () => {
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
   });
 
-  // The workspace design (§6): notes are the tab right after the questions.
   test("offers the notes as the tab right after the questions", () => {
     show();
 
@@ -61,10 +60,8 @@ describe("the side panel", () => {
     expect(screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label })).toBeVisible();
   });
 
-  // Task 3's own requirement: switching a tab must not remount what is
-  // behind it. Both panels are in the DOM from the start (`hidden` toggles,
-  // nothing unmounts), which this proves by finding the story's text without
-  // ever selecting its tab.
+  // Both panels are in the DOM from the start, so the story's text is
+  // found without selecting its tab.
   test("keeps the story mounted while the questions tab is showing", () => {
     show();
 
@@ -98,11 +95,7 @@ describe("the side panel", () => {
     expect(screen.getByText("This contest has no story yet")).toBeInTheDocument();
   });
 
-  /**
-   * Design spec §10: the picture does its work above the story, which on
-   * this screen means at the top of the story tab — before the export row
-   * and before the prose, not somewhere down the scroll.
-   */
+  /** SPEC.md §10: the cover heads the story tab, before the export row and the prose. */
   test("heads the story with the contest's cover", () => {
     render(
       <SidePanel
@@ -120,15 +113,11 @@ describe("the side panel", () => {
 
     const cover = screen.getByText("The cover of The Warehouse Fire");
     const story = screen.getByText("A body in the stacks.");
-    // Node.DOCUMENT_POSITION_FOLLOWING: the story comes after the cover.
+    // DOCUMENT_POSITION_FOLLOWING: the story comes after the cover.
     expect(cover.compareDocumentPosition(story) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  /**
-   * A cover heads a story, and a tab that is saying why there is no story is
-   * not a story. The same rule the print control and the Markdown download
-   * already follow in that state.
-   */
+  /** No story, no cover: the print control and the download follow the same rule. */
   test("shows no cover where there is no story for it to head", () => {
     render(
       <SidePanel
@@ -147,16 +136,10 @@ describe("the side panel", () => {
     expect(screen.queryByText("The cover of The Warehouse Fire")).not.toBeInTheDocument();
   });
 
-  // The last piece of export the plan asks for: the story as a file, beside
-  // the story itself — the same placement query-log-panel.tsx already uses
-  // for its own CSV link.
   test("offers the story as a Markdown download, as a link and not a button", () => {
     show();
 
-    // `hidden: true`, the same as the "tabpanel" query above: the story tab
-    // is not the one showing by default, and `Tabs` keeps it in the DOM
-    // rather than unmounting it (this file's own doc), which is exactly what
-    // makes it findable at all.
+    // `hidden: true`: the story tab is not showing, but stays in the DOM.
     const link = screen.getByRole("link", {
       name: en.participant.play.workspace.story.export.label,
       hidden: true,
@@ -166,23 +149,16 @@ describe("the side panel", () => {
     expect(link).toHaveTextContent("Markdown");
   });
 
-  // Printing happens on this screen now, not on a separate route (this
-  // file's own doc explains why) — a button that opens the browser's own
-  // print dialog in place, not a link that navigates anywhere.
+  // A button that opens the print dialog in place, not a link.
   describe("the print control", () => {
-    // Captured inside the mock itself, not read afterward — `window.print`
-    // is a no-op in jsdom either way, so the only way to prove the title was
-    // set *before* the call (not merely by the time the click handler
-    // returns, which a same-tick reordering would also satisfy) is to read
-    // `document.title` from inside the very call the mock stands in for.
+    // Read inside the mock, so the title is proven set before the call itself,
+    // not merely by the time the handler returns.
     let titleAtPrintTime: string | undefined;
 
     beforeEach(() => {
       titleAtPrintTime = undefined;
-      // jsdom has no printing pipeline of its own — see print-button.tsx's
-      // own test for the same reasoning. This proves what jsdom can prove:
-      // that a print was asked for, and when the document's title carried
-      // the filename a browser's "Save as PDF" reads it from.
+      // jsdom has no printing; this proves a print was asked for and what the
+      // title held at that moment.
       vi.spyOn(window, "print").mockImplementation(() => {
         titleAtPrintTime = document.title;
       });
@@ -200,10 +176,7 @@ describe("the side panel", () => {
       expect(screen.queryByRole("link", { name: en.participant.play.workspace.story.print })).not.toBeInTheDocument();
     });
 
-    // Chrome, Edge and Safari all suggest `document.title` as the filename
-    // for "Save as PDF" — this is the whole mechanism by which the saved
-    // file ends up named `story-{contestId}.pdf` instead of whatever this
-    // tab happened to be called.
+    // Browsers suggest `document.title` as the "Save as PDF" filename.
     test("names the file after the contest, prints, and puts the tab's own title back afterward", async () => {
       document.title = "DBContest";
       show();
@@ -212,9 +185,6 @@ describe("the side panel", () => {
         screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true }),
       );
 
-      // Proves the ordering the task requires: the title carried
-      // `story-c1` at the exact moment `window.print()` ran, not merely
-      // at some point before or after it.
       expect(titleAtPrintTime).toBe("story-c1");
       expect(document.title).toBe("story-c1");
       expect(window.print).toHaveBeenCalledTimes(1);
@@ -225,10 +195,8 @@ describe("the side panel", () => {
       expect(document.title).toBe("DBContest");
     });
 
-    // The defect the task exists to rule out: a participant's tab titled
-    // `story-…` for the rest of their olympiad. `afterprint` does not fire
-    // everywhere (older Safari, some in-app webviews), so the title has to
-    // come back on its own even then.
+    // `afterprint` does not fire everywhere (older Safari, some webviews), and
+    // the tab must not stay titled `story-…` for the rest of the olympiad.
     test("restores the title even on a browser that never fires afterprint", () => {
       vi.useFakeTimers();
       document.title = "DBContest";
@@ -237,7 +205,7 @@ describe("the side panel", () => {
       fireEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true }));
       expect(document.title).toBe("story-c1");
 
-      // No `afterprint` dispatched here — only time passing.
+      // No `afterprint`, only time passing.
       vi.runOnlyPendingTimers();
 
       expect(document.title).toBe("DBContest");
@@ -253,8 +221,8 @@ describe("the side panel", () => {
       window.dispatchEvent(new Event("afterprint"));
       expect(document.title).toBe("DBContest");
 
-      // A later, unrelated title change must survive the defensive timer
-      // firing after `afterprint` already restored it once.
+      // A later title change must survive the timer firing after `afterprint`
+      // already restored the title.
       document.title = "Something else entirely";
       vi.runOnlyPendingTimers();
 
@@ -288,13 +256,9 @@ describe("the side panel", () => {
 });
 
 /**
- * jsdom lays nothing out, so this cannot measure the 263px of empty page
- * scroll the defect produced (the numbers are in the commit message). What it
- * can hold is the rule the fix established: a scroll box that contains
- * `sr-only` text has to be a containing block, because `sr-only` is
- * `position: absolute` and a *static* scroll box does not clip one — the
- * hidden label then keeps the page's own coordinates and grows the document
- * with it.
+ * jsdom lays nothing out, so this holds the rule rather than the size: a
+ * scroll box containing `sr-only` text (`position: absolute`) must be a
+ * containing block, or the hidden label escapes to the page and grows it.
  */
 test("each scrolling panel is the containing block for the hidden labels inside it", () => {
   render(
@@ -318,20 +282,10 @@ test("each scrolling panel is the containing block for the hidden labels inside 
 });
 
 /**
- * jsdom lays nothing out, so this cannot measure the 54px of page scroll a
- * real browser pass found at 1440, 1024 and 768px — the Notes tab pushed the
- * strip past the panel's own width (`--pane-side`, clamped 8-32rem in
- * pane-splitter.tsx), and with nothing to contain it that overflow bubbled
- * up into the whole page's own scrollbar. What this proves is the two CSS
- * facts that stop it regardless of how narrow the panel or how long the
- * labels get:
- *
- * - the tablist itself scrolls horizontally rather than growing past its
- *   box (`overflow-x-auto`) instead of spilling into whatever is outside it;
- * - the element that contains it gives up flexbox's own floor on a flex
- *   item's width (`min-w-0`) — without it, a flex item's *automatic* minimum
- *   width is its content's min-content size, which four tab labels (longer
- *   still in Russian) exceed at every width the divider can be dragged to.
+ * jsdom lays nothing out, so this checks the two classes that keep a long tab
+ * strip from widening the page at any pane width: `overflow-x-auto` on the
+ * tablist, and `min-w-0` on its flex container, which otherwise cannot shrink
+ * below the labels' min-content width.
  */
 test("keeps the tab strip from widening the page at any pane width", () => {
   render(
@@ -353,14 +307,11 @@ test("keeps the tab strip from widening the page at any pane width", () => {
   expect(tablist.parentElement?.className).toMatch(/(^|\s)min-w-0(\s|$)/);
 });
 
-// The active tab can be scrolled out of the strip's own view (the point of
-// the fix above) — selecting one, by pointer or by keyboard, has to bring it
-// back rather than leaving the participant looking at whichever tabs
-// happened to fit.
+// The strip can be scrolled past the selected tab, so selecting one must
+// bring it back into view.
 test("scrolls the newly selected tab into view, since the strip may be scrolled past it", async () => {
-  // jsdom does not implement `scrollIntoView` at all — not even as a no-op —
-  // so there is nothing here for `vi.spyOn` to wrap; the mock has to be the
-  // property itself, put back afterward so no later test in this file sees it.
+  // jsdom has no `scrollIntoView` at all, so the property itself is mocked
+  // and restored afterwards.
   const scrollIntoView = vi.fn();
   const original = HTMLElement.prototype.scrollIntoView;
   HTMLElement.prototype.scrollIntoView = scrollIntoView;

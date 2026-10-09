@@ -14,34 +14,24 @@ import { messageForCode } from "@/lib/i18n/errors";
 const FAILURE_ID = "change-password-failure";
 
 /**
- * Which fields a refusal is about.
- *
- * Sign-in marks both of its fields, because the API deliberately refuses to
- * say which one was wrong. Here it does say, and marking all three would throw
- * that away: an author told `wrong_password` and shown three red borders
- * re-types the new password, which was never the problem. Every code the
- * server can answer from `POST /auth/password` is listed; anything else — a
- * gateway failure, an internal error — belongs to no field and gets the
- * message alone.
+ * Which fields a refusal concerns. Unlike sign-in, this API says which one was
+ * wrong, so marking all three would mislead. Every code `POST /auth/password`
+ * returns is listed; others get the message alone.
  */
 const BLAMED: Record<string, readonly ("current" | "next" | "confirm")[]> = {
-  /** Ours: the confirmation never leaves the browser. */
+  /** Client-side: the confirmation never leaves the browser. */
   password_mismatch: ["next", "confirm"],
-  /** The handover secret itself is wrong. Nothing about the new one is. */
+  /** The current password is wrong; the new one is fine. */
   wrong_password: ["current"],
   weak_password: ["next"],
   same_password: ["next"],
-  /** A field was left empty, and the form cannot tell which from here. */
+  /** A field was empty, and the code does not say which. */
   invalid_request: ["current", "next", "confirm"],
 };
 
 /**
- * The only interactive leaf on the screen; the rest stays a Server Component
- * and the form still submits with JavaScript switched off.
- *
- * The failure is written once, below the last field, and every field it
- * concerns points at it. Saying it on screen and saying nothing to a screen
- * reader is the same bug as not saying it at all.
+ * The screen's only client component; it submits without JavaScript too. One
+ * message below the last field, pointed at by every field it concerns.
  */
 export function ChangePasswordForm({ dict }: { dict: Dictionary }) {
   const t = dict.auth.changePassword;
@@ -55,7 +45,7 @@ export function ChangePasswordForm({ dict }: { dict: Dictionary }) {
     : null;
   const blamed = state.code ? (BLAMED[state.code] ?? []) : [];
 
-  /** A field is only described by the message when the message is about it. */
+  /** A field is described by the message only when it is blamed. */
   const wiring = (field: "current" | "next" | "confirm") =>
     blamed.includes(field)
       ? { invalid: true, describedBy: FAILURE_ID }
@@ -71,11 +61,7 @@ export function ChangePasswordForm({ dict }: { dict: Dictionary }) {
         <Input name="next" type="password" autoComplete="new-password" required />
       </Field>
 
-      {/* The message sits in the flow rather than out of it. Absolutely
-          positioned, a two-line failure — which Russian reaches inside this
-          384px column — prints straight through the button below it. In the
-          flow the form grows by exactly the message and nothing is overlapped;
-          at rest the rhythm is even, because there is no reserved blank line. */}
+      {/* In the flow: positioned absolutely, a wrapped message would overlap the button. */}
       <div className="flex flex-col gap-1.5">
         <Field id="confirm" label={t.confirm} {...wiring("confirm")}>
           <Input name="confirm" type="password" autoComplete="new-password" required />

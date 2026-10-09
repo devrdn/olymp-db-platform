@@ -6,18 +6,13 @@ export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./
 
 
 /**
- * The wire shapes of the contest itself.
- *
- * Parsing at the boundary means a contract change surfaces here, with the
- * field name in the message, instead of as `undefined` three components later.
- * The API speaks snake_case; the interface speaks camelCase, and the mapping
- * happens once, here.
- *
- * The story, the questions and the people have modules of their own. This one
- * covers the contest, its languages, its schedule, and the rules about when it
- * may still be changed.
+ * The wire shapes of the contest itself: its languages, schedule, and the rules
+ * about when it may still change. Parsing at the boundary surfaces a contract
+ * change here, with the field name, and maps snake_case to camelCase once.
+ * The story, the questions and the people have modules of their own.
  */
 
+/** A contest's lifecycle states. */
 export const CONTEST_STATUSES = ["draft", "published", "running", "finished", "archived"] as const;
 export type ContestStatus = (typeof CONTEST_STATUSES)[number];
 export type Enrollment = (typeof ENROLLMENTS)[number];
@@ -27,17 +22,12 @@ export type Progression = (typeof PROGRESSIONS)[number];
 export type Scoring = (typeof SCORINGS)[number];
 
 /**
- * Which states are reachable from which, mirrored from the Go side.
+ * Which states are reachable from which, mirrored from the Go side so the
+ * workspace offers only valid transitions. The API stays the authority: if the
+ * two drift, a button fails with `invalid_transition`.
  *
- * A deliberate second copy, and the only honest option: the alternative is
- * offering every transition and letting the API refuse most of them, which
- * turns the workspace into a guessing game. The API stays the authority — a
- * transition this table allows and the service does not still comes back as
- * `invalid_transition` — so the cost of the two drifting is a button that
- * fails politely, never a state nobody intended.
- *
- * Published → draft exists because publishing is how an author finds out the
- * gate passes; undoing it must not mean deleting the contest.
+ * Published → draft exists because publishing is how an author checks the
+ * gate; undoing it must not mean deleting the contest.
  */
 export const NEXT_STATUSES: Record<ContestStatus, readonly ContestStatus[]> = {
   draft: ["published"],
@@ -60,34 +50,19 @@ export const contestSummarySchema = z
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
     /**
-     * Whether the caller is registered for this contest. Always about the
-     * caller: the API fills it from the session it authenticated, never from
-     * anything the request carries.
-     *
-     * Defaulted rather than required, so a listing from an older server reads
-     * as "not enrolled" instead of failing the whole page — the flag decides
-     * which of two labels a row shows, and no screen depends on it to be safe.
+     * Whether the caller is registered, filled from the session, never from the
+     * request. Defaulted so an older server reads as "not enrolled" instead of
+     * failing the page; no screen depends on it to be safe.
      */
     enrolled: z.boolean().default(false),
-    // The two fields the play screen needs to know whether it is running
-    // under ICPC scoring at all (docs/ARCHITECTURE.md §6.1.1):
-    // whether to show a question's points, and what a wrong attempt on a
-    // question later solved costs. Read here rather than from the staff-only
-    // `Contest`, which a participant may not fetch.
+    // Read here because a participant may not fetch the staff-only `Contest`
+    // (docs/ARCHITECTURE.md §6.1.1).
     scoring: z.enum(SCORINGS),
     icpc_penalty_min: z.number(),
     /**
-     * The picture this contest wears, and who made it.
-     *
-     * Carried by the listing rather than asked for on its own, because the
-     * screen that needs it most is the one that can least afford a second
-     * request: the picture above a story (design spec §10) is on the play
-     * screen, which a participant opens under a timer and three hundred of
-     * them open in the same minute. The listing is already read there.
-     *
-     * Defaulted, like `enrolled` above: an empty hash is a contest wearing
-     * its drawn cover, and a server too old to send the field reads as
-     * exactly that rather than failing the whole page.
+     * Carried by the listing so the play screen, opened by hundreds of
+     * participants at once, needs no second request for its cover. An empty
+     * hash means the drawn cover; the default keeps an older server working.
      */
     cover_hash: z.string().default(""),
     cover_attribution: z.string().default(""),
@@ -148,11 +123,7 @@ export const settingsSchema = z
 
 export type ContestSettings = z.infer<typeof settingsSchema>;
 
-/**
- * A contest as its staff see it: every translation, not the negotiated one.
- * They are the ones authoring them, and serving a single language would make
- * the rest invisible in the editor.
- */
+/** A contest as its staff see it: every translation, since they author them all. */
 export const contestSchema = z
   .object({
     id: z.string(),
@@ -161,11 +132,8 @@ export const contestSchema = z
     question_mode: z.enum(QUESTION_MODES),
     progression: z.enum(PROGRESSIONS),
     scoring: z.enum(SCORINGS),
-    // Minutes added to an ICPC registration's penalty time for every wrong
-    // attempt on a question it goes on to solve. Present regardless of
-    // `scoring` — the column carries a default (20) and the mode can be
-    // reverted before the contest starts — but only read and shown while
-    // `scoring` is `icpc`.
+    // Minutes per wrong attempt on a question later solved. Always present,
+    // but meaningful only while `scoring` is `icpc`.
     icpc_penalty_min: z.number(),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
@@ -182,10 +150,8 @@ export const contestSchema = z
     translations: z.record(z.string(), translationSchema),
     created_at: z.string(),
     updated_at: z.string(),
-    // Whether the caller holds contest.monitor here, decided by the server's
-    // authoriser. Sent only by the read of one contest; the answer to a
-    // write omits it, and that reads as "no" — the tab it decides is simply
-    // not offered from a stale copy.
+    // Whether the caller holds contest.monitor here. Only the single-contest
+    // read sends it; a write's answer omits it, which reads as "no".
     may_monitor: z.boolean().default(false),
   })
   .transform((raw) => ({
@@ -217,12 +183,8 @@ export const contestSchema = z
 export type Contest = z.infer<typeof contestSchema>;
 
 /**
- * The picture a contest wears, as the API describes it.
- *
- * The bytes are never part of this: a screen that needs the picture links to
- * it, and a screen that only needs to know whether there is one reads the
- * hash. The same shape comes back from the upload itself, which is what lets
- * the panel show what was just stored without asking for it again.
+ * A contest's cover metadata, never its bytes. The upload returns the same
+ * shape, so the panel shows what was stored without a second read.
  */
 export const contestCoverSchema = z
   .object({
@@ -241,59 +203,34 @@ export const contestCoverSchema = z
 export type ContestCover = z.infer<typeof contestCoverSchema>;
 
 /**
- * The longest credit line the API stores, mirrored from
- * `covers.MaxAttributionLen`.
- *
- * A second copy, with the same standing as the transition table above: the
- * API refuses a longer one regardless, and this exists so the field can stop
- * at the limit instead of letting somebody type past it and be refused after
- * the fact.
+ * Mirrors `covers.MaxAttributionLen`, so the field stops at the limit instead
+ * of being refused after the fact.
  */
 export const MAX_COVER_ATTRIBUTION = 200;
 
 /**
- * Where one rendition of a contest's cover lives.
- *
- * The hash travels in `v`, and it is not decoration. The path names the
- * contest, not the file, so without it the address of a replaced cover would
- * be the address of the old one — the API answers a plain address with a
- * minute of caching for exactly that reason, and an address carrying the hash
- * with a year of it. This is the same trick `imageHref` plays for the
- * installation's own marks.
- *
- * 800 is the default because it is the card's rendition; 1600 is for the
- * picture above a story, where it is shown at something like its own size.
+ * The public address of a cover rendition. The path names the contest, not
+ * the file, so the hash in `v` is what busts the cache when the cover is
+ * replaced (the API caches a hashed address for a year, a plain one for a
+ * minute). 800 is the card; 1600 is the picture above a story.
  */
 export function coverHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
   return `/api/v1/public/contests/${contestId}/cover?size=${size}&v=${hash}`;
 }
 
 /**
- * The same rendition, read as the contest's staff rather than as a visitor.
- *
- * The public address refuses a draft — it refuses everybody, which is what it
- * is for — and a draft is the state a cover is chosen in. So the panel that
- * chooses one reads through this address instead: same bytes, behind the
- * session, answered `private` so no shared cache keeps a picture of a contest
- * nobody has published.
- *
- * The hash still travels, for a smaller reason: the answer is cached for
- * half a minute, and an organiser who has just replaced a cover should see
- * the new one rather than wait out somebody else's timer.
+ * The same rendition read as staff. The public address refuses a draft, which
+ * is when a cover is chosen; this one sits behind the session and is answered
+ * `private`. The hash still busts its half-minute cache after a replacement.
  */
 export function coverStaffHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
   return `/api/v1/contests/${contestId}/cover/file?size=${size}&v=${hash}`;
 }
 
 /**
- * Whether sequential progression (§6.1.1) actually governs this contest.
- *
- * Mirrors contests.Contest.SequentialActive on the Go side (finding 4):
- * progression alone is not enough to ask, since it means nothing at
- * `question_mode = single` — the one question has nothing before it to wait
- * on. Kept here as the one place the interface reads this from, rather than
- * letting the question editor and the settings panel each repeat the
- * two-field comparison and risk reading it differently one day.
+ * Whether sequential progression (docs/ARCHITECTURE.md §6.1.1) actually
+ * governs this contest; mirrors `contests.Contest.SequentialActive`.
+ * Progression means nothing at `question_mode = single`.
  */
 export function sequentialActive(contest: Pick<Contest, "progression" | "questionMode">): boolean {
   return contest.progression === "sequential" && contest.questionMode === "multi";
@@ -305,13 +242,9 @@ export function defaultLanguage(contest: Contest): string | undefined {
 }
 
 /**
- * The contest's title in the language being read, or in any language it has.
- *
- * The staff response carries every translation and negotiates none, so the
- * choice has to be made here. Falling through to another language is right on
- * an editing screen — the author needs to recognise which contest this is, and
- * a blank heading tells them nothing — but it is wrong in a listing, which is
- * why the summary is negotiated by the server instead.
+ * The title in `lang`, else in any language the contest has. Right for an
+ * editing screen, where a blank heading helps nobody; listings use the
+ * server-negotiated summary instead.
  */
 export function titleIn(contest: Contest, lang: string): string {
   for (const code of [lang, defaultLanguage(contest), ...Object.keys(contest.translations)]) {
@@ -322,54 +255,36 @@ export function titleIn(contest: Contest, lang: string): string {
 }
 
 /**
- * Whether the story, the questions and the answers may still change.
- *
- * The line is the start, not the publication: an author publishes to see the
- * contest as participants will, and may still fix a typo. Once it is running,
- * changing a question would change the task under people already answering it.
- *
- * Mirrored from the Go side, with the same standing as the transition table:
- * the API refuses regardless, and this copy exists so the interface can show a
- * disabled control with a reason instead of an enabled one that fails.
+ * Whether the story, the questions and the answers may still change. The line
+ * is the start, not publication: once running, a change would alter the task
+ * under people answering it. Mirrored from Go so controls can be disabled up
+ * front; the API refuses regardless.
  */
 export function contentEditable(status: ContestStatus): boolean {
   return status === "draft" || status === "published";
 }
 
 /**
- * Whether the contest's own fields may still change.
- *
- * Wider than the content line, deliberately. Extending the window after a
- * power cut and correcting a mistyped network range are exactly what a running
- * contest needs.
+ * Whether the contest's own fields may still change. Wider than the content
+ * line: a running contest may need its window extended or a network range fixed.
  */
 export function settingsEditable(status: ContestStatus): boolean {
   return status === "draft" || status === "published" || status === "running";
 }
 
 /**
- * Whether the *shape* is still open — the question mode, the timing model, the
- * session length. These freeze with the content, not with the settings:
- * people are already answering under them.
+ * Whether the question mode, timing model and session length may change.
+ * They freeze with the content, not the settings.
  */
 export function shapeEditable(status: ContestStatus): boolean {
   return status === "draft" || status === "published";
 }
 
 /**
- * The ICPC penalty the settings form submitted, as the API's
- * `icpc_penalty_min`.
- *
- * Locked with the rest of the shape (`shapeEditable`), the same as the
- * scoring radio it appears beside: a disabled field submits nothing, which
- * this reads as "send no key" rather than "clear it" — `null` is never a
- * meaningful outcome here, unlike `leaderboard.freeze_min`'s own three-way
- * split (`freezeFromForm`), because there is no way to unset a penalty in
- * this mode.
- *
- * A non-integer or an amount outside 0..240 is refused rather than rounded:
- * the column's own `CHECK` bound is 0 to 240, and a value the form quietly
- * adjusted would save a setting nobody chose.
+ * The submitted ICPC penalty as `icpc_penalty_min`. A disabled (locked) field
+ * submits nothing, which means "send no key"; a penalty cannot be unset.
+ * Anything but an integer in 0..240 (the column's `CHECK`) is refused, not
+ * rounded, so the form never saves a value nobody chose.
  */
 export function icpcPenaltyFromForm(
   value: FormDataEntryValue | null,
@@ -393,7 +308,6 @@ export function enumFromForm<T extends string>(
     : undefined;
 }
 
-/** The shape fields the settings form submits, before `duration_min` joins them (`shapeFromForm`'s own doc). */
 export type ShapeUpdate = {
   question_mode?: QuestionMode;
   progression?: Progression;
@@ -403,33 +317,15 @@ export type ShapeUpdate = {
 };
 
 /**
- * The contest's shape — `question_mode`, `progression`, `scoring`, `timing`
- * and `timing`'s own `duration_min` — as the settings form submitted it.
+ * The contest's shape as the settings form submitted it. A running contest
+ * disables these fieldsets, and a disabled radio group is absent from
+ * `FormData`, so each field is sent only when present: defaulting an absent
+ * one would ask to change a running contest's shape, and the API refuses the
+ * whole `PATCH`.
  *
- * All five freeze together once the contest starts (`shapeEditable`), in
- * fieldsets a running contest disables — and a disabled radio group is
- * excluded from `FormData` entirely, not merely empty. Building the request
- * as `oneOf(form.get("scoring"), SCORINGS) ?? "points"` once treated that
- * absence as a request to actually *set* scoring to `"points"`: a save that
- * touched nothing about the shape (extending the window, say, or renaming
- * the leaderboard) on a running ICPC contest sent `scoring: "points"`
- * alongside it, and `checkRunningChange` on the Go side refused the whole
- * `PATCH` for a change nobody asked for. Each field here is included only
- * when the form actually carried it — the same "absent means leave it
- * alone" contract `icpcPenaltyFromForm` above already gives
- * `icpc_penalty_min`, and the one `UpdateCommand` itself already documents
- * for every one of these fields on the Go side.
- *
- * `duration_min` piggybacks on `timing` rather than being asked for on its
- * own: its own field only exists in the DOM while "individual" is the
- * picked timing model (`settings-panels.tsx`), so there is no "the shape is
- * open but only duration is locked" state to represent. While `timing` is
- * present and `"individual"`, a missing or non-positive duration refuses
- * the whole save (`{ ok: false }`) exactly as it always has; while `timing`
- * is present and `"fixed"`, `duration_min` is sent as `null` explicitly —
- * harmless, since `contests.Service.Update` forces it to nil whenever the
- * contest's own timing ends up fixed regardless of what was sent, but
- * explicit rather than relying on that.
+ * `duration_min` follows `timing`, since its input exists only while
+ * "individual" is picked: then a missing or non-positive duration refuses the
+ * save; for "fixed" it is sent as `null`.
  */
 export function shapeFromForm(
   form: FormData,

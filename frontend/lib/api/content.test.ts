@@ -39,10 +39,7 @@ describe("questionSchema", () => {
     expect(questionSchema.parse({ ...question, max_attempts: null }).maxAttempts).toBeUndefined();
   });
 
-  /**
-   * The listing endpoint omits reference answers; only the single-question
-   * endpoint carries them. An absent list is not an empty question.
-   */
+  /** Only the single-question endpoint carries reference answers. */
   test("reads an omitted answer list as an empty one, not as undefined", () => {
     const listed = questionSchema.parse({ ...question, answers: undefined });
 
@@ -83,8 +80,6 @@ describe("untranslated", () => {
 
 describe("answerable", () => {
   test("is false for a question nothing could mark", () => {
-    // The author would otherwise find out at the publish gate, which is later
-    // and further from the question they were writing.
     expect(answerable(questionSchema.parse({ ...question, answers: [] }))).toBe(false);
     expect(answerable(questionSchema.parse(question))).toBe(true);
   });

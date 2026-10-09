@@ -1,13 +1,7 @@
 /**
- * The product mark: an index card with a raised tab and two ruled lines.
- *
- * The direction is called Kartoteka, and the desk card index is the reason —
- * a drawer of ruled cards is the direct ancestor of a row in a relational
- * table, and that kinship is what the whole visual language is built on. The
- * mark says it in sixteen pixels rather than in a paragraph.
- *
- * Drawn as one filled path with the rules cut out by the even-odd rule, so it
- * stays a single ink mass at any size and takes the surrounding colour.
+ * The product mark: an index card with a tab and two rules. One filled path
+ * with the rules cut out (even-odd), so it stays one ink mass in the
+ * surrounding colour at any size.
  */
 export function Mark({ className }: { className?: string }) {
   return (

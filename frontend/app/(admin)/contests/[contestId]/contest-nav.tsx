@@ -8,44 +8,18 @@ import { cn } from "@/lib/utils";
 export type NavItem = {
   href: string;
   label: string;
-  /**
-   * Match this address exactly rather than by prefix.
-   *
-   * The overview owns the workspace's bare address, which is a prefix of every
-   * other section's. Left to prefix matching it would be marked current on
-   * every item at once, which is the same as marking none.
-   */
+  /** Match exactly: the overview's address is a prefix of every other section's. */
   exact?: boolean;
-  /**
-   * What this section still owes, in a word or two.
-   *
-   * The reason the navigation is a column and not a row. "1 without text"
-   * belongs beside "Questions", where it is a piece of work with an address,
-   * not four screens away in a gate report an author has to go and read.
-   */
+  /** What this section still owes, shown beside it. */
   note?: string;
 };
 
 export type NavGroup = { label?: string; items: NavItem[] };
 
 /**
- * The workspace's sections.
- *
- * A column, not a row of tabs. Five sections today and the architecture names
- * two more admin screens for the same contest — the query log and the reports
- * — and a horizontal row was already scrolling sideways at 375px with the five.
- * A column also has somewhere to put a note per section, which a row does not.
- *
- * It is not a panel. There is no fill and no border box: the column is held by
- * one hairline, which is the same device the sign-in screen is built from and
- * the same one the specification means by "panels are separated by a rule".
- *
- * A Client Component for one reason — a layout cannot see the pathname, and
- * the current section has to be known to be marked. Everything under it stays
- * a Server Component.
- *
- * `aria-current="page"` carries what the mark says. A section distinguished
- * only by a border is undistinguished for anybody not looking at it.
+ * The workspace sections, as a column so each can carry a note (a row already
+ * overflowed at 375px). A client component only to know the pathname.
+ * `aria-current="page"` carries what the border shows.
  */
 export function ContestNav({ groups }: { groups: NavGroup[] }) {
   const pathname = usePathname();
@@ -55,9 +29,7 @@ export function ContestNav({ groups }: { groups: NavGroup[] }) {
       aria-label="Contest sections"
       className={cn(
         "flex flex-col gap-6",
-        // Below the layout breakpoint the column has nowhere to stand, so it
-        // becomes a single scrolling row — the same links in the same order,
-        // which is what the mobile reset asks of every asymmetric grid.
+        // Below the breakpoint the column becomes one scrolling row.
         "max-narrow:flex-row max-narrow:gap-5 max-narrow:overflow-x-auto max-narrow:border-b max-narrow:border-line max-narrow:pb-0",
       )}
     >
@@ -82,8 +54,7 @@ export function ContestNav({ groups }: { groups: NavGroup[] }) {
                 className={cn(
                   "group flex items-baseline justify-between gap-3 rounded-none px-2 py-1.5 text-control",
                   "border-l-2 transition-colors duration-(--t-input) ease-standard",
-                  // On a narrow screen the mark moves from the left edge to the
-                  // bottom one, because the column has become a row.
+                  // As a row, the mark moves to the bottom edge.
                   "max-narrow:shrink-0 max-narrow:border-l-0 max-narrow:border-b-2 max-narrow:-mb-px max-narrow:px-0 max-narrow:py-3 max-narrow:whitespace-nowrap",
                   current
                     ? "border-ink text-ink"

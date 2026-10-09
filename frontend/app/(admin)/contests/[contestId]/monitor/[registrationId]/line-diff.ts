@@ -1,14 +1,11 @@
 /**
- * What changed between two revisions of a participant's notes or SQL tab,
- * line by line: a longest-common-subsequence diff, small enough to own rather
- * than a dependency for one screen.
+ * Line diff (longest common subsequence) between two revisions of a
+ * participant's notes or SQL tab.
  *
- * Bounded. A revision body is at most 80 KB (monitor.MaxRevisionBodyBytes),
- * which can be tens of thousands of lines, and the table below is one cell
- * per pair of lines. The common beginning and end are taken off first — a
- * revision is usually a small edit of the one before — and only the changed
- * middle is compared. When even that is past `MAX_DIFF_CELLS`, the middle is
- * shown as removed and then added, and the result says it is not exact.
+ * Bounded: a body can be 80 KB (monitor.MaxRevisionBodyBytes), and the table
+ * has one cell per line pair. The common head and tail are stripped first; if
+ * the middle still exceeds `MAX_DIFF_CELLS` it is shown as removed then added,
+ * marked inexact.
  */
 
 /** The most cells the comparison table may have: 2 MB of 16-bit lengths. */
@@ -23,7 +20,7 @@ export type LineDiff = {
   lines: DiffLine[];
   added: number;
   removed: number;
-  /** False when the bound was hit and the middle is shown whole rather than minimally. */
+  /** False when the bound was hit and the middle is shown whole. */
   exact: boolean;
 };
 
@@ -39,7 +36,7 @@ export function lineDiff(beforeBody: string, afterBody: string): LineDiff {
   let added = 0;
   let removed = 0;
 
-  // The common beginning and end, which need no table.
+  // The common head and tail need no table.
   let head = 0;
   while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
   let tail = 0;
@@ -69,9 +66,8 @@ export function lineDiff(beforeBody: string, afterBody: string): LineDiff {
     for (let i = head; i < aEnd; i += 1) remove(i);
     for (let j = head; j < bEnd; j += 1) add(j);
   } else if (n > 0 || m > 0) {
-    // table[i][j]: the longest common subsequence of the middles from i and j
-    // on. Its values are at most min(n, m), which the bound keeps under
-    // 1000, so sixteen bits hold them.
+    // table[i][j]: LCS length of the middles from i and j on. At most min(n,
+    // m), under 1000 within the bound, so 16 bits suffice.
     const width = m + 1;
     const table = new Uint16Array((n + 1) * width);
     for (let i = n - 1; i >= 0; i -= 1) {
@@ -90,8 +86,7 @@ export function lineDiff(beforeBody: string, afterBody: string): LineDiff {
         i += 1;
         j += 1;
       } else if (table[(i + 1) * width + j] >= table[i * width + j + 1]) {
-        // On a tie the removal goes first: a changed line reads as the old
-        // one struck out and then the new one.
+        // On a tie the removal goes first, so a change reads old then new.
         remove(head + i);
         i += 1;
       } else {
@@ -111,8 +106,8 @@ export function lineDiff(beforeBody: string, afterBody: string): LineDiff {
 export type DiffRow = DiffLine | { type: "skip"; count: number };
 
 /**
- * The diff as it is shown: `context` unchanged lines around each change, and
- * every longer unchanged stretch as one row that counts it.
+ * The displayed diff: `context` unchanged lines around each change, and longer
+ * unchanged stretches as one counted row.
  */
 export function collapse(lines: readonly DiffLine[], context: number): DiffRow[] {
   const keep = new Uint8Array(lines.length);

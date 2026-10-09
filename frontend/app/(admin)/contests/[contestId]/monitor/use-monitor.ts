@@ -27,40 +27,35 @@ import {
 } from "./feed-list";
 import { mergeRoster } from "./roster";
 
-/** How often the table and the feed are asked again while the tab is visible (design §4). */
+/** Poll interval while the tab is visible (SPEC.md §5.1). */
 export const MONITOR_POLL_MS = 5_000;
 
-/** How soon to ask again when a poll's page said there is more past it. */
+/** Delay before the next catch-up page. */
 const CATCH_UP_MS = 1_000;
 
 /**
- * How many pages past the first a poll reads to catch up before it gives the
- * gap up and reads the newest page instead. A tab hidden for an hour can be
- * thousands of items behind; paging through them spends the read budget on a
- * list that keeps only the last thousand anyway. What was skipped is in the
- * participants' own pages and the CSV, and the table counts it all.
+ * Catch-up pages read before skipping to the newest page. A tab hidden for an
+ * hour can be thousands of items behind, and the list keeps only the last
+ * thousand; skipped items remain in participants' pages and the CSV.
  */
 export const MAX_CATCH_UP_PAGES = 5;
 
-/** The longest wait between polls while the server keeps failing. */
 export const MAX_FAILURE_WAIT_MS = 60_000;
 
-/** A tab turning visible this soon after a poll finished waits for the cadence. */
+/** A tab turning visible this soon after a poll keeps the cadence. */
 const FRESH_ENOUGH_MS = 2_000;
 
-/** How long a participant's row stays lit after a new item of theirs. */
 export const HIGHLIGHT_MS = 3_000;
 
 export type MonitorProblem = { kind: "forbidden" } | { kind: "tooOften"; seconds: number } | { kind: "failed" } | null;
 
 const NOBODY: ReadonlySet<string> = new Set();
 
-/** A stretch of time the feed is narrowed to: `from` inclusive, `until` exclusive, either open. */
+/** `from` inclusive, `until` exclusive; either may be open. */
 export type FeedRange = { from?: string; until?: string };
 
 const NO_KINDS: string[] = [];
 
-/** The range as read parameters, naming only the ends that are set. */
 function rangeParams(range: FeedRange): FeedRange {
   return {
     ...(range.from ? { from: range.from } : {}),
@@ -69,28 +64,15 @@ function rangeParams(range: FeedRange): FeedRange {
 }
 
 /**
- * The monitoring screen's live state: the participants table and the feed,
- * both asked again every five seconds while the tab is visible.
+ * Live state of the monitoring screen: the participants table and the feed,
+ * polled while the tab is visible. With `participant` the feed is that
+ * participant's timeline, and without `roster` no table is read.
  *
- * One participant's page uses the same state with `participant` set: the
- * feed is that participant's timeline, and without a `roster` there is no
- * table to ask. `kinds` is the filter it opens with, and `setRange` narrows
- * every read to a stretch of time.
- *
- * - **Hidden, nothing.** A hidden tab asks nothing; becoming visible asks at
- *   once, then keeps the cadence. Forty organisers' tabs in the background
- *   cost the API nothing.
- * - **One chain, never overlapping.** The next poll is scheduled when the
- *   last one has answered, so a slow answer is never raced by the next.
- * - **Refusals.** A 429 waits out its `Retry-After` — a tab turning visible
- *   does not cut the wait short — and a 403 stops the chain: the permission
- *   is gone, and asking every five seconds will not bring it back.
- * - **Nothing changed, nothing renders.** The table is merged row by row
- *   (`mergeRoster`) and an empty feed page returns the same state, so a
- *   quiet poll moves no state at all.
- * - **Running queries.** After the feed, one more read at most asks for the
- *   running queries of one participant again (`runningWindow`); the
- *   finished query takes the running one's place.
+ * A hidden tab reads nothing. Polls form one chain, scheduled after the
+ * previous answer, so they never overlap. A 429 waits out `Retry-After`
+ * (visibility does not cut it short); a 403 stops the chain. Quiet polls change
+ * no state (`mergeRoster`). After the feed, at most one read refreshes one
+ * participant's running queries.
  */
 export function useMonitor({
   contestId,
@@ -100,9 +82,9 @@ export function useMonitor({
   kinds: initialKinds = NO_KINDS,
 }: {
   contestId: string;
-  /** One participant's registration: the feed is their timeline. */
+  /** One participant's registration; the feed becomes their timeline. */
   participant?: string;
-  /** The table to keep current; absent, no table is asked. */
+  /** The table to keep current; absent, none is read. */
   roster?: Roster;
   feed: FeedPage;
   kinds?: string[];
@@ -117,32 +99,27 @@ export function useMonitor({
   const [fresh, setFresh] = useState<ReadonlySet<string>>(NOBODY);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
-  // What the asynchronous reads need to see as it is now, not as it was when
-  // the effect that started them ran.
+  // Current values for asynchronous reads.
   const feedRef = useRef(feed);
   const kindsRef = useRef(kinds);
   const rangeRef = useRef(range);
-  // Whether there is a table at all; fixed for the screen's life.
   const withRoster = useRef(initialRoster !== undefined).current;
-  // Bumped whenever the feed is replaced whole (a new filter, a jump back to
-  // the latest): a read begun before that answers for a list that is gone.
+  // Bumped when the feed is replaced whole; an earlier read's answer is then
+  // dropped.
   const generationRef = useRef(0);
   const triedRef = useRef<RunningTries>(new Map());
   const freshTokens = useRef(new Map<string, number>());
   const freshCounter = useRef(0);
   const freshTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
-  // A 429's wait, whichever read was refused; every read respects it, and a
-  // tab turning visible does not cut it short.
+  // A 429's wait, respected by every read.
   const quietUntilRef = useRef(0);
-  // Consecutive failures, for the back-off; reset by a poll that succeeds.
+  // Consecutive failures for the back-off.
   const failuresRef = useRef(0);
-  // Pages read in a row that said there was more, and the items they held.
   const catchUpRef = useRef({ pages: 0, items: 0 });
-  // Every read is made under this, and it is aborted when the screen goes.
-  // Filled by the polling effect, which owns its lifetime; null before it runs.
+  // Aborted when the screen goes; owned by the polling effect, null before it
+  // runs.
   const abortRef = useRef<AbortController | null>(null);
 
-  /** One read of the feed this screen shows: the contest's, or one participant's timeline. */
   const read = useCallback(
     (params: FeedParams, options: ReadOptions) =>
       participant
@@ -166,7 +143,7 @@ export function useMonitor({
     });
     const timer = setTimeout(() => {
       freshTimers.current.delete(timer);
-      // Only the ids no later item has lit again go out.
+      // Only ids no later item has lit again go out.
       const out = ids.filter((id) => freshTokens.current.get(id) === token);
       for (const id of out) freshTokens.current.delete(id);
       if (out.length === 0) return;
@@ -186,10 +163,9 @@ export function useMonitor({
     };
   }, []);
 
-  /** What a failed read means for the chain: the wait before the next, or null to stop. */
+  /** The wait before the next poll after a failure, or null to stop. */
   const failed = useCallback(
     (error: unknown): number | null => {
-      // The screen went away mid-read; there is nobody to tell.
       if (abortRef.current?.signal.aborted) return null;
       if (error instanceof ApiError) {
         if (error.status === 429) {
@@ -203,13 +179,13 @@ export function useMonitor({
           return null;
         }
         if (error.status === 401) {
-          // The layout above knows where a lost session goes.
+          // The layout redirects a lost session.
           router.refresh();
           return MONITOR_POLL_MS;
         }
       }
-      // A server that is down is not helped by forty tabs asking every five
-      // seconds: the wait doubles with each failure in a row, to a ceiling.
+      // Exponential back-off to a ceiling, so many tabs do not hammer a failing
+      // server.
       failuresRef.current += 1;
       setProblem({ kind: "failed" });
       return Math.min(MAX_FAILURE_WAIT_MS, MONITOR_POLL_MS * 2 ** (failuresRef.current - 1));
@@ -217,7 +193,7 @@ export function useMonitor({
     [router],
   );
 
-  /** Reads the newest page afresh; `gap` counts what is skipped by doing so. */
+  /** Reads the newest page; `gap` counts what is skipped. */
   const reload = useCallback(
     async (nextKinds: string[], gap = 0) => {
       const generation = ++generationRef.current;
@@ -234,13 +210,11 @@ export function useMonitor({
   );
 
   /**
-   * One poll; answers the wait before the next, or null to stop.
-   *
-   * An ordinary poll reads the table and the feed together, lights the rows
-   * of whoever has something new, and refreshes running queries. A page that
-   * says there is more starts a catch-up: the next ticks read only the feed,
-   * a second apart, light nothing (what they bring is old news), and after
-   * `MAX_CATCH_UP_PAGES` more pages give the rest up for the newest page.
+   * One poll; returns the wait before the next, or null to stop. A normal poll
+   * reads table and feed, lights rows with new items and refreshes running
+   * queries. A page with more behind it starts a catch-up: feed-only reads a
+   * second apart that light nothing, abandoned after `MAX_CATCH_UP_PAGES` for
+   * the newest page.
    */
   const poll = useCallback(async (): Promise<number | null> => {
     const generation = generationRef.current;
@@ -308,9 +282,8 @@ export function useMonitor({
     }
   }, [contestId, failed, light, read, reload, setFeed, withRoster]);
 
-  // The chain below reads the poll through a ref, so that nothing a render
-  // brings — a new router object, a new callback — restarts it: a restarted
-  // chain would forget a 429's wait and a 403's stop.
+  // Read through a ref so a re-render never restarts the chain, which would
+  // forget a 429's wait or a 403's stop.
   const pollRef = useRef(poll);
   useEffect(() => {
     pollRef.current = poll;
@@ -335,8 +308,7 @@ export function useMonitor({
     const tick = async () => {
       timer = undefined;
       if (cancelled || stopped || inFlight || !visible()) return;
-      // A refusal elsewhere (loading older, a new filter) may have asked for
-      // quiet since this tick was scheduled.
+      // Another read may have been refused since this tick was scheduled.
       const quiet = quietUntilRef.current - Date.now();
       if (quiet > 0) {
         schedule(quiet);
@@ -361,8 +333,8 @@ export function useMonitor({
         return;
       }
       if (stopped || inFlight) return;
-      // Back from a glance at another tab, the last poll is still fresh: the
-      // cadence goes on rather than a second read on top of it.
+      // If the last poll is still fresh, keep the cadence instead of reading
+      // again.
       const sinceLast = Date.now() - lastFinished;
       const wait = sinceLast < FRESH_ENOUGH_MS ? MONITOR_POLL_MS - sinceLast : 0;
       schedule(Math.max(wait, quietUntilRef.current - Date.now()));
@@ -378,7 +350,7 @@ export function useMonitor({
     };
   }, [contestId, participant]);
 
-  /** Reads the newest page afresh, for a new filter or a jump back to the latest. */
+  /** Reads the newest page, for a new filter or a jump to the latest. */
   const restart = useCallback(
     async (nextKinds: string[]) => {
       try {
@@ -399,7 +371,7 @@ export function useMonitor({
     [restart],
   );
 
-  /** Narrows every read to a stretch of time, and reads its newest page afresh. */
+  /** Narrows every read to a time range and reloads. */
   const setRange = useCallback(
     async (next: FeedRange) => {
       rangeRef.current = next;

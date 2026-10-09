@@ -12,12 +12,7 @@ const OPTIONS: ComboboxOption<Item>[] = [
   { key: "2", value: { id: "2" }, label: "Petrova Anna", description: "a.petrova" },
 ];
 
-/**
- * A small controlled harness, the same shape every real caller uses
- * (`person-picker.tsx` is the only one today): `inputValue` and `value` live
- * in the caller's own state, exactly as the docstring on `Combobox` says a
- * picker whose items are re-fetched every keystroke has to hold them.
- */
+/** Controlled harness shaped like the real caller (`person-picker.tsx`). */
 function Harness({
   items = OPTIONS,
   statusMessage,
@@ -55,9 +50,7 @@ describe("Combobox, label and description", () => {
     expect(screen.getByRole("combobox", { name: "Person" })).toBeInTheDocument();
   });
 
-  // Finding 3: a describing paragraph elsewhere on the page is only
-  // announced to a screen reader if something actually points the input at
-  // it — passing an id down is not enough on its own.
+  // Passing an id down is not enough; the input must point at it.
   test("wires describedBy to the input's aria-describedby", () => {
     render(
       <>
@@ -77,18 +70,13 @@ describe("Combobox, label and description", () => {
 });
 
 describe("Combobox, the item list", () => {
-  // The component's own docstring: `filter={null}` turns off the primitive's
-  // client-side re-filtering, because every caller here already fetched an
-  // already-matched result set from the server. If that were left on, typing
-  // something that does not literally appear in an option's *label* would
-  // hide options the server was right to return (a login or an email
-  // matched, folded into a full-name label the box does not show).
+  // With client-side re-filtering, a query matched on a field the label does
+  // not show would hide rows the server returned.
   test("shows every passed item regardless of what the box currently holds — no client-side re-filtering", async () => {
     const user = userEvent.setup();
     render(<Harness />);
 
-    // Neither candidate's label contains "zzz"; a re-filtering combobox
-    // would show none of them.
+    // Neither label contains "zzz"; a re-filtering combobox would show none.
     await user.type(screen.getByRole("combobox"), "zzz");
 
     expect(await screen.findByText("Ivanov Sergei")).toBeInTheDocument();
@@ -126,14 +114,8 @@ describe("Combobox, choosing an option", () => {
     expect(screen.getByRole("combobox")).toHaveValue("Ivanov Sergei");
   });
 
-  // The component's own docstring: selection is compared by `key`, not by
-  // object identity, because a picker whose items come back from a fresh
-  // request every keystroke never has the same object twice — even for the
-  // option already chosen. A version of this component keyed off
-  // `Object.is` (the primitive's own default, before `isItemEqualToValue`
-  // was passed) would stop recognising the chosen option the moment `items`
-  // is replaced by a new array, which is exactly what the next debounced
-  // search does.
+  // Compared by `Object.is`, the chosen option would stop being recognised
+  // after the next debounced re-fetch.
   test("keeps recognising the chosen option once items is replaced by a same-key, different-object array", async () => {
     function KeyIdentityHarness() {
       const [inputValue, setInputValue] = useState("");
@@ -149,8 +131,7 @@ describe("Combobox, choosing an option", () => {
           value={value}
           onValueChange={(next) => {
             setValue(next);
-            // A fresh array with the same keys but new option objects — the
-            // shape of a real re-fetch, not the same reference chosen twice.
+            // Same keys, new objects: the shape of a real re-fetch.
             setItems(OPTIONS.map((o) => ({ ...o })));
           }}
           emptyMessage="No matches"
@@ -165,10 +146,8 @@ describe("Combobox, choosing an option", () => {
     await user.click(await screen.findByText("Ivanov Sergei"));
     expect(screen.getByRole("combobox")).toHaveValue("Ivanov Sergei");
 
-    // Reopen the popup without touching the text, so this isolates whether
-    // the chosen *object* is still recognised now that `items` holds all
-    // new objects — not whether the displayed text still matches, which
-    // would be a different question.
+    // Reopen without touching the text, to isolate object recognition from text
+    // matching.
     await user.click(screen.getByRole("combobox"));
 
     const option = await screen.findByRole("option", { name: /Ivanov Sergei/ });
@@ -180,9 +159,8 @@ describe("Combobox, status and disabled state", () => {
   test("announces the status message in a live region", () => {
     render(<Harness statusMessage="Searching…" />);
 
-    // A substring match, not an exact one: the primitive appends an
-    // invisible character to its own status text so a screen reader
-    // re-announces it even when the same words repeat back to back.
+    // Substring match: the primitive appends an invisible character so a
+    // repeated status is re-announced.
     const status = screen.getByText((content) => content.includes("Searching…"));
     expect(status).toHaveAttribute("aria-live", "polite");
   });

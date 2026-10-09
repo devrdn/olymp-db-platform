@@ -10,14 +10,7 @@ export async function generateMetadata() {
   return { title: dict.workspace.create.heading };
 }
 
-/**
- * A new contest.
- *
- * It sits beside the register rather than inside a contest's workspace,
- * because there is no contest yet — and `new` cannot collide with a contest's
- * own address: an identifier is a UUID, and the segment is checked against
- * that before it is ever used.
- */
+/** A new contest. `new` cannot collide with a contest id, which is a UUID checked before use. */
 export default async function NewContestPage() {
   const [dict, locale] = await Promise.all([activeDictionary(), activeLocale()]);
   const t = dict.workspace.create;

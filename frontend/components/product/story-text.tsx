@@ -6,34 +6,21 @@ import { cleanEditorMarkdown } from "@/lib/format/markdown";
 import { cn } from "@/lib/utils";
 
 /**
- * Authored Markdown, rendered.
+ * Authored Markdown, rendered. One renderer for the constructor's preview and
+ * the participant's screen, so an author sees what participants see.
  *
- * One renderer for the constructor's preview and, when step 5 arrives, for the
- * participant's screen. Two would guarantee that an author sees something
- * other than what a participant sees, and that the difference is discovered on
- * the day of a contest.
- *
- * It is a security boundary. The story is written by a contest manager — a
- * less trusted role than an administrator — and read by every participant
- * while they work. The defence is structural rather than a filter: this
- * produces React elements, never an HTML string, so there is no
- * `dangerouslySetInnerHTML` in the path and no sanitiser to be got wrong. Raw
- * HTML in the source is not parsed at all; `<script>` is four words and an
- * angle bracket, and stays that way.
- *
- * GitHub-flavoured Markdown for tables and strikethrough. Tables are the case
- * that decided against a contenteditable editor in the first place: a
- * round-tripping WYSIWYG is exactly where one quietly turns into HTML and
- * stops being editable as Markdown.
+ * A security boundary: a contest manager writes the story and every participant
+ * reads it. It produces React elements, never an HTML string, so there is no
+ * `dangerouslySetInnerHTML` and no sanitiser; raw HTML is not parsed and shows
+ * as text. GitHub-flavoured Markdown adds tables and strikethrough.
  */
 
-/** Protocols a link may use. Anything else is a link that runs code. */
+/** Protocols a link may use; anything else can run code. */
 const SAFE = new Set(["http:", "https:", "mailto:"]);
 
 /**
- * `react-markdown` already refuses dangerous protocols; this says so in the
- * repository rather than depending on a default staying a default across a
- * major version of somebody else's package.
+ * `react-markdown` already refuses dangerous protocols; this keeps the rule in
+ * the repository rather than in a dependency's default.
  */
 function safeUrl(url: string): string {
   try {
@@ -44,10 +31,8 @@ function safeUrl(url: string): string {
 }
 
 const components: Components = {
-  // A story may cite a source. It opens away from the contest — a participant
-  // is working under a timer and must not lose the page — and `noopener`
-  // because a tab opened from here can otherwise reach back through
-  // `window.opener`.
+  // Opens in a new tab so a participant under a timer keeps the page;
+  // `noopener` cuts `window.opener`.
   a: ({ href, children, ...rest }) => (
     <a {...rest} href={href} target="_blank" rel="noopener noreferrer">
       {children}
@@ -56,24 +41,11 @@ const components: Components = {
 };
 
 /**
- * The typography of the rendered story, held here rather than passed in.
+ * The story's typography, held here so the preview and the participant's screen
+ * cannot drift; `className` is for layout only.
  *
- * It is the other half of "one renderer": if the preview and the participant's
- * screen were styled at their call sites, they would drift, and the author
- * would be proofreading something other than what is read. `className` is for
- * layout — width, margins — and never for how prose looks.
- *
- * Serif at the narrative step, the same face and size the source box is typed
- * in, so what an author writes and what a reader gets are the same words at
- * the same weight.
- *
- * Three rules apply only under `@media print`, harmless everywhere else the
- * `print:` variant has no effect: a heading is kept with the text that
- * follows it (`break-after-avoid`, so a page never ends on a lone heading
- * with its own paragraph pushed to the next one), a paragraph is not printed
- * as a single orphaned or widowed line, and a fenced code block — a whole
- * unit of content, the same reasoning `cleanEditorMarkdown`'s own doc gives
- * it — never splits across a page break.
+ * Under `print:` a heading stays with its paragraph, a paragraph is never a
+ * lone orphan or widow line, and a code block never splits across pages.
  */
 const PROSE = [
   "font-serif text-narrative text-ink",
@@ -96,12 +68,9 @@ const PROSE = [
 ].join(" ");
 
 export function StoryText({ markdown, className }: { markdown: string; className?: string }) {
-  // Cleaned on the way out as well as on the way in (see cleanEditorMarkdown).
-  // The editor's `<br />` artefacts are stopped at the save now, but the
-  // stories already written still carry them, and raw HTML is deliberately not
-  // rendered here — so without this they arrive on a participant's screen as
-  // the four characters, printed. Doing it here rather than with a migration
-  // means nothing rewrites somebody's own text in the database.
+  // Cleaned on output too: older stories still carry the editor's `<br />`
+  // artefacts, which would otherwise print as text. Doing it here avoids
+  // rewriting stored text.
   const text = cleanEditorMarkdown(markdown);
   if (text.trim() === "") return null;
 

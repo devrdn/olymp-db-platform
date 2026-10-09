@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — those would not exist yet when the factory
-// actually runs.
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -164,9 +161,8 @@ describe("requestGameBuildAction", () => {
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
-  // The screen's own reason to exist: a build already waiting or running is
-  // refused rather than queued twice, and this proves the refusal comes back
-  // as a named code the screen can show a sentence for, not a thrown error.
+  // A build already queued or running is refused with a named code, not a
+  // thrown error.
   test("carries the server's own refusal when a build is already in progress", async () => {
     serverRequest.mockRejectedValueOnce(new ApiError("build_in_progress", 409, "already building"));
 
@@ -225,8 +221,7 @@ describe("currentGameUploadAction", () => {
     expect(result).toMatchObject({ id: uploadId, receivedBytes: 1_000_000_000, status: "receiving" });
   });
 
-  // The handler's own sentinel for "nothing in progress" — not a 404, and
-  // not an error this action has anything to report.
+  // The "nothing in progress" sentinel is not a failure.
   test("reads the absent sentinel as an ordinary upload, not a failure", async () => {
     serverRequest.mockResolvedValueOnce({ ...upload, status: "absent", received_bytes: 0 });
 
@@ -433,10 +428,8 @@ describe("completeTableUploadAction", () => {
       `/contests/${contestId}/game/tables/suspects/data/${dataId}/complete`,
       { method: "POST" },
     );
-    // One of the three writes that marks the game out of date on the server.
-    // `GameBuild`'s notice is rendered by `page.tsx`, a server component, so
-    // without this the screen goes on saying the built game holds the current
-    // data for as long as the tab stays open.
+    // The build notice is rendered by a server component, so the path must be
+    // revalidated.
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
@@ -448,10 +441,7 @@ describe("completeTableUploadAction", () => {
     expect(result).toEqual({ code: "game_table_data_length_mismatch", detail: "short" });
   });
 
-  // `validateTableFile`'s own full pass is what actually finds a row whose
-  // field count is wrong, and it names the row — this is the detail the
-  // brief asks the interface to show rather than a generic "file did not
-  // fit" sentence.
+  // The server's full pass names the row with the wrong field count.
   test("carries the row the server named when a file's own data does not fit its columns", async () => {
     serverRequest.mockRejectedValueOnce(
       new ApiError("game_table_row_field_count", 400, "row 12 has 3 field(s), the table has 2 columns"),
@@ -540,10 +530,7 @@ describe("appendTableRowAction", () => {
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
-  // The message names the row and the column at fault — the brief's own
-  // requirement — and it travels back to the screen as `detail`
-  // (`UploadActionResult`'s own doc, `actions.ts`), never dropped the way a
-  // plain `{code}` would drop it.
+  // The row and column travel back as `detail`.
   test("carries the server's own refusal, naming the row and column at fault", async () => {
     serverRequest.mockRejectedValueOnce(
       new ApiError("game_table_value_invalid", 400, 'row 0, column "age": "old" is not a whole number'),

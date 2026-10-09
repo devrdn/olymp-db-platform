@@ -8,14 +8,7 @@ import { IMAGE_KINDS, SETTING_KEYS } from "@/lib/api/settings";
 
 export type SettingsState = { code?: string; saved?: boolean };
 
-/**
- * Saving what the installation calls itself.
- *
- * A Server Action, so the form works with JavaScript off and the API's origin
- * never reaches the page. The values are sent under the API's own keys, which
- * live in one place: the day a setting is added, the table, the catalogue and
- * this form each gain a line, and nothing has to be kept in step by memory.
- */
+/** Saves the installation's settings under the API's own keys. */
 export async function saveSettingsAction(
   _previous: SettingsState,
   form: FormData,
@@ -34,19 +27,14 @@ export async function saveSettingsAction(
     return { code: failureCode(failure) };
   }
 
-  // The name is in the bar of every screen, so the whole tree is stale, not
-  // just this page.
+  // The name is in every screen's bar.
   revalidatePath("/", "layout");
   return { saved: true };
 }
 
 /**
- * Replacing one of the installation's marks.
- *
- * The bytes go straight through: what an upload says about itself is the
- * uploader's claim, and the API decides by reading them. Nothing here inspects
- * the file, because a check on this side would be a second opinion that can be
- * skipped by not using this form.
+ * Replaces one of the installation's marks. The bytes are passed through
+ * uninspected; the API decides by reading them.
  */
 export async function uploadImageAction(
   _previous: SettingsState,

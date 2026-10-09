@@ -137,10 +137,6 @@ describe("the feed as the API sends it", () => {
     expect(parsed.items[6].detail).toMatchObject({ from: "Query 1", to: "Suspects" });
   });
 
-  /**
-   * A kind this build does not know yet, or a payload it cannot read, must
-   * not take the whole feed down with it: the row still says who and when.
-   */
   test("keeps an item whose kind or data it cannot read", () => {
     const parsed = feedSchema.parse({
       items: [item("teleported", { where: "moon" }), item("page_left", { away_ms: "long" }, "c2")],

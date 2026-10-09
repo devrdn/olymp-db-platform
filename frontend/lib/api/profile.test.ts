@@ -25,10 +25,6 @@ describe("the profile summary wire shape", () => {
 });
 
 describe("the profile contest list wire shape", () => {
-  // A contest that has not ended for this participant carries no result at
-  // all: during one, the profile shows nothing of what is happening inside
-  // it. The row has to be able to tell "no result yet" from "a result of
-  // nought", which is why the field is absent rather than zeroed.
   it("leaves a running contest without a result", () => {
     const list = profileContestsSchema.parse({
       truncated: false,
@@ -50,9 +46,6 @@ describe("the profile contest list wire shape", () => {
     expect(list.truncated).toBe(false);
   });
 
-  // ICPC writes no points at all, so the result of an ICPC contest is its
-  // solved count and its penalty minutes. The penalty is the field that says
-  // which of the two shapes this is: it is sent in that mode and in no other.
   it("carries the penalty of an ICPC result and no penalty anywhere else", () => {
     const list = profileContestsSchema.parse({
       truncated: true,
@@ -90,9 +83,6 @@ describe("the profile contest list wire shape", () => {
     expect(list.truncated).toBe(true);
   });
 
-  // `place_open` is the one thing the list says about the table, and the row
-  // says the place is not there yet when it is false. Read wrongly it would
-  // promise a place the report does not have.
   it("reads whether the table is open", () => {
     const list = profileContestsSchema.parse({
       truncated: false,
@@ -112,14 +102,7 @@ describe("the profile contest list wire shape", () => {
     expect(list.items[0].result?.state).toBe("frozen");
   });
 
-  /**
-   * A published contest whose window never opened has a table state of its
-   * own, and it reaches a real reader: a participant disqualified from a
-   * contest before it started is finished with it, so the row carries a
-   * result — of a table the server calls `not_started`. A schema that knew
-   * only the three running states threw here, and the section showed its
-   * failure line to somebody whose own work it was meant to show.
-   */
+  // Reached by a participant disqualified before the contest started.
   it("reads a table that has not opened yet", () => {
     const list = profileContestsSchema.parse({
       truncated: false,
@@ -140,7 +123,6 @@ describe("the profile contest list wire shape", () => {
   });
 });
 
-/** The report's own reads: the tab the screen opens on, and its notes. */
 describe("the report wire shape", () => {
   const report = {
     contest_id: CONTEST,
@@ -171,11 +153,6 @@ describe("the report wire shape", () => {
     expect(parsed.disqualified).toBe(false);
   });
 
-  /**
-   * Two ways to have no place, and both are null on the wire: the table is
-   * not open yet, or it is open and places nobody but its winner. A place of
-   * nought would read as a place, which is why neither is zeroed.
-   */
   it("reads no place as no place, whichever of the two reasons it is", () => {
     const frozen = profileReportSchema.parse({
       ...report,
@@ -193,11 +170,6 @@ describe("the report wire shape", () => {
     expect(loser.result?.winner).toBe(false);
   });
 
-  /**
-   * ICPC awards no points, so a question's own number there is the minutes it
-   * cost. An older server that sends none is read as nought rather than as
-   * undefined three components later.
-   */
   it("reads what a question cost in ICPC minutes, and nought where none was sent", () => {
     const parsed = profileReportSchema.parse({
       ...report,
@@ -212,12 +184,6 @@ describe("the report wire shape", () => {
     expect(parsed.questions[1].penalty).toBe(0);
   });
 
-  /**
-   * The report of a contest that never started, which is what a participant
-   * disqualified before the window opened is left with. The state is true and
-   * the screen has a sentence for it; a schema that refused it turned the
-   * whole report into an error page.
-   */
   it("reads a report whose table has not opened yet", () => {
     const parsed = profileReportSchema.parse({
       ...report,
@@ -238,13 +204,7 @@ describe("the report wire shape", () => {
     expect(parsed.result?.placeOpen).toBe(false);
   });
 
-  /**
-   * A row the published table does not carry has no result at all, and the
-   * server says so with null rather than an object of zeroes. The table is
-   * bounded, so this is every participant of a large contest below the cut:
-   * a schema that demanded an object read an empty scoring and an empty state
-   * as enum values and threw, turning the whole report into an error page.
-   */
+  // The table is bounded: every participant below the cut has a null result.
   it("reads a report whose row is outside the published table", () => {
     const parsed = profileReportSchema.parse({ ...report, result: null });
 

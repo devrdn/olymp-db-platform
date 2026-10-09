@@ -19,9 +19,7 @@ describe("parseRoster", () => {
   });
 
   test("keeps a bare login as a row with an empty full name, rather than dropping the line", () => {
-    // The server refuses this as `invalid_row` — that refusal is what tells
-    // whoever pasted the roster which line to fix. Dropping it here instead
-    // would make the line vanish with no trace at all.
+    // Kept so the server's `invalid_row` points at the line to fix.
     const rows = parseRoster("s.popescu");
 
     expect(rows).toEqual([{ login: "s.popescu", fullName: "", email: "" }]);

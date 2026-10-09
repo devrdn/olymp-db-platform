@@ -4,10 +4,8 @@ import { filterRows, flagCount, mergeRoster, sortRows } from "./roster";
 import { NO_FLAGS, rosterRow as row } from "./test-fixtures";
 
 /**
- * The table is re-read every five seconds and mostly comes back the same.
- * Keeping the previous objects where nothing changed is what lets a memoised
- * row skip its render, and keeping the previous array is what lets the whole
- * table skip it.
+ * Reusing unchanged row objects lets memoised rows skip rendering; reusing the
+ * array lets the table skip it.
  */
 describe("merging a fresh table into the one on screen", () => {
   test("keeps the very same list when nothing changed", () => {

@@ -24,14 +24,13 @@ import { cn } from "@/lib/utils";
 import { fetchStaffStandingsAction, revealStandingsAction, type RevealState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** How often a running contest's staff table asks the server again. */
+/** Poll interval for a running contest's staff table. */
 export const STAFF_REFRESH_MS = 15_000;
 
 /**
- * The contest's live table as its staff see it: both names, the disqualified
- * on it, what everybody else is shown right now, the way to the public page,
- * and — once a frozen contest has finished — the button that reveals the
- * result.
+ * The staff view of the table: both names, the disqualified, what everyone else
+ * sees now, the public link, and the reveal button once a frozen contest has
+ * finished.
  */
 export function StaffStandingsView({
   contestId,
@@ -50,11 +49,8 @@ export function StaffStandingsView({
   const router = useRouter();
   const [standings, setStandings] = useState(initial);
   const [failed, setFailed] = useState(false);
-  // Tracked so a fresh server-rendered `initial` (a real navigation, or the
-  // reveal action's own revalidatePath) can replace whatever the poll below
-  // last read. Adjusted during render rather than from an effect — the
-  // pattern React's own docs give for resetting state when a prop changes —
-  // so a new copy is not one extra render behind the prop that carries it.
+  // A new server `initial` replaces the polled copy. Adjusted during render, as
+  // React's docs recommend, to avoid an extra render.
   const [renderedInitial, setRenderedInitial] = useState(initial);
   if (initial !== renderedInitial) {
     setRenderedInitial(initial);
@@ -62,34 +58,13 @@ export function StaffStandingsView({
     setFailed(false);
   }
 
-  // A running contest's table moves, so it is asked for again on its own —
-  // but only for itself: a plain fetch of the standings endpoint
-  // (fetchStaffStandingsAction), not router.refresh() of the whole contest
-  // layout, which would re-run the contest lookup, the publish check and the
-  // questions list on every poll for a table that is the only thing that
-  // actually changed.
-  //
-  // `status` is a server prop, though, and nothing here refreshes it: the
-  // scheduler can finish a contest with nobody's tab open to notice, and a
-  // stale "running" would leave the reveal button (and the layout's own
-  // badges and tabs, outside this component) never catching up. So a poll
-  // that finds the contest's own status has moved on asks the layout for a
-  // real router.refresh() — the fresh props that refresh brings down restart
-  // or end the polling correctly on their own, through this same effect's
-  // dependencies and cleanup.
-  //
-  // The comparison is on status alone, not on the table's own shown.state:
-  // this poll runs only while status is "running", and Decide (the backend's
-  // own state machine) can answer "final" only once a contest is finished or
-  // archived — so a response can never carry shown.state "final" without
-  // status having moved on too, and checking status catches that already. An
-  // ordinary freeze reached mid-contest (shown.state live → frozen) leaves
-  // status exactly where it was, so it is not "moved on" here: the table
-  // simply shows it, the same way every other poll response does.
-  //
-  // Chained rather than a fixed interval, so a slow response cannot overlap
-  // the next request; requestId discards an answer that comes back after a
-  // newer one was already applied (or after the effect itself tore down).
+  // Polls only the standings endpoint, not `router.refresh()`, which would
+  // re-run the whole layout's reads. `status` is a server prop, so when a poll
+  // sees the status move on (the scheduler may finish the contest unobserved)
+  // it calls `router.refresh()`; the new props restart or end polling. Checking
+  // status suffices: "final" only appears once the contest is finished, and a
+  // mid-contest freeze does not change status. Chained, not an interval, so
+  // requests never overlap; `requestId` drops stale answers.
   useEffect(() => {
     if (status !== "running") return;
     let cancelled = false;
@@ -111,10 +86,8 @@ export function StaffStandingsView({
       try {
         result = await fetchStaffStandingsAction(contestId);
       } catch {
-        // A server action can throw instead of answering: the network
-        // dropped, or a redeploy retired the action's id. That is a failed
-        // poll like any refusal — shown, and asked again — not a rejection
-        // nobody handles that ends the chain for good.
+        // An action can throw (network drop, redeployed action id); treat it as
+        // a failed poll so the chain continues.
         if (cancelled || id !== requestId) return;
         setFailed(true);
         schedule();
@@ -129,16 +102,13 @@ export function StaffStandingsView({
           router.refresh();
         }
       } else if (result.code === "unauthenticated") {
-        // The session no longer holds; a refresh is what lets the layout
-        // redirect, rather than a "failed" banner this would keep retrying.
+        // The session is gone; a refresh lets the layout redirect.
         router.refresh();
       } else {
         setFailed(true);
       }
-      // Scheduled after a refresh too. The fresh props a refresh brings down
-      // re-run this effect, and its cleanup cancels this timer; a refresh
-      // that brings none (it failed, or nothing remounted) must not leave the
-      // table silent, so the chain asks again and refreshes again.
+      // Scheduled after a refresh too: new props cancel this timer, and a
+      // refresh that brings none must not leave the table silent.
       schedule();
     };
 
@@ -186,14 +156,8 @@ export function StaffStandingsView({
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
         <div className="overflow-x-auto">
-          {/* Fixed layout, the same construction as the public table
-              (components/product/standings.tsx): every column but the name
-              carries a width, so the name is the one that gives way to a
-              long full name rather than widening the table. The
-              `narrow`-scoped min-width class protects that same column from
-              the opposite failure once a wide ICPC grid is on screen — the
-              table scrolls inside the wrapper above instead of squeezing
-              the name to a sliver. */}
+          {/* Fixed layout as in the public table: the name column gives way, and
+             the `narrow` min-width keeps a wide ICPC grid from squeezing it. */}
           <table
             className={cn("w-full table-fixed border-collapse", gridWidth?.className)}
             style={gridWidth?.style}
@@ -305,7 +269,7 @@ export function StaffStandingsView({
   );
 }
 
-/** What everybody who is not staff is looking at, in the state's own colour. */
+/** What non-staff see, in the state's colour. */
 function Shown({ standings, dict, locale }: { standings: StaffStandings; dict: Dictionary; locale: string }) {
   const t = dict.leaderboard.staff;
   switch (standings.shown.state) {
@@ -344,7 +308,7 @@ function CopyLink({ contestId, dict }: { contestId: string; dict: Dictionary }) 
   );
 }
 
-/** The one irreversible button on the page, behind a question that says so. */
+/** The irreversible reveal, behind a confirmation. */
 function Reveal({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.leaderboard.staff;
   const [open, setOpen] = useState(false);

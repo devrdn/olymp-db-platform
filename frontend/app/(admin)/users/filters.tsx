@@ -14,29 +14,13 @@ import { cn } from "@/lib/utils";
 import { accountsHref } from "./search-href";
 
 /**
- * The account filters: typing searches, and the address still holds the view.
- *
- * It stays a GET form pointed at `/users` and keeps its submit button. That is
- * not a leftover — it is what the screen does when JavaScript has not loaded
- * or has failed, and it costs one element. The live behaviour below is an
- * enhancement on top of a form that already worked.
- *
- * What typing does is navigate, not fetch. The URL remains the single piece of
- * state, so a search is shareable, the back button walks through the searches
- * somebody tried, and the reset stays an ordinary link. Holding the query in
- * component state instead would take all three away in exchange for nothing.
- *
- * `replace`, not `push`: every keystroke would otherwise become an entry, and
- * one press of Back would step back through "popesc", "popes", "pope". One
- * search is one entry.
+ * Account filters. A GET form to `/users` with a submit button, so it works
+ * without JavaScript; typing navigates rather than fetching, so the URL stays
+ * the only state (shareable, Back works, reset is a link). `replace`, not
+ * `push`, so one search is one history entry.
  */
 
-/**
- * Long enough that a typed word is one query rather than six, short enough
- * that the result feels like it belongs to the typing. Under about 200ms the
- * pause stops collapsing bursts; past about 500ms the screen feels detached
- * from the keyboard.
- */
+/** 300ms: shorter than ~200ms does not collapse a burst; longer than ~500ms feels detached. */
 const SEARCH_PAUSE_MS = 300;
 
 const CONTROL = "h-(--control-h) w-full border border-edge bg-bg px-2.5 text-control text-ink";
@@ -58,16 +42,9 @@ export function AccountFilters({
   const box = useRef<HTMLInputElement>(null);
   const picker = useRef<HTMLSelectElement>(null);
 
-  // React never updates an uncontrolled input when `defaultValue` changes, so
-  // without this the back button and the reset link move the list while the
-  // controls keep showing the previous filter — results for one search under a
-  // box claiming another.
-  //
-  // Focus is what tells the two cases apart. A navigation that lands while
-  // somebody is typing must not touch the box: they are two letters further on
-  // than the address is, and writing it back would swallow those letters. Back
-  // and the reset link both blur it first, which is exactly when following the
-  // address is right.
+  // Uncontrolled inputs ignore a new `defaultValue`, so sync them on Back or
+  // reset. Only while unfocused: a navigation landing mid-typing would swallow
+  // the letters typed since.
   useEffect(() => {
     const typing = box.current !== null && document.activeElement === box.current;
 
@@ -77,28 +54,22 @@ export function AccountFilters({
 
   const navigate = useCallback(
     (next: { query: string; status: string }) =>
-      // `resetPage`: searching from page three of the previous result would
-      // otherwise leave somebody on page three of a result with four rows.
+      // A new search starts at page one.
       startSearch(() =>
         router.replace(accountsHref({ ...next, resetPage: true }), { scroll: false }),
       ),
     [router],
   );
 
-  // The select is not debounced. A pause suits a value built letter by letter;
-  // a choice from a list is complete the moment it is made, and waiting on it
-  // is latency for nothing.
-  //
-  // `navigate` is stable, so this is built once per status rather than per
-  // render — a debounce rebuilt on every render would restart its pause with
-  // each re-render instead of with each keystroke.
+  // The select is not debounced: a choice is complete when made. Built once per
+  // status (`navigate` is stable), so the pause restarts per keystroke, not per
+  // render.
   const search = useMemo(
     () => debounce((next: string) => navigate({ query: next, status }), SEARCH_PAUSE_MS),
     [navigate, status],
   );
 
-  // A timer that fires after the screen is gone navigates somebody somewhere
-  // they did not ask to go — including undoing a link they just followed.
+  // A timer firing after unmount would navigate somewhere unasked.
   useEffect(() => search.cancel, [search]);
 
   return (
@@ -106,8 +77,7 @@ export function AccountFilters({
       method="get"
       action="/users"
       className="flex flex-wrap items-end gap-3"
-      // The button still works with no JavaScript; with it, submitting is the
-      // same navigation the typing already performs, without the wait.
+      // With JavaScript, submit is the same navigation without the wait.
       onSubmit={(event) => {
         event.preventDefault();
         search.cancel();
@@ -120,9 +90,8 @@ export function AccountFilters({
           id="account-q"
           name="q"
           ref={box}
-          // Uncontrolled, and deliberately: a controlled value re-rendered from
-          // the server on every navigation is how the caret jumps to the end of
-          // the word somebody is still typing.
+          // Uncontrolled: a controlled value re-rendered from the server makes
+          // the caret jump.
           defaultValue={query}
           onChange={(event) => search(event.target.value)}
           className={CONTROL}
@@ -141,13 +110,9 @@ export function AccountFilters({
           }
           className={CONTROL}
         >
-          {/* An empty status is not "every account" — the server reads it as
-              "every account except the deleted ones" (`users.Filter`), so
-              `t.anyStatus` has to say that rather than "all": a control
-              labelled "all" that quietly excludes a category is a lie an
-              administrator discovers at the worst moment. "deleted" needs no
-              entry of its own here — it is already the last of
-              `ACCOUNT_STATUSES`, so the loop below renders it. */}
+          {/* Empty means every account except deleted ones (`users.Filter`), so
+             the label must not say "all". "deleted" comes from
+             `ACCOUNT_STATUSES` below. */}
           <option value="">{t.anyStatus}</option>
           {ACCOUNT_STATUSES.map((value) => (
             <option key={value} value={value}>
@@ -161,8 +126,7 @@ export function AccountFilters({
         {t.apply}
       </button>
 
-      {/* Announced rather than only drawn: somebody who cannot see the list
-          dim needs to be told the results are being fetched. */}
+      {/* Announced, since the dimmed list is visual only. */}
       <p role="status" aria-live="polite" className="text-small text-ink-3">
         {searching ? t.searching : ""}
       </p>

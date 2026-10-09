@@ -7,14 +7,10 @@ import { StateView } from "@/components/product/state-view";
 import { AdminDictionary } from "@/lib/i18n/client";
 
 /**
- * The recoverable-error state: a cause and a way forward.
- *
- * Next strips a Server Component error down to a digest before it reaches the
- * browser, so the API's machine code is not available here and this screen does
- * not pretend to know it. What it can honestly offer is a retry, which is the
- * whole point of the state: the failure class that reaches this boundary is
- * network or 5xx, and both are worth trying again. The digest is shown because
- * it is the one thing that ties this screen to a line in the server's log.
+ * Recoverable error with a retry. Next reduces a Server Component error to a
+ * digest, so the API code is unknown here; what reaches this boundary is
+ * network or 5xx, worth retrying. The digest ties the screen to a server log
+ * line.
  */
 export default function ContestsError({
   error,

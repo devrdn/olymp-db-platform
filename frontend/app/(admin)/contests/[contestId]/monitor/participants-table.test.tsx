@@ -77,8 +77,7 @@ describe("the participants table", () => {
 
     const paste = within(row).getByText(dict.workspace.monitor.flags.largePaste.label);
     expect(paste.closest("[title]")).toHaveAttribute("title", dict.workspace.monitor.flags.largePaste.explain);
-    // Not only a hover title, which a screen reader or a finger never reaches:
-    // the explanation is part of the badge's own text.
+    // Not only a hover title: the explanation is in the badge's text.
     expect(within(row).getByText(dict.workspace.monitor.flags.largePaste.explain)).toBeInTheDocument();
     expect(within(row).getByText(dict.workspace.monitor.flags.multipleIps.label)).toBeInTheDocument();
     expect(within(row).queryByText(dict.workspace.monitor.flags.parallelSessions.label)).not.toBeInTheDocument();
@@ -98,7 +97,7 @@ describe("the participants table", () => {
     const lit = screen.getByRole("row", { name: /Anna Petrova/ });
     expect(lit).toHaveAttribute("data-fresh", "true");
     expect(screen.getByRole("row", { name: /Ivan Ivanov/ })).not.toHaveAttribute("data-fresh");
-    // The whole row, not only the name held at its left edge.
+    // The whole row, not only the held name cell.
     expect(lit).toHaveClass("data-fresh:bg-accent-wash");
   });
 });

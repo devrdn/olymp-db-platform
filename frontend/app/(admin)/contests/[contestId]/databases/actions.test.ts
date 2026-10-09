@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — those would not exist yet when the factory
-// actually runs.
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -39,8 +36,7 @@ describe("dropGameInstanceAction", () => {
       `/contests/${contestId}/game/instances/game_c1_u1`,
       { method: "DELETE" },
     );
-    // The list is a server component read: without this the row on screen
-    // would still claim the database is there.
+    // The list is server-rendered; without this the dropped row would remain.
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
@@ -58,8 +54,7 @@ describe("dropGameInstanceAction", () => {
     expect(serverRequest).not.toHaveBeenCalled();
   });
 
-  // The two refusals this screen has sentences for. The code is carried
-  // through as it came, because the row's message is chosen from it.
+  // The code is passed through; the row's message is chosen from it.
   test("carries the server's own refusal code back to the row", async () => {
     serverRequest.mockRejectedValueOnce(
       new ApiError("game_instance_already_dropped", 409, "already gone"),

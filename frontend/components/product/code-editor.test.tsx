@@ -6,24 +6,17 @@ import { describe, expect, test, vi } from "vitest";
 import { CodeEditor, type CodeEditorHandle } from "./code-editor";
 
 /**
- * CodeMirror itself arrives through a dynamic `import()` (see code-editor.tsx
- * and code-editor-core.ts's own doc comments for why), which resolves on a
- * later microtask even when the module is already cached — so every test
- * that means to exercise the *real* editor has to wait for it, the same way
- * a participant's browser does. `.cm-editor` is CodeMirror's own root class,
- * present only once `mountEditor` has actually run.
+ * CodeMirror arrives through a dynamic `import()` that resolves on a later
+ * microtask even when cached. `.cm-editor` appears only once `mountEditor` has
+ * run.
  */
 async function waitForRealEditor(container: HTMLElement) {
   await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
 }
 
 describe("the SQL editor", () => {
-  // The property this whole redesign exists for: a participant who starts
-  // typing the instant the page paints must not lose those keystrokes to a
-  // chunk that has not arrived yet. No `await` before the assertion — this
-  // has to still be true before the dynamic import has had any chance to
-  // resolve, which is exactly the window a naive "render nothing until
-  // CodeMirror is ready" version of this component would have failed.
+  // No `await` before the assertion: this must hold before the dynamic import
+  // can resolve.
   test("the fallback field is typable immediately, before CodeMirror has loaded", () => {
     const onChange = vi.fn();
     render(
@@ -62,12 +55,6 @@ describe("the SQL editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT 1");
   });
 
-  // A participant typing in the fallback the instant the chunk finishes
-  // loading must not have the caret dropped on the floor: the fallback is
-  // about to unmount out from under them. Without this, continuing to type
-  // right through the handoff would go nowhere until they noticed and
-  // clicked back in — exactly the "swallowed keystrokes" failure mode this
-  // whole fallback design exists to avoid, just moved a few seconds later.
   test("keeps focus on the editor across the handoff, when the fallback had it", async () => {
     const { container } = render(
       <CodeEditor ariaLabel="Your query" placeholder="" getInitialValue={() => ""} onChange={vi.fn()} />,
@@ -105,19 +92,9 @@ describe("the SQL editor", () => {
     expect(onChange).toHaveBeenLastCalledWith("SELECT 1");
   });
 
-  // The property `ConsoleEditor` depends on: CodeMirror owns its own DOM and
-  // never asks React to re-render on a keystroke, the same guarantee the
-  // uncontrolled `<textarea>` this replaces already had (kept by a different
-  // mechanism — the file doc comment explains which). `Profiler.onRender`
-  // fires on an actual commit, so no call while typing is direct proof no
-  // re-render happened — not just that the DOM node survived, which
-  // reconciliation would preserve either way. This is the test that would
-  // fail if a future change routed CodeMirror's text through React state.
-  //
-  // Waits for the real editor first and on purpose: the fallback-to-CodeMirror
-  // handoff is itself one legitimate render (`ready` flipping), and this test
-  // is about typing, not about that transition — `workspace.test.tsx` and
-  // this file's own "hands off" tests already cover the transition.
+  // `Profiler.onRender` fires only on a commit, so no call while typing proves
+  // no re-render. Waits for the real editor first, since the handoff itself is
+  // one legitimate render.
   test("typing triggers no re-render, once the real editor has loaded", async () => {
     const onRender = vi.fn();
     const { container } = render(
@@ -148,8 +125,8 @@ describe("the SQL editor", () => {
     await waitForRealEditor(container);
     expect(container.querySelector(".cm-error-position")).not.toBeInTheDocument();
 
-    // Position 14 is 1-based into "SELECT * FRO suspects" — the space right
-    // after "FRO", which is where a real parser error for this text points.
+    // Position 14 (1-based) is the space after "FRO", where a real parser error
+    // points.
     rerender(
       <CodeEditor
         ariaLabel="Your query"
@@ -162,11 +139,8 @@ describe("the SQL editor", () => {
     await waitFor(() => expect(container.querySelector(".cm-error-position")).toBeInTheDocument());
   });
 
-  // A position can arrive before CodeMirror has: the refusal that names one
-  // only exists once a query has actually been run, but there is no way to
-  // guarantee that took longer than the chunk load. The mark has to apply
-  // once the editor exists rather than being silently dropped for having
-  // arrived "too early".
+  // The refusal can arrive before the chunk does; the mark must apply once the
+  // editor exists.
   test("an errorPosition present before CodeMirror has loaded is still applied once it has", async () => {
     const { container } = render(
       <CodeEditor
@@ -229,11 +203,7 @@ describe("the SQL editor", () => {
   });
 });
 
-/**
- * The gutter and the Tab key the design's editor has
- * (docs/design/preview.html, "SQL-консоль": the numbers 1..7 run down the
- * left of the query).
- */
+/** The gutter and the Tab key from the design. */
 describe("the editor's own affordances", () => {
   test("numbers the lines", async () => {
     const { container } = render(
@@ -252,8 +222,7 @@ describe("the editor's own affordances", () => {
     expect(gutter).toHaveTextContent("3");
   });
 
-  // Two hours of typing SQL is not a form: Tab indents here, and Escape then
-  // Tab is how a keyboard user leaves.
+  // Tab indents; Escape then Tab leaves.
   test("indents with Tab instead of leaving the field", async () => {
     const user = userEvent.setup();
     let text = "";
@@ -278,10 +247,9 @@ describe("the editor's own affordances", () => {
 });
 
 /**
- * One view, several documents — what the participant's SQL tabs are built on
- * (the workspace design, §5). Each document keeps its own `EditorState`, so
- * its undo history and its caret survive being switched away from, and
- * switching is not an edit: nothing is reported through `onChange`.
+ * One view, several documents (the participant's SQL tabs). Each keeps its own
+ * `EditorState`, so undo history and caret survive a switch, and a switch is
+ * not reported through `onChange`.
  */
 describe("several documents in one editor", () => {
   function Documents({
@@ -336,9 +304,8 @@ describe("several documents in one editor", () => {
   });
 
   test("keeps what was typed in a document while another one was showing", async () => {
-    // Read back through `onChange` rather than written out here: where a
-    // click lands the caret in this environment is not the point, and
-    // spelling the result out would make this a test about that instead.
+    // Read back through `onChange`: where a click lands the caret here is not
+    // the point.
     let typed = "";
     const { container } = render(<Documents onChange={(id, text) => (typed = id === "a" ? text : typed)} />);
     await waitForRealEditor(container);
@@ -352,15 +319,12 @@ describe("several documents in one editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent(typed);
   });
 
-  // The reason each document is a whole `EditorState` rather than a string:
-  // undo has to mean "what I did in this tab", not "what I last did
-  // anywhere".
   test("keeps each document's own undo history across a switch", async () => {
     const { container } = render(<Documents />);
     await waitForRealEditor(container);
     await userEvent.click(screen.getByRole("textbox"));
-    // One character, so the whole edit is one entry in the history however
-    // slowly the keystrokes are delivered.
+    // One character, so the edit is one history entry however slowly keys
+    // arrive.
     await userEvent.keyboard("X");
 
     await switchDocument();
@@ -371,8 +335,8 @@ describe("several documents in one editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT a");
   });
 
-  // Switching is not an edit. If it were reported, every switch would hand
-  // one tab's text to the other tab's autosave.
+  // If reported, a switch would hand one tab's text to the other tab's
+  // autosave.
   test("reports nothing through onChange when the document is swapped", async () => {
     const onChange = vi.fn();
     const { container } = render(<Documents onChange={onChange} />);
@@ -388,9 +352,8 @@ describe("several documents in one editor", () => {
     const handle = { current: null as CodeEditorHandle | null };
     const { container } = render(<Documents handle={handle} />);
     await waitForRealEditor(container);
-    // Open "b" once, so it is a document the editor is holding rather than
-    // one it would read afresh — a draft recovered after a tab has been
-    // looked at has to reach the state, not only the owner's own copy.
+    // Open "b" once, so the draft must reach the held state, not only the
+    // owner's copy.
     await switchDocument();
     await switchDocument();
 
@@ -410,9 +373,7 @@ describe("several documents in one editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT recovered");
   });
 
-  // A closed tab's state must not be kept: it is the largest thing a tab
-  // owns, and an id the server reused would otherwise open somebody's
-  // discarded text.
+  // A reused id must not reopen discarded text.
   test("forgets a document that was dropped", async () => {
     const texts = new Map([
       ["a", "SELECT a"],
@@ -431,11 +392,8 @@ describe("several documents in one editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT fresh");
   });
 
-  // And the ordinary case, which is the one that leaked: the tab being
-  // closed is the tab that is open. The showing document's state is not in
-  // the map — it is in the view — so the swap to the next tab put it back
-  // under the dropped id, where nothing would ever ask for it again and
-  // nothing would ever free it.
+  // The showing document lives in the view, not the map, so the next swap must
+  // not store it back under the dropped id.
   test("forgets a document dropped while it was the one showing", async () => {
     const texts = new Map([
       ["a", "SELECT a"],
@@ -455,16 +413,9 @@ describe("several documents in one editor", () => {
 });
 
 /**
- * Keys the surrounding screen owns.
- *
- * The participant's workspace collapses its panels on Ctrl/⌘+B and friends
- * (§8 of the workspace design), and those have to work while the caret is in
- * a query. A listener on the window is not enough: CodeMirror sees a keydown
- * inside its own content first, and what it does with an unclaimed
- * combination is type it or leave it to the browser — Ctrl+B in a
- * contenteditable is "bold". So the owner hands the keys down and they go
- * into the editor's own keymap, which is also what makes the editor call
- * `preventDefault` and the window listener stand aside.
+ * Keys the surrounding screen owns. CodeMirror sees a keydown first and would
+ * type or pass on an unclaimed one, so the owner's keys go into the editor's
+ * keymap, which also calls `preventDefault`.
  */
 describe("the keys the owner reserves", () => {
   test("runs the owner's handler and leaves the document alone", async () => {
@@ -481,19 +432,15 @@ describe("the keys the owner reserves", () => {
     await waitForRealEditor(container);
     await userEvent.click(screen.getByRole("textbox"));
 
-    // Ctrl, not Cmd: CodeMirror resolves `Mod` by platform and the test
-    // environment is not a Mac. A participant on a Mac presses ⌘B and
-    // reaches the same binding.
+    // Ctrl, not Cmd: `Mod` resolves by platform and the test environment is not
+    // a Mac.
     await userEvent.keyboard("{Control>}b{/Control}");
 
     expect(collapsed).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT 1");
   });
 
-  // The handler is read fresh on every press. The editor is built once and
-  // never rebuilt, and the owner's closure is recreated on each of its own
-  // renders — a captured one would go stale the first time anything else on
-  // the screen moved.
+  // The editor is built once; a captured closure would go stale.
   test("runs the handler the owner has now, not the one it mounted with", async () => {
     const first = vi.fn();
     const second = vi.fn();
@@ -524,11 +471,7 @@ describe("the keys the owner reserves", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
-  // A key whose handler has gone is not a key this editor has claimed. The
-  // owner stops passing it — the panel it toggled is not on this screen any
-  // more, say — and swallowing it would leave the participant with a
-  // combination that does nothing at all, rather than whatever CodeMirror or
-  // the page would have made of it.
+  // Swallowing an unclaimed key would leave a combination that does nothing.
   test("leaves a combination alone once its handler is gone", async () => {
     const { container, rerender } = render(
       <CodeEditor
@@ -556,9 +499,8 @@ describe("the keys the owner reserves", () => {
     expect(notPrevented).toBe(true);
   });
 
-  // What the window listener above this reads to know the key has been dealt
-  // with (panel-toggles.tsx): without it the combination would be handled
-  // twice and the panel would end up where it started.
+  // The window listener (panel-toggles.tsx) reads this; otherwise the panel
+  // toggles twice.
   test("marks the key as handled, so nothing above acts on it twice", async () => {
     const { container } = render(
       <CodeEditor

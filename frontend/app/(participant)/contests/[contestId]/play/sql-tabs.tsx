@@ -9,28 +9,20 @@ import type { PlayDictionary } from "./dictionary";
 import type { AutosaveEngine, AutosaveStatus } from "./use-autosave";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** One tab, as the strip needs it: what it is called and which document it is. */
+/** One tab, as the strip needs it. */
 export type SqlTabView = { id: string; title: string };
 
 /**
- * The strip above the SQL editor (§5 of the workspace design): a tab per
- * document, a ✕ on each, a + at the end.
+ * The strip above the SQL editor (SPEC.md §5): a tab per
+ * document, a ✕ on each, a + at the end. It draws and reports and decides
+ * nothing; `use-sql-tabs.ts` owns the texts and the server.
  *
- * It draws and it reports; it decides nothing. Whether closing a tab needs a
- * confirmation, what a new tab is called, whether a new order reached the
- * server — all of that belongs to `use-sql-tabs.ts`, which is where the text
- * of each tab and the server are. Keeping this half free of both is what
- * lets every key and every role below be tested without a network at all.
+ * Keyboard: the `tablist` pattern (arrows, Home, End, one tab stop), plus F2
+ * to rename and Ctrl/⌘+Shift+Arrow to move a tab without a pointer.
  *
- * The keyboard is the same one a `tablist` promises — arrows between the
- * tabs, Home and End to the ends, one stop in the page's own tab order — plus
- * the two an editor's tabs need and a tablist does not describe: F2 renames,
- * and Ctrl/⌘+Shift+Arrow moves the tab itself, so a strip that can be
- * arranged by dragging can be arranged without a pointer too.
- *
- * `closed` is the contest having ended for this participant. Every write is
- * refused from then on, so nothing that writes is offered: no +, no ✕, no
- * rename, no drag. Switching tabs and reading them stays.
+ * `closed` means the contest has ended for this participant: every write
+ * would be refused, so no +, ✕, rename or drag is offered. Switching and
+ * reading stay.
  */
 export function SqlTabStrip({
   tabs,
@@ -48,9 +40,9 @@ export function SqlTabStrip({
 }: {
   tabs: SqlTabView[];
   activeId: string;
-  /** Prefix for each tab's DOM id, so the editor below can name the tab it belongs to. */
+  /** Prefix for each tab's DOM id, so the editor panel can name its tab. */
   idPrefix: string;
-  /** The editor's own element, which this strip's tabs control. */
+  /** The editor's element, which the tabs control. */
   panelId: string;
   /** The contest is over: the strip is read-only. */
   closed: boolean;
@@ -59,10 +51,10 @@ export function SqlTabStrip({
   dict: PlayDictionary;
   onSelect: (id: string) => void;
   onCreate: () => void;
-  /** A new name for a tab. Refusals are the caller's to report — the server has the last word on a title. */
+  /** A new name for a tab. The caller reports refusals: the server has the last word on a title. */
   onRename: (id: string, title: string) => void;
   onClose: (id: string) => void;
-  /** The tab `id` belongs at index `to` of the strip. */
+  /** Move tab `id` to index `to`. */
   onMove: (id: string, to: number) => void;
 }) {
   const t = dict.participant.play.workspace.editor;
@@ -72,7 +64,7 @@ export function SqlTabStrip({
   const [renaming, setRenaming] = useState<string | null>(null);
   /** The tab a drag is hovering over, and which side of it the drop lands on. */
   const [dropAt, setDropAt] = useState<{ id: string; before: boolean } | null>(null);
-  /** Set while Esc is taking a rename back, so the blur it causes does not save it. */
+  /** Set while Esc cancels a rename, so the resulting blur does not save it. */
   const cancelled = useRef(false);
 
   const full = tabs.length >= MAX_TABS;
@@ -80,9 +72,8 @@ export function SqlTabStrip({
 
   const select = (id: string) => {
     onSelect(id);
-    // Focus follows selection within the strip, which is what makes the
-    // arrows usable: the element is already on screen, so this does not wait
-    // for the parent's own re-render.
+    // Focus follows selection, so the arrows work without waiting for the
+    // parent's re-render.
     elements.current.get(id)?.focus();
   };
 
@@ -92,18 +83,14 @@ export function SqlTabStrip({
 
   const finishRename = (tab: SqlTabView, value: string) => {
     setRenaming(null);
-    // An unchanged name is not a write. Every write counts against the
-    // participant's per-minute budget, refused or not.
+    // An unchanged name is not sent: every write counts against the
+    // per-minute budget, refused or not.
     if (value !== tab.title) onRename(tab.id, value);
   };
 
   /**
-   * Which side of a tab the pointer is on. The half it is over is what
-   * decides where the drop lands, the way every list that can be dragged
-   * decides it: an index taken from the target alone cannot say whether a
-   * tab dropped on the third tab belongs before or after it, and dragging
-   * rightwards is where the difference shows — the dragged tab has left its
-   * own place by the time it is put back.
+   * Which half of a tab the pointer is over, which decides whether the drop
+   * lands before or after it.
    */
   const onLeftHalf = (event: React.DragEvent<HTMLElement>): boolean => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -172,9 +159,8 @@ export function SqlTabStrip({
               }}
               role="tab"
               id={`${idPrefix}${tab.id}`}
-              // The name is the title and nothing else: the ✕ inside carries
-              // a label of its own, and without this the tab would be
-              // announced as "Suspects, Close Suspects".
+              // The name is the title alone; the ✕ has its own label, and without
+              // this the tab would read "Suspects, Close Suspects".
               aria-label={tab.title}
               aria-selected={active}
               aria-controls={panelId}
@@ -182,18 +168,10 @@ export function SqlTabStrip({
               draggable={!closed && renaming !== tab.id}
               onDragStart={(event) => {
                 dragged.current = tab.id;
-                // What is being dragged, written onto the drag session
-                // itself. Not bookkeeping: Firefox cancels a drag whose
-                // `DataTransfer` carries nothing at all and Safari is
-                // unreliable about it, so without this "drag to reorder"
-                // (§5) never starts outside Chrome. `effectAllowed` and the
-                // `dropEffect` below are what make the pointer say "move"
-                // rather than "copy" on the way.
-                //
-                // Guarded, and typed as it really is: a browser always hands
-                // a drag event one of these, and an event synthesised in a
-                // test — jsdom implements neither `DragEvent` nor
-                // `DataTransfer` — does not.
+                // Firefox cancels a drag whose `DataTransfer` is empty and Safari is
+                // unreliable, so the id is written onto it; `effectAllowed` and
+                // `dropEffect` make the pointer say "move". Typed as optional
+                // because jsdom implements neither `DragEvent` nor `DataTransfer`.
                 const carried = event.dataTransfer as DataTransfer | undefined;
                 carried?.setData("text/plain", tab.id);
                 if (carried) carried.effectAllowed = "move";
@@ -229,30 +207,21 @@ export function SqlTabStrip({
               className={cn(
                 "relative flex min-w-0 shrink-0 cursor-pointer items-center gap-1.5 border-r border-line px-3 py-1.5",
                 "text-control-sm transition-colors duration-(--t-input) ease-standard",
-                // No focus style of its own: the stylesheet gives anything
-                // focusable the same accent ring (`:focus-visible` in
-                // globals.css), and a second one here would be a second
-                // answer to the same question.
+                // No focus style here: globals.css gives every focusable element
+                // the same `:focus-visible` ring.
                 active ? "bg-sunk text-ink" : "text-ink-2 hover:text-ink",
               )}
             >
               {renaming === tab.id ? (
                 <input
                   autoFocus
-                  // Selects the whole name the moment rename opens, on both
-                  // the F2 and the double-click path — both just set
-                  // `renaming`, and `autoFocus` mounts this input focused,
-                  // so one `onFocus` covers both. Without it the caret lands
-                  // at the end with nothing selected, and the first
-                  // keystroke of a rename appends instead of replacing, the
-                  // way VS Code's own rename field never does.
+                  // Selects the whole name when rename opens (F2 and double-click
+                  // both mount this focused), so typing replaces it.
                   onFocus={(event) => event.currentTarget.select()}
                   aria-label={t.rename.replace("{tab}", tab.title)}
                   defaultValue={tab.title}
-                  // The server's own bound on a title, so the ordinary
-                  // typing path stops where the refusal would start. An
-                  // empty name, or one pasted past this, is still the
-                  // server's to refuse.
+                  // The server's bound on a title. An empty or pasted-over name is
+                  // still the server's to refuse.
                   maxLength={TAB_TITLE_MAX_CHARS}
                   spellCheck={false}
                   size={Math.max(4, tab.title.length)}
@@ -282,9 +251,7 @@ export function SqlTabStrip({
                 <span className="truncate">{tab.title}</span>
               )}
               {dropAt?.id === tab.id ? (
-                // Where the tab being dragged will land. A drop is otherwise
-                // a guess until it has happened, and undoing it means
-                // dragging again.
+                // Where the dragged tab will land.
                 <span
                   aria-hidden="true"
                   className={cn("absolute inset-y-0 w-0.5 bg-accent", dropAt.before ? "left-0" : "right-0")}
@@ -293,9 +260,8 @@ export function SqlTabStrip({
               {closable ? (
                 <button
                   type="button"
-                  // Not its own stop in the tab order: the strip is one stop,
-                  // and Delete on the focused tab is the keyboard's way to
-                  // this button.
+                  // Not a tab stop: the strip is one stop, and Delete on the focused
+                  // tab reaches this button.
                   tabIndex={-1}
                   aria-label={t.close.replace("{tab}", tab.title)}
                   onClick={(event) => {
@@ -313,11 +279,9 @@ export function SqlTabStrip({
       </div>
 
       {closed ? null : (
-        // The tooltip hangs on the span, not on the button, once the button
-        // is disabled: a disabled control fires no pointer events, so Chrome
-        // and Firefox never show a `title` written on it, and the mouse user
-        // is left with a + that does nothing and says nothing. The reader's
-        // answer is the described-by region below, which needs no pointer.
+        // The tooltip sits on the span while the button is disabled: a
+        // disabled control gets no pointer events, so its `title` never shows.
+        // Screen readers get the described-by text below.
         <span
           title={full ? dict.errors.workspace_tab_limit : undefined}
           className="flex shrink-0 items-center"
@@ -335,9 +299,7 @@ export function SqlTabStrip({
           </button>
         </span>
       )}
-      {/* Why the + cannot be pressed. A disabled control announces nothing of
-          its own, and the limit is the one thing a participant reaching for
-          an eleventh tab needs to be told. */}
+      {/* Why the + is disabled: a disabled control announces nothing itself. */}
       {full ? (
         <p id={limitId} className="sr-only">
           {dict.errors.workspace_tab_limit}
@@ -350,13 +312,9 @@ export function SqlTabStrip({
 
 
 /**
- * What is happening to the open tab's text, at the end of the strip.
- *
- * Two lines, the same way the notes panel carries two (see its own doc): the
- * visible one follows every change, "Saving…" included; the screen reader's
- * live region carries only settled outcomes, so a save after every pause in
- * typing is not read out while a failure, the recovery from it and the
- * contest closing are.
+ * The open tab's save status, at the end of the strip. As in the notes
+ * panel, the visible line follows every change while the live region carries
+ * only settled outcomes, so a save after each pause is not read aloud.
  */
 export function SqlTabStatus({
   engine,
@@ -365,12 +323,11 @@ export function SqlTabStatus({
   dict,
 }: {
   /**
-   * The engine saving the open tab, or null when nothing here is saved.
-   * Subscribed to here rather than higher up: a save must re-render this
-   * line and nothing else, least of all the editor beside it.
+   * The engine saving the open tab, or null when nothing is saved.
+   * Subscribed here so a save re-renders this line and not the editor.
    */
   engine: AutosaveEngine | null;
-  /** The code of the last refused action on the strip itself. */
+  /** The code of the strip's last refused action. */
   error: string | null;
   /** Whether these tabs are on the server at all. */
   stored: boolean;
@@ -392,10 +349,8 @@ export function SqlTabStatus({
         data-testid="sql-tabs-status"
         aria-hidden="true"
         title={message}
-        // Bounded and able to shrink, so a whole sentence — the contest
-        // ending says one — gives way to the tabs instead of squeezing
-        // them. The reader who needs it in full has the title above and the
-        // live region below.
+        // Bounded and shrinkable, so a long sentence gives way to the tabs; the
+        // full text is in the title and the live region.
         className={cn("min-w-0 max-w-48 truncate text-small", toneOf(status, error, stored))}
       >
         {message}
@@ -414,9 +369,8 @@ function messageFor(
   dict: PlayDictionary,
 ): string {
   const t = dict.participant.play.workspace.editor;
-  // The workspace was never read, so there is nothing to save to and no
-  // status to report — only the fact itself, which the participant has to
-  // know before they type two hours of work into it.
+  // The workspace was never read: nothing is saved, and the participant
+  // must know before typing into it.
   if (!stored) return t.unsaved;
   if (error !== null) return messageForCode(error, dict.errors);
   switch (status?.kind) {
@@ -449,7 +403,7 @@ function toneOf(status: AutosaveStatus | null, error: string | null, stored: boo
   }
 }
 
-/** A tab with no engine — the one local tab of a workspace that failed to load. */
+/** For a tab with no engine: the local tab of a workspace that failed to load. */
 function noSubscribe() {
   return () => {};
 }
@@ -459,14 +413,9 @@ function noStatus(): AutosaveStatus | null {
 }
 
 /**
- * Where a tab dropped on the tab at `targetIndex` lands, as an index of the
- * strip the move will make.
- *
- * The arithmetic is only interesting in one direction. A tab dragged
- * rightwards leaves its own place before it is put back, so every tab after
- * it has already shifted one to the left by the time the target's index is
- * used — which is how a drop past the middle of the third tab ends up one
- * position further right than the pointer said.
+ * The index a tab dropped on the tab at `targetIndex` lands at. A tab dragged
+ * rightwards leaves its place first, shifting the later tabs left by one, so
+ * the target index is corrected for that.
  */
 export function landingIndex(
   tabs: readonly SqlTabView[],

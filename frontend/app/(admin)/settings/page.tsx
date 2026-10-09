@@ -15,12 +15,8 @@ export async function generateMetadata() {
 }
 
 /**
- * The installation's own settings.
- *
- * `/settings/all` rather than the public read: this screen edits everything,
- * and the public endpoint deliberately answers with an allow-list. Two
- * endpoints for what looks like one resource is the point — the open one can
- * only ever say what somebody declared safe to say.
+ * The installation's settings, read from `/settings/all`: the public endpoint
+ * answers only an allow-list of what is safe to say.
  */
 export default async function SettingsPage() {
   const dict = await activeDictionary();

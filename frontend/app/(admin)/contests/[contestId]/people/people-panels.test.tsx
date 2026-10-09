@@ -27,11 +27,8 @@ function participant(overrides: Partial<Participant> = {}): Participant {
 }
 
 /**
- * ICPC scoring (docs/ARCHITECTURE.md §6.1.1)
- * ranks by how many questions are solved and, at a tie, by penalty time — a
- * running total of points is not a fact about a registration in this mode
- * (`registrations.total_score` is always 0), so the column that shows it is
- * not shown either, rather than showing a column of zeroes.
+ * ICPC ranks by solved count, then penalty (docs/ARCHITECTURE.md §6.1.1);
+ * `total_score` is always 0, so the score column is hidden.
  */
 describe("ParticipantPanel, the score column", () => {
   test("is shown for points and winner scoring", () => {

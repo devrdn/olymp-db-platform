@@ -1,16 +1,9 @@
 import { cn } from "@/lib/utils";
 
 /**
- * A person, in a circle.
- *
- * Initials, never a photograph. SPEC section 10.4 decided that: uploading
- * participants' pictures would create personal data that has to be stored,
- * moderated and deleted on request, and initials answer the same question —
- * which account is this — without any of it.
- *
- * The letters are decoration, not a label. Whatever this sits inside carries
- * the accessible name, so a screen reader hears "Ivan Ivanov" rather than
- * "I I".
+ * Initials in a circle, never a photograph (SPEC §10.4): photos would be
+ * personal data to store, moderate and delete. Decorative; the surrounding
+ * element carries the accessible name.
  */
 export function Avatar({ letters, className }: { letters: string; className?: string }) {
   return (

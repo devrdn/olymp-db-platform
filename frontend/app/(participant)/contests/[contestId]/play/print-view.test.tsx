@@ -22,9 +22,8 @@ describe("PrintView", () => {
     expect(screen.getByText("A body was found in the stacks.")).toBeInTheDocument();
   });
 
-  // The rare edge print/page.tsx's own doc names: an identity this server
-  // could not read. The byline says less rather than reading "Printed by  on
-  // 8 Sep 2026" with a name-shaped hole in it.
+  // An identity that could not be read: the byline gives only the date
+  // rather than a name-shaped hole.
   test("says only the date when there is no participant name to print", () => {
     render(
       <PrintView
@@ -51,16 +50,10 @@ describe("PrintView", () => {
       />,
     );
 
-    // No control of its own: printing is started from the story tab, and a
-    // button hidden on screen and `print:hidden` in print is one nobody can
-    // ever press.
+    // No control of its own: printing starts from the story tab.
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    // No console furniture exists to query for here — this component never
-    // imports ConsoleEditor, SchemaPanel, ResultPanel or QueryLogPanel — but
-    // the one piece of chrome every screen behind a session wears (AppBar) is
-    // outside this component entirely (it belongs to the layout above the
-    // route, not to this presentational piece), so there is nothing here that
-    // could render it even by accident.
+    // The app bar belongs to the layout above the route, so nothing here can
+    // render navigation.
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
   });
 });

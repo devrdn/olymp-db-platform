@@ -6,11 +6,8 @@ import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The router object is created once, here, and handed back the same way on
-// every call — real Next.js hands out a stable reference across renders, and
-// this component depends on that (it names `router` in an effect's own
-// dependencies); a mock that built a fresh object per call would churn that
-// effect on every render for a reason production never has.
+// One stable router object, as Next provides: the component lists `router` in
+// an effect's dependencies.
 const { fetchStaffStandingsAction, routerRefresh, router } = vi.hoisted(() => {
   const routerRefresh = vi.fn();
   return { fetchStaffStandingsAction: vi.fn(), routerRefresh, router: { refresh: routerRefresh } };
@@ -173,11 +170,8 @@ describe("the staff table", () => {
     );
 
     const table = screen.getByRole("table");
-    // Place (w-16 = 4rem) + login (w-28 = 7rem) + solved (w-20 = 5rem)
-    // + penalty (w-20 = 5rem) + 12 grid cells (w-12 = 3rem each) + a
-    // still-legible 12rem name column. The grid (and the login column) are
-    // `max-narrow:hidden`, so an unconditional `min-width` would force a
-    // sideways scroll on a phone showing none of the columns it is sized for.
+    // Place 4 + login 7 + solved 5 + penalty 5 + 12 × 3 + name floor 12 (rem).
+    // Applied only from `narrow` up, where those columns show.
     expect(table.style.getPropertyValue("--grid-min-width")).toBe("69rem");
     expect(table.className).toContain("narrow:min-w-(--grid-min-width)");
     expect(table.style.minWidth).toBe("");
@@ -236,10 +230,8 @@ describe("the staff table's own poll", () => {
     expect(screen.getByText(dict.leaderboard.failed)).toBeInTheDocument();
   });
 
-  // The scheduler can finish a contest with nobody's tab open to notice, and
-  // `status` is a server prop this poll otherwise never touches — so a
-  // frozen table's shown.state would sit on "frozen" straight through the
-  // transition and the reveal button would never appear.
+  // `status` is a server prop the poll never updates, so without a refresh the
+  // reveal button would never appear after the scheduler finishes the contest.
   test("asks the layout to refresh once the contest's own status has moved on, and stops once the new status arrives", async () => {
     fetchStaffStandingsAction.mockResolvedValue({
       kind: "ok",
@@ -251,23 +243,19 @@ describe("the staff table's own poll", () => {
     expect(routerRefresh).toHaveBeenCalledTimes(1);
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
 
-    // A refresh that brought no new props (it failed, or nothing remounted)
-    // must not leave the table silent for good: the chain carries on and
-    // asks again.
+    // A refresh that brought no new props must not stop the chain.
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
     expect(routerRefresh).toHaveBeenCalledTimes(2);
 
-    // Once the refresh does bring the new status down, the effect's own
-    // cleanup ends the chain.
+    // The new status ends the chain through the effect's cleanup.
     rerender(<StaffStandingsView contestId={ID} status="finished" standings={board({ status: "finished" })} dict={dict} locale="en" />);
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 3));
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
   });
 
-  // A server action can throw rather than answer: the network drops, or a
-  // redeploy retired the action's id. That must read as a failed poll, not
-  // as an unhandled rejection that silently ends the chain.
+  // A thrown action (network drop, retired action id) is a failed poll, not the
+  // end of the chain.
   test("treats a poll that throws as a failure and keeps polling", async () => {
     fetchStaffStandingsAction.mockRejectedValueOnce(new Error("Failed to find Server Action"));
     fetchStaffStandingsAction.mockResolvedValue({
@@ -286,9 +274,8 @@ describe("the staff table's own poll", () => {
     expect(screen.queryByText(dict.leaderboard.failed)).not.toBeInTheDocument();
   });
 
-  // An ordinary freeze reached mid-contest also moves shown.state, but it is
-  // not "moved on" the way a reveal is: the poll shows it like any other
-  // change, without asking for a whole-layout refresh.
+  // A mid-contest freeze changes shown.state but not status, so no layout
+  // refresh.
   test("does not refresh for an ordinary freeze reached mid-contest", async () => {
     fetchStaffStandingsAction.mockResolvedValue({
       kind: "ok",
@@ -328,14 +315,11 @@ describe("the staff table's own poll", () => {
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
 
-    // The first request is still pending; the chain must not have started a
-    // second one behind it just because an interval would have fired again.
+    // While the first request is pending no second one starts.
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 2));
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
 
-    // Once it resolves late, with a stale row count, it must not overwrite
-    // whatever a newer poll already applied — there is none yet here, so it
-    // is simply the copy shown, and the chain resumes from it.
+    // Resolving late, it is still the newest copy, and the chain resumes.
     await act(async () => {
       resolveFirst({ kind: "ok", standings: board({ rows: [{ ...board().rows[0], points: 99 }] }) });
     });

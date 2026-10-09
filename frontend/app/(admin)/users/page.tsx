@@ -17,20 +17,9 @@ export async function generateMetadata() {
 }
 
 /**
- * Account management, the last screen step 2 owed.
- *
- * Until now accounts could be created and blocked only through the API, which
- * meant a person with the right to manage them still needed a terminal and a
- * session token to use it. Creating one test student was a hand-written
- * program.
- *
- * A Server Component: the data is fetched where the session already is, so no
- * token reaches the browser and the first paint carries the rows. Filters live
- * in the URL, which makes the view shareable and the reset a plain link.
- *
- * The role catalogue is fetched beside the page rather than baked in. Roles
- * are rows in a table precisely so that adding one is data, and a list
- * repeated in the interface would be a second copy that nothing keeps in step.
+ * Account management. A Server Component, so no token reaches the browser and
+ * the first paint has rows. Filters live in the URL. The role catalogue is
+ * fetched, not baked in, since roles are data.
  */
 export default async function UsersPage(props: PageProps<"/users">) {
   const [params, locale, dict] = await Promise.all([
@@ -50,12 +39,9 @@ export default async function UsersPage(props: PageProps<"/users">) {
   if (offset > 0) search.set("offset", String(offset));
   search.set("limit", String(ACCOUNTS_PAGE));
 
-  // The proxy could only see that a session cookie exists; whether it is still
-  // worth anything is this answer. A dead session goes back to the form, which
-  // the error boundary could not offer.
-  //
-  // Both requests together: they render one screen, and a page that showed
-  // accounts with no role names would be showing codes for no reason.
+  // proxy.ts only saw a cookie; this answer says whether the session is alive,
+  // and a dead one goes back to sign-in. Both reads must succeed: accounts
+  // without role names would show bare codes.
   const [accountsPayload, rolesPayload] = await Promise.all([
     serverRequest(`/users?${search}`),
     serverRequest("/roles"),
@@ -74,11 +60,8 @@ export default async function UsersPage(props: PageProps<"/users">) {
     <Band fill className="flex flex-col gap-8 py-12">
       <AccountFilters query={query} status={status} dict={dict} />
 
-      {/* The selection itself lives one level up, in layout.tsx — it has to
-          survive this component re-rendering on every search, which a
-          provider mounted here could not. `pageIds` tells the bar which of
-          the whole selection are actually in `items` below, so it can say
-          when part of a pick spans other pages or an earlier search. */}
+      {/* The selection lives in layout.tsx so it survives searches. `pageIds`
+         lets the bar say how much of it is off this page. */}
       <SelectionBar dict={dict} roles={roles} pageIds={items.map((account) => account.id)} />
 
       <AccountRegister

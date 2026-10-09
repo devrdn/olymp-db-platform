@@ -7,11 +7,8 @@ import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 
 import { GameBuilderTable } from "./game-builder-table";
 
-// `router.refresh()` is what brings `GameBuild`'s own `game` prop — read by
-// `page.tsx`, a server component, at page load — back from the server after a
-// row is written. Without it the notice this whole feature exists to show can
-// only ever appear on the next reload, and an organiser who types fifty rows
-// and closes the tab is never told the game is out of date.
+// `router.refresh()` brings back the server-rendered build notice after a
+// write; without it the notice appears only on reload.
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
@@ -33,9 +30,7 @@ vi.mock("./actions", () => ({
   deleteTableRowAction,
 }));
 
-// `request` (the direct-to-API chunk transport) is the one thing this
-// component talks to that is not a Server Action — `game-upload.test.tsx`'s
-// own doc gives the identical reason.
+// Chunks go straight to the API, not through a Server Action.
 const request = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/client")>();
@@ -48,9 +43,8 @@ const contestId = "11111111-1111-1111-1111-111111111111";
 const dataId = "33333333-3333-3333-3333-333333333333";
 const td = en.workspace.game.builder.data;
 
-// A chunk size unlikely to appear by coincidence if the component ever falls
-// back to a hardcoded number instead of reading `builder_limits.chunk_bytes`
-// — the same tactic `game-upload.test.tsx` uses for the dump's own ceiling.
+// A chunk size that would not appear by coincidence if a hardcoded number
+// replaced `builder_limits.chunk_bytes`.
 const limits: BuilderLimits = {
   enabled: true,
   chunkBytes: 5,
@@ -104,16 +98,10 @@ function show({
   editable?: boolean;
   enabled?: boolean;
   onRowCountChange?: (n: number) => void;
-  /** The table's current active (deletion-adjusted) row count — the
-   * counterpart of the count `onRowCountChange` reports (`Lines`, never
-   * reduced by a delete: `GameBuilder`'s own lock keys off it exactly
-   * because a tombstoned row still leaves the file's old header behind),
-   * while this is `ActiveRows`, the number this screen shows. */
+  /** Active row count, as opposed to `Lines` reported through `onRowCountChange`. */
   activeRowCount?: number;
   onActiveRowCountChange?: (n: number) => void;
-  /** The chunked upload a reloaded page found still receiving, or null —
-   * `initialUpload` in `game-upload.tsx`, for a table's own CSV instead of
-   * a dump. */
+  /** The upload still receiving at page load, or null. */
   initialTableData?: ReturnType<typeof tableData> | null;
 } = {}) {
   return render(
@@ -144,13 +132,8 @@ beforeEach(() => {
   refresh.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
 
-  // Every test renders a table whose tab is `active` by default, which
-  // fetches the first window the instant it mounts (this component's own
-  // doc explains why, unlike `GameUpload`, that fetch is not gated on the
-  // upload's own phase). An empty page is the harmless default a test that
-  // is not itself exercising the row list should not have to restate;
-  // `mockResolvedValueOnce` calls inside a test still take priority over it
-  // for that test's own first call.
+  // An active tab fetches its first window on mount; an empty page is the
+  // default, and `mockResolvedValueOnce` in a test still wins.
   gameTableDataWindowAction.mockResolvedValue({
     value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
   });
@@ -183,12 +166,8 @@ describe("the table builder's own data panel", () => {
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
   });
 
-  // A reload mid-upload finds the unfinished upload the same way
-  // `game-upload.tsx` finds a dump's own: seeded from `initialTableData`,
-  // the prop `page.tsx` reads from `GET .../tables/{table}/data/current`.
-  // That route is what closed the gap this component's own doc used to name
-  // — the component still never calls it itself, which is why the state
-  // arrives as a prop rather than as a fetch on mount.
+  // The unfinished upload arrives as a prop read by `page.tsx`; the component
+  // does not fetch it on mount.
   test("shows an unfinished upload and asks for a file of the same size to continue", () => {
     show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
 
@@ -198,9 +177,8 @@ describe("the table builder's own data panel", () => {
     ).toBeInTheDocument();
   });
 
-  // The mistake this guards against is resuming with a file that only looks
-  // right by name — this upload carries no filename at all (unlike a dump's
-  // own), so the one thing worth checking before spending a request is size.
+  // A table upload has no filename, so size is the one check before spending a
+  // request.
   test("refuses to resume with a file whose size does not match the unfinished upload", async () => {
     show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
     const wrongFile = new File([new Uint8Array(3)], "other.csv");
@@ -212,19 +190,14 @@ describe("the table builder's own data panel", () => {
     expect(currentTableUploadAction).not.toHaveBeenCalled();
   });
 
-  // The brief's own rule for a resumed upload, proven here the same way
-  // "resumes the next chunk from the server's own received_bytes" proves it
-  // for a fresh one below: the next chunk continues from what the server
-  // reports *now* (`currentTableUploadAction`), not from the possibly stale
-  // count the page loaded with.
+  // A resume continues from the server's current count, not the stale one the
+  // page loaded with.
   test("resumes an unfinished upload from the server's own current offset, not the one the page loaded with", async () => {
     currentTableUploadAction.mockResolvedValueOnce(tableData({ receivedBytes: 7, declaredBytes: 12 }));
     request.mockResolvedValueOnce({ received_bytes: 12 });
     completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
 
-    // The page loaded with 5 bytes received; the server has actually taken 7
-    // by the time this tab resumes — a chunk sent from this page's own, now
-    // stale, count would land out of order.
+    // Loaded with 5 received; the server has 7 by now.
     show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
     const file = new File([new Uint8Array(12)], "suspects.csv");
 
@@ -239,9 +212,8 @@ describe("the table builder's own data panel", () => {
     expect(beginTableUploadAction).not.toHaveBeenCalled();
   });
 
-  // The mutation this guards against: a chunk size taken from a constant
-  // instead of `builder_limits.chunk_bytes` would still finish a 12-byte
-  // file, but never in three pieces of 5, 5 and 2.
+  // A constant chunk size would finish the file, but not in pieces of 5, 5 and
+  // 2.
   test("sends a small file in chunks sized from builder_limits, then shows what was received", async () => {
     beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
     let received = 0;
@@ -275,9 +247,8 @@ describe("the table builder's own data panel", () => {
     await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId));
   });
 
-  // The brief's own rule, for a table's own upload exactly as much as for
-  // the whole game's dump: the next chunk continues from the server's own
-  // received_bytes, never from this tab's own running total.
+  // The next chunk continues from the server's received_bytes, not this tab's
+  // total.
   test("resumes the next chunk from the server's own received_bytes, not from what this tab sent", async () => {
     beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0, declaredBytes: 12 }) });
     request.mockResolvedValueOnce({ received_bytes: 7 }).mockResolvedValueOnce({ received_bytes: 12 });
@@ -310,13 +281,8 @@ describe("the table builder's own data panel", () => {
     expect(screen.getByRole("button", { name: td.retry })).toBeInTheDocument();
   });
 
-  // The brief's own requirement: a CSV refusal names the row and column at
-  // fault, and this screen has to show that rather than only the generic
-  // dictionary sentence — `en.errors.game_table_row_field_count`'s own text
-  // says as much ("The message says which row"). The header check runs on
-  // the chunk PUT itself (`checkTableHeaderOnFirstChunk`), which this
-  // component talks to directly rather than through a Server Action, so the
-  // detail here comes straight off the thrown `ApiError`.
+  // The header check runs on the chunk PUT, which this component makes
+  // directly, so the detail comes off the thrown `ApiError`.
   test("shows the server's own row and column when a chunk fails header validation, not only the generic sentence", async () => {
     beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
     request.mockRejectedValueOnce(
@@ -339,12 +305,7 @@ describe("the table builder's own data panel", () => {
     ).toBeInTheDocument();
   });
 
-  // The same requirement, for a row typed into the form instead of a CSV
-  // file — completeTableUploadAction and appendTableRowAction both carry the
-  // server's own row/column detail back through `UploadActionResult.detail`
-  // (`actions.ts`'s own doc), since those two calls go through a Server
-  // Action rather than a direct `request()` this component can read
-  // `ApiError.message` off itself.
+  // For a typed row the detail comes back through the Server Action's `detail`.
   test("shows the server's own row and column when adding a row is refused, not only the generic sentence", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
@@ -418,20 +379,13 @@ describe("the table builder's own data panel", () => {
     expect(await screen.findByText("Ada")).toBeInTheDocument();
   });
 
-  // `TableData.Lines` and `TableData.ActiveRows()` answer two different
-  // questions (`tabledata.go`'s own doc: a tombstoned row leaves the file's
-  // old header behind, so `GameBuilder`'s own structure lock has to key off
-  // `Lines`, never off the deletion-adjusted count) — a write that changes
-  // both has to report both, to the two separate callbacks that carry them,
-  // rather than one shared count a later window fetch and an earlier write
-  // overwrite each other's meaning in.
+  // `Lines` drives the structure lock (a tombstone leaves the old header) and
+  // `ActiveRows()` is displayed; a write reports both, separately.
   test("reports a row's own total and its active count separately, not as one shared number", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [], totalRows: 10, truncated: false },
     });
-    // 11 total (the file's own line count, never reduced by a tombstone) and
-    // 8 active — the brief's own numbers: ten rows, three already deleted,
-    // one just added.
+    // Ten rows, three deleted, one added: 11 lines, 8 active.
     appendTableRowAction.mockResolvedValueOnce({ value: tableData({ status: "complete", lines: 11, activeRows: 8 }) });
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [{ row: 11, fields: ["Ada", "37"] }], totalRows: 11, truncated: false },
@@ -447,18 +401,13 @@ describe("the table builder's own data panel", () => {
     await userEvent.click(screen.getByRole("button", { name: td.addRowButton }));
 
     await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(8));
-    // The structural-lock count must reach 11 (Lines), from this write
-    // itself — not only once the follow-up window fetch happens to agree
-    // (that fetch's own 11 would mask a write that reported the wrong
-    // number here).
+    // Reported by the write itself, not only by the follow-up window fetch,
+    // which would mask a wrong value.
     expect(onRowCountChange).toHaveBeenCalledWith(11);
     expect(onRowCountChange).not.toHaveBeenCalledWith(8);
   });
 
-  // The one client-side rule this screen checks before the request rather
-  // than after it: a NOT NULL column left empty. Checked entirely offline —
-  // the assertion below is that nothing was sent, not just that a message
-  // appeared.
+  // A NOT NULL column left empty is refused offline: nothing is sent.
   test("refuses to submit a row that leaves a required column empty, without asking the server", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
@@ -492,11 +441,8 @@ describe("the table builder's own data panel", () => {
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
   });
 
-  // A tombstone never rewrites Lines (`tabledata.go`'s own `DeleteTableRow`
-  // doc: "not a rewrite of the file") — so a delete must only ever move the
-  // active count down, and must never touch the structural-lock one, or a
-  // deleted row would look like it unlocked a table the server still
-  // refuses to let this screen rename or restructure.
+  // A delete moves only the active count; lowering `Lines` would unlock a table
+  // the server still locks.
   test("deleting a row lowers only the active count, never the total the structure lock reads", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 5, truncated: false },
@@ -514,26 +460,15 @@ describe("the table builder's own data panel", () => {
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
 
     await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(2));
-    // The reload this delete triggers reports the file's own total again
-    // (5, unchanged — harmless), but nothing about the delete itself may
-    // ever report 4: the old, single-variable decrement this replaces did
-    // exactly that, unlocking a table the server still refuses to let this
-    // screen restructure.
+    // The follow-up fetch reports 5 again; the delete itself must never report
+    // 4.
     expect(onRowCountChange).not.toHaveBeenCalledWith(4);
   });
 
-  // The sequence this whole feature exists to close: the definition is saved,
-  // the background job builds the game empty, and only then can a row be
-  // typed at all. So every row is written to a game that is already built,
-  // and the notice offering to build it again lives in a tree `page.tsx`
-  // rendered on the server before the first row existed. Nothing but a
-  // refresh brings it back — and without one an organiser fills a table,
-  // closes the tab, and is never told the rows never reached a database.
-  //
-  // Asserted on all three writes that mark the game out of date on the server
-  // (AppendTableRow, DeleteTableRow, CompleteTableUpload — tabledata.go's own
-  // three), because a refresh missing from any one of them leaves the same
-  // silence.
+  // Rows can only be typed after the game is built empty, so the build notice
+  // lives in a tree rendered before the first row existed; only a refresh
+  // brings it back. Asserted for all three writes that mark the game out of
+  // date.
   test("brings the page back from the server after a row is added, so the build notice can appear", async () => {
     appendTableRowAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
 

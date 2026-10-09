@@ -5,38 +5,20 @@ import { Tag } from "@/components/ui/tag";
 import { cn } from "@/lib/utils";
 
 /**
- * The states of the specification that the constructor actually reaches.
+ * The specification's states the constructor reaches. The type is the contract:
+ * `empty` has no reset and `empty-filtered` requires one; `error-recoverable`
+ * requires a retry and `error-terminal` refuses one (a 403 or 404 does not
+ * change on retry). `blocked` is the publication gate: disabled with the reason
+ * and the missing work named.
  *
- * The type is the contract. `empty` has no reset control, because there is no
- * filter to clear and offering one would be a lie; `empty-filtered` cannot be
- * rendered without one, because without it the screen is a dead end. Those two
- * are the pair that gets confused most often, and here the confusion does not
- * compile. The same holds for the error pair: `error-recoverable` requires a
- * retry, `error-terminal` refuses one — a 403 on somebody else's contest and a
- * 404 on a question that belongs to another one (architecture section 7.3) do
- * not become true on a second attempt, and a button claiming otherwise wastes
- * the author's time.
- *
- * `blocked` is the publication gate's state: the button is disabled with the
- * reason named and the missing work listed, not greyed out in silence.
- *
- * Two of the nine are deliberately absent. `loading` is drawn from `Skeleton`
- * by each container, because its appearance is a property of the content it
- * stands in for. `degraded` and `provisioning` arrive with the game loop —
- * truncated result sets and a game database still being built are steps 4 and
- * 5 of the implementation order, and a state nothing renders is a state that
- * rots.
+ * `loading` is absent because each container draws its own `Skeleton`.
  */
 export type ViewState =
   | {
       kind: "empty";
       title: string;
       body: string;
-      /**
-       * Where to go instead. Optional, because not every emptiness has a next
-       * step — but where one exists, principle 4 says to name it: an accurate
-       * screen that leaves the reader with nothing to do is only half a state.
-       */
+      /** The next step, where one exists. */
       action?: { label: string; href: string };
     }
   | {
@@ -62,12 +44,12 @@ export type ViewState =
       kind: "blocked";
       title: string;
       body: string;
-      /** What is missing, or when the block lifts. A block without either is a wall. */
+      /** What is missing, or when the block lifts. */
       detail?: string;
       badge?: string;
     };
 
-/** Both non-primary ways out share a shape: an outlined pill that navigates. */
+/** Both non-primary exits: an outlined pill that navigates. */
 const EXIT =
   "mt-1 inline-flex h-(--control-h) items-center rounded-full border border-edge px-4 text-control text-ink transition-colors duration-(--t-input) ease-standard hover:border-ink";
 

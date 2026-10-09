@@ -9,20 +9,11 @@ import { serverRequest } from "@/lib/api/server";
 export type GameState = { code?: string; saved?: boolean };
 
 /**
- * Removing one participant's database.
- *
- * The destructive half of this screen, and the reason it is a Server Action
- * behind a confirmation rather than a link: the database is dropped with
- * whatever is connected to it forced closed, so a participant mid-query loses
- * that query. Nothing else of theirs moves — their answers, their score and
- * their clock live in the core database and this does not touch them — and
- * their next query or schema load rebuilds the database under the same name.
- *
- * The database name is not checked here the way an identifier would be. It is
- * PostgreSQL's own name rather than a UUID, and the server answers
- * `game_instance_not_found` for anything that is not one of this contest's —
- * which is the same answer it must give for another contest's real database,
- * so guessing at the shape here would buy nothing.
+ * Drops one participant's database, forcing connections closed, so a running
+ * query is lost. Answers, score and clock live in the core database and are
+ * untouched; the next query rebuilds it under the same name. The name is not
+ * validated here: the server answers `game_instance_not_found` for anything not
+ * this contest's.
  */
 export async function dropGameInstanceAction(
   _previous: GameState,
@@ -44,8 +35,7 @@ export async function dropGameInstanceAction(
 
   if (failure) return { code: failureCode(failure) };
 
-  // The list is read by a server component, so the page has to be asked again
-  // for the row to change.
+  // The list is server-rendered, so revalidate.
   revalidatePath(`/contests/${contestId}`, "layout");
 
   return { saved: true };

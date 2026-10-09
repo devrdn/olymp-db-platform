@@ -3,18 +3,9 @@ import { z } from "zod";
 import { CONTEST_STATUSES } from "./contests";
 
 /**
- * The two reads behind the front page
- * (`/public/…`, docs/ARCHITECTURE.md §9.6).
- *
- * Both are open: no session, no cookie, nothing about the caller. That is the
- * whole point of them, and it is also the boundary of what they may carry —
- * a contest's name, its state, its window and whether its table is open, and
- * never a login, a roster or a draft's schedule.
- *
- * Parsed here rather than trusted, for the same reason every other wire shape
- * in this directory is: the API speaks snake_case and a renamed field should
- * surface with its name in the message, not as `undefined` inside a component
- * two files away.
+ * The two open reads behind the front page (`/public/…`, docs/ARCHITECTURE.md
+ * §9.6). No session, so they carry a contest's name, state, window and whether
+ * its table is open, never a login, a roster or a draft's schedule.
  */
 
 export const publicStatsSchema = z.object({
@@ -27,25 +18,11 @@ export const publicStatsSchema = z.object({
 export type PublicStats = z.infer<typeof publicStatsSchema>;
 
 /**
- * One contest on the public list.
- *
- * The status enum is the product's whole set rather than the four the route
- * selects. The narrower one would be a second, quietly different definition
- * of "what states a contest has", and its only effect on a wrong answer from
- * the API would be to throw the other five rows away with the bad one. What
- * keeps a draft off this page is the server's own selection, which is where
- * the rule belongs — a client-side enum protects nobody, since the body has
- * already crossed the wire by the time it is checked.
- *
- * `starts_at` and `ends_at` are absent on a contest with no window yet, which
- * is why they are optional and why the row has a phrase for saying so.
- *
- * `cover_hash` is absent on a contest nobody uploaded a picture for, and that
- * absence is not a gap to apologise for: the card draws such a contest a cover
- * of its own from its identifier. The hash rather than an address, because the
- * address is built here (`coverHref`) and carries the hash in it — which is
- * what makes a replaced cover a new address rather than a year of somebody's
- * cache holding the old picture.
+ * One contest on the public list. The status enum is the full set: keeping
+ * drafts off this page is the server's selection, and a client-side enum
+ * protects nobody once the body has crossed the wire. The window is absent
+ * until set; `cover_hash` is absent for a drawn cover, and `coverHref` builds
+ * the address from it.
  */
 export const publicContestSchema = z
   .object({
@@ -71,7 +48,6 @@ export const publicContestSchema = z
 
 export type PublicContest = z.infer<typeof publicContestSchema>;
 
-/** The list names its rows `items`, as every other list this API serves does. */
 export const publicContestsSchema = z.object({
   items: z.array(publicContestSchema),
 });

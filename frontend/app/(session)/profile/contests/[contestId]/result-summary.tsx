@@ -5,21 +5,11 @@ import { formatTime } from "@/lib/format/datetime";
 import type { ReportDict } from "./report-tabs";
 
 /**
- * The report's first tab: what one participant's contest came to.
- *
- * Their own numbers, then the place — and the place only when the table is
- * open. The freeze is not worked around here: `placeOpen` is the server's own
- * decision (`leaderboard.Decide`), and a screen that printed a place beside
- * it would be a second door past the rule the standings screen keeps.
- *
- * There are two ways to have no place, and they are not the same sentence. A
- * frozen table has not published one yet; a winner-mode contest places its
- * winner and nobody else, on purpose and for good. Saying "not yet" to the
- * second would be promising something that is never coming.
- *
- * Definitions rather than tiles, a rule between the sections and mono figures
- * with tabular numerals (SPEC §5): the same vocabulary the profile screen
- * above it is written in.
+ * The report's first tab: the participant's numbers, then the place only when
+ * the table is open. `placeOpen` is the server's decision
+ * (`leaderboard.Decide`); showing a place past it would bypass the freeze. A
+ * frozen table has no place yet; winner mode never places anyone but the
+ * winner, so the sentences differ.
  */
 export function ResultSummary({
   report,
@@ -31,11 +21,8 @@ export function ResultSummary({
   locale: string;
 }) {
   const result = report.result;
-  // No result at all is a case of its own (see Standing): the table carries no
-  // row for this registration. The questions below then read as a points
-  // contest, which is what an unknown mode falls back to — with no standing
-  // there is no penalty to print either way, since the minutes on a question
-  // come from the table's own cells.
+  // Without a table row the questions fall back to points, and there is no
+  // penalty to show since minutes come from the table's cells.
   const icpc = result?.scoring === "icpc";
 
   return (
@@ -50,8 +37,7 @@ export function ResultSummary({
         </h2>
 
         <dl className="grid grid-cols-4 gap-x-6 gap-y-7 max-narrow:grid-cols-2">
-          {/* The scored figures need a standing; the session's own three
-              below do not, and a row outside the table still gets them. */}
+          {/* Scored figures need a standing; the session figures below do not. */}
           {result === null ? null : icpc ? (
             <>
               <Figure label={t.result.solved} value={String(result.solved)} />
@@ -83,11 +69,7 @@ export function ResultSummary({
   );
 }
 
-/**
- * The place, and only where there is one. A row the table did not place gets
- * no figure at all rather than a dash: the sentence under the strip says
- * which of the two reasons it is.
- */
+/** The place, or nothing (not a dash); the sentence below explains why. */
 function Place({ result, t }: { result: ProfileReportResult | null; t: ReportDict }) {
   if (result === null || !result.placeOpen || result.place === null) return null;
 
@@ -106,17 +88,13 @@ function Place({ result, t }: { result: ProfileReportResult | null; t: ReportDic
   );
 }
 
-/** The line under the strip: why there is a place, or why there is not. */
+/** Why there is a place or not. */
 function Standing({ result, t }: { result: ProfileReportResult | null; t: ReportDict }) {
-  // No standing at all, which is a third thing again: the table carries no row
-  // for this registration, so there is neither a place nor a score to explain.
-  // What is missing is their standing, not their work, and the sentence says
-  // so rather than leaving the strip looking broken.
+  // No table row for this registration: say the standing is missing, not their
+  // work.
   if (result === null) return <p className="max-w-body text-body text-ink-3">{t.result.outsideTable}</p>;
-  // A shut table has two reasons, and each gets its own sentence. A freeze is
-  // a result an organiser is about to reveal; a contest that never opened has
-  // no table to reveal at all, which is the report somebody disqualified
-  // before the start is left with.
+  // A freeze will be revealed; a contest that never opened (e.g. disqualified
+  // before the start) has no table.
   if (!result.placeOpen) {
     const said = result.state === "not_started" ? t.result.placeNotStarted : t.result.placePending;
     return <p className="max-w-body text-body text-ink-3">{said}</p>;
@@ -134,12 +112,8 @@ function Standing({ result, t }: { result: ProfileReportResult | null; t: Report
 }
 
 /**
- * The questions, in order: solved or not, how many attempts, when it was
- * first right, and what it was worth. What a participant already knows about
- * themselves, gathered in one place.
- *
- * A real table, with its own horizontal scroll, so five columns at 375px
- * scroll inside the box rather than pushing the page sideways.
+ * Per question: solved, attempts, first correct time and value. Scrolls inside
+ * its box at 375px.
  */
 function Questions({
   questions,
@@ -188,10 +162,7 @@ function Questions({
                     <Cell numeric>
                       {question.solvedAt ? formatTime(question.solvedAt, { locale }) : t.questions.never}
                     </Cell>
-                    {/* The column's own number: minutes where the mode
-                        charges them, points where it awards them. ICPC
-                        awards none, so printing points there would be a
-                        column of noughts under a real total. */}
+                    {/* Minutes under ICPC, points otherwise; ICPC awards no points. */}
                     <Cell numeric>{icpc ? question.penalty : question.points}</Cell>
                   </tr>
                 ))}
@@ -200,9 +171,7 @@ function Questions({
           </div>
           {truncated ? (
             <p className="max-w-body text-small text-warn">
-              {/* The attempts counted, not the questions: the bound the
-                  report was cut at is a number of attempts, and two
-                  questions holding fifty of them are not "two". */}
+              {/* Counts attempts, since the report is cut at a number of attempts. */}
               {t.questions.truncated.replace(
                 "{n}",
                 String(questions.reduce((sum, question) => sum + question.attempts, 0)),
@@ -234,10 +203,7 @@ function Cell({ children, numeric = false }: { children: React.ReactNode; numeri
   );
 }
 
-/**
- * One number over its caption. The term comes first in the markup, because
- * that is what a definition list is; the column is reversed for the eye.
- */
+/** A number over its caption; the term comes first in the markup, reversed visually. */
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 flex-col-reverse gap-1">

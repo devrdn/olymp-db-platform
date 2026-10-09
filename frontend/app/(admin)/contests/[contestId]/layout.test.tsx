@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Contest } from "@/lib/api/contests";
 
-// The layout is a Server Component: everything it reads through the request
-// (the locale, the API) is faked here, and what is under test is what it
-// decides from those answers — which sections it offers.
+// The layout's request-bound reads are faked; the test covers which sections it
+// offers.
 const { loadContest, loadContestResource } = vi.hoisted(() => ({
   loadContest: vi.fn(),
   loadContestResource: vi.fn(),
@@ -20,7 +19,7 @@ vi.mock("next/navigation", () => ({
   useSelectedLayoutSegment: () => null,
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
-// The title editor carries a Server Action; it is beside the point here.
+// The title editor carries a Server Action, irrelevant here.
 vi.mock("./title-editor", () => ({ TitleEditor: () => null }));
 
 import ContestLayout from "./layout";
@@ -57,11 +56,7 @@ beforeEach(() => {
   loadContestResource.mockResolvedValue(null);
 });
 
-/**
- * The monitoring tab is offered exactly when the API says the viewer holds
- * contest.monitor on this contest (`may_monitor`); the layout restates no
- * permission rule of its own.
- */
+/** The monitoring tab follows the API's `may_monitor`; the layout adds no rule of its own. */
 describe("the monitoring tab", () => {
   test("is offered when the API says the viewer may monitor", async () => {
     loadContest.mockResolvedValue({ ...contest, mayMonitor: true });
@@ -78,7 +73,7 @@ describe("the monitoring tab", () => {
     await renderLayout();
 
     expect(screen.queryByRole("link", { name: "Monitoring" })).not.toBeInTheDocument();
-    // The rest of the navigation is still there.
+    // The rest of the navigation remains.
     expect(screen.getByRole("link", { name: "Leaderboard" })).toBeInTheDocument();
   });
 

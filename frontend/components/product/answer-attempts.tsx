@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 
 import { QueryRow, type QueryRowLabels } from "./query-row";
 
-/** The words the attempts are written in. */
 export type AnswerAttemptsLabels = {
   empty: string;
   truncated: string;
@@ -24,14 +23,9 @@ export type AnswerAttemptsLabels = {
 };
 
 /**
- * Every attempt, by question in order, each opening to the queries that led
- * to it — those after the previous attempt on any question, or from the
- * start, and before this one. The API caps how many it sends per attempt and
- * counts the rest (`moreQueries`); a queries list and the CSV have them all.
- *
- * The same component on both sides of the product: a contest's staff read it
- * on the monitoring page, a participant reads their own on their report. The
- * words and the address column arrive as props.
+ * Every attempt by question, each opening to the queries since the previous
+ * attempt on any question. The API caps queries per attempt and counts the rest
+ * (`moreQueries`). Shared by staff monitoring and the participant's report.
  */
 export function AnswerAttempts({
   answers,
@@ -43,7 +37,7 @@ export function AnswerAttempts({
 }: {
   answers: Answers;
   labels: AnswerAttemptsLabels;
-  /** The words of the queries under an attempt, which are a list of their own. */
+  /** Labels for the queries under an attempt. */
   queryLabels: QueryRowLabels;
   statuses: Record<string, string>;
   locale: string;
@@ -117,7 +111,6 @@ function QuestionAttempts({
   );
 }
 
-/** One attempt; memoised, with its expansion as its own state. */
 const AttemptRow = memo(function AttemptRow({
   attempt,
   labels,
@@ -173,8 +166,7 @@ const AttemptRow = memo(function AttemptRow({
             <p className="text-small text-ink-3">{labels.noQueries}</p>
           ) : (
             <>
-              {/* Oldest first; the API keeps the first ones and counts the
-                  later ones it leaves out. */}
+              {/* Oldest first; the API keeps the first ones and counts the rest. */}
               <ol className="flex min-w-0 flex-col">
                 {attempt.queries.map((query) => (
                   <QueryRow

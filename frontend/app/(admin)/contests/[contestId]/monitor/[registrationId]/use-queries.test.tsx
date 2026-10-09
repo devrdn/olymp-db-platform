@@ -113,9 +113,8 @@ describe("loading more", () => {
 });
 
 /**
- * A query is journalled as running before it runs. While one is on screen,
- * the tab asks the timeline for that stretch every five seconds, while the
- * tab is visible, and puts the outcome in place; the whole statement stays.
+ * While a running query is on screen and the tab visible, its stretch of
+ * timeline is polled and the outcome put in place; the statement stays.
  */
 describe("running queries", () => {
   const at = "2026-09-20T10:00:01.100Z";

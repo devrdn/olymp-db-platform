@@ -10,23 +10,14 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { signInAction, type SignInState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** The one message the whole form points at when a sign-in is rejected. */
+/** The one message both fields point at on rejection. */
 const FAILURE_ID = "sign-in-failure";
 
 /**
- * The only interactive leaf on this page. The rest of the screen stays a
- * Server Component, and the form still submits with JavaScript switched off
- * because the action is a Server Action.
- *
- * The failure is reported once rather than under whichever field is blamed:
- * the API answers `invalid_credentials` without saying which of the two was
- * wrong — deliberately, so the form cannot be used to find out which logins
- * exist — and putting the message under the password field would claim
- * knowledge the server refused to give.
- *
- * Both fields still carry the invalid state and both point at that one
- * message. Saying it on screen and saying nothing to a screen reader is the
- * same bug as not saying it at all.
+ * The page's only client component; the Server Action still works without
+ * JavaScript. The API does not say which field was wrong
+ * (`invalid_credentials`), so logins cannot be probed; one message is shown and
+ * both fields point at it as invalid.
  */
 export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) {
   const t = dict.auth.signIn;
@@ -35,17 +26,14 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
   const failure = state.code
     ? (messageForCode(state.code, dict.errors))
     : null;
-  // A server too busy to check the password says nothing about what was
-  // typed, so the fields are not marked invalid for it; the message alone
-  // tells the visitor to try again in a moment.
+  // A busy server says nothing about the input, so the fields are not marked
+  // invalid.
   const blamesFields = Boolean(failure) && state.code !== "sign_in_busy";
 
   return (
     <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
-      {/* Where the visitor was going before the guard sent them here. It rides
-          in the form rather than in the action's closure so the page still
-          works with JavaScript switched off, and the action validates it —
-          this field is as forgeable as any other. */}
+      {/* Where the visitor was headed. In the form so it works without
+         JavaScript; the action validates it, since it is forgeable. */}
       {next ? <input type="hidden" name="next" value={next} /> : null}
 
       <Field
@@ -57,19 +45,9 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
         <Input name="login" autoComplete="username" required />
       </Field>
 
-      {/* The failure hangs off the password field rather than occupying a row.
-
-          It used to hold a blank line whether or not there was a message, to
-          keep the submit from moving under the cursor. That cost 28px no other
-          step in the form pays — the two fields sat 28px apart and the button
-          56px below the second — and the password read as having come loose.
-
-          Taking the line out of the flow instead was worse and measurably so: a
-          two-line failure, which Russian reaches at 67 characters in a 384px
-          column, printed straight through the button. So the message is in the
-          flow and appears only when there is one. At rest the rhythm is even;
-          when a sign-in is rejected the form grows by exactly the message and
-          nothing is ever overlapped. */}
+      {/* The message is in the flow and appears only when there is one: a
+         reserved blank line spaced the form unevenly, and an out-of-flow
+         message overlapped the button when it wrapped. */}
       <div className="flex flex-col gap-1.5">
         <Field
           id="password"

@@ -12,18 +12,9 @@ export type StatusState = { code?: string; moved?: ContestStatus };
 export type TitleState = { code?: string; saved?: boolean };
 
 /**
- * The titles and descriptions, replaced as a set.
- *
- * `PUT` on the wire, a full replacement in meaning — the same reason the
- * language set is: what has to stay consistent is the whole set, and a half
- * applied one is exactly what the publish gate would have to guess about.
- * `TitleEditor` only ever shows one declared language open by default, but
- * its form still carries every one of them (the rest sit behind a
- * disclosure), so this still receives the complete set on every save.
- *
- * Lives here, at the contest's root, rather than under `settings/`: the
- * screen that edits the name moved to the workspace header, and an action is
- * filed beside whoever calls it.
+ * Replaces titles and descriptions as a set, so the publish gate never sees a
+ * half-applied one. `TitleEditor` submits every language, collapsed ones
+ * included.
  */
 export async function saveTranslationsAction(
   _previous: TitleState,
@@ -54,8 +45,7 @@ export async function saveTranslationsAction(
 
   if (failure) return { code: failureCode(failure) };
 
-  // The title is printed in the header, in the breadcrumb and on the
-  // register behind them. All of it is now stale.
+  // The title also appears in the header, breadcrumb and register.
   revalidatePath("/contests");
   revalidatePath(`/contests/${contestId}`, "layout");
 
@@ -63,19 +53,10 @@ export async function saveTranslationsAction(
 }
 
 /**
- * Moving a contest between states.
- *
- * Both values arrive from a form and both are checked before they are used:
- * the identifier because it goes into a request path, and the status because
- * sending an unrecognised one would spend a round trip to be told what this
- * process already knows.
- *
- * Which transitions are legal is not decided here. The interface offers only
- * the ones its mirrored table allows, and the API refuses the rest with
- * `invalid_transition` — including the ones the mirror has drifted on. The
- * publish gate is the same arrangement: `GET /publish-check` says what is
- * missing so the button can be disabled with a reason, and the transition
- * itself is checked again on the server, where it counts.
+ * Changes a contest's status. Both values are validated first: the id goes into
+ * a path, and an unknown status would waste a round trip. Legality is decided
+ * by the API (`invalid_transition`); the interface only offers what its
+ * mirrored table allows.
  */
 export async function setStatusAction(
   _previous: StatusState,
@@ -97,8 +78,7 @@ export async function setStatusAction(
 
   if (failure) return { code: failureCode(failure) };
 
-  // The state is printed in the header, in the tab row's context and on the
-  // register behind them. All of it is now stale.
+  // The status also appears in the header and register.
   revalidatePath("/contests");
   revalidatePath(`/contests/${contestId}`, "layout");
 

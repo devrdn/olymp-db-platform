@@ -6,25 +6,17 @@ export { SQL_MODES } from "./policy-terms";
 
 
 /**
- * The wire shape of a contest's SQL access policy.
- *
- * Its own module because its consumer is not the constructor. The game loop
- * reads this policy to build the GRANTs for a participant's database, so it
- * travels separately from the contest's titles and schedule — which is the
- * same reason the Go side gives the policy a store of its own.
+ * The wire shape of a contest's SQL access policy, which the game loop turns
+ * into GRANTs for a participant's database.
  */
 
+/** Whether participants may only read or may also write. */
 export type SqlMode = (typeof SQL_MODES)[number];
 
 /**
- * The shape a writable table name may take: an optionally schema-qualified
- * lowercase identifier.
- *
- * Stricter than PostgreSQL allows, and checked here as well as on the server.
- * These names become GRANT statements when the game template is built, where
- * they cannot be passed as parameters — the narrow form is what makes that
- * construction safe whatever an author types into the field. Checking early
- * turns a rejected save into a message under the field it belongs to.
+ * An optionally schema-qualified lowercase identifier. Stricter than
+ * PostgreSQL because these names go into GRANT statements unparameterised;
+ * the server checks too, this only moves the error under the field.
  */
 const TABLE_NAME = /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/;
 
@@ -56,14 +48,7 @@ export function isTableName(value: string): boolean {
   return TABLE_NAME.test(value);
 }
 
-/**
- * Splits a pasted list of tables and reports which entries are unusable.
- *
- * Both halves are returned rather than throwing on the first bad one: an
- * author pasting eight table names wants to be told about all the typos at
- * once, which is the same reason the publish gate returns every problem
- * instead of the first.
- */
+/** Splits a pasted list of tables, reporting every unusable entry rather than the first. */
 export function parseTables(pasted: string): { tables: string[]; rejected: string[] } {
   const tables: string[] = [];
   const rejected: string[] = [];

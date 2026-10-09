@@ -7,14 +7,10 @@ import { loadContest, loadContestResource } from "../contest";
 import { QuestionList } from "./question-list";
 
 /**
- * The questions, in the order a participant meets them.
- *
- * The listing endpoint omits reference answers, so "has one" is read from the
- * per-question screen — except that the list still has to say which questions
- * lack one, because that is a publish-gate refusal an author should meet while
- * writing rather than at the gate. The schema reads an absent answer list as
- * empty, and the row is marked accordingly; a question that turns out to have
- * one loses the mark as soon as it is opened and saved.
+ * The questions in participant order. A missing reference answer is a
+ * publish-gate refusal, so the list marks it while the author writes. The
+ * listing omits reference answers and the schema reads an absent list as empty;
+ * the mark clears once the question is opened and saved.
  */
 export default async function QuestionsPage(props: PageProps<"/contests/[contestId]/questions">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
@@ -38,8 +34,7 @@ export default async function QuestionsPage(props: PageProps<"/contests/[contest
         </div>
         <p className="max-w-body text-body text-ink-2">{t.lede}</p>
 
-        {/* Said once, where it changes what the author should do next, rather
-            than as a refusal after they have written the second question. */}
+        {/* Said up front rather than as a refusal after a second question is written. */}
         {contest.questionMode === "single" ? (
           <p className="max-w-body text-small text-ink-3">{t.single}</p>
         ) : null}

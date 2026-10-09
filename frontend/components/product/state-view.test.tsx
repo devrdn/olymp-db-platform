@@ -5,9 +5,8 @@ import { describe, expect, test, vi } from "vitest";
 import { StateView } from "./state-view";
 
 /**
- * The pairs are what this component exists to keep apart, so they are what the
- * tests hold: an empty screen that offers a filter reset is lying about having
- * a filter, and a dead end that offers a retry is lying about being retryable.
+ * An empty screen offering a filter reset implies a filter; a dead end offering
+ * a retry implies it can succeed.
  */
 describe("StateView, the empty pair", () => {
   test("offers no way to clear a filter when no filter is what emptied the screen", () => {
@@ -93,10 +92,8 @@ describe("StateView, blocked", () => {
 
 describe("an empty state with somewhere to go", () => {
   test("names the next step rather than only the absence", () => {
-    // SPEC principle 4: a state is always explained, and no empty screen
-    // without a reason and a next step. A student with no contests yet is
-    // looking at an accurate but useless page unless it says where to find
-    // one — which, since the two lists were split, is a different screen.
+    // SPEC.md §2, principle 4: an empty screen names a next step, here the separate
+    // open-contests screen.
     render(
       <StateView
         state={{
@@ -115,8 +112,7 @@ describe("an empty state with somewhere to go", () => {
   });
 
   test("offers nothing when there is nowhere useful to send anybody", () => {
-    // The catalogue's own empty state. "Browse open contests" on the screen
-    // that is the open contests would be a link back to itself.
+    // On the open-contests screen, a link to it would point to itself.
     render(<StateView state={{ kind: "empty", title: "Nothing yet", body: "None are open." }} />);
 
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

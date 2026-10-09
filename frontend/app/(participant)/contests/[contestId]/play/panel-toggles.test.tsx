@@ -8,21 +8,14 @@ import { PanelToggles, PanelVisibilityProvider, useSchemaPanel } from "./panel-t
 
 const t = en.participant.play.workspace.panels;
 
-/**
- * A contest of its own per test.
- *
- * The remembered state is module-level — one record per contest, the way the
- * pane sizes next to it are — so two tests that shared a contest would share
- * whatever the first of them collapsed. Each test naming its own contest is
- * also closer to the truth: a participant's two olympiads are two screens.
- */
+/** One contest per test: the remembered state is module-level, per contest. */
 let contests = 0;
 function aContest() {
   contests += 1;
   return `c${contests}`;
 }
 
-/** The header's toggles on their own, above a workspace that has a schema panel. */
+/** The header's toggles above a stand-in workspace. */
 function show(contestId: string, { schema = true }: { schema?: boolean } = {}) {
   return render(
     <PanelVisibilityProvider contestId={contestId}>
@@ -33,9 +26,8 @@ function show(contestId: string, { schema = true }: { schema?: boolean } = {}) {
 }
 
 /**
- * Stands in for `Workspace`: it tells the header whether this contest has a
- * schema panel at all, and it marks its panes the way the real one does —
- * `data-panel` is how a shortcut knows the focus it is about to hide.
+ * Stands in for `Workspace`: reports whether there is a schema panel and
+ * marks its panes with `data-panel`, which the focus hand-off reads.
  */
 function AWorkspace({ schema }: { schema: boolean }) {
   useSchemaPanel(schema);
@@ -111,9 +103,7 @@ describe("the panel toggles", () => {
     expect(screen.getByRole("button", { name: t.side })).toHaveAttribute("aria-pressed", "true");
   });
 
-  // A contest that closed its catalogues has no schema panel at all
-  // (`Workspace` renders none), so a control for it would be a control for
-  // nothing.
+  // No schema panel, so no control for one.
   test("the schema toggle is absent in a contest that hides its schema", () => {
     show(aContest(), { schema: false });
 
@@ -123,15 +113,9 @@ describe("the panel toggles", () => {
   });
 
   /**
-   * A press on the toggle is the other way to collapse a panel, and it needs
-   * the same hand-off as the shortcut.
-   *
-   * On macOS, Safari and Firefox do not focus a `<button>` when it is
-   * clicked — the platform convention, and a real participant's browser.
-   * `fireEvent.click` is that browser: the press happens and the focus does
-   * not move, which is exactly the case where a hand-off that lived in the
-   * key handler alone left the focus in a field that was about to be
-   * hidden, and then on `<body>`.
+   * A click needs the same focus hand-off as the shortcut: Safari and Firefox
+   * on macOS do not focus a clicked button, and `fireEvent.click` behaves the
+   * same, so the focus would stay in a field about to be hidden.
    */
   test("a press takes the focus out of the panel it hides, in a browser that does not focus buttons", async () => {
     show(aContest());
@@ -163,7 +147,7 @@ describe("the panel toggles", () => {
     expect(query).toHaveFocus();
   });
 
-  // The same header draws the waiting room, where there are no panels yet.
+  // The waiting room draws the same header with no panels.
   test("nothing is drawn outside a provider", () => {
     render(<PanelToggles dict={en} />);
 
@@ -172,12 +156,11 @@ describe("the panel toggles", () => {
 });
 
 /**
- * VS Code's own three, and they have to work from wherever the participant
- * is. This is the page half of that: the editor's own keymap carries the
- * same three keys, which `console.test.tsx` covers.
+ * The page-level listener; the editor's keymap carries the same keys
+ * (`console.test.tsx`).
  */
 describe("the shortcuts", () => {
-  /** One press of a combination, from the page rather than from a field. */
+  /** One press of a combination, from the page rather than a field. */
   function press(key: "b" | "j", { alt = false }: { alt?: boolean } = {}) {
     fireEvent.keyDown(document.body, {
       key,
@@ -196,11 +179,8 @@ describe("the shortcuts", () => {
     expect(screen.getByRole("button", { name: t.side })).toHaveAttribute("aria-pressed", "true");
   });
 
-  // A contest that closed its catalogues draws no schema panel and offers no
-  // toggle for one, so the key has nothing to collapse. Flipping the stored
-  // flag anyway is a press that does nothing visible and changes what the
-  // next visit restores; the key is still claimed, because Ctrl+B belongs to
-  // this screen (it opens the bookmarks in Firefox) even where it is inert.
+  // No schema panel: the flag must not flip and be restored next visit, but
+  // the key is still claimed (Ctrl+B opens the bookmarks in Firefox).
   test("Ctrl+B changes nothing in a contest that hides its schema", () => {
     const contestId = aContest();
     show(contestId, { schema: false });
@@ -229,10 +209,8 @@ describe("the shortcuts", () => {
     expect(screen.getByRole("button", { name: t.bottom })).toHaveAttribute("aria-pressed", "false");
   });
 
-  // The editor's own keymap runs first and calls `preventDefault`, the way
-  // any CodeMirror binding does. Without this the key would be handled twice
-  // — once in the editor, once here — and the panel would end up exactly
-  // where it started.
+  // The editor's keymap runs first and calls `preventDefault`; handling the
+  // key again here would toggle the panel straight back.
   test("a key another handler already took is left alone", () => {
     show(aContest());
 
@@ -250,11 +228,8 @@ describe("the shortcuts", () => {
   });
 
   /**
-   * Collapsing a panel the participant is standing in has to put them
-   * somewhere. Left alone, focus falls to `<body>`: the next Tab starts from
-   * the top of the document, and a screen reader is told nothing at all
-   * about what just happened. The toggle is both the nearest thing to where
-   * they were and the control that undoes it.
+   * Without the hand-off, focus falls to `<body>` and a screen reader hears
+   * nothing; the toggle is nearest and undoes the collapse.
    */
   test("collapsing by shortcut takes the focus with it, onto the toggle", async () => {
     show(aContest());
@@ -265,8 +240,7 @@ describe("the shortcuts", () => {
     expect(screen.getByRole("button", { name: t.side })).toHaveFocus();
   });
 
-  // The ordinary case: the participant is typing a query, and a shortcut
-  // that yanked the caret out of the editor would be worse than no shortcut.
+  // Collapsing another panel must not pull the caret out of the editor.
   test("the caret stays where it is when the panel being collapsed is not the one holding it", async () => {
     show(aContest());
     const query = screen.getByRole("textbox", { name: "your query" });
@@ -320,10 +294,8 @@ describe("what is remembered", () => {
     expect(screen.getByRole("button", { name: t.side })).toHaveAttribute("aria-pressed", "true");
   });
 
-  // Task 4's lesson, and the reason the state is held in React and only
-  // mirrored into storage: a browser that refuses storage — a private
-  // window, a locked-down machine in a computer class — must cost the
-  // participant nothing this session.
+  // The state lives in React and is only mirrored to storage, so refused
+  // storage costs nothing this session.
   test("a storage that throws costs the participant nothing", async () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("storage is full");
@@ -339,11 +311,8 @@ describe("what is remembered", () => {
   });
 
   /**
-   * The realistic refusal is not a browser that has switched storage off; it
-   * is `QuotaExceededError` on a machine whose storage is full, where
-   * reading still works and still answers with whatever was stored last
-   * time. Believing that older record would quietly put the panel back and
-   * undo what the participant just did.
+   * The realistic refusal is `QuotaExceededError`: reads still return the
+   * older record, which must not put the panel back.
    */
   test("a refused write is not undone by an older record storage can still read", async () => {
     const contestId = aContest();
@@ -361,8 +330,7 @@ describe("what is remembered", () => {
     await userEvent.click(schema);
     expect(schema).toHaveAttribute("aria-pressed", "true");
 
-    // Anything else that re-renders the screen reads the store again, which
-    // is where the older record used to win.
+    // Any re-render reads the store again.
     await userEvent.click(screen.getByRole("button", { name: t.bottom }));
 
     expect(screen.getByRole("button", { name: t.schema })).toHaveAttribute("aria-pressed", "true");

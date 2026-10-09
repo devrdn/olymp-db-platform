@@ -56,10 +56,8 @@ describe("the query log panel", () => {
     expect(screen.getByText(en.participant.play.workspace.log.empty)).toBeInTheDocument();
   });
 
-  // Finding 4: an empty log and a log the server could not read must not
-  // look identical — a participant checking what they already tried has no
-  // way to tell a real answer from a shrug otherwise, and `total` being zero
-  // hides the ordinary "load more" retry too.
+  // An unreadable log must not look empty: the participant could not tell,
+  // and a zero `total` hides "load more" too.
   test("a log the server could not read says so, not that nothing has run yet", () => {
     show({ initial: { items: [], total: 0, failed: true } });
 
@@ -87,12 +85,8 @@ describe("the query log panel", () => {
     expect(row).toHaveTextContent(en.participant.play.workspace.log.status.running);
   });
 
-  // One page of the log is bounded in bytes as well as in rows, so a very
-  // long statement arrives as its beginning. Drawing that prefix as if it
-  // were the whole query hands a student a shortened copy of their own text
-  // — including in the tooltip, which is where the full statement otherwise
-  // is. The ellipsis is what says there was more; the whole of it is in the
-  // CSV export this panel already offers.
+  // A long statement arrives truncated; the ellipsis, also in the tooltip,
+  // says so. The CSV has the whole text.
   test("says when a statement arrived cut short", () => {
     show({ initial: { items: [entry("SELECT 'xxxx", { sqlTruncated: true })], total: 1, failed: false } });
 
@@ -100,9 +94,8 @@ describe("the query log panel", () => {
     expect(screen.getByTitle("SELECT 'xxxx…")).toBeInTheDocument();
   });
 
-  // The plan's own requirement: a student who refreshes mid-olympiad must
-  // not lose their history — proven here by seeding QueryLogPanel with a
-  // server-fetched initial page, exactly what page.tsx hands it on reload.
+  // A reload keeps the history: the panel is seeded with the server-fetched
+  // page, as page.tsx does.
   test("a reload sees the history the server already fetched, with no gap", () => {
     show({ initial: { items: [entry("SELECT 1"), entry("SELECT 2")], total: 2, failed: false } });
 
@@ -141,10 +134,8 @@ describe("the query log panel", () => {
     expect(screen.getByRole("button", { name: en.participant.play.workspace.log.retry })).toBeInTheDocument();
   });
 
-  // Finding 3: this panel stays mounted at all times, so it has to notice a
-  // query that ran while it was hidden — but only by refetching on the
-  // transition into being shown, never on mount for data page.tsx already
-  // fetched server-side.
+  // It refreshes on becoming shown, never on mount for data page.tsx already
+  // fetched.
   test("does not refetch on mount even when it starts active", () => {
     show({ active: true });
 
@@ -167,9 +158,7 @@ describe("the query log panel", () => {
     );
 
     await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
-    // Never fewer than a full page, even when fewer rows were loaded: the
-    // refresh asks for at least QUERY_LOG_PAGE_SIZE, not the smaller count
-    // that happened to be on screen.
+    // At least a full page, even when fewer rows were loaded.
     expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
   });
 
@@ -193,11 +182,8 @@ describe("the query log panel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed);
   });
 
-  // Finding 4 of the follow-up review: a student idly toggling Result and
-  // Log spends one AdmitRead — Run's own shared budget — on every single
-  // transition into "Log", even back into data just fetched a moment ago.
-  // A second transition inside QUERY_LOG_REFRESH_MIN_INTERVAL_MS of the
-  // first must not spend a second one.
+  // Toggling back within QUERY_LOG_REFRESH_MIN_INTERVAL_MS must not spend
+  // another AdmitRead, the budget Run shares.
   test("does not refetch a second time when toggled back within the minimum refresh interval", async () => {
     fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
     const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
@@ -205,18 +191,14 @@ describe("the query log panel", () => {
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
     await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
 
-    // Leave, then come straight back — well inside the minimum interval.
+    // Leave and come straight back, inside the interval.
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
 
     expect(fetchQueryLogAction).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 4 of the follow-up review, the other half: two refreshes can
-  // still overlap once enough real time separates the transitions that
-  // triggered them (a slow first request still in flight when a later
-  // transition starts a second). Whichever answer is actually newest must
-  // win, never whichever happens to resolve last on the wire.
+  // Overlapping refreshes: the newest request wins, not the last to resolve.
   test("a slower, superseded refresh cannot overwrite what a newer one already set", async () => {
     vi.useFakeTimers();
     try {
@@ -230,18 +212,18 @@ describe("the query log panel", () => {
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
       await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
 
-      // Far enough past the minimum interval for a second transition to
-      // trigger its own refresh, while the first request is still pending.
+      // Past the interval, so a second transition refreshes while the first is
+      // pending.
       await vi.advanceTimersByTimeAsync(QUERY_LOG_REFRESH_MIN_INTERVAL_MS + 1);
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
       await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(2));
 
-      // The newer request settles first, with the truly current answer...
+      // The newer request settles first...
       resolveSecond({ kind: "ok", items: [entry("SELECT 2")], total: 1 });
       await vi.waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
 
-      // ...and the older, now-stale one settles after. It must not win.
+      // ...and the stale one after. It must not win.
       resolveFirst({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
       await vi.runAllTimersAsync();
 

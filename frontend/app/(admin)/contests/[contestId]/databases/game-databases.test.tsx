@@ -10,8 +10,7 @@ import { GameDatabases } from "./game-databases";
 type State = { saved?: boolean; code?: string };
 
 const dropped = vi.hoisted(() => ({ current: { saved: true } as State }));
-// Typed with the Server Action's own signature, so the assertion below reads
-// the FormData it was given rather than casting its way to it.
+// Typed like the Server Action, so the assertion reads its FormData.
 const dropGameInstanceAction = vi.hoisted(() =>
   vi.fn<(previous: { saved?: boolean; code?: string }, form: FormData) => Promise<State>>(
     async () => dropped.current,
@@ -76,16 +75,14 @@ describe("the contest's databases", () => {
     expect(screen.getByText(t.spare)).toBeInTheDocument();
   });
 
-  // The row outlives the account on it, and inventing a name for somebody who
-  // is gone would be inventing a record.
+  // A deleted holder is named as gone, never invented.
   test("says the account is gone rather than showing an empty holder", () => {
     show({ instances: [instance({ participant: "", participantName: "" })] });
 
     expect(screen.getByText(t.formerParticipant)).toBeInTheDocument();
   });
 
-  // A size the game cluster could not give must never read as an empty
-  // database, which is what a bare zero would say on this screen.
+  // An unknown size must not read as an empty database.
   test("says a size is unknown rather than showing it as zero", () => {
     show({ instances: [instance({ sizeBytes: 0, sizeKnown: false })] });
 
@@ -110,8 +107,7 @@ describe("the contest's databases", () => {
     expect(screen.queryByRole("button", { name: t.drop })).not.toBeInTheDocument();
   });
 
-  // The mistake this guards against is pressing the button on the wrong row,
-  // so the question has to name whose database it is.
+  // The confirmation names the participant, to catch the wrong row.
   test("asks before dropping, naming the participant", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     show();

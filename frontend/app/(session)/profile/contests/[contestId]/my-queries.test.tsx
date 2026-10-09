@@ -53,10 +53,7 @@ describe("my queries", () => {
     expect(within(list).getByText("SELECT 9")).toBeInTheDocument();
   });
 
-  /**
-   * The participant's own address is not shown: it is theirs, it explains
-   * nothing to them, and it is in the way (design §2.2).
-   */
+  /** No address column (SPEC.md §5.2). */
   test("shows no address, not even an empty one", () => {
     renderTab({ items: [loggedQuery(9, { ip: "10.0.0.1" })], more: false });
 

@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — those would not exist yet when the factory
-// actually runs.
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -28,12 +25,8 @@ beforeEach(() => {
 });
 
 /**
- * `addParticipantAction` is the picker's own path: a person chosen from the
- * directory search arrives here as an id, not as a login the server has to
- * resolve a second time. It has to reach the same endpoint the bulk import
- * uses (`POST /contests/:id/participants`), carrying `user_ids` — the field
- * `importParticipantsAction` never sends, since that one only ever sends
- * `logins` typed by hand.
+ * The picker sends an id as `user_ids` to the import endpoint (`POST
+ * /contests/:id/participants`); the bulk import only sends `logins`.
  */
 describe("addParticipantAction", () => {
   test("sends the chosen candidate's id as user_ids, and revalidates the contest", async () => {
@@ -50,9 +43,7 @@ describe("addParticipantAction", () => {
   });
 
   test("refuses an empty selection without ever calling the server", async () => {
-    // What the picker's hidden field holds before anybody has chosen a
-    // candidate — the field the form still submits if the button is reached
-    // without picking anyone.
+    // The hidden field before anyone is chosen.
     const state = await addParticipantAction({}, form({ contestId, userId: "" }));
 
     expect(state).toEqual({ code: "invalid_user_id" });
@@ -60,12 +51,9 @@ describe("addParticipantAction", () => {
   });
 
   /**
-   * The endpoint this shares with the roster import always answers 200 with
-   * `{ added, skipped }` — it has no 409 for "already enrolled", because
-   * AddParticipants.addOne catches that case itself and reports it as a
-   * skip (see contests.SkipAlreadyEnrolled). A candidate the picker offered
-   * can still fail to land — enrolled by somebody else a moment earlier —
-   * and that has to read as something other than a plain success.
+   * The endpoint answers 200 with `{ added, skipped }`, reporting "already
+   * enrolled" as a skip (contests.SkipAlreadyEnrolled), which must not read as
+   * success.
    */
   test("reports the skip reason when the chosen candidate was not actually added", async () => {
     serverRequest.mockResolvedValueOnce({

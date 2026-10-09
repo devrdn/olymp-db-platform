@@ -9,8 +9,6 @@ describe("initials", () => {
   });
 
   test("skips the middle, which is where a patronymic sits", () => {
-    // "Иван Сергеевич Иванов" is the ordinary Russian form, and ИСИ says less
-    // about who it is than ИИ does.
     expect(initials("Иван Сергеевич Иванов")).toBe("ИИ");
   });
 
@@ -23,8 +21,6 @@ describe("initials", () => {
   });
 
   test("falls back to the login when there is no name yet", () => {
-    // An account created from a roster import may carry only a login until
-    // somebody fills the rest in, and a blank circle names nobody.
     expect(initials("", "s.popescu")).toBe("SP");
     expect(initials("   ", "ivanov")).toBe("I");
   });
@@ -34,8 +30,6 @@ describe("initials", () => {
   });
 
   test("ignores the punctuation a login is built from", () => {
-    // Splitting "s.popescu" on spaces alone would yield "S"; on the separators
-    // logins actually use it reads as a name, which is what it is.
     expect(initials("", "s.popescu")).toBe("SP");
     expect(initials("", "i_ivanov")).toBe("II");
   });

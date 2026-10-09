@@ -5,46 +5,16 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Tabs that switch what is visible without ever remounting it.
+ * Tabs that switch what is visible without remounting it: every panel stays in
+ * the tree and only `hidden` changes, so a half-typed query, a scroll position
+ * and a rendered result survive a switch.
  *
- * Built for the play workspace (Task 3 of the game-ui plan): a half-typed
- * query, a scroll position, an already-rendered result table all have to
- * survive a switch between "Result" and "Query log", or between "Story" and
- * "Questions" — so every panel stays in the React tree the whole time; only
- * the DOM's native `hidden` attribute changes, which is what keeps a hidden
- * panel out of layout and costing no reflow.
+ * Hand-rolled rather than Base UI's `Tabs`, which costs about 13 KB gzipped on
+ * the play route. Implements the WAI-ARIA tabs pattern with manual activation:
+ * arrow keys and Home/End move focus, click or Enter/Space selects.
  *
- * Hand-rolled rather than Base UI's `Tabs` (finding 6): that composite pulls
- * its whole roving-focus engine plus floating-ui utilities — about 25 KB raw,
- * 13.4 KB gzipped on this route — to drive four buttons and a `hidden`
- * attribute, on the one screen hundreds of students load at the same minute.
- * What is here is the same handful of DOM facts the WAI-ARIA tabs pattern
- * asks for, written directly: `role="tablist"`/`"tab"`/`"tabpanel"`,
- * `aria-selected`, `aria-controls`/`aria-labelledby` pairing a tab to its
- * panel, and a roving `tabIndex` with arrow-key movement between tabs
- * (Home/End included). Activation is manual — a tab becomes selected on
- * click, or on Enter/Space once arrow keys have moved focus to it, not on
- * arrow-key focus alone — which is the pattern WAI-ARIA recommends for a
- * plain tab list and the one the previous Base UI usage already followed.
- *
- * This also fixes finding 1 by construction: `TabsContent` can render `flex
- * flex-col` (a flex *container*, not just a flex *item*), so a child that
- * asks for `flex-1` — `ResultPanel`'s own root, for one — actually gets a
- * height to fill rather than sizing to its content inside a block box. That
- * is opt-in via the `fill` prop (default `true`, matching every panel that
- * needed it first) rather than forced on every panel unconditionally
- * (finding 3 of the follow-up review): a panel with no child that must fill
- * the height — the story, or the questions list, both of which scroll the
- * whole tab rather than a bounded inner child — gets a plain block box, the
- * layout ordinary flowed content (paragraph margins included) already
- * expects. Every panel is rendered unconditionally, always in the DOM, with
- * `hidden` toggled on the ones not selected — `[hidden]` still needs
- * `!important` here (`[&[hidden]]:hidden`) because the `flex` utility, when
- * `fill` applies it, would otherwise win the display property.
- *
- * Styling follows this project's own flat, ruled direction (`dialog.tsx`'s own
- * doc explains the reasoning once): no glow, no shadow, `rounded-none`, an
- * underline for the active tab rather than a filled pill.
+ * `[&[hidden]]:hidden` is needed because the `flex` utility would otherwise win
+ * the display property.
  */
 
 type TabsContextValue = {
@@ -69,7 +39,7 @@ function Tabs({
   children,
   ...props
 }: {
-  /** Controlled selection. Omit and use `defaultValue` for an uncontrolled tab group. */
+  /** Controlled selection; omit and use `defaultValue` for uncontrolled. */
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
@@ -101,11 +71,8 @@ function Tabs({
 }
 
 /**
- * The roving-tabindex owner: arrow keys move focus among this list's own
- * `[role="tab"]` children (wrapping at the ends), Home/End jump to the first
- * or last. Moving focus this way never selects a tab by itself — only a
- * click, or Enter/Space on the focused tab, does (manual activation, this
- * component's own doc).
+ * Owns the roving tabindex: arrows move focus (wrapping), Home/End jump to the
+ * ends. Moving focus never selects.
  */
 function TabsList({ className, children, onKeyDown, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const listRef = React.useRef<HTMLDivElement>(null);
@@ -161,9 +128,7 @@ function TabsTrigger({
       id={`${baseId}-tab-${value}`}
       aria-controls={`${baseId}-panel-${value}`}
       aria-selected={isSelected}
-      // Roving tabindex: only the selected tab sits in the regular tab
-      // order, matching the WAI-ARIA tabs pattern — a screen reader user
-      // tabs once into the list, then arrow-keys between tabs.
+      // Only the selected tab is in the tab order (WAI-ARIA tabs pattern).
       tabIndex={isSelected ? 0 : -1}
       onClick={(event) => {
         onClick?.(event);
@@ -189,14 +154,9 @@ function TabsContent({
   className,
   children,
   /**
-   * Whether this panel is a flex *container* its own children can fill —
-   * `ResultPanel` and the query log both have a `flex-1` root that needs a
-   * bounded height to scroll inside (finding 1). Default `true` for that
-   * reason, but a panel that only holds ordinarily-flowing content — prose,
-   * a form — should pass `fill={false}`: forcing `flex-col` on it buys
-   * nothing (nothing inside asks to fill the height) and turns every direct
-   * child into a flex item, which is not the layout plain block content was
-   * written for (finding 3).
+   * Makes the panel a flex column, so a `flex-1` child (`ResultPanel`, the
+   * query log) gets a bounded height to scroll in. Pass `false` for plain
+   * flowing content such as prose or a form.
    */
   fill = true,
   ...props
@@ -210,12 +170,8 @@ function TabsContent({
       role="tabpanel"
       id={`${baseId}-panel-${value}`}
       aria-labelledby={`${baseId}-tab-${value}`}
-      // Present the whole time (never conditionally rendered) so state
-      // inside a hidden panel — a scroll position, an in-progress answer —
-      // survives the switch; `hidden` is what takes it out of layout and
-      // out of the accessibility tree without unmounting it. `inert` on top
-      // of that keeps focus and a screen reader's virtual cursor from ever
-      // landing inside a panel that is not showing.
+      // Always rendered so state inside survives a switch; `inert` keeps focus
+      // and screen readers out while hidden.
       hidden={!isSelected}
       inert={!isSelected}
       tabIndex={0}

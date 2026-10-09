@@ -3,24 +3,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Every colour a screen names has to exist.
- *
- * Tailwind emits nothing for a class it cannot resolve, and nothing is not an
- * error — it is a rule that silently does not apply. Three invented colours
- * shipped on the play screen that way: `bg-danger` and `border-danger` made a
- * failed query look exactly like a "try again in a moment", and `bg-surface`
- * left both sticky table heads transparent, so rows scrolled through them.
- * None of it failed a build, a type check or a lint.
- *
- * So the palette is read from the stylesheet that defines it, and the source
- * is scanned for colour utilities naming anything else. SPEC.md §3.3 says
- * "no arbitrary colours"; this is what makes that checkable rather than a
- * matter of care.
+ * Every colour class a screen names must exist: Tailwind emits nothing for an
+ * unknown class, and no build, type check or lint notices (SPEC.md §3.3).
+ * The palette is read from the stylesheet and the source scanned against it.
  */
 
 const ROOT = join(__dirname, "..", "..");
 
-/** Names defined in the stylesheet under a given custom-property prefix. */
 function defined(prefix: string): Set<string> {
   const css = readFileSync(join(ROOT, "app", "globals.css"), "utf8");
   const names = new Set<string>();
@@ -31,10 +20,8 @@ function defined(prefix: string): Set<string> {
 }
 
 /**
- * Words that follow a colour prefix without being colours: Tailwind's own
- * keywords, and the utilities that share the prefix — `border-b` is a side,
- * `bg-clip` is a behaviour. Listed rather than inferred, so a genuine typo
- * cannot hide behind a clever rule.
+ * Words that follow a colour prefix without being colours. Listed rather than
+ * inferred, so a typo cannot hide behind a rule.
  */
 const NOT_A_COLOUR = new Set([
   "transparent", "current", "inherit", "white", "black", "none", "auto",
@@ -52,28 +39,15 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
     if (entry === "node_modules" || entry === ".next" || entry.startsWith(".")) continue;
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) sourceFiles(path, found);
-    // `.tsx` only: a className lives in markup, and a `.ts` file naming
-    // `--text-body--line-height` inside a CSS string is not a class.
+    // `.tsx` only: a `.ts` file may name `--text-...` inside a CSS string.
     else if (/\.tsx$/.test(entry) && !/\.test\.tsx$/.test(entry)) found.push(path);
   }
   return found;
 }
 
 /**
- * Paper has no dark mode. `data-theme="dark"` and a dark `prefers-color-scheme`
- * both exist to make a screen easier on the eyes at night, and neither is a
- * reason a printed page should arrive with a near-black background and white
- * text on it — the print-only copy of the story (`play/print-view.tsx`) is
- * read on paper, not a screen, regardless of which theme the browser that
- * requested it was showing a moment before `window.print()` ran.
- *
- * Checked at the source rather than by asking jsdom to compute a cascade:
- * jsdom has no layout and cannot be trusted to evaluate `@media print`
- * correctly (a lesson this branch already paid for elsewhere) — a false
- * green here would be exactly the kind of test that passes for the wrong
- * reason. What is checkable without a real browser is intent: that both
- * rules which apply the dark palette are gated to `screen`, so print falls
- * through to `:root`'s own — undecorated, and already light — declaration.
+ * Print never gets the dark palette. Checked in the source, since jsdom cannot
+ * be trusted with `@media print`: both dark rules must be gated to `screen`.
  */
 describe("printing forces the light palette", () => {
   const css = readFileSync(join(ROOT, "styles", "tokens.css"), "utf8");
@@ -95,8 +69,7 @@ describe("the colours the interface names", () => {
 
     for (const file of [...sourceFiles(join(ROOT, "app")), ...sourceFiles(join(ROOT, "components"))]) {
       const source = readFileSync(file, "utf8");
-      // `bg-bad-wash`, `text-ink-3`, `border-bad/40` — the colour is what
-      // stands between the prefix and an optional opacity.
+      // The colour sits between the prefix and an optional opacity (`border-bad/40`).
       const pattern =
         /\b(?:bg|text|border|ring|divide|fill|stroke|outline|decoration|caret|shadow)-([a-z][a-z0-9-]*)(?:\/\d+)?\b/g;
       for (const match of source.matchAll(pattern)) {
@@ -104,12 +77,10 @@ describe("the colours the interface names", () => {
         if (known.has(name) || sizes.has(name) || NOT_A_COLOUR.has(name)) continue;
         // `border-l-2`, `border-b-0`: a side and a width, not a colour.
         if (/^[blrtxyse]-\d+$/.test(name)) continue;
-        // `border-l-gold`, `border-t-transparent`: a side and a colour — and
-        // the colour after the side is held to the same list as any other.
+        // A side and a colour (`border-l-gold`); the colour is still checked.
         const side = /^[blrtxyse]-([a-z][a-z0-9-]*)$/.exec(name);
         if (side && (known.has(side[1]) || NOT_A_COLOUR.has(side[1]))) continue;
-        // `ring-offset-2`, `ring-offset-bg`: a different utility that happens
-        // to share the prefix.
+        // `ring-offset-*` is a different utility.
         if (name.startsWith("offset-")) continue;
         // `bg-linear-to-r`: a gradient, not a colour.
         if (name.startsWith("linear-") || name.startsWith("radial-") || name.startsWith("conic-")) continue;

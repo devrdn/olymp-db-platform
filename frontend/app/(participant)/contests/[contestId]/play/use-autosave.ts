@@ -8,49 +8,38 @@ import { isClosed, type ClosedCode } from "./refusals";
 
 /**
  * Saving without a button, for one document at a time: the participant's
- * notes, or one SQL tab (docs/ARCHITECTURE.md §6.4).
- *
- * The rules, all enforced by `AutosaveEngine` below:
+ * notes, or one SQL tab (docs/ARCHITECTURE.md §6.4). `AutosaveEngine`
+ * enforces:
  *
  * - a save leaves 1.5 s after the last edit, and at least every 10 s while
  *   the participant keeps typing;
- * - it leaves at once on `flush()` (an editor losing focus), and at once,
- *   as a `keepalive` request, when the browser tab is hidden, when the page
- *   is hidden for good (`pagehide`), and when the editor unmounts with
- *   unsaved text — a server action or an ordinary fetch does not survive
- *   the page closing;
+ * - it leaves at once on `flush()` (an editor losing focus), and at once as
+ *   a `keepalive` request when the tab is hidden (unless a retry is
+ *   waiting), on `pagehide`, and when the editor unmounts with unsaved text:
+ *   an ordinary fetch does not survive the page closing;
  * - text equal to what the server last confirmed is never sent;
  * - at most one ordinary request per document is in flight; edits made
- *   while it runs leave in the next request, after it answers;
- * - a save that failed on the network or with a 5xx is retried after 2, 4,
- *   8, 16 and then every 30 s; a 429 waits as long as `Retry-After` says;
+ *   meanwhile leave after it answers;
+ * - a network or 5xx failure is retried after 2, 4, 8, 16 and then every
+ *   30 s; a 429 waits as long as `Retry-After` says;
  * - a refusal of the text itself (a 4xx such as `workspace_notes_too_long`)
  *   is not retried until the text changes;
  * - once the contest has closed for the participant (409 `contest_ended`,
- *   `contest_finished` or `deadline_passed`), the engine stops for good and
- *   says so; there is no read-only mode to fall back to. `contest_not_running`
- *   (a contest not open now, which may open later) is not one of them and
- *   has no handling of its own: the workspace is on screen only once the
- *   contest runs, and a running contest can only go on to finish, never
- *   back to draft, so it cannot arrive mid-work. Should it arrive anyway, it
- *   is a refusal like any other 4xx.
+ *   `contest_finished` or `deadline_passed`), the engine stops for good.
+ *   `contest_not_running` cannot arrive mid-work, since a running contest
+ *   never goes back to draft; if it does, it is an ordinary 4xx refusal.
  *
- * Until the server has confirmed a text, it is kept as a draft in
- * `localStorage`, keyed by account, contest and document, for the one case the
- * server cannot cover: the page reloaded before the save left or landed.
- * The draft records the server version it was written against (`base`) and
- * a fingerprint of the text in flight (`sent`); on mount it is shown and
- * saved again if the server copy is still that version, or is the text that
- * was in flight — the save landed, but the edits after it did not. A server
- * copy saved later from somewhere else wins, which is the last-write-wins
- * rule the whole workspace follows. Client and server clocks are never
- * compared: the computers in a lab are not trusted to agree on the time.
+ * Until the server confirms a text, it is kept as a draft in `localStorage`,
+ * keyed by account, contest and document, for a reload before the save
+ * landed. The draft records the server version it was written against
+ * (`base`) and fingerprints of the texts in flight (`sent`); on mount it is
+ * restored if the server copy is still that version or one of those texts.
+ * A copy saved later from elsewhere wins (last write wins). Client and server
+ * clocks are never compared: lab machines are not trusted to agree.
  *
- * Every storage access is wrapped: a private window, a full quota or a
- * policy that denies storage only costs the draft, never the save.
- *
- * React sees only the status. The text lives in the engine and in the
- * editor, so typing re-renders nothing unless the status changes.
+ * Every storage access is wrapped: denied or full storage costs only the
+ * draft, never the save. React sees only the status, so typing re-renders
+ * nothing unless the status changes.
  */
 
 /** A save that is waiting, running, done, or will not happen. */
@@ -71,16 +60,14 @@ export type AutosaveStatus =
 export type AutosaveOptions = {
   /**
    * Who is typing. `null` when the account could not be read, and then no
-   * draft is kept at all: there is no key that is safely theirs, and a draft
-   * under a shared one costs somebody their notes, while losing it costs a
-   * reload's worth of typing.
+   * draft is kept: a draft under a shared key could cost somebody their notes,
+   * while losing it costs a reload's worth of typing.
    */
   accountId: string | null;
   contestId: string;
   /**
-   * Which document of the contest this is (`notes`, `tab:{id}`). Fixed for
-   * the life of the hook, together with `contestId`: a different document
-   * is a different component instance (key it).
+   * Which document this is (`notes`, `tab:{id}`). Fixed for the hook's life,
+   * with `contestId`: key the component to change it.
    */
   documentKey: string;
   /** The text the server returned on the first read. */
@@ -114,26 +101,19 @@ export const AUTOSAVE_DRAFT_WRITE_MS = 300;
 const DRAFT_PREFIX = "dbcontest.play.draft.";
 
 /**
- * Where a document's draft is kept: one key per account, contest and
- * document.
- *
- * The account is in the key because the computers in a lab are shared and
- * `localStorage` is not. Two accounts that have never saved their notes both
- * stand on a null version, so a key without the account would hand the draft
- * of whoever sat here before to the student reading the screen now — and
- * autosave it into their account as the newer text.
+ * One draft key per account, contest and document. The account is in the
+ * key because lab machines are shared: two accounts that never saved both
+ * stand on a null version, so without it a student would inherit, and
+ * autosave, the previous user's draft.
  */
 export function draftStorageKey(accountId: string, contestId: string, documentKey: string): string {
   return `${DRAFT_PREFIX}${encodeURIComponent(accountId)}.${contestId}.${documentKey}`;
 }
 
 /**
- * Removes every draft on this machine that belongs to another account.
- *
- * Keying by account stops one student from reading another's text; this is
- * the other half, for the text already lying in the machine when they sit
- * down. Called once as the play screen mounts. A draft of this account's own
- * other contests is kept: it is theirs, and it is what a reload restores.
+ * Removes every draft on this machine that belongs to another account, so a
+ * previous user's text does not linger. Drafts of this account's other
+ * contests are kept. Called once as the play screen mounts.
  */
 export function purgeForeignDrafts(accountId: string): void {
   const store = storage();
@@ -152,9 +132,8 @@ export function purgeForeignDrafts(accountId: string): void {
 }
 
 /**
- * A short fingerprint of a text: its length and a 32-bit FNV-1a hash of its
- * UTF-16 code units. Enough to recognise "the server holds the text that was
- * in flight" without storing that text a second time.
+ * Length plus a 32-bit FNV-1a hash of the UTF-16 code units: enough to tell
+ * that the server holds the text that was in flight, without storing it twice.
  */
 export function textFingerprint(text: string): string {
   let hash = 0x811c9dc5;
@@ -170,9 +149,8 @@ type Draft = {
   /** The server version this text was edited on top of. */
   base: string | null;
   /**
-   * Fingerprints of the texts sent but not yet confirmed. The server
-   * holding one of them means the save landed and the edits after it did
-   * not, so this draft is still the newer text.
+   * Fingerprints of texts sent but not yet confirmed. The server holding one
+   * means that save landed and later edits did not, so the draft is newer.
    */
   sent?: string[];
 };
@@ -209,24 +187,20 @@ const SAVING: AutosaveStatus = { kind: "saving" };
 const RETRYING: AutosaveStatus = { kind: "retrying" };
 
 /**
- * The state machine behind `useAutosave`, free of React so Task 4's editor
- * can hold one per SQL tab without a hook per tab. Methods are bound
- * properties: they are handed to event handlers as they are.
+ * The state machine behind `useAutosave`, free of React so the SQL tabs can
+ * hold one per tab. Methods are bound properties, safe to pass as handlers.
  */
 export class AutosaveEngine {
   private options: AutosaveOptions;
   private readonly key: string | null;
 
-  /** What the editor holds. */
   private text: string;
   /**
-   * What the server is known to hold, and the version it answered with.
-   * Null means "not known": two requests overlapped and neither answer
-   * proves which of them the database committed last.
+   * What the server is known to hold, and its version. Null means unknown:
+   * two requests overlapped, and neither answer proves which committed last.
    */
   private saved: string | null;
   private version: string | null;
-  /** The texts of the requests in flight, oldest first. */
   private readonly flights: { text: string }[] = [];
   /** Two requests for this document were in flight at the same time. */
   private overlapped = false;
@@ -234,16 +208,14 @@ export class AutosaveEngine {
   private unconfirmed: string[] = [];
   /** The last text sent as a keepalive request, so leaving twice sends once. */
   private lastKeepalive: string | null = null;
-  /** A save came due while a request was in flight. */
   private sendWhenIdle = false;
-  /** The text the server refused, and why. */
   private rejected: { text: string; code: string } | null = null;
   private closedCode: ClosedCode | null = null;
   private discarded = false;
-  /** Between unmount and a remount (React's strict mode runs both). */
+  /** Before mount, and between an unmount and a remount (strict mode runs both). */
   private suspended = true;
   private recovered = false;
-  /** Failed attempts since the last success, for the pause. */
+  /** Failed attempts since the last success, for the backoff. */
   private attempt = 0;
 
   private debounceTimer: Timer | undefined;
@@ -265,7 +237,7 @@ export class AutosaveEngine {
     this.version = options.initialVersion;
   }
 
-  /** Takes the caller's latest callbacks; the document itself does not change. */
+  /** Takes the caller's latest callbacks; the document does not change. */
   setCallbacks = (options: Pick<AutosaveOptions, "save" | "onRestore">) => {
     this.options = { ...this.options, save: options.save, onRestore: options.onRestore };
   };
@@ -279,7 +251,7 @@ export class AutosaveEngine {
 
   getStatus = () => this.status;
 
-  /** Mounted: recover the draft once, and pick up anything left unsent. */
+  /** Mounted: recover the draft once and pick up anything unsent. */
   start = () => {
     this.suspended = false;
     if (!this.recovered) {
@@ -290,7 +262,7 @@ export class AutosaveEngine {
     this.emit();
   };
 
-  /** Unmounted: send what is unsaved on the way out, and stop every timer. */
+  /** Unmounted: send what is unsaved and stop every timer. */
   suspend = () => {
     this.leave();
     this.suspended = true;
@@ -327,9 +299,8 @@ export class AutosaveEngine {
   };
 
   /**
-   * The browser tab was hidden. The page is still there, so a pause the
-   * server asked for is still honoured: every refused write counts against
-   * the same per-minute budget as a real one.
+   * The tab was hidden. The page is still there, so a server-requested pause
+   * is honoured: every refused write counts against the per-minute budget.
    */
   hide = () => {
     this.storeDraft(true);
@@ -337,9 +308,8 @@ export class AutosaveEngine {
   };
 
   /**
-   * The page itself is going away (`pagehide`, or the editor unmounting).
-   * This is the last chance to send, so a waiting retry is no reason to
-   * stay silent.
+   * The page is going away (`pagehide`, or unmount). Last chance to send, so a
+   * waiting retry does not hold it back.
    */
   leave = () => {
     this.storeDraft(true);
@@ -367,17 +337,15 @@ export class AutosaveEngine {
       this.emit();
       return;
     }
-    // A pause the server asked for, or one a failure earned, is waited out
-    // by everything except the page going away for good.
+    // A server-requested or earned pause is waited out by everything except the
+    // page going away.
     if (this.retryTimer !== undefined && !bypassWait) return;
 
     if (this.flights.length > 0) {
-      // Already on its way, in this very text: nothing to add.
       if (this.flights.some((flight) => flight.text === text)) return;
-      // An ordinary save waits for the answer and leaves after it. A page
-      // that is going away cannot wait, so it sends in parallel — and
-      // because nothing then says which request the database commits last,
-      // neither answer is taken as proof (see `settleFlight`).
+      // An ordinary save waits for the answer. A page going away cannot, so it
+      // sends in parallel, and then neither answer counts as proof
+      // (`settleFlight`).
       if (!keepalive) {
         this.sendWhenIdle = true;
         return;
@@ -412,18 +380,17 @@ export class AutosaveEngine {
   }
 
   /**
-   * Takes one request out of flight and reports whether its answer may be
-   * believed. It may not while another request for the same document
-   * overlapped it: the two were committed in an order this side cannot see,
-   * so what the server holds is unknown until one more save settles it.
+   * Removes a request from flight and reports whether its answer can be
+   * believed. Not if another request overlapped it: the commit order is
+   * unknown until one more save settles it.
    */
   private settleFlight(flight: { text: string }): boolean {
     const at = this.flights.indexOf(flight);
     if (at >= 0) this.flights.splice(at, 1);
     if (!this.overlapped) return true;
     if (this.flights.length === 0) {
-      // Both have answered: nothing is confirmed, and the current text goes
-      // out once more to make the server's copy known again.
+      // Both answered and nothing is confirmed: send the current text once
+      // more to make the server's copy known.
       this.overlapped = false;
       this.saved = null;
       this.sendWhenIdle = true;
@@ -435,8 +402,8 @@ export class AutosaveEngine {
     const believable = this.settleFlight(flight);
     if (this.discarded) return;
     this.attempt = 0;
-    // The version is worth keeping either way: it is the draft's base, and a
-    // later one is closer to the truth than an older one.
+    // Keep the version either way: it is the draft's base, and newer is
+    // closer to the truth.
     this.version = version;
     if (believable) {
       this.saved = text;
@@ -448,8 +415,8 @@ export class AutosaveEngine {
 
   private failed(text: string, error: unknown, flight: { text: string }, keepalive: boolean) {
     this.settleFlight(flight);
-    // A keepalive save that failed did not reach the server, so leaving
-    // again may send this text again.
+    // A failed keepalive did not reach the server, so leaving again may
+    // resend this text.
     if (keepalive && this.lastKeepalive === text) this.lastKeepalive = null;
     if (this.discarded) return;
 
@@ -463,8 +430,8 @@ export class AutosaveEngine {
     }
 
     if (error instanceof ApiError && error.status === 429) {
-      // Never shorter than the first pause: every refused save counts
-      // against the same budget, so a zero wait must not become a loop.
+      // Never shorter than the first pause: refused saves count against the
+      // same budget, so a zero wait must not become a loop.
       const wait =
         error.retryAfterSeconds !== undefined
           ? Math.max(error.retryAfterSeconds * 1000, AUTOSAVE_RETRY_FIRST_MS)
@@ -473,8 +440,8 @@ export class AutosaveEngine {
     } else if (error instanceof ApiError && isRefusalOfText(error.status)) {
       this.rejected = { text, code: error.code };
     } else {
-      // The network, a 5xx, an expired session: none is about the text, and
-      // any may pass.
+      // The network, a 5xx, an expired session: not about the text, and may
+      // pass.
       this.retryLater(this.pause());
     }
     this.settle();
@@ -512,7 +479,7 @@ export class AutosaveEngine {
     }, wait);
   }
 
-  /** Unsaved text with nothing on the way to send it gets the ordinary wait. */
+  /** Gives unsaved text with nothing pending the ordinary wait. */
   private scheduleIfDirty() {
     if (this.suspended || this.discarded || this.closedCode !== null) return;
     if (this.flights.length > 0 || this.retryTimer !== undefined || this.debounceTimer !== undefined) return;
@@ -557,7 +524,7 @@ export class AutosaveEngine {
     return PENDING;
   }
 
-  /** Publishes the status, and only when it changed: every publish is a render. */
+  /** Publishes the status only when it changed: every publish is a render. */
   private emit() {
     const next = this.computeStatus();
     const current = this.status;
@@ -569,13 +536,9 @@ export class AutosaveEngine {
   }
 
   /**
-   * Keeps the draft in step: removed when the server holds the text,
-   * written otherwise.
-   *
-   * Written after a short pause by default rather than on every keystroke:
-   * a SQL tab holds up to 64 KiB, and serialising that per character is
-   * work for nothing. `now` is for the moments when there may be no later:
-   * the tab being hidden, the page going away, the contest closing.
+   * Removes the draft when the server holds the text, writes it otherwise.
+   * Written after a short pause, since a SQL tab holds up to 64 KiB; `now` is
+   * for moments with no later (tab hidden, page leaving, contest closed).
    */
   private storeDraft(now = false) {
     if (this.discarded) return;
@@ -604,7 +567,7 @@ export class AutosaveEngine {
     try {
       storage()?.setItem(this.key, JSON.stringify(draft));
     } catch {
-      // Quota or policy: the draft is a convenience, the save still goes.
+      // The draft is a convenience; the save still goes.
     }
   }
 
@@ -622,16 +585,15 @@ export class AutosaveEngine {
     try {
       storage()?.removeItem(this.key);
     } catch {
-      // Nothing to do: a draft that cannot be removed is ignored on the next
-      // mount unless it still beats the server copy.
+      // Ignored on the next mount unless it still beats the server copy.
     }
   }
 }
 
 /**
- * A 4xx that is about the request itself, so sending the same text again
- * would be refused again. 401 (a session that may be restored), 408 and 429
- * are not; 409 closure codes are handled before this is asked.
+ * A 4xx about the request itself, so the same text would be refused again.
+ * 401 (the session may be restored), 408 and 429 are not; 409 closure codes
+ * are handled before this is asked.
  */
 function isRefusalOfText(status: number): boolean {
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -642,13 +604,9 @@ function serverStatus(): AutosaveStatus {
 }
 
 /**
- * Starts an engine and wires it to the two events that mean "save now, the
- * page may not be here in a moment". Returns the cleanup, which detaches
- * the listeners and sends what is still unsaved.
- *
- * Exported because Task 4 keeps one engine per SQL tab, which no hook can
- * do: this is the whole lifecycle, in one call, rather than a copy of it
- * beside every editor.
+ * Starts an engine and wires it to the tab-hidden and `pagehide` events. The
+ * returned cleanup detaches them and sends what is unsaved. Exported for the
+ * SQL tabs, which hold one engine per tab and cannot use a hook.
  */
 export function attachEngine(engine: AutosaveEngine): () => void {
   const onVisibility = () => {

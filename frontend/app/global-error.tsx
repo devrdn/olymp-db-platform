@@ -1,15 +1,9 @@
 "use client";
 
 /**
- * The failure that took the root layout with it.
- *
- * This replaces the document, so it has no access to the fonts, the tokens or
- * the dictionary — everything they live in is what has just failed. It is
- * therefore deliberately plain and deliberately English, and the one thing it
- * carries is the digest, which is what ties the screen to a line in the log.
- *
- * Anything richer here would be a second design system maintained for the case
- * where the first one is broken.
+ * Replaces the whole document when the root layout fails, so fonts, tokens and
+ * dictionary are unavailable: plain English, carrying only the digest for the
+ * logs.
  */
 export default function GlobalError({
   error,

@@ -1,26 +1,22 @@
 import { TabStrip } from "@/components/product/tab-strip";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
-/** The tabs of a participant's page, in the order they stand. */
 export const PARTICIPANT_TABS = ["timeline", "queries", "answers", "workspace", "sessions"] as const;
 export type ParticipantTab = (typeof PARTICIPANT_TABS)[number];
 
-/** The tab `?tab=` names; the timeline when it names none, or nothing this page has. */
+/** The tab `?tab=` names, or the timeline for none or an unknown one. */
 export function tabFromParam(value: string | string[] | undefined): ParticipantTab {
   const first = Array.isArray(value) ? value[0] : value;
   return (PARTICIPANT_TABS as readonly string[]).includes(first ?? "") ? (first as ParticipantTab) : "timeline";
 }
 
-/** A tab's address, which an organiser can share; the timeline is the page's own. */
+/** A tab's shareable address; the timeline is the bare page. */
 export function tabHref(contestId: string, registrationId: string, tab: ParticipantTab): string {
   const base = `/contests/${contestId}/monitor/${registrationId}`;
   return tab === "timeline" ? base : `${base}?tab=${tab}`;
 }
 
-/**
- * The strip of a participant's tabs: `TabStrip`, which a participant's own
- * report wears too, with this screen's own addresses and words.
- */
+/** `TabStrip` with this screen's addresses and words. */
 export function ParticipantTabs({
   contestId,
   registrationId,

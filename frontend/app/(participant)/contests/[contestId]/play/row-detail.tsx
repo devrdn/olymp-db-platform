@@ -9,33 +9,17 @@ import { cn } from "@/lib/utils";
 import type { PlayDictionary } from "./dictionary";
 
 /**
- * One row of a query's result, open in full — §7 of the workspace design.
- *
- * The table above it has to clip: every row is the same height and every
- * column a declared width, which is what makes the window over a
- * thousand-row answer arithmetic rather than measurement (see
- * `result-panel.tsx`). The price of that is a cell a participant cannot read,
- * and a `title` attribute is not a way to read a witness statement. So the
- * row opens here instead: every column of it, every value whole, wrapped
- * rather than clipped, and each one takeable out of the page.
- *
- * Only the result table opens a row. The query log deliberately does not
- * (the plan's own words): what a log entry holds is one query's text, which
- * has its own place, not a row of somebody's data.
+ * One row of a query's result, open in full (SPEC.md §5).
+ * The table clips cells to keep its window arithmetic (`result-panel.tsx`);
+ * here every value is whole, wrapped, and can be copied. Only the result
+ * table opens rows; the query log does not.
  */
 
 /**
- * Puts text on the clipboard, or says it could not.
- *
- * Two ways, because the first one is not always there: `navigator.clipboard`
- * is a secure-context API, and a classroom machine reaching this service over
- * plain HTTP on the local network — which is exactly how an on-premise
- * olympiad is often run — has no `clipboard` at all. The old
- * `document.execCommand("copy")` over a detached textarea still works
- * everywhere, so it is what the failure falls through to.
- *
- * Nothing here throws. A refused clipboard is a line under the buttons, not
- * an exception that takes the result panel down with the copy.
+ * Puts text on the clipboard and reports whether it could.
+ * `navigator.clipboard` exists only in a secure context, and an on-premise
+ * olympiad is often served over plain HTTP, so the fallback is
+ * `execCommand("copy")` on a temporary textarea. Never throws.
  */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -44,29 +28,24 @@ async function copyText(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // Permission refused, or a clipboard the browser will not hand over
-    // without a gesture it did not see. The selection below may still work.
+    // Permission refused or no user gesture seen; the fallback may still work.
   }
 
-  // Selecting a textarea takes the focus with it, and the focus is what the
-  // row's own Esc and arrows are attached to — left on `<body>`, the panel
-  // stops answering the keyboard on exactly the plain-HTTP machines this
-  // branch exists for. So: remember what had it, and give it back.
+  // Selecting the textarea takes the focus, which the row's Esc and arrows
+  // depend on, so it is given back afterwards.
   const focused = document.activeElement as HTMLElement | null;
   const area = document.createElement("textarea");
   try {
     area.value = text;
     area.setAttribute("readonly", "");
     // Off-screen rather than hidden: a `display: none` textarea has no
-    // selection to copy, and a fixed one does not scroll the page under the
-    // participant on the way.
+    // selection, and `fixed` does not scroll the page.
     area.style.position = "fixed";
     area.style.top = "0";
     area.style.opacity = "0";
     document.body.appendChild(area);
-    // Focused as well as selected: some browsers copy nothing from a
-    // selection in an unfocused field, and doing it explicitly is also what
-    // makes the focus this steals something the `finally` below can give back.
+    // Focused as well as selected: some browsers copy nothing from an
+    // unfocused field.
     area.focus({ preventScroll: true });
     area.select();
     return document.execCommand("copy");
@@ -95,15 +74,15 @@ export function RowDetail({
   columns: readonly string[];
   columnTypes?: readonly string[];
   row: readonly (string | null)[];
-  /** Which row of the whole answer this is, counted from zero as the table counts. */
+  /** The row's zero-based index in the whole answer. */
   index: number;
-  /** The word the table prints for a null, so the two never disagree. */
+  /** The word the table prints for a null, so the two agree. */
   nullLabel: string;
   dict: PlayDictionary;
   onClose: () => void;
-  /** The arrows and Esc, handled by whoever owns the selection. */
+  /** The arrows and Esc, handled by the selection's owner. */
   onKeyDown?: (event: React.KeyboardEvent) => void;
-  /** How the pane above sizes this — see the result split's own comment. */
+  /** Sizing from the result split (see its comment). */
   className?: string;
 }) {
   const t = dict.participant.play.workspace.row;
@@ -111,29 +90,17 @@ export function RowDetail({
   const regionRef = useRef<HTMLDivElement>(null);
 
   /**
-   * Takes the keyboard when the row opens.
-   *
-   * Without it, opening a row is silent for anybody not looking at the
-   * screen: `aria-selected` on a `tr` of an ordinary table is not announced,
-   * and a panel appearing somewhere below the table announces nothing of
-   * itself either. Moving the focus here is the announcement — the region's
-   * own name, "Row 3 of the result", is what gets read — and it is also what
-   * puts "Copy row", "Close" and the arrows where the participant now is.
-   *
-   * On mount, which is exactly when the row opens: the panel is not rendered
-   * at all while nothing is open, and arrowing to a neighbouring row keeps
-   * this same region. Closing hands the focus back to the row it came from
-   * (`SelectableRows.close`), so the round trip ends where it started.
+   * Takes the focus when the row opens (this mounts only then). Neither
+   * `aria-selected` on a table row nor a new panel is announced, so the
+   * focus move is the announcement, reading the region's name. Closing
+   * returns the focus to the row (`SelectableRows.close`).
    */
   useEffect(() => {
     regionRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // A notice belongs to the row it was shown on: arrowing to the next row
-  // must not leave "Copied" standing over a value nobody copied. Cleared
-  // during the render that brings the new row in rather than in an effect
-  // afterwards — React's own "reset state when a prop changes" pattern, and
-  // the one the result table beside it already uses for its own window.
+  // A notice belongs to its row: arrowing on clears "Copied". Reset during
+  // render, React's pattern for resetting state on a prop change.
   const [shown, setShown] = useState(row);
   if (shown !== row) {
     setShown(row);
@@ -151,9 +118,7 @@ export function RowDetail({
       ref={regionRef}
       role="region"
       aria-label={t.region.replace("{n}", number)}
-      // Focusable by script, never a stop in the tab order: the participant
-      // tabs through the table and this panel's own controls, not through
-      // the box around them. See the effect above for what focuses it.
+      // Focused by script only, never a tab stop.
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cn("flex min-h-0 flex-col overflow-hidden", className)}
@@ -163,8 +128,7 @@ export function RowDetail({
           {t.heading.replace("{n}", number)}
         </span>
         <div className="flex-1" />
-        {/* The whole row in the same shape the table's own download has, so
-            what is pasted into a spreadsheet lands in the same columns. */}
+        {/* CSV, like the table's download, so a paste lands in the same columns. */}
         <Button type="button" variant="quiet" size="sm" onClick={() => copy(toCsv(columns, [row]))}>
           {t.copyRow}
         </Button>
@@ -173,11 +137,8 @@ export function RowDetail({
         </Button>
       </div>
 
-      {/* On the page from the start, empty. A live region only announces what
-          changes *inside* it: one created together with its own text is a
-          region the reader never had, and a refused copy — the one message
-          that matters — would go unsaid. Empty it draws no line box, so it
-          costs nothing until there is something to say. */}
+      {/* Rendered empty from the start: a live region announces only changes
+          inside it, so one created with its text would say nothing. */}
       <p
         role="status"
         className={cn(
@@ -199,9 +160,7 @@ export function RowDetail({
             >
               <dt className="truncate font-mono text-label text-ink-3 uppercase" title={column}>
                 {column}
-                {/* The type under the name, as the table's own header draws
-                    it — and absent rather than wrong when this build could
-                    not name it. */}
+                {/* The type under the name, absent when unknown. */}
                 {columnTypes?.[c] ? (
                   <span className="block truncate font-normal normal-case">{columnTypes[c]}</span>
                 ) : null}
@@ -213,9 +172,7 @@ export function RowDetail({
                   value
                 )}
               </dd>
-              {/* A null has no text to take: the word on screen is this
-                  interface's, not the database's, and pasting it would be
-                  pasting a translation. */}
+              {/* A null has no text to copy; the word on screen is a translation. */}
               {value === null ? (
                 <span />
               ) : (
@@ -223,10 +180,8 @@ export function RowDetail({
                   type="button"
                   variant="quiet"
                   size="sm"
-                  // The visible words say what it does; the accessible name
-                  // says which of the columns it does it to, because a
-                  // fifteen-column row is fifteen buttons that otherwise read
-                  // the same.
+                  // The accessible name names the column, or every copy button in a
+                  // wide row would read the same.
                   aria-label={t.copyValueNamed.replace("{column}", column)}
                   onClick={() => copy(value)}
                 >

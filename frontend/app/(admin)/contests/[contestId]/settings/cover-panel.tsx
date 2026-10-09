@@ -14,30 +14,18 @@ import { removeCoverAction, uploadCoverAction, type SettingsState } from "./acti
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * The refusals that are about the credit line rather than about the file.
- *
- * Every other code this panel can receive — the file is too heavy, the format
- * is not one we accept, the picture has too many pixels, the account has
- * uploaded too often — is about what was chosen, and belongs beside the
- * chooser. Splitting them is the whole point: a refusal that cannot say which
- * of the two controls to change is a refusal that has to be guessed at.
+ * Refusals about the credit line, shown under it; every other code concerns the
+ * file and is shown beside the chooser.
  */
 const ATTRIBUTION_CODES = new Set(["cover_attribution_required", "cover_attribution_too_long"]);
 
-/** Which of the two forms the outcome on screen belongs to. */
 type Attempt = "upload" | "remove";
 
-/** A file the organiser has picked, and the address the browser can draw it from. */
 type Choice = { file: File; preview: string | null };
 
 /**
- * The picked file as something an `<img>` can show, before a byte has been
- * sent.
- *
- * Object URLs are a browser's, not jsdom's, and the preview is a courtesy
- * rather than a requirement: where they do not exist the panel goes on showing
- * what the contest wears today, and says in words which file is about to
- * replace it.
+ * A preview URL for the picked file. Object URLs may not exist (jsdom); then
+ * the panel names the file in words instead.
  */
 function choose(file: File): Choice {
   return {
@@ -47,21 +35,12 @@ function choose(file: File): Choice {
 }
 
 /**
- * The picture a contest wears, and the two things an organiser can do to it.
+ * Upload or remove the cover. Not `useActionState`: with two forms, what the
+ * contest wears is whichever ran last, and two hooks do not record order, so
+ * one outcome stamped with its attempt is kept instead.
  *
- * Not `useActionState`, which every other panel on this screen uses, and the
- * exception is worth the sentence: there are two forms here, an upload and a
- * removal, and what the contest wears afterwards is whichever of them ran
- * *last*. Two independent `useActionState` hooks hold two results and say
- * nothing about their order, so "upload, then think better of it and remove"
- * would leave the uploaded picture on screen. One outcome, stamped with the
- * attempt it came from, answers that without a second source of truth.
- *
- * The credit line is not decoration and the panel does not treat it as such.
- * The publish gate refuses a contest whose uploaded cover credits nobody
- * (design spec §10.1), so the field says it is required while the picture is
- * being chosen — not after a round trip, and not at publishing time, which is
- * the worst possible moment to learn it.
+ * The publish gate refuses an uploaded cover without a credit (SPEC.md §10.1), so
+ * the field is marked required while choosing.
  */
 export function CoverPanel({
   contestId,
@@ -70,7 +49,7 @@ export function CoverPanel({
   dict,
 }: {
   contestId: string;
-  /** What the contest wears as the page loaded it, or nothing. */
+  /** The cover as the page loaded it, or null. */
   cover: ContestCover | null;
   editable: boolean;
   dict: Dictionary;
@@ -84,16 +63,11 @@ export function CoverPanel({
 
   const [chosen, setChosen] = useState<Choice | null>(null);
   const [attribution, setAttribution] = useState(cover?.attribution ?? "");
-  /** True once an upload has been refused here for having nobody credited. */
+  /** Set once an upload was refused here for a missing credit. */
   const [uncredited, setUncredited] = useState(false);
 
-  // The server's copy, as the last render received it.
-  //
-  // When it moves, this panel's own idea of the cover moves with it: a save
-  // revalidates the page, and a panel still showing what it sent quietly
-  // disagrees with what was stored. It is the same reset the panels next door
-  // get from a `key` on their form, done from the inside so that it does not
-  // depend on the parent remembering to spell it.
+  // When the server's copy changes after a save, reset this panel's view of the
+  // cover, so it does not depend on the parent keying it.
   const [seen, setSeen] = useState(cover);
   if (seen !== cover) {
     setSeen(cover);
@@ -102,9 +76,8 @@ export function CoverPanel({
     setUncredited(false);
   }
 
-  // An object URL outlives the state that named it — it is held by the
-  // document, not by React — so every one this panel makes is given back when
-  // the choice moves on or the panel goes away.
+  // Object URLs are held by the document, so each is revoked when the choice
+  // changes or the panel unmounts.
   useEffect(() => {
     const url = chosen?.preview;
     if (!url) return;
@@ -121,8 +94,8 @@ export function CoverPanel({
       const state = await action(outcome?.state ?? {}, form);
       setOutcome({ of, state });
       setAttempt(null);
-      // `undefined` is "this save was not about the cover"; `null` is "there
-      // is no longer one". Only the second may clear the picture on screen.
+      // `undefined`: the save was not about the cover; `null`: the cover is
+      // gone.
       if (state.cover !== undefined) setCurrent(state.cover);
       if (state.saved) setChosen(null);
     });
@@ -131,9 +104,8 @@ export function CoverPanel({
   function submit(form: FormData) {
     if (!chosen) return;
     if (!attribution.trim()) {
-      // Refused here, without spending a place in the account's upload budget
-      // — which counts refusals — on a request whose answer this side already
-      // knows. The action refuses it again for a browser with no JavaScript.
+      // Refused here, since refusals count against the upload budget. The
+      // action refuses it again without JavaScript.
       setUncredited(true);
       return;
     }
@@ -166,9 +138,7 @@ export function CoverPanel({
         <Tooltip label={dict.chrome.helpLabel}>{t.help}</Tooltip>
       </div>
 
-      {/* What is accepted stays on screen, above the chooser: the rule was put
-          before the choice on purpose, so an 8 MB photograph straight off a
-          phone is not picked blind and refused after the fact. */}
+      {/* The rules precede the chooser, so a phone photo is not picked blind and refused after. */}
       <p className="max-w-body text-small text-ink-2">{t.hint}</p>
 
       <div className="flex flex-col gap-6 narrow:flex-row narrow:items-start">
@@ -182,17 +152,12 @@ export function CoverPanel({
                 className="size-full object-cover"
               />
             ) : (
-              /* The same drawing the front page puts on this contest's card,
-                 not a second one of its own: an organiser who saw one cover
-                 here and another out there would learn that neither is
-                 real (design spec §2.3). */
+              /* The same drawing the contest's card shows elsewhere (SPEC.md §10.3). */
               <DrawnCover seed={contestId} label={t.drawnAlt} />
             )}
           </div>
 
-          {/* What the frame above is showing, said in words: the file about to
-              go up, the credit line of the one already there, or why there is
-              a drawn cover in it. */}
+          {/* Says in words what the frame shows. */}
           <figcaption className="flex flex-col gap-1">
             {chosen ? (
               <>
@@ -270,8 +235,7 @@ export function CoverPanel({
                 {removing ? t.removing : t.remove}
               </Button>
 
-              {/* Beside the control that caused it, like every other refusal
-                  here: a removal has no field of its own to stand under. */}
+              {/* A removal has no field, so its refusal sits beside the button. */}
               {removeFailure ? (
                 <p role="alert" className="max-w-body text-small text-bad">
                   {removeFailure}

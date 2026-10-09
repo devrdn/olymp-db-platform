@@ -29,18 +29,14 @@ describe("my notes", () => {
 
     expect(screen.getByText("suspects: 3")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Query 1" })).toBeInTheDocument();
-    // The SQL is highlighted, so it is read from the block rather than as
-    // one run of text: the keywords are elements of their own.
+    // Highlighted SQL is read from the block, since keywords are separate
+    // elements.
     const blocks = [...document.querySelectorAll("pre code")].map((code) => code.textContent);
     expect(blocks).toContain("SELECT * FROM guests");
     expect(screen.getByText(t().asLeft)).toBeInTheDocument();
   });
 
-  /**
-   * The history of an edit is a monitoring fact about how somebody worked,
-   * and it is the organiser's tool rather than a record the participant is
-   * handed back (design §2.2).
-   */
+  /** Edit history is an organiser's monitoring tool (SPEC.md §5.2). */
   test("offers no history of the edits", () => {
     renderTab({
       notes: { body: "suspects: 3", updatedAt: "2026-05-14T09:00:00Z" },
@@ -51,18 +47,11 @@ describe("my notes", () => {
     expect(screen.getByText(t().noTabs)).toBeInTheDocument();
   });
 
-  /**
-   * The two columns split on the page's own breakpoint, not on a container
-   * query: nothing in this screen's tree declares `@container`, so a
-   * `@min-[…]` class here would never apply at any width.
-   */
+  /** Splits on the page breakpoint: no `@container` exists, so `@min-[…]` would never apply. */
   test("splits on the breakpoint the rest of the screen uses", () => {
     renderTab({ notes: { body: "suspects: 3", updatedAt: null }, tabs: [] });
 
-    // Found through the markup the screen already has — the element holding
-    // the two sections — rather than through an attribute added for the
-    // test's benefit: a hook nothing renders for is one more thing to keep
-    // alive, and one the component is free to lose without anybody noticing.
+    // Found through existing markup rather than a test-only attribute.
     const columns = screen.getByRole("heading", { name: t().notes }).closest("section")
       ?.parentElement as HTMLElement;
     expect(columns).toHaveClass("grid", "grid-cols-2", "max-narrow:grid-cols-1");

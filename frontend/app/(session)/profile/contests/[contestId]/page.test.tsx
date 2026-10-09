@@ -4,8 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The page is a Server Component: the API and the request are faked, and what
-// is under test is what it reads for the address and what it renders.
+// A Server Component: API and request are faked.
 const { serverRequest, notFound } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
   notFound: vi.fn(() => {
@@ -93,10 +92,7 @@ describe("the heading", () => {
   });
 });
 
-/**
- * The tab is in the address, so it is in the title too: three browser tabs
- * of one report all called "Result" are three tabs nobody can tell apart.
- */
+/** The tab is in the title, so browser tabs are distinguishable. */
 describe("the title of the browser tab", () => {
   test("names the tab the address asks for", async () => {
     expect(await generateMetadata({ searchParams: Promise.resolve({ tab: "queries" }) } as never)).toEqual({
@@ -143,12 +139,7 @@ describe("the tab in the address", () => {
   });
 });
 
-/**
- * One answer for every one of them. A contest that is not this participant's,
- * one that has not ended for them, and one that does not exist are the same
- * 404 from the API with the same code, and the same not-found page here: the
- * profile does not say what exists or who is on it.
- */
+/** Another's contest, one not yet ended for them, and a missing one get the same not-found page. */
 describe("an address that leads nowhere", () => {
   test("a contest that has not finished for this participant is not found", async () => {
     serverRequest.mockImplementation(async () => {
@@ -172,18 +163,11 @@ describe("an address that leads nowhere", () => {
     expect(serverRequest).not.toHaveBeenCalled();
   });
 
-  /**
-   * The report's own answer decides the page, whichever read fails first.
-   *
-   * The two reads run together, and a tab that fails for its own reason must
-   * not be what the reader is shown when the report says the contest is not
-   * theirs: a race would answer with whichever rejection arrived first, and
-   * the loser's would be left with nobody to receive it.
-   */
+  /** The report's failure decides, even when the tab's read fails first. */
   test("answers with the report's failure even when the tab fails sooner", async () => {
     serverRequest.mockImplementation(async (path: string) => {
       if (path.startsWith(`${base}/queries`)) throw new Error("the tab read broke first");
-      // A tick later, so the tab's failure is certainly the first one.
+      // A tick later, so the tab fails first.
       await new Promise((resolve) => setTimeout(resolve, 0));
       throw new ApiError("profile_contest_not_found", 404, "No finished contest of yours with that identifier");
     });

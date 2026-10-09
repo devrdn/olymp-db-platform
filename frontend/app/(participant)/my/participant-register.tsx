@@ -13,24 +13,11 @@ import { EnrollButton } from "./enroll-button";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
- * A participant's register, used by both of their screens.
- *
- * One component, not two, because the rows are identical: the same columns,
- * the same window, the same rule for what a row offers. What differs is which
- * contests are in it and what the screen is called, so those arrive as props.
- * Two components differing by a heading is how one of them gets a fix and the
- * other does not.
- *
- * A register, like the author's, and for the same reason the direction gives:
- * rows compare down a column and tiles do not. It is not the author's register
- * with a column removed, though. What a student scans for is different — when
- * does it start, can I get in — so the columns are the window and the way in,
- * and the author's audit columns are gone.
- *
- * No thumbnails. The specification allows a photograph above the crime
- * story, where atmosphere is part of the task, and nowhere else; a strip of
- * eight of them here would be the wall of cards this direction was chosen to
- * get away from.
+ * A participant's register, shared by `/my` and `/open`: the rows are the
+ * same, only the contests and the heading differ, so one component keeps a
+ * fix from reaching only one screen. Rows rather than tiles, so columns
+ * compare; the columns are the window and the way in. No thumbnails: the spec
+ * allows a photograph only above the crime story.
  */
 
 const HEAD =
@@ -38,37 +25,26 @@ const HEAD =
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
 
 /**
- * Whether joining is worth offering on this row.
- *
- * Somebody already registered is never offered it. The listing used to be
- * unable to say — the summary carried no such field — so the button appeared
- * wherever joining was possible and the API answered `already_enrolled`,
- * which was tolerable while "mine" and "open to me" shared one screen. On a
- * catalogue that lists both, it turns an ordinary state into an error message.
- *
- * `draft` and `archived` never appear in a participant's scope. `finished`
- * cannot be joined, and `running` is the game loop's to open, which is step 5.
+ * Whether joining is offered: only for an open, published contest the
+ * participant is not yet in. On a catalogue listing both kinds, offering it
+ * to an enrolled participant would turn an ordinary state into an
+ * `already_enrolled` error.
  */
 function canOfferToJoin(contest: ContestSummary): boolean {
   return !contest.enrolled && contest.enrollment === "open" && contest.status === "published";
 }
 
 /**
- * Whether there is a contest to walk into.
- *
- * Enrolled and running, and nothing else: a published contest has not started,
- * and a finished one has no console to open. Without this the console existed
- * and nothing in the interface led to it, which is the same as it not
- * existing.
+ * Whether there is a contest to walk into: enrolled and running. A published
+ * contest has not started, and a finished one has no console.
  */
 function canOpen(contest: ContestSummary): boolean {
   return contest.enrolled && contest.status === "running";
 }
 
 /**
- * Whether the contest has a table worth opening: from the moment it runs, and
- * after it finishes, which is when the result is what people come back for.
- * Offered to everybody listed, enrolled or not — the table is public.
+ * Whether the contest has a standings table worth opening: from the moment
+ * it runs, and after. Public, so offered whether enrolled or not.
  */
 function hasTable(contest: ContestSummary): boolean {
   return contest.status === "running" || contest.status === "finished" || contest.status === "archived";
@@ -90,9 +66,8 @@ export function ParticipantRegister({
   heading: string;
   countLabel: string;
   /**
-   * What to say when there is nothing, and where to go about it. The two
-   * screens have different answers: an empty "mine" sends the reader to the
-   * open list, and an empty open list has nowhere useful to send anybody.
+   * What to say when there is nothing, and where to go. An empty "mine"
+   * points to the open list; an empty open list has nowhere to point.
    */
   empty: { title: string; body: string; action?: { label: string; href: string } };
 }) {
@@ -112,8 +87,7 @@ export function ParticipantRegister({
 
       {contests.length === 0 ? (
         <div className="border-t border-line">
-          {/* `empty`, never `empty-filtered`: neither screen has filters, so
-              there is no control to offer and offering one would be a lie. */}
+          {/* `empty`, never `empty-filtered`: neither screen has filters. */}
           <StateView state={{ kind: "empty", ...empty }} />
         </div>
       ) : (
@@ -175,10 +149,8 @@ export function ParticipantRegister({
                       {canOfferToJoin(contest) ? (
                         <EnrollButton contestId={contest.id} dict={dict} />
                       ) : canOpen(contest) ? (
-                        /* The one row on this screen with something to do right
-                           now. It outranks "you are enrolled", which is a state
-                           rather than a step — and a contest that is running is
-                           the only thing a participant came here for. */
+                        /* The one row with something to do now; it outranks "you are
+                           enrolled", which is a state, not a step. */
                         <Link
                           href={`/contests/${contest.id}/play`}
                           className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
@@ -186,14 +158,12 @@ export function ParticipantRegister({
                           {t.openConsole}
                         </Link>
                       ) : contest.enrolled ? (
-                        /* First, because it outranks every other reason there is
-                           nothing to press. "By invitation" on a contest one is
-                           already invited to reads as though one were not. */
+                        /* Before the invitation note: "by invitation" on a contest one is
+                           already in reads as though one were not. */
                         <span className="text-small text-ink-2">{t.enrolled}</span>
                       ) : (
-                        /* Nothing to do, and the state column already says why.
-                           A disabled button repeating it would be a control that
-                           exists only to be refused. */
+                        /* The state column already says why; a disabled button would only
+                           repeat it. */
                         <span className="text-small text-ink-3">
                           {contest.enrollment === "invite_only" ? t.byInvitation : t.noAction}
                         </span>

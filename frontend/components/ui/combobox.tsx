@@ -6,32 +6,23 @@ import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-/**
- * A searchable picker, drawn from this project's own tokens rather than the
- * registry's — the same reasoning as `dialog.tsx` and `checkbox.tsx`.
- *
- * The list is always exactly what the caller passed in `items`: `filter={null}`
- * turns off the primitive's own client-side re-filtering, because the callers
- * this project has all fetch an already-matched result set from the server —
- * re-filtering a substring match against a label built from more fields than
- * the label shows (a login and an email, folded into one displayed name)
- * would silently drop matches the server was right to return.
- *
- * Selection is compared by `key`, not by reference: a picker whose items come
- * back from a fresh request every keystroke never has the same object twice,
- * even for the option already chosen.
- */
+/** One item the picker offers. */
 export type ComboboxOption<T> = {
-  /** Stable identity, compared across re-fetches — never the object itself. */
+  /** Stable identity across re-fetches. */
   key: string;
   value: T;
-  /** What the input shows once this option is chosen, and what it is matched
-   * by inside the popup. */
+  /** Shown in the input once chosen, and matched inside the popup. */
   label: string;
-  /** A second line under the label — a login under a name, for one. */
+  /** A second line under the label, e.g. a login under a name. */
   description?: string;
 };
 
+/**
+ * A searchable picker. `filter={null}` disables client-side re-filtering:
+ * callers fetch an already-matched set, and re-matching against the displayed
+ * label would drop rows the server matched on other fields (login, email).
+ * Selection is compared by `key`, since re-fetched items are new objects.
+ */
 export function Combobox<T>({
   id,
   label,
@@ -58,20 +49,17 @@ export function Combobox<T>({
   onValueChange: (value: ComboboxOption<T> | null) => void;
   placeholder?: string;
   emptyMessage: string;
-  /** Announced politely to screen readers as it changes — "Searching…", a
-   * count, or nothing once the answer is on screen. */
+  /** Announced politely to screen readers: "Searching…", a count, or nothing. */
   statusMessage?: string;
   disabled?: boolean;
   className?: string;
-  /** id of a paragraph elsewhere on the page — a hint, a "Selected: …" line
-   * — that describes this control. Wired to the input's own
-   * `aria-describedby` rather than left for the caller to attach by hand,
-   * which is how a describing paragraph ends up in the DOM with nothing
-   * pointing at it. */
+  /**
+   * Id of a paragraph elsewhere (a hint, a "Selected: …" line) wired to the
+   * input's `aria-describedby`.
+   */
   describedBy?: string;
-  /** An explanation behind a "?" beside the label, as `Field` has one. */
   help?: string;
-  /** The "?" button's accessible name (`chrome.helpLabel`); required with `help`. */
+  /** Required with `help`. */
   helpLabel?: string;
 }) {
   return (
@@ -89,13 +77,9 @@ export function Combobox<T>({
       disabled={disabled}
       autoHighlight
     >
-      {/* A native label, not `Combobox.Label`: the primitive's own label only
-          associates with `Combobox.Trigger`, which this picker does not use
-          — it is a typeahead built on `Combobox.Input` directly, and the
-          primitive's own development warning says a native label (or
-          `Field.Label`) is what labels that form control. */}
-      {/* The "?" beside the label, never inside it, so the input's name
-          stays the label alone — the same rule `Field` follows. */}
+      {/* A native label: `Combobox.Label` only associates with
+         `Combobox.Trigger`, which this typeahead does not use. */}
+      {/* Beside the label, never inside, so the input's name is the label alone. */}
       <div className="flex items-center gap-1.5">
         <label htmlFor={id} className="font-mono text-label text-ink-3 uppercase">
           {label}
@@ -124,9 +108,8 @@ export function Combobox<T>({
               "border border-line-2 bg-panel py-1 outline-none",
             )}
           >
-            {/* Requires `items` on the root, and must stay mounted — see the
-                primitive's own doc comment — so its text is toggled rather
-                than the element itself. */}
+            {/* Requires `items` on the root and must stay mounted, so its text
+               is toggled instead. */}
             <ComboboxPrimitive.Empty className="px-3 py-2 text-small text-ink-3">
               {emptyMessage}
             </ComboboxPrimitive.Empty>
@@ -152,9 +135,8 @@ export function Combobox<T>({
         </ComboboxPrimitive.Positioner>
       </ComboboxPrimitive.Portal>
 
-      {/* Visually hidden, not unmounted: the primitive announces a change in
-          its text to screen readers, which needs the element to still be
-          there when the change happens. */}
+      {/* Visually hidden, not unmounted: the announcement needs the element
+         present when its text changes. */}
       <ComboboxPrimitive.Status className="sr-only" aria-live="polite">
         {statusMessage}
       </ComboboxPrimitive.Status>

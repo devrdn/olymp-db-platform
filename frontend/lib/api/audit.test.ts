@@ -4,8 +4,7 @@ import { auditSearch, blockedProblems, dayBounds, summariseChanges } from "./aud
 
 describe("auditSearch", () => {
   test("leaves out what was not asked for", () => {
-    // An empty filter sent as `action=` would be a filter, not the absence of
-    // one, and the API would answer with nothing.
+    // `action=` would be a filter that matches nothing.
     expect(auditSearch({}).toString()).toBe("limit=50");
   });
 
@@ -28,9 +27,6 @@ describe("auditSearch", () => {
 
 describe("dayBounds", () => {
   test("takes a day to the instant after it, because `to` is exclusive", () => {
-    // "Up to and including the 3rd" is midnight on the 4th. Left as the 3rd,
-    // a whole day of entries would be missing from the answer and nothing
-    // would say so.
     expect(dayBounds("", "2026-03-03")).toEqual({ to: "2026-03-04T00:00:00Z" });
   });
 
@@ -61,7 +57,6 @@ describe("summariseChanges", () => {
   });
 
   test("says when a save moved nothing", () => {
-    // Otherwise it is indistinguishable from an edit the reader cannot see.
     expect(summariseChanges({ changed: false })).toEqual({ changes: [], unchanged: true });
   });
 
@@ -101,8 +96,7 @@ describe("blockedProblems", () => {
   });
 
   test("drops anything that is not a string, rather than rendering it raw", () => {
-    // The payload is read straight off the wire; a shape this reader does not
-    // expect must not become a React child.
+    // Read straight off the wire: an unexpected shape must not become a React child.
     expect(blockedProblems({ problems: ["no_story", 12, null] })).toEqual(["no_story"]);
   });
 });

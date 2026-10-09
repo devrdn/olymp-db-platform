@@ -5,11 +5,9 @@ import { ExportMenu } from "./export-menu";
 
 describe("ExportMenu", () => {
   test("hands the download to the browser as a link, not to a script", () => {
-    // The whole design decision, held here: what leaves the server is decided
-    // by the server, under the permission the endpoint sits behind, and the
-    // page only asks for it. A button that fetched and built a blob could
-    // only ever offer what the page already had — which for the contest
-    // package is nothing, because the answer key is never sent to a page.
+    // The server decides what leaves, under the endpoint's permission; a
+    // page-built blob could only hold what the page had (nothing, for the
+    // contest package).
     render(
       <ExportMenu
         heading="Export"
@@ -27,9 +25,8 @@ describe("ExportMenu", () => {
   });
 
   test("offers one control per format", () => {
-    // §9.1 promises NDJSON and XLSX beside CSV. Each surface offers one
-    // format today, so the shape has to be a list rather than a special case
-    // for one.
+    // A list even for one format, since more are planned (docs/ARCHITECTURE.md
+    // §9.1).
     render(
       <ExportMenu
         heading="Export"
@@ -45,8 +42,7 @@ describe("ExportMenu", () => {
   });
 
   test("renders nothing at all when a screen has no export to offer", () => {
-    // A group heading with no controls under it is a promise the screen does
-    // not keep, and a screen reader announces it all the same.
+    // A heading over no controls is still announced.
     const { container } = render(<ExportMenu heading="Export" formats={[]} />);
 
     expect(container).toBeEmptyDOMElement();

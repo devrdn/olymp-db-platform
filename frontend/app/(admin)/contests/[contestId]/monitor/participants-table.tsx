@@ -17,7 +17,7 @@ import { COUNTER_KEYS, filterRows, sortRows, type CounterKey, type RosterFilter,
 
 type MonitorDict = Dictionary["workspace"]["monitor"];
 
-/** The columns in the order they stand, and which way a first press sorts each. */
+/** Column order, and each column's first sort direction. */
 const COLUMNS: { key: SortKey; numeric: boolean }[] = [
   { key: "name", numeric: false },
   { key: "status", numeric: false },
@@ -29,15 +29,10 @@ const COLUMNS: { key: SortKey; numeric: boolean }[] = [
 const CONTROL = "h-(--control-h) border border-edge bg-bg px-2.5 text-control text-ink";
 
 /**
- * Every participant with their counters and flags (design §4, §6).
- *
- * The table is wider than the column it stands in once the feed is beside
- * it, so it scrolls sideways inside its own box — the page never does — with
- * the name held at the left edge, and down inside a bounded box with its
- * heading held at the top, so the feed beside it stays in view.
- *
- * Rows are memoised on the row object, and the rows arrive merged
- * (`mergeRoster`): a poll that changed one participant renders one row.
+ * Every participant with counters and flags (SPEC.md §5.1). Scrolls both ways
+ * inside its own box with the name column and heading held. Rows are memoised
+ * and arrive merged (`mergeRoster`), so a poll that changed one participant
+ * renders one row.
  */
 export function ParticipantsTable({
   contestId,
@@ -50,7 +45,7 @@ export function ParticipantsTable({
   contestId: string;
   rows: RosterRow[];
   truncated: boolean;
-  /** Participants with a new feed item a moment ago; their rows are lit. */
+  /** Participants with a fresh feed item; their rows are lit. */
   fresh: ReadonlySet<string>;
   dict: Dictionary;
   locale: string;
@@ -120,9 +115,7 @@ export function ParticipantsTable({
         <p className="font-mono text-data text-ink-3">
           {t.table.count.replace("{shown}", String(shown.length)).replace("{total}", String(rows.length))}
         </p>
-        {/* Above the table rather than in the flags heading: the heading
-            sits inside the table's own scroll box, which would clip the
-            explanation at its edge. */}
+        {/* Above the table: inside its scroll box the explanation would be clipped. */}
         <span className="inline-flex items-center gap-1 text-small text-ink-3">
           <span aria-hidden>{t.flags.help}</span>
           <FlagsHelp t={t} />
@@ -138,9 +131,8 @@ export function ParticipantsTable({
         <p className="text-body text-ink-2">{t.table.noMatch}</p>
       ) : (
         <div className="max-h-[42rem] overflow-auto border-y border-line max-narrow:max-h-[70vh]">
-          {/* Separate borders, not collapsed: a collapsed border belongs to the
-              table rather than the cell, so it would scroll away from under
-              the held heading and name column. */}
+          {/* Separate borders: a collapsed border belongs to the table and would
+             scroll away from the held cells. */}
           <table className="w-max min-w-full border-separate text-left" style={{ borderSpacing: 0 }}>
             <caption className="sr-only">{t.table.heading}</caption>
             <thead>
@@ -155,8 +147,7 @@ export function ParticipantsTable({
                       className={cn(
                         "sticky top-0 z-1 border-b border-line-2 bg-bg px-2 py-2 align-bottom font-mono text-label font-medium text-ink-3 uppercase",
                         numeric && key !== "flags" && "text-right",
-                        // The corner: held on both axes, above both the
-                        // heading row and the name column.
+                        // The corner cell, held on both axes above both.
                         index === 0 && "left-0 z-2",
                       )}
                     >
@@ -215,7 +206,7 @@ function FlagsHelp({ t }: { t: MonitorDict }) {
   );
 }
 
-/** A participant's raised flags as badges; the table's rows and a participant's page both show them. */
+/** Raised flags as badges, for the table and a participant's page. */
 export function FlagBadges({ flags, t }: { flags: MonitorFlags; t: MonitorDict }) {
   return (
     <span className="flex flex-wrap gap-1">
@@ -226,7 +217,7 @@ export function FlagBadges({ flags, t }: { flags: MonitorFlags; t: MonitorDict }
           className="rounded-full bg-warn-wash px-1.5 font-mono text-label whitespace-nowrap text-warn uppercase"
         >
           <span aria-hidden>{t.flags[flag].label}</span>
-          {/* The title is for a pointer; this is for everybody else. */}
+          {/* The title serves pointers; this serves everyone else. */}
           <span className="sr-only">{t.flags[flag].explain}</span>
         </span>
       ))}
@@ -237,10 +228,7 @@ export function FlagBadges({ flags, t }: { flags: MonitorFlags; t: MonitorDict }
 const CELL = "border-b border-line px-2 py-1.5";
 const NUMBER = "text-right font-mono text-data tabular-nums";
 
-/**
- * One participant. Memoised: the props are the row object, which survives a
- * poll that did not change it, and values that do not change between polls.
- */
+/** One participant, memoised on a row object that survives an unchanged poll. */
 const ParticipantRow = memo(function ParticipantRow({
   row,
   fresh,
@@ -263,8 +251,8 @@ const ParticipantRow = memo(function ParticipantRow({
   );
 
   return (
-    // Lit whole: the row's own fill shows through the transparent cells, and
-    // the name cell, opaque so the counters scroll under it, takes the same.
+    // The fill shows through transparent cells; the opaque name cell takes it
+    // too.
     <tr
       data-fresh={fresh || undefined}
       className="group transition-colors duration-(--t-state) ease-standard data-fresh:bg-accent-wash"
@@ -272,8 +260,7 @@ const ParticipantRow = memo(function ParticipantRow({
       <td
         className={cn(
           CELL,
-          // Held at the left edge while the counters scroll under it; opaque,
-          // or the numbers would scroll through the name.
+          // Held at the left; opaque so numbers do not scroll through the name.
           "sticky left-0 z-1 max-w-56 min-w-40 bg-bg",
           "transition-colors duration-(--t-state) ease-standard group-data-fresh:bg-accent-wash",
         )}

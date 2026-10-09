@@ -6,11 +6,7 @@ import { Tooltip } from "./tooltip";
 
 const EXPLANATION = "Percent of this question's own points, lost for every wrong attempt.";
 
-/**
- * Behaviour only. jsdom has no layout — every rectangle is zero — so whether
- * the bubble stays inside the viewport at the right edge or on a phone is not
- * something a test here can see; that was checked in a browser.
- */
+/** Behaviour only: jsdom has no layout, so viewport placement was checked in a browser. */
 function Harness({ onOuterKeyDown }: { onOuterKeyDown?: (event: React.KeyboardEvent) => void }) {
   return (
     <div onKeyDown={onOuterKeyDown}>
@@ -21,12 +17,12 @@ function Harness({ onOuterKeyDown }: { onOuterKeyDown?: (event: React.KeyboardEv
   );
 }
 
-/** How many Escape presses reached a handler outside the tooltip — Tab presses do too, and are not the point. */
+/** Escape presses that reached an outer handler (Tab presses reach it too). */
 const escapesSeenBy = (handler: ReturnType<typeof vi.fn>) =>
   handler.mock.calls.filter(([event]) => (event as React.KeyboardEvent).key === "Escape").length;
 
 const trigger = () => screen.getByRole("button", { name: "Hint" });
-// `hidden: true` because a closed bubble is hidden, and still has to be found.
+// A closed bubble is hidden but must still be found.
 const bubble = () => screen.getByRole("tooltip", { hidden: true });
 
 describe("Tooltip", () => {
@@ -62,8 +58,7 @@ describe("Tooltip", () => {
 
     await user.hover(trigger());
     await user.hover(bubble());
-    // Longer than the leave grace: a bubble that closed on leaving the "?"
-    // would be gone by now.
+    // Longer than the leave grace.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(bubble()).toBeVisible();
 
@@ -96,9 +91,8 @@ describe("Tooltip", () => {
   test("does not take a finger passing over it for hover", () => {
     render(<Harness />);
 
-    // React derives enter and leave from over and out, so those are the
-    // events to send. A finger that lands on the "?" only to scroll the form
-    // must not flash the bubble; the same event from a mouse must.
+    // React derives enter and leave from over and out. A touch must not open
+    // the bubble; a mouse must.
     fireEvent.pointerOver(trigger(), { pointerType: "touch" });
     expect(bubble()).not.toBeVisible();
 
@@ -130,7 +124,7 @@ describe("Tooltip", () => {
     await user.keyboard("{Escape}");
 
     expect(bubble()).not.toBeVisible();
-    // A dialog around it closes on the same key; one press closes one layer.
+    // One press closes one layer.
     expect(escapesSeenBy(outer)).toBe(0);
   });
 

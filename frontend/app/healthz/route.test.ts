@@ -1,9 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-// Liveness must not depend on the API: the container's healthcheck asks this
-// every fifteen seconds, and a probe that reached the API would fill its log
-// with four requests a minute. Any call to the API client is a failure here,
-// not a dependency to fake.
+// Liveness must not touch the API; any API call fails the test.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
@@ -23,8 +20,7 @@ describe("GET /healthz", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  // Prerendered at build time, the answer would be a file that says "ok"
-  // whether or not the server behind it is running.
+  // Prerendered, it would say "ok" whether or not the server runs.
   test("is rendered by the running server, not at build time", () => {
     expect(dynamic).toBe("force-dynamic");
   });

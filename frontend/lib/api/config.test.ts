@@ -29,13 +29,6 @@ describe("apiOrigin", () => {
   });
 });
 
-/**
- * The secret the reverse proxy proves itself with (see lib/api/forwarded.ts).
- * Without it no forwarded address is handed to the API — the safe answer, and
- * one that makes every visitor look like the web container. In production that
- * is almost certainly a deployment that forgot the variable, so it is said out
- * loud; in development there is usually no proxy at all, and nothing to say.
- */
 describe("ingressSecret", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
 
@@ -73,8 +66,7 @@ describe("ingressSecret", () => {
   });
 
   test("refuses the example file's placeholder in production, without repeating it", async () => {
-    // deploy/.env.example marks values an operator must choose with "change-me";
-    // a secret everybody who read the repository knows vouches for nobody.
+    // A "change-me" placeholder from deploy/.env.example is public, so it vouches for nobody.
     vi.resetModules();
     const fresh = await import("./config");
     const placeholder = "CHANGE-ME-to-the-output-of-openssl-rand-hex-32";

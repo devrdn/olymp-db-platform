@@ -4,9 +4,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
-// The workspace is rendered whole, because a divider only means anything
-// between two panes. Its collaborators are stubbed to nothing — this file is
-// about the widths, and each of them is tested where it lives.
+// The whole workspace is rendered, since a divider needs two panes; its
+// collaborators are stubbed out and tested where they live.
 vi.mock("./actions", () => ({
   runQueryAction: async () => ({ kind: "idle" }),
   submitAnswerAction: async () => ({ kind: "idle" }),
@@ -32,8 +31,7 @@ function show(contestId = "c1") {
       accountId="u1"
       contestId={contestId}
       storyBody={<p>A body in the stacks.</p>}
-      // This file is about the widths of the interactive panes; the print
-      // copy is rendered on the server now (page.tsx) and has none.
+      // Rendered on the server in production; it has no panes.
       printView={null}
       storyCover={null}
       storyUnavailable={null}
@@ -51,13 +49,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-/**
- * SPEC.md §11 asks `ConsoleShell` for "three panes with resizable, remembered
- * sizes", and the reason is the one a fixed layout ran into: how much room
- * the questions need is a property of the contest, not of the product. An
- * olympiad whose questions are two lines and one whose questions are a
- * paragraph want different columns.
- */
+/** SPEC.md §11: three panes with resizable, remembered sizes. */
 describe("the console's panes", () => {
   const t = en.participant.play.workspace.panes;
 
@@ -71,28 +63,24 @@ describe("the console's panes", () => {
     handle.focus();
     await user.keyboard("{ArrowLeft}");
 
-    // Left widens the questions: the pane is on the right, so its edge moves
-    // against the pointer.
+    // Left widens the questions: the pane is on the right.
     expect(handle).toHaveAttribute("aria-valuenow", String(Math.round(DEFAULT_SIDE_REM) + 1));
     expect(container.querySelector<HTMLElement>("[style*='--pane-side']")?.style.getPropertyValue("--pane-side")).toBe(
       `${DEFAULT_SIDE_REM + 1}rem`,
     );
   });
 
-  // The divider is a 1px hairline on purpose — the pane is the thing, not
-  // the handle — so what has to be big enough to press is the invisible area
-  // around it. Measured, that area was 9px wide at every screen size, on a
-  // control that first appears at 760px, which is a tablet somebody may well
-  // be using with a finger. jsdom cannot measure a pseudo-element, so what is
-  // held here is that the coarse-pointer widening is still declared.
+  // The hairline's grab area is 9px for a mouse and wider for a finger on
+  // the tablets that see it from 760px. jsdom cannot measure a
+  // pseudo-element, so the declared classes are checked.
   test("widens its grab area for a finger without stealing a mouse's clicks", () => {
     show();
     const handle = screen.getByRole("separator", { name: t.side });
 
-    // The mouse-sized area: one pixel of hairline plus four either side.
+    // Mouse-sized: one pixel of hairline plus four either side.
     expect(handle.className).toMatch(/(^|\s)after:-left-1(\s|$)/);
     expect(handle.className).toMatch(/(^|\s)after:-right-1(\s|$)/);
-    // The finger-sized one, and only where the pointer is coarse.
+    // Finger-sized, only where the pointer is coarse.
     expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-left-3(\s|$)/);
     expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-right-3(\s|$)/);
   });
@@ -111,17 +99,13 @@ describe("the console's panes", () => {
       String(Math.round(DEFAULT_SIDE_REM) + 4),
     );
 
-    // Another contest is another screen, and starts from the design's own
-    // width rather than inheriting somebody else's question length.
+    // Another contest starts from the design's width.
     screen.getByRole("separator", { name: t.side }).blur();
     show("c2");
     const both = screen.getAllByRole("separator", { name: t.side });
     expect(both[both.length - 1]).toHaveAttribute("aria-valuenow", String(Math.round(DEFAULT_SIDE_REM)));
   });
 
-  // A pane narrowed past this shows no column names and wraps every second
-  // word; a participant who dragged too far in a hurry should not have to
-  // drag back to read anything.
   test("cannot be collapsed to nothing", async () => {
     const user = userEvent.setup();
     show();
@@ -146,16 +130,8 @@ describe("the console's panes", () => {
 });
 
 /**
- * §7: the edge between the editor and the panel below it is draggable too.
- * It used to be a fixed 11:9, which is a share of the screen the product
- * picked — and how much of it a participant wants for the answer is theirs,
- * not ours: reading a forty-column row and writing a fifteen-line query want
- * opposite splits.
- *
- * The same handle as the two vertical edges, turned a quarter: a share of the
- * column's height rather than a width in rem, because the column's height is
- * the viewport's and a stored rem would mean something different on every
- * screen the contest is sat in front of.
+ * SPEC.md §5: the editor's split is draggable too, stored as a share of the column's
+ * height (the viewport's), since a stored rem would differ per screen.
  */
 describe("the edge between the editor and the panel below it", () => {
   const t = en.participant.play.workspace.panes;
@@ -166,9 +142,8 @@ describe("the edge between the editor and the panel below it", () => {
     const handle = screen.getByRole("separator", { name: t.editor });
     expect(handle).toHaveAttribute("aria-orientation", "horizontal");
     expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
-    // Its grab area widens above and below rather than left and right, and
-    // it is absent below the breakpoint, where the column's height is its own
-    // content and a share of it means nothing.
+    // The grab area widens vertically, and the handle is absent below the
+    // breakpoint, where the column's height is its content.
     expect(handle.className).toMatch(/(^|\s)after:-top-1(\s|$)/);
     expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-bottom-3(\s|$)/);
     expect(handle.className).toMatch(/(^|\s)max-narrow:hidden(\s|$)/);
@@ -217,10 +192,8 @@ describe("the edge between the editor and the panel below it", () => {
     expect(Number(handle.getAttribute("aria-valuemin"))).toBeGreaterThan(0);
   });
 
-  // A pointer drag never goes through React (see the module's own doc): it
-  // writes the share straight onto the column, and state is written once on
-  // release. What makes that work on this axis is that the share is read
-  // against the column's measured height, not against a font size.
+  // A drag writes straight onto the column and commits on release; on this
+  // axis the share is read against the column's measured height.
   test("a drag reads the column's own height, and commits once on release", () => {
     const { container } = show();
     const handle = screen.getByRole("separator", { name: t.editor });
@@ -231,8 +204,8 @@ describe("the edge between the editor and the panel below it", () => {
     fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0, clientY: 200 });
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 240 });
 
-    // Forty pixels of a four-hundred-pixel column is ten points of share, and
-    // it is on the element rather than in state.
+    // 40px of a 400px column is ten points of share, on the element, not in
+    // state.
     expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT + 10}%`);
     expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
 
@@ -240,11 +213,8 @@ describe("the edge between the editor and the panel below it", () => {
     expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT + 10));
   });
 
-  // A touch drag ends in ways a mouse drag does not: a second finger, the
-  // browser taking the gesture over as a scroll, a call arriving. The
-  // pointer then never comes up. Left alone, the handle stays in a drag
-  // nothing will ever end — the next pointer to cross it moves the edge
-  // with nothing pressed — and the column keeps a size nobody committed.
+  // A touch drag can end without a pointerup (a second finger, a scroll
+  // takeover), which would leave a drag nothing ends and an uncommitted size.
   test("an interrupted drag ends, and leaves the column where it started", () => {
     const { container } = show();
     const handle = screen.getByRole("separator", { name: t.editor });
@@ -263,10 +233,8 @@ describe("the edge between the editor and the panel below it", () => {
     expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT}%`);
   });
 
-  // The capture can be lost on its own — an element removed, a browser that
-  // decides the gesture belongs to it — and that is the same interruption
-  // by another name. After an ordinary release there is no drag left for it
-  // to undo, which is what keeps it from taking back a size just committed.
+  // Losing capture is the same interruption; after a normal release there is
+  // no drag left, so it cannot undo a committed size.
   test("a lost pointer capture ends the drag too, and never undoes a release", () => {
     const { container } = show();
     const handle = screen.getByRole("separator", { name: t.editor });
@@ -280,8 +248,7 @@ describe("the edge between the editor and the panel below it", () => {
 
     expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT}%`);
 
-    // The release order a browser really uses: pointerup, then the implicit
-    // loss of the capture. The share committed on the way up stands.
+    // A browser's real order: pointerup, then the implicit capture loss.
     fireEvent.pointerDown(handle, { pointerId: 2, clientX: 0, clientY: 200 });
     fireEvent.pointerMove(handle, { pointerId: 2, clientX: 0, clientY: 240 });
     fireEvent.pointerUp(handle, { pointerId: 2, clientX: 0, clientY: 240 });

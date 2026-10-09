@@ -3,24 +3,14 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 
-// Testing Library only auto-cleans when Vitest globals are enabled. They are
-// not, so the previous render would otherwise stay in the document and the
-// next query would find two of everything.
+// Testing Library auto-cleans only with Vitest globals, which are off.
 afterEach(cleanup);
 
 /**
- * jsdom does not lay out text, so `Range` — unlike `Element` — ships with no
- * `getClientRects`/`getBoundingClientRect` at all (`Element`'s own versions
- * exist and return a zero rect; `Range`'s are simply absent). CodeMirror 6
- * calls the `Range` ones on every view update, from a `requestAnimationFrame`
- * callback this test file never touches, to measure what it just drew — so
- * without a stub, any test that mounts `CodeEditor` (code-editor.test.tsx,
- * console.test.tsx) throws an *uncaught* `TypeError` well after the test that
- * triggered it has already reported passing, which Vitest correctly refuses
- * to treat as unrelated noise. The zero rectangle costs nothing here: no test
- * in this project asserts where a character was drawn on screen — that is
- * exactly the "jsdom cannot show you any of this" the component's own report
- * names, and is why the real-browser check exists.
+ * jsdom's `Range` has no `getClientRects`/`getBoundingClientRect`. CodeMirror
+ * calls them from `requestAnimationFrame` after each update, so without a stub
+ * a test mounting `CodeEditor` throws an uncaught `TypeError` after it has
+ * passed. No test asserts on-screen positions, so a zero rectangle is enough.
  */
 if (typeof Range !== "undefined" && !Range.prototype.getClientRects) {
   const zeroRect = (): DOMRect => ({

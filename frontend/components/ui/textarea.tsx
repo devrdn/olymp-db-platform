@@ -3,20 +3,9 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * A field for prose.
- *
- * The same square edge and the same `--edge` border as `Input`, because they
- * are the same control at different heights and a rounded one beside a square
- * one is the small inconsistency that makes a form look assembled from parts.
- *
- * Set in the narrative face rather than the interface one. What is typed here
- * is the crime story, and it is read back on the participant's screen in that
- * face; an author writing in one typeface and publishing in another is judging
- * a paragraph's rhythm against the wrong measure.
- *
- * `field-sizing-content` lets it grow with what is in it, bounded by
- * `min-h`/`max-h` — a scroll bar inside a box inside a page is where a long
- * story goes to be un-editable.
+ * A field for prose: the same square `--edge` border as `Input`, set in the
+ * narrative face the story is read in. `field-sizing-content` grows it within
+ * `min-h`/`max-h`.
  */
 function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
   return (

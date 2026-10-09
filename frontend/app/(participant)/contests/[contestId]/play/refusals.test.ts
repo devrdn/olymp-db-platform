@@ -42,14 +42,13 @@ describe("refusalKind", () => {
     expect(refusalKind(code)).toBe(kind);
   });
 
-  // Most of the vocabulary is this: the request itself was refused, and what
-  // to change is in the sentence the dictionary holds for its code.
+  // Most codes: the dictionary's sentence says what to change.
   test("any code it does not name is an ordinary refusal", () => {
     expect(refusalKind("something_new")).toBe("refused");
   });
 
-  // A server code renamed or removed would otherwise leave its name here,
-  // and the screen would quietly stop recognising it.
+  // A renamed or removed server code would otherwise silently stop being
+  // recognised.
   test("every code it names is one the API declares, or the one the client invents", () => {
     const declared = contractCodes();
     const unknown = NAMED_CODES.filter(
@@ -64,9 +63,8 @@ describe("isClosed", () => {
     expect(isClosed("contest_finished")).toBe(true);
     expect(isClosed("contest_ended")).toBe(true);
     expect(isClosed("deadline_passed")).toBe(true);
-    // Not open now is not over: a published contest taken back to draft may
-    // be published again, and the participant waiting for it must not be
-    // told it has finished.
+    // Not open now is not over: a contest taken back to draft may be
+    // published again.
     expect(isClosed("contest_not_running")).toBe(false);
     expect(isClosed("not_a_participant")).toBe(false);
     expect(isClosed("query_too_often")).toBe(false);
@@ -80,7 +78,7 @@ describe("showsReference", () => {
     expect(showsReference("answer_too_long", errors)).toBe(false);
     expect(showsReference("query_too_often", errors)).toBe(false);
     expect(showsReference("something_new", errors)).toBe(true);
-    // A name every object answers to is still not a sentence the dictionary holds.
+    // A key every object has is still not a dictionary sentence.
     expect(showsReference("constructor", errors)).toBe(true);
   });
 });

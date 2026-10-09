@@ -7,11 +7,8 @@ export async function generateMetadata() {
 }
 
 /**
- * A wrong address inside this section.
- *
- * Bare, because this group's layout already renders the shell. Without this
- * file the root `not-found.tsx` answered instead and brought a second one
- * with it — two headers stacked on one screen.
+ * Not-found inside this group, bare because the layout already renders the
+ * shell; the root one would stack a second header.
  */
 export default function NotFound() {
   return <NotFoundView />;

@@ -11,14 +11,11 @@ import { activeTheme } from "@/lib/theme/server";
 
 import "./globals.css";
 
-// Three languages, so three subsets. The scaffold shipped `["latin"]`, which
-// silently drops Cyrillic and the Romanian comma-below letters and renders
-// them from a fallback face instead. The lists are written out at each call
-// because next/font reads them at build time and cannot follow a reference.
+// Latin alone drops Cyrillic and Romanian comma-below letters to a fallback
+// face. The lists are literal because next/font reads them at build time.
 
-// Weights are pinned rather than left to the variable default so the bundle
-// carries what section 4 uses and nothing else. There is no 700: the system
-// has no bold, and shipping the file would be an invitation to reach for it.
+// Only the weights docs/design/SPEC.md §4 uses; no 700, since the system has
+// no bold.
 const onest = Onest({
   variable: "--font-onest",
   subsets: ["latin", "latin-ext", "cyrillic"],
@@ -42,15 +39,8 @@ const literata = Literata({
 });
 
 /**
- * The title and the tab icon come from the installation.
- *
- * `generateMetadata` rather than a constant, because both are rows in a table
- * now: a university that renamed itself would otherwise be renamed everywhere
- * on screen and still called "DB Contest" in the browser's tab, its history
- * and every bookmark somebody made.
- *
- * Both fall back to the product's own. A settings row that cannot be read is
- * not a reason to serve a page with no title.
+ * Title and icons come from the installation's settings, so a rename reaches
+ * the tab and bookmarks; both fall back to the product's own if the read fails.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const brand = await branding();
@@ -58,8 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   const icons: Metadata["icons"] = {};
   if (brand.images.favicon) icons.icon = imageHref("favicon", brand.images.favicon);
-  // The large square one: a home screen, a bookmark tile. Falls back to the
-  // favicon rather than to nothing, since a small icon scaled up beats none.
+  // The large icon falls back to the favicon: scaled up beats none.
   const large = brand.images.icon ?? brand.images.favicon;
   if (large) icons.apple = imageHref(brand.images.icon ? "icon" : "favicon", large);
 
@@ -72,12 +61,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * `lang` is the language actually being rendered, read from the one place that
- * holds it. `data-theme` is read the same way, from a cookie, which is what
- * lets the first byte of HTML already carry the right theme — the alternative
- * is the blocking inline script whose only job is to repaint a page that was
- * painted wrong. Every route is dynamic anyway, because each reads the
- * session, so nothing is lost by resolving both per request.
+ * `lang` and `data-theme` are resolved per request (every route is dynamic
+ * anyway), so the first byte carries the right theme without a blocking repaint
+ * script.
  */
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const [locale, dict, theme] = await Promise.all([
@@ -93,11 +79,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${onest.variable} ${jetbrainsMono.variable} ${literata.variable} antialiased`}
     >
       <body className="font-sans text-body">
-        {/* At the root rather than per section: `error.tsx` is a client
-            boundary that can never await a dictionary, and any route can end
-            on one. What crosses is this scope's own sections and no others
-            (finding 5) — the root boundary reads one, and a group whose
-            boundaries read more adds its own scope in its own layout. */}
+        {/* At the root because `error.tsx` is a client boundary that cannot
+           await a dictionary. Only this scope's sections cross the wire; groups
+           add their own scopes. */}
         <AppDictionaryProvider dict={selectApp(dict)} locale={locale}>
           {children}
         </AppDictionaryProvider>

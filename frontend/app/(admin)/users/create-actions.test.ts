@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { vi } from "vitest";
 
-// `vi.mock` factories are hoisted above every import in this file, so the
-// mocks they return have to be built through `vi.hoisted` rather than closed
-// over plain top-level `const`s — the same reason `[userId]/actions.test.ts`
-// and `selection.test.tsx` both do this. `serverRequest` is mocked, not
-// `createAccount`/`importAccounts` themselves: those live in
-// `lib/api/accounts.ts` and stay real here, so these tests exercise the
-// actual request bodies and the actual zod parsing along with the actions.
+// `vi.mock` factories are hoisted, so mocks are built with `vi.hoisted`. Only
+// `serverRequest` is mocked, so the real request bodies and zod parsing in
+// `lib/api/accounts.ts` are exercised.
 const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
@@ -85,10 +81,7 @@ describe("createAccountAction", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
   });
 
-  // Proves a refusal from the server — a taken login, an invalid row — is
-  // reported by its own code rather than collapsed into a generic failure:
-  // `Outcome`-style lookups in the component read `state.code` against
-  // `dict.errors`, which already carries a translation for `login_taken`.
+  // A server refusal keeps its own code, which the component translates.
   test("passes a taken-login refusal through by its own code", async () => {
     serverRequest.mockRejectedValueOnce(new ApiError("login_taken", 409, "This login is already in use"));
 
@@ -160,8 +153,7 @@ describe("importAccountsAction", () => {
   });
 
   test("refuses a roster larger than one import carries, without ever calling the server", async () => {
-    // Mirrors `users.maxImportRows` on the server: caught here so an
-    // oversized paste never spends a request only to be told the same thing.
+    // Mirrors `users.maxImportRows`; refused before a request.
     const roster = Array.from({ length: MAX_IMPORT_ROWS + 1 }, (_, i) => `s${i}, Student ${i}`).join("\n");
 
     const state = await importAccountsAction({}, form({ roster }));

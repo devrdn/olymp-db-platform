@@ -4,9 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// A Server Action: importing it for real pulls in `next/headers` and a running
-// framework. The module boundary is what gets faked; the form's own behaviour
-// is what is under test.
+// The real Server Action would pull in `next/headers`.
 const changePasswordAction = vi.hoisted(() => vi.fn());
 vi.mock("./actions", () => ({ changePasswordAction }));
 
@@ -28,11 +26,7 @@ describe("ChangePasswordForm, a refused change", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.password_mismatch);
   });
 
-  /**
-   * A mismatch is the author's typing, and it belongs to the two fields that
-   * disagree. The one-time password is not in question and marking it invalid
-   * would send them to re-check a field that was right.
-   */
+  /** A mismatch blames only the two fields that disagree. */
   test("blames only the two fields a mismatch is about", async () => {
     changePasswordAction.mockResolvedValue({ code: "password_mismatch" });
     render(<ChangePasswordForm dict={en} />);
@@ -48,11 +42,7 @@ describe("ChangePasswordForm, a refused change", () => {
     );
   });
 
-  /**
-   * The mirror image: `wrong_password` is the API saying the handover secret
-   * itself is wrong. Blaming the new password there would be worse than saying
-   * nothing, because the author would change a field that was fine.
-   */
+  /** `wrong_password` blames only the current password. */
   test("blames only the current password when the API rejects that one", async () => {
     changePasswordAction.mockResolvedValue({ code: "wrong_password" });
     render(<ChangePasswordForm dict={en} />);
@@ -102,10 +92,7 @@ describe("ChangePasswordForm, before anything has been submitted", () => {
     }
   });
 
-  /**
-   * The browser's password manager needs to be told which field is which, or
-   * it offers the saved password for the new one and stores the old.
-   */
+  /** Autocomplete hints keep the password manager from swapping old and new. */
   test("tells the password manager which field is the new one", () => {
     render(<ChangePasswordForm dict={en} />);
 

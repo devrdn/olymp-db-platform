@@ -25,11 +25,8 @@ async function load(contestId: string, locale: string): Promise<Loaded> {
 }
 
 /**
- * A contest's table, open to anybody with the link: participants, the
- * audience in the hall, whoever the organiser shares it with.
- *
- * Kept out of search engines on two levels — this metadata, and the API's own
- * `X-Robots-Tag` — because it is a page of people's names.
+ * A contest's table for anyone with the link. Kept out of search engines by
+ * this metadata and the API's `X-Robots-Tag`, since it lists people's names.
  */
 export async function generateMetadata(props: PageProps<"/contests/[contestId]/leaderboard">) {
   const [{ contestId }, dict, locale] = await Promise.all([props.params, activeDictionary(), activeLocale()]);
@@ -58,7 +55,7 @@ export default async function PublicLeaderboardPage(props: PageProps<"/contests/
         <PublicStandings
           contestId={contestId}
           initial={loaded.standings}
-          // Only the table's own vocabulary crosses to the client.
+          // Only the table's vocabulary crosses to the client.
           dict={{ leaderboard: dict.leaderboard }}
           locale={locale}
         />

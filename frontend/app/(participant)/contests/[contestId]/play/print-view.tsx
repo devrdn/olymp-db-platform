@@ -3,28 +3,14 @@ import type { PlayDictionary } from "./dictionary";
 
 
 /**
- * Everything that is allowed to print: the contest's name, who printed it
- * and when, and the story. No console, no schema tree, no result table, no
- * navigation — not hidden by a stylesheet, simply never imported, which is
- * what makes it possible to render this component on its own (`renderToString`,
- * no cookies, no session, no data fetching) to check the one thing jsdom
- * cannot: how a real browser paginates it.
+ * Everything allowed to print: the contest's name, who printed it and when,
+ * and the story. Nothing else is imported, so it renders on its own
+ * (`renderToString`, no session or data) to test real pagination.
  *
- * `workspace.tsx` mounts this once, inside a container that is `hidden` on
- * screen and `print:block` only under `@media print`, beside the interactive
- * workspace it hides the mirror image of. It used to be a whole separate
- * route instead (`.../play/print`) — see workspace.tsx's own doc for why
- * that was given up.
- *
- * A plain document, deliberately — no `100dvh`, no internal scroll box. The
- * play screen this story is normally read on is fixed and full-bleed on
- * purpose (`workspace.tsx`'s own doc), which is exactly what would clip a
- * print to one page of cut-off panels; this view never adopts that layout in
- * the first place; instead it flows the ordinary way a browser already knows
- * how to paginate. Printing is started from the button beside the
- * story tab (side-panel.tsx's `printStory`), which is why this view carries
- * no control of its own: a button hidden on screen and `print:hidden` once
- * printing starts is a button nobody can ever press.
+ * `workspace.tsx` mounts it in a container shown only under `@media print`.
+ * A plain flowing document, without the play screen's fixed `100dvh` layout
+ * that would clip a print. Printing starts from the story tab
+ * (side-panel.tsx's `printStory`), so this view has no control of its own.
  */
 export function PrintView({
   contestTitle,
@@ -34,7 +20,7 @@ export function PrintView({
   dict,
 }: {
   contestTitle: string;
-  /** Empty when the identity behind this request could not be read — see the play screen's own dict entries (`participant.play.print`). */
+  /** Empty when the identity could not be read; the byline then shows only the date. */
   participantName: string;
   /** Already formatted for display (lib/format/datetime.ts), not an ISO instant. */
   date: string;

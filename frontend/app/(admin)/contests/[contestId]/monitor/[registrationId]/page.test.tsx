@@ -4,8 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The page is a Server Component: the API and the request are faked, and
-// what is under test is what it reads for the address and what it renders.
+// A Server Component: API and request are faked.
 const { serverRequest, notFound } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
   notFound: vi.fn(() => {
@@ -171,9 +170,8 @@ describe("the tab in the address", () => {
 
 describe("an address that leads nowhere", () => {
   /**
-   * The API answers another contest's registration exactly as one that does
-   * not exist — 404 with its own code — and the page must be the not-found
-   * page, not an error to retry.
+   * Another contest's registration is a 404 like a missing one, so the
+   * not-found page, not a retry.
    */
   test("another contest's registration is not found", async () => {
     serverRequest.mockImplementation(async (path: string) => {

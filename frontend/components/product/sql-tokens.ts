@@ -1,22 +1,14 @@
 /**
- * SQL read into the pieces a read-only view colours: keywords, function
- * names, strings, numbers and comments, and everything else as it is.
- *
- * Not the editor's highlighter. That is CodeMirror, ~140 KiB gzipped and
- * built for typing (components/product/code-editor-core.ts); an organiser
- * reading a list of fifty statements needs colours, not an editor, so this is
- * a single linear pass with no dependency. The colours are the same tokens
- * the editor uses (`--accent-ink`, `--sql-function`, `--sql-string`,
- * `--sql-number`, `--ink-3`), so a statement reads the same on both screens.
- *
- * Lossless by construction: the pieces joined are the text, whatever it is —
- * a string or comment left open runs to the end rather than failing.
+ * Splits SQL into the pieces a read-only view colours. A single dependency-free
+ * pass rather than CodeMirror, using the editor's colour tokens. Lossless: the
+ * pieces join back to the text, and an unclosed string or comment runs to the
+ * end.
  */
 
 export type SqlTokenKind = "keyword" | "function" | "string" | "number" | "comment" | "plain";
 export type SqlToken = { kind: SqlTokenKind; text: string };
 
-/** The words coloured as keywords: the statements and clauses a contest's queries are made of. */
+/** The words coloured as keywords. */
 const KEYWORDS = new Set(
   (
     "all and any as asc between by case cast create cross current_date current_timestamp delete desc distinct drop " +
@@ -36,7 +28,7 @@ function matchAt(pattern: RegExp, text: string, at: number): string | null {
   return match ? match[0] : null;
 }
 
-/** The end of a single-quoted string starting at `at`, doubled quotes included. */
+/** End of a single-quoted string starting at `at`, doubled quotes included. */
 function stringEnd(sql: string, at: number): number {
   let i = at + 1;
   while (i < sql.length) {

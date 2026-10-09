@@ -3,14 +3,8 @@ import { LOCALE_NAMES, LOCALES, type Locale } from "@/lib/i18n/config";
 import { chooseLocale } from "./locale-actions";
 
 /**
- * Changing language leaves the visitor exactly where they were: the language
- * is not part of the address, so there is nothing to navigate.
- *
- * A form, so it needs no JavaScript. Each language is a submit button.
- *
- * The width is fixed by the codes themselves — two letters, in every language
- * there will ever be — which is the one place in this interface where a
- * container may be sized to its content.
+ * A form of submit buttons, so it works without JavaScript; the language is not
+ * in the address, so the visitor stays where they are.
  */
 export function LanguageSwitcher({ current, label }: { current: Locale; label: string }) {
   return (

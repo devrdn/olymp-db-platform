@@ -17,23 +17,12 @@ import { messageForCode } from "@/lib/i18n/errors";
 const FAILURE_ID = "new-contest-failure";
 
 /**
- * Everything that has to be decided before a contest exists.
+ * What must be decided before a contest exists: the question format and timing
+ * model, which freeze at the start, and the language set, which shapes every
+ * later editor. The schedule and limits come later, since a draft has none.
  *
- * Which is less than it looks, and deliberately so. The schedule, the network
- * restriction and the rate limits are not here: a draft has none of them, they
- * stay editable while the contest runs, and asking for them now would be
- * asking an author to invent a date to get past a form.
- *
- * What *is* here freezes. The question format and the timing model stop being
- * editable when the contest starts, because people are already answering under
- * them; and the language set decides what every editor after this one asks
- * for. Those are the questions worth a screen of their own.
- *
- * The language set is the only part with client state, and it earns it: the
- * title fields are per language, so the form has to grow and shrink as
- * languages are ticked. Without JavaScript every language's title field is
- * present and the checkboxes still submit, so the form degrades to a longer
- * version of itself rather than to a broken one.
+ * Only the language set has client state, to grow and shrink the per-language
+ * title fields; without JavaScript every title field is present.
  */
 export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Locale }) {
   const t = dict.workspace.create;
@@ -53,7 +42,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
   function toggle(code: Locale, on: boolean) {
     setChosen((current) => {
       const next = on ? [...current, code] : current.filter((c) => c !== code);
-      // The contest must fall back to a language it actually declares.
+      // The fallback must be a declared language.
       if (!next.includes(fallback) && next[0]) setFallback(next[0]);
       return next;
     });
@@ -82,8 +71,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
                   <span className="ml-2 font-mono text-data text-ink-3 uppercase">{code}</span>
                 </label>
 
-                {/* The default is a property of the set, so the control for it
-                    lives with the set rather than in a select of its own. */}
+                {/* The default belongs to the set, so its control lives there. */}
                 <label
                   className={cn(
                     "ml-auto flex items-center gap-2 text-small",
@@ -152,9 +140,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
             onPick={setTiming}
           />
 
-          {/* Only asked for when it means something. On the shared window the
-              deadline is the contest's end, and a duration field there would
-              be a value with nothing to apply to. */}
+          {/* On the shared window the deadline is the contest's end, so no duration. */}
           {timing === "individual" ? (
             <Field id="durationMin" label={t.timingGroup.duration} hint={t.timingGroup.durationHint}>
               <Input
@@ -196,18 +182,9 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
 }
 
 /**
- * A titled block of the form.
- *
- * A real `<fieldset>` and `<legend>`: a group of radios announced without one
- * is a list of options with no question attached, which is exactly how a
- * screen reader meets "fixed / individual".
- *
- * What the block decides sits behind a "?" beside the legend (`help`); a rule
- * the author has to meet — the one title that is required — stays on screen
- * as `hint`. The "?" is beside the legend rather than inside it, so the
- * group's name stays the legend's words; none of these fieldsets is ever
- * disabled, which is the one reason to put it inside (see the contest
- * settings panels).
+ * A `<fieldset>` with a `<legend>`, so radio groups are announced with their
+ * question. The "?" sits beside the legend: these fieldsets are never disabled,
+ * the one reason to put it inside.
  */
 function Group({
   legend,
@@ -236,7 +213,6 @@ function Group({
   );
 }
 
-/** One choice from a short, closed set — a radio group, not a select. */
 function Choices<T extends string>({
   name,
   values,

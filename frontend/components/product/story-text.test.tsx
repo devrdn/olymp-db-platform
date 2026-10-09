@@ -4,17 +4,9 @@ import { describe, expect, test } from "vitest";
 import { StoryText } from "./story-text";
 
 /**
- * This component is a security boundary, not a formatter.
- *
- * The story is written by a contest manager — a less trusted role than an
- * administrator — and read by every participant during a contest. A `<script>`
- * that survived from the source into the page would be one manager taking
- * every participant's session.
- *
- * The defence is that nothing here ever builds an HTML string: the renderer
- * produces React elements, so there is no `dangerouslySetInnerHTML` anywhere
- * and no sanitiser to be got wrong. Raw HTML in the source is not parsed at
- * all — it is text, and text is what it stays.
+ * A security boundary: a manager writes the story and every participant reads
+ * it, so a surviving `<script>` would take every participant's session. Nothing
+ * builds an HTML string; raw HTML stays text.
  */
 describe("StoryText, what it refuses to render", () => {
   test("does not execute a script somebody wrote into the story", () => {
@@ -24,8 +16,7 @@ describe("StoryText, what it refuses to render", () => {
   });
 
   test("does not build an element out of raw HTML at all", () => {
-    // Not sanitised afterwards — never parsed. An `<img onerror>` is the
-    // classic way past a sanitiser, and there is nothing here to get past.
+    // Never parsed, so an `<img onerror>` has no sanitiser to get past.
     const { container } = render(
       <StoryText markdown={'<img src="x" onerror="alert(1)">' + "\n\nA body in the stacks."} />,
     );
@@ -42,8 +33,7 @@ describe("StoryText, what it refuses to render", () => {
   });
 
   test("sends a link that does go somewhere out of the page safely", () => {
-    // A story may cite a source. `noopener` because a tab opened from here can
-    // otherwise reach back through `window.opener`.
+    // `noopener`, so the opened tab cannot reach back through `window.opener`.
     render(<StoryText markdown={"[the archive](https://example.edu/archive)"} />);
 
     const link = screen.getByRole("link", { name: "the archive" });
@@ -66,9 +56,7 @@ describe("StoryText, what it does render", () => {
   });
 
   test("renders a table, which is why this is not a WYSIWYG", () => {
-    // A round-tripping editor is where a table quietly becomes HTML and stops
-    // being editable as Markdown. Keeping the source as the source means the
-    // author can write one and it survives.
+    // A table stays Markdown in the source and renders as a table.
     render(
       <StoryText markdown={"| Suspect | Alibi |\n| --- | --- |\n| Butler | none |"} />,
     );
@@ -85,11 +73,8 @@ describe("StoryText, what it does render", () => {
 });
 
 /**
- * The payloads somebody would actually try, against the real renderer.
- *
- * Not a substitute for the decision above — nothing here builds an HTML string,
- * so there is no filter to evade — but a filter relied on instead of that
- * decision would fail at least one of these.
+ * Common payloads against the real renderer; a filter relied on instead of
+ * never building HTML would fail at least one.
  */
 describe("StoryText against the usual payloads", () => {
   const payloads = [
@@ -123,14 +108,9 @@ describe("StoryText against the usual payloads", () => {
 });
 
 /**
- * The editor's own artefact, which every story written so far carries.
- *
- * Milkdown serialises an empty paragraph — and an empty table cell — as a
- * literal `<br />`. Raw HTML is deliberately not rendered here, so without
- * cleaning, a participant reads the four characters. The save now cleans
- * them, but the stories already in the database do not become right by
- * themselves, and rewriting somebody's text with a migration is not the way
- * to make them so.
+ * Milkdown serialises an empty paragraph or table cell as a literal `<br />`.
+ * Stored stories still carry it, and raw HTML is not rendered, so the renderer
+ * cleans it rather than a migration rewriting authors' text.
  */
 describe("the markdown a WYSIWYG editor produced", () => {
   test("does not print the editor's empty-paragraph breaks at the reader", () => {

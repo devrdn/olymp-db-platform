@@ -27,12 +27,8 @@ vi.mock("./actions", () => ({
   },
 }));
 
-// The query log refuses to refetch within three seconds of its last refresh,
-// so that a participant idly toggling Result and Log does not spend the
-// `AdmitRead` budget their next query needs. That gate belongs to the log
-// panel and is tested there (querylog-terms.ts carries the reasoning); here
-// it would only mean that a collapse and an expand one keystroke apart prove
-// nothing about whether the panel was told it had been left.
+// The log's three-second refresh gate is tested in its own panel; here it
+// would make a collapse and expand one keystroke apart prove nothing.
 vi.mock("@/lib/api/querylog-terms", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/querylog-terms")>()),
   QUERY_LOG_REFRESH_MIN_INTERVAL_MS: 0,
@@ -42,11 +38,8 @@ function freshInitialLog() {
   return { items: [], total: 0, failed: false };
 }
 
-// The notes and the SQL tabs save themselves straight to the API, so this
-// screen reaches for `fetch` on its own the moment anything is typed. None
-// of the tests here are about saving — `use-sql-tabs.test.tsx` and
-// `notes-panel.test.tsx` are — so it answers, and answers successfully, so a
-// retry does not keep a timer running past the test that started it.
+// The notes and SQL tabs save straight to the API as soon as anything is
+// typed. Answering successfully keeps a retry timer from outliving a test.
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal(
@@ -65,22 +58,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The events channel belongs to `PlayHeader`, which `page.tsx` now renders
-// above this component's own Suspense boundary (finding 2) — so nothing here
-// opens one. Both stand-ins stay: they cost nothing, and they are what keeps
-// a re-introduced `EventSource` from turning these tests flaky rather than
-// red.
+// The events channel belongs to `PlayHeader`, outside this component; the
+// stand-ins keep a reintroduced `EventSource` from making these flaky.
 vi.mock("./use-contest-events", () => ({
   useContestEvents: () => ({ offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" }),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
-// Finding 5: counts how many times ResultPanel and SidePanel's own render
-// functions actually run — not just whether their DOM survives, which
-// reconciliation would preserve either way. Workspace wraps both in
-// `React.memo`, so a render this counter did not see is exactly the proof a
-// bottom-tab click, which changes nothing about either panel's own props,
-// did not reach them.
+// Counts real renders of the memoised panels, which DOM survival alone
+// cannot show.
 const renderCounts = vi.hoisted(() => ({ result: 0, side: 0 }));
 vi.mock("./result-panel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./result-panel")>();
@@ -106,12 +92,8 @@ const A_SCHEMA = {
   tables: [{ name: "guests", columns: [{ name: "id", type: "uuid", nullable: false, references: "" }] }],
 };
 
-// Deliberately different text from `storyBody` below: the print-only copy
-// and the on-screen story tab render from two different props
-// (`storyMarkdown` vs `storyBody`), and sharing one sentence between them
-// would make `getByText` ambiguous the moment both are in the tree at once
-// (workspace.tsx's own doc: the print copy stays mounted, only hidden by a
-// class jsdom does not apply) — a false green either way a mismatch went.
+// The print copy's text differs from `storyBody` so `getByText` is never
+// ambiguous: both stay mounted, and jsdom ignores the class hiding one.
 function show(
   schema: typeof A_SCHEMA | null = null,
   overrides: {
@@ -152,12 +134,8 @@ const A_WORKSPACE = {
 };
 
 /**
- * What `page.tsx` hands `Workspace` as `printView`: the print copy, already
- * rendered, because `Workspace` is a client component and importing
- * `PrintView` from it shipped `react-markdown` to the browser (that file's own
- * doc, and the client-graph test at the bottom of this one). Built here so
- * every assertion below still reads the real printed output rather than a
- * stand-in.
+ * What `page.tsx` hands `Workspace` as `printView`, rendered here so the
+ * assertions read the real print output.
  */
 function printCopy(storyMarkdown: string | null) {
   if (storyMarkdown === null) return null;
@@ -172,7 +150,7 @@ function printCopy(storyMarkdown: string | null) {
   );
 }
 
-/** The wrapper `workspace.tsx` renders the print-only story into — see that file's own doc for why it is a class, not the `hidden` attribute. */
+/** The print-only wrapper `workspace.tsx` renders. */
 function printOnlyContainer(container: HTMLElement): HTMLElement | null {
   return (
     [...container.querySelectorAll("div")].find(
@@ -182,20 +160,10 @@ function printOnlyContainer(container: HTMLElement): HTMLElement | null {
 }
 
 /**
- * CodeMirror arrives through a dynamic `import()` (code-editor.tsx's own doc
- * comment says why); until it resolves, the console shows a plain, always-
- * typable fallback field in its place. A test about the *editor's own DOM
- * node* — not about typing, which works through either — waits for the real
- * one first, so the fallback→CodeMirror swap is not mistaken for whatever
- * the test is actually checking.
- *
- * Every test that types a query through the visible editor waits for it too
- * (finding 6): typing straight into `getByRole("textbox")` without waiting
- * only ever hit the fallback, because `userEvent.type` reliably outran the
- * dynamic import in a test environment — a false green that would not
- * survive the import taking one microtask longer. Defaults to `document.
- * body` so call sites that never captured a `container` still have
- * something to search.
+ * Waits for CodeMirror, which loads through a dynamic `import()` behind a
+ * plain fallback field. Tests about the editor's node, or typing into it,
+ * wait first; `userEvent` otherwise outruns the import and only ever types
+ * into the fallback.
  */
 async function waitForRealEditor(container: HTMLElement = document.body) {
   await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
@@ -203,10 +171,8 @@ async function waitForRealEditor(container: HTMLElement = document.body) {
 
 async function runQuery() {
   await waitForRealEditor();
-  // `userEvent.type` does not reliably drive CodeMirror's contentEditable
-  // div (it is not a text input and has no `selectionStart`/`selectionEnd`)
-  // — click-then-keyboard is the pattern already proven against the real
-  // editor elsewhere (code-editor.test.tsx, console.test.tsx).
+  // `userEvent.type` cannot drive CodeMirror's contentEditable; click then
+  // keyboard is the pattern code-editor.test.tsx uses.
   await userEvent.click(screen.getByRole("textbox"));
   await userEvent.keyboard("SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
@@ -223,8 +189,6 @@ describe("the play workspace", () => {
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
   });
 
-  // The plan's central requirement: switching a tab must not remount or
-  // refetch anything, and a half-typed query has to survive it.
   test("a half-typed query survives switching every tab and back", async () => {
     const { container } = show();
     await waitForRealEditor(container);
@@ -237,8 +201,7 @@ describe("the play workspace", () => {
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions }));
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result }));
 
-    // Not a form control any more (CodeMirror's content div), so the text is
-    // read the way any other rendered content is, not through `.value`.
+    // CodeMirror's content is not a form control, so read its text.
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT * FROM suspects");
   });
 
@@ -252,9 +215,6 @@ describe("the play workspace", () => {
     expect(screen.getByRole("textbox")).toBe(editor);
   });
 
-  // Seeing what a query just did is the point of running it — a completed
-  // run switches the bottom panel to "Result" by itself, the way an editor's
-  // own output panel opens itself.
   test("a completed run switches the bottom panel to Result on its own", async () => {
     runResult.current = {
       kind: "answer",
@@ -271,26 +231,20 @@ describe("the play workspace", () => {
     );
   });
 
-  // Finding 3: refreshing the log after every run spent one of the
-  // participant's own `AdmitRead` units on a tab that, because a completed
-  // run switches the workspace to "Result" in the same instant, was never
-  // even the one showing. Running a query — refused or not — must not touch
-  // the log endpoint at all while the participant is looking at the result.
+  // The log's reads share the participant's `AdmitRead` budget, and a run
+  // switches the bottom panel to "Result" anyway.
   test("running a query does not refresh the query log", async () => {
     runResult.current = { kind: "refused", code: "query_too_often" };
     show();
     const before = logCalls.count;
 
     await runQuery();
-    // The refusal itself, rather than "some live region": the SQL tabs put
-    // their own save status on the screen now, and it is a live region too.
+    // The refusal itself: the SQL tabs' save status is a live region too.
     await waitFor(() => expect(screen.getByText(en.errors.query_too_often)).toBeInTheDocument());
 
     expect(logCalls.count).toBe(before);
   });
 
-  // The log still has to catch up eventually — just on the moment a
-  // participant actually goes to look at it, rather than on every query.
   test("switching to the log tab refreshes it", async () => {
     show();
     const before = logCalls.count;
@@ -300,10 +254,6 @@ describe("the play workspace", () => {
     await waitFor(() => expect(logCalls.count).toBeGreaterThan(before));
   });
 
-  // Finding 5: a bottom-tab click sets state only in Workspace — none of
-  // ResultPanel's or SidePanel's own props move because of it — so a
-  // memoised panel should skip the render entirely rather than reconcile a
-  // thousand-row table (or the whole side panel) for nothing.
   test("clicking a bottom tab does not re-render the memoised result and side panels", async () => {
     show();
     const resultRendersBefore = renderCounts.result;
@@ -317,8 +267,8 @@ describe("the play workspace", () => {
   });
 });
 
-// The screen reports its participant's pastes and absences (use-signals.ts);
-// this proves the collector is mounted with the screen, not what it does.
+// Proves the collector is mounted with the screen, not what it does
+// (use-signals.ts).
 describe("the browser signals", () => {
   test("a paste into the notes is sent for this contest, re-rendering nothing", async () => {
     show();
@@ -353,8 +303,7 @@ describe("the notes", () => {
     expect(screen.getByText(en.participant.play.workspace.notes.failed)).toBeInTheDocument();
   });
 
-  // Typing is the hot path: the field is uncontrolled and its status lives
-  // in the notes panel, so nothing above it may render per keystroke.
+  // Typing is the hot path: nothing above the notes may render per keystroke.
   test("typing in them does not re-render the side panel", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
@@ -368,13 +317,9 @@ describe("the notes", () => {
   });
 });
 
-// Task: printing happens on this screen now, not on a separate route — see
-// this file's own doc and print-view.tsx's. jsdom cannot evaluate
-// `@media print` (it lays nothing out), so these prove the two things a DOM
-// assertion actually can: the print-only copy is in the tree with the right
-// content, and the interactive workspace carries the class that removes it
-// from a printed page. What a real browser does with those classes is
-// checked separately, against the built CSS.
+// jsdom cannot evaluate `@media print`, so these check the DOM half: the
+// print-only copy's content and the class that removes the interactive
+// workspace from the page.
 describe("the print-only copy of the story", () => {
   test("is in the tree, holding the contest title, the byline and the story", () => {
     const { container } = show();
@@ -395,32 +340,22 @@ describe("the print-only copy of the story", () => {
     expect(printOnly!.textContent).toBe("");
   });
 
-  /**
-   * Design spec §10: the photograph does its work above the story *on the
-   * screen*. A sheet of paper wants the text somebody asked for, not a
-   * full-bleed picture across the top of it and the prose pushed onto a
-   * second page, so `PrintView` renders the story alone and the cover lives
-   * only in the interactive tree beside it.
-   */
+  /** SPEC.md §10: the cover is for the screen; a printed story is text alone. */
   test("carries no cover: a printed story is text, not atmosphere", () => {
     const { container } = show();
 
     const printOnly = printOnlyContainer(container);
     expect(printOnly!.querySelector("img")).toBeNull();
-    // Present on the screen, which is what makes the absence above a
-    // decision rather than a cover that never rendered at all.
+    // Present on screen, so its absence above is a decision.
     expect(container.querySelector("img[alt='Cover of The Greenhouse Case']")).not.toBeNull();
   });
 
   test("the interactive workspace is marked to disappear under print", () => {
     const { container } = show();
 
-    // Workspace renders exactly two top-level siblings: the print-only copy,
-    // and the interactive workspace beside it (workspace.tsx's own doc) — so
-    // "whichever top-level child is not the print copy" identifies the
-    // second without depending on the console markup nested many levels
-    // inside it, which also carries `flex min-h-0 flex-col` classes of its
-    // own and would make a class-based `closest()` match the wrong ancestor.
+    // Workspace renders two top-level siblings, the print copy and the
+    // workspace, so the one that is not the print copy is the workspace.
+    // A class-based `closest()` would match nested console markup.
     const printOnly = printOnlyContainer(container);
     const workspaceRoot = [...container.children].find((el) => el !== printOnly) as HTMLElement | undefined;
     expect(workspaceRoot).not.toBeUndefined();
@@ -428,10 +363,8 @@ describe("the print-only copy of the story", () => {
   });
 });
 
-// The design's left column (docs/design/preview.html, "SQL-консоль"). It is
-// absent rather than empty in a contest that closed its catalogues: leaving
-// the column in place would spend a fifth of the screen saying nothing, and
-// the panel would be the very oracle the closed catalogue is hiding.
+// Absent rather than empty when the catalogues are closed: the panel would
+// be the very oracle being hidden.
 describe("the schema column", () => {
   test("is there when the contest shows its schema", () => {
     show(A_SCHEMA);
@@ -450,13 +383,8 @@ describe("the schema column", () => {
 });
 
 /**
- * jsdom lays nothing out, so nothing here can assert a width. What it can
- * assert is the property the widths came out of: which pane is placed where,
- * and whether each track is allowed to exceed its container. Both defects
- * these cover were invisible in the source and only turned up in a browser
- * (the numbers are in the commit message); what is left behind here is the
- * *rule* each fix established, so the next edit that breaks it is caught
- * where it is cheap.
+ * jsdom lays nothing out, so these assert the rules the widths come from:
+ * where each pane is placed, and whether a track may exceed its container.
  */
 describe("the pane grid's own shape", () => {
   function paneGrid(container: HTMLElement): HTMLElement {
@@ -466,9 +394,9 @@ describe("the pane grid's own shape", () => {
   }
 
   /**
-   * The `order` a pane declares for one breakpoint range, most specific
-   * prefix first — or null where it declares none and would therefore be
-   * placed at the CSS default of 0, ahead of every pane that declares one.
+   * The `order` a pane declares for a breakpoint range, most specific prefix
+   * first, or null where it would default to 0 and be placed before every
+   * pane that declares one.
    */
   function declaredOrder(el: Element, prefixes: readonly string[]): number | null {
     for (const prefix of prefixes) {
@@ -480,16 +408,13 @@ describe("the pane grid's own shape", () => {
     return null;
   }
 
-  /** The panes actually laid out in one range: the ones not hidden there. */
+  /** The panes laid out in one range: those not hidden there. */
   function placedPanes(grid: HTMLElement, hiddenClass: string): Element[] {
     return [...grid.children].filter((child) => !child.classList.contains(hiddenClass));
   }
 
-  // The defect: the questions' own divider carried no order at all, so grid
-  // auto-placement walked it first, put it in the 1fr column and pushed the
-  // console into the 1px divider column beside it. Every pane that is laid
-  // out in a range has to name its place in that range — a single silent
-  // `order: 0` is enough to reorder the whole row.
+  // A single unordered pane is enough for grid auto-placement to reorder the
+  // row and squeeze the console into a 1px divider column.
   test("every pane placed between the two breakpoints declares its own order, and no two share one", () => {
     const { container } = show(A_SCHEMA);
     const grid = paneGrid(container);
@@ -516,11 +441,8 @@ describe("the pane grid's own shape", () => {
     expect(new Set(orders).size).toBe(orders.length);
   });
 
-  // The defect: with no `grid-template-columns` at all, this grid's one
-  // implicit track is `auto`, and an `auto` track is floored at its
-  // content's max-content width — here the result table's own natural
-  // width, whatever the last query made it. The editor was sized by the
-  // table underneath it and the page scrolled sideways.
+  // An implicit `auto` track grows to the result table's max-content width,
+  // which sized the editor by the table and scrolled the page sideways.
   test("the console column declares a track that cannot exceed its container", () => {
     const { container } = show(A_SCHEMA);
     const column = container.querySelector("form")?.closest("div.grid");
@@ -529,9 +451,7 @@ describe("the pane grid's own shape", () => {
     expect(column!.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
   });
 
-  // The defect: below the narrow breakpoint nothing bounded the result
-  // panel's height, so a result laid out at its full natural height inside
-  // the page and buried the questions thousands of pixels below the fold.
+  // Unbounded, a large result buries the questions far below the fold.
   test("the bottom panel keeps a height bound of its own on the narrow fallback", () => {
     const { container } = show(A_SCHEMA);
     const panes = [...container.querySelectorAll("div")].filter(
@@ -545,19 +465,12 @@ describe("the pane grid's own shape", () => {
   });
 });
 
-// The one thing about this file that a rendering assertion cannot reach: what
-// it drags into the browser.
-//
-// `Workspace` is a client component, so every module it imports — and every
-// module those import, transitively — is compiled into this route's client
-// bundle. `PrintView` reaches `StoryText`, which is `react-markdown` and
-// `remark-gfm`: a real Markdown parser, measured at 31.9 KiB gzipped in this
-// route's own chunks, on the screen a participant spends two hours in. It is
-// rendered on the server instead (page.tsx), and nothing about the rendered
-// output says so — which is exactly why this is asserted here rather than
-// left to whoever next reaches for a component that happens to be convenient.
+// What `Workspace` pulls into the browser, which no render can show. As a
+// client component, everything it imports ships to the client, and
+// `PrintView` reaches `react-markdown` (about 32 KiB gzipped). It is rendered
+// on the server instead (page.tsx).
 describe("what Workspace pulls into the client bundle", () => {
-  /** Bare package specifiers reachable from `entry`, following this app's own files (relative and `@/`) and stopping at package boundaries. */
+  /** Bare package specifiers reachable from `entry`, following this app's files (relative and `@/`). */
   function packagesReachableFrom(entry: string): Set<string> {
     const root = path.resolve(__dirname, "../../../../..");
     const packages = new Set<string>();
@@ -583,9 +496,7 @@ describe("what Workspace pulls into the client bundle", () => {
       if (seen.has(file)) return;
       seen.add(file);
       const source = readFileSync(file, "utf8");
-      // `import type` and `export type` are erased by the compiler and reach
-      // no bundle, so following them would fail this for a name only the
-      // type-checker ever sees.
+      // Type-only imports are erased and reach no bundle.
       const imports = source.matchAll(/(?:^|\n)\s*(?:import|export)\s+(?!type\s)(?:[^'"\n]*?\sfrom\s+)?["']([^"']+)["']/g);
       for (const [, specifier] of imports) {
         if (specifier.startsWith(".") || specifier.startsWith("@/")) {
@@ -604,16 +515,15 @@ describe("what Workspace pulls into the client bundle", () => {
   test("not the Markdown parser: the story and its print copy are rendered on the server", () => {
     const packages = packagesReachableFrom("workspace.tsx");
 
-    // A guard against the guard: if the walk resolved nothing, an empty set
-    // would pass the real assertion below for the wrong reason.
+    // If the walk resolved nothing, an empty set would pass for the wrong
+    // reason.
     expect(packages.has("react")).toBe(true);
 
     expect([...packages].filter((name) => name === "react-markdown" || name === "remark-gfm")).toEqual([]);
   });
 
-  // The counterpart: `page.tsx` is a Server Component, and there the parser is
-  // exactly where it belongs. Without this, the test above would still pass if
-  // somebody deleted the print copy outright instead of moving it.
+  // Without this, deleting the print copy outright would also pass the test
+  // above.
   test("page.tsx still renders the print copy, on the server, where the parser is free", () => {
     expect(packagesReachableFrom("page.tsx").has("react-markdown")).toBe(true);
     expect(readFileSync(path.resolve(__dirname, "page.tsx"), "utf8")).toContain("<PrintView");
@@ -621,20 +531,15 @@ describe("what Workspace pulls into the client bundle", () => {
 });
 
 /**
- * §8: a collapsed panel leaves the grid entirely, together with the divider
- * beside it, so the editor takes the room it was in. Hiding it in place
- * would leave its column standing and buy the participant nothing, which is
- * the whole reason the design asks for VS Code's behaviour by name.
- *
- * The toggles themselves live in the header (`panel-toggles.tsx`), so these
- * render the pair the way `page.tsx` does: one provider around the controls
- * and the panels they control.
+ * SPEC.md §5: a collapsed panel leaves the grid with its divider, so the editor takes
+ * its room. The toggles live in the header, so these render both inside one
+ * provider, as `page.tsx` does.
  */
 describe("collapsing a panel", () => {
   const p = en.participant.play.workspace.panels;
   const panes = en.participant.play.workspace.panes;
 
-  /** A contest of its own per test: what is collapsed is remembered per contest, and two tests that shared one would share that. */
+  /** One contest per test: what is collapsed is remembered per contest. */
   let contests = 0;
   function showWithToggles(
     schema: typeof A_SCHEMA | null = A_SCHEMA,
@@ -664,10 +569,8 @@ describe("collapsing a panel", () => {
     return { ...view, contestId };
   }
 
-  // A collapsed panel is hidden rather than unmounted — it holds a
-  // participant's half-typed answer, the log's loaded pages, a search — so
-  // these ask what is *visible*, not what is in the tree, and pass
-  // `hidden: true` to find the element at all.
+  // Collapsed panels are hidden, not unmounted, so these check visibility and
+  // pass `hidden: true` to find the element.
   function schemaPanel() {
     return screen.getByRole("region", { name: en.participant.play.schema.heading, hidden: true });
   }
@@ -677,7 +580,7 @@ describe("collapsing a panel", () => {
   function bottomPanel() {
     return screen.getByText(en.participant.play.workspace.resultEmpty);
   }
-  /** The editor by name: the schema panel beside it has a search field, so "the textbox" is ambiguous here. */
+  /** The editor by name: the schema panel has a search field too. */
   function editor() {
     return screen.getByRole("textbox", { name: en.participant.console.label });
   }
@@ -705,7 +608,7 @@ describe("collapsing a panel", () => {
 
     expect(sidePanel()).not.toBeVisible();
     expect(screen.queryByRole("separator", { name: panes.side })).not.toBeInTheDocument();
-    // The console is untouched: this is the panel beside it that left.
+    // The console stays.
     expect(editor()).toBeVisible();
   });
 
@@ -718,8 +621,6 @@ describe("collapsing a panel", () => {
     expect(screen.queryByRole("separator", { name: panes.editor })).not.toBeInTheDocument();
   });
 
-  // §8: collapse all three and what is left on the screen is the tab strip
-  // and the editor.
   test("collapsing all three leaves the tab strip and the editor", async () => {
     showWithToggles();
 
@@ -734,9 +635,8 @@ describe("collapsing a panel", () => {
     expect(editor()).toBeVisible();
   });
 
-  // jsdom lays nothing out, so what is asserted is the template the widths
-  // come out of: a column that is not there must not keep a track, or the
-  // editor gains nothing by the panel leaving.
+  // jsdom lays nothing out, so the template is checked: a collapsed column
+  // must not keep a track.
   test("the grid drops the track of a collapsed column", async () => {
     const { container } = showWithToggles();
     const grid = container.querySelector<HTMLElement>('[style*="--pane-schema"]')!;
@@ -754,16 +654,13 @@ describe("collapsing a panel", () => {
     expect(grid.style.getPropertyValue("--cols-narrow")).not.toContain("var(--pane-side)");
   });
 
-  // A panel that comes back comes back the size the participant left it, not
-  // the size the design ships: the two records are independent, and
-  // collapsing is not a reason to forget a drag.
+  // Collapsing does not forget a width the participant set.
   test("a width the participant set survives a collapse and an expand", async () => {
     const { container, contestId } = showWithToggles();
     const grid = container.querySelector<HTMLElement>('[style*="--pane-side"]')!;
     const before = grid.style.getPropertyValue("--pane-side");
 
-    // The divider moves with the arrow keys as well as with a pointer, which
-    // is the half of it jsdom can actually drive.
+    // The arrow keys move the divider too, which jsdom can drive.
     fireEvent.keyDown(screen.getByRole("separator", { name: panes.side }), { key: "ArrowLeft" });
     const widened = grid.style.getPropertyValue("--pane-side");
     expect(widened).not.toBe(before);
@@ -777,9 +674,6 @@ describe("collapsing a panel", () => {
     );
   });
 
-  // The result is the point of running: a collapsed bottom panel opens
-  // itself, the same reasoning that already switches the bottom tab to
-  // "Result" when a run settles.
   test("a completed run brings a collapsed bottom panel back", async () => {
     runResult.current = {
       kind: "answer",
@@ -795,8 +689,7 @@ describe("collapsing a panel", () => {
     expect(screen.getByRole("button", { name: p.bottom })).toHaveAttribute("aria-pressed", "true");
   });
 
-  // The toolbar's own two buttons choose which tab the bottom panel shows.
-  // With the panel collapsed they would otherwise be controls for nothing.
+  // Otherwise the toolbar buttons would control a hidden panel.
   test("choosing a bottom tab brings a collapsed bottom panel back", async () => {
     showWithToggles();
     await userEvent.click(screen.getByRole("button", { name: p.bottom }));
@@ -807,11 +700,8 @@ describe("collapsing a panel", () => {
   });
 
   /**
-   * The keys have to work where a participant actually is, which for two
-   * hours of an olympiad is the middle of a query. The editor's own keymap
-   * is the only place that can serve that: CodeMirror sees the keydown in
-   * its content first, and an unclaimed Ctrl+B in a contenteditable is the
-   * browser's "bold".
+   * The keys must work mid-query: CodeMirror sees the keydown first, and an
+   * unclaimed Ctrl+B in a contenteditable is the browser's "bold".
    */
   test("Ctrl+B with the caret in the editor collapses the schema panel and types nothing", async () => {
     const { container } = showWithToggles();
@@ -826,11 +716,8 @@ describe("collapsing a panel", () => {
     expect(editor()).toHaveTextContent("SELECT 1");
   });
 
-  // The same key in a contest that closed its catalogues: there is no schema
-  // panel to collapse and no toggle for one, so the press has nothing to do.
-  // The editor still claims the key — an unclaimed Ctrl+B in a
-  // contenteditable is "bold" — and what must not happen is the flag being
-  // flipped anyway, invisibly, for the next visit to restore.
+  // No schema panel and no toggle: the editor still claims the key, but the
+  // flag must not be flipped and remembered for the next visit.
   test("Ctrl+B in the editor does nothing in a contest that hides its schema", async () => {
     const { container, contestId } = showWithToggles(null);
     await waitForRealEditor(container);
@@ -843,24 +730,16 @@ describe("collapsing a panel", () => {
     expect(editor()).toHaveTextContent("SELECT 1");
   });
 
-  // Two things at once, and neither is visible in the rendered output.
-  //
-  // The editor claims the key — `preventDefault`, which is what stops a
-  // browser from reading Ctrl+B in a contenteditable as "bold" and what
-  // keeps ⌘B on a Mac from being confused with Ctrl+B, which CodeMirror
-  // binds there to moving back a character. And it is handled once: the
-  // window listener above stands aside for a key whose default is already
-  // prevented, instead of toggling the panel straight back.
+  // The editor claims the key (`preventDefault`: no "bold", and no
+  // CodeMirror ⌘B cursor move on a Mac), and the window listener stands aside
+  // for a prevented key instead of toggling the panel back.
   test("the editor claims the combination, and nothing above it acts on the same press", async () => {
     const { container } = showWithToggles();
     await waitForRealEditor(container);
     const content = container.querySelector(".cm-content")!;
-    // Read on the editor's own element rather than from what `fireEvent`
-    // reports: by the time the event has finished bubbling the window
-    // listener has had its turn too, and its own `preventDefault` would make
-    // an editor that bound nothing look exactly like one that did. A
-    // listener added here runs after CodeMirror's, which is registered on
-    // this same node when the view is built.
+    // Read on the editor's element: after bubbling, the window listener's
+    // own `preventDefault` would mask an editor that bound nothing. This
+    // listener runs after CodeMirror's, registered on the same node.
     let claimedByTheEditor: boolean | null = null;
     content.addEventListener("keydown", (event) => {
       claimedByTheEditor = event.defaultPrevented;
@@ -873,14 +752,9 @@ describe("collapsing a panel", () => {
   });
 
   /**
-   * The reason a collapsed panel is hidden and not unmounted.
-   *
-   * A question's answer field is plain component state — no draft, nothing
-   * saved — and the verdict beside it lives in `useActionState`. Unmounting
-   * the panel would throw away a typed, unsubmitted answer during a graded
-   * contest, and the participant would have pressed one key to do it. On a
-   * Windows layout AltGr reports as Ctrl+Alt, so they need not even have
-   * meant to press it.
+   * Why a collapsed panel is hidden, not unmounted: an answer field is plain
+   * state, nothing saved, and on Windows AltGr reports as Ctrl+Alt, so one
+   * stray key could discard a typed answer.
    */
   test("a typed answer survives a collapse and an expand", async () => {
     const q = {
@@ -909,10 +783,8 @@ describe("collapsing a panel", () => {
     ).toHaveValue("the gardener");
   });
 
-  // The query log holds pages it loaded and a list it refreshed. Unmounting
-  // the pane put all of that back to the snapshot the server render shipped
-  // — an hour old by the middle of an olympiad — with nothing on screen to
-  // say so, and took every "load older" page with it.
+  // Unmounting would reset the log to the server-rendered snapshot and drop
+  // every loaded page.
   test("collapsing the bottom panel does not remount the query log", async () => {
     showWithToggles(null);
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
@@ -924,11 +796,8 @@ describe("collapsing a panel", () => {
     expect(screen.getByText(en.participant.play.workspace.log.empty)).toBe(empty);
   });
 
-  // And it still has to catch up when the participant comes back to it:
-  // collapsing the panel is leaving the tab, so expanding into it is
-  // arriving. The three-second gate on that refresh is the log panel's own
-  // and is tested there; it is stubbed out at the top of this file so what
-  // is asserted here is the transition and not the clock.
+  // Expanding into the log counts as arriving; the refresh gate is stubbed
+  // out at the top of this file.
   test("expanding back into the log refreshes it", async () => {
     showWithToggles(null);
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
@@ -941,10 +810,6 @@ describe("collapsing a panel", () => {
     await waitFor(() => expect(logCalls.count).toBeGreaterThan(before));
   });
 
-  // The memoised panels stay memoised. Collapsing the bottom panel moves
-  // nothing about the side panel's own props, and this screen holds a
-  // thousand-row table and every question card — the same reasoning the
-  // bottom-tab test above records.
   test("collapsing one panel does not re-render the panel beside it", async () => {
     showWithToggles();
     const sideRendersBefore = renderCounts.side;
@@ -954,12 +819,8 @@ describe("collapsing a panel", () => {
     expect(renderCounts.side).toBe(sideRendersBefore);
   });
 
-  // Below 760px the panels are stacked sections rather than columns, and the
-  // same toggles hide those sections — there is one tree, so a panel that
-  // left the grid left the stack with it. What can still go wrong there is
-  // the ordering rule the panes carry: every pane laid out in a range names
-  // its own place, and a single silent `order: 0` reorders the whole row
-  // (see the pane grid's own tests above).
+  // One tree serves both layouts; every pane still laid out must name its
+  // own order (see the pane grid's tests).
   test("the panes left after a collapse still each declare their own order", async () => {
     const { container } = showWithToggles();
     await userEvent.click(screen.getByRole("button", { name: p.schema }));

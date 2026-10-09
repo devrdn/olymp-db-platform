@@ -1,19 +1,15 @@
 /**
- * Where an account goes once it has signed in.
- *
- * There is one sign-in form: the API has no separate admin endpoint, and the
- * difference between a participant and staff only appears afterwards, in the
- * permissions `/auth/me` returns. Routing therefore reads permissions and
- * never roles, the same rule the server's middleware follows, so a new role
- * added as data needs no change here.
+ * Where an account goes once it has signed in. Routing reads permissions,
+ * never roles, as the server's middleware does, so a role added as data needs
+ * no change here.
  */
 
+/** What routing needs to know about the signed-in account. */
 export type Identity = { mustChangePassword: boolean; permissions: string[] };
 
 /**
- * Holding any of these means the account has business in the constructor.
- * Scoped contest permissions are deliberately absent: they are granted per
- * contest, so they say nothing about where to land.
+ * Any of these sends the account to the constructor. Per-contest permissions
+ * are absent: they say nothing about where to land.
  */
 const STAFF_PERMISSIONS = [
   "contest.create",
@@ -23,22 +19,13 @@ const STAFF_PERMISSIONS = [
   "audit.view",
 ];
 
-/** Where a visitor is sent to obtain a session, and never sent back to. */
 const SIGN_IN = "/login";
 
 /**
- * The `?next=` the guard captured, if it is safe to obey.
- *
- * An unchecked `next` turns the sign-in page into an open redirect, which is
- * how a phishing link borrows a real domain: the address bar shows this
- * university, the destination does not. Only a path on this origin is
- * accepted, and the two forms browsers read as protocol-relative — `//host`
- * and `/\host`, since a backslash is normalised to a slash — are rejected
- * along with everything that is not a path at all.
- *
- * `/` and `/login` are refused for a duller reason: the first is the showcase,
- * which is not what somebody signing in is asking for, and the second is where
- * the visitor has just come from.
+ * The guard's `?next=`, if safe to obey. Only a path on this origin is taken,
+ * or sign-in becomes an open redirect; `//host` and `/\host` are
+ * protocol-relative to browsers and refused. `/` (the showcase) and `/login`
+ * are refused as pointless destinations.
  */
 function resumable(next: string | undefined): string | null {
   if (!next || next[0] !== "/") return null;
@@ -53,15 +40,7 @@ function resumable(next: string | undefined): string | null {
   return next;
 }
 
-/**
- * Where an account belongs when nothing more specific is known.
- *
- * Separate from the function below because two callers need it: the one that
- * decides where signing in lands, and any screen shared by both audiences —
- * the profile — which has to point its own mark somewhere. A participant sent
- * to the register would meet it scoped to contests they manage, which is
- * empty: an accurate answer to a question they never asked.
- */
+/** An account's home; also used by screens both audiences share, such as the profile. */
 export function homeFor(permissions: string[]): string {
   const isStaff = permissions.some((held) => STAFF_PERMISSIONS.includes(held));
   return isStaff ? "/contests" : "/my";

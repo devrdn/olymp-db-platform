@@ -6,23 +6,10 @@ import type { Account } from "./account-link";
 import { AppBar } from "./app-bar";
 
 /**
- * The frame every screen behind a session wears.
- *
- * One shell, not one per audience. It was `AdminShell` while the constructor
- * was the only thing behind a session; the participant's screens arrived and
- * wanted the identical bar with a different home, which is a prop, not a
- * component. Two shells differing by one string is how the language switcher
- * gets fixed in one of them and not the other.
- *
- * `home` is where the mark leads, and it differs by audience for a real
- * reason: an author's home is the register, a participant's is their own list,
- * and sending either to the other's screen means an immediate refusal from the
- * API. `section` names where the visitor is, beside the mark.
- *
- * It is a layout rather than something each page wraps itself in because
- * `loading.tsx` and `error.tsx` render inside it: the bar stays put while rows
- * load and stays put when they fail. A shell that exists only on the happy
- * path is a shell that flashes.
+ * The frame for every screen behind a session. One shell for all audiences;
+ * `home` differs because each audience's home is refused to the other. A
+ * layout, so `loading.tsx` and `error.tsx` render inside it and the bar never
+ * flashes.
  */
 export function ProductShell({
   locale,
@@ -41,21 +28,12 @@ export function ProductShell({
   dict: Dictionary;
   home: string;
   section?: string;
-  /**
-   * Navigation for a shell that has more than one destination. It replaces the
-   * plain section label rather than joining it: a name beside a set of links,
-   * one of which is marked as current, says the same thing twice.
-   */
+  /** Replaces the section label rather than joining it, which would say the same thing twice. */
   nav?: React.ReactNode;
-  /**
-   * Who is signed in, for the door to their profile. Absent while the layout
-   * could not reach `/auth/me` — the bar then simply says less rather than
-   * inventing a name.
-   */
+  /** Absent when the layout could not reach `/auth/me`; the bar then says less. */
   account?: Account;
-  /** What this installation calls itself. */
   name?: string;
-  /** Where its own mark lives, when it has uploaded one. */
+  /** The installation's uploaded logo, if any. */
   logo?: string;
   children: React.ReactNode;
 }) {

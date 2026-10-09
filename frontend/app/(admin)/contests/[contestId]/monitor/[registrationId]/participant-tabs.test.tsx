@@ -39,7 +39,7 @@ describe("the tab strip", () => {
     expect(screen.getAllByRole("link")).toHaveLength(PARTICIPANT_TABS.length);
   });
 
-  /** Five labels do not fit a phone's width; the strip scrolls inside itself rather than widening the page. */
+  /** Five labels do not fit a phone; the strip scrolls, not the page. */
   test("scrolls sideways inside itself", () => {
     render(<ParticipantTabs contestId={CONTEST} registrationId={REG} current="timeline" dict={dict} />);
     const strip = screen.getByRole("navigation", { name: dict.workspace.monitor.participant.tabsLabel });

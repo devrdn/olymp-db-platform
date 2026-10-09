@@ -52,9 +52,6 @@ describe("signIn", () => {
   });
 
   test("carries the caller's forwarded address to the API", async () => {
-    // Sign-in reaches the API from this server, so without the chain the API
-    // throttles and audits the web container instead of the person. The
-    // headers are the action's to decide — this layer just must not lose them.
     let sent: Headers | undefined;
 
     await signIn(
@@ -78,9 +75,6 @@ describe("signIn", () => {
   });
 
   test("sends the browser's device cookie to the API, and nothing else of the jar", async () => {
-    // A browser the owner has signed in from before is throttled on its own
-    // rather than with the address it shares; the API can only know it is
-    // that browser if the cookie crosses this server.
     let sent: Headers | undefined;
 
     await signIn(
@@ -152,8 +146,6 @@ describe("signIn", () => {
       });
 
     test("waits as long as the API asks and tries once more", async () => {
-      // A refusal for load is not a verdict on the password; the person
-      // typed nothing wrong, so they should not have to press again.
       const answers = [busy("1"), accepted()];
       const waits: number[] = [];
       let calls = 0;

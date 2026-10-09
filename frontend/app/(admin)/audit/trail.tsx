@@ -14,24 +14,16 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 /**
- * The audit trail, as a register.
- *
- * Same shape as the contest list and for the same reason: the data is tabular
- * and the whole use of it is scanning down a column — every login from one
- * address, everything one person did this morning. A wall of cards cannot be
- * scanned that way.
- *
- * The action arrives as a machine code and is translated here, from the
- * dictionary, exactly as an error code is. A code with no wording yet is shown
- * as the code rather than hidden: the trail is a record, and dropping a line
- * from it because the interface has not caught up would make the record lie.
+ * The audit trail as a register, scanned down a column. Action codes are
+ * translated from the dictionary; an untranslated code is shown raw, since
+ * dropping a line would make the record lie.
  */
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
 
-/** How many changed fields a row names before it starts counting them. */
+/** Changed fields named before the rest are counted. */
 const NAMED_FIELDS = 3;
 
 export function AuditTrailRegister({
@@ -46,7 +38,7 @@ export function AuditTrailRegister({
   entries: AuditEntry[];
   total: number;
   offset: number;
-  /** Builds the address of another page, so paging keeps the filters. */
+  /** Builds another page's address, keeping the filters. */
   pageHref: (offset: number) => string;
   filtered: boolean;
   dict: Dictionary;
@@ -55,8 +47,8 @@ export function AuditTrailRegister({
   const t = dict.audit;
 
   if (entries.length === 0) {
-    // Two different facts. "Nothing matches these filters" offers the way out;
-    // "nothing has happened yet" is not a problem and has no reset to offer.
+    // "Nothing matches these filters" offers a reset; "nothing has happened
+    // yet" does not.
     return (
       <StateView
         state={
@@ -114,9 +106,7 @@ export function AuditTrailRegister({
                   {entry.actor_login ? (
                     <span className="font-mono text-data text-ink">{entry.actor_login}</span>
                   ) : (
-                    /* Not a gap: an entry with no actor is the system acting,
-                       and saying so is more honest than an empty cell that
-                       reads as missing data. */
+                    /* No actor means the system acted. */
                     <span className="text-small text-ink-3 italic">{t.system}</span>
                   )}
                 </td>
@@ -126,10 +116,7 @@ export function AuditTrailRegister({
                       {entry.action}
                     </span>
                   )}
-                  {/* What moved, under what it was called. In the monospace
-                      register, where the interface's own prose ends and the
-                      record's raw data begins — these are field names as the
-                      API spells them, not sentences. */}
+                  {/* Field names as the API spells them, in monospace. */}
                   <ChangeSummary payload={entry.payload} label={t.unchanged} />
                   <BlockedProblems payload={entry.payload} dict={dict} />
                   <LoginFailureReason payload={entry.payload} dict={dict} />
@@ -146,9 +133,8 @@ export function AuditTrailRegister({
 
       {total > AUDIT_PAGE ? (
         <nav className="flex items-center gap-2.5" aria-label={t.heading}>
-          {/* Offsets rather than a cursor: the trail is append-only and read
-              newest first, so a page cannot shift under a reader the way it
-              would in a table that is edited. */}
+          {/* Offsets suffice: the trail is append-only and read newest first, so
+             pages do not shift. */}
           {offset > 0 ? (
             <Link
               href={pageHref(Math.max(0, offset - AUDIT_PAGE))}
@@ -172,21 +158,9 @@ export function AuditTrailRegister({
 }
 
 /**
- * Which fields an entry moved, and what they moved to, behind a disclosure.
- *
- * Closed, the row names the first few fields and counts the rest: a register
- * is read by scanning down a column, and a line per field turned each row into
- * a paragraph. Open, it holds every field with both values.
- *
- * A native <details>, so this page still ships no client JavaScript for
- * reading the trail: it is keyboard-operable and announced as a disclosure
- * without a line of ours. The values were in a title attribute before, which
- * is a tooltip — invisible on a touch screen, impossible to copy, and found by
- * accident if at all.
- *
- * "Nothing changed" gets no disclosure: there is nothing under it. The server
- * records it deliberately, because a save that moved nothing is otherwise
- * indistinguishable from an edit the reader simply cannot see.
+ * Changed fields behind a native `<details>`: closed, it names the first few
+ * and counts the rest; open, both values of each. No client JavaScript needed.
+ * "Nothing changed" is recorded on purpose and gets no disclosure.
  */
 function ChangeSummary({
   payload,
@@ -211,9 +185,7 @@ function ChangeSummary({
         {rest > 0 ? `${named} +${rest}` : named}
       </summary>
 
-      {/* A description list, because that is what this is: a field, and what
-          became of it. The arrow carries the direction, so neither side needs
-          a word for it in any language. */}
+      {/* The arrow carries the direction, so no word is needed. */}
       <dl className="mt-1.5 flex flex-col gap-1">
         {changes.map((change) => (
           <div key={change.field} className="flex flex-wrap items-baseline gap-x-2">
@@ -231,17 +203,8 @@ function ChangeSummary({
 }
 
 /**
- * Why a `contest.start_blocked` entry happened.
- *
- * "A contest did not start" names the symptom; an organizer opens the trail
- * for the reason, and the reason is exactly the closed vocabulary the
- * publish gate's own screen already renders (`workspace.gate.problems` —
- * `app/(admin)/contests/[contestId]/publish-gate.tsx`'s `global` list). Reused
- * here rather than invented again: the same small dot-and-sentence bullet,
- * scaled to a register row instead of a full report. A code with no wording
- * yet is still shown, raw, in the monospace register — the same rule
- * ChangeSummary and Subject already apply, because a blocked contest with an
- * unreadable reason is no better than one with none at all.
+ * The reason for a `contest.start_blocked` entry, in the publish gate's
+ * vocabulary (`workspace.gate.problems`). Unknown codes are shown raw.
  */
 function BlockedProblems({ payload, dict }: { payload: AuditEntry["payload"]; dict: Dictionary }) {
   const codes = blockedProblems(payload);
@@ -262,16 +225,9 @@ function BlockedProblems({ payload, dict }: { payload: AuditEntry["payload"]; di
 }
 
 /**
- * Why an `auth.login_failed` entry happened.
- *
- * "Failed to sign in" names the event; an administrator investigating an
- * incident cannot tell a mistyped password from a blocked account from a
- * sweep of guesses without knowing which — three different conversations to
- * have. The reason is the closed vocabulary `backend/internal/auth`'s
- * `Reason*` constants declare, read back the same way `BlockedProblems`
- * reads `contest.start_blocked`'s problem codes: a code with no wording yet
- * is shown raw rather than dropped, because a login-failure line with an
- * unreadable reason is no better than one with none.
+ * The reason for an `auth.login_failed` entry (a wrong password, a blocked
+ * account, a guessing sweep), from the backend's `Reason*` codes. Unknown codes
+ * are shown raw.
  */
 function LoginFailureReason({ payload, dict }: { payload: AuditEntry["payload"]; dict: Dictionary }) {
   const reason = loginFailureReason(payload);
@@ -287,17 +243,8 @@ function LoginFailureReason({ payload, dict }: { payload: AuditEntry["payload"];
 }
 
 /**
- * What the action was about, on one line.
- *
- * The name only. The kind was there too and doubled the height of every row
- * in the register — for a word the action beside it had already said:
- * "Changed a contest · Contest". It survives as the title, which is where it
- * earns its keep, on an action this interface has no wording for yet.
- *
- * A contest that still exists is a link, because the next thing a reader
- * wants is to open it. One that is gone keeps its identifier and no name: the
- * trail outlives what it describes, and inventing a name for something
- * deleted would be inventing a record.
+ * The entry's subject, by name; the kind is only the title. An existing contest
+ * is a link; a deleted one keeps its id and no invented name.
  */
 function Subject({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
   if (!entry.entity) return null;

@@ -4,16 +4,13 @@ import { CONTEST_STATUSES } from "./contests";
 import { SCORINGS } from "./contests-terms";
 
 /**
- * The contest's table, as the API sends it to its three audiences
- * (docs/ARCHITECTURE.md §10).
- *
- * The public and participant copies share one shape: the participant's only
- * extra is `is_you`, and neither carries an identifier of any kind. The staff
- * copy is a different shape on purpose — it names people twice over and lists
- * the disqualified, so a component written for one can never be handed the
- * other by accident.
+ * The contest's table for its three audiences (docs/ARCHITECTURE.md §10). The
+ * public and participant copies share one shape with no identifiers (the
+ * participant's adds `is_you`). The staff copy is a separate shape, naming
+ * people and listing the disqualified, so the two cannot be mixed up.
  */
 
+/** The states a contest's table can be in. */
 export const STANDINGS_STATES = [
   "not_started",
   "live",
@@ -23,9 +20,8 @@ export const STANDINGS_STATES = [
 export type StandingsState = (typeof STANDINGS_STATES)[number];
 
 /**
- * The ICPC grid's cell states (docs/ARCHITECTURE.md §6.1.1,
- * the section on grid cells). `cells` and `questions` are present only when
- * `scoring` is `"icpc"` — `points` and `winner` rows carry neither.
+ * The ICPC grid's cell states (docs/ARCHITECTURE.md §6.1.1). `cells` and
+ * `questions` are present only when `scoring` is `"icpc"`.
  */
 export const CELL_STATES = ["solved", "failed", "pending", "untried"] as const;
 export type CellState = (typeof CELL_STATES)[number];
@@ -136,10 +132,8 @@ export const staffStandingsSchema = z
       state: z.enum(STANDINGS_STATES),
       frozen_at: z.string().optional(),
     }),
-    // The contest's own status, not the table's: shown.state can sit on
-    // "frozen" straight through a contest finishing, since the freeze
-    // persists past the end, so a poller needs this to notice that
-    // transition — and, with it, that revealing may now be possible.
+    // The contest's status: `shown.state` stays "frozen" past the end, so a
+    // poller needs this to notice the finish and that revealing is possible.
     status: z.enum(CONTEST_STATUSES),
     scoring: z.enum(SCORINGS),
     freeze_min: z.number().nullable(),
@@ -169,12 +163,8 @@ export type StaffStandings = z.infer<typeof staffStandingsSchema>;
 export const IDENTITY_HUES = 6;
 
 /**
- * Which identity hue a label wears: 1 to 6, the same for the same label on
- * every read and on every screen, so a person keeps their colour between the
- * play tab and the public page.
- *
- * FNV-1a over the UTF-16 code units — small, dependency-free and spread well
- * enough that a roster of forty lands on every hue.
+ * A label's identity hue, 1 to 6, stable across reads and screens. FNV-1a over
+ * the UTF-16 code units.
  */
 export function identityHue(label: string): number {
   let hash = 0x811c9dc5;
@@ -189,15 +179,9 @@ export const FREEZE_UNITS = ["minutes", "hours"] as const;
 export type FreezeUnit = (typeof FREEZE_UNITS)[number];
 
 /**
- * The freeze the settings form submitted, as the API's `freeze_min`.
- *
- * Three outcomes, because the API tells three apart: a number sets the
- * freeze, `null` clears it, and `undefined` sends no key at all — which is
- * what a locked field (the contest has started) must do, since a disabled
- * input submits nothing and "nothing" must not read as "clear it".
- *
- * A non-whole or non-positive amount is refused rather than rounded: a freeze
- * of "1.5 minutes" quietly becoming two is a setting nobody chose.
+ * The submitted freeze as `freeze_min`: a number sets it, `null` clears it,
+ * and `undefined` sends no key, which is what a locked (disabled, so absent)
+ * field must mean. A non-whole or non-positive amount is refused, not rounded.
  */
 export function freezeFromForm(
   mode: FormDataEntryValue | null,

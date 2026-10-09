@@ -25,8 +25,7 @@ describe("the game schema wire shape", () => {
     });
   });
 
-  // The API never sends null for either list (participant_handler.go's own
-  // rule), and a client that quietly accepted one would hide the day it did.
+  // The API never sends null for a list; accepting one would hide the day it did.
   it("refuses a null table list rather than rendering nothing", () => {
     expect(() => gameSchemaSchema.parse({ tables: null, truncated: false })).toThrow();
   });

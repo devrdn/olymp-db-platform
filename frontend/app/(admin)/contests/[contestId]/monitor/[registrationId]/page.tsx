@@ -24,20 +24,13 @@ import { TimelineTab } from "./timeline-tab";
 import { WorkspaceTab } from "./workspace-tab";
 
 /**
- * Everything one participant did (design §6, second item): a heading, and
- * five tabs — the timeline, the SQL queries, the answers with the queries
- * that led to them, the workspace with its history, and sign-ins and
- * networks.
+ * Everything one participant did (SPEC.md §5.1): timeline, queries, answers,
+ * workspace history, sign-ins. The tab is in the address and the server reads
+ * only that tab's data. The API audits each view.
  *
- * The tab is in the address (`?tab=`), so a link to it can be shared, and
- * the server reads that tab's data — and only that tab's — before the page
- * arrives. Each view is audited by the API; nothing here needs to.
- *
- * Every read goes through `loadContestResource`, which answers a missing
- * permission as a 404 page. The API answers a registration of another
- * contest exactly as one that does not exist — 404, with a code of its own
- * (`monitor_participant_not_found`) — so any 404 here is the not-found page
- * too, not an error to retry.
+ * Reads go through `loadContestResource`. A registration of another contest is
+ * a 404 like a missing one (`monitor_participant_not_found`), so every 404 is
+ * the not-found page.
  */
 export default async function ParticipantPage(
   props: PageProps<"/contests/[contestId]/monitor/[registrationId]">,
@@ -111,7 +104,7 @@ export default async function ParticipantPage(
   );
 }
 
-/** One monitoring read, with every 404 answered as the not-found page. */
+/** One monitoring read; any 404 is the not-found page. */
 async function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
   let value: T | null;
   try {
@@ -124,12 +117,11 @@ async function read<T>(contestId: string, path: string, parse: (payload: unknown
   return value;
 }
 
-/** A timeline read's path under the contest, with the feed's own parameters. */
 function timeline(contestId: string, registrationId: string, kinds: string[] = []): string {
   return timelinePath(contestId, registrationId, { kinds, limit: MAX_FEED_PAGE }).slice(`/contests/${contestId}`.length);
 }
 
-/** What the tab in the address shows first, read on the server. */
+/** The current tab's data, read on the server. */
 async function loadTab(tab: ParticipantTab, contestId: string, registrationId: string) {
   const one = `/monitor/participants/${registrationId}`;
   switch (tab) {

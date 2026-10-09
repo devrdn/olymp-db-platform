@@ -24,9 +24,6 @@ describe("debounce", () => {
   });
 
   test("collapses a burst into one call carrying the last word", () => {
-    // The point of the whole thing: eight keystrokes are one question, not
-    // eight, and the answer wanted is to the last of them. Sending all eight
-    // would put eight ILIKE queries on the database for one search.
     const done = vi.fn();
     const search = debounce(done, 300);
 
@@ -54,9 +51,6 @@ describe("debounce", () => {
   });
 
   test("can be called off, so a component that unmounts leaves nothing behind", () => {
-    // Without this, navigating away mid-word fires a router call against a
-    // screen that is gone — React warns, and in the worst case it undoes a
-    // navigation the visitor just made deliberately.
     const done = vi.fn();
     const search = debounce(done, 300);
 

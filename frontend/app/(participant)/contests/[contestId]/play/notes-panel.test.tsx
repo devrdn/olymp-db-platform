@@ -47,7 +47,7 @@ function edit(value: string) {
   fireEvent.change(field(), { target: { value } });
 }
 
-/** What the status line under the field says to a sighted reader. */
+/** The visible status line under the field. */
 function visibleStatus() {
   return screen.getByTestId("notes-status").textContent;
 }
@@ -126,12 +126,8 @@ describe("the notes panel", () => {
     expect(live.textContent).toBe(before);
   });
 
-  // What the SQL editor beside these notes does once the contest is over:
-  // the saving stops, the draft stays, and the field goes on taking text.
-  // A participant writing down what they worked out has no reason to be
-  // treated differently from one typing a query, and taking the field away
-  // from under a hand that is mid-sentence is the one answer that loses
-  // something.
+  // As with the SQL editor: saving stops, the draft stays, and the field
+  // still takes text.
   test("says the contest is over when a save is refused for it, and still takes what is typed", async () => {
     answer = refused(409, "contest_finished");
     show();
@@ -178,8 +174,7 @@ describe("the notes panel", () => {
 
     edit("x".repeat(NOTES_COUNTER_FROM));
 
-    // Plain digits, with no locale grouping: this is rendered on the server
-    // as well, and Node and the browser do not always group alike.
+    // No locale grouping: server and browser may group differently.
     expect(screen.getByTestId("notes-counter")).toHaveTextContent("18000 of 20000 characters");
   });
 
@@ -198,8 +193,7 @@ describe("the notes panel", () => {
     expect(screen.queryByTestId("notes-counter")).not.toBeInTheDocument();
   });
 
-  // The field stops accepting text at the limit, and a field that silently
-  // stops is exactly what a screen reader user cannot see.
+  // A field that silently stops is invisible to a screen reader.
   test("announces once when the notes reach the limit", () => {
     show();
     const live = screen.getByTestId("notes-limit");
@@ -246,7 +240,7 @@ test("a paste into the notes is watched as one into the notes", () => {
   expect(pasteTargetOf(field())).toBe("notes");
 });
 
-// Design §8: the notes are not private, and the field says so.
+// The notes are not private (docs/ARCHITECTURE.md §6.4).
 test("say under the field that the organiser can see them", () => {
   show();
   expect(t.observed).toBe("The organiser can see your notes.");

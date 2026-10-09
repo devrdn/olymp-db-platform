@@ -21,33 +21,22 @@ import {
 import { useGamePoll } from "./game-poll";
 import { messageForCode } from "@/lib/i18n/errors";
 
-/** How many consecutive out-of-order refusals the loop resyncs from on its
- * own before giving up and asking a person to press Retry. Covers the one
- * legitimate cause — this tab's own idea of the offset fell behind the
- * server's, the exact gap `game_upload_chunk_out_of_order`'s own text
- * describes — without spinning forever against a genuinely broken upload. */
+/**
+ * Consecutive out-of-order refusals resynced automatically (this tab's offset
+ * fell behind the server's) before asking for Retry, so a broken upload does
+ * not spin forever.
+ */
 const MAX_AUTO_RESYNCS = 3;
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error";
 
 /**
- * One chunk of a game upload, sent straight to the API rather than through a
- * Server Action.
- *
- * Every other write in this screen (`./actions.ts`) goes through one: small
- * JSON, and the API's origin never has to reach the browser. A chunk cannot
- * follow it there for two reasons at once. First, size — a Server Action's
- * request body is capped (1 MiB by default, and `next.config.ts` has no
- * static number to raise it to, because `chunk_bytes` is this *installation's
- * own* configured ceiling, read at runtime from `upload_limits`, not a build-
- * time constant this file could match). Second, memory — a Server Action
- * receives its payload as `FormData` the framework itself buffers before this
- * code ever runs, where `rawBody: Blob` here lets the browser stream the
- * slice off disk. `client.ts`'s `request()` was built framework-free for
- * exactly this: `origin: ""` (its default) is a same-origin relative request,
- * which is what a browser call needs and a Server Action never did — the
- * `next.config.ts` rewrite that already lets the browser fetch a settings
- * image straight from `/api/v1/...` is the same route this reaches.
+ * Sends one chunk straight to the API, not through a Server Action: an action's
+ * body is capped at 1 MiB while `chunk_bytes` is configured per installation at
+ * runtime, and an action buffers its `FormData` where `rawBody: Blob` streams
+ * the slice from disk. `request()`'s default empty origin makes it a
+ * same-origin `/api` call, forwarded by the reverse proxy or, without one,
+ * the `next.config.ts` rewrite.
  */
 async function putChunk(
   contestId: string,
@@ -70,27 +59,13 @@ async function putChunk(
 }
 
 /**
- * The second way to build this contest's game: a finished dump, sent in
- * pieces, instead of a script typed into `GameEditor` above it.
+ * Builds the game from an uploaded dump, on the same screen as `GameEditor` so
+ * the shared status stays in view.
  *
- * A second control on the same screen rather than a tab of its own — an
- * organiser choosing between them is choosing between two ways to produce
- * the very thing `GameEditor`'s own status tag already reports on, and
- * hiding one behind a click would only make that status harder to find.
- *
- * The upload's own progress lives entirely in this component's state, not in
- * a prop `GameEditor` also reads: the two screens agree once the build
- * itself finishes, through `router.refresh()` re-reading `/game` the normal
- * way (`page.tsx`'s own `Promise.all`), which is the same mechanism a plain
- * reload uses and needs no wiring between two otherwise independent forms.
- *
- * The one exception is the viewer for a file this contest's game was already
- * built from: that has to survive a reload, because the tab that ran the
- * upload is gone by then and nothing else on this page still names the file.
- * `game.upload` (`gameResponse.Upload`, present exactly when `game.source`
- * is `"file"`) is what carries that fact across the reload — it is what
- * seeds this component's state back into the "done" phase below, the same
- * phase a live completion (`runLoop`) reaches on its own.
+ * Progress lives in this component's state; the two panels agree after the
+ * build via `router.refresh()`. The viewer for the file the current game was
+ * built from must survive a reload, so `game.upload` (present when
+ * `game.source` is `"file"`) seeds the "done" phase.
  */
 export function GameUpload({
   contestId,
@@ -100,12 +75,12 @@ export function GameUpload({
   dict,
 }: {
   contestId: string;
-  /** The game as `page.tsx` read it — `game.uploadLimits` is this panel's
-   * own ceilings, and `game.source` / `game.upload` are what let it restore
-   * the "done" viewer after a reload (this component's own doc explains
-   * why nothing else can). */
+  /**
+   * `game.uploadLimits` holds the ceilings; `game.source` and `game.upload`
+   * restore the "done" viewer after a reload.
+   */
   game: Game;
-  /** The upload a reloaded page found still receiving, or null. */
+  /** The upload still receiving at page load, or null. */
   initialUpload: Upload | null;
   editable: boolean;
   dict: Dictionary;
@@ -117,10 +92,8 @@ export function GameUpload({
   const uploadLimits = game.uploadLimits;
 
   const resumable = initialUpload && initialUpload.status === "receiving" ? initialUpload : null;
-  // A file-sourced game whose own upload this reload can still describe —
-  // never true at the same time as `resumable`, an in-progress replacement
-  // takes priority for the picker below over a stale "here is what built
-  // the current game" note.
+  // A resumable upload takes priority over the note about the file that built
+  // the current game.
   const restored = !resumable && game.source === "file" ? (game.upload ?? null) : null;
 
   const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : restored ? "done" : "idle");
@@ -130,38 +103,25 @@ export function GameUpload({
   const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? restored?.bytes ?? 0);
   const [rateBps, setRateBps] = useState(0);
   /**
-   * How long the last chunk took, in milliseconds — the progress bar's own
-   * transition duration (finding 4).
-   *
-   * A bar whose transition outlives the interval between updates never
-   * displays the truth: it spends its whole life travelling towards a figure
-   * that has already moved. The fixed 120ms this used to carry is longer
-   * than a chunk takes on a fast link, so the bar trailed the upload the
-   * whole way and only arrived 120ms after the last chunk had landed. The
-   * cadence is not knowable in advance — it is the file, the chunk size and
-   * the network — so it is measured, and the token stays the ceiling rather
-   * than the value.
+   * The last chunk's duration in ms, used as the bar's transition time. A
+   * transition longer than the update interval never shows the truth; the token
+   * stays the ceiling.
    */
   const [stepMs, setStepMs] = useState<number | null>(null);
   const [mismatch, setMismatch] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [completedGame, setCompletedGame] = useState<Game | null>(restored ? game : null);
-  // True only once this tab's own `runLoop` has actually finished an upload
-  // — never for the "done" phase `restored` seeds above. It is what tells
-  // the green "file received, build started" line (a fact about *this*
-  // upload, just now) apart from `tu.sourceNote` (a fact about the file the
-  // *current* game happens to have been built from, possibly long ago).
+  // True only after this tab's own upload finished, never for a restored "done"
+  // phase; separates "file received" from the note about an older file.
   const [liveCompletion, setLiveCompletion] = useState(false);
-  // Mirrors whether `fileRef.current` is set, for render: a ref itself must
-  // never be read while rendering (React warns, correctly — it is not a
-  // value the render phase can depend on and still update as expected), so
-  // "is there a file this tab can still retry with" needs its own state.
+  // Mirrors `fileRef.current` for render, since refs must not be read during
+  // render.
   const [hasFile, setHasFile] = useState(false);
 
   const fileRef = useRef<File | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const rateOriginRef = useRef<{ time: number; bytes: number }>({ time: 0, bytes: 0 });
-  /** When `markProgress` last ran, for the bar's own transition (see `stepMs`). */
+  /** When `markProgress` last ran (see `stepMs`). */
   const progressStepRef = useRef(0);
 
   const [windowFrom, setWindowFrom] = useState(1);
@@ -172,34 +132,18 @@ export function GameUpload({
   const [windowError, setWindowError] = useState<string | null>(null);
   const [gotoValue, setGotoValue] = useState("1");
 
-  // Keeps this panel's own idea of the build current once its upload has
-  // finished: nobody is holding a form open waiting on this one, a build is
-  // minutes at the worst case, and "jump to the failing line" below has
-  // nothing to jump to until a poll actually reports `failed`.
-  //
-  // The same timer GameEditor above uses, not a second one over the same
-  // endpoint — see useGamePoll for why two of them were both a wasted request
-  // every two seconds and a way for the two panels to show different states
-  // on the tick a build finishes.
+  // Polls the build after the upload finishes. Shares `GameEditor`'s timer (see
+  // useGamePoll), so the two panels never disagree on the tick a build ends.
   useGamePoll(contestId, phase === "done" && Boolean(completedGame?.building), setCompletedGame);
 
-  // Loads the viewer's first window the moment there is an upload id to read
-  // it for — a live completion (`runLoop`, below) and a reload that restored
-  // one from `game.upload` both reach `phase === "done"` this way, and
-  // either one needs the same first page of lines before `tu.viewHeading`
-  // means anything. `loadedForRef` is keyed on the upload id rather than
-  // firing once per mount, so a second file uploaded later in the same tab
-  // (a new id) still gets its own window loaded without this effect trying
-  // on every re-render in between.
+  // Loads the viewer's first window once per upload id, for both a live
+  // completion and a restored one.
   const loadedForRef = useRef<string | null>(null);
   useEffect(() => {
     if (phase !== "done" || !uploadId || loadedForRef.current === uploadId) return;
     loadedForRef.current = uploadId;
     void fetchWindow(uploadId, 1);
-    // fetchWindow is stable across renders (it closes over nothing but
-    // setState calls and contestId), so it is deliberately left out of the
-    // dependency array rather than redeclared with useCallback for a
-    // function this effect is the only caller of.
+    // fetchWindow closes only over setState and contestId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, uploadId]);
 
@@ -209,10 +153,8 @@ export function GameUpload({
     if (elapsed > 0.2) {
       setRateBps((newSent - rateOriginRef.current.bytes) / elapsed);
     }
-    // The gap since the previous chunk, which is how long this bar has to
-    // travel before the next one arrives (see `stepMs`). A gap measured
-    // across a restarted upload is simply a long one, and a long one is
-    // clamped back to the token — so there is nothing to reset here.
+    // The gap since the previous chunk. A gap across a restart is long and gets
+    // clamped to the token, so nothing needs resetting.
     const previous = progressStepRef.current;
     progressStepRef.current = now;
     if (previous > 0) setStepMs(now - previous);
@@ -220,12 +162,8 @@ export function GameUpload({
   }
 
   /**
-   * `id` is always the caller's own, never read from `uploadId` state: this
-   * is called from `runLoop` the instant an upload completes, inside the
-   * same render pass that just called `setUploadId` — a state update that
-   * has not landed in this closure's own `uploadId` yet, only in the next
-   * render's. `loadWindow` below is the version a click handler uses, once
-   * that render has long since happened and `uploadId` is trustworthy again.
+   * `id` comes from the caller: `runLoop` calls this before the `setUploadId`
+   * update reaches this closure. Click handlers use `loadWindow`.
    */
   async function fetchWindow(id: string, from: number) {
     setWindowLoading(true);
@@ -250,7 +188,6 @@ export function GameUpload({
     await fetchWindow(uploadId, from);
   }
 
-  /** Sends every remaining chunk of `file`, starting at `startOffset`. */
   async function runLoop(file: File, id: string, startOffset: number, chunkBytes: number) {
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -264,20 +201,15 @@ export function GameUpload({
       const chunk = file.slice(offset, end);
 
       try {
-        // Chunks are sent one at a time on purpose (the brief's own "send
-        // chunks one after another"); a parallel Promise.all here would race PUTs
-        // against the same offset, which the server would just refuse as
-        // out of order.
+        // One at a time: parallel PUTs would race the same offset.
         offset = await putChunk(contestId, id, offset, chunk, controller.signal);
         resyncs = 0;
         markProgress(offset);
       } catch (error) {
         if (isAbortError(error)) return;
 
-        // The server knows the true offset better than this tab's own
-        // count of what it sent — the rule the brief states for a resumed
-        // upload applies just as much mid-stream, to a chunk this tab
-        // thought had not landed yet but actually had.
+        // The server knows the true offset better than this tab, mid-stream as
+        // much as on resume.
         if (
           error instanceof ApiError &&
           error.code === "game_upload_chunk_out_of_order" &&
@@ -309,14 +241,9 @@ export function GameUpload({
     setCompletedGame(result.value ?? null);
     setLiveCompletion(true);
     setPhase("done");
-    // The viewer's first window is loaded by the `loadedForRef` effect
-    // above, keyed on `uploadId` (already `id` by the time that effect
-    // reruns) — not fetched again here, which would only race it.
-    // GameEditor's own status tag reads `initial`, a prop from the server
-    // component above (page.tsx) — this is what brings it (and this
-    // component's own `initialUpload`, now absent) current. Local state set
-    // just above survives it: router.refresh() merges new server props into
-    // the existing client tree without resetting useState (its own doc).
+    // The `loadedForRef` effect loads the first window; fetching here would
+    // race it. The refresh brings `GameEditor`'s server props current, and
+    // local state survives it.
     router.refresh();
   }
 
@@ -348,10 +275,8 @@ export function GameUpload({
     setErrorCode(null);
     setPhase("uploading");
 
-    // The reselected file only proves its own name and size match — the
-    // server's own count of what it actually received is what a resend has
-    // to start from, not the number this page loaded with, which may
-    // already be stale.
+    // Resend from the server's current count; the one loaded with the page may
+    // be stale.
     const fresh = await currentGameUploadAction(contestId);
     const offset =
       fresh && fresh.id === resumable.id && fresh.status === "receiving"
@@ -369,10 +294,7 @@ export function GameUpload({
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const picked = event.target.files?.[0];
-    // Cleared immediately, not just after a successful read: without this, a
-    // person who fixes a mismatched resume by picking the very same filename
-    // a second time never fires `onChange` at all, because the input's own
-    // value has not changed.
+    // Cleared at once, so picking the same file again still fires `onChange`.
     event.target.value = "";
     if (!picked) return;
 
@@ -405,13 +327,9 @@ export function GameUpload({
   }
 
   /**
-   * Back to the picker, so a different file can replace this one.
-   *
-   * Not cancel(): nothing is in flight, and the upload on the server is
-   * complete rather than abandoned — it stays until a new one replaces it,
-   * which is what makes this safe to offer beside a game that is already
-   * built. The refusal when the contest has started is the server's to give
-   * (game_not_editable), the same one the editor gets.
+   * Back to the picker to replace the file. Not a cancel: the server's upload
+   * is complete and stays until replaced. The server refuses once the contest
+   * has started.
    */
   function chooseAnother() {
     fileRef.current = null;
@@ -536,20 +454,10 @@ export function GameUpload({
             aria-valuemax={100}
             className="h-2 w-full overflow-hidden rounded-full bg-sunk"
           >
-            {/* `scaleX`, not `width` (finding 4). A width is a layout
-                property: every frame of that transition re-laid out the bar,
-                its track and the row of figures beside it, which is exactly
-                what SPEC.md §6 asks this kind of movement to avoid — a
-                transform is composited and touches no layout at all. The
-                track above is what carries the rounding (SPEC.md §5: it
-                lives on the outer frame), so the fill has none of its own to
-                be squashed by the scale.
-
-                The duration is `min(--t-input, the gap since the last
-                chunk)`: the token stays the ceiling — including the 1ms it
-                collapses to under `prefers-reduced-motion` — while a faster
-                upload gets a faster bar, which is what makes this a readout
-                of the upload rather than a chase after it. */}
+            {/* `scaleX`, not `width`: a transform is composited and causes no
+               layout (SPEC §6). The track carries the rounding. Duration is
+               `min(--t-input, gap since the last chunk)`, so the token, 1ms
+               under reduced motion, stays the ceiling. */}
             <div
               className="h-full origin-left bg-accent transition-transform ease-standard"
               style={{
@@ -704,12 +612,7 @@ export function GameUpload({
 
               {windowError ? (
                 <p role="alert" className="text-small text-bad">
-                  {/* `message()` falls back to the dictionary's generic
-                      "something went wrong" for a code it does not know, and
-                      that is the wrong fallback here: what failed is one page
-                      of one file, which `tu.windowError` says in the three
-                      languages it is already translated into. The generic one
-                      was what this rendered while that key sat unused. */}
+                  {/* Falls back to `tu.windowError`, not the generic "something went wrong". */}
                   {(errors as Record<string, string>)[windowError] ?? tu.windowError}
                 </p>
               ) : windowLoading ? (

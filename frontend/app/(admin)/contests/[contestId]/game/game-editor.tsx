@@ -14,18 +14,9 @@ import { saveGameScriptAction, type GameState } from "./actions";
 import { useGamePoll } from "./game-poll";
 
 /**
- * The screen an organiser writes their game on.
- *
- * The same CodeEditor a participant types queries into, for the same reason
- * it exists there: this is SQL, and SQL is read by its shape. Nothing about
- * the highlighting is olympiad-specific, so nothing here is a second copy of
- * it.
- *
- * Saving stores the script and starts a build somewhere else — the API
- * answers 202 — so this component's other job is to watch. It asks again
- * every two seconds while the build is running and stops the moment it is
- * not, because a page left polling for ever is a page that costs an idle
- * browser and an idle server something all afternoon.
+ * The organiser's SQL game editor, using the participant's `CodeEditor`. Saving
+ * answers 202 and a worker builds; the status is polled while building and
+ * polling stops when it ends.
  */
 export function GameEditor({
   contestId,
@@ -46,30 +37,22 @@ export function GameEditor({
   const [state, save, saving] = useActionState<GameState, FormData>(saveGameScriptAction, {});
   const [polled, setPolled] = useState<Game | null>(null);
 
-  // Derived, not synchronised. A save hands the build to a worker, so the
-  // answer to "is it built" is somewhere else the moment the action returns —
-  // and the server's own answer to that save was `pending`. Writing that into
-  // state from an effect would be a render cascade for a value both sides
-  // already agree on; this says the same thing without one, and holds whether
-  // or not the action's revalidation has refreshed `initial` yet.
+  // Derived rather than set from an effect: after a save the server said
+  // `pending`, and this holds whether or not revalidation has refreshed
+  // `initial` yet.
   const game: Game = polled ?? (state.saved ? { ...initial, status: "pending", building: true } : initial);
 
-  // The mirror field FormData reads. CodeEditor draws the text; a real
-  // textarea is what a form submits and what a browser restores across a soft
-  // reload — the same arrangement the participant's console uses, and its own
-  // doc comment explains why the two are separate.
+  // The textarea a form submits and the browser restores; CodeEditor only draws
+  // the text, as in the participant's console.
   const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const [bytes, setBytes] = useState(() => new TextEncoder().encode(initialScript).length);
 
-  // Shared with GameUpload below it on the page rather than a timer of this
-  // component's own: one request per tick for one answer, and both panels
-  // handed the same snapshot so they cannot disagree about a build that has
-  // just finished (useGamePoll's own doc).
+  // Shared with GameUpload, so both panels get the same snapshot (see
+  // useGamePoll).
   useGamePoll(contestId, game.building, setPolled);
 
-  // The server's own ceiling, from the status it just answered with — never
-  // a constant of this bundle's own (CLAUDE.md rule 11). The fallback is for
-  // an API old enough not to send the field; zero means "it did not say".
+  // The server's ceiling, never a bundled constant (CLAUDE.md rule 11). Zero
+  // means an older API did not send it.
   const maxBytes = game.maxScriptBytes > 0 ? game.maxScriptBytes : FALLBACK_MAX_GAME_SCRIPT_BYTES;
   const tooLong = bytes > maxBytes;
 
@@ -146,7 +129,7 @@ export function GameEditor({
   );
 }
 
-/** The build's state, in the one word an organiser needs. */
+/** The build's state in one word. */
 function GameStatusTag({ game, t }: { game: Game; t: Dictionary["workspace"]["game"] }) {
   const tone =
     game.status === "ready"

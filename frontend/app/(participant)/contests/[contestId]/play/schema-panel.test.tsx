@@ -41,22 +41,18 @@ describe("the schema panel", () => {
     expect(screen.getByText("text")).toBeInTheDocument();
   });
 
-  // The join a participant needs is exactly this. Having to discover it by
-  // guessing is not the puzzle the olympiad is setting.
+  // The join a participant needs; guessing it is not the puzzle.
   test("names the table a foreign key points at, instead of the column's type", () => {
     panel();
 
     expect(screen.getByText("fk rooms")).toBeInTheDocument();
-    // And says so on the table itself, the way the design draws it.
+    // And counted on the table row, as the design draws it.
     expect(within(screen.getByRole("button", { name: /guests/ })).getByText("fk 1")).toBeInTheDocument();
   });
 
-  // A column's type shares the row with its name and, at the design's own
-  // 212px pane, does not always fit. `shrink-0` on the type meant the *name*
-  // absorbed the whole shortfall: measured, `badge_number` was left 11px of
-  // room while `character varying` beside it printed in full. The name is
-  // what has to be typed into a query, so it now gives way last — and
-  // whichever of the two is cut, the full text stays reachable in the title.
+  // At the design's 212px pane the row does not always fit. The name is what
+  // gets typed, so the type gives way first; the full text stays in the
+  // title.
   test("a column's type gives way before its name, and stays readable in full", () => {
     panel({
       truncated: false,
@@ -75,10 +71,8 @@ describe("the schema panel", () => {
     expect(screen.getByText("recorded_at")).toHaveAttribute("title", "recorded_at");
   });
 
-  // The same rule SidePanel's own panels keep: `sr-only` is
-  // `position: absolute`, and a static scroll box does not clip one, so a
-  // scroller holding visually-hidden text has to be the containing block for
-  // it or the label keeps the page's coordinates instead of the panel's.
+  // As in SidePanel: a scroller holding `sr-only` text must be its
+  // containing block.
   test("the scrolling tree is the containing block for the hidden search label", () => {
     const { container } = panel();
     const scroller = container.querySelector("section > div.overflow-y-auto");
@@ -109,14 +103,13 @@ describe("the schema panel", () => {
     await user.type(screen.getByLabelText(en.participant.play.schema.searchLabel), "full");
 
     expect(screen.getByText("full_name")).toBeInTheDocument();
-    // `rooms` matched nothing, so it is gone entirely — as is `guests`'s own
-    // `id`, which the search did not match.
+    // `rooms` matched nothing and is gone, as is the unmatched `id` of
+    // `guests`.
     expect(screen.queryByRole("button", { name: /rooms/ })).not.toBeInTheDocument();
     expect(screen.queryByText("room_id")).not.toBeInTheDocument();
   });
 
-  // A hit the participant cannot see is not a hit: a column matched inside a
-  // collapsed table has to open it.
+  // A hidden hit is no hit: a match inside a collapsed table opens it.
   test("a match inside a collapsed table opens it", async () => {
     const user = userEvent.setup();
     panel();
@@ -155,8 +148,7 @@ describe("the schema panel", () => {
     expect(screen.getByText(en.participant.play.schema.truncated)).toBeInTheDocument();
   });
 
-  // The participant's hands are in the editor, so the shortcut is bound on
-  // the document rather than on the panel.
+  // Bound on the document: the participant's hands are in the editor.
   test("⌘K puts the cursor in the search field from anywhere on the screen", async () => {
     const user = userEvent.setup();
     panel();
@@ -167,13 +159,8 @@ describe("the schema panel", () => {
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });
 
-  // §8 lets the participant collapse this panel entirely, and the shortcut
-  // that opens its search is no use pointed at something nobody can see —
-  // the same reasoning by which a completed run opens a collapsed result
-  // panel. The panel asks its owner to bring it back and focuses once it is
-  // actually visible: `focus()` inside a `display:none` subtree is a
-  // documented no-op, so focusing before the owner has re-rendered would
-  // move focus to nothing.
+  // Collapsed, the panel asks to be shown and focuses once visible:
+  // `focus()` inside a `display:none` subtree does nothing.
   test("⌘K asks to be shown again when it is collapsed, and takes the cursor once it is", async () => {
     const user = userEvent.setup();
     const onReveal = vi.fn();
@@ -190,8 +177,7 @@ describe("the schema panel", () => {
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });
 
-  // Forty thousand rows laid out at once is a frame budget nothing recovers
-  // from, and the API's own bound allows exactly that.
+  // The API's bound allows forty thousand rows, too many to lay out at once.
   test("a very large schema starts collapsed instead of laying every column out", () => {
     const many: GameSchema = {
       truncated: false,

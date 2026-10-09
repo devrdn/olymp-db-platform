@@ -5,11 +5,8 @@ import { SETTING_KEYS, type ImageKind } from "./settings-terms";
 export { IMAGE_KINDS, SETTING_KEYS, imageHref, type ImageKind } from "./settings-terms";
 
 /**
- * What the installation calls itself, and what it puts on itself.
- *
- * The keys are the API's, spelled once here. They are dotted strings rather
- * than an object because that is what the table holds — a setting is a row, so
- * that adding one is data rather than a release.
+ * The installation's name, contact and images. Settings are rows keyed by
+ * dotted strings, so adding one is data rather than a release.
  */
 export const settingsSchema = z
   .object({

@@ -1,14 +1,14 @@
 import type { FeedItem, LoggedQuery } from "@/lib/api/monitor";
 
-/** Builders shared by this page's tests. */
+/** Builders for this page's tests. */
 
 export const CONTEST = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
 export const REG = "9a1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
 
-/** The query builder of the shared log, so both sides build the same row. */
+/** The shared log's builder, so both sides build the same row. */
 export { loggedQuery } from "@/components/product/test-fixtures";
 
-/** The same query as the timeline carries it. */
+/** The same query as a timeline item. */
 export function queryFeedItem(query: LoggedQuery): FeedItem {
   return {
     cursor: `t${query.id}`,

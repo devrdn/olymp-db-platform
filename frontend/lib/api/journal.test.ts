@@ -2,13 +2,6 @@ import { describe, expect, test } from "vitest";
 
 import { answersSchema, queriesSchema } from "./journal";
 
-/**
- * The shapes one participant's record arrives in, which the monitoring
- * routes and the participant's own profile both speak. The two audiences
- * read them through their own modules; what is proved here is the reading
- * itself, once.
- */
-
 const ID = "9a1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
 
 const wireQuery = (id: number, overrides: Record<string, unknown> = {}) => ({

@@ -14,33 +14,21 @@ export async function generateMetadata() {
 }
 
 /**
- * Where a participant lands after signing in.
- *
- * A Server Component: the data is fetched where the session already is, so no
- * token reaches the browser and the first paint carries the rows.
- *
- * `scope=participant` is passed explicitly rather than relied on. The API
- * scopes the listing by what the caller may see, and for an account holding no
- * staff permission that already means "mine and the open ones" — but an
- * account that holds both roles, which the teaching assistant running a
- * contest and sitting another one does, would otherwise get the contests they
- * manage on the screen that promises the ones they take part in.
- *
- * This screen is the enrolled half of that; `/open` is the other.
+ * Where a participant lands after signing in: the contests they are enrolled
+ * in (`/open` is the catalogue). `scope=participant` is explicit because an
+ * account holding staff permissions too would otherwise get the contests it
+ * manages.
  */
 export default async function MyContestsPage() {
   const [locale, dict] = await Promise.all([activeLocale(), activeDictionary()]);
 
-  // `enrolled=true` is what makes this screen its own. The scope alone still
-  // returns the open contests too, which is the catalogue's answer, not this
-  // one: the question here is asked under a timer on the day of a contest, and
-  // diluting it with things to browse is what the split was for.
+  // `enrolled=true` keeps the open contests out: this screen answers "when
+  // does mine start", asked under a timer on the day.
   const search = new URLSearchParams({ scope: "participant", enrolled: "true", lang: locale });
 
-  // The proxy could only see that a session cookie exists; what it is worth is
-  // this answer. A dead session goes back to the form and an account still on
-  // its one-time password goes to the password screen — neither is a failure a
-  // retry could fix, which is what the error boundary would offer.
+  // The proxy only saw that a cookie exists. A dead session goes back to
+  // sign-in and a one-time password to the password screen; a retry could
+  // fix neither.
   const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
     const target = authRecoveryRedirect(error, "/my");
     if (target) redirect(target);
@@ -61,8 +49,7 @@ export default async function MyContestsPage() {
         empty={{
           title: dict.participant.mine.empty.title,
           body: dict.participant.mine.empty.body,
-          // Principle 4: the state names its next step. Without it a new
-          // student meets an accurate screen with nothing to do on it.
+          // The empty state names its next step (SPEC.md §2, principle 4).
           action: { label: dict.participant.mine.empty.action, href: "/open" },
         }}
       />

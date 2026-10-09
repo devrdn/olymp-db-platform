@@ -17,10 +17,6 @@ describe("guardRedirect", () => {
     expect(guardRedirect("/", "", false)).toBeNull();
   });
 
-  // The matcher admits a path that starts with the public one plus a slash,
-// and for "/" that reads as anything starting "//". Next normalises "//my" to
-// "/my" before it becomes a route, so the guard sees it again and refuses it
-// — but the argument is load-bearing enough to pin rather than to trust.
 test("does not let a doubled slash walk in through the front page", () => {
   expect(guardRedirect("//my", "", false)).not.toBeNull();
 });
@@ -29,9 +25,6 @@ test("and it is still only the front page that is open", () => {
     expect(guardRedirect("/my", "", false)).toBe("/login?next=%2Fmy");
   });
 
-  // The container's healthcheck is a signed-out request. Redirected, it would
-  // render /login — and every render of a page asks the API for the site's
-  // settings, so an idle stack would keep the API busy answering a probe.
   test("leaves the liveness route reachable without a session", () => {
     expect(guardRedirect("/healthz", "", false)).toBeNull();
   });
@@ -62,24 +55,11 @@ test("and it is still only the front page that is open", () => {
   });
 
   test("keeps the password screen behind a session", () => {
-    // It is reached by an account that is signed in and stuck; without a
-    // session there is nothing to change.
     expect(guardRedirect("/password", "", false)).toBe("/login?next=%2Fpassword");
   });
 
-  /**
-   * The redirect this guard issues carries a query of its own, so the next
-   * request arrives at `/login?next=…` rather than at `/login`. If the
-   * allow-list is consulted with the query attached, sign-in stops matching
-   * it and the guard sends the sign-in page to itself, wrapping `next` one
-   * encoding deeper each time — a loop the browser ends with
-   * ERR_TOO_MANY_REDIRECTS, and which locks out every signed-out visitor
-   * rather than some unlucky path.
-   *
-   * Hence two arguments: the path decides, the query is only carried. They
-   * are separate parameters so that the decision cannot be handed a query
-   * string again by accident.
-   */
+  // The redirect itself lands on `/login?next=…`; matching with the query
+  // attached would loop.
   test("leaves sign-in reachable when it carries where to go next", () => {
     expect(guardRedirect("/login", "?next=%2Fcontests", false)).toBeNull();
   });
@@ -91,13 +71,6 @@ test("and it is still only the front page that is open", () => {
   });
 });
 
-/**
- * The guard can only see whether a cookie exists; the cookie is httpOnly and
- * only the API can say what it is still worth. So the real verdict arrives
- * after the page has been asked to render, as a failure code — and the
- * recoverable-error screen then offers a retry that can never succeed, because
- * neither signing in nor replacing a password happens by asking again.
- */
 describe("authRecoveryRedirect", () => {
   test("sends a dead session back to sign in, carrying where it was going", () => {
     expect(authRecoveryRedirect(new ApiError("unauthenticated", 401, "..."), "/contests")).toBe(
@@ -106,17 +79,12 @@ describe("authRecoveryRedirect", () => {
   });
 
   test("sends an account still on its one-time password to the one screen it may use", () => {
-    // The API closes everything except the way out. The interface has to agree,
-    // or the account meets an error screen on every route instead of the form
-    // that unblocks it.
     expect(
       authRecoveryRedirect(new ApiError("password_change_required", 403, "..."), "/contests"),
     ).toBe("/password");
   });
 
   test("does not carry a destination into the password screen", () => {
-    // Nothing resumes here: changing a password retires every session, so the
-    // journey restarts at sign-in whatever they were doing.
     expect(
       authRecoveryRedirect(new ApiError("password_change_required", 403, "..."), "/contests"),
     ).not.toContain("next=");
@@ -128,8 +96,6 @@ describe("authRecoveryRedirect", () => {
   });
 
   test("leaves a refusal that signing in again would not lift", () => {
-    // The account is signed in and simply not allowed: sending it to the form
-    // would loop it straight back here.
     expect(authRecoveryRedirect(new ApiError("forbidden", 403, "..."), "/contests")).toBeNull();
   });
 
@@ -139,12 +105,6 @@ describe("authRecoveryRedirect", () => {
 });
 
 describe("authRecoveryRedirect, leaving a trace", () => {
-  /**
-   * The bug this exists for was reported twice and reproduced neither time:
-   * a session that bounces to the sign-in form, with nothing on either side
-   * saying which request was refused or why. The redirect is the moment the
-   * interface knows, and it was the one moment that said nothing.
-   */
   test("records which code sent the visitor back, and where from", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -154,16 +114,13 @@ describe("authRecoveryRedirect, leaving a trace", () => {
     const line = warn.mock.calls[0].join(" ");
     expect(line).toContain("unauthenticated");
     expect(line).toContain("/contests");
-    // The request id is what ties this line to the API's own log for the very
-    // same request, which is the whole point of writing one.
     expect(line).toContain("req-42");
 
     warn.mockRestore();
   });
 
   test("says nothing when it is not the one redirecting", () => {
-    // `forbidden` is somebody signed in and simply not allowed. Logging it
-    // here would put a line in the log for every ordinary permission check.
+    // Logging `forbidden` would add a line for every ordinary permission check.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     authRecoveryRedirect(new ApiError("forbidden", 403, "No", "req-7"), "/contests");
@@ -174,19 +131,7 @@ describe("authRecoveryRedirect, leaving a trace", () => {
 });
 
 describe("guardRedirect, resuming the exact view", () => {
-  /**
-   * These two once called the guard with the path and query joined into one
-   * string, which is how the proxy called it, and they passed — while every
-   * signed-out visitor was caught in a redirect loop. The function was right
-   * about the string it was handed; the bug was in what it was handed, and a
-   * test that builds the argument itself cannot see that. Hence the separate
-   * parameters, which put the mistake beyond the type checker's tolerance.
-   */
   test("carries the query string, not just the path", () => {
-    // The promise this function makes is that signing in resumes the journey.
-    // A filtered register, a page of results, a search somebody typed — all of
-    // that lives in the query string, and dropping it lands them on a bare
-    // list wondering what happened to their search.
     expect(guardRedirect("/users", "?q=popescu&status=blocked", false)).toBe(
       "/login?next=%2Fusers%3Fq%3Dpopescu%26status%3Dblocked",
     );

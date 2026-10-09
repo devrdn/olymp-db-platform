@@ -5,17 +5,9 @@ import { useSelectedLayoutSegment } from "next/navigation";
 import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 
 /**
- * The contest workspace's trail: the register, this contest, this section.
- *
- * A client component for one reason, the same one the bar's navigation has: a
- * Server Component cannot know which section is open, and only the segment
- * below this layout says. Everything else — the title, the labels, the
- * translations — was decided on the server and arrives as props.
- *
- * `useSelectedLayoutSegment` returns the segment directly below the layout it
- * is rendered in, so a question's own page (`/questions/<id>`) still reports
- * `questions`. That is the right answer: the trail names sections, and the
- * question's heading names the question.
+ * The workspace trail: register, contest, section. A client component only to
+ * read the open segment. `useSelectedLayoutSegment` reports `questions` on a
+ * question's page too, which is right: the trail names sections.
  */
 export function ContestCrumbs({
   register,
@@ -27,7 +19,7 @@ export function ContestCrumbs({
   register: { href: string; label: string };
   contestHref: string;
   title: string;
-  /** Segment to label. A segment with no entry contributes no step. */
+  /** Segment to label; a segment without an entry adds no step. */
   sections: Record<string, string>;
   label: string;
 }) {
@@ -39,8 +31,7 @@ export function ContestCrumbs({
       label={label}
       items={[
         { href: register.href, label: register.label },
-        // The contest is a link only while it is not the last step: standing
-        // on the overview, it is where the visitor already is.
+        // Not a link when it is the last step.
         section ? { href: contestHref, label: title } : { label: title },
         ...(section ? [{ label: section }] : []),
       ]}

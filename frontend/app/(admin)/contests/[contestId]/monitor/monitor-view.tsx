@@ -10,14 +10,9 @@ import { ParticipantsTable } from "./participants-table";
 import { useMonitor, type MonitorProblem } from "./use-monitor";
 
 /**
- * The contest's monitoring screen: the participants table on the left, the
- * live feed on the right (design §6, first item).
- *
- * Side by side only where the workspace column is wide enough for both — a
- * container query, because the column's width depends on the navigation
- * beside it as much as on the window. Narrower, the feed goes under the
- * table. Either way each half scrolls inside its own box, so neither a wide
- * table nor a long line ever widens the page.
+ * The monitoring screen: participants table and live feed (SPEC.md §5.1). Side by
+ * side when a container query says the column is wide enough (it depends on the
+ * navigation too), stacked otherwise. Each half scrolls inside its own box.
  */
 export function MonitorView({
   contestId,
@@ -36,8 +31,7 @@ export function MonitorView({
   const monitor = useMonitor({ contestId, roster, feed: initialFeed });
 
   return (
-    // The gap here is cancelled by the empty status line's `empty:-mt-8`
-    // (Problem, below): change one and the other changes with it.
+    // This gap and `Problem`'s `empty:-mt-8` must stay equal.
     <div className="@container flex min-w-0 flex-col gap-8">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="flex max-w-body min-w-0 flex-col gap-3">
@@ -94,10 +88,9 @@ export function MonitorView({
 }
 
 /**
- * The live region for what went wrong. Always in the document, with only its
- * text changing: a region inserted together with its message is not announced
- * by every screen reader. Shared with one participant's page, whose column
- * keeps the same `gap-8` its empty state takes back.
+ * The live region for errors. Always rendered with only its text changing,
+ * since a region inserted with its message is not announced by every screen
+ * reader.
  */
 export function Problem({
   problem,
@@ -106,7 +99,7 @@ export function Problem({
 }: {
   problem: MonitorProblem;
   t: Dictionary["workspace"]["monitor"];
-  /** What the empty line does to the gap above it; the default takes back a `gap-8`. */
+  /** How the empty line takes back the gap above; the default takes back `gap-8`. */
   className?: string;
 }) {
   const text = !problem
@@ -117,10 +110,8 @@ export function Problem({
         ? t.problems.tooOften.replace("{seconds}", String(problem.seconds))
         : t.problems.failed;
   return (
-    // Empty, it takes back the column's gap above it (`gap-8` on the view's
-    // root — keep the two equal) rather than being
-    // hidden: a hidden region is out of the accessibility tree, which is
-    // what keeping it in the document is for.
+    // Collapsed when empty rather than hidden, so it stays in the accessibility
+    // tree.
     <p role="status" className={cn("text-small text-warn", className)}>
       {text}
     </p>
