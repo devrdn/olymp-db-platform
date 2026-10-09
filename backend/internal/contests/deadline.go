@@ -19,7 +19,7 @@ func ClockPending(c Contest, p Participant) bool {
 //   - fixed:      deadline = ends_at. Everybody shares one window;
 //     registration.StartedAt is analytics only and never enters the formula.
 //   - individual: deadline = LEAST(started_at + duration_min, ends_at). A
-//     participant may begin anywhere in [starts_at, ends_at) (StandingOf
+//     participant may begin anywhere in [starts_at, ends_at) (Gate.StandingOf
 //     decides that) and gets their own minutes from their own start, capped
 //     by the contest's own end.
 //
@@ -33,11 +33,11 @@ func ClockPending(c Contest, p Participant) bool {
 // currently open to the participant, never as open without limit.
 //
 // A plain function over values the caller already holds, not a method that
-// fetches: the participation gate (StandingOf), the submission path and the
-// events channel each already have their own Contest and Participant in hand
-// by the time they need this, and a second lookup here would just be a
-// second place the timing rule could drift from this one. None of them adds
-// the grace to it themselves; closesAt in standing.go is the one place that
+// fetches: the participation gate (Gate.StandingOf), the submission path and
+// the events channel each already have their own Contest and Participant in
+// hand by the time they need this, and a second lookup here would just be a
+// second place the timing rule could drift from this one. None of them adds the
+// grace to it themselves; Gate.closesAt in standing.go is the one place that
 // does.
 func Deadline(c Contest, p Participant) (deadline time.Time, ok bool) {
 	switch c.Timing {

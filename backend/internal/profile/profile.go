@@ -5,7 +5,7 @@
 //
 // It answers only "is this the caller's own, and is it over for them" — and
 // the second half is not its own rule: it asks the participation gate
-// (contests.StandingOf(...).Over, with the installation's grace), so a
+// (contests.Gate.StandingOf(...).Over, the installation's one gate), so a
 // contest's results open exactly when its play screen closes. It
 // does not compute a result — points, solved, penalty and place come from
 // internal/leaderboard, and the queries, answers and workspace are read by
@@ -117,13 +117,11 @@ type Config struct {
 	Attempts     Attempts
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
-	// Grace is the installation's deadline allowance (DEADLINE_GRACE), the
-	// same value the console and the answer route are given
-	// (internal/app/app.go passes cfg.DeadlineGrace to all three): a
-	// participant already at work may act until their deadline plus it, so
-	// their results open only then. Taken exactly as given, zero included —
-	// config.Load is where "unset" becomes five seconds.
-	Grace time.Duration
+	// Gate is the participation gate, the same *Gate the console and the
+	// answer route are handed (internal/app builds one): a participant
+	// already at work may act until their deadline plus its grace, so their
+	// results open only then. Required.
+	Gate *contests.Gate
 }
 
 // Service answers a participant's reads of their own account.
@@ -134,13 +132,16 @@ type Service struct {
 	results  Results
 	attempts Attempts
 	now      func() time.Time
-	grace    time.Duration
+	gate     *contests.Gate
 }
 
-// NewService returns the service.
+// NewService returns the service. Panics without a Gate.
 func NewService(cfg Config) *Service {
+	if cfg.Gate == nil {
+		panic("profile: NewService needs the participation gate")
+	}
 	s := &Service{store: cfg.Store, contests: cfg.Contests, people: cfg.Participants,
-		results: cfg.Results, attempts: cfg.Attempts, now: cfg.Now, grace: cfg.Grace}
+		results: cfg.Results, attempts: cfg.Attempts, now: cfg.Now, gate: cfg.Gate}
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -204,7 +205,7 @@ func (s *Service) Open(ctx context.Context, contestID, userID uuid.UUID) (Access
 // once it finishes. Where the caller is does not enter into it, so no address
 // is asked for.
 func (s *Service) over(c contests.Contest, p contests.Participant, now time.Time) bool {
-	return contests.StandingOf(c, p, now, s.grace, netip.Addr{}).Over()
+	return s.gate.StandingOf(c, p, now, netip.Addr{}).Over()
 }
 
 // Summary is the profile's four numbers.

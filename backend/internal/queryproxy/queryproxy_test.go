@@ -30,6 +30,12 @@ var openWindow = time.Now().Add(24 * time.Hour)
 // every participant's time is up.
 var closedWindow = time.Now().Add(-24 * time.Hour)
 
+// fiveSecondGate is the participation gate every Service in this package's
+// tests is built with unless the test builds its own: DEADLINE_GRACE's
+// default of five seconds, the grace New used to assume when nobody wired
+// one.
+var fiveSecondGate = contests.NewGate(5 * time.Second)
+
 // The collaborators are faked because each is tested where it lives: the
 // repositories against a real database, the provisioner against a real
 // cluster, the runner against both. What is under test here is the order of
@@ -250,6 +256,7 @@ func fixture(t *testing.T) (*queryproxy.Service, *databases, *runner) {
 			ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: sqlpolicy.ReadOnly(),
 		}},
 		db, run,
+		fiveSecondGate,
 	), db, run
 }
 
@@ -346,7 +353,7 @@ func TestWhoMayAskAndWhen(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			service := queryproxy.New(given.people, contestStore{contest: given.contest},
 				games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-				&databases{database: "x"}, &runner{result: &queryrunner.Result{}})
+				&databases{database: "x"}, &runner{result: &queryrunner.Result{}}, fiveSecondGate)
 
 			if _, err := service.Run(t.Context(), command()); !errors.Is(err, given.want) {
 				t.Fatalf("error = %v, want %v", err, given.want)
@@ -370,6 +377,7 @@ func TestAFixedContestStopsAcceptingQueriesAtItsEndEvenIfStatusLagsBehind(t *tes
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
@@ -400,6 +408,7 @@ func TestAnIndividualParticipantsOwnDeadlinePassesEvenThoughTheContestWindowHasN
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
@@ -426,6 +435,7 @@ func TestAnIndividualParticipantStillWithinTheirOwnWindowIsUnaffected(t *testing
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -455,6 +465,7 @@ func TestAnIndividualParticipantsFirstQueryStartsTheirClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -484,6 +495,7 @@ func TestASecondQueryDoesNotRestartAnAlreadyStartedParticipant(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -505,6 +517,7 @@ func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -532,6 +545,7 @@ func TestAFailureToStartTheClockIsMarkedAsOurs(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
@@ -567,6 +581,7 @@ func TestAFirstQueryBeforeStartsAtStartsNoClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrContestNotRunning) {
@@ -598,6 +613,7 @@ func TestAFirstQueryAfterEndsAtStartsNoClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
@@ -628,7 +644,8 @@ func TestAFirstQueryAtExactlyEndsAtIsTooLateToStart(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, run,
-	).WithClock(func() time.Time { return closes }).WithGrace(5 * time.Second)
+		contests.NewGate(5*time.Second),
+	).WithClock(func() time.Time { return closes })
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("a first query at exactly ends_at: error = %v, want ErrDeadlinePassed", err)
@@ -660,6 +677,7 @@ func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, run,
+		fiveSecondGate,
 	).WithClock(func() time.Time { return now })
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
@@ -689,6 +707,7 @@ func TestAFirstQueryWhoseStartLeavesTheClockPendingIsRefusedAsOurs(t *testing.T)
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, run,
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
@@ -720,6 +739,7 @@ func TestADisallowedAddressDoesNotStartTheClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	fromHome := command()
@@ -748,6 +768,7 @@ func TestAnOversizedFirstQueryDoesNotStartTheClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	cmd := command()
@@ -778,6 +799,7 @@ func TestANotYetProvisionedContestDoesNotStartTheClock(t *testing.T) {
 		contestStore{contest: contest},
 		games{err: provisioning.ErrNoGame},
 		&databases{}, &runner{},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNoGameYet) {
@@ -804,7 +826,8 @@ func TestTheGraceWindowAcceptsAQueryArrivingJustAfterTheDeadlineAndNoLater(t *te
 			contestStore{contest: contest},
 			games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 			&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
-		).WithClock(func() time.Time { return now }).WithGrace(5 * time.Second)
+			contests.NewGate(5*time.Second),
+		).WithClock(func() time.Time { return now })
 	}
 
 	withinGrace := build(deadline.Add(3 * time.Second))
@@ -841,7 +864,7 @@ func TestAPublishedContestFromADisallowedAddressNamesTheAddress(t *testing.T) {
 	p := people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}}
 	service := queryproxy.New(p, contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-		&databases{database: "x"}, &runner{result: &queryrunner.Result{}})
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}}, fiveSecondGate)
 
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
@@ -865,6 +888,7 @@ func TestAContestWithNoGameYet(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{err: provisioning.ErrNoGame},
 		&databases{}, &runner{},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNoGameYet) {
@@ -905,6 +929,7 @@ func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	fromRoom := command()
@@ -936,6 +961,7 @@ func TestAParticipantWhoHasFinishedIsDone(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrParticipantFinished) {
@@ -959,6 +985,7 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 			games{game: provisioning.Contest{Policy: policy}},
 			&databases{database: "x"},
 			&runner{err: failure},
+			fiveSecondGate,
 		)
 	}
 
@@ -989,7 +1016,7 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 // runner never enter Access at all, and passing them zero values here is
 // itself part of what this file proves about the method.
 func accessFixture(people queryproxy.People, contest contestStore) *queryproxy.Service {
-	return queryproxy.New(people, contest, games{}, &databases{}, &runner{})
+	return queryproxy.New(people, contest, games{}, &databases{}, &runner{}, fiveSecondGate)
 }
 
 // Access is the admission the participant-facing read endpoints (the story,
@@ -1062,8 +1089,8 @@ func TestAccessClosesAtExactlyTheDeadlinePlusTheGrace(t *testing.T) {
 	contest := contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &deadline}
 	p := people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}
 	at := func(now time.Time) *queryproxy.Service {
-		return accessFixture(p, contestStore{contest: contest}).
-			WithClock(func() time.Time { return now }).WithGrace(5 * time.Second)
+		return queryproxy.New(p, contestStore{contest: contest}, games{}, &databases{}, &runner{}, contests.NewGate(5*time.Second)).
+			WithClock(func() time.Time { return now })
 	}
 
 	if _, _, err := at(deadline.Add(5*time.Second-time.Nanosecond)).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); err != nil {
@@ -1086,8 +1113,8 @@ func TestAccessRefusesAnUnstartedIndividualParticipantAtExactlyEndsAt(t *testing
 	}
 	p := people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}}
 	at := func(now time.Time) *queryproxy.Service {
-		return accessFixture(p, contestStore{contest: contest}).
-			WithClock(func() time.Time { return now }).WithGrace(5 * time.Second)
+		return queryproxy.New(p, contestStore{contest: contest}, games{}, &databases{}, &runner{}, contests.NewGate(5*time.Second)).
+			WithClock(func() time.Time { return now })
 	}
 
 	if _, _, err := at(closes.Add(-time.Nanosecond)).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); err != nil {
@@ -1099,11 +1126,11 @@ func TestAccessRefusesAnUnstartedIndividualParticipantAtExactlyEndsAt(t *testing
 }
 
 // An individual participant who has not started yet has nothing for the
-// deadline formula to compute from — the gate (contests.StandingOf) admits
-// them inside the contest's own window, for Access exactly as for Run before
-// it will ever start a clock, and Access must not start one itself: it also
-// admits the answer endpoint and the query log, and a content read starts
-// the clock separately, once it has succeeded (StartOnRead).
+// deadline formula to compute from — the gate (contests.Gate.StandingOf) admits
+// them inside the contest's own window, for Access exactly as for Run before it
+// will ever start a clock, and Access must not start one itself: it also admits
+// the answer endpoint and the query log, and a content read starts the clock
+// separately, once it has succeeded (StartOnRead).
 func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStartsTheirClock(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	duration := 30
@@ -1261,8 +1288,9 @@ func TestStartOnReadAtExactlyEndsAtStartsNoClock(t *testing.T) {
 	}
 	starts := 0
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
-	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest}).
-		WithClock(func() time.Time { return closes }).WithGrace(5 * time.Second)
+	service := queryproxy.New(people{participant: p, starts: &starts}, contestStore{contest: contest},
+		games{}, &databases{}, &runner{}, contests.NewGate(5*time.Second)).
+		WithClock(func() time.Time { return closes })
 
 	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("StartOnRead() = %v, want ErrDeadlinePassed", err)
@@ -1560,6 +1588,7 @@ func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 				contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 				games{game: provisioning.Contest{Policy: closed}},
 				&databases{database: "x"}, &runner{err: failure},
+				fiveSecondGate,
 			)
 
 			_, err := service.Run(t.Context(), command())
@@ -1580,15 +1609,15 @@ func TestOurOwnFailuresAreMarkedApartFromTheQuerysOwn(t *testing.T) {
 
 	for name, service := range map[string]*queryproxy.Service{
 		"the registration cannot be read": queryproxy.New(
-			people{err: broken}, contestStore{}, games{}, &databases{}, &runner{}),
+			people{err: broken}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate),
 		"the contest cannot be read": queryproxy.New(
 			people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
-			contestStore{err: broken}, games{}, &databases{}, &runner{}),
+			contestStore{err: broken}, games{}, &databases{}, &runner{}, fiveSecondGate),
 		"the database cannot be provided": queryproxy.New(
 			people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 			games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-			&databases{err: broken}, &runner{}),
+			&databases{err: broken}, &runner{}, fiveSecondGate),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := service.Run(t.Context(), command())
@@ -1610,6 +1639,7 @@ func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		db, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -1627,6 +1657,7 @@ func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadWrite("evidence")}},
 		writing, &runner{result: &queryrunner.Result{}, quotaSink: &writing.lastQuota},
+		fiveSecondGate,
 	)
 	if _, err := service.Run(t.Context(), command()); err != nil {
 		t.Fatalf("running: %v", err)
@@ -1654,6 +1685,7 @@ func TestEveryOutcomeTheRunnerReportsIsRecognisedAsOurs(t *testing.T) {
 				contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 				games{game: provisioning.Contest{Policy: closed}},
 				&databases{database: "x"}, &runner{err: outcome},
+				fiveSecondGate,
 			)
 
 			_, err := service.Run(t.Context(), command())
@@ -1680,6 +1712,7 @@ func TestAJournalFailureIsNotSwallowedByAClosedCatalogue(t *testing.T) {
 		games{game: provisioning.Contest{Policy: closed}},
 		&databases{database: "x"},
 		&runner{err: fmt.Errorf("%w: %w", queryrunner.ErrJournalUnavailable, errors.New("dial tcp: connection refused"))},
+		fiveSecondGate,
 	)
 
 	_, err := service.Run(t.Context(), command())
@@ -1717,6 +1750,7 @@ func TestAQueryOverTheLengthBoundIsRefusedAfterTheRateCheckAndBeforeAnythingElse
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		db, run,
+		fiveSecondGate,
 	)
 
 	cmd := command()
@@ -1756,6 +1790,7 @@ func TestAQueryOverTheLengthBoundStillCountsAgainstTheRate(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	oversized := command()
@@ -1800,6 +1835,7 @@ func TestAParticipantAskingTooFastIsRefusedBeforeTheRunnerIsReached(t *testing.T
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, run,
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -1836,6 +1872,7 @@ func TestARequestRefusedByTheDeadlineStillCountsAgainstTheRate(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithClock(func() time.Time { return deadline.Add(time.Minute) })
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
@@ -1860,6 +1897,7 @@ func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrContestNotRunning) {
@@ -1887,6 +1925,7 @@ func TestANeverRegisteredCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testi
 	service := queryproxy.New(
 		people{err: contests.ErrParticipantNotFound, calls: &calls},
 		contestStore{}, games{}, &databases{}, &runner{},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
@@ -1910,6 +1949,7 @@ func TestADisqualifiedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}, calls: &calls},
 		contestStore{}, games{}, &databases{}, &runner{},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
@@ -1933,6 +1973,7 @@ func TestAFinishedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}, calls: &calls},
 		contestStore{}, games{}, &databases{}, &runner{},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
@@ -1966,26 +2007,31 @@ func TestALegitimateParticipantIsUnaffectedByTheEarlyRateCheck(t *testing.T) {
 	}
 }
 
-// Finding 7: WithGrace and WithPerMinuteDefault must agree about a negative
-// value. config.Load never produces one for either DEADLINE_GRACE or
-// QUERY_PER_MINUTE, so a caller passing one here is a bug in the wiring, not
-// deployment input to fail closed on quietly.
-func TestWithGracePanicsOnANegativeValue(t *testing.T) {
+// Every admission here is the participation gate's, so the façade cannot be
+// assembled without one: it used to fall back to a five-second grace of its
+// own while the answer route and the profile fell back to none, so a
+// deployment that forgot one wiring had its console and its answers disagree
+// about when a participant's time is up.
+func TestNewRefusesToAssembleWithoutAGate(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("WithGrace(-1s) did not panic")
+			t.Fatal("New(..., nil) did not panic")
 		}
 	}()
-	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithGrace(-time.Second)
+	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, nil)
 }
 
+// Finding 7: a negative QUERY_PER_MINUTE is refused the way a negative
+// DEADLINE_GRACE is (contests.NewGate). config.Load never produces either, so
+// a caller passing one here is a bug in the wiring, not deployment input to
+// fail closed on quietly.
 func TestWithPerMinuteDefaultPanicsOnANegativeValue(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("WithPerMinuteDefault(-1) did not panic")
 		}
 	}()
-	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithPerMinuteDefault(-1)
+	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithPerMinuteDefault(-1)
 }
 
 // query_rate_limit_per_min used to be stored, validated and served without
@@ -2001,12 +2047,14 @@ func TestTheContestsOwnRateLimitIsEnforced(t *testing.T) {
 		contestStore{contest: strict},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 	lenientService := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 		contestStore{contest: lenient},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	)
 
 	if _, err := strictService.Run(t.Context(), command()); err != nil {
@@ -2032,6 +2080,7 @@ func TestWithPerMinuteDefaultOverridesTheFallback(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 
 	if _, err := service.Run(t.Context(), command()); err != nil {
@@ -2058,6 +2107,7 @@ func TestAContestCannotSetALooserRateThanTheInstallation(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(3)
 
 	admitted := 0
@@ -2090,6 +2140,7 @@ func TestAContestMaySetAStricterRateThanTheInstallation(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(30)
 
 	for i := range 2 {
@@ -2116,6 +2167,7 @@ func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(0)
 
 	for i := range 50 {
@@ -2136,6 +2188,7 @@ func TestAdmitReadSharesRunsOwnPerAccountBudget(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 
 	userID := uuid.New()
@@ -2160,6 +2213,7 @@ func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithPerMinuteDefault(1)
 
 	spent := uuid.New()
@@ -2258,6 +2312,7 @@ func TestNothingLeftToAnswerIsRefusedBeforeAnyDatabaseIsProvisioned(t *testing.T
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		db, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithAnswerable(&answerable{left: false})
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
@@ -2300,6 +2355,7 @@ func TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun(t *testing.T) {
 			contestStore{contest: contest, calls: &contestCalls},
 			games{game: game, calls: &gameCalls},
 			&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+			fiveSecondGate,
 		)
 		if _, err := service.Run(t.Context(), command()); err != nil {
 			t.Fatalf("running: %v", err)
@@ -2317,6 +2373,7 @@ func TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun(t *testing.T) {
 			contestStore{contest: contest, calls: &contestCalls},
 			games{game: game, calls: &gameCalls},
 			&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+			fiveSecondGate,
 		).WithLookup(lookupFake{participant: participant, contest: contest, game: game, calls: &lookupCalls})
 
 		if _, err := service.Run(t.Context(), command()); err != nil {
@@ -2349,7 +2406,7 @@ func TestTheInstanceTheLookupReadReachesProvisioningUntouched(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			db := &databases{database: "x"}
-			service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{result: &queryrunner.Result{}}).
+			service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{result: &queryrunner.Result{}}, fiveSecondGate).
 				WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: given.instance})
 
 			if _, err := service.Run(t.Context(), command()); err != nil {
@@ -2372,6 +2429,7 @@ func TestAccessUsesTheSingleLookupOnceWired(t *testing.T) {
 		people{participant: participant, calls: &peopleCalls},
 		contestStore{contest: contest, calls: &contestCalls},
 		games{}, &databases{}, &runner{},
+		fiveSecondGate,
 	).WithLookup(lookupFake{participant: participant, contest: contest, calls: &lookupCalls})
 
 	got, _, err := service.Access(t.Context(), contest.ID, uuid.New(), netip.Addr{})
@@ -2392,6 +2450,7 @@ func TestASingleLookupsFailureIsMarkedAsOurs(t *testing.T) {
 	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
 	service := queryproxy.New(
 		people{}, contestStore{}, games{}, &databases{}, &runner{},
+		fiveSecondGate,
 	).WithLookup(lookupFake{err: broken})
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
@@ -2418,7 +2477,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	// consulted, so a disallowed address must still win.
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
-	service := queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
+	service := queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed — the address check comes before the game is looked at", err)
 	}
@@ -2428,7 +2487,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	// never told their contest has no game, even though both are true.
 	fromRoom := command()
 	fromRoom.Address = netip.MustParseAddr("10.20.3.4")
-	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).
+	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).
 		WithLookup(lookup).WithAnswerable(&answerable{left: false})
 	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
 		t.Fatalf("error = %v, want ErrNothingLeftToAnswer — answerable comes before the game is looked at", err)
@@ -2437,7 +2496,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	// Nothing else refuses one from the contest's own network with a
 	// question still open: the missing game is what finally answers, exactly
 	// as it would have from a separate Games.Game call.
-	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
+	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}, fiveSecondGate).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNoGameYet) {
 		t.Fatalf("error = %v, want ErrNoGameYet", err)
 	}
@@ -2483,6 +2542,7 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 		contestStore{contest: contests.Contest{Status: contests.StatusFinished}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
 	).WithWatcher(seen)
 	cmd := command()
 	cmd.Address = netip.MustParseAddr("192.0.2.44")

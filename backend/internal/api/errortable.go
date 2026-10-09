@@ -90,10 +90,10 @@ func joined(tables ...errorTable) errorTable {
 }
 
 // standingErrors answers the participation gate's refusals
-// (contests.StandingOf): what a participant meets on the console, the play
+// (contests.Gate.StandingOf): what a participant meets on the console, the play
 // screen, the events channel and the answer route alike, whichever of them
-// asked. Composed into queryproxyErrors and contestsErrors, whose packages
-// both hand these over, and walked by both their tests.
+// asked. Composed into queryproxyErrors and contestsErrors, whose packages both
+// hand these over, and walked by both their tests.
 var standingErrors = errorTable{
 	// The same answer whether the caller never registered, was disqualified,
 	// or the contest named in the URL belongs to somebody else entirely:

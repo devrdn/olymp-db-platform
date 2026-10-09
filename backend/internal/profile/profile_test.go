@@ -11,6 +11,19 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/profile"
 )
 
+// Whether a contest is over for the caller is the participation gate's
+// answer, so a Service cannot be assembled without the gate: with none, it
+// would have to pick a grace of its own, and results could open while the
+// play screen still admits the participant.
+func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService without a Gate did not panic")
+		}
+	}()
+	profile.NewService(profile.Config{})
+}
+
 func TestOpenAdmitsAContestThatHasEndedForTheCaller(t *testing.T) {
 	r := newRig(t)
 	c, p := r.seed(t, contests.StatusFinished)

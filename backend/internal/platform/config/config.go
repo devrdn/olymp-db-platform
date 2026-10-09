@@ -405,9 +405,10 @@ type Config struct {
 	// deadline (docs/ARCHITECTURE.md §8) before an action arriving after it is
 	// refused. It exists because a request sent an instant before the
 	// deadline can arrive an instant after it; the number is a rule about
-	// timing, not about this process, so — like QueryPerMinute above — it
-	// belongs to the package that enforces it (queryproxy.Service.WithGrace)
-	// rather than to a constant duplicated wherever a deadline is checked.
+	// timing, not about this process, so it is handed to the one thing that
+	// enforces it, the participation gate (contests.NewGate, built once by
+	// internal/app), rather than to a constant duplicated wherever a
+	// deadline is checked.
 	DeadlineGrace time.Duration
 	// GameInstanceGraceMin is what a contest's own settings.grace_period_min
 	// defers to when it is left at zero (docs/ARCHITECTURE.md §2.4, §4.2):

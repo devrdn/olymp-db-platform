@@ -130,6 +130,7 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"},
 		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
+		fiveSecondGate,
 	).WithClock(func() time.Time { return clock })
 
 	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
@@ -233,6 +234,7 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 		registrations, postgres.NewContests(pool),
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{},
+		fiveSecondGate,
 	)
 
 	// The enrolled participant of the running contest gets in.
@@ -311,6 +313,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"},
 		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
+		fiveSecondGate,
 	).WithAnswerable(postgres.NewAnswerable(pool))
 
 	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
@@ -363,7 +366,7 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil).
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
 		WithClock(func() time.Time { return clock })
 
 	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
@@ -531,7 +534,7 @@ func roundTripFixture(t *testing.T) roundTrips {
 	}
 
 	databases := provisioning.New(games, panicCluster{t: t})
-	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}).
+	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}, fiveSecondGate).
 		WithAnswerable(postgres.NewAnswerable(pool)).
 		WithLookup(registrations).
 		WithSchemas(&schemas{})
@@ -647,6 +650,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"},
 		journalled,
+		fiveSecondGate,
 	)
 
 	address := netip.MustParseAddr("203.0.113.9")

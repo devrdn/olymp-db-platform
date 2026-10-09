@@ -5,7 +5,7 @@ package contests
 // participant or staff member that is not there; a change the contest's status
 // or schedule does not allow; a roster, a search or a package out of bounds),
 // the enrolment refusals, what a participant meets at the participation gate
-// (StandingOf), and what a participant meets submitting an answer.
+// (Gate.StandingOf), and what a participant meets submitting an answer.
 // internal/api answers each from a table of its own, and a test there walks
 // this list so that none can reach a client as "internal error"; a test here
 // reads the package's source so that none can be declared and left off it.

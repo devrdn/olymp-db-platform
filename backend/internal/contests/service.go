@@ -98,19 +98,12 @@ type ServiceConfig struct {
 	UnitOfWork storage.UnitOfWork
 	// Now is the clock, injected so the enrollment deadline is testable.
 	Now func() time.Time
-	// Grace is the network-latency allowance Submit adds to a participant's
-	// deadline before refusing an answer for arriving late (§8), matching
-	// queryproxy's own default so the two paths share one grace, not one
-	// apiece. Taken exactly as given, including zero: an installation that
-	// sets DEADLINE_GRACE=0 means no grace, not "unset", and config.Load is
-	// the one place that already resolves "unset" to five seconds before
-	// this field is ever populated (internal/app/app.go passes
-	// cfg.DeadlineGrace straight through) — a second default here would
-	// override that deliberate choice right back to five seconds (finding
-	// 2). A caller with nothing to do with answering questions, and so no
-	// opinion on Grace, simply gets zero, which is harmless because Submit
-	// is the only method that reads it.
-	Grace time.Duration
+	// Gate is the participation gate Submit admits an answer through and
+	// takes its write deadline from (the participant's deadline plus the
+	// installation's grace, §8). Required: it is the same *Gate the console
+	// and the profile are handed (internal/app builds one), so the answer
+	// route can never hold a grace of its own that disagrees with theirs.
+	Gate *Gate
 	// Logger records the one thing Submit ever has to log rather than fail
 	// on: a reference answer whose regex does not compile (submission.go's
 	// own grade). Defaults to slog.Default() so a caller that never sets it
@@ -124,18 +117,17 @@ type ServiceConfig struct {
 	Sleep func(time.Duration)
 	// DefaultGraceMin is the installation's own default grace period
 	// (config.GameInstanceGraceMin, GAME_INSTANCE_GRACE_MIN) — the grace that
-	// actually governs a contest for as long as its own
-	// Settings.GracePeriodMin reads zero (GracePeriodMin's own doc). Service.
-	// ExtendGrace compares an organizer's requested value against this
-	// number, not against the stored zero, when a contest never set an
-	// explicit grace: internal/postgres/gameinstances.go's reclaimDeadline
-	// already falls back to this same installation default for that same
-	// contest, so comparing against anything else would let ExtendGrace
-	// accept a value the sweep does not actually treat as an extension.
-	// Zero (a caller with nothing to do with reclaim, same as Grace above)
-	// means ExtendGrace requires nothing more than a positive value the
-	// first time — harmless, since such a caller never constructs a Service
-	// a contest's own game databases are reclaimed through.
+	// actually governs a contest for as long as its own Settings.GracePeriodMin
+	// reads zero (GracePeriodMin's own doc). Service.ExtendGrace compares an
+	// organizer's requested value against this number, not against the stored
+	// zero, when a contest never set an explicit grace:
+	// internal/postgres/gameinstances.go's reclaimDeadline already falls back
+	// to this same installation default for that same contest, so comparing
+	// against anything else would let ExtendGrace accept a value the sweep does
+	// not actually treat as an extension. Zero (a caller with nothing to do
+	// with reclaim) means ExtendGrace requires nothing more than a positive
+	// value the first time — harmless, since such a caller never constructs a
+	// Service a contest's own game databases are reclaimed through.
 	DefaultGraceMin int
 	// PoolTrigger asks the background game-pool tender to run again soon
 	// after a roster changes (see PoolTrigger's own doc). Optional: nil is
@@ -162,22 +154,22 @@ type Service struct {
 	audit           *audit.Recorder
 	uow             storage.UnitOfWork
 	now             func() time.Time
-	grace           time.Duration
+	gate            *Gate
 	log             *slog.Logger
 	sleep           func(time.Duration)
 	defaultGraceMin int
 	poolTrigger     PoolTrigger
 }
 
-// NewService assembles the contest service.
+// NewService assembles the contest service. Panics without a Gate.
 func NewService(cfg ServiceConfig) *Service {
+	if cfg.Gate == nil {
+		panic("contests: NewService needs the participation gate")
+	}
 	now := cfg.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	// cfg.Grace is taken exactly as given, zero included — see its own doc
-	// for why a second default here would be finding 2 all over again.
-	grace := cfg.Grace
 	log := cfg.Logger
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -202,7 +194,7 @@ func NewService(cfg ServiceConfig) *Service {
 		audit:           cfg.Audit,
 		uow:             cfg.UnitOfWork,
 		now:             now,
-		grace:           grace,
+		gate:            cfg.Gate,
 		log:             log,
 		sleep:           sleep,
 		defaultGraceMin: cfg.DefaultGraceMin,

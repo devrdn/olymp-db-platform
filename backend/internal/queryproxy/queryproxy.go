@@ -9,7 +9,7 @@
 //
 // The middle question has one answer for the whole service, and it is not
 // written here: this package looks the registration up and asks the
-// participation gate, contests.StandingOf, the same rule every other
+// participation gate, contests.Gate.StandingOf, the same rule every other
 // participant-facing path asks. What it keeps of its own is in front of the
 // gate — the rate limits — and behind it: starting an individual clock, and
 // telling the monitor who was seen.
@@ -40,10 +40,10 @@ import (
 // and because only one of them means they did something wrong.
 //
 // Whether this participant may act in this contest at all is not among them:
-// that is the participation gate's (contests.StandingOf), and its refusals —
-// not a participant, the contest not running, finished, time up, an address
-// the contest is not held on — are contests' sentinels, handed over as the
-// gate gives them.
+// that is the participation gate's (contests.Gate.StandingOf), and its
+// refusals — not a participant, the contest not running, finished, time up,
+// an address the contest is not held on — are contests' sentinels, handed
+// over as the gate gives them.
 var (
 	// ErrNothingLeftToAnswer is a participant for whom no question of the
 	// contest is still answerable: every one of them is either answered
@@ -255,12 +255,14 @@ type Service struct {
 	// "now" still next to a deadline it names explicitly, instead of racing
 	// the wall clock.
 	now func() time.Time
-	// grace is the network-latency allowance an already-working participant
-	// is given past their deadline (§8), handed to the gate
-	// (contests.StandingOf), which is the one place it is added. It is never
-	// part of what a participant is shown — nothing here renders a deadline,
-	// and the day something does, it must call contests.Deadline without this.
-	grace time.Duration
+	// gate is the participation gate every admission here asks
+	// (contests.Gate.StandingOf), carrying the installation's network-latency
+	// allowance past a participant's deadline (§8): the same *Gate the answer
+	// route and the profile are handed, so the console holds no grace of its
+	// own. The grace is never part of what a participant is shown — nothing
+	// here renders a deadline, and the day something does, it must call
+	// contests.Deadline, which does not add it.
+	gate *contests.Gate
 	// schemas answers what a contest's game looks like, for the console's
 	// schema panel. Set by WithSchemas and nil until then — see Schema for
 	// why a build that never wired it refuses rather than panicking.
@@ -277,20 +279,20 @@ type Service struct {
 	watcher Watcher
 }
 
-// defaultGrace is the network-latency allowance a deployment gets unless
-// WithGrace says otherwise — the "about 5 seconds" docs/ARCHITECTURE.md §8
-// names.
-const defaultGrace = 5 * time.Second
-
-// New assembles the façade.
-func New(people People, contests Contests, games Games, databases Databases, runner Executor) *Service {
+// New assembles the façade around gate, the participation gate every
+// admission asks. Panics on a nil gate: there is no grace this package could
+// assume that is sure to match the one the rest of the installation uses.
+func New(people People, contests Contests, games Games, databases Databases, runner Executor, gate *contests.Gate) *Service {
+	if gate == nil {
+		panic("queryproxy: New needs the participation gate")
+	}
 	return &Service{
 		people: people, databases: databases, runner: runner,
 		lookup:           defaultLookup{people: people, contests: contests, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
 		now:              func() time.Time { return time.Now().UTC() },
-		grace:            defaultGrace,
+		gate:             gate,
 	}
 }
 
@@ -341,24 +343,6 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 	return s
 }
 
-// WithGrace overrides the network-latency allowance New defaults to five
-// seconds, so a deployment's own configuration decides what "just in time"
-// means here the same way it does for the submission path — both hand it to
-// the gate, which adds it on top of the one contests.Deadline formula, rather
-// than keeping a grace of their own.
-//
-// Panics on a negative grace, the same as WithPerMinuteDefault does on a
-// negative rate: config.Load never produces one (DEADLINE_GRACE is rejected
-// there first), so a caller passing one is a bug in the wiring, not
-// deployment input to fail closed on quietly.
-func (s *Service) WithGrace(grace time.Duration) *Service {
-	if grace < 0 {
-		panic(fmt.Sprintf("queryproxy: negative grace %s", grace))
-	}
-	s.grace = grace
-	return s
-}
-
 // WithPerMinuteDefault sets the rate a contest falls back to when its
 // organiser left query_rate_limit_per_min at zero, and the ceiling
 // effectiveRateLimit will not let any contest's own setting exceed — so this
@@ -367,8 +351,8 @@ func (s *Service) WithGrace(grace time.Duration) *Service {
 // Zero means the deployment's installation has no limit at all, the same
 // meaning config.Runner.PerMinute gives the same variable; negative panics
 // rather than being silently ignored, since Config.Load never produces one
-// and a caller passing one is a bug this should not hide. WithGrace agrees:
-// the same reasoning applies to a negative grace, and the two options must
+// and a caller passing one is a bug this should not hide. contests.NewGate
+// agrees: the same reasoning applies to a negative grace, and the two must
 // not disagree about what a bad value deserves.
 func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 	if perMinute < 0 {
@@ -470,12 +454,12 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // this time so a contest's own tighter setting is what binds, and only a query
 // that clears it is charged the work below.
 //
-// Then, from values already in hand: may this participant act in this
-// contest now, from this address — the participation gate
-// (contests.StandingOf), the same one every participant-facing read asks —
-// and is the query within its length. A not-yet-started individual
-// participant is admitted inside the contest's own window (finding 1), and
-// asked again once their clock has started, further down.
+// Then, from values already in hand: may this participant act in this contest
+// now, from this address — the participation gate (contests.Gate.StandingOf),
+// the same one every participant-facing read asks — and is the query within its
+// length. A not-yet-started individual participant is admitted inside the
+// contest's own window (finding 1), and asked again once their clock has
+// started, further down.
 //
 // Next is the one check that costs a round trip of its own: has this
 // participant anything left to answer at all (ErrNothingLeftToAnswer)? After
@@ -649,15 +633,15 @@ func classifyParticipant(participant contests.Participant, err error, wrap strin
 	return participant, nil
 }
 
-// admit asks the participation gate (contests.StandingOf) whether participant
-// may act in contest now, from addr, with this service's clock and grace: nil,
+// admit asks the participation gate (contests.Gate.StandingOf) whether
+// participant may act in contest now, from addr, by this service's clock: nil,
 // or the gate's one refusal. It never starts an individual participant's
 // clock — Run does that once every other check downstream has had its say
 // (§8, finding 2), and StartOnRead once a read of the contest's content has
 // succeeded — so a caller that only wants to know "is this still open to me"
 // can ask without the side effect of asking.
 func (s *Service) admit(contest contests.Contest, participant contests.Participant, addr netip.Addr) error {
-	return contests.StandingOf(contest, participant, s.now(), s.grace, addr).Refusal()
+	return s.gate.StandingOf(contest, participant, s.now(), addr).Refusal()
 }
 
 // Access resolves who is asking and confirms they may currently interact with
@@ -667,9 +651,9 @@ func (s *Service) admit(contest contests.Contest, participant contests.Participa
 // StartOnRead.
 //
 // This is deliberately the same admission Run requires before it will take a
-// query — the participation gate, contests.StandingOf — and nothing more: no
-// rate limit of its own, no game lookup, no database provisioning, because
-// reading the story costs none of what running a query against the
+// query — the participation gate, contests.Gate.StandingOf — and nothing
+// more: no rate limit of its own, no game lookup, no database provisioning,
+// because reading the story costs none of what running a query against the
 // participant's own database costs. It is exposed here rather than
 // reimplemented beside the read endpoints because "may this student see this
 // contest" answered twice, even slightly differently, is exactly the shape of
@@ -796,7 +780,7 @@ func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UU
 	}
 
 	// MayWait is false only where MayAct is too, so Refusal names why.
-	standing := contests.StandingOf(contest, participant, s.now(), s.grace, addr)
+	standing := s.gate.StandingOf(contest, participant, s.now(), addr)
 	if !standing.MayWait() {
 		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
 	}

@@ -221,6 +221,8 @@ func newProfileFixture(t *testing.T) *profileFixture {
 	service := profile.NewService(profile.Config{
 		Store: f.store, Contests: stores.Contests, Participants: stores.Registrations,
 		Results: f.results, Attempts: f.watch, Now: func() time.Time { return f.now },
+		// No grace: an instant past a deadline is past it.
+		Gate: contests.NewGate(0),
 	})
 	// One gate, and a factory for as many handlers over it as a test wants:
 	// the deployment hands the same gate to this handler and to the play

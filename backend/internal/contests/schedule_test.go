@@ -16,10 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// schedulerFixtureGrace is the grace newScheduler wires every Scheduler up
-// with, standing in for cfg.DeadlineGrace — a fixed, recognisable value so a
-// test can tell it apart from the zero value a forgotten wiring would leave
-// behind.
+// schedulerFixtureGrace is the grace of the gate newScheduler wires every
+// Scheduler up with, standing in for cfg.DeadlineGrace — a fixed,
+// recognisable value so a test can tell it apart from the zero value a
+// forgotten wiring would leave behind.
 const schedulerFixtureGrace = 5 * time.Second
 
 // schedulerFixture is everything one Scheduler test needs, assembled so a
@@ -50,7 +50,7 @@ func newScheduler() schedulerFixture {
 	poolTrigger := conteststest.NewPoolTrigger(uow)
 	roster, users := newRoster()
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, schedulerFixtureGrace).
+		scheduler: contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace)).
 			WithPoolTrigger(poolTrigger),
 		repo: repo, stories: stories, questions: questions, roster: roster, users: users,
 		sink: sink, uow: uow, poolTrigger: poolTrigger,
@@ -126,6 +126,22 @@ func statusOf(t *testing.T, f schedulerFixture, id uuid.UUID) string {
 		t.Fatalf("ByID() = %v", err)
 	}
 	return c.Status
+}
+
+// The scheduler finishes a contest by the participation gate's own grace, so
+// it cannot be assembled without one: a Scheduler with no gate would have to
+// invent a grace, and any it invented could disagree with the one the console
+// and the answer route refuse by.
+func TestNewSchedulerRefusesToAssembleWithoutAGate(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewScheduler(..., nil) did not panic")
+		}
+	}()
+	sink := conteststest.NewSink()
+	roster, _ := newRoster()
+	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
+		roster, sink, audit.New(sink), &conteststest.UnitOfWork{}, nil)
 }
 
 func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
@@ -619,7 +635,7 @@ func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	roster, users := newRoster()
-	scheduler := contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, schedulerFixtureGrace)
+	scheduler := contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace))
 
 	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions,
 		roster: roster, users: users, sink: sink, uow: uow}

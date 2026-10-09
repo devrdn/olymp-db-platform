@@ -44,7 +44,7 @@ type EventsAccess interface {
 // It carries exactly two things over the channel's lifetime: a "sync" event,
 // every defaultResyncInterval, with server_now and this caller's own
 // deadline (contests.Deadline — never with the grace the participation gate,
-// contests.StandingOf, adds before refusing a late action: the grace is an
+// contests.Gate, adds before refusing a late action: the grace is an
 // allowance for a request already on its way, not time a participant is
 // shown); and a "contest_started"
 // event when the contest starts, and a "contest_finished" event when the
