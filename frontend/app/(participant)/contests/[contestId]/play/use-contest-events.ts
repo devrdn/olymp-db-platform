@@ -105,8 +105,17 @@ const RECONNECT_JITTER = 0.5;
  * "The same terms" is one function, `scheduleReconnect`: a capped doubling
  * wait with jitter on it, reset by a `sync`. It is one function because it
  * was two, and only one of them doubled — see finding 4 there.
+ *
+ * `renderedDormant` is the caller's word that the page under it was rendered
+ * from a `dormant` refusal (content-loaded.tsx). The channel cannot know that
+ * on its own when the contest opened between the page's render and this
+ * channel's first connection: that connection is simply admitted.
  */
-export function useContestEvents(contestId: string, initialPhase: ContestPhase = "waiting") {
+export function useContestEvents(
+  contestId: string,
+  initialPhase: ContestPhase = "waiting",
+  renderedDormant = false,
+) {
   const offsetRef = useRef(0);
   // Three states, not two. `undefined` is "no sync has arrived yet"; `null`
   // is "a sync arrived and the server said this participant has no deadline",
@@ -121,14 +130,33 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
   // because the contest is not open now. A page the server rendered from that
   // same refusal is stale from this moment, and this is the only place that
   // learns it: the window opening is not an event the channel pushes, it is
-  // simply the next connection being admitted. Stays true once set.
+  // simply the next connection being admitted. The page may also have been
+  // rendered from that refusal while this channel was never refused at all
+  // (`renderedDormant`): then any admitted connection is the reopening.
+  // Stays true once set.
   const [reopened, setReopened] = useState(false);
+  // Read by the channel below, which outlives every render; kept current by
+  // the effect that follows it.
+  const renderedDormantRef = useRef(renderedDormant);
+  // Whether any connection has been accepted yet. A ref, not state: an
+  // ordinary sync must not render (see `deadlineRef` above), and this matters
+  // only when the page says it rendered dormant after the fact.
+  const admittedRef = useRef(false);
   // Set by the effect below to the live channel's own resync; a no-op until
   // then and after unmount.
   const resyncRef = useRef<() => void>(() => {});
 
+  // The page streams in under its caller, so it can say it rendered dormant
+  // after the channel was already admitted: that is the reopening too.
+  useEffect(() => {
+    renderedDormantRef.current = renderedDormant;
+    if (renderedDormant && admittedRef.current) setReopened(true);
+  }, [renderedDormant]);
+
   useEffect(() => {
     const url = `${API_PREFIX}/contests/${contestId}/events`;
+    // A new channel has admitted nothing yet.
+    admittedRef.current = false;
     let cancelled = false;
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -188,7 +216,8 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
           // banner and backoff from it are stale.
           retryDelay = RECONNECT_MIN_DELAY_MS;
           setChannelError(null);
-          if (dormant) {
+          admittedRef.current = true;
+          if (dormant || renderedDormantRef.current) {
             dormant = false;
             setReopened(true);
           }

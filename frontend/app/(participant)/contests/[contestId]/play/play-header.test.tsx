@@ -18,13 +18,54 @@ type EventsSnapshot = {
 
 // The hook itself is tested on its own (use-contest-events.test.ts); this
 // stands in for it so the header can be proven against every phase without
-// waiting on a real EventSource.
+// waiting on a real EventSource. `real` hands the header the hook itself, for
+// the tests whose subject is the two of them together.
 const events = vi.hoisted(() => ({
   current: { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" } as EventsSnapshot,
+  real: false,
 }));
-vi.mock("./use-contest-events", () => ({ useContestEvents: () => events.current }));
+vi.mock("./use-contest-events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./use-contest-events")>();
+  return {
+    useContestEvents: (...args: Parameters<typeof actual.useContestEvents>) =>
+      events.real ? actual.useContestEvents(...args) : events.current,
+  };
+});
 
-import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
+/** Just enough of EventSource for the real hook to open a channel and be sent a sync on it. */
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+  readyState: number = FakeEventSource.CONNECTING;
+  private listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+
+  constructor() {
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, handler: (event: MessageEvent) => void) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(handler);
+  }
+
+  emit(type: string, data: unknown) {
+    const payload = { data: JSON.stringify(data) } as MessageEvent;
+    for (const handler of this.listeners.get(type) ?? []) handler(payload);
+  }
+
+  close() {
+    this.readyState = FakeEventSource.CLOSED;
+  }
+}
+
+/** Admits the channel: the server's first sync on the connection open now. */
+function admitChannel() {
+  act(() => FakeEventSource.instances.at(-1)!.emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
+}
+
+import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 
@@ -185,6 +226,81 @@ describe("PlayHeader", () => {
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  // The race the reopened path misses: the page under this bar was rendered
+  // "not open now", then the window opened before the channel's first
+  // connection, which is therefore simply admitted — never refused, never
+  // `reopened`. The page itself says what it rendered, and the header
+  // refreshes once that and an admitted channel are both true, in whichever
+  // order they arrive.
+  describe("the page under the bar says what it rendered", () => {
+    beforeEach(() => {
+      events.real = true;
+      FakeEventSource.instances = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+    });
+    afterEach(() => {
+      events.real = false;
+      vi.unstubAllGlobals();
+    });
+
+    function under(signal: React.ReactNode, { title = "X", waitingForStart = false } = {}) {
+      return (
+        <ContentLoadedProvider>
+          <PlayHeader contestId="c1" title={title} waitingForStart={waitingForStart} dict={en} />
+          {signal}
+        </ContentLoadedProvider>
+      );
+    }
+
+    test("a page that rendered dormant refreshes once when its channel's first connection is admitted", () => {
+      const { rerender } = render(under(<RenderedRefusalSignal code="contest_not_running" />));
+      expect(refresh).not.toHaveBeenCalled();
+
+      admitChannel();
+      expect(refresh).toHaveBeenCalledTimes(1);
+
+      admitChannel();
+      rerender(under(<RenderedRefusalSignal code="contest_not_running" />, { title: "Y" }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    // The page streams in under the bar, so the channel can be admitted
+    // before the page has said what it rendered.
+    test("a page that says it rendered dormant after its channel was admitted refreshes once", () => {
+      const { rerender } = render(under(null));
+      admitChannel();
+      expect(refresh).not.toHaveBeenCalled();
+
+      rerender(under(<RenderedRefusalSignal code="contest_not_running" />));
+
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    test("a page that rendered normally does not refresh on connect", () => {
+      render(under(<ContentLoadedSignal />));
+
+      admitChannel();
+
+      expect(refresh).not.toHaveBeenCalled();
+    });
+
+    test("a page that rendered a closed refusal never refreshes", () => {
+      render(under(<RenderedRefusalSignal code="contest_ended" />));
+
+      admitChannel();
+
+      expect(refresh).not.toHaveBeenCalled();
+    });
+
+    test("the waiting room does not refresh on an admitted channel, whatever was signalled", () => {
+      render(under(<RenderedRefusalSignal code="contest_not_running" />, { waitingForStart: true }));
+
+      admitChannel();
+
+      expect(refresh).not.toHaveBeenCalled();
+    });
   });
 
   // The waiting room already refreshes on contest_started and on nothing

@@ -299,6 +299,40 @@ describe("useContestEvents", () => {
       expect(result.current.channelError).toBeNull();
     });
 
+    // The other half of the same transition: the page may have been rendered
+    // from that refusal while the channel's own first connection, a moment
+    // later, is simply admitted, never refused. Only the caller knows the
+    // page rendered "not open now"; told so, the hook reports the first
+    // accepted connection as the reopening it is.
+    test("a page rendered not open now reports the channel's first accepted connection as reopened, never refused", () => {
+      const { result } = renderHook(() => useContestEvents("c1", "running", true));
+      expect(result.current.reopened).toBe(false);
+
+      act(() => FakeEventSource.instances[0].emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
+
+      expect(result.current.reopened).toBe(true);
+    });
+
+    // The page streams under the header, so it can say what it rendered after
+    // the channel was already admitted.
+    test("a page that says it rendered not open now after the channel was admitted reports reopened then", () => {
+      const { result, rerender } = renderHook(({ dormant }) => useContestEvents("c1", "running", dormant), {
+        initialProps: { dormant: false },
+      });
+      act(() => FakeEventSource.instances[0].emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
+      expect(result.current.reopened).toBe(false);
+
+      rerender({ dormant: true });
+
+      expect(result.current.reopened).toBe(true);
+    });
+
+    test("a page rendered not open now does not report reopened before any connection is accepted", () => {
+      const { result } = renderHook(() => useContestEvents("c1", "running", true));
+
+      expect(result.current.reopened).toBe(false);
+    });
+
     test("a channel that was never refused as not open now does not report reopening on connect", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "query_too_often")));
       const { result } = renderHook(() => useContestEvents("c1", "running"));
