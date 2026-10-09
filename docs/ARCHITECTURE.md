@@ -2125,12 +2125,20 @@ nothing.
 ### 8.1 The participation gate
 
 Whether a participant may do something in a contest right now is decided in
-one place: `contests.StandingOf(contest, registration, now, grace, address)`.
-It is a pure function in the `contests` package and reads nothing: every
-caller already holds the contest and the registration, and the console's
-admission fetches both in one round trip (`queryproxy.Lookup.ForAccess` for
-reads and the event stream, `ForRun` for the console). Its
-answer, a `contests.Standing`, is computed for the request and never stored.
+one place: `gate.StandingOf(contest, registration, now, address)`, a method of
+`contests.Gate`. The gate carries the installation's one deadline grace
+(`DEADLINE_GRACE`): `internal/app` builds it once, with
+`contests.NewGate(cfg.DeadlineGrace)`, and hands the same value to everything
+that asks the question or depends on its answer — `queryproxy.New` (the console
+and the participant reads), `contests.ServiceConfig.Gate` (answers),
+`contests.NewScheduler` and `profile.Config.Gate`. None of them has a grace of
+its own or a default for one, and each refuses to be built without the gate,
+so two of them cannot disagree about when a participant's time is up.
+`StandingOf` is pure and reads nothing: every caller already holds the contest
+and the registration, and the console's admission fetches both in one round
+trip (`queryproxy.Lookup.ForAccess` for reads and the event stream, `ForRun`
+for the console). Its answer, a `contests.Standing`, is computed for the
+request and never stored.
 Four questions are asked of it:
 
 - **`MayAct`** — read the story, the questions, the query log and the schema;
@@ -2155,8 +2163,9 @@ table (`standing_test.go`), which covers each boundary below to the
 nanosecond.
 
 **Time.** On the participant's side the grace is added in exactly one place
-(`closesAt` in `standing.go`); the only other addition is the scheduler's own
-`ends_at + grace` when it finishes a contest, which agrees with it:
+(`Gate.closesAt` in `standing.go`); the only other addition is the scheduler's
+own `ends_at + grace` when it finishes a contest, with the same gate's grace,
+which agrees with it:
 
 - Under fixed timing the contest is open while its status is `running` —
   before `starts_at` too, since the status is what an organiser or the
@@ -2208,7 +2217,7 @@ it like every other `/play` read; `Run` admits the console's queries;
 channel closes because `Over` holds it sends `contest_finished` — except for a
 disqualified participant, whose channel closes as `not_a_participant` always
 has. `contests.Service.Submit` asks before it reads the question.
-`profile.Service` asks `Over`, with the installation's `DEADLINE_GRACE`. An
+`profile.Service` asks `Over`, through the same gate. An
 individual clock is started (`queryproxy.Service.StartOnRead`, a console's
 first query, a first answer) only after the gate admits the participant, and
 the gate is asked again of the registration `Start` hands back: it may be
@@ -3113,8 +3122,8 @@ in it; the profile, like monitoring, tells nobody that.
 **While a contest runs, the profile shows none of its data** — a "running"
 line and a link in, nothing more. Whether the contest has ended *for this
 participant* is the participation gate's own answer,
-`contests.StandingOf(contest, participant, now, grace, …).Over()`, asked with
-the installation's `DEADLINE_GRACE`: over exactly when they may never act in
+`gate.StandingOf(contest, participant, now, …).Over()`, asked of the
+installation's one `contests.Gate`: over exactly when they may never act in
 it again, so the play screen and the results are never open at once. That is
 the registration `finished` or `disqualified`; the contest `finished` or
 `archived`; or, while it runs, the participant's own deadline plus the grace
