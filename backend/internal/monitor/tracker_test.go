@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -614,6 +615,37 @@ func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
 		tracker.Observe(ctx, visit)
 	}
 	b.ReportMetric(float64(slow.calls)/float64(b.N), "cache-calls/op")
+}
+
+// BenchmarkObserveUnchangedOnRedis is the same request against a real Redis,
+// which is what the deployment's cache is when REDIS_ADDR is set: the
+// simulated round trip above, measured. Skipped unless MONITOR_BENCH_REDIS is
+// the address of a Redis this benchmark may write to (it writes only keys
+// named after fresh identifiers).
+func BenchmarkObserveUnchangedOnRedis(b *testing.B) {
+	addr := os.Getenv("MONITOR_BENCH_REDIS")
+	if addr == "" {
+		b.Skip("set MONITOR_BENCH_REDIS to a Redis address to measure against it")
+	}
+	ctx := context.Background()
+	store, err := cache.NewRedis(ctx, addr)
+	if err != nil {
+		b.Fatalf("NewRedis(%s) = %v", addr, err)
+	}
+	b.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	tracker := monitor.NewTracker(store, &eventLog{}, &sessionBook{}, slog.New(slog.NewTextHandler(io.Discard, nil))).
+		WithClock(func() time.Time { return now })
+	visit := monitor.Visit{
+		Contest: uuid.New(), Registration: uuid.New(),
+		Address: netip.MustParseAddr("10.0.0.1"), Session: monitor.SessionTag("token"), UserAgent: "Firefox",
+	}
+	tracker.Observe(ctx, visit)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		tracker.Observe(ctx, visit)
+	}
 }
 
 // A genuine parallel session already reported does not pay for liveness on
