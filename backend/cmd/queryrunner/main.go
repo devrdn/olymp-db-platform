@@ -1,8 +1,9 @@
 // Command queryrunner runs the DB Contest Query Runner. It is a separate
 // service because it links PostgreSQL's parser through cgo, C code reading
 // adversary text whose crash a recover cannot catch, and because only it
-// holds the game cluster's credentials. It is stateless and has no core
-// database connection.
+// holds the participants' roles (game_reader, game_writer) and runs their
+// SQL; the Core API reaches the game cluster only as the provisioning role.
+// It is stateless and has no core database connection.
 package main
 
 import (

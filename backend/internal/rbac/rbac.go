@@ -49,7 +49,8 @@ type ContestRole string
 const (
 	RoleNone ContestRole = ""
 	// RoleOwner is the contest's creator: everything a manager may do, plus
-	// appointing managers and archiving.
+	// appointing managers (contest.manage). Archiving is a status change
+	// under contest.publish, which managers hold too.
 	RoleOwner   ContestRole = "owner"
 	RoleManager ContestRole = "manager"
 )

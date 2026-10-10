@@ -206,8 +206,8 @@ test-game: require-env test-game-cluster ## Run the game cluster tests against a
 test-game-cluster: require-env
 	GAME_TEST_DB_PORT=$(GAME_TEST_DB_PORT) $(COMPOSE_DEV) --profile test up -d --wait --force-recreate pg-game-test
 
-# The one test that crosses both clusters: a script saved in the core database
-# has to become a real database on the game cluster. Every other test of that
+# The tests that cross both clusters: a script saved in the core database has
+# to become a real database on the game cluster. Every other test of that
 # feature stops at a boundary, which is how BuildTemplate went months with no
 # caller at all.
 .PHONY: test-game-build
@@ -410,7 +410,7 @@ front-test: front-install ## Run the interface's tests
 front-lint: front-install ## Lint the interface
 	cd $(FRONTEND) && npm run lint
 
-front-check: front-install ## Everything CI runs for the interface
+front-check: front-install ## Everything CI runs for the interface but the smoke test
 	cd $(FRONTEND) && npm run lint && npm run contrast && npm run type-scale \
 		&& npm run error-codes && npm run typecheck && npm test && npm run build
 
