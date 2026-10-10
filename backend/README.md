@@ -1,10 +1,10 @@
 # Core API
 
-Backend service of the DB Contest platform. Steps 1 and 2 of the plan in
-[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) are implemented: the foundation
-(layout, configuration, logging, metrics, health probes, core schema) and
-authentication with role-based access control. Contests, the game databases and
-the query runner arrive in the following steps.
+Backend of the DB Contest platform: the Core API (`cmd/api`), which serves
+`/api/v1`, and the Query Runner (`cmd/queryrunner`), a separate process that
+checks and runs participants' SQL on the game cluster. For how the code fits
+together, a worked package and recipes for common changes, see the
+[developer guide, chapter 4](../docs/guide/04-backend.md).
 
 ## Layout
 
@@ -12,29 +12,35 @@ the query runner arrive in the following steps.
 backend/
 ├── cmd/                 entry points, thin: flags, signals, exit codes
 │   ├── api/             Core API server
+│   ├── queryrunner/     Query Runner (cgo: links PostgreSQL's parser)
 │   ├── migrate/         schema migrations (embedded)
-│   └── bootstrap/       creates the first administrator
+│   ├── bootstrap/       creates the first administrator
+│   ├── gamedb/          prepares the game cluster's roles, on every deploy
+│   ├── gameorphans/     finds and removes dropped databases and orphaned covers
+│   ├── testdb/          recreates the test database for `make test-db`
+│   ├── consoleload/     load test of the SQL console
+│   └── apicontract/, auditcontract/   generate docs/api/*.json
 ├── internal/
 │   ├── app/             composition root: builds the graph, runs it, tears it down
-│   ├── api/             HTTP surface: router assembly and handlers
-│   ├── auth/            who is this: passwords, sessions, login, middleware
-│   ├── rbac/            may they do this: the two-level permission model
-│   ├── users/           accounts, roles, password rules
-│   ├── contests/        contests, content, staff, participants, publish gate
-│   ├── audit/           append-only trail of who did what
+│   ├── api/             HTTP surface: routes, handlers, error table, codes
+│   ├── auth/, rbac/, users/, audit/, settings/
+│   │                    accounts, sessions, permissions, the trail, installation settings
+│   ├── contests/        contests, content, staff, participants, the participation gate
+│   ├── leaderboard/, monitor/, profile/, showcase/, covers/, workspace/
+│   │                    standings, watching participants, own profile, front page,
+│   │                    cover pictures, notes and SQL tabs
+│   ├── provisioning/, gamefile/, gamedb/
+│   │                    game templates and per-participant databases, uploaded dumps,
+│   │                    the game cluster's roles and grants
+│   ├── queryproxy/      the Core API's side of a query: who, whether, which database
+│   ├── queryrunner/, sqlpolicy/, rpc/
+│   │                    the Query Runner: execution, the SQL policy, the gRPC contract
 │   ├── health/          liveness, readiness, self-probe
-│   ├── postgres/        every repository implementation — all SQL lives here
-│   └── platform/        infrastructure, imports no domain package
-│       ├── cache/       Cache interface: Redis or in-process fallback
-│       ├── config/      environment configuration
-│       ├── filestore/   one directory on a volume, addressed by key
-│       ├── httpx/       middleware, CSRF guard, client IP, JSON responses
-│       ├── i18n/        language negotiation (Accept-Language, fallbacks)
-│       ├── logging/     slog setup and request correlation
-│       ├── metrics/     Recorder interface: prometheus, log or none
-│       ├── password/    argon2id hashing
-│       ├── server/      HTTP listener with graceful shutdown
-│       └── storage/     PostgreSQL pool, querier seam, unit of work
+│   ├── postgres/        every core-database repository; all core SQL lives here
+│   └── platform/        infrastructure, imports no domain package: cache, config,
+│                        filestore, flight, httpx, i18n, logging, metrics, password,
+│                        sentineltest, server, storage
+├── proto/               the Core API to Query Runner contract (generated code in internal/rpc)
 └── migrations/          core schema, applied by cmd/migrate
 ```
 
@@ -209,46 +215,25 @@ secret, not a credential to live on.
 
 ### Endpoints
 
-| Method | Path | Who |
-|---|---|---|
-| POST | `/api/v1/auth/login` | anyone |
-| GET | `/api/v1/auth/me` | signed in |
-| POST | `/api/v1/auth/logout` | signed in |
-| POST | `/api/v1/auth/password` | signed in (own password) |
-| GET | `/api/v1/settings` | anyone — the sign-in screen carries the installation's name |
-| GET | `/api/v1/settings/all`, PUT `/api/v1/settings` | `settings.manage` |
-| GET | `/api/v1/settings/images/{kind}` | anyone — the sign-in screen wears them |
-| PUT, DELETE | `/api/v1/settings/images/{kind}` | `settings.manage`. `kind` is logo, icon or favicon |
-| GET | `/api/v1/roles` | `users.manage` |
-| GET, POST | `/api/v1/users` | `users.manage` |
-| GET, PATCH | `/api/v1/users/{id}` | `users.manage` |
-| POST | `/api/v1/users/{id}/block`, `/unblock` | `users.manage` |
-| POST | `/api/v1/users/{id}/password-reset` | `users.manage` |
-| PUT | `/api/v1/users/{id}/roles` | `users.manage` |
-| POST | `/api/v1/users/import` | `users.manage` |
-| GET | `/api/v1/audit` | `audit.view` |
-| GET | `/api/v1/contests` | signed in (scoped by who you are; `scope=participant` and `enrolled=true|false` cut a participant's own two lists) |
-| POST | `/api/v1/contests` | `contest.create` |
-| GET | `/api/v1/contests/{id}` | `contest.view` on that contest |
-| PATCH, DELETE | `/api/v1/contests/{id}` | `contest.edit` |
-| GET | `/api/v1/contests/{id}/publish-check` | `contest.view` |
-| POST | `/api/v1/contests/{id}/status` | `contest.publish` |
-| PUT | `/api/v1/contests/{id}/languages`, `/translations` | `contest.edit` |
-| GET, PUT | `/api/v1/contests/{id}/sql-policy` | `contest.view` / `contest.edit` |
-| GET, PUT | `/api/v1/contests/{id}/story` | `contest.view` / `contest.edit` |
-| GET, POST | `/api/v1/contests/{id}/questions` | `contest.view` / `contest.edit` |
-| PUT | `/api/v1/contests/{id}/questions/order` | `contest.edit` |
-| GET, PUT, PATCH, DELETE | `/api/v1/contests/{id}/questions/{qid}` | `contest.view` / `contest.edit`. PUT replaces the whole question — fields, wording and answers — in one transaction; PATCH edits its own fields only |
-| PUT | `/api/v1/contests/{id}/questions/{qid}/texts`, `/answers` | `contest.edit` |
-| GET | `/api/v1/contests/{id}/managers` | `contest.view` |
-| PUT, DELETE | `/api/v1/contests/{id}/managers/{userId}` | `contest.manage` (owner) |
-| GET, POST | `/api/v1/contests/{id}/participants` | `participant.manage` |
-| DELETE | `/api/v1/contests/{id}/participants/{userId}` | `participant.manage` |
-| POST | `/api/v1/contests/{id}/participants/{userId}/disqualify` | `participant.manage` |
-| POST | `/api/v1/contests/{id}/enroll` | signed in (the contest decides) |
+Every route sits under `/api/v1` and belongs to one handler in
+`internal/api`. Each handler's `Mount` method is where its routes and their
+guards live: `Authenticate` for a session, `RequirePermission` for an
+installation-wide permission, `RequireContestPermission` for one scoped to
+the `{contestID}` in the path. `router.go` registers only `/version` itself
+and mounts the handlers that `internal/app` assembles, so any other route
+missing from a `Mount` does not exist.
 
-The Postman collection in `postman/` covers all of them with the request bodies
-and the response codes each one answers with.
+A few routes answer without a session: sign-in, the installation's name and
+images (the sign-in screen wears them), the landing page's reads under
+`/public`, a contest's public leaderboard and its cover. `GET /contests` is
+scoped by who is asking, and `POST /contests/{id}/enroll` is open to any
+signed-in account, with the contest's own rules deciding.
+
+The verified map of every route, the screen that calls it, the package that
+holds its rule and the permission that guards it is
+[docs/guide/02-use-cases.md](../docs/guide/02-use-cases.md). The Postman
+collection in [`postman/`](../postman) carries request bodies and expected
+response codes for much of the API.
 
 ### Running a contest
 
@@ -263,8 +248,9 @@ survive:
    `languages` table, so adding a fourth language to the installation is an
    `INSERT` there, with no migration and no deploy.
 3. **Story, questions, answers** — authored per language. `is_visible` defaults
-   to true: hiding a question is the deliberate choice, and a hidden question
-   still scores.
+   to true: hiding a question is the deliberate choice. A hidden question is
+   left out of the participant's list entirely, identifier included, so
+   nobody can answer it; staff still see it.
 4. **Publish check** — reports *everything* missing at once, as machine codes
    the interface translates. An organizer fixing a contest one refusal at a time
    would need a round trip per missing translation.
