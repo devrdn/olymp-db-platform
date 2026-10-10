@@ -159,7 +159,7 @@ jobs:
 
       # One command for both clusters. `./...` is what makes this the check
       # that cannot drift: a package added later is covered by it, and with
-      # GAME_DB_DSN set above the game-cluster tests and the two cross-cluster
+      # GAME_DB_DSN set above the game-cluster tests and the cross-cluster
       # build tests in internal/provisioning run here rather than skipping.
       # There is no separate `make test-game` step because there is nothing
       # for it to add — the Makefile target exists to pass a developer's own

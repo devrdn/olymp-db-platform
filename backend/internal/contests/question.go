@@ -62,9 +62,10 @@ type Question struct {
 	// PenaltyPct is the percent of Points a wrong attempt costs (§6.1.1),
 	// 0..100. It is applied when answering and never recomputed.
 	PenaltyPct int
-	// IsVisible decides whether the question text is shown. A hidden
-	// question still scores: working out what is asked is part of the
-	// puzzle (§6.1).
+	// IsVisible decides whether a participant is given the question at all.
+	// A hidden question keeps its points and reference answers and staff see
+	// it, but the participant's list leaves it out, identifier included
+	// (Reader, §6.1).
 	IsVisible bool
 	// ChoiceIDs are the language-independent option identifiers a
 	// submission carries, never a label.

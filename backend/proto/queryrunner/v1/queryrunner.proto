@@ -12,9 +12,10 @@ edition = "2023";
 //     recover can catch. In one process with the Core API, a crafted query
 //     would be a repeatable way to end sign-in, the timer and the submission
 //     of answers — the very things section 4 insists must survive everything.
-//   - Only this service holds the game cluster's credentials. In one process,
-//     a fault anywhere in the API would be within reach of every participant's
-//     database.
+//   - Only this service holds the participants' roles and runs their SQL; the
+//     Core API connects to the game cluster only as the provisioning role, to
+//     build templates and copies. In one process, a fault anywhere in the API
+//     would be within reach of every participant's database as those roles.
 //
 // Scaling is *not* among the reasons. On one on-premise machine serving a few
 // hundred participants, nobody is going to replicate this.
