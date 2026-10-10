@@ -52,10 +52,13 @@ Why that line and not another:
    bootstrap job for the sake of one component. So the Runner has an image of
    its own, `db-contest-queryrunner`, on `distroless/base`.
 
-2. **Only the Runner holds the game cluster's credentials.** In one process
-   with the Core API, a mistake in any handler would be within reach of the
-   participants' databases. The configuration is split so that the Core API's
-   settings structure physically cannot name the game cluster.
+2. **Only the Runner holds the participants' roles.** In one process with
+   the Core API, a mistake in any handler would be within reach of the
+   participants' databases as the roles their SQL runs under. The
+   configuration is split so that only the Runner's settings carry
+   `game_reader` and `game_writer`; the Core API reaches the game cluster
+   through `GAME_PROVISIONER_DSN` alone, to build each contest's template and
+   the participants' copies, and never runs a participant's SQL.
 
 3. **Minimal operational cost.** Two services instead of ten: deployment stays
    a Docker Compose file, and the security boundary is drawn where it earns
@@ -102,7 +105,6 @@ flowchart LR
     S --> FE
     A --> FE
     FE -->|REST + SSE| API
-    FE -->|/api/query| API
     API -->|gRPC| QR
     API --> CORE
     API --> REDIS
@@ -208,20 +210,21 @@ sequenceDiagram
     participant QR as Query Runner
     participant G as Game DB (the participant's)
 
-    FE->>API: POST /api/contests/{id}/query {sql}
-    API->>API: session, role, address policy, participation active, clock not expired
-    API->>API: rate limit (Redis)
-    API->>QR: Execute(dbName, sql)
+    FE->>API: POST /api/v1/contests/{id}/query {sql}
+    API->>API: session, then rate limit per account and per registration (in-process queryrunner.RateLimiter)
+    API->>API: address policy, participation active, clock not expired
+    API->>API: open the query_log row (running)
+    API->>QR: Run(dbName, sql, policy)
     QR->>QR: parse to an AST, filter against the contest's policy
     QR->>G: execute (the policy's role, statement_timeout, LIMIT)
     G-->>QR: rows, truncated to N
     QR-->>API: result or error
-    API->>API: write query_log
+    API->>API: close the query_log row (ok, rejected, error, timeout)
     API-->>FE: columns, rows, duration
 ```
 
 **A contest starts for a participant:** enrolment puts the creation of
-`game_c{contest}_u{user}` on the provisioning queue — or binds a copy already
+`game_c{contest}_u{registration}` on the provisioning queue — or binds a copy already
 waiting in the pool (section 4.2) — the row in `game_instances` reaches
 `ready`, and the console opens when the contest starts. After the finish plus
 a grace period the databases are dropped.
@@ -1045,10 +1048,10 @@ A contest asks in one of two modes, `contests.question_mode`:
 | `single` | One question carrying the whole olympiad: the classic "here is the story, name the culprit" |
 
 Separate from the mode is a question's **visibility**, `questions.is_visible`.
-A hidden question exists fully — it has reference answers and points — it is
-simply not shown. The participant sees the story and a field to answer in, and
-working out what is being asked is part of the puzzle rather than a line of
-instructions.
+A hidden question keeps its reference answers and points, and staff see it,
+but the participant's question list leaves it out entirely, identifier
+included (`contests.Reader` reads only visible questions). A participant is
+never given a way to answer it.
 
 **Why visibility belongs to the question and not to the contest.** The single
 mode is what motivated it, but there is nothing single-specific about hiding,
@@ -1166,7 +1169,9 @@ it costs the most.
 
 The order is `questions.ord`, the same one used for display. Hidden questions
 (`is_visible = false`) count in the sequence like any other: hidden is not
-absent.
+absent. Since a participant can never answer one, the publication gate refuses
+a sequential contest with a hidden question ordered before another
+(`sequential_hides_question`).
 
 **The server checks it, not the interface.** Submitting an answer to a
 question that has not opened is refused by the API. Hiding the question in the
@@ -1599,9 +1604,10 @@ room, or this campus network". An empty list means no restriction.
 - **Matching** uses Go's own address types (`netip.Prefix.Contains`), and the
   contest's CIDR list is cached.
 - **A refusal** is a page that says the contest is available only from the
-  university's network, not a bare 403; and every blocked attempt goes to
-  `audit_log` with who, from where and when — which is also the signal that
-  somebody is trying from a device of their own.
+  university's network, not a bare 403. A sign-up refused for its address
+  goes to `audit_log` (`contest.access_denied`) with who, from where and
+  when — which is also the signal that somebody is trying from a device of
+  their own; a refused query, answer or read is answered but not audited.
 - **Who it binds:** participants only. Administrators and a contest's managers
   are outside it, or a wrong range would lock the person who set it out of
   their own contest. Their actions are fully audited anyway.
@@ -2104,7 +2110,7 @@ nothing.
   grace for network delay (`DEADLINE_GRACE`), five seconds by default.
 - **The interface synchronises** by receiving `server_now` and **its own**
   `deadline` at load, computing the offset locally, and resynchronising every
-  thirty to sixty seconds over **SSE** (`/api/contests/{id}/events`), which
+  thirty seconds over **SSE** (`/api/v1/contests/{id}/events`), which
   also carries `contest_started` and `contest_finished`. SSE was chosen over
   WebSocket because the traffic is one-way, and SSE is simpler and survives a
   reconnect out of the box.

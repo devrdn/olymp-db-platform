@@ -6,7 +6,10 @@ Tailwind v4, TypeScript.
 The visual system it implements is specified in
 [`docs/design/SPEC.md`](../docs/design/SPEC.md); the product it serves is
 specified in [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md). This file is
-about the code: where things are, and where a new thing goes.
+about the code: where things are, and where a new thing goes. The developer
+guide's chapter on the interface,
+[`docs/guide/05-frontend.md`](../docs/guide/05-frontend.md), walks through how a
+page reads and writes, the play screen, and step-by-step recipes.
 
 ## Running it
 
@@ -29,9 +32,9 @@ told to.
 
 `make front` derives `API_ORIGIN` from `deploy/.env`, the same file the API and
 the containers read, so a port changes in one place. `make front-check` runs
-everything CI runs, and `make front-build` + `make front-start` serve the
-production build locally — which is the only way to see the behaviour that
-differs there, the content policy among it.
+everything CI runs except the smoke test, and `make front-build` +
+`make front-start` serve the production build locally — which is the only way
+to see the behaviour that differs there, the content policy among it.
 
 Running `npm run dev` directly also works; copy `.env.example` to `.env.local`
 first so the API address is set.
@@ -40,19 +43,26 @@ first so the API address is set.
 |---|---|
 | `npm run dev` | development server on `:3000` |
 | `npm test` | unit and component tests (Vitest) |
-| `npm run typecheck` | `tsc --noEmit` |
+| `npm run test:watch` | the same, re-run on change |
+| `npm run typecheck` | `next typegen && tsc --noEmit` (see `AGENTS.md` for why typegen comes first) |
 | `npm run lint` | ESLint, including the three design-system rules |
 | `npm run contrast` | every token pair against its WCAG threshold, in both themes |
-| `npm run error-codes` | every API error code has a message in the dictionary |
+| `npm run type-scale` | every `text-*` class names a step or colour that exists |
+| `npm run error-codes` | every API error code has a message in every dictionary |
 | `npm run build` | production build |
+| `npm run start` | serves the standalone build (`scripts/serve.mjs`) |
+| `npm run smoke` | serves the build and asks it for `/login` |
 
-CI runs all of them on every pull request (`.github/workflows/frontend.yml`).
+CI runs all of them but `dev`, `test:watch` and `start` on every pull request
+(`.github/workflows/frontend.yml`); `smoke` runs after the build.
 
 ## Environment
 
 | Variable | Required | Meaning |
 |---|---|---|
 | `API_ORIGIN` | in production | where the Next **server** dials the Core API, e.g. `http://api:8080` |
+| `INGRESS_SECRET` | in production | the value Caddy adds to every request; without it no client address is forwarded to the API (`lib/api/forwarded.ts`), and a production server refuses to start (`scripts/start.mjs`) |
+| `COOKIE_SECURE` | no | `false` drops `Secure` from the session cookie, for a production build served over plain http; unset means `Secure` in production |
 
 There is one environment file for the whole project, `deploy/.env`. The API
 reads `ENV` from it, the interface reads `NODE_ENV`, and both read `API_ORIGIN`
@@ -79,9 +89,12 @@ app/                 routes; a folder is a URL
   error.tsx            the last boundary before the framework's own
   not-found.tsx        404
   global-error.tsx     the failure that took the layout with it
-  (public)/            screens without a session; the group holds their shell
+  (public)/            screens without a session: the front page, sign-in, a contest's public table
     login/               page, sign-in-form, actions.ts
-  (admin)/             screens behind one; the group holds their shell
+  (account)/           /password, the one screen an account on a one-time password may use
+  (session)/           /profile, shared by participants and staff
+  (participant)/       /my, /open and the play screen (contests/[contestId]/play)
+  (admin)/             the constructor: contests, users, audit, settings
     contests/            page, loading, error, contest-register
 
 components/
@@ -106,6 +119,8 @@ proxy.ts               route protection (Next 16 calls this middleware "proxy")
 do not appear in any URL: `/login` and `/contests` are the addresses. What they
 carry is the layout — the shell each set of screens wears — so a new
 administrative screen is a folder inside `(admin)` and arrives already framed.
+A group is not an access rule: `proxy.ts` decides by path, from the lists in
+`lib/auth/guard.ts`.
 
 **A route owns what only it uses.** Its page, the components that page renders
 and the Server Actions it submits to live in the route folder. `login/` has an
@@ -134,11 +149,15 @@ authenticated request needs both.
 
 ## Where does a new thing go?
 
-**A page.** A folder inside `(admin)` if it needs a session, inside `(public)`
-if it does not. The group gives it the shell. Beyond that it needs nothing:
-`proxy.ts` already redirects a visitor without one, and `serverRequest` already
-carries the cookie. Give it `loading.tsx` if the wait is visible, and an
-`error.tsx` only if the section's failure differs from the root one.
+**A page.** A folder inside the group of the audience it serves: `(admin)` for
+staff, `(participant)` for participants, `(session)` for both, `(public)` for
+anyone. The group gives it the shell. A page behind a session needs nothing
+more: `proxy.ts` already redirects a visitor without one, and `serverRequest`
+already carries the cookie. A page that must open without a session also needs
+its path in `PUBLIC_PATHS`, `PUBLIC_EXACT` or `PUBLIC_PATTERNS` in
+`lib/auth/guard.ts`; in `(public)` alone it still redirects to sign-in. Give it
+`loading.tsx` if the wait is visible, and an `error.tsx` only if the section's
+failure differs from the root one.
 
 **A component.** Rendered by one route? Put it in that route's folder. Reached
 by a second? Move it to `components/product/`. Chrome the whole app wears?
@@ -155,10 +174,12 @@ their own.
 `lib/i18n/config.ts`. No component changes — the same rule the server follows by
 keeping languages in a table rather than an enum.
 
-**A colour, size, duration or radius.** `styles/tokens.css`, then a utility in
-the `@theme` block of `app/globals.css`. Writing one inline is an ESLint error,
-and that is the point: a design system nothing enforces is a document, not a
-system.
+**A colour, control size, duration or radius.** `styles/tokens.css`, then a
+utility in the `@theme` block of `app/globals.css`. **A type step** (size, line
+height, tracking and weight together) is written in that `@theme` block itself,
+and named in the `font-size` list of `cn()` in `lib/utils.ts`. Writing any of
+these inline is an ESLint error, and that is the point: a design system nothing
+enforces is a document, not a system.
 
 **An API call.** A schema in `lib/api/`, parsed at the boundary with Zod, and a
 `serverRequest` from a Server Component. Parsing where the data arrives means a

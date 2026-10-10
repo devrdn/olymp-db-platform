@@ -57,12 +57,16 @@ PostgreSQL's real parser through cgo to check a statement before running it —
 C code reading adversarial text, where a crash is the end of the process
 rather than a panic Go can recover from. Inside the API that would be a
 reproducible way to take down sign-in, the clock and answer submission at the
-moment they matter most. It is also the only process that holds the game
-cluster's credentials: the Core API's configuration cannot name that cluster
-at all.
+moment they matter most. It is also the only process that holds the
+participants' roles on the game cluster and runs their SQL: the Core API
+connects there only as the provisioning role, to build each contest's template
+and the participants' copies.
 
 The architecture document explains the rest, including what was considered and
-rejected: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+rejected: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). If you are going to
+work on the code, start with the
+[developer guide](docs/guide/01-overview.md); [docs/README.md](docs/README.md)
+lists every document.
 
 ## Running it locally
 
@@ -119,11 +123,14 @@ skipping rather than passing quietly:
 make test-db          # the repository tests, on a database recreated from zero
 make test-game        # the game cluster's isolation, as the participant's role
 make test-game-build  # the one path that crosses both clusters
-make front-check      # everything CI runs for the interface
+make front-check      # the interface's lint, checks, tests and build
 ```
 
-`make test-all` runs what CI runs for the backend, including the race
-detector, a vulnerability scan and static security analysis.
+`make test-all` runs the backend gate that needs no database: format and tidy
+checks, vet, the race detector, the build, a vulnerability scan and static
+security analysis. CI also runs the database tests, so run the three targets
+above as well before you trust a green `test-all`. How the tests are organised
+is in the [developer guide, chapter 6](docs/guide/06-testing.md).
 
 ## Layout
 
