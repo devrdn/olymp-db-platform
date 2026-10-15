@@ -2270,7 +2270,7 @@ table. The staff interface gets a section of its own:
   highlighting (the same CodeMirror, read-only), the database's error text or
   the validator's reason, the duration and the `request_id`.
 - **Filters and search:** by contest, participant, status and time range, with
-  full-text search over the query's text ("who touched the `suspects`
+  a substring search over the query's text ("who touched the `suspects`
   table"). Pagination is keyset over `(executed_at, id)`, so the panel stays
   fast over hundreds of thousands of rows.
 - **A live mode.** During a contest, a tail of the log over the existing event
@@ -2398,14 +2398,13 @@ participant types into the console and a formula to whoever opens the file,
 and a file a participant downloaded is often opened by somebody else. Both
 text cells, the query and the error, go through the same `spreadsheetSafe`.
 
-The indexes behind the panel: `query_log (registration_id, executed_at, id)`,
-`query_log (executed_at, id)`, and a GIN index on `to_tsvector(sql_text)` for
-full-text search.
+The indexes behind the panel: `query_log (registration_id, executed_at, id)`
+and `query_log (contest_id, executed_at, id)`; there is no full-text index.
 
 **A deliberate gap.** A rate refusal caught by `queryproxy.Service`'s own
 pre-check (section 5, before the journal row is written) does not reach
 `query_log` — the pre-check exists precisely so that a query which never got
-to the database costs neither a row nor its GIN index. So the panel and the
+to the database costs neither a row nor its index entries. So the panel and the
 reporting on top of it (queries per participant, the share refused) undercount
 those refusals by exactly what the pre-check turned away. It is an accepted
 trade-off rather than a forgotten bug, and the rate of such refusals is still

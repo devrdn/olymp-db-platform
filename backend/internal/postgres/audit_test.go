@@ -151,6 +151,24 @@ func TestTheTotalCountsEveryMatchNotJustThePage(t *testing.T) {
 	})
 }
 
+func TestTheLastShortPageCountsTheMatchesBeforeIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-last-page")
+		writeTrail(t, ctx, actor.ID)
+
+		filter := audit.Filter{Actor: actor.ID, Limit: 5}.Normalize()
+		filter.Offset = 1
+		found, total, err := NewAuditTrail(testPool).List(ctx, filter)
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 1 || total != 2 {
+			t.Errorf("page of %d with total %d, want 1 of 2", len(found), total)
+		}
+	})
+}
+
 func TestAPagePastTheEndStillCountsEveryMatch(t *testing.T) {
 	// A total of zero would tell the panel the trail is empty.
 	withTx(t, func(ctx context.Context) {

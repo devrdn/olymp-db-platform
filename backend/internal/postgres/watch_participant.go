@@ -36,7 +36,7 @@ func (w *Watch) Participant(ctx context.Context, contest, registration uuid.UUID
 //
 // One range of query_log (registration_id, executed_at) past the cursor, with
 // status and search as filters inside it. The search is a case-insensitive
-// substring match (escaped, CLAUDE.md rule 3), not the GIN full-text index:
+// substring match (escaped, CLAUDE.md rule 3), not a full-text match:
 // the registration's range is already the narrowest, and a word match would
 // not find "suspects" in "suspects.name".
 func (w *Watch) Queries(ctx context.Context, q monitor.QueriesQuery) (monitor.QueriesPage, error) {
