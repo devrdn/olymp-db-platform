@@ -17,7 +17,13 @@ import (
 type fakeWatchStore struct {
 	WatchStore
 	rosters atomic.Int32
+	feeds   atomic.Int32
 	hold    chan struct{}
+}
+
+func (f *fakeWatchStore) Feed(context.Context, FeedQuery) (FeedPage, error) {
+	f.feeds.Add(1)
+	return FeedPage{Items: []FeedItem{{ID: "1"}}}, nil
 }
 
 func (f *fakeWatchStore) Roster(_ context.Context, _ uuid.UUID, limit int) (Roster, error) {
@@ -60,6 +66,55 @@ func TestTheRosterIsCachedForItsTTLPerContest(t *testing.T) {
 	if got := store.rosters.Load(); got != 3 {
 		t.Fatalf("computations after the TTL = %d, want 3", got)
 	}
+}
+
+func TestTheContestsLiveFeedPagesAreCached(t *testing.T) {
+	store := &fakeWatchStore{}
+	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	service := NewWatchService(WatchConfig{Store: store, Now: func() time.Time { return now }})
+	contest := uuid.New()
+	read := func(q FeedQuery) {
+		t.Helper()
+		q.Contest = contest
+		if page, err := service.Feed(t.Context(), q); err != nil || len(page.Items) != 1 {
+			t.Fatalf("feed = %+v, %v", page, err)
+		}
+	}
+	reads := func(want int32) {
+		t.Helper()
+		if got := store.feeds.Load(); got != want {
+			t.Fatalf("store reads = %d, want %d", got, want)
+		}
+	}
+
+	read(FeedQuery{Kinds: []string{FeedSignIn, FeedSignOut}})
+	read(FeedQuery{Kinds: []string{FeedSignOut, FeedSignIn}})
+	reads(1)
+
+	read(FeedQuery{Kinds: []string{FeedSignIn}})
+	reads(2)
+	read(FeedQuery{Kinds: []string{FeedSignIn}, Limit: 10})
+	reads(3)
+
+	cursor := Cursor{At: now, Source: SourceAudit, ID: "1"}
+	same := cursor
+	read(FeedQuery{After: &cursor})
+	read(FeedQuery{After: &same})
+	reads(4)
+	later := Cursor{At: now.Add(time.Second), Source: SourceAudit, ID: "2"}
+	read(FeedQuery{After: &later})
+	reads(5)
+
+	read(FeedQuery{Before: &cursor})
+	read(FeedQuery{Before: &cursor})
+	reads(7)
+	read(FeedQuery{From: now.Add(-time.Hour)})
+	reads(8)
+
+	now = now.Add(RosterCacheTTL)
+	read(FeedQuery{Kinds: []string{FeedSignIn, FeedSignOut}})
+	read(FeedQuery{After: &cursor})
+	reads(10)
 }
 
 func TestConcurrentRosterMissesShareOneComputation(t *testing.T) {
