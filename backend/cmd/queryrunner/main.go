@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -61,14 +62,21 @@ func run() error {
 		return err
 	}
 
+	idleConns, err := idleConnections(cfg.Concurrent, cfg.IdleConns)
+	if err != nil {
+		return err
+	}
+
 	limits := queryrunner.Limits{
 		Deadline:    cfg.Deadline,
 		MaxRows:     cfg.MaxRows,
 		MaxBytes:    cfg.MaxBytes,
 		Concurrent:  cfg.Concurrent,
 		QueueDepth:  cfg.QueueDepth,
+		QueueWait:   cfg.QueueWait,
 		PerMinute:   cfg.PerMinute,
 		IdleTimeout: cfg.IdleConnTimeout,
+		IdleConns:   idleConns,
 	}
 
 	// A result budget past what the transport carries would turn a valid
@@ -92,4 +100,23 @@ func run() error {
 	}
 
 	return rpc.Serve(ctx, lis, rpc.NewServer(runner, limits, log), cfg.Token, cfg.ShutdownTimeout, log)
+}
+
+// idleConnections settles how many idle connections the runner keeps:
+// configured, or by default four per running query. Running and idle ones
+// connect as the participant roles, so past their CONNECTION LIMIT a query
+// fails to connect instead of being told the system is busy. The default
+// leaves as many connections free as run, for backends still exiting.
+func idleConnections(concurrent, configured int) (int, error) {
+	idle := configured
+	if idle < 0 {
+		idle = max(0, min(4*concurrent, gamedb.RoleConnectionLimit-2*concurrent))
+	}
+	if concurrent+idle > gamedb.RoleConnectionLimit {
+		return 0, fmt.Errorf(
+			"QUERY_CONCURRENT=%d plus QUERY_IDLE_CONNS=%d is %d game-cluster connections, "+
+				"past the participant roles' CONNECTION LIMIT of %d: lower QUERY_IDLE_CONNS or QUERY_CONCURRENT",
+			concurrent, idle, concurrent+idle, gamedb.RoleConnectionLimit)
+	}
+	return idle, nil
 }

@@ -160,17 +160,18 @@ func TestAnIdleConnectionIsClosedAfterItsIdleTimeout(t *testing.T) {
 	}
 }
 
-// At the bound, a read needing a new connection closes the least recently used
-// kept one first.
-func TestTheRunnerKeepsNoMoreConnectionsThanItRunsQueries(t *testing.T) {
+// Idle connections have a budget of their own, so a kept one survives queries
+// to other databases until that budget, not the running one, is full.
+func TestTheRunnerKeepsNoMoreIdleConnectionsThanItsIdleBudget(t *testing.T) {
 	limits := unlimited()
-	limits.Concurrent = 2
+	limits.Concurrent = 1
+	limits.IdleConns = 2
 	runner, first := setupWith(t, limits, anything{})
 	databases := []string{first, seeded(t), seeded(t), seeded(t)}
 
 	for i, database := range databases {
 		backend(t, runner, database)
-		want := min(i+1, limits.Concurrent)
+		want := min(i+1, limits.IdleConns)
 		if n := eventually(t, want, databases...); n != want {
 			t.Fatalf("after reading %d databases the runner holds %d connections, want %d", i+1, n, want)
 		}
@@ -187,6 +188,7 @@ func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 2
 	limits.QueueDepth = 16
+	limits.IdleConns = 0
 	runner, first := setupWith(t, limits, anything{})
 	databases := []string{first, seeded(t), seeded(t), seeded(t), seeded(t), seeded(t)}
 
@@ -240,7 +242,8 @@ func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 }
 
 // The gate makes this unreachable through Run, so the pool is driven directly:
-// a broken gate must show up as a refusal, not as extra backends.
+// a broken gate must show up as a refusal, not as extra backends, whether the
+// connection would be dialled or reused.
 func TestThePoolRefusesToGoPastItsBound(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 1
@@ -258,15 +261,16 @@ func TestThePoolRefusesToGoPastItsBound(t *testing.T) {
 		t.Fatalf("the runner holds %d connections, want 1", n)
 	}
 
-	// Kept idle, so it may now be closed to make room.
+	// Given back and kept idle, so its place is free again.
 	release(true)
 	again, err := queryrunner.HoldConnection(t.Context(), runner, second)
 	if err != nil {
-		t.Fatalf("a connection in place of an idle one: %v", err)
+		t.Fatalf("a connection after the first was given back: %v", err)
 	}
 	defer again(false)
-	if n := eventually(t, 1, first, second); n != 1 {
-		t.Fatalf("the runner holds %d connections, want 1", n)
+
+	if _, err := queryrunner.HoldConnection(t.Context(), runner, first); !errors.Is(err, queryrunner.ErrBusy) {
+		t.Fatalf("reusing the kept connection past a bound of one: error = %v, want ErrBusy", err)
 	}
 }
 

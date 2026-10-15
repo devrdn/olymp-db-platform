@@ -265,11 +265,18 @@ services:
       # the number of participants (see deploy/.env.example).
       QUERY_CONCURRENT: ${QUERY_CONCURRENT:-8}
       QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-32}
+      # How long a queued query waits for a slot before it is answered as
+      # timed out.
+      QUERY_QUEUE_WAIT: ${QUERY_QUEUE_WAIT:-15s}
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
       # How long a read's connection is kept for the participant's next query
-      # (0-5m, 0 = a connection per query). Kept connections count against
-      # QUERY_CONCURRENT, so the memory arithmetic below is unchanged.
+      # (0-5m, 0 = a connection per query), and how many are kept at once on
+      # top of the running ones (unset = four per QUERY_CONCURRENT, 0 = none).
+      # An idle backend holds a few MiB, not the per-process cap, so the memory
+      # arithmetic below is unchanged; with QUERY_CONCURRENT it must fit the
+      # participant roles' CONNECTION LIMIT of 60 (deploy/.env.example).
       QUERY_CONN_IDLE_TIMEOUT: ${QUERY_CONN_IDLE_TIMEOUT:-30s}
+      QUERY_IDLE_CONNS: ${QUERY_IDLE_CONNS:-}
       # The game cluster's container memory limit — the same variable, and the
       # same default, pg-game's limit is interpolated from — so the runner
       # refuses to start with a concurrency the cluster cannot hold (see

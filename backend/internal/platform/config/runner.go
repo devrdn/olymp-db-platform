@@ -41,13 +41,20 @@ type Runner struct {
 	// queues rather than refuses a round where everybody presses Run.
 	Concurrent int
 	QueueDepth int
+	// QueueWait bounds how long a queued query waits for a slot, so a request
+	// the browser has given up on stops holding its connection and journal row.
+	QueueWait time.Duration
 	// PerMinute bounds how often one participant may ask; the semaphore
 	// alone lets cheap queries through one at a time.
 	PerMinute int
 	// IdleConnTimeout is how long a connection is kept for the database's
-	// next query; zero keeps none. Kept connections count against
-	// Concurrent, so this never raises how many backends the cluster holds.
+	// next query; zero keeps none.
 	IdleConnTimeout time.Duration
+	// IdleConns is how many such connections are kept at once, on top of the
+	// Concurrent running ones; zero keeps none. Negative means
+	// QUERY_IDLE_CONNS is unset: the composition root picks the default,
+	// since only it knows the participant roles' connection limit.
+	IdleConns int
 	// ExtraFunctions extend the function allow-list without a release.
 	ExtraFunctions []string
 
@@ -70,7 +77,14 @@ type Runner struct {
 //
 // and GAME_DB_MEMORY_BYTES must be at least that. At the default concurrency
 // of eight: (8 + 4 + 4) × 256 MiB + 2 GiB = 6 GiB, rounded up to 7 GiB in
-// deploy/.env.example. Idle kept connections count within QUERY_CONCURRENT.
+// deploy/.env.example.
+//
+// Idle kept connections (QUERY_IDLE_CONNS) are not in the sum: after DISCARD
+// ALL an idle backend holds a few MiB, not the per-process cap, which the
+// reserve and the rounding absorb at the default of four per running query.
+// They are connections, though: cmd/queryrunner refuses QUERY_CONCURRENT +
+// QUERY_IDLE_CONNS past the participant roles' CONNECTION LIMIT, which also
+// keeps them well below pg-game's max_connections (200).
 //
 // MaxParallelWorkers is the cluster-wide parallel worker pool and must equal
 // max_parallel_workers on the pg-game command. MaxBuildSessions equals the
@@ -138,6 +152,9 @@ func LoadRunner() (Runner, error) {
 	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 32); err != nil {
 		return Runner{}, err
 	}
+	if cfg.QueueWait, err = durationEnv("QUERY_QUEUE_WAIT", 15*time.Second); err != nil {
+		return Runner{}, err
+	}
 	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
 		return Runner{}, err
 	}
@@ -149,6 +166,9 @@ func LoadRunner() (Runner, error) {
 	if cfg.IdleConnTimeout < 0 || cfg.IdleConnTimeout > MaxIdleConnTimeout {
 		return Runner{}, fmt.Errorf("QUERY_CONN_IDLE_TIMEOUT must be between 0 and %s, got %s",
 			MaxIdleConnTimeout, cfg.IdleConnTimeout)
+	}
+	if cfg.IdleConns, err = intEnv("QUERY_IDLE_CONNS", -1); err != nil {
+		return Runner{}, err
 	}
 	if cfg.PerMinute < 0 {
 		return Runner{}, fmt.Errorf("QUERY_PER_MINUTE cannot be negative, got %d", cfg.PerMinute)
@@ -188,6 +208,9 @@ func LoadRunner() (Runner, error) {
 	}
 	if cfg.Deadline <= 0 {
 		return Runner{}, fmt.Errorf("QUERY_DEADLINE must be positive, got %s", cfg.Deadline)
+	}
+	if cfg.QueueWait <= 0 {
+		return Runner{}, fmt.Errorf("QUERY_QUEUE_WAIT must be positive, got %s", cfg.QueueWait)
 	}
 	// The per-process cap turns over-allocation into one backend's "out of
 	// memory" ERROR only while the container can hold every backend at the
