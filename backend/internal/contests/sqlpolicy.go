@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 
@@ -22,10 +24,10 @@ const (
 // ErrInvalidPolicy reports a policy that cannot be enforced as written.
 var ErrInvalidPolicy = errors.New("sql policy is not valid")
 
-// tableName is an optionally schema-qualified lowercase identifier. Stricter
-// than PostgreSQL because these names are spliced into GRANT statements, where
-// parameters cannot be used.
-var tableName = regexp.MustCompile(`^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$`)
+// tableName is a lowercase identifier, optionally qualified by `public`.
+// Stricter than PostgreSQL because these names are spliced into GRANT
+// statements, run as a superuser, where parameters cannot be used.
+var tableName = regexp.MustCompile(`^(public\.)?[a-z_][a-z0-9_]*$`)
 
 // maxWritableTables bounds the list, since every entry becomes a grant on
 // every participant's database.
@@ -91,6 +93,9 @@ func (p SQLPolicy) Validate() error {
 	for _, table := range p.WritableTables {
 		if !tableName.MatchString(table) {
 			return fmt.Errorf("%w: %q is not a valid table name", ErrInvalidPolicy, table)
+		}
+		if sensitive, catalog := sqlpolicy.ClassifyRelation("public", strings.TrimPrefix(table, "public.")); sensitive || catalog {
+			return fmt.Errorf("%w: %q is a system catalog", ErrInvalidPolicy, table)
 		}
 		if _, duplicate := seen[table]; duplicate {
 			return fmt.Errorf("%w: table %q listed twice", ErrInvalidPolicy, table)

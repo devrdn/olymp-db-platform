@@ -1151,7 +1151,7 @@ const en = {
           read_write: "reading and writing",
         },
         tables: "Writable tables",
-        tablesHint: "Lowercase names, optionally schema-qualified, separated by commas.",
+        tablesHint: "Lowercase names of tables in schema public, separated by commas.",
         tablesHelp: "These become GRANT statements, so anything else is refused here rather than at the database.",
         createView: "May create views",
         ownTables: "May create their own tables",

@@ -87,6 +87,32 @@ func TestReadWriteAcceptsOrdinaryTableNames(t *testing.T) {
 	}
 }
 
+// The GRANT on a listed table runs as a superuser, so a catalog there would
+// hand every participant the installation.
+func TestWritableTablesStayInPublicAndOutOfTheCatalogs(t *testing.T) {
+	for _, name := range []string{
+		"pg_catalog.pg_authid",
+		"pg_authid",
+		"information_schema.tables",
+		"work.notes",
+		"PG_CATALOG.pg_class",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := sqlpolicy.ReadWrite(name).Validate()
+			if !errors.Is(err, sqlpolicy.ErrInvalidPolicy) {
+				t.Fatalf("writable table %q: Validate() = %v, want ErrInvalidPolicy", name, err)
+			}
+		})
+	}
+
+	if err := sqlpolicy.ReadWrite("public.suspects", "suspects2").Validate(); err != nil {
+		t.Fatalf("game tables in public were refused: %v", err)
+	}
+	if err := sqlpolicy.ReadWrite("suspects").Validate(); err != nil {
+		t.Fatalf("an unqualified game table was refused: %v", err)
+	}
+}
+
 func TestADuplicateTableIsRefused(t *testing.T) {
 	if err := sqlpolicy.ReadWrite("evidence", "evidence").Validate(); err == nil {
 		t.Fatal("a duplicated table validated")

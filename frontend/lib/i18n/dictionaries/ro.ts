@@ -1043,7 +1043,7 @@ const ro = {
           read_write: "citire și scriere",
         },
         tables: "Tabele modificabile",
-        tablesHint: "Nume cu minuscule, opțional cu schemă, separate prin virgulă.",
+        tablesHint: "Nume de tabele din schema public, cu minuscule, separate prin virgulă.",
         tablesHelp: "Acestea devin instrucțiuni GRANT, deci orice altceva este refuzat aici, nu la baza de date.",
         createView: "Pot crea vizualizări",
         ownTables: "Pot crea tabele proprii",

@@ -47,6 +47,26 @@ func TestWritingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
 	}
 }
 
+// Writing to a catalog makes a participant whatever the provisioning role is,
+// so it is refused whether or not the policy lists the catalog.
+func TestWritingNeverReachesACatalog(t *testing.T) {
+	listed := sqlpolicy.ReadWrite("evidence", "pg_catalog.pg_authid", "pg_authid")
+	for _, sql := range []string{
+		`UPDATE pg_catalog.pg_authid SET rolsuper = true`,
+		`DELETE FROM pg_authid`,
+		`TRUNCATE pg_catalog.pg_authid`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			refusal(t, sql, listed)
+
+			r := refusal(t, sql, writing())
+			if r.Code != sqlpolicy.CodeTableNotWritable {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeTableNotWritable)
+			}
+		})
+	}
+}
+
 // A participant may edit the evidence, never the shape of the contest.
 func TestWritingNeverReachesTheShapeOfTheContest(t *testing.T) {
 	for _, sql := range []string{
