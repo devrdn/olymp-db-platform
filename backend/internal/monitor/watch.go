@@ -3,6 +3,9 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,13 +16,13 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/flight"
 )
 
-// RosterCacheTTL is how long one participants-table computation serves every
-// organiser of a contest.
+// RosterCacheTTL is how long one participants-table computation, or one
+// newest page of the contest's feed, serves every organiser of a contest.
 const RosterCacheTTL = 3 * time.Second
 
-// rosterComputeTimeout bounds one shared computation (see flight.Do); it
-// guards against a connection acquire that never returns.
-const rosterComputeTimeout = 20 * time.Second
+// computeTimeout bounds one shared computation (see flight.Do); it guards
+// against a connection acquire that never returns.
+const computeTimeout = 20 * time.Second
 
 // WatchStore is the storage the organiser's reads need.
 type WatchStore interface {
@@ -53,7 +56,8 @@ type WatchConfig struct {
 	Marks ViewMarks
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
-	// RosterTTL defaults to RosterCacheTTL.
+	// RosterTTL is the roster and feed cache's lifetime; it defaults to
+	// RosterCacheTTL.
 	RosterTTL time.Duration
 }
 
@@ -68,6 +72,7 @@ type WatchService struct {
 
 	mu      sync.Mutex
 	rosters map[uuid.UUID]cachedRoster
+	feeds   map[string]cachedFeed
 	flight  singleflight.Group
 }
 
@@ -78,7 +83,7 @@ type cachedRoster struct {
 
 func NewWatchService(cfg WatchConfig) *WatchService {
 	s := &WatchService{store: cfg.Store, audit: cfg.Audit, marks: cfg.Marks, now: cfg.Now, rosterTTL: cfg.RosterTTL,
-		rosters: make(map[uuid.UUID]cachedRoster)}
+		rosters: make(map[uuid.UUID]cachedRoster), feeds: make(map[string]cachedFeed)}
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -97,7 +102,7 @@ func (s *WatchService) Roster(ctx context.Context, contest uuid.UUID) (Roster, e
 	if roster, ok := s.cachedRoster(contest, now); ok {
 		return roster, nil
 	}
-	result, err := flight.Do(ctx, &s.flight, "roster:"+contest.String(), rosterComputeTimeout, func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, "roster:"+contest.String(), computeTimeout, func(ctx context.Context) (any, error) {
 		roster, err := s.store.Roster(ctx, contest, MaxRosterRows)
 		if err != nil {
 			return nil, err
@@ -153,8 +158,63 @@ func (s *WatchService) Feed(ctx context.Context, q FeedQuery) (FeedPage, error) 
 		if _, err := s.store.Participant(ctx, q.Contest, q.Registration); err != nil {
 			return FeedPage{}, err
 		}
+		return s.store.Feed(ctx, q)
 	}
-	return s.store.Feed(ctx, q)
+	// Every open monitor polls with the same newest cursor, so the newest
+	// page and the page after it are shared; a Before page or a time range is
+	// one reader walking history and stays uncached.
+	if q.Before != nil || !q.From.IsZero() || !q.Until.IsZero() {
+		return s.store.Feed(ctx, q)
+	}
+	after := ""
+	if q.After != nil {
+		after = q.After.Encode()
+	}
+	key := "feed:" + q.Contest.String() + ":" + strconv.Itoa(q.Limit) + ":" + after + ":" +
+		strings.Join(slices.Compact(slices.Sorted(slices.Values(q.Kinds))), ",")
+	if page, ok := s.cachedFeed(key, s.now()); ok {
+		return page, nil
+	}
+	result, err := flight.Do(ctx, &s.flight, key, computeTimeout, func(ctx context.Context) (any, error) {
+		page, err := s.store.Feed(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		return cachedFeed{page: page, expires: s.now().Add(s.rosterTTL)}, nil
+	})
+	if err != nil {
+		return FeedPage{}, err
+	}
+	entry := result.(cachedFeed)
+	s.storeFeed(key, entry)
+	return entry.page, nil
+}
+
+type cachedFeed struct {
+	page    FeedPage
+	expires time.Time
+}
+
+func (s *WatchService) cachedFeed(key string, now time.Time) (FeedPage, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.feeds[key]
+	if !ok || !now.Before(entry.expires) {
+		return FeedPage{}, false
+	}
+	return entry.page, true
+}
+
+func (s *WatchService) storeFeed(key string, entry cachedFeed) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for k, e := range s.feeds {
+		if !now.Before(e.expires) {
+			delete(s.feeds, k)
+		}
+	}
+	s.feeds[key] = entry
 }
 
 func (s *WatchService) StreamFeed(ctx context.Context, q FeedQuery, yield func(FeedItem) error) error {
