@@ -180,6 +180,8 @@ var usersErrors = errorTable{
 	{err: users.ErrAccountBlocked, status: http.StatusConflict, code: codeAccountBlocked,
 		message: "This account is blocked"},
 	{err: users.ErrTooManyAccounts, status: http.StatusBadRequest, code: codeTooManyAccounts},
+	{err: users.ErrUnknownRole, status: http.StatusBadRequest, code: codeUnknownRole,
+		message: "One of the roles does not exist"},
 	{err: users.ErrRosterTooLarge, status: http.StatusBadRequest, code: codeInvalidRequest},
 	{err: users.ErrInvalidAccount, status: http.StatusBadRequest, code: codeInvalidRequest},
 	// Only changing one's own password can be refused for strength; resets and

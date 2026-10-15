@@ -44,6 +44,8 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 
 	repo := userstest.New()
 	repo.GrantRole("admin", permissions...)
+	repo.GrantRole("student")
+	repo.GrantRole("organizer")
 	admin := repo.Add(users.User{Login: "root", FullName: "Root", Status: users.StatusActive, Roles: []string{"admin"}})
 
 	log := logging.New("error", io.Discard)
@@ -375,6 +377,20 @@ func TestSingleAccountOperationsRefuseADeletedAccount(t *testing.T) {
 				t.Errorf("code = %q, want account_deleted", code)
 			}
 		})
+	}
+}
+
+func TestRolesEndpointAnswersAnUnknownRoleWith400(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Roles: []string{"student"}})
+
+	rec := f.do(http.MethodPut, "/users/"+target.ID.String()+"/roles", `{"roles":["studnet"]}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "unknown_role" {
+		t.Errorf("code = %q, want unknown_role", code)
 	}
 }
 

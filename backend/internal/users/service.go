@@ -110,6 +110,16 @@ type CreateResult struct {
 // Create registers an account with a generated one-time password, which the
 // user must replace at first login.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, error) {
+	roles, err := s.checkRoles(ctx, cmd.Roles)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	cmd.Roles = roles
+	return s.create(ctx, cmd)
+}
+
+// create is Create for roles checkRoles has already passed.
+func (s *Service) create(ctx context.Context, cmd CreateCommand) (CreateResult, error) {
 	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
 	if err := validateAccount(login, fullName, email); err != nil {
 		return CreateResult{}, err
@@ -345,6 +355,10 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 }
 
 func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, roleCodes []string) error {
+	roleCodes, err := s.checkRoles(ctx, roleCodes)
+	if err != nil {
+		return err
+	}
 	user, err := s.repo.ByID(ctx, userID)
 	if err != nil {
 		return err
@@ -426,6 +440,35 @@ func validateAccount(login, fullName, email string) error {
 		return fmt.Errorf("%w: %q is not an email address", ErrInvalidAccount, email)
 	}
 	return nil
+}
+
+// checkRoles returns the codes without repeats, refusing more than
+// MaxRolesPerAccount of them or one the role catalog does not hold.
+func (s *Service) checkRoles(ctx context.Context, codes []string) ([]string, error) {
+	if len(codes) == 0 {
+		return codes, nil
+	}
+	distinct := make([]string, 0, min(len(codes), MaxRolesPerAccount))
+	for _, code := range codes {
+		if slices.Contains(distinct, code) {
+			continue
+		}
+		if len(distinct) == MaxRolesPerAccount {
+			return nil, fmt.Errorf("%w: at most %d roles", ErrInvalidAccount, MaxRolesPerAccount)
+		}
+		distinct = append(distinct, code)
+	}
+
+	catalogue, err := s.repo.Roles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	for _, code := range distinct {
+		if !slices.ContainsFunc(catalogue, func(r Role) bool { return r.Code == code }) {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownRole, code)
+		}
+	}
+	return distinct, nil
 }
 
 func validateReason(reason string) (string, error) {
@@ -568,14 +611,21 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 			ErrRosterTooLarge, len(cmd.Rows), maxImportRows)
 	}
 
+	// Checked once for the whole roster: a bad role is the request's fault,
+	// not any row's.
+	roles, err := s.checkRoles(ctx, cmd.Roles)
+	if err != nil {
+		return ImportResult{}, err
+	}
+
 	var result ImportResult
 	for i, row := range cmd.Rows {
-		created, err := s.Create(ctx, CreateCommand{
+		created, err := s.create(ctx, CreateCommand{
 			ActorID:  cmd.ActorID,
 			Login:    row.Login,
 			Email:    row.Email,
 			FullName: row.FullName,
-			Roles:    cmd.Roles,
+			Roles:    roles,
 		})
 		switch {
 		case err == nil:
