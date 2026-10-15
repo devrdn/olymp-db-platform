@@ -137,7 +137,7 @@ func NewAuditTrail(pool *pgxpool.Pool) *AuditTrail {
 }
 
 // auditListWhere is AuditTrail.List's filter as $1 to $6. It names only
-// audit_log columns, so the count past the end needs no joins.
+// audit_log columns, so the count needs no joins.
 const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 		  AND ($2 = '' OR a.action = $2)
 		  AND ($3 = '' OR a.entity = $3)
@@ -146,9 +146,10 @@ const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 		  AND ($6::timestamptz IS NULL OR a.created_at < $6)`
 
 // List returns a page of the trail, newest first, and the total matching.
-// The total rides on the page's rows, so only a page past the end counts it
-// separately. The actor join is LEFT: system events have no actor, and a
-// deleted account's entries remain.
+// The total is a separate count without the joins, skipped when the page
+// itself shows where the matches end: it is short, and it either holds rows or
+// starts at the first match. The actor join is LEFT: system events have no
+// actor, and a deleted account's entries remain.
 func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, int, error) {
 	// A filter no stored text can equal matches nothing; sending it would
 	// fail the statement.
@@ -166,8 +167,7 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 		       -- not a gap to fill: the trail outlives what it describes.
 		       COALESCE(subject.login, contest_title.title, ''),
 		       COALESCE(a.payload, '{}'::jsonb), COALESCE(host(a.ip), ''),
-		       COALESCE(a.user_agent, ''), a.created_at,
-		       COUNT(*) OVER() AS total
+		       COALESCE(a.user_agent, ''), a.created_at
 		FROM audit_log a
 		LEFT JOIN users u ON u.id = a.actor_id
 		-- Compared as text in both directions: entity_id is a text column and
@@ -198,10 +198,7 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 	}
 	defer rows.Close()
 
-	var (
-		found []audit.Record
-		total int
-	)
+	var found []audit.Record
 	for rows.Next() {
 		var (
 			record  audit.Record
@@ -209,7 +206,7 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 		)
 		if err := rows.Scan(&record.ID, &record.ActorID, &record.ActorLogin, &record.Action,
 			&record.Entity, &record.EntityID, &record.EntityLabel, &payload, &record.IP,
-			&record.UserAgent, &record.CreatedAt, &total); err != nil {
+			&record.UserAgent, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan audit entry: %w", err)
 		}
 		if err := json.Unmarshal(payload, &record.Payload); err != nil {
@@ -220,11 +217,13 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("read audit trail: %w", err)
 	}
-	if len(found) == 0 && f.Offset > 0 {
-		if err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx,
-			`SELECT COUNT(*) FROM audit_log a `+auditListWhere, args...).Scan(&total); err != nil {
-			return nil, 0, fmt.Errorf("count audit trail: %w", err)
-		}
+	if len(found) < f.Limit && (len(found) > 0 || f.Offset == 0) {
+		return found, f.Offset + len(found), nil
+	}
+	var total int
+	if err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_log a `+auditListWhere, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count audit trail: %w", err)
 	}
 	return found, total, nil
 }
