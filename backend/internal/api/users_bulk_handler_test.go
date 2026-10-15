@@ -112,6 +112,21 @@ func TestBulkRolesEndpointReplacesTheSet(t *testing.T) {
 	}
 }
 
+func TestBulkRolesEndpointAnswersAnUnknownRoleWith400(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Roles: []string{"student"}})
+
+	rec := f.do(http.MethodPost, "/users/bulk/roles",
+		`{"ids":["`+target.ID.String()+`"],"roles":["studnet"]}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "unknown_role" {
+		t.Errorf("code = %q, want unknown_role", code)
+	}
+}
+
 // TestBulkPasswordResetIssuesADistinctPasswordPerAccount: a shared password is
 // a shared account.
 func TestBulkPasswordResetIssuesADistinctPasswordPerAccount(t *testing.T) {

@@ -429,6 +429,7 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 	if _, err := q.Exec(ctx, `DELETE FROM user_roles WHERE user_id = $1`, id); err != nil {
 		return fmt.Errorf("clear roles: %w", err)
 	}
+	roleCodes = distinctRoleCodes(roleCodes)
 	if len(roleCodes) == 0 {
 		return nil
 	}
@@ -441,8 +442,8 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 		return fmt.Errorf("assign roles: %w", err)
 	}
 	if int(tag.RowsAffected()) != len(roleCodes) {
-		return fmt.Errorf("assign roles: %d of %d codes are not known roles",
-			len(roleCodes)-int(tag.RowsAffected()), len(roleCodes))
+		return fmt.Errorf("assign roles: %w: %d of %d codes are not known roles",
+			users.ErrUnknownRole, len(roleCodes)-int(tag.RowsAffected()), len(roleCodes))
 	}
 	return nil
 }
@@ -458,7 +459,6 @@ func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes
 	if _, err := q.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ANY($1)`, ids); err != nil {
 		return fmt.Errorf("clear roles: %w", err)
 	}
-	// A repeated code would otherwise be reported as unknown by the row count.
 	roleCodes = distinctRoleCodes(roleCodes)
 	if len(roleCodes) == 0 {
 		return nil
@@ -481,8 +481,8 @@ func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes
 		if len(ids) > 0 {
 			matched = int(tag.RowsAffected()) / len(ids)
 		}
-		return fmt.Errorf("assign roles: %d of %d codes are not known roles",
-			len(roleCodes)-matched, len(roleCodes))
+		return fmt.Errorf("assign roles: %w: %d of %d codes are not known roles",
+			users.ErrUnknownRole, len(roleCodes)-matched, len(roleCodes))
 	}
 	return nil
 }

@@ -245,6 +245,10 @@ func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids [
 	if err := boundSelection(ids); err != nil {
 		return BulkResult{}, err
 	}
+	roleCodes, err := s.checkRoles(ctx, roleCodes)
+	if err != nil {
+		return BulkResult{}, err
+	}
 	budget := s.newAdminBudget(ctx)
 	keepsAdmin := slices.Contains(roleCodes, RoleAdmin)
 

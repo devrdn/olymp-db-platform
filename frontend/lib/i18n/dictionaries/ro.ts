@@ -1779,6 +1779,7 @@ const ro = {
     account_deleted: "Acest cont este șters.",
     reason_required: "Indicați un motiv.",
     too_many_accounts: "Sunt mai multe conturi decât poate procesa o singură operațiune. Restrângeți selecția.",
+    unknown_role: "Unul dintre roluri nu există. Reîncărcați pagina și alegeți din nou.",
     owner_immutable: "Proprietarul olimpiadei nu poate fi retras.",
     address_not_allowed: "Accesul este permis doar din rețeaua universității.",
     staff_cannot_participate: "Acest cont face deja parte din echipa olimpiadei, așa că nu se poate înscrie și ca participant.",

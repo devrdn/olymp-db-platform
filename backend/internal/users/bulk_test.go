@@ -451,7 +451,7 @@ func TestBulkReplaceRolesNeverSpendsTheBudgetWhenTheNewRolesKeepAdmin(t *testing
 	sole := f.createAdmin(t, "sole-admin")
 
 	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
-		[]uuid.UUID{sole.ID}, []string{users.RoleAdmin, "instructor"})
+		[]uuid.UUID{sole.ID}, []string{users.RoleAdmin, "organizer"})
 	if err != nil {
 		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
 	}
@@ -548,6 +548,21 @@ func TestBulkReplaceRolesOpensNoTransactionWhenNothingSurvives(t *testing.T) {
 	}
 	if f.uow.Calls != before {
 		t.Errorf("uow.Calls = %d, want %d: nothing survived classify, so no transaction should have opened", f.uow.Calls, before)
+	}
+}
+
+func TestBulkReplaceRolesRefusesAnUnknownRole(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	before := f.uow.Calls
+
+	_, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID, []uuid.UUID{target.ID}, []string{"studnet"})
+
+	if !errors.Is(err, users.ErrUnknownRole) {
+		t.Fatalf("BulkReplaceRoles() = %v, want ErrUnknownRole", err)
+	}
+	if f.uow.Calls != before {
+		t.Error("a refused role change opened a transaction")
 	}
 }
 

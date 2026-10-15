@@ -258,6 +258,8 @@ var (
 		"Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later.")
 	codeTooManyAccounts = httpx.NewCode("too_many_accounts",
 		"More accounts were selected than one operation carries. The message says the limit.")
+	codeUnknownRole = httpx.NewCode("unknown_role",
+		"A role code is not one of the installation's roles. The message names the code.")
 	codeAccountDeleted = httpx.NewCode("account_deleted",
 		"The operation assumes the account can still be reached — a profile edit, a password reset, a role change — and this one is deleted.")
 

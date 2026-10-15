@@ -626,6 +626,10 @@
       "meaning": "There is no valid session. Sign in and retry."
     },
     {
+      "code": "unknown_role",
+      "meaning": "A role code is not one of the installation's roles. The message names the code."
+    },
+    {
       "code": "user_not_found",
       "meaning": "No account with that identifier or login exists."
     },

@@ -34,6 +34,10 @@ const (
 // (CLAUDE.md rule 2).
 const MaxStatusReasonLength = 500
 
+// MaxRolesPerAccount bounds the role codes one request carries (CLAUDE.md
+// rule 2), well above the installation's roles.
+const MaxRolesPerAccount = 16
+
 var (
 	ErrNotFound = errors.New("user not found")
 	// ErrInvalidAccount reports an empty login or name, a field over its
@@ -59,6 +63,8 @@ var (
 	// have to sign in to use, such as a contest staff role. Distinct from
 	// auth.ErrAccountBlocked, which answers the account's own sign-in.
 	ErrAccountBlocked = errors.New("this account is blocked")
+	// ErrUnknownRole names a role code the role catalog does not hold.
+	ErrUnknownRole = errors.New("unknown role")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -69,7 +75,7 @@ func Errors() []error {
 		ErrNotFound, ErrInvalidAccount, ErrLoginTaken, ErrEmailTaken,
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
-		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts,
+		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole,
 	}
 }
 
@@ -146,6 +152,8 @@ type Repository interface {
 	BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64, error)
 	BumpSessionGenerationMany(ctx context.Context, ids []uuid.UUID) error
 	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
+	// Roles lists the installation's global roles.
+	Roles(ctx context.Context) ([]Role, error)
 	ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error
 	ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error
 	// TakenAmong returns the deleted accounts whose login or email a live

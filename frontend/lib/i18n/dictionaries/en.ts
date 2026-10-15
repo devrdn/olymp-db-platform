@@ -1976,6 +1976,7 @@ const en = {
     account_deleted: "This account is deleted.",
     reason_required: "Enter a reason.",
     too_many_accounts: "That is more accounts than one operation can take. Narrow the selection.",
+    unknown_role: "One of the roles does not exist. Reload the page and choose again.",
     owner_immutable: "A contest owner cannot be removed.",
     address_not_allowed: "Access is allowed only from the university network.",
     staff_cannot_participate: "This account already staffs the contest, so it cannot also register as a participant.",

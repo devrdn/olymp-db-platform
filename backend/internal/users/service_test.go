@@ -57,6 +57,9 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	repo := userstest.New()
+	for _, role := range []string{"student", "organizer", users.RoleAdmin} {
+		repo.GrantRole(role)
+	}
 	sink := &collectingSink{}
 	uow := &userstest.SpyUnitOfWork{}
 	return &fixture{
@@ -508,6 +511,85 @@ func TestReplaceRolesRetiresSessionsSoNewLimitsApplyAtOnce(t *testing.T) {
 	after, _ := f.repo.Get(user.ID)
 	if after.SessionGeneration <= before.SessionGeneration {
 		t.Error("the session generation was not advanced after a role change")
+	}
+}
+
+func TestReplaceRolesStoresARepeatedCodeOnce(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "some password")
+
+	if err := f.service.ReplaceRoles(context.Background(), f.actor, user.ID,
+		[]string{"student", "organizer", "student"}); err != nil {
+		t.Fatalf("ReplaceRoles() returned error: %v", err)
+	}
+
+	stored, _ := f.repo.Get(user.ID)
+	if !slices.Equal(stored.Roles, []string{"student", "organizer"}) {
+		t.Errorf("roles = %v, want [student organizer]", stored.Roles)
+	}
+}
+
+func TestReplaceRolesRefusesAnUnknownRole(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "some password")
+
+	err := f.service.ReplaceRoles(context.Background(), f.actor, user.ID, []string{"student", "studnet"})
+
+	if !errors.Is(err, users.ErrUnknownRole) {
+		t.Fatalf("ReplaceRoles() = %v, want ErrUnknownRole", err)
+	}
+	if !strings.Contains(err.Error(), "studnet") {
+		t.Errorf("err = %q, want it to name the unknown code", err)
+	}
+	if f.uow.Calls != 0 {
+		t.Error("a refused role change opened a transaction")
+	}
+}
+
+func TestReplaceRolesRefusesMoreRolesThanTheBound(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "some password")
+	codes := make([]string, users.MaxRolesPerAccount+1)
+	for i := range codes {
+		codes[i] = fmt.Sprintf("role-%d", i)
+	}
+
+	err := f.service.ReplaceRoles(context.Background(), f.actor, user.ID, codes)
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("ReplaceRoles() = %v, want ErrInvalidAccount", err)
+	}
+}
+
+func TestCreateRefusesAnUnknownRoleBeforeStoringAnything(t *testing.T) {
+	f := newFixture(t)
+
+	_, err := f.service.Create(context.Background(), users.CreateCommand{
+		ActorID: f.actor, Login: "petrov", FullName: "Pyotr Petrov", Roles: []string{"studnet"},
+	})
+
+	if !errors.Is(err, users.ErrUnknownRole) {
+		t.Fatalf("Create() = %v, want ErrUnknownRole", err)
+	}
+	if _, err := f.repo.ByLogin(context.Background(), "petrov"); !errors.Is(err, users.ErrNotFound) {
+		t.Error("a refused account was stored")
+	}
+}
+
+func TestImportRefusesAnUnknownRoleForTheWholeRoster(t *testing.T) {
+	f := newFixture(t)
+
+	res, err := f.service.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows:    []users.ImportRow{{Login: "petrov", FullName: "Pyotr Petrov"}},
+		Roles:   []string{"studnet"},
+	})
+
+	if !errors.Is(err, users.ErrUnknownRole) {
+		t.Fatalf("Import() = %v, want ErrUnknownRole", err)
+	}
+	if len(res.Created) != 0 || len(res.Skipped) != 0 {
+		t.Errorf("result = %+v, want nothing created or skipped", res)
 	}
 }
 
@@ -1173,6 +1255,7 @@ type accessFixture struct {
 func newAccessFixture(t *testing.T) *accessFixture {
 	t.Helper()
 	repo := userstest.New()
+	repo.GrantRole("student")
 	uow := &trackingUnitOfWork{}
 	access := &recordingAccessCache{uow: uow}
 	service := users.NewService(repo, audit.New(&collectingSink{}), uow, passwordtest.NewHasher()).

@@ -588,8 +588,11 @@ func TestReplaceRolesManyReportsAnUnknownCode(t *testing.T) {
 		if err == nil {
 			t.Fatal("ReplaceRolesMany() with a typo'd code succeeded")
 		}
-		if got := err.Error(); got != "assign roles: 1 of 2 codes are not known roles" {
-			t.Errorf("err = %q, want it to name exactly one unknown code of two", got)
+		if !errors.Is(err, users.ErrUnknownRole) {
+			t.Errorf("err = %v, want users.ErrUnknownRole", err)
+		}
+		if !strings.Contains(err.Error(), "1 of 2 codes") {
+			t.Errorf("err = %q, want it to name exactly one unknown code of two", err)
 		}
 	})
 }
