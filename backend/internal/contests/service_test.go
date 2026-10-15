@@ -1053,6 +1053,22 @@ func TestAStatusChangeRecordsItTheSameWayAsEverythingElse(t *testing.T) {
 	}
 }
 
+func TestTitlesPastTheirBoundAreRefusedBeforeAnythingIsWritten(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	before := len(f.Audit.Entries)
+
+	err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID,
+		[]contests.Translation{{Lang: "en", Title: strings.Repeat("a", 201)}})
+
+	if !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("SetTranslations() = %v, want ErrInvalidContest", err)
+	}
+	if len(f.Audit.Entries) != before {
+		t.Error("a refused change was audited")
+	}
+}
+
 func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
 	// The trail is not a version history for authored text.
 	f := conteststest.NewFixture()

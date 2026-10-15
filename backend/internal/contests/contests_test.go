@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -383,6 +384,57 @@ func TestValidateAcceptsAnICPCPenaltyAtItsBounds(t *testing.T) {
 
 // Written against the lifecycle, not a list: a new status must decide here
 // whether a stranger sees it.
+func allowedNetworks(n int) []netip.Prefix {
+	prefixes := make([]netip.Prefix, n)
+	for i := range prefixes {
+		prefixes[i] = netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+	}
+	return prefixes
+}
+
+// CLAUDE.md rule 2: AllowsAddress walks the whole list on every request.
+func TestValidateRejectsMoreAllowedNetworksThanTheBound(t *testing.T) {
+	c := validContest()
+	c.AllowedCIDRs = allowedNetworks(257)
+
+	if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidContest", err)
+	}
+}
+
+func TestValidateAcceptsAllowedNetworksAtTheBound(t *testing.T) {
+	c := validContest()
+	c.AllowedCIDRs = allowedNetworks(256)
+
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestTranslationBoundsTitleAndDescriptionInCharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		tr   contests.Translation
+		ok   bool
+	}{
+		{"title at the bound", contests.Translation{Title: strings.Repeat("ж", 200)}, true},
+		{"title past the bound", contests.Translation{Title: strings.Repeat("ж", 201)}, false},
+		{"description at the bound", contests.Translation{Description: strings.Repeat("ж", 10_000)}, true},
+		{"description past the bound", contests.Translation{Description: strings.Repeat("ж", 10_001)}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.tr.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, contests.ErrInvalidContest) {
+				t.Errorf("Validate() = %v, want contests.ErrInvalidContest", err)
+			}
+		})
+	}
+}
+
 func TestOnlyADraftIsKeptFromAStranger(t *testing.T) {
 	all := []string{
 		contests.StatusDraft,

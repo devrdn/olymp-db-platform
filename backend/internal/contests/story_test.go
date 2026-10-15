@@ -3,6 +3,7 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -79,5 +80,34 @@ func TestAContestWithoutAStoryReportsThatPlainly(t *testing.T) {
 
 	if _, err := f.Service.Story(context.Background(), c.ID); !errors.Is(err, contests.ErrStoryNotFound) {
 		t.Errorf("Story() = %v, want ErrStoryNotFound", err)
+	}
+}
+
+// CLAUDE.md rule 2, counted in characters so every language gets the same room.
+func TestStoryIsBoundedPerLanguage(t *testing.T) {
+	cases := []struct {
+		name  string
+		runes int
+		ok    bool
+	}{
+		{"at the bound", 200_000, true},
+		{"past the bound", 200_001, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := f.SeedContest(contests.StatusDraft)
+
+			_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, map[string]string{
+				"en": "A body in the stacks.",
+				"ro": strings.Repeat("ș", tc.runes),
+			})
+			if tc.ok && err != nil {
+				t.Errorf("SetStory() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, contests.ErrInvalidContest) {
+				t.Errorf("SetStory() = %v, want ErrInvalidContest", err)
+			}
+		})
 	}
 }

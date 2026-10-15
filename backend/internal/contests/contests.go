@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -114,6 +115,16 @@ const maxDurationMin = 7 * 24 * 60
 // days, well inside what provisioning.Service.Reclaim's make_interval handles.
 const maxGracePeriodMin = 90 * 24 * 60
 
+// Bounds on a contest's authored text and network list (CLAUDE.md rule 2).
+// Text is counted in characters, so Cyrillic gets the same room as Latin.
+const (
+	maxTitleRunes       = 200
+	maxDescriptionRunes = 10_000
+	// maxAllowedCIDRs also bounds the walk AllowsAddress makes on every
+	// participant request.
+	maxAllowedCIDRs = 256
+)
+
 // Errors the domain reports; the HTTP layer maps each to a status code.
 var (
 	ErrNotFound          = errors.New("contest not found")
@@ -197,6 +208,17 @@ type Translation struct {
 	Lang        string
 	Title       string
 	Description string
+}
+
+// Validate checks the bounds on one language's title and description.
+func (t Translation) Validate() error {
+	if utf8.RuneCountInString(t.Title) > maxTitleRunes {
+		return fmt.Errorf("%w: a title is at most %d characters", ErrInvalidContest, maxTitleRunes)
+	}
+	if utf8.RuneCountInString(t.Description) > maxDescriptionRunes {
+		return fmt.Errorf("%w: a description is at most %d characters", ErrInvalidContest, maxDescriptionRunes)
+	}
+	return nil
 }
 
 // allowedTransitions maps a status to the ones reachable from it. Published →
@@ -350,6 +372,9 @@ func (c Contest) Validate() error {
 		return fmt.Errorf("%w: unknown timing %q", ErrInvalidContest, c.Timing)
 	}
 
+	if len(c.AllowedCIDRs) > maxAllowedCIDRs {
+		return fmt.Errorf("%w: at most %d allowed networks", ErrInvalidContest, maxAllowedCIDRs)
+	}
 	if c.StartsAt != nil && c.EndsAt != nil && !c.StartsAt.Before(*c.EndsAt) {
 		return fmt.Errorf("%w: the contest must end after it starts", ErrInvalidContest)
 	}

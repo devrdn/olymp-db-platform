@@ -90,6 +90,90 @@ func TestNonChoiceQuestionMustNotCarryOptions(t *testing.T) {
 	}
 }
 
+// A participant submits the identifier as an answer, which carries the same bound.
+func TestChoiceQuestionBoundsItsOptionIdentifiers(t *testing.T) {
+	atBound := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", strings.Repeat("b", 1000)}}
+	if err := atBound.Validate(); err != nil {
+		t.Errorf("Validate() at the bound = %v, want nil", err)
+	}
+
+	past := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", strings.Repeat("b", 1001)}}
+	if err := past.Validate(); !errors.Is(err, contests.ErrInvalidQuestion) {
+		t.Errorf("Validate() past the bound = %v, want contests.ErrInvalidQuestion", err)
+	}
+}
+
+func labels(n int) map[string]string {
+	out := make(map[string]string, n)
+	for i := range n {
+		out[fmt.Sprint(i)] = "suspect"
+	}
+	return out
+}
+
+// CLAUDE.md rule 2, counted in characters so every language gets the same room.
+func TestQuestionTextIsBounded(t *testing.T) {
+	cases := []struct {
+		name string
+		text contests.QuestionText
+		ok   bool
+	}{
+		{"body at the bound", contests.QuestionText{BodyMD: strings.Repeat("ж", 20_000)}, true},
+		{"body past the bound", contests.QuestionText{BodyMD: strings.Repeat("ж", 20_001)}, false},
+		{"label at the bound", contests.QuestionText{Choices: map[string]string{"a": strings.Repeat("ж", 1000)}}, true},
+		{"label past the bound", contests.QuestionText{Choices: map[string]string{"a": strings.Repeat("ж", 1001)}}, false},
+		{"as many labels as options", contests.QuestionText{Choices: labels(50)}, true},
+		{"more labels than options", contests.QuestionText{Choices: labels(51)}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.text.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, contests.ErrInvalidQuestion) {
+				t.Errorf("Validate() = %v, want contests.ErrInvalidQuestion", err)
+			}
+		})
+	}
+}
+
+func TestEveryPathThatWritesQuestionTextChecksItsBound(t *testing.T) {
+	overlong := map[string]contests.QuestionText{"en": {BodyMD: strings.Repeat("a", 20_001)}}
+	paths := map[string]func(*conteststest.Fixture, uuid.UUID, uuid.UUID) error{
+		"AddQuestion": func(f *conteststest.Fixture, contestID, _ uuid.UUID) error {
+			cmd := questionCmd(contestID)
+			cmd.Texts = overlong
+			_, err := f.Service.AddQuestion(context.Background(), cmd)
+			return err
+		},
+		"SaveQuestion": func(f *conteststest.Fixture, contestID, questionID uuid.UUID) error {
+			_, err := f.Service.SaveQuestion(context.Background(), contests.SaveQuestionCommand{
+				ActorID: uuid.New(), ContestID: contestID, QuestionID: questionID,
+				Kind: contests.KindText, Points: 5, Texts: overlong,
+			})
+			return err
+		},
+		"SetQuestionTexts": func(f *conteststest.Fixture, contestID, questionID uuid.UUID) error {
+			return f.Service.SetQuestionTexts(context.Background(), uuid.New(), contestID, questionID, overlong)
+		},
+	}
+	for name, write := range paths {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := f.SeedContest(contests.StatusDraft)
+			q, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
+			if err != nil {
+				t.Fatalf("AddQuestion() = %v", err)
+			}
+
+			if err := write(f, c.ID, q.ID); !errors.Is(err, contests.ErrInvalidQuestion) {
+				t.Errorf("%s() = %v, want ErrInvalidQuestion", name, err)
+			}
+		})
+	}
+}
+
 func TestChoiceQuestionKnowsItsOwnOptions(t *testing.T) {
 	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "b"}}
 
