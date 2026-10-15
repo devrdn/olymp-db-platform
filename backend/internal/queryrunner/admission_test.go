@@ -113,6 +113,43 @@ func TestWithRoomInTheQueueANewcomerWaitsAndSucceeds(t *testing.T) {
 	wg.Wait()
 }
 
+// A queued query must not wait as long as the caller is willing to.
+func TestAQueuedQueryStopsWaitingAtTheQueueWait(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.Concurrent = 1
+	limits.QueueDepth = 4
+	limits.QueueWait = 200 * time.Millisecond
+	limits.Deadline = 3 * time.Second
+	runner, database := slowRunner(t, limits)
+
+	holding := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		close(holding)
+		_, _ = runner.Run(t.Context(), other("holder", database, `SELECT pg_sleep(2)`))
+	}()
+
+	<-holding
+	time.Sleep(300 * time.Millisecond)
+
+	started := time.Now()
+	_, err := runner.Run(t.Context(), other("newcomer", database, `SELECT 1`))
+	waited := time.Since(started)
+
+	if !errors.Is(err, queryrunner.ErrTimeout) {
+		t.Fatalf("error = %v, want ErrTimeout", err)
+	}
+	// The holder sleeps two seconds; returning well before proves the wait
+	// was cut, not served.
+	if waited > time.Second {
+		t.Fatalf("waited %s for a slot, past the queue wait of %s", waited, limits.QueueWait)
+	}
+
+	wg.Wait()
+}
+
 func TestASlotIsReturnedWhateverHappened(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Concurrent = 1

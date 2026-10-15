@@ -72,11 +72,17 @@ type Limits struct {
 	// request is refused rather than queued indefinitely.
 	Concurrent int
 	QueueDepth int
+	// QueueWait bounds how long a queued query waits for a slot before it is
+	// answered ErrTimeout.
+	QueueWait time.Duration
 	// PerMinute bounds how often one participant may ask. Zero means no limit.
 	PerMinute int
 	// IdleTimeout is how long a finished read's connection is kept for that
 	// database's next read. Zero keeps none.
 	IdleTimeout time.Duration
+	// IdleConns is how many such connections are kept at once, beyond the
+	// Concurrent running ones. Zero keeps none.
+	IdleConns int
 }
 
 // DefaultLimits are the architecture's figures (sections 4.3 and 5).
@@ -90,11 +96,13 @@ func DefaultLimits() Limits {
 		MaxBytes:   5 << 20,
 		Concurrent: 8,
 		QueueDepth: 32,
+		QueueWait:  15 * time.Second,
 		PerMinute:  30,
 		// Spans reading one answer and editing the next query, and is short
 		// enough that the reclaim sweep's plain DROP DATABASE finds a
 		// finished contest's databases already released.
 		IdleTimeout: 30 * time.Second,
+		IdleConns:   32,
 	}
 }
 
@@ -131,8 +139,7 @@ type Runner struct {
 // New assembles a runner.
 func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 	return &Runner{
-		// Idle connections count against QUERY_CONCURRENT too (see pool).
-		conns:   newPool(cluster.connect, limits.Concurrent, limits.IdleTimeout),
+		conns:   newPool(cluster.connect, limits.Concurrent, limits.IdleConns, limits.IdleTimeout),
 		checker: checker,
 		limits:  limits,
 		gate:    newGate(limits.Concurrent, limits.QueueDepth),
@@ -166,7 +173,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	release, err := r.gate.enter(ctx, participant)
+	// Without a bound of its own the wait lasts as long as the caller does,
+	// holding its connection, stream and journal row. The deadline covers
+	// only the wait, never the execution.
+	waiting, stopWaiting := context.WithTimeout(ctx, r.limits.QueueWait)
+	release, err := r.gate.enter(waiting, participant)
+	stopWaiting()
 	if err != nil {
 		return nil, err
 	}

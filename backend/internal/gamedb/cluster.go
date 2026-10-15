@@ -38,10 +38,11 @@ const (
 // the script.
 const RoleAuthor = "game_author"
 
-// connectionLimit is a backstop under the Query Runner's semaphore: high
-// enough not to shape normal load, low enough that a broken runner cannot
-// exhaust the cluster's connections.
-const connectionLimit = 60
+// RoleConnectionLimit is the participant roles' CONNECTION LIMIT, a backstop
+// under the Query Runner's semaphore: high enough not to shape normal load,
+// low enough that a broken runner cannot exhaust the cluster's connections.
+// The runner's running and idle connections together must fit within it.
+const RoleConnectionLimit = 60
 
 // authorConnectionLimit is how many game scripts may run at once. Each session
 // runs arbitrary SQL and can allocate up to the per-process memory cap, so it
@@ -145,8 +146,8 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 		[2]string{"default_transaction_read_only", "on"})
 
 	for _, role := range []roleSpec{
-		{RoleReader, roles.ReaderPassword, connectionLimit, readerDefaults},
-		{RoleWriter, roles.WriterPassword, connectionLimit, sessionDefaults},
+		{RoleReader, roles.ReaderPassword, RoleConnectionLimit, readerDefaults},
+		{RoleWriter, roles.WriterPassword, RoleConnectionLimit, sessionDefaults},
 		{RoleAuthor, roles.AuthorPassword, authorConnectionLimit, authorDefaults},
 	} {
 		if err := prepareRole(ctx, conn, role); err != nil {

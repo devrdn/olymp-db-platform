@@ -111,6 +111,57 @@ func TestTheIdleConnectionTimeoutHasADefaultAndBounds(t *testing.T) {
 	}
 }
 
+func TestTheQueueWaitHasADefaultAndMustBePositive(t *testing.T) {
+	setRunnerRequired(t)
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.QueueWait != 15*time.Second {
+		t.Fatalf("queue wait = %s, want 15s by default", cfg.QueueWait)
+	}
+
+	for value, accepted := range map[string]bool{
+		"1s":  true,
+		"0s":  false,
+		"-1s": false,
+		"ten": false,
+	} {
+		t.Run(value, func(t *testing.T) {
+			setRunnerRequired(t)
+			t.Setenv("QUERY_QUEUE_WAIT", value)
+			cfg, err := LoadRunner()
+			if accepted && err != nil {
+				t.Fatalf("QUERY_QUEUE_WAIT=%s was refused: %v", value, err)
+			}
+			if !accepted && err == nil {
+				t.Fatalf("QUERY_QUEUE_WAIT=%s was accepted as %s", value, cfg.QueueWait)
+			}
+		})
+	}
+}
+
+func TestAnUnsetIdleConnectionBudgetIsLeftToTheCompositionRoot(t *testing.T) {
+	setRunnerRequired(t)
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.IdleConns >= 0 {
+		t.Fatalf("idle connections = %d with QUERY_IDLE_CONNS unset, want negative", cfg.IdleConns)
+	}
+
+	t.Setenv("QUERY_IDLE_CONNS", "0")
+	if cfg, err = LoadRunner(); err != nil || cfg.IdleConns != 0 {
+		t.Fatalf("QUERY_IDLE_CONNS=0: %d, %v; want a runner that keeps none", cfg.IdleConns, err)
+	}
+
+	t.Setenv("QUERY_IDLE_CONNS", "-1")
+	if _, err := LoadRunner(); err == nil {
+		t.Fatal("a negative idle connection budget was accepted")
+	}
+}
+
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	// Stated here so the test fails if the constants drift.
 	const cap = int64(DefaultProcessMemoryBytes)

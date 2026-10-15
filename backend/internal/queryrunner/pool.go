@@ -21,8 +21,8 @@ type session struct {
 	reused bool
 }
 
-// errPoolExhausted is the pool at its bound with nothing idle to close. The
-// gate should make this unreachable; it is refused rather than exceeded,
+// errPoolExhausted is the pool lending every connection it may. The gate
+// should make this unreachable; it is refused rather than exceeded,
 // because the game cluster's memory is sized for the bound.
 var errPoolExhausted = fmt.Errorf("%w: every game-database connection the runner may hold is in use", ErrBusy)
 
@@ -34,10 +34,11 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 //
 // It keeps at most one idle connection per database, closed after idleTimeout:
 // an instance database has CONNECTION LIMIT 2, the second slot being headroom
-// for a backend still exiting. It holds at most capacity (QUERY_CONCURRENT)
-// connections in all, idle included, because the game cluster's memory is
-// sized for that many backends; at the bound a new connection first closes the
-// least recently used idle one.
+// for a backend still exiting. It lends at most capacity (QUERY_CONCURRENT)
+// connections, because the game cluster's memory is sized for that many
+// running backends, and keeps at most maxIdle idle ones on top, since a
+// separate budget is what lets a connection survive until its participant's
+// next query. Past maxIdle the least recently kept one is closed.
 //
 // Only a read that finished cleanly is kept, after DISCARD ALL. A write, a
 // failure, or an abandoned query closes its connection: a reset is not trusted
@@ -53,10 +54,11 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 type pool struct {
 	dial        dialer
 	capacity    int
+	maxIdle     int
 	idleTimeout time.Duration
 
 	mu     sync.Mutex
-	open   int // connections dialled and not yet closed, idle or lent
+	lent   int
 	idle   map[string]*idleConn
 	closed bool
 }
@@ -75,10 +77,11 @@ const closeTimeout = 5 * time.Second
 // means the connection is not kept.
 const resetTimeout = 2 * time.Second
 
-func newPool(dial dialer, capacity int, idleTimeout time.Duration) *pool {
+func newPool(dial dialer, capacity, maxIdle int, idleTimeout time.Duration) *pool {
 	return &pool{
 		dial:        dial,
 		capacity:    capacity,
+		maxIdle:     maxIdle,
 		idleTimeout: idleTimeout,
 		idle:        make(map[string]*idleConn),
 	}
@@ -88,6 +91,11 @@ func newPool(dial dialer, capacity int, idleTimeout time.Duration) *pool {
 // when it is a read and one is kept, a new one otherwise.
 func (p *pool) acquire(ctx context.Context, database string, write bool, readBudget int64) (*session, error) {
 	p.mu.Lock()
+	if p.lent >= p.capacity {
+		p.mu.Unlock()
+		return nil, errPoolExhausted
+	}
+	p.lent++
 	kept, ok := p.idle[database]
 	if ok && !write {
 		delete(p.idle, database)
@@ -97,33 +105,22 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 		kept.session.reused = true
 		return kept.session, nil
 	}
-
-	// An evicted idle connection is closed before dialling, and its place in
-	// open passes to the new one.
-	var evicted *session
-	switch {
-	case ok: // a write, with a read connection kept for the same database
+	// A write closes the read connection kept for its database before
+	// dialling, to stay within the database's connection limit.
+	if ok {
 		delete(p.idle, database)
 		kept.timer.Stop()
-		evicted = kept.session
-	case p.open >= p.capacity:
-		if evicted = p.oldestIdleLocked(); evicted == nil {
-			p.mu.Unlock()
-			return nil, errPoolExhausted
-		}
-	default:
-		p.open++
 	}
 	p.mu.Unlock()
 
-	if evicted != nil {
-		closeConn(ctx, evicted.conn)
+	if ok {
+		closeConn(ctx, kept.session.conn)
 	}
 
 	conn, meter, err := p.dial(ctx, database, write, readBudget)
 	if err != nil {
 		p.mu.Lock()
-		p.open--
+		p.lent--
 		p.mu.Unlock()
 		return nil, err
 	}
@@ -131,7 +128,7 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 }
 
 // oldestIdleLocked removes and returns the least recently kept idle
-// connection, or nil. The caller holds mu and inherits its place in open.
+// connection, or nil. The caller holds mu.
 func (p *pool) oldestIdleLocked() *session {
 	var oldest *idleConn
 	for _, candidate := range p.idle {
@@ -151,7 +148,7 @@ func (p *pool) oldestIdleLocked() *session {
 // error and without its context ending; a clean read's connection is reset with
 // DISCARD ALL and kept, anything else is closed.
 func (p *pool) release(ctx context.Context, s *session, clean bool) {
-	keep := clean && !s.write && p.idleTimeout > 0 && !s.conn.IsClosed() &&
+	keep := clean && !s.write && p.idleTimeout > 0 && p.maxIdle > 0 && !s.conn.IsClosed() &&
 		s.conn.PgConn().TxStatus() == 'I'
 	if keep {
 		resetting, stop := context.WithTimeout(context.WithoutCancel(ctx), resetTimeout)
@@ -160,23 +157,31 @@ func (p *pool) release(ctx context.Context, s *session, clean bool) {
 		keep = err == nil
 	}
 
-	if keep {
-		p.mu.Lock()
-		// One idle connection per database; if one is already kept, this
-		// one is closed.
-		if _, taken := p.idle[s.database]; !taken && !p.closed {
-			kept := &idleConn{session: s, since: time.Now()}
-			kept.timer = time.AfterFunc(p.idleTimeout, func() { p.expire(kept) })
-			p.idle[s.database] = kept
-			p.mu.Unlock()
-			return
+	p.mu.Lock()
+	// One idle connection per database; if one is already kept, this one is
+	// closed.
+	if _, taken := p.idle[s.database]; keep && !taken && !p.closed {
+		p.lent--
+		var evicted *session
+		if len(p.idle) >= p.maxIdle {
+			evicted = p.oldestIdleLocked()
 		}
+		kept := &idleConn{session: s, since: time.Now()}
+		kept.timer = time.AfterFunc(p.idleTimeout, func() { p.expire(kept) })
+		p.idle[s.database] = kept
 		p.mu.Unlock()
+		// The caller's answer need not wait on another participant's close.
+		if evicted != nil {
+			go closeConn(context.Background(), evicted.conn)
+		}
+		return
 	}
+	p.mu.Unlock()
 
+	// Closed before its place is given up, so lent never undercounts.
 	closeConn(ctx, s.conn)
 	p.mu.Lock()
-	p.open--
+	p.lent--
 	p.mu.Unlock()
 }
 
@@ -191,11 +196,7 @@ func (p *pool) expire(kept *idleConn) {
 	delete(p.idle, kept.session.database)
 	p.mu.Unlock()
 
-	// Closed before its place is given up, so open never undercounts.
 	closeConn(context.Background(), kept.session.conn)
-	p.mu.Lock()
-	p.open--
-	p.mu.Unlock()
 }
 
 // close closes every idle connection and keeps none from here on. Connections
@@ -213,9 +214,6 @@ func (p *pool) close() {
 
 	for _, kept := range idle {
 		closeConn(context.Background(), kept.session.conn)
-		p.mu.Lock()
-		p.open--
-		p.mu.Unlock()
 	}
 }
 

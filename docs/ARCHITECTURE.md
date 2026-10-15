@@ -637,11 +637,14 @@ governed by **admission control in the Query Runner**:
   session with `DISCARD ALL` before leaving it. Only a read that finished
   without an error and without a cancellation leaves its connection behind;
   a write, an error, a cancellation and a deadline all close it as before.
-  Every connection the Runner holds, busy or idle, counts against
-  `QUERY_CONCURRENT`: at the boundary the least recently used idle one is
-  closed, so the cluster's memory arithmetic does not change. The database's
-  own backstop is `CONNECTION LIMIT 2` per instance and the role's overall
-  limit — both of which only ever fire if the semaphore is broken.
+  Idle connections have a budget of their own (`QUERY_IDLE_CONNS`, four per
+  `QUERY_CONCURRENT` by default), past which the least recently used is
+  closed; an idle backend holds a few MiB rather than the per-process cap, so
+  the memory arithmetic counts only running queries, and the Runner refuses to
+  start when `QUERY_CONCURRENT` + `QUERY_IDLE_CONNS` exceeds the participant
+  roles' connection limit. The database's own backstop is `CONNECTION LIMIT 2`
+  per instance and the role's overall limit — both of which only ever fire if
+  the semaphore is broken.
 - **Container boundaries.** The game cluster runs in a container with cgroup
   limits on CPU, IO and memory, so even total degradation stays inside the
   resources it was given, and the core database on its own instance is
