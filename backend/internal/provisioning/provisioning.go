@@ -18,6 +18,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -39,6 +40,12 @@ type Instance struct {
 	Database        string
 	TemplateVersion int
 	Status          string
+}
+
+// current reports whether the instance can be handed back as it is: not
+// dropped, and copied from the contest's current template.
+func (i Instance) current(contest Contest) bool {
+	return i.Status != InstanceStatusDropped && i.TemplateVersion >= contest.Version
 }
 
 // InstanceStatusDropped is the terminal status Reclaim leaves on a row once
@@ -126,6 +133,14 @@ type Service struct {
 	repo    Repository
 	cluster Cluster
 	workers int
+	// copies holds workers slots shared by every CREATE DATABASE … TEMPLATE
+	// this service runs, the tender's and participants' alike: each copies the
+	// whole template on the cluster's one disk.
+	copies *semaphore.Weighted
+	// providing holds one channel per registration whose database is being
+	// provided, closed when that is done.
+	providingMu sync.Mutex
+	providing   map[uuid.UUID]chan struct{}
 	// audit and uow are set by WithAudit; nil means Reclaim records nothing.
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
@@ -148,7 +163,11 @@ const ReclaimBatchLimit = 200
 
 // New assembles the service.
 func New(repo Repository, cluster Cluster) *Service {
-	return &Service{repo: repo, cluster: cluster, workers: DefaultWorkers}
+	return &Service{
+		repo: repo, cluster: cluster,
+		workers: DefaultWorkers, copies: semaphore.NewWeighted(DefaultWorkers),
+		providing: map[uuid.UUID]chan struct{}{},
+	}
 }
 
 // WithWorkers sets how many copies may be made at once.
@@ -157,6 +176,7 @@ func (s *Service) WithWorkers(workers int) *Service {
 		workers = 1
 	}
 	s.workers = workers
+	s.copies = semaphore.NewWeighted(int64(workers))
 	return s
 }
 
@@ -195,15 +215,27 @@ func (s *Service) Instance(ctx context.Context, registration uuid.UUID) (Instanc
 // included.
 func (s *Service) EnsureFrom(ctx context.Context, contest Contest, registration uuid.UUID, existing Instance, err error) (string, error) {
 	switch {
-	case err == nil && existing.Status != InstanceStatusDropped && existing.TemplateVersion >= contest.Version:
+	case err == nil && existing.current(contest):
 		return existing.Database, nil
-	case err == nil && existing.Status != InstanceStatusDropped:
-		// From an older template: rebuilt now rather than by the sweep, so the
-		// first to arrive does not play on old data.
-		return s.rebuildExisting(ctx, contest, registration, existing.Database)
+	case err != nil && !errors.Is(err, ErrNoInstance):
+		return "", err
+	}
+
+	// One participant's concurrent requests (Run and Schema on a first visit)
+	// would otherwise both copy, the second dropping the first's new database.
+	done, err := s.provideAlone(ctx, registration)
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	// Re-read, since another request may have provided it in the meantime.
+	switch existing, err = s.repo.Of(ctx, registration); {
+	case err == nil && existing.current(contest):
+		return existing.Database, nil
 	case err == nil:
-		// Dropped: the row is history and its database is gone, whatever
-		// version it carries.
+		// From an older template, rebuilt now rather than by the sweep so the
+		// first to arrive does not play on old data; or dropped, whose database
+		// is gone whatever version the row carries.
 		return s.rebuildExisting(ctx, contest, registration, existing.Database)
 	case !errors.Is(err, ErrNoInstance):
 		return "", err
@@ -223,7 +255,7 @@ func (s *Service) EnsureFrom(ctx context.Context, contest Contest, registration 
 	}
 
 	database := instanceName(contest.ID, registration)
-	if err := s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy); err != nil {
+	if err := s.copyTemplate(ctx, contest, database); err != nil {
 		return "", err
 	}
 	if err := s.repo.Assign(ctx, contest.ID, registration, database, contest.Version); err != nil {
@@ -288,7 +320,7 @@ func (s *Service) TopUp(ctx context.Context, contest Contest, depth int) (int, e
 
 func (s *Service) addSpare(ctx context.Context, contest Contest) error {
 	database := spareName(contest.ID)
-	if err := s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy); err != nil {
+	if err := s.copyTemplate(ctx, contest, database); err != nil {
 		return err
 	}
 	if err := s.repo.AddSpare(ctx, contest.ID, database, contest.Version); err != nil {
@@ -408,7 +440,45 @@ func (s *Service) Ready(ctx context.Context, contest Contest) (bool, error) {
 
 // replace makes a database new again, keeping its name.
 func (s *Service) replace(ctx context.Context, contest Contest, database string) error {
+	return s.copyTemplate(ctx, contest, database)
+}
+
+// copyTemplate makes database a fresh copy of the contest's template once one
+// of the s.copies slots is free.
+func (s *Service) copyTemplate(ctx context.Context, contest Contest, database string) error {
+	if err := s.copies.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer s.copies.Release(1)
 	return s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy)
+}
+
+// provideAlone waits until no other request is providing registration's
+// database, then claims that role until done is called. It gives up when ctx
+// ends. The guard is per process; replicas do not see each other's.
+func (s *Service) provideAlone(ctx context.Context, registration uuid.UUID) (done func(), err error) {
+	for {
+		s.providingMu.Lock()
+		busy, taken := s.providing[registration]
+		if !taken {
+			mine := make(chan struct{})
+			s.providing[registration] = mine
+			s.providingMu.Unlock()
+			return func() {
+				s.providingMu.Lock()
+				delete(s.providing, registration)
+				s.providingMu.Unlock()
+				close(mine)
+			}, nil
+		}
+		s.providingMu.Unlock()
+
+		select {
+		case <-busy:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // rebuildExisting makes database new again under its existing name and
