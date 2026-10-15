@@ -24,7 +24,7 @@ describe("sqlPolicySchema", () => {
 });
 
 describe("isTableName", () => {
-  test("accepts a plain and a schema-qualified identifier", () => {
+  test("accepts a plain identifier and one qualified by public", () => {
     expect(isTableName("suspects")).toBe(true);
     expect(isTableName("public.suspects")).toBe(true);
     expect(isTableName("_evidence_2")).toBe(true);
@@ -40,6 +40,12 @@ describe("isTableName", () => {
       "*",
     ]) {
       expect(isTableName(hostile)).toBe(false);
+    }
+  });
+
+  test("refuses a schema other than public", () => {
+    for (const elsewhere of ["pg_catalog.pg_authid", "information_schema.tables", "work.notes"]) {
+      expect(isTableName(elsewhere)).toBe(false);
     }
   });
 

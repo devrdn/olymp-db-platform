@@ -80,7 +80,8 @@ func ReadWrite(tables ...string) Policy {
 
 // Validate reports whether the policy describes one coherent set of rules: no
 // write permission under read_only (it needs the writer role and a GRANT),
-// and only plain table names, since they are interpolated into GRANTs.
+// and only plain names of game tables in `public`, since they are
+// interpolated into GRANTs.
 func (p Policy) Validate() error {
 	switch p.Mode {
 	case ModeReadOnly:
@@ -106,6 +107,18 @@ func (p Policy) Validate() error {
 	for _, table := range p.WritableTables {
 		if !PlainTableName(table) {
 			return fmt.Errorf("%w: %q is not a plain table name", ErrInvalidPolicy, table)
+		}
+		// The GRANT runs as a superuser, so the list may only ever name game
+		// tables in `public`, never a catalog.
+		schema, name, qualified := strings.Cut(table, ".")
+		if !qualified {
+			schema, name = "public", table
+		}
+		if !strings.EqualFold(schema, "public") {
+			return fmt.Errorf("%w: %q is outside schema public", ErrInvalidPolicy, table)
+		}
+		if sensitive, catalog := ClassifyRelation(schema, name); sensitive || catalog {
+			return fmt.Errorf("%w: %q is a system catalog", ErrInvalidPolicy, table)
 		}
 		folded := strings.ToLower(table)
 		if _, already := seen[folded]; already {

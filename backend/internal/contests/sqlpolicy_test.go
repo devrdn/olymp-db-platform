@@ -71,6 +71,26 @@ func TestPolicyRejectsATableNameThatIsNotAnIdentifier(t *testing.T) {
 	}
 }
 
+func TestPolicyRejectsATableOutsidePublicOrInTheCatalogs(t *testing.T) {
+	// The grants run as a superuser; a catalog here would make every
+	// participant one.
+	for _, name := range []string{
+		"pg_catalog.pg_authid",
+		"pg_authid",
+		"information_schema.tables",
+		"work.notes",
+		"public.pg_class",
+	} {
+		p := contests.DefaultSQLPolicy(uuid.New())
+		p.Mode = contests.ModeReadWrite
+		p.WritableTables = []string{name}
+
+		if err := p.Validate(); !errors.Is(err, contests.ErrInvalidPolicy) {
+			t.Errorf("Validate() with table %q = %v, want contests.ErrInvalidPolicy", name, err)
+		}
+	}
+}
+
 func TestPolicyRejectsATableListedTwice(t *testing.T) {
 	p := contests.DefaultSQLPolicy(uuid.New())
 	p.Mode = contests.ModeReadWrite

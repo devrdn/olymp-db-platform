@@ -14,11 +14,11 @@ export { SQL_MODES } from "./policy-terms";
 export type SqlMode = (typeof SQL_MODES)[number];
 
 /**
- * An optionally schema-qualified lowercase identifier. Stricter than
+ * A lowercase identifier, optionally qualified by `public`. Stricter than
  * PostgreSQL because these names go into GRANT statements unparameterised;
  * the server checks too, this only moves the error under the field.
  */
-const TABLE_NAME = /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/;
+const TABLE_NAME = /^(public\.)?[a-z_][a-z0-9_]*$/;
 
 export const sqlPolicySchema = z
   .object({

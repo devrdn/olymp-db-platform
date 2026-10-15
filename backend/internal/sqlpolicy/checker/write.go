@@ -73,10 +73,16 @@ func truncateAllowed(p sqlpolicy.Policy, stmt *pg.TruncateStmt) error {
 }
 
 // targetAllowed admits a game table the contest named, or a table in the
-// participant's own schema; anything else is refused by name.
+// participant's own schema; anything else, a catalog above all, is refused by
+// name.
 func targetAllowed(p sqlpolicy.Policy, rel *pg.RangeVar, what string) error {
 	if rel == nil {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: what}
+	}
+	// A catalog is refused even when the policy lists it, so this check does
+	// not depend on every stored policy having passed Policy.Validate.
+	if sensitive, catalog := sqlpolicy.ClassifyRelation(rel.GetSchemaname(), rel.GetRelname()); sensitive || catalog {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeTableNotWritable, Subject: relationName(rel)}
 	}
 	if p.MayWriteTo(rel.GetSchemaname(), rel.GetRelname()) {
 		return nil
