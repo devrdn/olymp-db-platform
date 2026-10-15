@@ -3,7 +3,9 @@ package contests
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/google/uuid"
@@ -11,6 +13,10 @@ import (
 
 // ErrStoryNotFound reports that the contest has no story yet.
 var ErrStoryNotFound = errors.New("story not found")
+
+// maxStoryRunes bounds one language's story (CLAUDE.md rule 2). The story is
+// the product, so the bound leaves room for a long one.
+const maxStoryRunes = 200_000
 
 // Story is the crime the participants investigate; a contest has at most one.
 type Story struct {
@@ -46,6 +52,11 @@ func (s *Service) Story(ctx context.Context, contestID uuid.UUID) (Story, error)
 func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (Story, error) {
 	if _, err := s.editableContest(ctx, contestID); err != nil {
 		return Story{}, err
+	}
+	for _, body := range bodies {
+		if utf8.RuneCountInString(body) > maxStoryRunes {
+			return Story{}, fmt.Errorf("%w: a story is at most %d characters", ErrInvalidContest, maxStoryRunes)
+		}
 	}
 	if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
 		return Story{}, err

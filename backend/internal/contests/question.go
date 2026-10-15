@@ -34,6 +34,12 @@ const (
 // maxChoices bounds a choice question's options (CLAUDE.md rule 2).
 const maxChoices = 50
 
+// Bounds on a question's authored text (CLAUDE.md rule 2), in characters.
+const (
+	maxQuestionBodyRunes = 20_000
+	maxChoiceLabelRunes  = 1_000
+)
+
 // maxPenaltyPct bounds questions.penalty_pct, a percentage (CLAUDE.md rule 2).
 const maxPenaltyPct = 100
 
@@ -132,10 +138,30 @@ func (q Question) validateChoices() error {
 		if strings.TrimSpace(id) == "" {
 			return fmt.Errorf("%w: an option identifier must not be empty", ErrInvalidQuestion)
 		}
+		// A participant submits the identifier as their answer.
+		if utf8.RuneCountInString(id) > maxAnswerRunes {
+			return fmt.Errorf("%w: an option identifier is at most %d characters", ErrInvalidQuestion, maxAnswerRunes)
+		}
 		if _, duplicate := seen[id]; duplicate {
 			return fmt.Errorf("%w: option %q listed twice", ErrInvalidQuestion, id)
 		}
 		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// Validate checks the bounds on a question's wording in one language.
+func (t QuestionText) Validate() error {
+	if utf8.RuneCountInString(t.BodyMD) > maxQuestionBodyRunes {
+		return fmt.Errorf("%w: a question is at most %d characters", ErrInvalidQuestion, maxQuestionBodyRunes)
+	}
+	if len(t.Choices) > maxChoices {
+		return fmt.Errorf("%w: at most %d option labels", ErrInvalidQuestion, maxChoices)
+	}
+	for _, label := range t.Choices {
+		if utf8.RuneCountInString(label) > maxChoiceLabelRunes {
+			return fmt.Errorf("%w: an option label is at most %d characters", ErrInvalidQuestion, maxChoiceLabelRunes)
+		}
 	}
 	return nil
 }
@@ -299,7 +325,7 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 	if err := q.Validate(); err != nil {
 		return Question{}, err
 	}
-	if err := s.checkLanguageCodes(ctx, textLanguages(cmd.Texts)); err != nil {
+	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
 		return Question{}, err
 	}
 
@@ -419,7 +445,7 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	if err := validateAnswersFor(updated, cmd.Answers); err != nil {
 		return Question{}, err
 	}
-	if err := s.checkLanguageCodes(ctx, textLanguages(cmd.Texts)); err != nil {
+	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
 		return Question{}, err
 	}
 
@@ -556,7 +582,7 @@ func (s *Service) SetQuestionTexts(ctx context.Context, actorID, contestID, ques
 	if _, err := s.questionOf(ctx, contestID, questionID); err != nil {
 		return err
 	}
-	if err := s.checkLanguageCodes(ctx, textLanguages(texts)); err != nil {
+	if err := s.checkTexts(ctx, texts); err != nil {
 		return err
 	}
 
@@ -594,6 +620,17 @@ func (s *Service) SetAnswers(ctx context.Context, actorID, contestID, questionID
 			"count":       len(answers),
 		})
 	})
+}
+
+// checkTexts checks every language's wording, then that each language is
+// offered.
+func (s *Service) checkTexts(ctx context.Context, texts map[string]QuestionText) error {
+	for _, t := range texts {
+		if err := t.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.checkLanguageCodes(ctx, textLanguages(texts))
 }
 
 // textLanguages lists the language codes a text map carries.

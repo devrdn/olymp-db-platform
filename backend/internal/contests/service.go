@@ -673,12 +673,15 @@ func (s *Service) checkLanguages(ctx context.Context, langs []ContestLanguage) e
 	return checkLanguagesKnown(known, langs)
 }
 
-// checkTranslationLanguages applies the same check to authored text. The
-// language need not be one the contest declares yet; the publish gate checks
-// the set is complete.
+// checkTranslationLanguages checks the bounds of authored text, then applies
+// the same language check to it. The language need not be one the contest
+// declares yet; the publish gate checks the set is complete.
 func (s *Service) checkTranslationLanguages(ctx context.Context, translations []Translation) error {
 	langs := make([]ContestLanguage, 0, len(translations))
 	for _, t := range translations {
+		if err := t.Validate(); err != nil {
+			return err
+		}
 		langs = append(langs, ContestLanguage{Code: t.Lang})
 	}
 	return s.checkLanguages(ctx, langs)
