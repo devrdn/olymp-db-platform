@@ -172,7 +172,7 @@ func (p *pool) release(ctx context.Context, s *session, clean bool) {
 		p.mu.Unlock()
 		// The caller's answer need not wait on another participant's close.
 		if evicted != nil {
-			go closeConn(context.Background(), evicted.conn)
+			go closeConn(ctx, evicted.conn)
 		}
 		return
 	}
