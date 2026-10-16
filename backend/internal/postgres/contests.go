@@ -40,7 +40,8 @@ const contestColumns = `
 		FROM contest_translations ct WHERE ct.contest_id = c.id
 	), '[]'::json),
 	COALESCE((SELECT cc.hash FROM contest_covers cc WHERE cc.contest_id = c.id), ''),
-	COALESCE((SELECT cc.attribution FROM contest_covers cc WHERE cc.contest_id = c.id), '')`
+	COALESCE((SELECT cc.attribution FROM contest_covers cc WHERE cc.contest_id = c.id), ''),
+	COALESCE((SELECT p.mode FROM contest_sql_policies p WHERE p.contest_id = c.id), 'read_only')`
 
 // Contests stores contests in PostgreSQL.
 type Contests struct {
@@ -68,10 +69,12 @@ type translationRow struct {
 	Description string `json:"description"`
 }
 
-// The cover comes from correlated subqueries rather than a join, so the
-// unique constraint on contest_covers does not decide the listing's row
-// count. An empty hash means no uploaded picture: the contest shows the drawn
-// cover.
+// The cover and the policy's mode come from correlated subqueries rather
+// than joins, so the unique constraints on contest_covers and
+// contest_sql_policies do not decide the listing's row count, and every query
+// sharing contestColumns reads them without a join of its own. An empty hash
+// means no uploaded picture: the contest shows the drawn cover. A contest
+// with no policy row reads read_only, as the game's own policy read does.
 
 // contestScanTargets returns pointers in contestColumns' order, shared by
 // every query that selects it.
@@ -84,6 +87,7 @@ func contestScanTargets(c *contests.Contest, settings, languages, translations *
 		&c.ICPCPenaltyMin,
 		languages, translations,
 		&c.CoverHash, &c.CoverAttribution,
+		&c.SQLMode,
 	}
 }
 

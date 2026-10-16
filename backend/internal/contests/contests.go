@@ -175,9 +175,12 @@ type Contest struct {
 	// CoverAttribution credits the picture's author. The publish gate
 	// requires one with a CoverHash (§10.1); empty for the drawn cover.
 	CoverAttribution string
-	CreatedBy        uuid.UUID
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// SQLMode is the mode of the contest's SQLPolicy, ModeReadOnly when none
+	// is stored. Read-only here: Service.SetPolicy writes it.
+	SQLMode   string
+	CreatedBy uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Settings are the tunables stored as jsonb on the contest row. Typed rather

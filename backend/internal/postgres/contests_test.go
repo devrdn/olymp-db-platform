@@ -125,6 +125,39 @@ func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	})
 }
 
+func TestAListingCarriesTheModeOfEachContestsPolicy(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-listing-mode")
+		writing := makeContest(t, ctx, author.ID)
+		unconfigured := makeContest(t, ctx, author.ID)
+		policy := contests.DefaultSQLPolicy(writing)
+		policy.Mode = contests.ModeReadWrite
+		if err := NewSQLPolicies(testPool).Save(ctx, policy); err != nil {
+			t.Fatalf("Save() = %v", err)
+		}
+
+		found, _, err := repo.List(ctx, contests.Filter{Limit: 10})
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		byID := map[uuid.UUID]contests.Contest{}
+		for _, c := range found {
+			byID[c.ID] = c
+		}
+		if got := byID[writing].SQLMode; got != contests.ModeReadWrite {
+			t.Errorf("SQLMode = %q, want %q, the mode its policy row holds", got, contests.ModeReadWrite)
+		}
+		if got := byID[unconfigured].SQLMode; got != contests.ModeReadOnly {
+			t.Errorf("a contest with no policy row reads SQLMode = %q, want the default %q", got, contests.ModeReadOnly)
+		}
+		if got, err := repo.ByID(ctx, writing); err != nil || got.SQLMode != contests.ModeReadWrite {
+			t.Errorf("ByID() = (%q, %v), want %q", got.SQLMode, err, contests.ModeReadWrite)
+		}
+	})
+}
+
 func TestUpdateWritesTheICPCPenalty(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)
