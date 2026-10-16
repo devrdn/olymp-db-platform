@@ -83,6 +83,12 @@ GAME_TEST_DB_DSN  ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(
 # where in the file it appears.
 REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
 
+# Where the uploads are INSIDE the api container, which is what `make backup`
+# copies the game-uploads-data volume out of. Captured before GAME_UPLOAD_DIR
+# is replaced below, as CONTAINER_COVER_DIR is. Empty falls back to the path
+# the compose file mounts the volume at, because it mounts it there anyway.
+CONTAINER_GAME_UPLOAD_DIR := $(if $(GAME_UPLOAD_DIR),$(GAME_UPLOAD_DIR),/var/lib/dbcontest/uploads)
+
 # Where an uploaded dump lands when the API runs on the host.
 #
 # deploy/.env sets GAME_UPLOAD_DIR to the container's own path, because that is
@@ -132,7 +138,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads restore-game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -296,6 +302,11 @@ sec: ## Static security analysis
 restore-covers-check: ## Prove restored covers belong to the API's user
 	deploy/restore-covers-check.sh
 
+# That `make backup` takes the game uploads and `make restore-game-uploads`
+# gives them back to the API's user, the same way and with the same guarantees.
+restore-game-uploads-check: ## Prove the backup takes the game uploads and restores them to the API's user
+	deploy/restore-game-uploads-check.sh
+
 # What the bundled Caddy tells the API about the client — address, scheme, Host,
 # and which service /api/* reaches — with the real image and the real Caddyfile,
 # first hop and behind an edge proxy. Needs Docker; starts and removes its own
@@ -430,23 +441,28 @@ front-check: front-install ## Everything CI runs for the interface but the smoke
 # The database is not all of it. A contest's cover picture is a file on the
 # contest-covers-data volume and not a row anywhere, so pg_dump cannot see it
 # (the contest covers design §1 names this as the cost of keeping the pictures
-# on a volume). Two artefacts come out of this target, sharing one timestamp:
-# the dump and a tar of that volume. Restoring only the first gives back every
-# contest without its cover, and that is found out on the day it can no longer
-# be fixed.
+# on a volume). Organisers' uploaded dumps and the table builder's CSV files
+# are files on the game-uploads-data volume for the same reason, and a game
+# built from one cannot be built again without it. Three artefacts come out of
+# this target, sharing one timestamp: the dump and a tar of each volume.
+# Restoring only the first gives back every contest without its cover and its
+# uploads, and that is found out on the day it can no longer be fixed.
 #
-# The volume is copied through the api service rather than by naming the
-# volume to `docker run`: the mount point is the compose file's business, not
+# Each volume is staged through mktemp, so TMPDIR decides where: the uploads
+# run to gigabytes, and a host whose /tmp is in memory points TMPDIR at a disk.
+#
+# The volumes are copied through the api service rather than by naming them
+# to `docker run`: the mount point is the compose file's business, not
 # this file's, and `docker compose cp` reads a stopped container as happily as
 # a running one. It needs the container to EXIST, which on a deployed machine
 # it does; a partial backup is reported as a failure rather than written
 # quietly, because a backup nobody was told was incomplete is worse than none.
 
-# Strict on purpose: a backup that quietly leaves the covers behind is the
+# Strict on purpose: a backup that quietly leaves a volume behind is the
 # one that is discovered to be incomplete on the day it is restored. A
 # developer who wants only the dump says so — DB_ONLY=1 — rather than reading
 # an exit code as permission.
-backup: require-env ## Dump the core database and archive the covers volume (DB_ONLY=1 for the dump alone)
+backup: require-env ## Dump the core database and archive the covers and game uploads volumes (DB_ONLY=1 for the dump alone)
 	@mkdir -p $(BACKUP_DIR)
 	@stamp=$$(date +%Y%m%d-%H%M%S); \
 		file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$stamp.dump; \
@@ -455,23 +471,28 @@ backup: require-env ## Dump the core database and archive the covers volume (DB_
 			{ echo "backup failed; removing the partial file"; rm -f $$file; exit 1; }; \
 		test -s $$file || { echo "the dump is empty — refusing to keep it"; rm -f $$file; exit 1; }; \
 		echo "wrote $$file ($$(du -h $$file | cut -f1))"; \
-		covers=$(BACKUP_DIR)/covers-$$stamp.tar.gz; \
-		staging=$$(mktemp -d); \
+		take() { \
+			archive=$(BACKUP_DIR)/$$1-$$stamp.tar.gz; staging=$$(mktemp -d); \
+			if $(COMPOSE) cp "api:$$2/." $$staging >/dev/null; then \
+				tar -czf $$archive -C $$staging . || \
+					{ echo "the $$1 volume could not be archived"; rm -rf $$staging; rm -f $$archive; return 1; }; \
+				echo "wrote $$archive ($$(du -h $$archive | cut -f1))"; \
+				rm -rf $$staging; \
+			else \
+				rm -rf $$staging; \
+				echo "the $$1 volume was NOT copied: no api container to read $$2 from."; \
+				echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
+				echo "$$3. Create the container ('make deploy') and"; \
+				echo "run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
+				return 1; \
+			fi; \
+		}; \
 		if [ -n "$(DB_ONLY)" ]; then \
-			rm -rf $$staging; \
-			echo "DB_ONLY: the covers were not taken. This is a dump, not a backup of the installation."; \
-		elif $(COMPOSE) cp api:$(CONTAINER_COVER_DIR)/. $$staging >/dev/null; then \
-			tar -czf $$covers -C $$staging . || \
-				{ echo "the covers volume could not be archived"; rm -rf $$staging; rm -f $$covers; exit 1; }; \
-			echo "wrote $$covers ($$(du -h $$covers | cut -f1))"; \
-			rm -rf $$staging; \
+			echo "DB_ONLY: the covers and the game uploads were not taken. This is a dump, not a backup of the installation."; \
 		else \
-			rm -rf $$staging; \
-			echo "the covers volume was NOT copied: no api container to read $(CONTAINER_COVER_DIR) from."; \
-			echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
-			echo "bring back every contest without its cover. Create the container ('make deploy') and"; \
-			echo "run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
-			exit 1; \
+			take covers $(CONTAINER_COVER_DIR) "bring back every contest without its cover" && \
+			take game-uploads $(CONTAINER_GAME_UPLOAD_DIR) "leave every game built from an uploaded file unable to be built again" || \
+				exit 1; \
 		fi; \
 		echo "Copy what was written off this machine. A backup that only exists on the host it came from is not a backup."
 
@@ -518,16 +539,16 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 		if [ "$$serving" = "1" ]; then \
 			$(COMPOSE) start api || echo "the api did NOT come back up — start it by hand"; fi; \
 		if [ $$result -eq 0 ]; then echo "restored $(CORE_DB_NAME) from $(FILE)"; \
-			echo "The covers are not in this dump: restore them too, with"; \
+			echo "The covers and the game uploads are not in this dump: restore them too, with"; \
 			echo "  make restore-covers FILE=$(BACKUP_DIR)/covers-<timestamp>.tar.gz CONFIRM=yes"; \
+			echo "  make restore-game-uploads FILE=$(BACKUP_DIR)/game-uploads-<timestamp>.tar.gz CONFIRM=yes"; \
 		else echo "restore FAILED — the database is in an unknown state, do not run an olympiad on it"; fi; \
 		exit $$result
 
-# The other half of a restore, and the reason `make backup` writes two files.
-# A cover is named by the hash of its own content, so copying an archive over
-# a volume that already holds some of the same files replaces each with an
-# identical one — this is additive, and it is why it does not empty the
-# directory first.
+# Copies a `make backup` archive into one of the api container's volumes:
+# $(1) names the volume in messages, $(2) is the archive's file prefix, $(3)
+# the directory inside the container, and $(4) an optional sentence the
+# confirmation prompt adds.
 #
 # The files go back owned by the API's user, 65532. Copied in as they are, they
 # keep whoever ran `make` as their owner and the 0600 the API wrote them with,
@@ -539,27 +560,45 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 # `docker cp -`, which extracts it as written. Into
 # a file first rather than a pipe: /bin/sh has no pipefail, and a tar that
 # failed halfway would otherwise reach the volume as a partial restore.
-restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
-	@test -n "$(FILE)" || { echo "usage: make restore-covers FILE=$(BACKUP_DIR)/covers-....tar.gz CONFIRM=yes"; exit 1; }
+#
+# It is additive and does not empty the directory first; each target below
+# says why that is safe for its volume.
+define restore-volume
+	@test -n "$(FILE)" || { echo "usage: make $@ FILE=$(BACKUP_DIR)/$(2)-....tar.gz CONFIRM=yes"; exit 1; }
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
 	@test "$(CONFIRM)" = "yes" || { \
-		echo "This copies $(FILE) into the covers volume at $(CONTAINER_COVER_DIR)."; \
+		echo "This copies $(FILE) into the $(1) volume at $(3)."; \
+		$(if $(4),echo "$(4)";) \
 		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
 	@staging=$$(mktemp -d); packed=$$staging.tar; \
 		tar -xzf "$(FILE)" -C $$staging || { echo "$(FILE) is not a readable archive"; rm -rf $$staging; exit 1; }; \
 		api=$$($(COMPOSE) ps -aq api); \
 		test -n "$$api" || \
-			{ echo "the covers were NOT restored: no api container to write $(CONTAINER_COVER_DIR) to"; \
+			{ echo "the $(1) were NOT restored: no api container to write $(3) to"; \
 			  rm -rf $$staging; exit 1; }; \
 		if tar --version 2>/dev/null | grep -q 'GNU tar'; then owner="--owner=65532 --group=65532 --numeric-owner"; \
 		else owner="--uid 65532 --gid 65532 --no-xattrs --no-acls"; fi; \
 		COPYFILE_DISABLE=1 tar -cf $$packed $$owner -C $$staging . && \
-		docker cp - $$api:$(CONTAINER_COVER_DIR) < $$packed || \
-			{ echo "the covers were NOT restored: they could not be copied into $(CONTAINER_COVER_DIR)"; \
+		docker cp - $$api:$(3) < $$packed || \
+			{ echo "the $(1) were NOT restored: they could not be copied into $(3)"; \
 			  rm -rf $$staging $$packed; exit 1; }; \
 		rm -rf $$staging $$packed; \
-		echo "restored the covers volume from $(FILE)"; \
+		echo "restored the $(1) volume from $(FILE)"; \
 		echo "Restart the api if it is running: docker compose -f deploy/docker-compose.yml restart api"
+endef
+
+# A cover is named by the hash of its own content, so copying an archive over
+# a volume that already holds some of the same files replaces each with an
+# identical one.
+restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
+	$(call restore-volume,covers,covers,$(CONTAINER_COVER_DIR))
+
+# An upload is named by its own id, so a file already there is the same upload.
+# Run it after `make restore`, never before: the upload sweep deletes a file
+# whose upload the database does not record, which is also what clears away
+# anything newer than the backup that the volume still held.
+restore-game-uploads: require-env ## Restore the game uploads volume from an archive, after make restore (FILE=path CONFIRM=yes)
+	$(call restore-volume,game uploads,game-uploads,$(CONTAINER_GAME_UPLOAD_DIR),Run this after make restore: until the database records these uploads the upload sweep deletes them.)
 
 # The two halves of the game circuit that are not the API.
 #
