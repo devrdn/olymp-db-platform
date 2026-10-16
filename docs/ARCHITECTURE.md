@@ -2911,11 +2911,13 @@ backwards; a page always runs oldest to newest, and the response carries
 - **Sign-ins are bounded by the contest's window.** A participant's sign-ins,
   sign-outs and failed sign-ins are counted from
   `GREATEST(the registration's created_at, the start − 1 h)` to
-  `COALESCE(finished_at, the participant's deadline, ends_at) + 1 h`
+  `COALESCE(LEAST(finished_at, the participant's deadline), ends_at) + 1 h`
   (`monitor.SignInGrace`), where the start is
   `COALESCE(the contest's starts_at, the participant's started_at, the
-  registration's created_at)`. Signing in after the end to read the result is
-  the contest's business; a lecture a week later is not. The same before the
+  registration's created_at)`. The earlier of the finish and the deadline,
+  because a contest's end finishes an individual participant when it closes,
+  which can be days after their own time ran out. Signing in after the end to
+  read the result is the contest's business; a lecture a week later is not. The same before the
   start: an `invite_only` contest may enrol a student weeks ahead, and weeks
   of their sign-ins, addresses and browsers — along with failed sign-ins
   carrying other people's addresses — do not belong to that contest's

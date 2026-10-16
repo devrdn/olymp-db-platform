@@ -374,14 +374,16 @@ func feedAudit(q monitor.FeedQuery) feedStatement {
 	// else their registration, and never earlier than the registration: an
 	// account's sign-ins before it enrolled are not the contest's business.
 	//
-	// The end is their finish, else their individual deadline (as in
-	// contests.Deadline), else the contest's end, else now. An individual
+	// The end is the earlier of their finish and their individual deadline
+	// (as in contests.Deadline), else the contest's end, else now: the
+	// contest's end finishes them when it closes, which under individual
+	// timing can be long after their own time ran out. An individual
 	// participant who never started in a contest with no end stays unbounded;
 	// their sign-ins are all they have in the contest.
 	const participantStart = `COALESCE(c.starts_at, r.started_at, r.created_at)`
-	const participantEnd = `COALESCE(r.finished_at,
+	const participantEnd = `COALESCE(LEAST(r.finished_at,
 		      CASE WHEN c.timing = 'individual'
-		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END,
+		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END),
 		      c.ends_at)`
 	// Built on first use: a parameter no branch names cannot be typed.
 	var windowSQL string
