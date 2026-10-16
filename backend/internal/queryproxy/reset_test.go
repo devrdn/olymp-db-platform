@@ -1,6 +1,7 @@
 package queryproxy_test
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"testing"
@@ -170,6 +171,16 @@ func TestTheGateDecidesWhoMayReset(t *testing.T) {
 			stage: func(l *lookupFake) { l.contest.EndsAt = &closedWindow },
 			want:  contests.ErrDeadlinePassed,
 		},
+		"a contest that has not started": {
+			stage: func(l *lookupFake) { l.contest.Status = contests.StatusPublished },
+			want:  contests.ErrContestNotRunning,
+		},
+		"a caller outside the contest's network": {
+			stage: func(l *lookupFake) {
+				l.contest.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+			},
+			want: contests.ErrAddressNotAllowed,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, db, lookup := resetFixture(t)
@@ -241,5 +252,56 @@ func TestAResetWithoutAGameOrACopyIsNamed(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, given.want)
 			}
 		})
+	}
+}
+
+// A caller who left while waiting for their turn is not the service failing.
+func TestAResetWhoseCallerLeftIsACancellationNotAFailure(t *testing.T) {
+	service, db, lookup := resetFixture(t)
+	db.resetErr = context.Canceled
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := service.Reset(ctx, resetCommand(lookup.contest.ID))
+	if !errors.Is(err, queryrunner.ErrCanceled) {
+		t.Fatalf("error = %v, want ErrCanceled", err)
+	}
+	if errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatal("a caller who left was reported as the service failing")
+	}
+}
+
+// As in Run: once the console has closed there is nothing to work towards, so
+// a copy would be spent for nothing.
+func TestAResetIsRefusedOnceNothingIsLeftToAnswer(t *testing.T) {
+	service, db, lookup := resetFixture(t)
+	answers := &answerable{left: false}
+	service.WithAnswerable(answers)
+
+	if err := service.Reset(t.Context(), resetCommand(lookup.contest.ID)); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("error = %v, want ErrNothingLeftToAnswer", err)
+	}
+	if len(db.resets) != 0 {
+		t.Fatal("a database was copied for a participant with nothing left to answer")
+	}
+
+	answers.err = errors.New("connection refused")
+	if err := service.Reset(t.Context(), resetCommand(lookup.contest.ID)); !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable when it cannot be worked out", err)
+	}
+}
+
+// The read-only refusal is decided from values in hand, before the round trip.
+func TestAReadOnlyContestIsRefusedWithoutAskingWhatIsLeft(t *testing.T) {
+	service, _, lookup := resetFixture(t)
+	lookup.game.Policy = sqlpolicy.ReadOnly()
+	answers := &answerable{left: true}
+	service.WithAnswerable(answers)
+
+	if err := service.Reset(t.Context(), resetCommand(lookup.contest.ID)); !errors.Is(err, queryproxy.ErrResetReadOnly) {
+		t.Fatalf("error = %v, want ErrResetReadOnly", err)
+	}
+	if answers.calls != 0 {
+		t.Fatal("a read-only contest still cost the answerable round trip")
 	}
 }

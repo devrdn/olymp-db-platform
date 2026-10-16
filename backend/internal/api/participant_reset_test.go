@@ -74,6 +74,9 @@ func TestResetRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{err: contests.ErrNotAParticipant, status: http.StatusForbidden, code: "not_a_participant"},
 		{err: contests.ErrContestEnded, status: http.StatusConflict, code: "contest_ended"},
 		{err: queryproxy.ErrNoGameYet, status: http.StatusConflict, code: "no_game_yet"},
+		{err: queryproxy.ErrNothingLeftToAnswer, status: http.StatusConflict, code: "nothing_left_to_answer"},
+		{err: fmt.Errorf("%w: waiting for the reset", queryrunner.ErrCanceled),
+			status: http.StatusRequestTimeout, code: "query_cancelled"},
 		{err: queryproxy.ErrNoRoomForDatabase, status: http.StatusServiceUnavailable, code: "game_cluster_full"},
 		{err: fmt.Errorf("%w: copy the template: disk I/O", queryproxy.ErrUnavailable),
 			status: http.StatusInternalServerError, code: "internal_error"},
@@ -104,5 +107,17 @@ func TestAResetWithAnInvalidContestIDIsA400(t *testing.T) {
 	}
 	if len(f.resets.got) != 0 {
 		t.Fatal("an unreadable contest identifier reached the service")
+	}
+}
+
+// A caller who left while their press waited is not an error of ours.
+func TestAResetWhoseCallerLeftIsNotLogged(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.resets.err = fmt.Errorf("%w: waiting for the reset", queryrunner.ErrCanceled)
+
+	f.reset(uuid.NewString())
+
+	if f.logs.loggedError("") {
+		t.Fatal("a caller who left was logged as an error")
 	}
 }

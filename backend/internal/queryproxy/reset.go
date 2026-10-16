@@ -9,6 +9,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
@@ -48,6 +49,8 @@ type ResetCommand struct {
 // two rate checks come first, as in Run: the account's shared budget before
 // any lookup, then this registration's resets before the gate, so every
 // refusal after the lookup, a read-only contest's included, spends a press.
+// Like Run it refuses once nothing is left to answer, after the checks made
+// from values in hand.
 //
 // A registration with no database yet is answered as done: the first query
 // copies a fresh one anyway. A reset starts no clock, since whatever made the
@@ -86,10 +89,22 @@ func (s *Service) Reset(ctx context.Context, cmd ResetCommand) error {
 	if lookup.Game.Policy.Mode != sqlpolicy.ModeReadWrite {
 		return ErrResetReadOnly
 	}
+	if s.answerable != nil {
+		left, err := s.answerable.AnswerableLeft(ctx, cmd.ContestID, participant.ID)
+		if err != nil {
+			return fmt.Errorf("%w: work out what is still answerable: %w", ErrUnavailable, err)
+		}
+		if !left {
+			return ErrNothingLeftToAnswer
+		}
+	}
 
 	switch err := s.databases.Reset(ctx, cmd.UserID, lookup.Game, participant.ID); {
 	case errors.Is(err, provisioning.ErrNoInstance):
 		return nil
+	case ctx.Err() != nil && errors.Is(err, context.Canceled):
+		// Most often a second press that gave up waiting for the first.
+		return fmt.Errorf("%w: waiting for the reset: %w", queryrunner.ErrCanceled, err)
 	case err != nil:
 		return provisionFailure(err)
 	}
