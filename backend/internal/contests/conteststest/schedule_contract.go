@@ -76,11 +76,19 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		}
 		return ids
 	}
-	finish := func(t *testing.T, ctx context.Context, target ScheduleTarget, grace time.Duration) []uuid.UUID {
+	finishAll := func(t *testing.T, ctx context.Context, target ScheduleTarget, grace time.Duration) []contests.FinishedContest {
 		t.Helper()
-		ids, err := target.Repo.AdvanceFinished(ctx, grace)
+		finished, err := target.Repo.AdvanceFinished(ctx, grace)
 		if err != nil {
 			t.Fatalf("AdvanceFinished(%v) = %v", grace, err)
+		}
+		return finished
+	}
+	finish := func(t *testing.T, ctx context.Context, target ScheduleTarget, grace time.Duration) []uuid.UUID {
+		t.Helper()
+		var ids []uuid.UUID
+		for _, c := range finishAll(t, ctx, target, grace) {
+			ids = append(ids, c.ID)
 		}
 		return ids
 	}
@@ -208,7 +216,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
 
-			if err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning); err != nil {
+			if _, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning); err != nil {
 				t.Fatalf("SetStatus() = %v", err)
 			}
 
@@ -222,11 +230,11 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
 			matched(t, "DueToStart()", dueIDs(t, ctx, target), map[string]uuid.UUID{"due": id}, nil)
-			if err := target.Contests.SetStatus(ctx, id, contests.StatusPublished, contests.StatusArchived); err != nil {
+			if _, err := target.Contests.SetStatus(ctx, id, contests.StatusPublished, contests.StatusArchived); err != nil {
 				t.Fatalf("the manual SetStatus() = %v", err)
 			}
 
-			err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning)
+			_, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Errorf("SetStatus() error = %v, want ErrStatusChanged", err)
@@ -238,7 +246,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 	t.Run("SetStatus of a contest that is not there is ErrNotFound", func(t *testing.T) {
 		// Deleted between the read and the write; the tick moves on.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
-			err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusPublished, contests.StatusRunning)
+			_, err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusPublished, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrNotFound) {
 				t.Errorf("SetStatus() error = %v, want ErrNotFound", err)
@@ -335,9 +343,13 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			ended := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, past, target.Now())
 			running := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, inside, target.Now())
 
-			finish(t, ctx, target, grace)
+			reported := map[uuid.UUID][]uuid.UUID{}
+			for _, c := range finishAll(t, ctx, target, grace) {
+				reported[c.ID] = c.Users
+			}
 
 			ended.wantFinished(t, ctx)
+			ended.wantReported(t, "AdvanceFinished()", reported[past])
 			running.wantUntouched(t, ctx)
 		})
 	})

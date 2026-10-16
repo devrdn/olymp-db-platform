@@ -136,11 +136,13 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			t.Fatalf("Update() = %v", err)
 		}
 	}
-	setStatus := func(t *testing.T, ctx context.Context, target ContestTarget, id uuid.UUID, from, to string) {
+	setStatus := func(t *testing.T, ctx context.Context, target ContestTarget, id uuid.UUID, from, to string) []uuid.UUID {
 		t.Helper()
-		if err := target.Repo.SetStatus(ctx, id, from, to); err != nil {
+		finished, err := target.Repo.SetStatus(ctx, id, from, to)
+		if err != nil {
 			t.Fatalf("SetStatus(%s, %s) = %v", from, to, err)
 		}
+		return finished
 	}
 	replaceLanguages := func(t *testing.T, ctx context.Context, target ContestTarget, id uuid.UUID, langs ...contests.ContestLanguage) {
 		t.Helper()
@@ -576,7 +578,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			created := create(t, ctx, target, plain(target.NewUser()))
 			setStatus(t, ctx, target, created.ID, contests.StatusDraft, contests.StatusPublished)
 
-			err := target.Repo.SetStatus(ctx, created.ID, contests.StatusDraft, contests.StatusRunning)
+			_, err := target.Repo.SetStatus(ctx, created.ID, contests.StatusDraft, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Errorf("SetStatus() error = %v, want ErrStatusChanged", err)
@@ -591,7 +593,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		// Distinct from a moved status: a contest that moved can be looked
 		// at again, one that is gone cannot.
 		each(t, func(ctx context.Context, target ContestTarget) {
-			err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusDraft, contests.StatusPublished)
+			_, err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusDraft, contests.StatusPublished)
 
 			notFound(t, err, "SetStatus()")
 		})
@@ -624,9 +626,10 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, ours, target.Now())
 			another := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, theirs, target.Now())
 
-			setStatus(t, ctx, target, ours, contests.StatusRunning, contests.StatusFinished)
+			finished := setStatus(t, ctx, target, ours, contests.StatusRunning, contests.StatusFinished)
 
 			roster.wantFinished(t, ctx)
+			roster.wantReported(t, "SetStatus()", finished)
 			another.wantUntouched(t, ctx)
 		})
 	})
@@ -636,10 +639,13 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			id := running(t, ctx, target)
 			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, id, target.Now())
 
-			err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusFinished)
+			finished, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusFinished)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Fatalf("SetStatus() error = %v, want ErrStatusChanged", err)
+			}
+			if len(finished) != 0 {
+				t.Errorf("a refused SetStatus() reported %v finished, want nobody", finished)
 			}
 			roster.wantUntouched(t, ctx)
 		})
@@ -650,9 +656,12 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			id := running(t, ctx, target)
 			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, id, target.Now())
 
-			setStatus(t, ctx, target, id, contests.StatusRunning, contests.StatusArchived)
+			finished := setStatus(t, ctx, target, id, contests.StatusRunning, contests.StatusArchived)
 
 			roster.wantUntouched(t, ctx)
+			if len(finished) != 0 {
+				t.Errorf("SetStatus() to archived reported %v finished, want nobody", finished)
+			}
 		})
 	})
 
@@ -1329,6 +1338,30 @@ func (r endingRoster) wantFinished(t *testing.T, ctx context.Context) {
 		rosterStartedAheadOfClock: {contests.RegistrationFinished, &ahead, &ahead},
 		rosterDisqualified:        {status: contests.RegistrationDisqualified, startedAt: &before},
 	})
+}
+
+// wantReported checks that got names, once each, exactly the users whose
+// registrations the contest's end finished: the two still active.
+func (r endingRoster) wantReported(t *testing.T, call string, got []uuid.UUID) {
+	t.Helper()
+	want := map[uuid.UUID]rosterState{
+		r.users[rosterStarted]:             rosterStarted,
+		r.users[rosterStartedAheadOfClock]: rosterStartedAheadOfClock,
+	}
+	seen := map[uuid.UUID]int{}
+	for _, user := range got {
+		seen[user]++
+	}
+	for user, state := range want {
+		if seen[user] != 1 {
+			t.Errorf("%s reported the participant %s %d times, want once", call, state, seen[user])
+		}
+	}
+	for user := range seen {
+		if _, finished := want[user]; !finished {
+			t.Errorf("%s reported %s finished, who was not active in the contest", call, user)
+		}
+	}
 }
 
 // wantUntouched is the roster as seeded.

@@ -276,41 +276,62 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 // its roster change in one statement. finished_at is the database's clock,
 // or the participant's start if that is later: Start records the
 // application's clock, and the schema refuses a finish before the start.
+// It returns exactly the rows it moved, which the outer query reads to
+// report who finished.
 const finishRoster = `
 	finished AS (
 		UPDATE registrations r
 		SET status = 'finished', finished_at = GREATEST(now(), r.started_at)
 		FROM moved
 		WHERE moved.status = 'finished' AND r.contest_id = moved.id AND r.status = 'active'
+		RETURNING r.contest_id, r.user_id
 	)`
 
 // SetStatus moves the contest to status to, only if it is still in status
 // from. The comparison is in the WHERE clause: PostgreSQL locks the row and
 // re-evaluates it against the committed value, so of two concurrent callers
 // with the same stale status only one matches.
-func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
-	var moved int
-	err := r.querier(ctx).QueryRow(ctx, `
+//
+// It reads one row per finished user, or a single row with no user when the
+// move finished nobody; no row at all means nothing matched.
+func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
 		WITH moved AS (
 			UPDATE contests SET status = $3, updated_at = now()
 			WHERE id = $1 AND status = $2
 			RETURNING id, status
 		),`+finishRoster+`
-		SELECT count(*) FROM moved`,
-		id, from, to).Scan(&moved)
+		SELECT f.user_id FROM moved m LEFT JOIN finished f ON f.contest_id = m.id`,
+		id, from, to)
 	if err != nil {
-		return fmt.Errorf("set contest status: %w", err)
+		return nil, fmt.Errorf("set contest status: %w", err)
 	}
-	if moved == 1 {
-		return nil
+	defer rows.Close()
+
+	moved, finished := false, []uuid.UUID(nil)
+	for rows.Next() {
+		var user *uuid.UUID
+		if err := rows.Scan(&user); err != nil {
+			return nil, fmt.Errorf("scan a finished participant: %w", err)
+		}
+		moved = true
+		if user != nil {
+			finished = append(finished, *user)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("set contest status: %w", err)
+	}
+	if moved {
+		return finished, nil
 	}
 
 	// Nothing matched: a second read tells a missing contest from a moved
 	// status.
 	if _, err := r.ByID(ctx, id); err != nil {
-		return err
+		return nil, err
 	}
-	return contests.ErrStatusChanged
+	return nil, contests.ErrStatusChanged
 }
 
 var _ contests.ScheduleRepository = (*Contests)(nil)
@@ -367,33 +388,39 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 //
 // A contest with no ends_at (individual timing) stays running until an
 // organizer moves it.
-func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error) {
+func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]contests.FinishedContest, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH moved AS (
 			UPDATE contests SET status = $1, updated_at = now()
 			WHERE status = $2 AND ends_at IS NOT NULL AND ends_at + $3::interval <= now()
 			RETURNING id, status
 		),`+finishRoster+`
-		SELECT id FROM moved`,
+		SELECT m.id, f.user_id FROM moved m LEFT JOIN finished f ON f.contest_id = m.id`,
 		contests.StatusFinished, contests.StatusRunning, grace)
 	if err != nil {
 		return nil, fmt.Errorf("advance contests to finished: %w", err)
 	}
-	return scanIDs(rows)
-}
-
-// scanIDs collects a single uuid column and closes rows.
-func scanIDs(rows pgx.Rows) ([]uuid.UUID, error) {
 	defer rows.Close()
-	var ids []uuid.UUID
+
+	var finished []contests.FinishedContest
+	at := map[uuid.UUID]int{}
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan id: %w", err)
+		var contest uuid.UUID
+		var user *uuid.UUID
+		if err := rows.Scan(&contest, &user); err != nil {
+			return nil, fmt.Errorf("scan a finished contest: %w", err)
 		}
-		ids = append(ids, id)
+		i, seen := at[contest]
+		if !seen {
+			i = len(finished)
+			at[contest] = i
+			finished = append(finished, contests.FinishedContest{ID: contest})
+		}
+		if user != nil {
+			finished[i].Users = append(finished[i].Users, *user)
+		}
 	}
-	return ids, rows.Err()
+	return finished, rows.Err()
 }
 
 // Delete removes a contest; the schema's cascades remove its dependent rows.

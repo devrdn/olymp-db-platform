@@ -270,7 +270,7 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	return nil
 }
 
-func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) error {
+func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
 	// A staged race: a concurrent request committed between the caller's
 	// read and this write.
 	if r.racesTo != "" {
@@ -284,30 +284,30 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) e
 
 	c, ok := r.byID[id]
 	if !ok {
-		return contests.ErrNotFound
+		return nil, contests.ErrNotFound
 	}
 	if c.Status != from {
-		return contests.ErrStatusChanged
+		return nil, contests.ErrStatusChanged
 	}
 	c.Status = to
 	if now, ok := r.now(); ok {
 		c.UpdatedAt = now
 	}
 	r.byID[id] = c
-	if to == contests.StatusFinished {
-		r.finishRoster(id)
+	if to != contests.StatusFinished {
+		return nil, nil
 	}
-	return nil
+	return r.finishRoster(id), nil
 }
 
 // finishRoster finishes the contest's active registrations, as the real
-// statement moving a contest to finished does.
-func (r *Contests) finishRoster(id uuid.UUID) {
+// statement moving a contest to finished does, and returns their users.
+func (r *Contests) finishRoster(id uuid.UUID) []uuid.UUID {
 	if r.registrations == nil {
-		return
+		return nil
 	}
 	now, ok := r.now()
-	r.registrations.finishActive(id, now, ok)
+	return r.registrations.finishActive(id, now, ok)
 }
 
 // SetStatusRaces makes the next SetStatus find the contest already moved to
@@ -915,8 +915,10 @@ func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now t
 
 // finishActive mirrors postgres's finishRoster: every active registration of
 // the contest finishes at now, or at its own start if that is later. Without
-// a clock (stamp false) FinishedAt is left as it is.
-func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time, stamp bool) {
+// a clock (stamp false) FinishedAt is left as it is. It returns the users it
+// finished.
+func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time, stamp bool) []uuid.UUID {
+	var users []uuid.UUID
 	for id, p := range r.byID {
 		if p.ContestID != contestID || p.Status != contests.RegistrationActive {
 			continue
@@ -930,7 +932,9 @@ func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time, stamp b
 			p.FinishedAt = &finished
 		}
 		r.byID[id] = p
+		users = append(users, p.UserID)
 	}
+	return users
 }
 
 // AddScore mirrors the real repository's atomic increment.

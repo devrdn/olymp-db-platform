@@ -28,13 +28,20 @@ type ScheduleRepository interface {
 	DueToStart(ctx context.Context) ([]Contest, error)
 	// SetStatus is Repository.SetStatus: it refuses if a manual Transition
 	// moved the contest first.
-	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
+	SetStatus(ctx context.Context, id uuid.UUID, from, to string) (finished []uuid.UUID, err error)
 	// AdvanceFinished moves to finished every running contest whose ends_at
-	// plus grace has passed by the database clock, and returns their ids.
-	// The grace is the gate's, so no request inside it is refused as
+	// plus grace has passed by the database clock, and returns each of them
+	// once. The grace is the gate's, so no request inside it is refused as
 	// finished. A contest without ends_at never matches. Each contest's
 	// active registrations finish with it, as in Repository.SetStatus.
-	AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error)
+	AdvanceFinished(ctx context.Context, grace time.Duration) ([]FinishedContest, error)
+}
+
+// FinishedContest is a contest AdvanceFinished moved to finished, with the
+// users whose registrations finished with it.
+type FinishedContest struct {
+	ID    uuid.UUID
+	Users []uuid.UUID
 }
 
 // scheduleStories, scheduleQuestions, scheduleRoster and scheduleCovers are
@@ -222,7 +229,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 				return fmt.Errorf("check publish gate for contest %s: %w", c.ID, gateErr)
 			}
 
-			if err := s.repo.SetStatus(ctx, c.ID, StatusPublished, StatusRunning); err != nil {
+			if _, err := s.repo.SetStatus(ctx, c.ID, StatusPublished, StatusRunning); err != nil {
 				// A concurrent Transition or delete got there first and
 				// audited it.
 				if errors.Is(err, ErrStatusChanged) || errors.Is(err, ErrNotFound) {
@@ -235,13 +242,13 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 			entries = append(entries, scheduleEntry(c.ID, StatusPublished, StatusRunning))
 		}
 
-		finishedIDs, err := s.repo.AdvanceFinished(ctx, s.gate.grace)
+		finishedContests, err := s.repo.AdvanceFinished(ctx, s.gate.grace)
 		if err != nil {
 			return fmt.Errorf("advance contests to finished: %w", err)
 		}
-		finished = len(finishedIDs)
-		for _, id := range finishedIDs {
-			entries = append(entries, scheduleEntry(id, StatusRunning, StatusFinished))
+		finished = len(finishedContests)
+		for _, c := range finishedContests {
+			entries = append(entries, scheduleEntry(c.ID, StatusRunning, StatusFinished))
 		}
 
 		if len(entries) == 0 {
