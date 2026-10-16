@@ -32,8 +32,8 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 // schema panel. The caller has already admitted participant in contest through
 // Access; Schema does not admit them again.
 //
-// A successful read starts an individual participant's clock (StartOnRead); a
-// refused one, a hidden schema included, starts nothing. The catalogue flag is
+// A successful read records the participant's start (StartOnRead); a refused
+// one, a hidden schema included, starts nothing. The catalogue flag is
 // checked before provisioning or reading anything, so a hidden schema costs the
 // cluster no connection and cannot be told apart from a slow one.
 func (s *Service) Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error) {

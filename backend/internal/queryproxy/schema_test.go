@@ -186,6 +186,26 @@ func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
 	}
 }
 
+func TestReadingTheSchemaRecordsAFixedTimingParticipantsStart(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	starts := 0
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
+	service := queryproxy.New(
+		people{participant: registration, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "game_c1_u1"}, &runner{},
+		fiveSecondGate,
+	).WithSchemas(&schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}})
+
+	if _, err := service.Schema(t.Context(), contest, registration, netip.MustParseAddr("192.0.2.7")); err != nil {
+		t.Fatalf("Schema() = %v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
+	}
+}
+
 // A refused read starts nothing. For a disallowed address the start asks the
 // gate itself rather than trust Access did.
 func TestARefusedSchemaReadStartsNoClock(t *testing.T) {

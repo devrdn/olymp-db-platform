@@ -348,6 +348,59 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	}
 }
 
+// Under a shared window the first read records the start and makes the
+// registration active, the events channel never does, and a later read moves
+// nothing.
+func TestAFixedTimingParticipantsFirstReadRecordsTheStartOnceAndTheEventsChannelNever(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	contestID := makeRunningFixedContest(t, ctx, pool, author, clock.Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+
+	registrations := postgres.NewRegistrations(pool)
+	if _, err := registrations.Add(ctx, contestID, student); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
+		WithClock(func() time.Time { return clock })
+
+	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
+		t.Fatalf("AccessForEvents() = %v", err)
+	}
+	if stored, err := registrations.ByUser(ctx, contestID, student); err != nil || stored.StartedAt != nil || stored.Status != contests.RegistrationRegistered {
+		t.Fatalf("after the events channel: %+v, err = %v; want registered, no start", stored, err)
+	}
+
+	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
+	if err != nil {
+		t.Fatalf("Access() = %v", err)
+	}
+	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	stored, err := registrations.ByUser(ctx, contestID, student)
+	if err != nil || stored.StartedAt == nil || !stored.StartedAt.Equal(clock) || stored.Status != contests.RegistrationActive {
+		t.Fatalf("after the first read: %+v, err = %v; want active, started at %v", stored, err, clock)
+	}
+
+	clock = clock.Add(7 * time.Minute)
+	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
+		t.Fatalf("second StartOnRead() = %v", err)
+	}
+	again, err := registrations.ByUser(ctx, contestID, student)
+	if err != nil || again.StartedAt == nil || !again.StartedAt.Equal(*stored.StartedAt) || again.Status != contests.RegistrationActive {
+		t.Fatalf("after a second read: %+v, err = %v; want active, started at %v unchanged", again, err, stored.StartedAt)
+	}
+}
+
 // countingTracer counts every statement pgx sends over a real connection.
 type countingTracer struct {
 	mu    sync.Mutex
@@ -414,8 +467,10 @@ func (noOpExecutor) Run(context.Context, queryrunner.Request, queryrunner.Origin
 }
 
 // roundTrips measures the steady state: a fixed-timing, read-only contest with
-// a ready template and a participant already started with a current copy, so
-// neither Start, Quota nor the game cluster adds a round trip.
+// a ready template and a participant with a current copy, so neither Quota nor
+// the game cluster adds a round trip. The participant is not started: the
+// warm-up call records the start, so the measured call shows that a
+// participant already started costs no Start (CLAUDE.md rule 6).
 type roundTrips struct {
 	tracer    *countingTracer
 	service   *queryproxy.Service
@@ -461,9 +516,6 @@ func roundTripFixture(t *testing.T) roundTrips {
 	registration, err := registrations.Add(ctx, contestID, student)
 	if err != nil {
 		t.Fatalf("Add() = %v", err)
-	}
-	if _, err := registrations.Start(ctx, registration.ID, time.Now()); err != nil {
-		t.Fatalf("Start() = %v", err)
 	}
 	games := postgres.NewGameInstances(pool)
 	if err := games.Assign(ctx, contestID, registration.ID, "game_db_roundtrip_"+suffix, 1); err != nil {

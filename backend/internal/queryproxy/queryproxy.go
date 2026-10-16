@@ -293,9 +293,10 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 //  4. Anything left to answer (one round trip). Before provisioning, so a
 //     participant who cannot score cannot make the service build a database.
 //  5. The game exists, then the database is provisioned.
-//  6. Only then does an individual participant's clock start, so a refused
-//     request never costs them time. A query the SQL validator later rejects
-//     still starts it: the participant did act against the game.
+//  6. Only then is the participant's start recorded, which under individual
+//     timing starts their clock, so a refused request never costs them time.
+//     A query the SQL validator later rejects still records it: the
+//     participant did act against the game.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
 	if err := s.rate.Admit(cmd.UserID.String(), s.perMinuteDefault); err != nil {
 		return nil, err
@@ -424,12 +425,13 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 	return participant, contest, nil
 }
 
-// StartOnRead starts an individual participant's clock on their first read of
-// the contest's content (story, question list or schema) and returns the
-// participant as it now stands.
+// StartOnRead records a participant's start on their first read of the
+// contest's content (story, question list or schema), under either timing,
+// and returns the participant as it now stands. Under individual timing it
+// starts their clock.
 //
-// Otherwise a participant could read everything, prepare offline, and spend
-// their duration only on typing. Callers invoke it only after a successful
+// Otherwise an individual participant could read everything, prepare offline,
+// and spend their duration only on typing. Callers invoke it only after a successful
 // read: a refused read showed nothing and must cost nothing. The events
 // channel and leaderboards never call it. The gate is asked here, not trusted
 // from an earlier Access, and asked again after Start (see startClock).
@@ -437,11 +439,11 @@ func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, par
 	return s.startClock(ctx, contest, participant, addr)
 }
 
-// startClock checks the gate, starts the clock, and checks again: the start
-// may be another request's, and time may already be up. A participant whose
-// clock is not pending costs nothing.
+// startClock checks the gate, records the start, and checks again: the start
+// may be another request's, and time may already be up. A participant already
+// started costs nothing.
 func (s *Service) startClock(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
-	if !contests.ClockPending(contest, participant) {
+	if !participant.AwaitsStart() {
 		return participant, nil
 	}
 	if err := s.admit(contest, participant, addr); err != nil {

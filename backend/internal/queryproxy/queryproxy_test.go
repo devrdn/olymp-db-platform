@@ -460,12 +460,34 @@ func TestASecondQueryDoesNotRestartAnAlreadyStartedParticipant(t *testing.T) {
 	}
 }
 
-// Fixed timing shares one window; Deadline never consults StartedAt for it.
-func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
+// Under a shared window the first query records the start too; the deadline
+// is still the contest's end (contests.Deadline).
+func TestAFixedTimingParticipantsFirstQueryRecordsTheirStart(t *testing.T) {
 	starts := 0
 	service := queryproxy.New(
 		people{participant: contests.Participant{
-			ID: uuid.New(), Status: contests.RegistrationActive,
+			ID: uuid.New(), Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
+	)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start was called %d times for a fixed-timing participant's first query, want 1", starts)
+	}
+}
+
+func TestASecondQueryFromAFixedTimingParticipantCallsNoStart(t *testing.T) {
+	began := time.Now().Add(-time.Minute)
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began,
 		}, starts: &starts},
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
@@ -477,7 +499,7 @@ func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
 		t.Fatalf("running: %v", err)
 	}
 	if starts != 0 {
-		t.Fatalf("Start was called %d times for a fixed-timing participant, want 0", starts)
+		t.Fatalf("Start was called %d times for a participant already started, want 0", starts)
 	}
 }
 
@@ -1111,17 +1133,59 @@ func TestStartOnReadDoesNotMoveAClockAlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
+func TestStartOnReadRecordsAFixedTimingParticipantsStart(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	starts := 0
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+	started, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{})
+	if err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	if starts != 1 || started.StartedAt == nil || started.Status != contests.RegistrationActive {
+		t.Fatalf("Start called %d times, participant = %+v; want one start, active", starts, started)
+	}
+}
+
+func TestStartOnReadCallsNoStartForAFixedTimingParticipantAlreadyStarted(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	starts := 0
+	began := time.Now().Add(-10 * time.Minute)
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began}
 	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
 
 	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); err != nil {
 		t.Fatalf("StartOnRead() = %v", err)
 	}
 	if starts != 0 {
-		t.Fatalf("Start called %d times under fixed timing, want 0", starts)
+		t.Fatalf("Start called %d times for a participant already started, want 0", starts)
+	}
+}
+
+// StartOnRead asks the gate itself, so a shared window that is not running
+// starts nobody even if a caller skipped Access.
+func TestStartOnReadInAFixedContestNotRunningStartsNobody(t *testing.T) {
+	for name, given := range map[string]struct {
+		status string
+		want   error
+	}{
+		"published": {contests.StatusPublished, contests.ErrContestNotRunning},
+		"finished":  {contests.StatusFinished, contests.ErrContestEnded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			contest := contests.Contest{ID: uuid.New(), Status: given.status, Timing: contests.TimingFixed, EndsAt: &openWindow}
+			starts := 0
+			p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+			service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+			if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, given.want) {
+				t.Fatalf("StartOnRead() = %v, want %v", err, given.want)
+			}
+			if starts != 0 {
+				t.Fatalf("Start called %d times, want 0", starts)
+			}
+		})
 	}
 }
 
