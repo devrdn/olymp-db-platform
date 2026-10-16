@@ -462,7 +462,7 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 	if err := s.admit(contest, participant, addr); err != nil {
 		return contests.Participant{}, err
 	}
-	started, err := s.start(ctx, participant.ID)
+	started, err := contests.StartParticipant(ctx, s.uow, s.audit, s.people, participant.ID, s.now())
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: record the participant's start: %w", ErrUnavailable, err)
 	}
@@ -478,21 +478,6 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 		return contests.Participant{}, fmt.Errorf("%w: recording the participant's start left their clock pending", ErrUnavailable)
 	}
 	return started, nil
-}
-
-// start records the participant's start and, when this call recorded it,
-// its audit entry, in one unit of work.
-func (s *Service) start(ctx context.Context, registrationID uuid.UUID) (contests.Participant, error) {
-	var started contests.Participant
-	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		var recorded bool
-		var err error
-		if started, recorded, err = s.people.Start(ctx, registrationID, s.now()); err != nil || !recorded {
-			return err
-		}
-		return s.audit.Record(ctx, contests.StartEntry(started))
-	})
-	return started, err
 }
 
 // resolve is the lookup Access and AccessForEvents share, classified the same
