@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -149,6 +150,10 @@ type Service struct {
 	// budget.
 	maxClusterBytes int64
 	sizes           templateSizes
+	// copyTimeout bounds a reset's work once its turn is held, which no
+	// longer ends with the request; zero leaves it to the cluster's own
+	// statement timeout.
+	copyTimeout time.Duration
 }
 
 // DefaultWorkers is how many copies are made at once: enough to fill a pool in
@@ -185,6 +190,13 @@ func (s *Service) WithWorkers(workers int) *Service {
 func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Service {
 	s.audit = rec
 	s.uow = uow
+	return s
+}
+
+// WithCopyTimeout sets how long a reset may take once it has its turn: the
+// copy-slot wait, the copy and the row's update together.
+func (s *Service) WithCopyTimeout(timeout time.Duration) *Service {
+	s.copyTimeout = timeout
 	return s
 }
 
@@ -366,6 +378,11 @@ func (s *Service) Invalidate(ctx context.Context, contest Contest) (int, error) 
 // The copy comes before the row and its audit entry, as in DropInstance: a
 // failure between them leaves a fresh database under a row that a second
 // press brings up to date.
+//
+// Only the wait for the turn ends with ctx. The copy drops the old database
+// first, so the caller leaving halfway would leave the row naming nothing:
+// from the turn on, the work is detached from the request and bounded by
+// WithCopyTimeout instead.
 func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest, registration uuid.UUID) error {
 	done, err := s.provideAlone(ctx, registration)
 	if err != nil {
@@ -373,12 +390,15 @@ func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest,
 	}
 	defer done()
 
+	ctx, cancel := s.detached(ctx)
+	defer cancel()
+
 	existing, err := s.repo.Of(ctx, registration)
 	if err != nil {
 		return err
 	}
 	if err := s.replace(ctx, contest, existing.Database); err != nil {
-		return err
+		return s.abandonCopy(ctx, existing.Database, err)
 	}
 
 	write := func(ctx context.Context) error {
@@ -394,6 +414,30 @@ func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest,
 		return write(ctx)
 	}
 	return s.uow.Do(ctx, write)
+}
+
+// detached is ctx without its cancellation, bounded by s.copyTimeout.
+func (s *Service) detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	work := context.WithoutCancel(ctx)
+	if s.copyTimeout <= 0 {
+		return work, func() {}
+	}
+	return context.WithTimeout(work, s.copyTimeout)
+}
+
+// abandonCopy marks a failed reset's row 'dropped', which EnsureFrom rebuilds
+// on the participant's next action. The copy may have dropped the old
+// database already, so the name is cleared first: a row left 'ready' would
+// hand out nothing, and one marked 'dropped' over a live database would never
+// be reclaimed. If the name cannot be cleared the row is left as it is.
+func (s *Service) abandonCopy(ctx context.Context, database string, cause error) error {
+	if err := s.cluster.Drop(ctx, database); err != nil {
+		return errors.Join(cause, fmt.Errorf("clear %s after a failed copy: %w", database, err))
+	}
+	if err := s.repo.MarkDropped(ctx, database); err != nil {
+		return errors.Join(cause, fmt.Errorf("mark %s dropped after a failed copy: %w", database, err))
+	}
+	return cause
 }
 
 // resetEntry records a participant's reset on the contest's trail.
