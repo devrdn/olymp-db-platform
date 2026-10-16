@@ -2171,7 +2171,7 @@ nothing.
   `finished_at` at the database's clock (or at the participant's start, if
   the application recorded that later). A participant who never started
   stays `registered`, and a disqualified one stays `disqualified`. From then
-  on the gate refuses a participant who started with `contest_finished`, the
+  on the gate answers `contest_finished` to a participant who started, the
   profile counts the contest as finished, and monitoring shows the finish.
 
 ### 8.1 The participation gate
@@ -2917,16 +2917,16 @@ backwards; a page always runs oldest to newest, and the response carries
   registration's created_at)`. The earlier of the finish and the deadline,
   because a contest's end finishes an individual participant when it closes,
   which can be days after their own time ran out. Signing in after the end to
-  read the result is the contest's business; a lecture a week later is not. The same before the
-  start: an `invite_only` contest may enrol a student weeks ahead, and weeks
-  of their sign-ins, addresses and browsers — along with failed sign-ins
-  carrying other people's addresses — do not belong to that contest's
-  organiser, while signing in an hour before the start to check the machine
-  does. One case is left unbounded above: individual timing where the
-  participant never started and the contest has no end. Failed sign-ins are
-  found by `lower(login)` through the partial index — somebody else's typo in
-  a participant's login is attributed to them, deliberately — and a change of
-  login loses the earlier failures.
+  read the result is the contest's business; a lecture a week later is not.
+  The same before the start: an `invite_only` contest may enrol a student
+  weeks ahead, and weeks of their sign-ins, addresses and browsers — along
+  with failed sign-ins carrying other people's addresses — do not belong to
+  that contest's organiser, while signing in an hour before the start to check
+  the machine does. One case is left unbounded above: individual timing where
+  the participant never started and the contest has no end. Failed sign-ins
+  are found by `lower(login)` through the partial index — somebody else's typo
+  in a participant's login is attributed to them, deliberately — and a change
+  of login loses the earlier failures.
 - Disqualifications are read by the contest entity, with the participant
   filter inside the subquery, before the `LIMIT`.
 

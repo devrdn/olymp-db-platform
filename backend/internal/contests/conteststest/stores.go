@@ -28,7 +28,9 @@ type Contests struct {
 	order   []uuid.UUID
 	racesTo string
 	// Clock stands in for the database's now() in Create, Update and
-	// SetStatus. Nil leaves the timestamps as they are.
+	// SetStatus, and in the FinishedAt a move to finished writes. Nil leaves
+	// the timestamps as they are: a finished registration keeps a nil
+	// FinishedAt.
 	Clock func() time.Time
 	// managers and registrations back Filter.ManagedBy and Filter.VisibleTo,
 	// and registrations is the roster a move to finished finishes; see
@@ -304,8 +306,8 @@ func (r *Contests) finishRoster(id uuid.UUID) {
 	if r.registrations == nil {
 		return
 	}
-	now, _ := r.now()
-	r.registrations.finishActive(id, now)
+	now, ok := r.now()
+	r.registrations.finishActive(id, now, ok)
 }
 
 // SetStatusRaces makes the next SetStatus find the contest already moved to
@@ -910,17 +912,21 @@ func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now t
 }
 
 // finishActive mirrors postgres's finishRoster: every active registration of
-// the contest finishes at now, or at its own start if that is later.
-func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time) {
+// the contest finishes at now, or at its own start if that is later. Without
+// a clock (stamp false) FinishedAt is left as it is.
+func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time, stamp bool) {
 	for id, p := range r.byID {
 		if p.ContestID != contestID || p.Status != contests.RegistrationActive {
 			continue
 		}
-		finished := now
-		if p.StartedAt != nil && p.StartedAt.After(now) {
-			finished = *p.StartedAt
+		p.Status = contests.RegistrationFinished
+		if stamp {
+			finished := now
+			if p.StartedAt != nil && p.StartedAt.After(now) {
+				finished = *p.StartedAt
+			}
+			p.FinishedAt = &finished
 		}
-		p.Status, p.FinishedAt = contests.RegistrationFinished, &finished
 		r.byID[id] = p
 	}
 }

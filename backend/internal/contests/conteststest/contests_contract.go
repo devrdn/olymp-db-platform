@@ -1260,12 +1260,15 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 	})
 }
 
-// The states a contest's end treats differently, one participant in each.
+// rosterState is a state a contest's end treats differently; an
+// endingRoster holds one participant in each.
+type rosterState string
+
 const (
-	neverStarted         = "never started"
-	started              = "started"
-	startedAheadOfClock  = "started ahead of the store's clock"
-	disqualifiedStarting = "disqualified after starting"
+	rosterNeverStarted        rosterState = "never started"
+	rosterStarted             rosterState = "started"
+	rosterStartedAheadOfClock rosterState = "started ahead of the store's clock"
+	rosterDisqualified        rosterState = "disqualified after starting"
 )
 
 // endingRoster is one participant of a contest in each state its end treats
@@ -1274,7 +1277,7 @@ type endingRoster struct {
 	repo    contests.RegistrationRepository
 	contest uuid.UUID
 	now     time.Time
-	users   map[string]uuid.UUID
+	users   map[rosterState]uuid.UUID
 }
 
 // seedEndingRoster enrols the roster in contest. now is the store's clock; a
@@ -1283,23 +1286,23 @@ type endingRoster struct {
 func seedEndingRoster(t *testing.T, ctx context.Context, repo contests.RegistrationRepository,
 	newUser func() uuid.UUID, contest uuid.UUID, now time.Time) endingRoster {
 	t.Helper()
-	r := endingRoster{repo: repo, contest: contest, now: now, users: map[string]uuid.UUID{}}
-	for _, state := range []string{neverStarted, started, startedAheadOfClock, disqualifiedStarting} {
+	r := endingRoster{repo: repo, contest: contest, now: now, users: map[rosterState]uuid.UUID{}}
+	for _, state := range []rosterState{rosterNeverStarted, rosterStarted, rosterStartedAheadOfClock, rosterDisqualified} {
 		user := newUser()
 		p, err := repo.Add(ctx, contest, user)
 		if err != nil {
 			t.Fatalf("Add() = %v", err)
 		}
 		switch state {
-		case started, disqualifiedStarting:
+		case rosterStarted, rosterDisqualified:
 			_, err = repo.Start(ctx, p.ID, now.Add(-time.Hour))
-		case startedAheadOfClock:
+		case rosterStartedAheadOfClock:
 			_, err = repo.Start(ctx, p.ID, now.Add(time.Hour))
 		}
 		if err != nil {
 			t.Fatalf("Start() = %v", err)
 		}
-		if state == disqualifiedStarting {
+		if state == rosterDisqualified {
 			if err := repo.SetStatus(ctx, p.ID, contests.RegistrationDisqualified); err != nil {
 				t.Fatalf("SetStatus() = %v", err)
 			}
@@ -1320,11 +1323,11 @@ type rosterRow struct {
 func (r endingRoster) wantFinished(t *testing.T, ctx context.Context) {
 	t.Helper()
 	before, ahead := r.now.Add(-time.Hour), r.now.Add(time.Hour)
-	r.want(t, ctx, map[string]rosterRow{
-		neverStarted:         {status: contests.RegistrationRegistered},
-		started:              {contests.RegistrationFinished, &before, &r.now},
-		startedAheadOfClock:  {contests.RegistrationFinished, &ahead, &ahead},
-		disqualifiedStarting: {status: contests.RegistrationDisqualified, startedAt: &before},
+	r.want(t, ctx, map[rosterState]rosterRow{
+		rosterNeverStarted:        {status: contests.RegistrationRegistered},
+		rosterStarted:             {contests.RegistrationFinished, &before, &r.now},
+		rosterStartedAheadOfClock: {contests.RegistrationFinished, &ahead, &ahead},
+		rosterDisqualified:        {status: contests.RegistrationDisqualified, startedAt: &before},
 	})
 }
 
@@ -1332,15 +1335,15 @@ func (r endingRoster) wantFinished(t *testing.T, ctx context.Context) {
 func (r endingRoster) wantUntouched(t *testing.T, ctx context.Context) {
 	t.Helper()
 	before, ahead := r.now.Add(-time.Hour), r.now.Add(time.Hour)
-	r.want(t, ctx, map[string]rosterRow{
-		neverStarted:         {status: contests.RegistrationRegistered},
-		started:              {status: contests.RegistrationActive, startedAt: &before},
-		startedAheadOfClock:  {status: contests.RegistrationActive, startedAt: &ahead},
-		disqualifiedStarting: {status: contests.RegistrationDisqualified, startedAt: &before},
+	r.want(t, ctx, map[rosterState]rosterRow{
+		rosterNeverStarted:        {status: contests.RegistrationRegistered},
+		rosterStarted:             {status: contests.RegistrationActive, startedAt: &before},
+		rosterStartedAheadOfClock: {status: contests.RegistrationActive, startedAt: &ahead},
+		rosterDisqualified:        {status: contests.RegistrationDisqualified, startedAt: &before},
 	})
 }
 
-func (r endingRoster) want(t *testing.T, ctx context.Context, rows map[string]rosterRow) {
+func (r endingRoster) want(t *testing.T, ctx context.Context, rows map[rosterState]rosterRow) {
 	t.Helper()
 	sameInstant := func(a, b *time.Time) bool {
 		return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
