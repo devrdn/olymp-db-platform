@@ -84,6 +84,10 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			message: "the database refused the query"},
 		queryproxy.ErrSchemaHidden: {status: http.StatusForbidden, code: "schema_hidden",
 			message: "This contest does not show the game's schema"},
+		queryproxy.ErrResetReadOnly: {status: http.StatusConflict, code: "reset_read_only",
+			message: "This contest is read-only, so a participant's database has nothing to reset"},
+		queryproxy.ErrResetTooOften: {status: http.StatusTooManyRequests, code: "reset_too_often",
+			message: "This participant has reset their database as often as allowed for now", retryAfter: "600"},
 	}
 
 	declared := map[string]bool{}

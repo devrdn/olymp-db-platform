@@ -62,6 +62,10 @@ var (
 		"The database has already been removed — by the reclaim sweep once the contest's grace period passed, or by somebody else while this page was open. Nothing was changed; reloading the list shows the current state.")
 	codeSchemaHidden = httpx.NewCode("schema_hidden",
 		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
+	codeResetReadOnly = httpx.NewCode("reset_read_only",
+		"The participant asked for their database back as the contest started it, and this contest is read-only: nothing they run can change it, so there is nothing to reset. A rule of the contest, not a fault; nothing was copied.")
+	codeResetTooOften = httpx.NewCode("reset_too_often",
+		"This participant has reset their database as often as the installation allows in a sliding window, refused presses included. Each reset drops the database and copies the template again, so it is bounded; nothing was copied, and `Retry-After` says how long to wait at most.")
 
 	// --- The game's uploaded dump --------------------------------------------
 	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1): most

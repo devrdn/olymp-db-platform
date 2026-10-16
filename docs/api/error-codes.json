@@ -570,6 +570,14 @@
       "meaning": "Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later."
     },
     {
+      "code": "reset_read_only",
+      "meaning": "The participant asked for their database back as the contest started it, and this contest is read-only: nothing they run can change it, so there is nothing to reset. A rule of the contest, not a fault; nothing was copied."
+    },
+    {
+      "code": "reset_too_often",
+      "meaning": "This participant has reset their database as often as the installation allows in a sliding window, refused presses included. Each reset drops the database and copies the template again, so it is bounded; nothing was copied, and `Retry-After` says how long to wait at most."
+    },
+    {
       "code": "same_password",
       "meaning": "The new password is the one already in use."
     },
