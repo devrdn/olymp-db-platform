@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -145,7 +147,8 @@ const queryRetryAfter = time.Minute
 // opened.
 var queryrunnerErrors = errorTable{
 	{err: queryrunner.ErrTimeout, status: http.StatusGatewayTimeout, code: codeQueryTimedOut},
-	{err: queryrunner.ErrCanceled, status: http.StatusRequestTimeout, code: codeQueryCancelled},
+	{err: queryrunner.ErrCanceled, status: http.StatusRequestTimeout, code: codeQueryCancelled,
+		message: "The caller stopped waiting"},
 	{err: queryrunner.ErrBusy, status: http.StatusServiceUnavailable, code: codeQueryBusy},
 	{err: queryrunner.ErrAlreadyRunning, status: http.StatusConflict, code: codeQueryAlreadyRunning},
 	// One code whether the runner or a façade's pre-check caught the caller:
@@ -160,6 +163,17 @@ var queryrunnerErrors = errorTable{
 	{err: queryrunner.ErrJournalUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a query could not be journalled"},
+}
+
+// callerLeft answers an error that the client's going away caused while the
+// service waited on its behalf, as the console answers it: 408
+// query_cancelled, not logged. Only when the request's own context ended, so a
+// cancellation of ours is still answered as a failure.
+func callerLeft(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) bool {
+	if r.Context().Err() == nil || !errors.Is(err, context.Canceled) {
+		return false
+	}
+	return queryrunnerErrors.answer(w, r, log, fmt.Errorf("%w: %w", queryrunner.ErrCanceled, err))
 }
 
 // usersErrors answers every error in users.Errors() (walked by
