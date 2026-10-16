@@ -34,6 +34,8 @@ export const PUBLISH_PROBLEMS = {
   staffRegistered: "staff_registered",
   // An uploaded cover with nobody credited; a drawn cover never appears here.
   coverNeedsAttribution: "cover_needs_attribution",
+  // The game template is missing, waiting for a build, building or failed.
+  noGame: "no_game",
 } as const;
 
 export type PublishProblem = {

@@ -892,6 +892,7 @@ const en = {
         leaderboard_freeze_exceeds_window: "The leaderboard freeze starts before the contest does, or the contest has no end to count it back from.",
         staff_registered: "A participant's account administers every contest, so it already reads this contest's reference answers and its unfrozen leaderboard. Remove them from the roster before publishing, or take the permission away from the account.",
         cover_needs_attribution: "The uploaded cover has no line saying whose picture it is. Add one, or remove the cover and let the contest wear its drawn one.",
+        no_game: "The olympiad's database is not built yet, is still building, or its last build failed, so no participant would have a database to query. Build it on the Database tab and wait for the build to finish.",
       },
     },
     story: {

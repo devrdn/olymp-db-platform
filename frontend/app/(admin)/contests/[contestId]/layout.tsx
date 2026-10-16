@@ -164,8 +164,8 @@ async function navigation(
         { href: `${base}/people`, label: t.tabs.people },
         { href: `${base}/settings`, label: t.tabs.settings },
         // Read while the contest runs, so it follows people and settings. No
-        // note: notes come from the publish gate, and database state never
-        // blocks publishing.
+        // note: notes come from the publish gate, and the participants' copies
+        // never block publishing.
         { href: `${base}/databases`, label: t.tabs.databases },
         // Read during and after the contest.
         { href: `${base}/standings`, label: t.tabs.leaderboard },
