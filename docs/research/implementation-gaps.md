@@ -572,6 +572,9 @@ the last manual `make backup` (O1).
 
 ## Stale roadmap entries
 
+Each of these has since been corrected in the document it names; they are
+kept here as found.
+
 - **S1. §14 step 5, "The game", is unchecked** (`docs/ARCHITECTURE.md:4001-4005`)
   but built: the play routes (`backend/internal/api/participant_handler.go:194-201`),
   the event stream (`backend/internal/api/events_handler.go:165`), the penalty

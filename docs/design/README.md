@@ -67,5 +67,7 @@ Three checks, all in CI (`.github/workflows/frontend.yml`):
 
 The specification rests on [`../ARCHITECTURE.md`](../ARCHITECTURE.md): section
 6.1 (question modes and the hidden question) and section 6.2 (multilingual text
-and the three layers). The reverse edit — a section on frontend architecture — is
-described in section 17 of the specification and has not been made yet.
+and the three layers). The reverse direction — the frontend's own architecture —
+is written up in the developer guide,
+[`../guide/05-frontend.md`](../guide/05-frontend.md), as section 17 of the
+specification records.
