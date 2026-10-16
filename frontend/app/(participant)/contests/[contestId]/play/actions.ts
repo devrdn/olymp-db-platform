@@ -194,10 +194,7 @@ export async function resetDatabaseAction(_previous: ResetState, form: FormData)
 /** The re-read schema, or why it could not be read. */
 export type SchemaRefreshResult = { kind: "ok"; schema: GameSchema } | { kind: "refused"; code: string };
 
-/**
- * Re-reads the schema of the participant's own database, which a reset
- * changes: the tables and views they made are gone.
- */
+/** Re-reads the schema of the participant's own database. */
 export async function refreshSchemaAction(contestId: string): Promise<SchemaRefreshResult> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
 
