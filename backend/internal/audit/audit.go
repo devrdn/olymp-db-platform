@@ -299,6 +299,12 @@ func WithRequestMeta(ctx context.Context, ip, userAgent string) context.Context 
 	return context.WithValue(ctx, metaKey{}, requestMeta{ip: ip, userAgent: storableUserAgent(userAgent)})
 }
 
+// WithoutRequestMeta returns ctx without the request origin, so an entry
+// recorded with it carries only the origin it names itself.
+func WithoutRequestMeta(ctx context.Context) context.Context {
+	return context.WithValue(ctx, metaKey{}, nil)
+}
+
 // redact returns a copy of the payload with sensitive values removed, at any
 // depth. Handlers pass request data straight through.
 func redact(payload map[string]any) map[string]any {

@@ -226,7 +226,10 @@ func TestAdvanceAuditsEachParticipationAContestsEndFinishes(t *testing.T) {
 	f.roster.Put(contests.Participant{ContestID: overdue, UserID: uuid.New(), Status: contests.RegistrationRegistered})
 	f.roster.Put(contests.Participant{ContestID: stillRunning, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began})
 
-	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+	// A tick never runs inside a request today; the entries must not borrow
+	// one's origin if it ever does.
+	ctx := audit.WithRequestMeta(context.Background(), "203.0.113.7", "some-agent")
+	if _, _, err := f.scheduler.Advance(ctx); err != nil {
 		t.Fatalf("Advance() = %v", err)
 	}
 

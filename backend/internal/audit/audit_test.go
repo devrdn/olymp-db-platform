@@ -165,6 +165,19 @@ func TestExplicitOriginWinsOverTheContext(t *testing.T) {
 	}
 }
 
+// A system entry written while serving a request must not borrow that
+// request's origin: the request's own entry already records it.
+func TestWithoutRequestMetaRecordsNoOrigin(t *testing.T) {
+	sink := &recordingSink{}
+	ctx := WithoutRequestMeta(WithRequestMeta(context.Background(), "203.0.113.7", "Mozilla/5.0"))
+
+	_ = New(sink).RecordMany(ctx, []Entry{{Action: ActionParticipantFinish}})
+
+	if got := sink.entries[0]; got.IP != "" || got.UserAgent != "" {
+		t.Errorf("origin = %q/%q, want none", got.IP, got.UserAgent)
+	}
+}
+
 func TestTheUserAgentIsStorableAndBoundedWhereverItCameFrom(t *testing.T) {
 	long := strings.Repeat("я", 300) // 600 bytes, two per character
 	for name, ctx := range map[string]context.Context{
