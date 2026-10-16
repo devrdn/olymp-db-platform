@@ -348,8 +348,8 @@ stateDiagram-v2
   database's clock, or at the participant's own start if the application
   recorded that later. A participant who never started stays `registered`,
   and a disqualified one stays `disqualified`. The caller writes one
-  `participant.finish` audit entry, with no actor, for each user the
-  statement returns as finished, in the same transaction.
+  `participant.finish` audit entry, with no actor and no origin, for each
+  user the statement returns as finished, in the same transaction.
 - Deleting a draft: `DELETE /contests/ID`, behind `contest.edit`, calling
   `Service.Delete`. Any other status is refused; a contest that was ever
   published can only be archived.

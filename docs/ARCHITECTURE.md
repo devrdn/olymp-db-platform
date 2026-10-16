@@ -2178,8 +2178,9 @@ nothing.
   with the participant as its actor, in the transaction that records it;
   a later request, or one that lost the race to start them, writes nothing.
   The move into `finished` writes one `participant.finish` per registration
-  it finished, with no actor and the user in the payload, in the
-  transaction that moves the contest.
+  it finished, with the user in the payload and no actor, address or user
+  agent, in the transaction that moves the contest; an organiser's own
+  `contest.status_change` records who moved it and from where.
 
 ### 8.1 The participation gate
 
