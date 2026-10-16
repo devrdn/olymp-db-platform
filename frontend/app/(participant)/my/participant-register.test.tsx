@@ -34,6 +34,7 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   // Spelled out for the same reason as `description`.
   coverHash: "",
   coverAttribution: "",
+  sqlMode: "read_only",
   ...over,
 });
 

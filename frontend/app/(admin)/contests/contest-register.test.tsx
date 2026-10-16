@@ -23,6 +23,7 @@ const nightInTheArchive: ContestSummary = {
   // Unused by the register (no pictures, SPEC.md §10), but part of the shape.
   coverHash: "",
   coverAttribution: "",
+  sqlMode: "read_only",
 };
 
 let en: Dictionary;

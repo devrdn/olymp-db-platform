@@ -104,6 +104,26 @@ describe("contestListSchema", () => {
       coverAttribution: "",
     });
   });
+
+  // The play screen offers the database reset only where writing is allowed.
+  test("carries the mode of the contest's SQL policy", () => {
+    const item = {
+      id: "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+      status: "running",
+      enrollment: "open",
+      question_mode: "multi",
+      lang: "ru",
+      title: "Ночь в архиве",
+      scoring: "points",
+      icpc_penalty_min: 20,
+    };
+
+    expect(contestListSchema.parse({ items: [{ ...item, sql_mode: "read_write" }], total: 1 }).items[0].sqlMode).toBe(
+      "read_write",
+    );
+    // An older server omits it; nothing is offered that it would refuse.
+    expect(contestListSchema.parse({ items: [item], total: 1 }).items[0].sqlMode).toBe("read_only");
+  });
 });
 
 const detail = {

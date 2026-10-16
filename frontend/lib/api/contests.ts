@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
+import { SQL_MODES } from "./policy-terms";
 
 export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
 
@@ -66,6 +67,12 @@ export const contestSummarySchema = z
      */
     cover_hash: z.string().default(""),
     cover_attribution: z.string().default(""),
+    /**
+     * The mode of the contest's SQL policy, which a participant may not read
+     * whole; the play screen offers the database reset only under
+     * `read_write`. An older server omits it, read as `read_only`.
+     */
+    sql_mode: z.enum(SQL_MODES).default("read_only"),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -83,6 +90,7 @@ export const contestSummarySchema = z
     icpcPenaltyMin: raw.icpc_penalty_min,
     coverHash: raw.cover_hash,
     coverAttribution: raw.cover_attribution,
+    sqlMode: raw.sql_mode,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;
