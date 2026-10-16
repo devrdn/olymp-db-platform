@@ -255,3 +255,17 @@ func (r *GameInstances) GameEditable(ctx context.Context, contestID uuid.UUID) (
 	}
 	return editable, nil
 }
+
+// GameReady implements the publish gate's question about a contest's game. A
+// ready row is built at its current version: every save and rebuild raises the
+// version and leaves the row pending. The condition is the one ForRun and Game
+// join on, so the gate and the console agree.
+func (r *GameInstances) GameReady(ctx context.Context, contestID uuid.UUID) (bool, error) {
+	var ready bool
+	if err := r.querier(ctx).QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM game_templates WHERE contest_id = $1 AND status = 'ready')`,
+		contestID).Scan(&ready); err != nil {
+		return false, fmt.Errorf("read whether the contest's game is built: %w", err)
+	}
+	return ready, nil
+}
