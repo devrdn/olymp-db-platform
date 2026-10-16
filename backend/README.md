@@ -580,44 +580,49 @@ cannot be reconstructed by reinstalling anything.
 second is the `contest-covers-data` volume: a contest's cover picture is a
 file in `COVER_DIR` (`internal/platform/filestore`), deliberately not a row in
 any table, so `pg_dump` does not see it and a restore from the dump alone
-gives back every contest without its cover. `make backup` writes both, under
-one timestamp, and fails loudly rather than writing only the dump.
-
-The third is the `game-uploads-data` volume in `GAME_UPLOAD_DIR`: organisers'
-uploaded dumps, and the table builder's CSV files under its `tables/`
-directory. A game built from a file is built from them, so without them it
-cannot be built again. `make backup` does not take this volume; copy it out of
-the `api` container by hand:
-
-```bash
-docker compose -f deploy/docker-compose.yml cp api:/var/lib/dbcontest/uploads/. <dir>
-```
-
-Bring it back only after `make restore`, owned by the API's user (65532), and
-restart the `api`: until the rows are back, the upload sweep treats the files
-as orphans and deletes them. Section 13 of
-[the architecture](../docs/ARCHITECTURE.md) has the whole move procedure.
+gives back every contest without its cover. The third is the
+`game-uploads-data` volume in `GAME_UPLOAD_DIR`: organisers' uploaded dumps,
+and the table builder's CSV files under its `tables/` directory. A game built
+from a file is built from them, so without them it cannot be built again.
+`make backup` writes all three, under one timestamp, and fails loudly rather
+than writing only part of them; `DB_ONLY=1` takes the dump alone and says so.
 
 ```bash
 make backup                                   # deploy/backups/<db>-<timestamp>.dump
                                               # deploy/backups/covers-<timestamp>.tar.gz
-make restore-check   FILE=deploy/backups/....dump
-make restore         FILE=deploy/backups/....dump         CONFIRM=yes
-make restore-covers  FILE=deploy/backups/covers-....tar.gz CONFIRM=yes
+                                              # deploy/backups/game-uploads-<timestamp>.tar.gz
+make restore-check        FILE=deploy/backups/....dump
+make restore              FILE=deploy/backups/....dump              CONFIRM=yes
+make restore-covers       FILE=deploy/backups/covers-....tar.gz       CONFIRM=yes
+make restore-game-uploads FILE=deploy/backups/game-uploads-....tar.gz CONFIRM=yes
 ```
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
-the host, and refuses to keep an empty file. The covers come out through
+the host, and refuses to keep an empty file. The volumes come out through
 `docker compose cp` on the `api` service — the mount point is the compose
 file's business, not the Makefile's — which reads a stopped container as
-happily as a running one, but needs the container to exist. Copy all three
-off the machine: a backup that only exists on the host it came from is not a
-backup.
+happily as a running one, but needs the container to exist. Each volume is
+staged in a temporary directory before it is archived, and the uploads can
+run to gigabytes: on a host whose `/tmp` is held in memory, point `TMPDIR` at
+a disk with room for them (`TMPDIR=/srv/tmp make backup`; the restores
+stage the same way). Copy all three files off the machine: a backup that only
+exists on the host it came from is not a backup.
 
-`restore-covers` copies an archive back into the volume. It is additive and
-does not empty the directory first, which is safe because a cover is named by
-the hash of its own content: a file that is already there is replaced by an
-identical one.
+`restore-covers` and `restore-game-uploads` copy an archive back into its
+volume, owned by the API's user (65532), and say to restart the `api`. Both
+are additive and do not empty the directory first. That is safe for the
+covers because a cover is named by the hash of its own content, so a file
+that is already there is replaced by an identical one; and for the uploads
+because an upload is named by its own id. **Restore the uploads after
+`make restore`, not before:** until the rows are back, the upload sweep treats
+the files as orphans and deletes them, which is also what clears away any
+upload the volume held that the restored database does not know. Section 13
+of [the architecture](../docs/ARCHITECTURE.md) has the whole move procedure.
+
+`make restore-covers-check` and `make restore-game-uploads-check` prove that
+ownership against a throwaway compose project, the second also that
+`make backup` takes the uploads; neither touches `deploy/.env` or a running
+stack.
 
 `restore-check` loads the dump into a throwaway database and drops it again. It
 touches nothing real, and it is the whole difference between having backups and

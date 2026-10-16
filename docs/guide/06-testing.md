@@ -207,7 +207,7 @@ they stop with an explanation when it is missing.
 | `make test-all` | `fmt-check`, `tidy-check`, `vet`, `test-race`, `build`, `vuln`, `sec` | Go and a C compiler; installs `govulncheck` and `gosec` if missing |
 | `make front-test` | `npm test` (`vitest run`) | Node; installs dependencies if missing |
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build (not `smoke`) | Node |
-| `make restore-covers-check`, `make edge-check` | the backup restore and the Caddy forwarding, against throwaway containers | Docker |
+| `make restore-covers-check`, `make restore-game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 
 One test or one package, from `backend/`:
 
