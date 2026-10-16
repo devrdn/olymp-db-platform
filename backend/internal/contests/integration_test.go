@@ -172,6 +172,11 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 		{"DisqualifyParticipant", func() error {
 			return f.Service.DisqualifyParticipant(ctx, actor, c.ID, rival.ID)
 		}},
+		// Finishes the participant the first answer started, whose entry
+		// must share the move's transaction too.
+		{"Transition to finished", func() error {
+			return f.Service.Transition(ctx, actor, c.ID, contests.StatusFinished)
+		}},
 		{"Delete", func() error {
 			return f.Service.Delete(ctx, actor, doomed.ID)
 		}},

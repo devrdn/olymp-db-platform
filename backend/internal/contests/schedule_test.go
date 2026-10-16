@@ -214,6 +214,28 @@ func TestAdvanceStartsAContestThatPassesThePublishGateAndFinishesAnOverdueOne(t 
 	}
 }
 
+// The scheduler's move writes one system entry per participation it
+// finishes, in the tick's transaction, beside the contest's status change.
+func TestAdvanceAuditsEachParticipationAContestsEndFinishes(t *testing.T) {
+	f := newScheduler()
+	f.repo.Contests.Rosters(nil, f.roster)
+	overdue := putOverdue(f)
+	stillRunning := putRunning(f, 0)
+	began := f.repo.Contests.Clock().Add(-time.Hour)
+	ended := f.roster.Put(contests.Participant{ContestID: overdue, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began})
+	f.roster.Put(contests.Participant{ContestID: overdue, UserID: uuid.New(), Status: contests.RegistrationRegistered})
+	f.roster.Put(contests.Participant{ContestID: stillRunning, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began})
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+
+	wantFinishEntries(t, f.sink.Entries, overdue, ended.UserID)
+	if len(f.sink.Loose) != 0 {
+		t.Errorf("entries recorded outside the transaction: %v", f.sink.Loose)
+	}
+}
+
 // A story can disappear after publication; starts_at arriving must not let
 // the contest through.
 func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
