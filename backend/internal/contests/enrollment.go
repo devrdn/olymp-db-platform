@@ -98,12 +98,19 @@ type Participant struct {
 // HasStarted reports whether the participant has begun working. StartedAt
 // is the authoritative fact, the one Deadline computes from; the statuses
 // agree with it because only RegistrationRepository.Start moves a
-// registration to active, setting StartedAt in the same write. Under a
-// shared clock nothing sets either: see HasWork.
+// registration to active, setting StartedAt in the same write.
 func (p Participant) HasStarted() bool {
 	return p.StartedAt != nil ||
 		p.Status == RegistrationActive ||
 		p.Status == RegistrationFinished
+}
+
+// AwaitsStart reports a participant whose start is not recorded yet, under
+// either timing: their first successful read, query or answer records it.
+// Only under individual timing does the start also set the deadline; that is
+// ClockPending, which the gate and Deadline read instead.
+func (p Participant) AwaitsStart() bool {
+	return p.StartedAt == nil
 }
 
 // ParticipantFilter selects a page of participants.
@@ -166,8 +173,8 @@ type RegistrationRepository interface {
 	// the account's roles, since the point is a grant made after registering.
 	RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error)
 	// HasWork reports whether a query, answer, note or signal is recorded
-	// against this registration. Under a shared clock nothing sets
-	// started_at, so this, not HasStarted, guards a cascading delete.
+	// against this registration. A note or signal records no start, so this,
+	// not HasStarted alone, guards a cascading delete.
 	HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error)
 }
 
@@ -446,7 +453,6 @@ func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, use
 		if p.HasStarted() {
 			return ErrParticipantStarted
 		}
-		// A shared clock never marks anybody started.
 		work, err := s.registrations.HasWork(ctx, p.ID)
 		if err != nil {
 			return err

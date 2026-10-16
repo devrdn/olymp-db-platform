@@ -711,6 +711,9 @@ type Registrations struct {
 	// writer registers the same person between lookup and write, without
 	// needing two goroutines.
 	MissLookups bool
+	// StartCalls counts Start calls, written or not, so a test can show a
+	// participant already started costs no call at all.
+	StartCalls int
 }
 
 var _ contests.RegistrationRepository = (*Registrations)(nil)
@@ -877,6 +880,7 @@ func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, s
 // active status together, once; a repeat call reads back the first. A
 // registration in any other status (disqualified, say) is returned unchanged.
 func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
+	r.StartCalls++
 	p, ok := r.byID[registrationID]
 	if !ok {
 		return contests.Participant{}, contests.ErrParticipantNotFound

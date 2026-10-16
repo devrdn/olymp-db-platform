@@ -643,6 +643,90 @@ func TestSubmitStartsAnIndividualParticipantsClockOnFirstAnswer(t *testing.T) {
 	}
 }
 
+// Under a shared window the first answer records the start too, and the
+// deadline the write is handed stays the contest's end.
+func TestSubmitRecordsAFixedParticipantsStartOnFirstAnswer(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationRegistered})
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+	}); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if stored.StartedAt == nil || !stored.StartedAt.Equal(conteststest.FixtureNow) {
+		t.Fatalf("StartedAt = %v, want %v", stored.StartedAt, conteststest.FixtureNow)
+	}
+	if stored.Status != contests.RegistrationActive {
+		t.Fatalf("Status = %q, want %q", stored.Status, contests.RegistrationActive)
+	}
+	if len(f.Submissions.Requests) != 1 || !f.Submissions.Requests[0].Deadline.Equal(*c.EndsAt) {
+		t.Fatalf("Insert was handed %+v, want one request with the deadline %v", f.Submissions.Requests, *c.EndsAt)
+	}
+}
+
+// A second answer from a participant already started calls no Start, under
+// either timing (CLAUDE.md rule 6).
+func TestSubmitCallsNoStartForAParticipantAlreadyStarted(t *testing.T) {
+	duration := 30
+	for name, timing := range map[string]struct {
+		timing      string
+		durationMin *int
+	}{
+		"fixed":      {contests.TimingFixed, nil},
+		"individual": {contests.TimingIndividual, &duration},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
+			began := f.Now.Add(-10 * time.Minute)
+			c := f.Contests.Put(contests.Contest{
+				Status: contests.StatusRunning, Timing: timing.timing, DurationMin: timing.durationMin,
+				StartsAt: &starts, EndsAt: &ends,
+			})
+			p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &began})
+			q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+			if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+			}); err != nil {
+				t.Fatalf("Submit() = %v", err)
+			}
+			if f.Registrations.StartCalls != 0 {
+				t.Fatalf("Start was called %d times, want 0", f.Registrations.StartCalls)
+			}
+		})
+	}
+}
+
+// A shared window that is not running yet starts nobody: the answer is
+// refused before any write.
+func TestSubmitInAFixedContestNotYetRunningStartsNobody(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts, ends := f.Now.Add(time.Hour), f.Now.Add(2*time.Hour)
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusPublished, Timing: contests.TimingFixed, StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationRegistered})
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+	}); !errors.Is(err, contests.ErrContestNotRunning) {
+		t.Fatalf("Submit() = %v, want ErrContestNotRunning", err)
+	}
+	if f.Registrations.StartCalls != 0 {
+		t.Fatalf("Start was called %d times, want 0", f.Registrations.StartCalls)
+	}
+}
+
 // As a substring match, one value listing every candidate would be graded
 // correct. Each case gets a fresh fixture so attempts do not carry over.
 func TestSubmitMatchesARegexAgainstTheWholeAnswer(t *testing.T) {
