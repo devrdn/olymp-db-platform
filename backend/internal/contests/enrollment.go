@@ -20,7 +20,7 @@ const (
 	RegistrationRegistered = "registered"
 	// RegistrationActive means the participant's session is running.
 	RegistrationActive = "active"
-	// RegistrationFinished means they are done, by choice or by the clock.
+	// RegistrationFinished means they started and their contest has ended.
 	RegistrationFinished = "finished"
 	// RegistrationDisqualified means excluded while the record is kept.
 	RegistrationDisqualified = "disqualified"

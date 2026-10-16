@@ -23,6 +23,10 @@ type ScheduleTarget struct {
 	// be nil; when both are set, startsAt is before endsAt, as the schema
 	// requires.
 	Seed func(status string, startsAt, endsAt *time.Time) uuid.UUID
+	// Registrations is the store whose rows a contest's end moves, and
+	// NewUser makes the accounts it enrols.
+	Registrations contests.RegistrationRepository
+	NewUser       func() uuid.UUID
 	// Now is the store's clock, which decides whether a window has opened or
 	// closed.
 	Now func() time.Time
@@ -320,6 +324,21 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			for status, id := range others {
 				wantStatus(t, ctx, target, id, status, status+" contest")
 			}
+		})
+	})
+
+	t.Run("AdvanceFinished finishes the participants still active in each contest it finishes", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ScheduleTarget) {
+			const grace = 5 * time.Second
+			past := target.Seed(contests.StatusRunning, nil, at(target, -grace))
+			inside := target.Seed(contests.StatusRunning, nil, at(target, -grace+time.Microsecond))
+			ended := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, past, target.Now())
+			running := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, inside, target.Now())
+
+			finish(t, ctx, target, grace)
+
+			ended.wantFinished(t, ctx)
+			running.wantUntouched(t, ctx)
 		})
 	})
 

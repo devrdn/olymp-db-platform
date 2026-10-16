@@ -115,8 +115,9 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 						t.Fatalf("Add() = %v", err)
 					}
 				},
-				Outside: context.Background(),
-				Now:     repo.Clock,
+				Registrations: registrations,
+				Outside:       context.Background(),
+				Now:           repo.Clock,
 			})
 	})
 }

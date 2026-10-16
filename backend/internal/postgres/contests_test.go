@@ -45,8 +45,9 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 						t.Fatalf("Add() = %v", err)
 					}
 				},
-				Outside: context.Background(),
-				Now:     func() time.Time { return now },
+				Registrations: registrations,
+				Outside:       context.Background(),
+				Now:           func() time.Time { return now },
 			})
 		})
 	})
@@ -291,6 +292,7 @@ func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
 			repo := NewContests(testPool)
 			author := makeUser(t, ctx, "author-schedule-contract")
 			now := txNow(t, ctx)
+			accounts := 0
 			run(ctx, conteststest.ScheduleTarget{
 				Repo:     repo,
 				Contests: repo,
@@ -298,6 +300,11 @@ func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
 					id := makeContest(t, ctx, author.ID)
 					setSchedule(t, ctx, id, status, startsAt, endsAt)
 					return id
+				},
+				Registrations: NewRegistrations(testPool),
+				NewUser: func() uuid.UUID {
+					accounts++
+					return makeUser(t, ctx, fmt.Sprintf("schedule-contract-%d", accounts)).ID
 				},
 				Now: func() time.Time { return now },
 			})

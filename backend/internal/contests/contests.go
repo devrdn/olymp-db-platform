@@ -479,7 +479,9 @@ type Repository interface {
 	Update(ctx context.Context, c Contest) error
 	// SetStatus moves the contest from status from to status to, and reports
 	// ErrStatusChanged if a concurrent request moved it since the caller read
-	// it.
+	// it. A move to finished finishes every active registration of the
+	// contest in the same write, so no reader sees the contest ended and a
+	// participant still active; registered and disqualified ones stay.
 	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
 	// Delete removes a contest and everything hanging off it.
 	Delete(ctx context.Context, id uuid.UUID) error
