@@ -203,7 +203,7 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 		return SubmitOutcome{}, ErrNotAChoice
 	}
 
-	participant, err := s.startClock(ctx, cmd.Contest, cmd.Participant, cmd.Address)
+	participant, err := s.recordStart(ctx, cmd.Contest, cmd.Participant, cmd.Address)
 	if err != nil {
 		return SubmitOutcome{}, err
 	}
@@ -247,19 +247,19 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	}, nil
 }
 
-// startClock records a participant's start on their first answer, under
+// recordStart records a participant's start on their first answer, under
 // either timing, through the registration's Start, which sets started_at and
 // active only once (§8); under individual timing that starts their clock. It
 // then asks the gate again about the participant Start returned: another
 // request may have started them first and their time may be up, or they may
 // have been disqualified since. Anyone already started is returned unchanged.
-func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr netip.Addr) (Participant, error) {
+func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, addr netip.Addr) (Participant, error) {
 	if !p.AwaitsStart() {
 		return p, nil
 	}
 	started, err := s.registrations.Start(ctx, p.ID, s.now())
 	if err != nil {
-		return Participant{}, fmt.Errorf("start the participant's clock: %w", err)
+		return Participant{}, fmt.Errorf("record the participant's start: %w", err)
 	}
 	if err := s.gate.StandingOf(c, started, s.now(), addr).Refusal(); err != nil {
 		return Participant{}, err

@@ -359,7 +359,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		}
 	}
 
-	if participant, err = s.startClock(ctx, contest, participant, cmd.Address); err != nil {
+	if participant, err = s.recordStart(ctx, contest, participant, cmd.Address); err != nil {
 		return nil, err
 	}
 
@@ -431,18 +431,19 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 // starts their clock.
 //
 // Otherwise an individual participant could read everything, prepare offline,
-// and spend their duration only on typing. Callers invoke it only after a successful
-// read: a refused read showed nothing and must cost nothing. The events
-// channel and leaderboards never call it. The gate is asked here, not trusted
-// from an earlier Access, and asked again after Start (see startClock).
+// and spend their duration only on typing. Callers invoke it only after a
+// successful read: a refused read showed nothing and must cost nothing. The
+// events channel and leaderboards never call it. The gate is asked here, not
+// trusted from an earlier Access, and asked again after Start (see
+// recordStart).
 func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
-	return s.startClock(ctx, contest, participant, addr)
+	return s.recordStart(ctx, contest, participant, addr)
 }
 
-// startClock checks the gate, records the start, and checks again: the start
+// recordStart checks the gate, records the start, and checks again: the start
 // may be another request's, and time may already be up. A participant already
 // started costs nothing.
-func (s *Service) startClock(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
+func (s *Service) recordStart(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
 	if !participant.AwaitsStart() {
 		return participant, nil
 	}
@@ -451,17 +452,18 @@ func (s *Service) startClock(ctx context.Context, contest contests.Contest, part
 	}
 	started, err := s.people.Start(ctx, participant.ID, s.now())
 	if err != nil {
-		return contests.Participant{}, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
+		return contests.Participant{}, fmt.Errorf("%w: record the participant's start: %w", ErrUnavailable, err)
 	}
 	// Gate first: a registration disqualified or finished meanwhile comes back
-	// still pending, and the gate's refusal says why.
+	// with no start recorded, and the gate's refusal says why.
 	if err := s.admit(contest, started, addr); err != nil {
 		return contests.Participant{}, err
 	}
-	// Still pending yet admitted means the store broke its contract. Fail
-	// closed: the gate would otherwise admit a participant with no deadline.
+	// An individual clock still pending yet admitted means the store broke its
+	// contract. Fail closed: the gate would otherwise admit a participant with
+	// no deadline. Under fixed timing the deadline never depends on the start.
 	if contests.ClockPending(contest, started) {
-		return contests.Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrUnavailable)
+		return contests.Participant{}, fmt.Errorf("%w: recording the participant's start left their clock pending", ErrUnavailable)
 	}
 	return started, nil
 }
