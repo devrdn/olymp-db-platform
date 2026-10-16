@@ -137,6 +137,19 @@ func (s *Service) DropInstance(ctx context.Context, actorID, contestID uuid.UUID
 	if err != nil {
 		return InstanceRecord{}, err
 	}
+	// A participant's copy waits for its registration's turn, or a reset
+	// finishing after the drop would mark 'ready' a database that is gone. The
+	// row is read again because the wait may have changed it.
+	if record.Registration != nil {
+		done, err := s.provideAlone(ctx, *record.Registration)
+		if err != nil {
+			return InstanceRecord{}, err
+		}
+		defer done()
+		if record, err = s.repo.InstanceNamed(ctx, contestID, database); err != nil {
+			return InstanceRecord{}, err
+		}
+	}
 	if record.Dropped() {
 		return InstanceRecord{}, ErrInstanceAlreadyDropped
 	}

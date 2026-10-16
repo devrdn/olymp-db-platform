@@ -166,6 +166,32 @@ func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *test
 	}
 }
 
+// A reset that finished after the drop would mark 'ready' a database that is
+// gone, so the drop waits for the registration's turn.
+func TestADropWaitsForAResetOfTheSameDatabase(t *testing.T) {
+	service, fake, contest, people := serviceFor(t, 1)
+	database, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	fake.slow = 150 * time.Millisecond
+
+	reset := make(chan error, 1)
+	go func() { reset <- service.Reset(t.Context(), uuid.New(), contest, people[0]) }()
+	waitUntil(t, func() bool { return fake.inFlight() == 1 })
+
+	if _, err := service.DropInstance(t.Context(), uuid.New(), contest.ID, database); err != nil {
+		t.Fatalf("DropInstance: %v", err)
+	}
+	if err := <-reset; err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	if status := statusOf(t, t.Context(), database); status != "dropped" {
+		t.Fatalf("the row is %q after a drop that came second, want dropped", status)
+	}
+}
+
 func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
