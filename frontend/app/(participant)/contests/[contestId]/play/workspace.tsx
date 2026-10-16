@@ -7,14 +7,16 @@ import type { QuestionEntry } from "./questions-panel";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import type { PlayDictionary } from "./dictionary";
 import type { GameSchema } from "@/lib/api/schema";
+import type { SqlMode } from "@/lib/api/policy";
 import type { Scoring } from "@/lib/api/contests";
 import type { WorkspaceSnapshot } from "@/lib/api/workspace";
 import type { Locale } from "@/lib/i18n/config";
 
-import type { ConsoleState } from "./actions";
+import { refreshSchemaAction, type ConsoleState } from "./actions";
 import { ConsoleEditor } from "./console";
 import { usePanelVisibility, useSchemaPanel } from "./panel-toggles";
 import { QueryLogPanel } from "./query-log-panel";
+import { ResetDatabase } from "./reset-database";
 import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
@@ -28,7 +30,7 @@ import { useSignals } from "./use-signals";
 const MemoResultPanel = memo(ResultPanel);
 const MemoQueryLogPanel = memo(QueryLogPanel);
 const MemoSidePanel = memo(SidePanel);
-// The schema is fixed for the whole contest.
+// The schema changes only when the participant resets their database.
 const MemoSchemaPanel = memo(SchemaPanel);
 
 /**
@@ -55,7 +57,8 @@ export function Workspace({
   questionEntries,
   scoring = "points",
   icpcPenaltyMin = 20,
-  schema,
+  schema: initialSchema,
+  sqlMode,
   initialLog,
   workspace,
   locale,
@@ -81,6 +84,8 @@ export function Workspace({
   icpcPenaltyMin?: number;
   /** The game's shape, or null in a contest that hides it — see SchemaPanel. */
   schema: GameSchema | null;
+  /** The contest's SQL mode; only `read_write` offers the database reset. */
+  sqlMode: SqlMode;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   /** The participant's notes and SQL tabs, or null when the read failed; the notes then say they could not be loaded. */
   workspace: WorkspaceSnapshot | null;
@@ -88,6 +93,9 @@ export function Workspace({
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace;
+  // Re-read after a reset, which removes the tables and views the participant
+  // made.
+  const [schema, setSchema] = useState(initialSchema);
 
   // Reports leaving the page and pasting to the organiser (use-signals.ts).
   // The workspace exists only while the contest runs for this participant.
@@ -149,6 +157,16 @@ export function Workspace({
     ],
     [schema, toggle],
   );
+
+  // A contest that hides its schema is not asked for it. A failed read keeps
+  // the panel as it was rather than taking it away.
+  const schemaShown = schema !== null;
+  const onDatabaseReset = useCallback(() => {
+    if (!schemaShown) return;
+    void refreshSchemaAction(contestId).then((result) => {
+      if (result.kind === "ok") setSchema(result.schema);
+    });
+  }, [contestId, schemaShown]);
 
   /** Brings the schema panel back for ⌘K, which focuses its search field. */
   const revealSchema = useCallback(() => expand("schema"), [expand]);
@@ -274,6 +292,9 @@ export function Workspace({
                     >
                       {t.tabs.log}
                     </ToolbarButton>
+                    {sqlMode === "read_write" ? (
+                      <ResetDatabase contestId={contestId} onReset={onDatabaseReset} dict={dict} />
+                    ) : null}
                   </>
                 }
                 onResult={(state, source) => {

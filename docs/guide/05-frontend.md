@@ -468,14 +468,15 @@ budgets and surviving a closed tab.
 | `side-panel.tsx` | Tabs for story, questions, notes and leaderboard; the story's Markdown and print exports. |
 | `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswerAction`. |
 | `notes-panel.tsx` | One self-saving notes field. |
-| `schema-panel.tsx` | Tables, columns, types and foreign keys. Absent when the organiser hides the schema. |
+| `schema-panel.tsx` | Tables, columns, types and foreign keys. Absent when the organiser hides the schema; re-read after a database reset. |
+| `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabaseAction`, that stays open until it can say how the reset went. |
 | `panel-toggles.tsx`, `pane-splitter.tsx` | Collapsible panels with keyboard shortcuts; draggable, remembered pane sizes. |
 | `use-autosave.ts` | The autosave engine for notes and SQL tabs. |
 | `use-contest-events.ts` | The Server-Sent Events channel and the corrected clock. |
 | `use-signals.ts` | Page-left and paste signals reported to the organiser. |
 | `refusals.ts` | What each refusal code means for this screen. |
 | `content-loaded.tsx` | Tells the header, across the Suspense boundary, whether the workspace or a refusal rendered. |
-| `actions.ts` | Server actions: run a query, submit an answer, refresh questions, page the query log, read the standings. |
+| `actions.ts` | Server actions: run a query, submit an answer, refresh questions, page the query log, read the standings, reset the database and re-read the schema. |
 | `story.md/route.ts` | Route Handler: the story as a Markdown download. |
 | `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `reload-link.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton, rate-limit reload button. |
 
@@ -557,7 +558,7 @@ own reaction.
 | `dormant` | not open now, may open later | `contest_not_running` |
 | `excluded` | not taking part | `not_a_participant` |
 | `elsewhere` | outside the contest's network | `address_not_allowed` |
-| `passing` | lifts by itself shortly | `query_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict` |
+| `passing` | lifts by itself shortly | `query_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict`, `reset_too_often` |
 | `fault` | our failure; with a code the dictionary has no sentence for, the only case that shows a request reference (`showsReference`) | `internal_error`, `query_service_down`, `game_cluster_full`, `unreachable` |
 | `refused` | every other code; the dictionary sentence says what to change | (unlisted) |
 

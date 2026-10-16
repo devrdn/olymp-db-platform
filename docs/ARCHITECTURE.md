@@ -506,8 +506,11 @@ How it holds together:
   trail as `contest.instance_reset`, with the participant as the actor, and
   a press whose copy failed as `contest.instance_reset_failed`. It is
   not written to the query log, whose rows are statements with a statement's
-  status and text, and no screen offers the reset yet (section 15, item 34).
-  Resets and removals use
+  status and text. The play screen offers the reset only in a `read_write`
+  contest, whose mode travels with the participant's contest listing
+  (`sql_mode`), behind a confirmation saying that the tables return to the
+  contest's starting state and the participant's changes are lost; after it,
+  the screen re-reads the schema panel. Resets and removals use
   `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+), so an active session is
   terminated automatically and a hung statement cannot block the rebuild.
 - **Disk quotas.** Writing opens a denial-of-service vector: fill the disk.

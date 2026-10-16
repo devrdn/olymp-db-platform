@@ -12,10 +12,18 @@ import { PrintView } from "./print-view";
 import type { QuestionEntry } from "./questions-panel";
 import { StoryCover } from "./story-cover";
 import { Workspace } from "./workspace";
-import type { AnswerState, ConsoleState, QuestionsRefreshResult, QueryLogRefreshResult } from "./actions";
+import type {
+  AnswerState,
+  ConsoleState,
+  QuestionsRefreshResult,
+  QueryLogRefreshResult,
+  ResetState,
+  SchemaRefreshResult,
+} from "./actions";
 
 const runResult = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
 const logCalls = vi.hoisted(() => ({ count: 0 }));
+const schemaReads = vi.hoisted(() => ({ count: 0, next: { kind: "refused", code: "unreachable" } as SchemaRefreshResult }));
 
 vi.mock("./actions", () => ({
   runQueryAction: async () => runResult.current,
@@ -24,6 +32,11 @@ vi.mock("./actions", () => ({
   fetchQueryLogAction: async (): Promise<QueryLogRefreshResult> => {
     logCalls.count++;
     return { kind: "ok", items: [], total: 0 };
+  },
+  resetDatabaseAction: async (): Promise<ResetState> => ({ kind: "done" }),
+  refreshSchemaAction: async (): Promise<SchemaRefreshResult> => {
+    schemaReads.count++;
+    return schemaReads.next;
   },
 }));
 
@@ -100,6 +113,7 @@ function show(
     storyMarkdown?: string | null;
     storyUnavailable?: string | null;
     workspace?: typeof A_WORKSPACE | null;
+    sqlMode?: "read_only" | "read_write";
   } = {},
 ) {
   return render(
@@ -120,6 +134,7 @@ function show(
       storyUnavailable={overrides.storyUnavailable ?? null}
       questionEntries={[]}
       schema={schema}
+      sqlMode={overrides.sqlMode ?? "read_only"}
       initialLog={freshInitialLog()}
       workspace={"workspace" in overrides ? (overrides.workspace ?? null) : A_WORKSPACE}
       locale="en"
@@ -382,6 +397,66 @@ describe("the schema column", () => {
   });
 });
 
+describe("the database reset", () => {
+  const r = en.participant.play.workspace.reset;
+
+  beforeEach(() => {
+    schemaReads.count = 0;
+  });
+
+  async function reset() {
+    await userEvent.click(screen.getByRole("button", { name: r.open }));
+    await userEvent.click(screen.getByRole("button", { name: r.confirm }));
+    await screen.findByRole("status");
+    // The open dialog hides the screen behind it from the accessibility tree.
+    await userEvent.click(screen.getAllByRole("button", { name: r.close }).at(-1)!);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  test("is offered by a contest that lets participants write", () => {
+    show(A_SCHEMA, { sqlMode: "read_write" });
+
+    expect(screen.getByRole("button", { name: r.open })).toBeInTheDocument();
+  });
+
+  test("is not offered by a read-only contest", () => {
+    show(A_SCHEMA, { sqlMode: "read_only" });
+
+    expect(screen.queryByRole("button", { name: r.open })).not.toBeInTheDocument();
+  });
+
+  test("redraws the schema panel from the database as it now is", async () => {
+    schemaReads.next = {
+      kind: "ok",
+      schema: { truncated: false, tables: [{ name: "suspects", columns: [] }] },
+    };
+    show(A_SCHEMA, { sqlMode: "read_write" });
+
+    await reset();
+
+    expect(await screen.findByRole("button", { name: /suspects/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /guests/ })).not.toBeInTheDocument();
+  });
+
+  test("keeps the schema on screen when it cannot be read again", async () => {
+    schemaReads.next = { kind: "refused", code: "query_too_often" };
+    show(A_SCHEMA, { sqlMode: "read_write" });
+
+    await reset();
+
+    await waitFor(() => expect(schemaReads.count).toBe(1));
+    expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
+  });
+
+  test("asks for no schema in a contest that hides it", async () => {
+    show(null, { sqlMode: "read_write" });
+
+    await reset();
+
+    expect(schemaReads.count).toBe(0);
+  });
+});
+
 /**
  * jsdom lays nothing out, so these assert the rules the widths come from:
  * where each pane is placed, and whether a track may exceed its container.
@@ -559,6 +634,7 @@ describe("collapsing a panel", () => {
           storyUnavailable={null}
           questionEntries={questionEntries}
           schema={schema}
+          sqlMode="read_only"
           initialLog={freshInitialLog()}
           workspace={A_WORKSPACE}
           locale="en"

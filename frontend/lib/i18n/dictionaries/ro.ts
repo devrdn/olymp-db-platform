@@ -1482,6 +1482,17 @@ const ro = {
           copied: "Copiat în clipboard",
           copyFailed: "Nu s-a putut copia. Selectați textul și copiați-l manual.",
         },
+        reset: {
+          open: "Resetează baza de date",
+          title: "Resetați baza de date?",
+          body: "Fiecare tabel revine la starea de la începutul concursului. Tot ce ați schimbat în ea se pierde: rândurile adăugate, modificate sau șterse și tabelele sau vederile create de dumneavoastră.",
+          kept: "Răspunsurile, punctajul, notițele, filele SQL și jurnalul interogărilor rămân neschimbate.",
+          cancel: "Anulează",
+          confirm: "Resetează",
+          resetting: "Se resetează…",
+          done: "Baza de date este din nou cum era la începutul concursului.",
+          close: "Închide",
+        },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
         /** Din ce filă vine rezultatul de pe ecran — el rămâne cât timp se scrie în altă filă. */
         resultFrom: "Din fila „{tab}”",

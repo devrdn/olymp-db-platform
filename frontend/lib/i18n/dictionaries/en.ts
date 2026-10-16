@@ -1664,6 +1664,19 @@ const en = {
           copied: "Copied to the clipboard",
           copyFailed: "Could not copy. Select the text and copy it yourself.",
         },
+        // The database reset a writing contest offers (docs/ARCHITECTURE.md
+        // §4.1). The confirmation says plainly what is lost and what stays.
+        reset: {
+          open: "Reset database",
+          title: "Reset your database?",
+          body: "Every table goes back to how it was when the contest started. Everything you changed in it is lost: rows you added, changed or deleted, and any tables or views you created.",
+          kept: "Your answers, score, notes, SQL tabs and query log stay as they are.",
+          cancel: "Cancel",
+          confirm: "Reset",
+          resetting: "Resetting…",
+          done: "Your database is back to how the contest started it.",
+          close: "Close",
+        },
         resultEmpty: "Run a query to see its result here.",
         /** Which tab the result on screen came from — it stays while another tab is being typed in. */
         resultFrom: "From {tab}",

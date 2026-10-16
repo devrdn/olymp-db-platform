@@ -129,6 +129,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
               coverAttribution={contest.coverAttribution}
               scoring={contest.scoring}
               icpcPenaltyMin={contest.icpcPenaltyMin}
+              sqlMode={contest.sqlMode}
               locale={locale}
               dict={dict}
             />
@@ -151,6 +152,7 @@ async function PlayPanels({
   coverAttribution,
   scoring,
   icpcPenaltyMin,
+  sqlMode,
   locale,
   dict,
 }: {
@@ -165,6 +167,8 @@ async function PlayPanels({
   scoring: ContestSummary["scoring"];
   /** Minutes added per wrong attempt on a question later solved; read only under `icpc`. */
   icpcPenaltyMin: number;
+  /** The contest's SQL mode; only `read_write` offers the database reset. */
+  sqlMode: ContestSummary["sqlMode"];
   locale: Locale;
   dict: PlayDictionary;
 }) {
@@ -310,6 +314,7 @@ async function PlayPanels({
         scoring={scoring}
         icpcPenaltyMin={icpcPenaltyMin}
         schema={schema}
+        sqlMode={sqlMode}
         initialLog={initialLog}
         workspace={workspace}
         locale={locale}
