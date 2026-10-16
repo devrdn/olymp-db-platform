@@ -341,6 +341,13 @@ stateDiagram-v2
   the deadline grace has passed. A due contest the publication gate refuses
   stays published, and
   `contest.start_blocked` is audited once per distinct set of problems.
+- Either move to `finished` finishes the roster in the same statement
+  (`finishRoster` in
+  [backend/internal/postgres/contests.go](../../backend/internal/postgres/contests.go)):
+  every `active` registration becomes `finished`, with `finished_at` at the
+  database's clock, or at the participant's own start if the application
+  recorded that later. A participant who never started stays `registered`,
+  and a disqualified one stays `disqualified`.
 - Deleting a draft: `DELETE /contests/ID`, behind `contest.edit`, calling
   `Service.Delete`. Any other status is refused; a contest that was ever
   published can only be archived.

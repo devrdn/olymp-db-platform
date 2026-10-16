@@ -1000,7 +1000,7 @@ CREATE TABLE registrations (
     status      text NOT NULL DEFAULT 'registered'
         CHECK (status IN ('registered','active','finished','disqualified')),
     started_at  timestamptz,  -- with timing = individual, this sets the deadline (section 8)
-    finished_at timestamptz,
+    finished_at timestamptz,  -- written when the contest moves to finished (section 8)
     total_score int NOT NULL DEFAULT 0,       -- denormalised for the leaderboard
     UNIQUE (contest_id, user_id)
 );
@@ -2165,6 +2165,14 @@ nothing.
   read "finished" before answers and queries stopped being accepted within the
   grace, and other code that decides by status rather than recomputing the
   deadline would refuse an honest participant early.
+- **A registration finishes with its contest.** The move into `finished`,
+  whether the scheduler or an organiser makes it, finishes the roster in the
+  same statement: every `active` registration becomes `finished`, with
+  `finished_at` at the database's clock (or at the participant's start, if
+  the application recorded that later). A participant who never started
+  stays `registered`, and a disqualified one stays `disqualified`. From then
+  on the gate refuses a participant who started with `contest_finished`, the
+  profile counts the contest as finished, and monitoring shows the finish.
 
 ### 8.1 The participation gate
 
