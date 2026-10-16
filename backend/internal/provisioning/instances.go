@@ -124,8 +124,10 @@ func (s *Service) fillSizes(ctx context.Context, records []InstanceRecord) {
 //
 // The row is marked after the cluster drop, as in Reclaim. A failure between
 // the two leaves 'ready' over a missing database, which a second press
-// repairs (DROP DATABASE IF EXISTS). Marking first would leave 'dropped' over
-// a live database, which Reclaimable skips, leaking the disk for good.
+// repairs (DROP DATABASE IF EXISTS); the organiser leaving is not such a
+// failure, since both run detached from the request. Marking first would
+// leave 'dropped' over a live database, which Reclaimable skips, leaking the
+// disk for good.
 func (s *Service) DropInstance(ctx context.Context, actorID, contestID uuid.UUID, database string) (InstanceRecord, error) {
 	// Bounded before storage (CLAUDE.md rule 2). A longer name cannot be a
 	// database, so it is simply not found.
@@ -150,6 +152,10 @@ func (s *Service) DropInstance(ctx context.Context, actorID, contestID uuid.UUID
 			return InstanceRecord{}, err
 		}
 	}
+	// From here the organiser leaving must not stop the drop between the
+	// cluster and the row, as in Reset.
+	ctx, cancel := s.detached(ctx)
+	defer cancel()
 	if record.Dropped() {
 		return InstanceRecord{}, ErrInstanceAlreadyDropped
 	}
