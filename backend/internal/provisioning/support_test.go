@@ -190,6 +190,13 @@ func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpol
 	return nil
 }
 
+// inFlight is how many copies are being made right now.
+func (c *cluster) inFlight() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.creating
+}
+
 func (c *cluster) highWater() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
