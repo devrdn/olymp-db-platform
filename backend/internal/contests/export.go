@@ -38,9 +38,9 @@ type Package struct {
 	// there is a game at all.
 	Game    string
 	HasGame bool
-	// GameOmitted is set when the contest has a game built from an uploaded
-	// dump, which never lives in this service's storage and so cannot travel.
-	// Then HasGame is true and Game is empty.
+	// GameOmitted is set when the contest's game was not written in the
+	// editor (an uploaded dump or the table builder), so it has no script to
+	// carry. Then HasGame is true and Game is empty.
 	GameOmitted bool
 }
 

@@ -24,8 +24,9 @@ script, uploaded as a finished dump, or described table by table in a builder
 that takes CSV files and typed rows. Staff and their roles. A per-contest SQL
 policy deciding what participants may run. Registration that is open or by
 invitation, optionally restricted to an address range. Live monitoring of a
-contest in flight, a query log with filters and export, a leaderboard with an
-optional freeze, and reports afterwards.
+contest in flight, which carries the contest's query log: a feed with filters
+and a live mode, each participant's queries with a search, and CSV export. A
+leaderboard with an optional freeze.
 
 **Underneath.** Every participant works in their own copy of the game
 database, so nothing one of them does can be seen or felt by another. Every

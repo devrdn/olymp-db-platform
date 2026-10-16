@@ -576,12 +576,27 @@ On-premise means nobody else is backing this machine up, and what is in the
 core database — the participants' answers and the results of an olympiad —
 cannot be reconstructed by reinstalling anything.
 
-**There are two things to copy, not one.** The database is the first. The
+**There are three things to copy, not one.** The database is the first. The
 second is the `contest-covers-data` volume: a contest's cover picture is a
 file in `COVER_DIR` (`internal/platform/filestore`), deliberately not a row in
 any table, so `pg_dump` does not see it and a restore from the dump alone
 gives back every contest without its cover. `make backup` writes both, under
 one timestamp, and fails loudly rather than writing only the dump.
+
+The third is the `game-uploads-data` volume in `GAME_UPLOAD_DIR`: organisers'
+uploaded dumps, and the table builder's CSV files under its `tables/`
+directory. A game built from a file is built from them, so without them it
+cannot be built again. `make backup` does not take this volume; copy it out of
+the `api` container by hand:
+
+```bash
+docker compose -f deploy/docker-compose.yml cp api:/var/lib/dbcontest/uploads/. <dir>
+```
+
+Bring it back only after `make restore`, owned by the API's user (65532), and
+restart the `api`: until the rows are back, the upload sweep treats the files
+as orphans and deletes them. Section 13 of
+[the architecture](../docs/ARCHITECTURE.md) has the whole move procedure.
 
 ```bash
 make backup                                   # deploy/backups/<db>-<timestamp>.dump
@@ -595,7 +610,7 @@ make restore-covers  FILE=deploy/backups/covers-....tar.gz CONFIRM=yes
 the host, and refuses to keep an empty file. The covers come out through
 `docker compose cp` on the `api` service — the mount point is the compose
 file's business, not the Makefile's — which reads a stopped container as
-happily as a running one, but needs the container to exist. Copy both results
+happily as a running one, but needs the container to exist. Copy all three
 off the machine: a backup that only exists on the host it came from is not a
 backup.
 

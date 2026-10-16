@@ -819,9 +819,17 @@ PublishGate, AuditRow.
 panes with resizable, remembered sizes). Plus `Band` and `AppBar`, which every
 shell is built from.
 
-**Built so far:** Button, Input, Label, Field, Tag, Skeleton, StateView, Band,
-AppBar, Mark, PublicShell, AdminShell, ContestRegister, LanguageSwitcher,
-ThemeToggle, ExportMenu.
+**Built so far:** in `components/ui`, Button, Input, Label, Field, Textarea,
+Checkbox, Combobox, Tag, Avatar, Tooltip, Dialog, Tabs, Skeleton and
+MarkdownEditor; in `components/product`, StateView, ExportMenu, CodeEditor,
+SqlBlock, QueryLog, QueryRow, TabStrip, StoryText, StandingsView,
+AnswerAttempts, ContestWindow, DrawnCover and NotFoundView; in
+`components/layout`, Band, AppBar, Mark, Breadcrumbs, SectionNav,
+AccountLink, SignOutButton, LanguageSwitcher, ThemeToggle and two shells in
+place of the four planned: ProductShell for every screen behind a session and
+FocusShell for the public screens, the not-found page and the forced password
+change. ContestRegister lives beside the contest list that uses it, in
+`app/(admin)/contests/`.
 
 ### 11.1 ExportMenu
 
@@ -1021,17 +1029,15 @@ not advertise three advantages). No width fitted to a string. There is no weight
    form with a server error, the session over a single origin, four states, both
    shells, both themes, both density modes, three languages.~~ **Done.**
 
-Next is item 3 of the architecture: content CRUD and the constructor, which by
-now is assembled from ready parts.
-
 ## 17. Side edit to the architecture
 
 `docs/ARCHITECTURE.md` does not describe the frontend architecture: section 2.1
-lists the screens and section 13 gives the frontend one line. A separate change
-adds a section covering the Server/Client Component boundary, the session path (a
-single origin through Caddy — otherwise a `Secure`+`SameSite` cookie never
-arrives), the TanStack Query invalidation strategy, the SSE approach for the
-timer and monitoring, and a reference to the state taxonomy.
+lists the screens and section 13 gives the frontend one line. The description
+lives in the developer guide instead, `docs/guide/05-frontend.md`: the
+Server/Client Component boundary, how a page reads through server components
+and writes through server actions (there is no client-side query cache), the
+few calls the browser makes itself over the origin it shares with the API, the
+event stream behind the clock, and the states `StateView` renders.
 
 ## 18. Mockups
 

@@ -177,16 +177,28 @@ access of its own.
 
 | Module | Responsibility |
 |---|---|
-| `auth` | Sign-in, sessions, the RBAC middleware |
-| `users` | Profiles, account administration |
-| `contests` | Contests, stories, questions and reference answers; the contest's SQL policy; appointing managers; the lifecycle (draft → published → running → finished) and the clock |
-| `registrations` | Enrolment — self-service for `open`, by a manager for `invite_only` — and the start and finish of one participant's run |
-| `submissions` | Taking answers, checking them, scoring |
-| `provisioning` | Creating and removing participants' game databases from a template: a worker queue plus a pool of spares (section 4.2) |
+| `auth` | Sign-in, sessions, brute-force throttling, the RBAC middleware |
+| `rbac` | Whether an identity may perform an action here: global roles and contest roles (section 7) |
+| `users` | Accounts, their global roles, account administration |
+| `contests` | Contests, stories, questions and reference answers; the contest's SQL policy; appointing managers; the lifecycle (draft → published → running → finished) and the clock; enrolment — self-service for `open`, by a manager for `invite_only` — and the participation gate; taking answers, checking them, scoring |
+| `sqlpolicy` | What a participant's SQL may do, and whether a query stays inside it; the same description drives the template's grants (section 4.1) |
+| `provisioning` | How a contest's game is described and built, and creating and removing participants' game databases from its template: a worker queue plus a pool of spares (section 4.2) |
+| `gamedb` | The game cluster's side of provisioning: roles, grants and the DDL that copies and drops databases (section 4) |
+| `gamefile` | An organiser's uploaded dump and the table builder's CSV files, kept on the API host's disk as they arrive in chunks |
 | `queryproxy` | A thin façade: takes SQL from the interface, applies the rate limit, hands it to the Query Runner, writes the query log |
-| `reporting` | Statistics, leaderboards, export |
+| `workspace` | A participant's notes and SQL editor tabs, kept per registration (section 6.4) |
+| `leaderboard` | The standings as each audience may see them: live, frozen, final (section 10) |
+| `profile` | What a participant is told about their own account: totals, contests and, for each contest over, the report, queries, answers and notes (section 9.5) |
 | `audit` | The append-only record of what staff did |
 | `monitor` | Watching a participant: browser and server signals, the history of their notes and tabs, a fingerprint of each query; and the organiser's reads — a participant table with flags, a combined feed, queries, answers, workspace, CSV (section 9.4) |
+| `covers` | A contest's cover picture: what may be uploaded, how it is re-encoded and named, what a visitor may read (section 9.7) |
+| `settings` | The installation's name, contacts and images, changed from a screen (section 10.1) |
+| `showcase` | The front page's public reads: the installation's totals and the contests a visitor may see (section 9.6) |
+
+Beside the modules, `internal/queryrunner` is the Query Runner's own package
+(section 2.3); `api`, `rpc` and `health` adapt the modules to HTTP and gRPC;
+`postgres` implements their storage; `platform/*` is infrastructure; and `app`
+assembles the whole.
 
 Modules talk to each other only through Go interfaces — never by reaching into
 another module's tables. Those interfaces are the seams a future split into
@@ -593,8 +605,10 @@ it never runs in bulk at the moment that matters:
   pool and every instance already created** at the old version and remakes
   them through the queue, so nobody can be handed a database with stale grants
   or stale data. `game_instances.template_version` makes the drift
-  detectable, and "every instance is at the current version" is a condition of
-  a contest entering `running`.
+  detectable. "Every instance is at the current version" is meant to be a
+  condition of a contest entering `running`, and is not yet:
+  `provisioning.Service.Ready` answers the question but nothing calls it, so
+  neither publication nor the start waits for the game (see section 15).
 - **Template discipline.** Nothing may be connected to a template while
   `CREATE DATABASE` copies it: the builder role is disconnected as soon as the
   build finishes, and an organiser previewing the game schema does so on a
@@ -1065,10 +1079,15 @@ wanted one hidden question among several.
 trigger.** An organiser building such a contest passes through zero questions,
 and through two while replacing one. A trigger would fight the editor for no
 benefit: the invariant only has to hold at publication. It is checked by the
-**publication gate**, along with translation completeness and the game
-instances' versions (section 4.2). That is a deliberate division: the database
-guarantees what is true always, the gate guarantees what is true at the
-transition.
+**publication gate**, along with at least one language, a story and
+questions, every translation in every declared language, choice labels and
+reference answers, the schedule, the settings that only work together
+(section 6.1.1), a freeze inside the contest's window (section 10), no staff
+registered as participants (section 6.2) and a cover's credit line (section
+9.7). That is a deliberate division: the database guarantees what is true
+always, the gate guarantees what is true at the transition. The gate does not
+look at the game: whether its template is built is not checked at publication
+(see section 15).
 
 ## 6.1.1 How a contest decides a result
 
@@ -2302,8 +2321,9 @@ table. The staff interface gets a section of its own:
   per participant, the share that failed, the average time to a correct
   answer.
 
-**What exists today.** Of all that export, exactly two things exist, and
-neither is a staff panel.
+**What exists today.** Of all that export, three things exist, and none is a
+staff panel: the two below, and monitoring's CSV of one participant's feed or
+a whole contest's (section 9.4).
 
 **A participant's own query log, as CSV.**
 `GET /api/v1/contests/{id}/play/log.csv`, beside the existing `/play/log`:
@@ -3385,8 +3405,12 @@ a participant's work, this is housekeeping.
 
 ## 10. Reporting
 
-The `reporting` module over the core database — `query_log`, `submissions`,
-`registrations`:
+Reporting is not one module. Three packages serve it today, all over the core
+database: `leaderboard` (the standings, below), `profile` (a participant's own
+report, section 9.5) and `monitor` (an organiser's reads of one contest and
+its CSV export, section 9.4). What reporting is meant to cover, of which the
+leaderboard and the participant's report exist and the staff reports and
+their export do not:
 
 - **During a contest, for staff:** a live leaderboard, progress by question
   (how many participants are on which), the rate of failing queries, activity
@@ -3396,10 +3420,10 @@ The `reporting` module over the core database — `query_log`, `submissions`,
   report, which they see in their profile (section 9.5).
 - **Export:** CSV and XLSX for the faculty office.
 
-Implementation: SQL views, and materialised views refreshed on a schedule
-where needed; heavy reports are computed once a contest has finished and
-cached. A separate analytical database is unnecessary at these volumes, and
-the module's seam allows one later.
+The intended implementation: SQL views, and materialised views refreshed on a
+schedule where needed; heavy reports are computed once a contest has finished
+and cached. A separate analytical database is unnecessary at these volumes,
+and reading through the packages' own interfaces leaves room for one later.
 
 **The leaderboard** (implemented; the code is `internal/leaderboard`). The
 table is seen by three audiences: the organiser, always live, at
@@ -3599,9 +3623,10 @@ mistaken for oversights:
    AST validation — nested statements, writing functions, reaching another
    database, denial of service through recursive CTEs or Cartesian products —
    written up as a regression suite.
-4. Load testing (k6): the peak scenario of N participants pressing Run at
-   once, plus bulk provisioning — creating N instances from a template of the
-   target size, measuring `WAL_LOG` against `FILE_COPY`.
+4. Load testing (`cmd/consoleload`, run as `make loadtest`): the peak
+   scenario of N participants pressing Run at once, plus bulk provisioning —
+   creating N instances from a template of the target size, measuring
+   `WAL_LOG` against `FILE_COPY`.
 5. Repeat a reduced audit before every olympiad, and a full one whenever
    authentication, the query proxy or provisioning changes.
 
@@ -3666,8 +3691,8 @@ DBContest/
 │   ├── cmd/queryrunner/    # the Query Runner
 │   ├── cmd/migrate/        # schema migrations
 │   ├── internal/
-│   │   ├── auth/  contests/  submissions/  provisioning/
-│   │   ├── queryproxy/  reporting/  audit/  monitor/  covers/
+│   │   ├── auth/  users/  contests/  provisioning/
+│   │   ├── queryproxy/  leaderboard/  audit/  monitor/  covers/
 │   │   └── platform/       # config, storage, logging, http plumbing
 │   ├── migrations/         # golang-migrate, the core database
 │   └── proto/              # the Query Runner's gRPC contract
@@ -3797,7 +3822,9 @@ and archives the covers volume; `make restore-check` loads a dump into a
 throwaway database and drops it, which is the difference between "we have
 backups" and "we think we have backups"; `make restore` replaces the live
 database and demands an explicit confirmation. Participants' instances are not
-backed up — they are rebuilt from the template.
+backed up — they are rebuilt from the template. Nor is the game uploads volume:
+organisers' uploaded dumps and the table builder's CSV files are in neither
+file `make backup` writes.
 
 ### Moving to another server
 
@@ -3805,9 +3832,22 @@ Written down not because a move is planned but because it is the same
 procedure as recovering from a failed disk, and the second is not chosen. The
 day it is needed is a bad day to work it out.
 
-**Exactly one thing is carried across: the core database's dump.** That
-follows from decisions taken for other reasons, and it is worth knowing which,
-so as not to undo them by accident.
+**What is carried across is the core database's dump and two volumes of
+files; the game templates are rebuilt.**
+
+- **The covers archive** travels beside the dump: `make backup` writes both
+  under one timestamp (section 9.7).
+- **The game uploads volume** (`game-uploads-data`) is copied by hand, since
+  `make backup` does not take it. Without it a game built from an uploaded
+  dump or from the table builder's CSV files cannot be built again.
+- **The templates** live in `pg-game-data`, which stays behind, while the
+  restored database still records them as built; nothing checks that a
+  recorded template exists. Each contest that is still to be played needs its
+  game rebuilt on the new host, and a rebuild is refused once a contest is
+  `running`.
+
+The rest follows from decisions taken for other reasons, and it is worth
+knowing which, so as not to undo them by accident.
 
 - **The server compiles nothing** (above): `deploy` is a `pull` plus `up -d`
   against a named tag in the registry. A new machine needs Docker, the
@@ -3818,32 +3858,55 @@ so as not to undo them by accident.
 - **Uploaded files are rows in `settings_files`, not a volume** (section
   10.1). The logo and the icons travel with the dump. This is usually what
   breaks a move: the volume is forgotten, because it is mentioned nowhere but
-  in `docker-compose.yml`. The covers volume is the exception the backup takes
-  explicitly (section 9.7).
+  in `docker-compose.yml`. The covers and the game uploads are the
+  exceptions: they are volumes, carried as above.
 - **The certificate is reissued automatically.** Caddy takes it from
   `SITE_ADDRESS`; `caddy-data` need not and should not be carried over.
 
-**What deliberately stays behind.** `pg-game-data`, the participants'
-instances, which provisioning recreates on demand. `redis-data`, the sessions
-— losing them means everybody signs in again, which during a server move is
-more right than wrong. `caddy-data`, the certificates. The observability
-volumes are graph history, carried over only if wanted.
+**What deliberately stays behind.** `pg-game-data`: the templates, rebuilt as
+above, and the participants' instances, which a rebuild remakes.
+`redis-data`, the sessions — losing them means everybody signs in again, which
+during a server move is more right than wrong. `caddy-data`, the
+certificates. The observability volumes are graph history, carried over only
+if wanted.
 
 **The order:**
 
-1. Take the dump — `make backup` — and **verify it**:
-   `make restore-check FILE=…`. An unverified dump is a hypothesis, not a
-   backup.
+1. Take the dump and the covers archive — `make backup` — and **verify the
+   dump**: `make restore-check FILE=…`. An unverified dump is a hypothesis,
+   not a backup. Then copy the game uploads out of the `api` container by
+   hand, `tables/` included: no `make` target does it, so it is
+   `docker compose -f deploy/docker-compose.yml cp api:<GAME_UPLOAD_DIR>/. <dir>`
+   (by default `/var/lib/dbcontest/uploads`).
 2. Bring up the new host: Docker, `deploy/`, `.env`. `SITE_ADDRESS` is a
    **temporary** name, not the real one.
 3. `make deploy VERSION=vX.Y.Z` — the same tag that runs now. Moving and
    upgrading in one go is two suspects for one failure.
-4. `make restore FILE=… CONFIRM=yes` on the new host.
-5. Exercise sign-in, a contest and the SQL console on the temporary name.
-6. Switch DNS, change `SITE_ADDRESS` to the real name, and `make deploy`
+4. `make restore FILE=… CONFIRM=yes` and
+   `make restore-covers FILE=… CONFIRM=yes` on the new host. Copy the game
+   uploads into the new `api` container by hand as well, owned by the API's
+   user (65532) as `restore-covers` does for covers — the API cannot open a
+   file it does not own — and restart the `api`. Copy them after the
+   restore, not before: until the rows are back, the upload sweep treats the
+   files as orphans and deletes them.
+5. Rebuild the game of every contest still to be played. The restored
+   database records each template as built and nothing checks the cluster,
+   so until then that contest has no game.
+   `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
+   stored, in `draft` or `published`. The game screen offers it only for a
+   table-builder game whose rows changed since its build, or whose build
+   failed, and a restored game is normally neither, so the route is called
+   directly with an organiser's session, whatever the game's source. The
+   rebuild raises the version, and the participants' copies are made again
+   from the new template. A contest that is `running` cannot be rebuilt and
+   the code has no other way to bring its game back — another reason to move
+   between olympiads. A finished contest needs no game: what is shown of it
+   afterwards is read from the core database.
+6. Exercise sign-in, a contest and the SQL console on the temporary name.
+7. Switch DNS, change `SITE_ADDRESS` to the real name, and `make deploy`
    again. Caddy issues a certificate for the new name.
 
-**Step 5 is possible in full, and that is not obvious.** The interface and the
+**Step 6 is possible in full, and that is not obvious.** The interface and the
 API must live on one name, because of `SameSite=Lax` and the `Origin` check —
 but on a temporary name the stack is self-consistent. So the move can be
 rehearsed completely, with real cookies and a real sign-in, before anything is
@@ -3998,17 +4061,31 @@ The existing step numbers do not move: other sections refer to "step 4" and
     contest's participant is impossible by construction rather than by the
     application's vigilance.
 
-- [ ] **5. The game** — the participant's interface (story, console,
+- [x] **5. The game** — the participant's interface (story, console,
   questions), submissions with automatic checking, the clock and the event
   stream. The scoring rules live here too, because without submissions there
   is nothing to enforce them with: the penalty for a wrong attempt, and
   sequential progression.
-- [ ] **6. Reporting and the journal** — the leaderboard (done, section 10),
-  the query-log panel (filters, live mode, CSV/XLSX/NDJSON export), reports.
-  And the contest's scoring mode, because what distinguishes the modes is how
-  a place is computed rather than how an answer is recorded.
-- [ ] **7. Audit and load** — the security audit from section 11's plan, a k6
-  load test, a pilot olympiad with a test group, and afterwards an extension
+- [ ] **6. Reporting and the journal** — half built.
+  - [x] **6.1 The leaderboard and the scoring modes** — the live, frozen and
+    final table with the reveal (section 10); points, a single winner and
+    ICPC scoring (section 6.1.1). The modes belong to this step because what
+    distinguishes them is how a place is computed rather than how an answer
+    is recorded.
+  - [x] **6.2 The query log inside one contest** — the participant's own log
+    and its CSV, on the play screen and in the profile (section 9.5); for
+    staff, the contest's monitoring (section 9.4): a feed filtered by kind,
+    time and participant with a live mode, each participant's queries with a
+    status filter and a search, and CSV of the contest or of one participant.
+  - [ ] **6.3 The query-log panel and reports** — the panel of section 9.1
+    across contests, with a search over a whole contest's queries and NDJSON
+    and XLSX export; and the staff reports of section 10: progress by
+    question during a contest, a breakdown by question afterwards, the
+    results as a file.
+- [ ] **7. Audit and load** — the security audit from section 11's plan, a
+  load test (`cmd/consoleload`, which exists: the steady and burst scenarios
+  through the participant's real path, and provisioning under either copy
+  strategy), a pilot olympiad with a test group, and afterwards an extension
   of the validator's function allow list from the refusals the panel
   aggregated.
 
@@ -4040,15 +4117,16 @@ The order is numeric, not by priority.
   Extend the form to the filter's full set, and check that each new field
   rests on an index rather than making `audit_log` be read whole — the table
   is kept for a year and grows faster than the rest.
-- [ ] **9. Bulk account actions are written three times** (section 6.3). Three
-  endpoints (`/users/bulk/status`, `/bulk/roles`, `/bulk/password-reset`),
-  three server actions and five dialogues came out to one pattern with no
-  shared code: the rule "a reason is required and is truncated" is written in
-  four places and the empty-selection check in three. Today every copy agrees;
-  nothing holds them together, and the first change to the rule — a length
-  limit, a ban on whitespace-only — would have to be repeated by hand. Reduce
-  it to one description of an action and derive the dialogues and the server
-  actions from it.
+- [ ] **9. Account actions repeat their rules in the interface.** The server
+  holds each rule once: `validateReason` trims a reason, refuses an empty one
+  and bounds its length for one account and for many, and `boundSelection`
+  checks the selection of all three bulk endpoints
+  (`/users/bulk/status`, `/bulk/roles`, `/bulk/password-reset`). The
+  interface does not: the reason is checked in both server-action files and
+  in three dialogues, the empty selection three times in `bulk-actions.ts`,
+  and none of them knows the length limit, so an over-long reason is refused
+  only by the server. Reduce the interface's side to one description of an
+  action and derive the dialogues and the server actions from it.
 - [ ] **10. Team mode: several people playing as one team.** The standard path
   is individual and the team mode is deliberately deferred; what follows is
   what has to be decided when it is needed, because half of it is not about a
@@ -4109,8 +4187,10 @@ The order is numeric, not by priority.
   **Participants are a partial success, and already are.**
   `POST /participants` takes logins and answers
   `{added, skipped:[{ref, reason}]}`: one typo does not reject the other three
-  hundred rows. A file adds only the parsing here — a CSV, or a column pasted
-  from a spreadsheet — and the rule is already written and tested.
+  hundred rows. A column pasted from a spreadsheet is already parsed
+  (`parseLogins`, split on whitespace, commas and semicolons); what is missing
+  is a file upload on the people screen, and the rule it would feed is
+  already written and tested.
 
   **A contest is all or nothing.** A half-loaded contest is worse than none:
   the publication gate will reject it for reasons its author did not create,
@@ -4121,7 +4201,7 @@ The order is numeric, not by priority.
   **The export exists, the import does not.** `GET /contests/{id}/export`
   serves the package as JSON (section 9.1), under `contest.edit`. So what
   remains of this item is exactly the second half: accepting such a file, all
-  or nothing, with every problem at once — and the CSV parsing for
+  or nothing, with every problem at once — and the file upload for
   participants, which stays a separate mechanism with the opposite semantics.
   The package's shape is already fixed by a `format` field and an integer
   `version` in the file itself, so an importer can refuse an unknown version
