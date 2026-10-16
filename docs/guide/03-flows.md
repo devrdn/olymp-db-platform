@@ -370,11 +370,11 @@ and the scheduler. It reports every problem at once; the codes are constants in
 | An uploaded cover carries an attribution | `cover_needs_attribution` |
 | The game's template is built at its current version | `no_game` |
 
-The game check reads `game_templates` in the core database
-(`GameInstances.GameReady`), never the game cluster, with the condition the
-console's lookup uses for `no_game_yet`, so a contest cannot open to
-participants told there is no game. A game saved again while the contest is
-published holds the start until the rebuild finishes.
+The game check is `GameInstances.GameReady`, a read of `game_templates` in the
+core database, never the game cluster
+([ARCHITECTURE.md §4.2](../ARCHITECTURE.md#42-provisioning-without-a-spike)).
+A game saved again while the contest is published holds the start until the
+rebuild finishes.
 
 Rules that matter:
 

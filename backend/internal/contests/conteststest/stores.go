@@ -1278,6 +1278,11 @@ func (r *Games) Built(contestID uuid.UUID) {
 	r.ready[contestID] = true
 }
 
+// Unbuilt leaves the contest with no game at all.
+func (r *Games) Unbuilt(contestID uuid.UUID) {
+	delete(r.ready, contestID)
+}
+
 // Rebuilding puts a built game back to waiting for a build, as saving it
 // again or asking for a rebuild does.
 func (r *Games) Rebuilding(contestID uuid.UUID) {

@@ -60,8 +60,7 @@ type scheduleCovers interface {
 // core database's template record rather than the game cluster.
 type scheduleGames interface {
 	// GameReady reports whether the contest's game template is built at its
-	// current version: the same condition under which a participant's console
-	// answers anything but no_game_yet.
+	// current version.
 	GameReady(ctx context.Context, contestID uuid.UUID) (bool, error)
 }
 
