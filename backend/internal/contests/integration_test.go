@@ -24,9 +24,11 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 	c := f.SeedPublishableContest()
 	staff := f.AddUser("t.manager")
 	student := f.AddUser("s.popescu")
+	rival := f.AddUser("a.ionescu")
 	doomed := f.SeedContest(contests.StatusDraft)
 
 	var added contests.Question
+	var enrolled contests.Participant
 
 	operations := []struct {
 		name string
@@ -132,15 +134,43 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			return f.Service.Transition(ctx, actor, c.ID, contests.StatusPublished)
 		}},
 		{"Enroll", func() error {
-			_, err := f.Service.Enroll(ctx, contests.EnrollCommand{
+			var err error
+			enrolled, err = f.Service.Enroll(ctx, contests.EnrollCommand{
 				UserID:    student.ID,
 				ContestID: c.ID,
 				Address:   netip.MustParseAddr("10.20.30.40"),
 			})
 			return err
 		}},
+		{"Enroll another participant", func() error {
+			_, err := f.Service.Enroll(ctx, contests.EnrollCommand{
+				UserID:    rival.ID,
+				ContestID: c.ID,
+				Address:   netip.MustParseAddr("10.20.30.41"),
+			})
+			return err
+		}},
+		{"Transition to running", func() error {
+			return f.Service.Transition(ctx, actor, c.ID, contests.StatusRunning)
+		}},
+		// Only the first answer changes something the trail records: the
+		// participant's start.
+		{"Submit, the first answer", func() error {
+			running, err := f.Contests.ByID(ctx, c.ID)
+			if err != nil {
+				return err
+			}
+			questions, err := f.Service.Questions(ctx, c.ID)
+			if err != nil {
+				return err
+			}
+			_, err = f.Service.Submit(ctx, contests.SubmitCommand{
+				Participant: enrolled, Contest: running, QuestionID: questions[0].ID, Value: "the butler",
+			})
+			return err
+		}},
 		{"DisqualifyParticipant", func() error {
-			return f.Service.DisqualifyParticipant(ctx, actor, c.ID, student.ID)
+			return f.Service.DisqualifyParticipant(ctx, actor, c.ID, rival.ID)
 		}},
 		{"Delete", func() error {
 			return f.Service.Delete(ctx, actor, doomed.ID)
