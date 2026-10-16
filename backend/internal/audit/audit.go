@@ -99,6 +99,9 @@ const (
 	// ActionGameInstanceDrop records one database an organizer had removed
 	// to remake it, distinct from the sweep's reclaim.
 	ActionGameInstanceDrop = "contest.instance_dropped"
+	// ActionGameInstanceReset records a participant remaking their own
+	// database from the contest's template.
+	ActionGameInstanceReset = "contest.instance_reset"
 	// ActionGameTemplateReclaim records a contest's template database dropped
 	// by the sweep once every instance copied from it is gone.
 	ActionGameTemplateReclaim = "contest.template_reclaimed"
@@ -145,6 +148,7 @@ var actions = []string{
 	ActionParticipantEnroll, ActionParticipantStart, ActionParticipantFinish,
 	ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
+	ActionGameInstanceReset,
 	ActionGameUploadComplete, ActionGameUploadAbort,
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
 	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,
