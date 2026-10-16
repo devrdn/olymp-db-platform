@@ -1832,6 +1832,10 @@ const ro = {
       "Această olimpiadă nu are un joc salvat, deci nu este nimic de construit. Scrieți SQL-ul, încărcați un dump gata făcut sau descrieți tabelele și salvați — construirea citește ce este salvat.",
     schema_hidden:
       "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
+    reset_read_only:
+      "Acest concurs este doar pentru citire: nimic din ce rulați nu vă poate schimba baza, deci nu este nimic de resetat.",
+    reset_too_often:
+      "V-ați resetat baza de câteva ori în ultimele minute. Așteptați puțin înainte de a o reseta din nou.",
     nothing_left_to_answer:
       "Fiecare întrebare de aici este fie rezolvată, fie fără încercări rămase, așa că nu mai aveți la ce lucra și consola s-a închis. Povestea, răspunsurile și rezultatele rămân la locul lor.",
     game_script_empty:

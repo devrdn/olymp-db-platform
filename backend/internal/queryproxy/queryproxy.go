@@ -55,7 +55,7 @@ var (
 func Errors() []error {
 	return []error{
 		ErrNothingLeftToAnswer, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
-		ErrDatabaseDeclined, ErrSchemaHidden,
+		ErrDatabaseDeclined, ErrSchemaHidden, ErrResetReadOnly, ErrResetTooOften,
 	}
 }
 
@@ -102,12 +102,15 @@ type Lookup interface {
 	ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error)
 }
 
-// Databases hands out the participant's own copy, and says how large it may
-// grow. Only defaultLookup calls Instance.
+// Databases hands out the participant's own copy, says how large it may
+// grow, and remakes it on request. Only defaultLookup calls Instance.
 type Databases interface {
 	Instance(ctx context.Context, registration uuid.UUID) (provisioning.Instance, error)
 	EnsureFrom(ctx context.Context, contest provisioning.Contest, registration uuid.UUID, existing provisioning.Instance, err error) (string, error)
 	Quota(ctx context.Context, contest provisioning.Contest) (int64, error)
+	// Reset copies the template over the registration's database and records
+	// actor as who asked; provisioning.ErrNoInstance when it has none.
+	Reset(ctx context.Context, actor uuid.UUID, contest provisioning.Contest, registration uuid.UUID) error
 }
 
 // Answerable answers whether a registration still has a question it could
@@ -155,6 +158,9 @@ type Service struct {
 	// user ID, checked before any lookup, and the registration ID, checked
 	// against the contest's own limit.
 	rate *queryrunner.RateLimiter
+	// resets is keyed by registration ID, so its keys are bounded by the
+	// rosters (CLAUDE.md rule 5).
+	resets *queryrunner.RateLimiter
 	// perMinuteDefault is the rate for a contest left at zero and the ceiling
 	// for any contest's own setting. Zero means no limit.
 	perMinuteDefault int
@@ -192,6 +198,7 @@ func New(people People, contestStore Contests, games Games, databases Databases,
 		audit: recorder, uow: uow,
 		lookup:           defaultLookup{people: people, contests: contestStore, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
+		resets:           queryrunner.NewRateLimiter(ResetsPerWindow, ResetWindow),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
 		now:              func() time.Time { return time.Now().UTC() },
 		gate:             gate,

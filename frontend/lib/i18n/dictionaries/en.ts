@@ -2029,6 +2029,10 @@ const en = {
       "This contest has no game stored, so there is nothing to build. Write its SQL, upload a ready-made dump, or describe its tables and save that — a build reads what is stored.",
     schema_hidden:
       "This olympiad does not show the database's structure. Finding it is part of the puzzle.",
+    reset_read_only:
+      "This contest is read-only: nothing you run can change your database, so there is nothing to reset.",
+    reset_too_often:
+      "You have reset your database several times in the last few minutes. Wait a little before resetting it again.",
     nothing_left_to_answer:
       "Every question here is either answered or out of attempts, so there is nothing left to work towards and the console has closed. The story, your answers and the results stay where they are.",
     game_script_empty:

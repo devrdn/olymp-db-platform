@@ -177,6 +177,19 @@ type databases struct {
 	// registration's copy.
 	existing    provisioning.Instance
 	existingErr error
+	// resets records every Reset call; resetErr is its answer.
+	resets   []resetCall
+	resetErr error
+}
+
+type resetCall struct {
+	actor, registration uuid.UUID
+	contest             provisioning.Contest
+}
+
+func (d *databases) Reset(_ context.Context, actor uuid.UUID, c provisioning.Contest, registration uuid.UUID) error {
+	d.resets = append(d.resets, resetCall{actor: actor, registration: registration, contest: c})
+	return d.resetErr
 }
 
 // Instance answers that the registration has no copy yet.

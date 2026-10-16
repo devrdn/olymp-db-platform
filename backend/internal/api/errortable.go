@@ -127,6 +127,13 @@ var queryproxyErrors = joined(errorTable{
 	// the panel.
 	{err: queryproxy.ErrSchemaHidden, status: http.StatusForbidden, code: codeSchemaHidden,
 		message: "This contest does not show the game's schema"},
+	// 409, like nothing_left_to_answer: the contest's policy refuses, not a
+	// permission the caller lacks.
+	{err: queryproxy.ErrResetReadOnly, status: http.StatusConflict, code: codeResetReadOnly,
+		message: "This contest is read-only, so a participant's database has nothing to reset"},
+	{err: queryproxy.ErrResetTooOften, status: http.StatusTooManyRequests, code: codeResetTooOften,
+		message:    "This participant has reset their database as often as allowed for now",
+		retryAfter: queryproxy.ResetWindow},
 }, standingErrors)
 
 // queryRetryAfter is long enough for a slot to be free: the limiter is a
