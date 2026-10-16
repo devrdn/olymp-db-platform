@@ -368,10 +368,13 @@ and the scheduler. It reports every problem at once; the codes are constants in
 | Sequential progression: no hidden question before the last | `sequential_hides_question` |
 | No account with `contest.admin_all` registered as a participant | `staff_registered` |
 | An uploaded cover carries an attribution | `cover_needs_attribution` |
+| The game's template is built at its current version | `no_game` |
 
-The publication gate does not check that the game database is built; a contest without a
-ready template opens, and its console answers that there is no game yet
-(`queryproxy.ErrNoGameYet`).
+The game check reads `game_templates` in the core database
+(`GameInstances.GameReady`), never the game cluster, with the condition the
+console's lookup uses for `no_game_yet`, so a contest cannot open to
+participants told there is no game. A game saved again while the contest is
+published holds the start until the rebuild finishes.
 
 Rules that matter:
 
