@@ -79,6 +79,13 @@ const (
 	ActionParticipantRemove     = "participant.remove"
 	ActionParticipantDisqualify = "participant.disqualify"
 	ActionParticipantEnroll     = "participant.enroll"
+	// ActionParticipantStart records the participant's own start: their first
+	// read, query or answer. It is written once, by the request that records
+	// the start, never by a later one.
+	ActionParticipantStart = "participant.start"
+	// ActionParticipantFinish records one participation closed by its
+	// contest's move to finished (nil actor), one entry per participant.
+	ActionParticipantFinish = "participant.finish"
 	// ActionContestAccessDenied records a participant turned away by a
 	// contest's network restriction.
 	ActionContestAccessDenied = "contest.access_denied"
@@ -135,7 +142,8 @@ var actions = []string{
 	ActionContestMonitorView, ActionContestMonitorExport,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
-	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
+	ActionParticipantEnroll, ActionParticipantStart, ActionParticipantFinish,
+	ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
 	ActionGameUploadComplete, ActionGameUploadAbort,
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,

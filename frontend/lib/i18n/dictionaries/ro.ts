@@ -1678,6 +1678,8 @@ const ro = {
       "participant.remove": "A eliminat un participant",
       "participant.disqualify": "A descalificat un participant",
       "participant.enroll": "S-a înscris la o olimpiadă",
+      "participant.start": "A început lucrul la o olimpiadă",
+      "participant.finish": "O participare s-a încheiat odată cu olimpiada",
       "contest.access_denied": "A fost refuzat de restricția de rețea",
       "contest.instance_reclaimed": "A eliminat baza de date a unui participant după expirarea perioadei de grație a olimpiadei",
       "contest.template_reclaimed": "A eliminat baza de date șablon a olimpiadei după ce fiecare copie a participanților dispăruse deja",

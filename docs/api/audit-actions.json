@@ -41,6 +41,8 @@
     "participant.remove",
     "participant.disqualify",
     "participant.enroll",
+    "participant.start",
+    "participant.finish",
     "contest.access_denied",
     "contest.start_blocked",
     "contest.instance_reclaimed",

@@ -1871,6 +1871,8 @@ const en = {
       "participant.remove": "Removed a participant",
       "participant.disqualify": "Disqualified a participant",
       "participant.enroll": "Signed up for a contest",
+      "participant.start": "Started work on a contest",
+      "participant.finish": "A participation ended with its contest",
       "contest.access_denied": "Was refused by the network restriction",
       "contest.instance_reclaimed": "Removed a participant's database once the contest's grace period passed",
       "contest.template_reclaimed": "Removed a contest's template database once every participant's copy was already gone",
