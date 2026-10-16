@@ -1679,7 +1679,7 @@
                 "reset"
               ]
             },
-            "description": "Drops the caller's database and copies the contest's template under the same name, so their tables and their own views and tables are as the contest started them. A query running at that moment is cut off. Recorded on the audit trail as `contest.instance_reset`; submissions, score and time are untouched. A participant with no database yet gets 204 and nothing is copied: their first query makes a fresh one.\n\nResponses: 204 · 400 `invalid_contest_id` · 403 · 409 `reset_read_only` / `no_game_yet` · 429 `reset_too_often` / `query_too_often` · 503 `game_cluster_full`"
+            "description": "Drops the caller's database and copies the contest's template under the same name, so every table and view in it is as the contest started it. A query running at that moment is cut off. Recorded on the audit trail as `contest.instance_reset`; submissions, score and time are untouched. A participant with no database yet gets 204 and nothing is copied: their first query makes a fresh one.\n\nResponses: 204 · 400 `invalid_contest_id` · 403 · 408 `query_cancelled` (the caller left while the press waited for an earlier one) · 409 `reset_read_only` / `nothing_left_to_answer` / `no_game_yet` · 429 `reset_too_often` / `query_too_often` · 503 `game_cluster_full`"
           },
           "response": []
         }

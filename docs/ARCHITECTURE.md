@@ -499,6 +499,7 @@ How it holds together:
   every play route, and provisioning recreates their instance from the
   template under the same name in seconds (`provisioning.Service.Reset`). A
   read-only contest refuses it (`reset_read_only`): nothing there can change.
+  So does a console closed because nothing is left to answer, as for a query.
   Each press drops and copies a database, so a registration may press three
   times in ten minutes, refused presses included (`reset_too_often`), after
   the account's query budget is charged. The fact is written to the audit

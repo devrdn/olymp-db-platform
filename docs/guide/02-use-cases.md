@@ -209,7 +209,7 @@ flowchart LR
 | Review and download my query log | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/log`, `GET /contests/{contestID}/play/log.csv` | `queryproxy` (admission) | Gate: `MayAct` |
 | Keep notes and SQL tabs | `/contests/{contestID}/play` | `GET .../play/workspace`, `PUT .../play/notes`, `POST .../play/tabs`, `PUT .../play/tabs/order`, `PATCH` and `DELETE .../play/tabs/{tabId}` | `workspace` | Gate: `MayAct`; saves per minute are capped (`workspace_too_often`) |
 | See the leaderboard with my row marked | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/leaderboard` | `leaderboard` | Session and a registration (`not_a_participant` otherwise); rate-limited per account |
-| Reset my database | Not offered by a screen yet | `POST /contests/{contestID}/play/reset` | `queryproxy`, then `provisioning` | Gate: `MayAct`; a `read_write` contest (`reset_read_only` otherwise); three resets per registration in ten minutes, refused ones included (`reset_too_often`). Mounted only with the console |
+| Reset my database | Not offered by a screen yet | `POST /contests/{contestID}/play/reset` | `queryproxy`, then `provisioning` | Gate: `MayAct`; a `read_write` contest (`reset_read_only` otherwise); at least one question still answerable; three resets per registration in ten minutes, refused ones included (`reset_too_often`). Mounted only with the console |
 | Send browser signals (leaving the page, pasting) | `/contests/{contestID}/play` (automatic) | `POST /contests/{contestID}/play/signals` | `monitor` (`Signals`) | Gate: `MayAct`; at most 50 events per batch, batches per minute capped |
 
 `...` in this table stands for `/contests/{contestID}`.
