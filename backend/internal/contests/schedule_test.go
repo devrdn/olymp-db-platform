@@ -26,6 +26,7 @@ type schedulerFixture struct {
 	stories     *conteststest.Stories
 	questions   *conteststest.Questions
 	roster      *conteststest.Registrations
+	games       *conteststest.Games
 	users       *userstest.Repository
 	sink        *conteststest.Sink
 	uow         *conteststest.UnitOfWork
@@ -36,14 +37,15 @@ func newScheduler() schedulerFixture {
 	repo := conteststest.NewSchedule()
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
+	games := conteststest.NewGames()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	poolTrigger := conteststest.NewPoolTrigger(uow)
 	roster, users := newRoster()
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace)).
+		scheduler: contests.NewScheduler(repo, stories, questions, roster, games, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace)).
 			WithPoolTrigger(poolTrigger),
-		repo: repo, stories: stories, questions: questions, roster: roster, users: users,
+		repo: repo, stories: stories, questions: questions, roster: roster, games: games, users: users,
 		sink: sink, uow: uow, poolTrigger: poolTrigger,
 	}
 }
@@ -77,6 +79,7 @@ func duePublishable(f schedulerFixture) contests.Contest {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
+	f.games.Built(c.ID)
 	return putDue(f, c)
 }
 
@@ -116,7 +119,21 @@ func TestNewSchedulerRefusesToAssembleWithoutAGate(t *testing.T) {
 	sink := conteststest.NewSink()
 	roster, _ := newRoster()
 	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
-		roster, sink, audit.New(sink), &conteststest.UnitOfWork{}, nil)
+		roster, conteststest.NewGames(), sink, audit.New(sink), &conteststest.UnitOfWork{}, nil)
+}
+
+// A scheduler that cannot ask about the game would start every due contest
+// without one.
+func TestNewSchedulerRefusesToAssembleWithoutGameReadiness(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewScheduler(..., nil games, ...) did not panic")
+		}
+	}()
+	sink := conteststest.NewSink()
+	roster, _ := newRoster()
+	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
+		roster, nil, sink, audit.New(sink), &conteststest.UnitOfWork{}, contests.NewGate(schedulerFixtureGrace))
 }
 
 func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
@@ -242,6 +259,98 @@ func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemNoStory)
+	}
+}
+
+// blockedCodes returns the problem codes of the tick's only audit entry, which
+// must record a blocked start.
+func blockedCodes(t *testing.T, f schedulerFixture) []string {
+	t.Helper()
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1", len(f.sink.Entries))
+	}
+	entry := f.sink.Entries[0]
+	if entry.Action != audit.ActionContestStartBlocked {
+		t.Fatalf("action = %q, want %q", entry.Action, audit.ActionContestStartBlocked)
+	}
+	problems, ok := entry.Payload["problems"].([]string)
+	if !ok {
+		t.Fatalf("payload problems = %v, want a []string", entry.Payload["problems"])
+	}
+	return problems
+}
+
+func TestAdvanceDoesNotStartAContestWhoseGameWasNeverBuilt(t *testing.T) {
+	f := newScheduler()
+	c := duePublishable(f)
+	f.games.Rebuilding(c.ID)
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 || f.repo.SetStatusCalls != 0 {
+		t.Errorf("started = %d, SetStatus calls = %d, want neither — the contest has no game", started, f.repo.SetStatusCalls)
+	}
+	if codes := blockedCodes(t, f); !slices.Equal(codes, []string{contests.ProblemNoGame}) {
+		t.Errorf("problems = %v, want exactly [%s]", codes, contests.ProblemNoGame)
+	}
+}
+
+func TestAdvanceStartsADueContestWhoseGameIsBuilt(t *testing.T) {
+	f := newScheduler()
+	c := duePublishable(f)
+	f.games.Built(c.ID)
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 1 {
+		t.Errorf("started = %d, want 1", started)
+	}
+	if got := statusOf(t, f, c.ID); got != contests.StatusRunning {
+		t.Errorf("status = %q, want running", got)
+	}
+}
+
+// Replacing the game of a published contest starts a new build; the old
+// template is no longer what a participant would be given.
+func TestAdvanceDoesNotStartAContestWhoseGameIsBeingRebuilt(t *testing.T) {
+	f := newScheduler()
+	c := duePublishable(f)
+	f.games.Built(c.ID)
+	f.games.Rebuilding(c.ID)
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 {
+		t.Errorf("started = %d, want 0 — the game is being rebuilt", started)
+	}
+	if got := statusOf(t, f, c.ID); got != contests.StatusPublished {
+		t.Errorf("status = %q, want the contest left published", got)
+	}
+	if codes := blockedCodes(t, f); !slices.Contains(codes, contests.ProblemNoGame) {
+		t.Errorf("problems = %v, want %s among them", codes, contests.ProblemNoGame)
+	}
+}
+
+// An unreadable template record aborts the tick rather than read as a
+// missing game (CLAUDE.md rule 8).
+func TestAdvanceFailsWhenTheGameCannotBeRead(t *testing.T) {
+	f := newScheduler()
+	duePublishable(f)
+	failure := errors.New("game templates are away")
+	f.games.ReadyErr = failure
+
+	_, _, err := f.scheduler.Advance(context.Background())
+	if !errors.Is(err, failure) {
+		t.Errorf("Advance() = %v, want an error wrapping %v", err, failure)
+	}
+	if f.repo.SetStatusCalls != 0 || len(f.sink.Entries) != 0 {
+		t.Error("a gate that could not be evaluated must neither move nor record anything")
 	}
 }
 
@@ -559,13 +668,14 @@ func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	repo := conteststest.NewSchedule()
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
+	games := conteststest.NewGames()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	roster, users := newRoster()
-	scheduler := contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace))
+	scheduler := contests.NewScheduler(repo, stories, questions, roster, games, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace))
 
 	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions,
-		roster: roster, users: users, sink: sink, uow: uow}
+		roster: roster, games: games, users: users, sink: sink, uow: uow}
 	duePublishable(f)
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {

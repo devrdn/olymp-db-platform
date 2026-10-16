@@ -416,6 +416,32 @@ func TestPublishCheckListsWhatIsMissing(t *testing.T) {
 	}
 }
 
+// The interface's publish-gate report translates this code in every locale.
+func TestPublishCheckNamesAGameThatIsNotBuilt(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedPublishableContest()
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: c.ID, UserID: f.actor.ID, Role: rbac.RoleOwner, GrantedBy: f.actor.ID,
+	}); err != nil {
+		t.Fatalf("Grant() returned error: %v", err)
+	}
+	f.stores.Games.Rebuilding(c.ID)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/publish-check", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	problems, _ := body["problems"].([]any)
+	if body["ready"] != false || len(problems) != 1 {
+		t.Fatalf("ready = %v, problems = %v, want not ready with the game as the only problem", body["ready"], problems)
+	}
+	if code := problems[0].(map[string]any)["code"]; code != "no_game" {
+		t.Errorf("problem code = %v, want no_game", code)
+	}
+}
+
 func TestPublishingAnIncompleteContestIsRefusedWithItsReasons(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)

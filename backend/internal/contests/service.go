@@ -62,6 +62,9 @@ type ServiceConfig struct {
 	// Sequence answers whether a question may be answered yet in a
 	// sequential contest (§6.1.1). Optional; only Submit uses it.
 	Sequence SequentialGate
+	// GameReadiness lets the publish gate refuse a contest whose game is not
+	// built (§4.2). Required.
+	GameReadiness scheduleGames
 	// Covers lets the publish gate refuse an uploaded cover with nobody
 	// credited (§10.1). Optional; without one the gate never asks.
 	Covers     scheduleCovers
@@ -100,6 +103,7 @@ type Service struct {
 	submissions     SubmissionRepository
 	sequence        SequentialGate
 	covers          scheduleCovers
+	games           scheduleGames
 	audit           *audit.Recorder
 	uow             storage.UnitOfWork
 	now             func() time.Time
@@ -110,10 +114,14 @@ type Service struct {
 	poolTrigger     PoolTrigger
 }
 
-// NewService assembles the contest service. Panics without a Gate.
+// NewService assembles the contest service. Panics without a Gate or
+// GameReadiness.
 func NewService(cfg ServiceConfig) *Service {
 	if cfg.Gate == nil {
 		panic("contests: NewService needs the participation gate")
+	}
+	if cfg.GameReadiness == nil {
+		panic("contests: NewService needs to know whether a contest's game is built")
 	}
 	now := cfg.Now
 	if now == nil {
@@ -140,6 +148,7 @@ func NewService(cfg ServiceConfig) *Service {
 		submissions:     cfg.Submissions,
 		sequence:        cfg.Sequence,
 		covers:          cfg.Covers,
+		games:           cfg.GameReadiness,
 		audit:           cfg.Audit,
 		uow:             cfg.UnitOfWork,
 		now:             now,
@@ -562,7 +571,7 @@ func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 }
 
 func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
-	return checkPublishable(ctx, s.stories, s.questions, s.registrations, s.covers, c)
+	return checkPublishable(ctx, s.stories, s.questions, s.registrations, s.games, s.covers, c)
 }
 
 // Transition moves a contest along its lifecycle.

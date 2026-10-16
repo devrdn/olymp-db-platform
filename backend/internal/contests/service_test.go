@@ -726,6 +726,90 @@ func TestPublishAcceptsAContestWithNoUploadedCover(t *testing.T) {
 	}
 }
 
+// Without a built game every participant's console answers no_game_yet.
+func TestPublishRefusesAContestWhoseGameWasNeverBuilt(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Games.Rebuilding(c.ID)
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished)
+
+	if codes := problemCodes(t, err); !slices.Equal(codes, []string{contests.ProblemNoGame}) {
+		t.Errorf("problems = %v, want exactly [%s]", codes, contests.ProblemNoGame)
+	}
+	if reloaded, _ := f.Service.ByID(context.Background(), c.ID); reloaded.Status != contests.StatusDraft {
+		t.Errorf("status = %q, want the refused contest left a draft", reloaded.Status)
+	}
+}
+
+func TestPublishAcceptsAContestWhoseGameIsBuilt(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Games.Built(c.ID)
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+}
+
+// The game stays replaceable while published, and replacing it starts a new
+// build.
+func TestStartRefusesAContestWhoseGameIsBeingRebuilt(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+	f.Games.Rebuilding(c.ID)
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusRunning)
+
+	if codes := problemCodes(t, err); !slices.Contains(codes, contests.ProblemNoGame) {
+		t.Errorf("problems = %v, want %s among them", codes, contests.ProblemNoGame)
+	}
+	if reloaded, _ := f.Service.ByID(context.Background(), c.ID); reloaded.Status != contests.StatusPublished {
+		t.Errorf("status = %q, want the refused contest left published", reloaded.Status)
+	}
+}
+
+func TestCheckPublishNamesAMissingGame(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Games.Rebuilding(c.ID)
+
+	err := f.Service.CheckPublish(context.Background(), c.ID)
+
+	if codes := problemCodes(t, err); !slices.Contains(codes, contests.ProblemNoGame) {
+		t.Errorf("problems = %v, want %s among them", codes, contests.ProblemNoGame)
+	}
+}
+
+// An unreadable template record is an outage, not a missing game
+// (CLAUDE.md rule 8).
+func TestPublishSurfacesAFailureToReadTheGame(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	failure := errors.New("game templates are away")
+	f.Games.ReadyErr = failure
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished)
+
+	if !errors.Is(err, failure) || errors.Is(err, contests.ErrNotPublishable) {
+		t.Errorf("Transition(published) = %v, want %v and not a publish-gate refusal", err, failure)
+	}
+}
+
+// A service that cannot ask about the game would publish every contest
+// without one.
+func TestNewServiceRefusesToAssembleWithoutGameReadiness(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService without GameReadiness did not panic")
+		}
+	}()
+	contests.NewService(contests.ServiceConfig{Gate: contests.NewGate(0)})
+}
+
 func TestTransitionTriggersThePoolWhenPublishingOrStarting(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
