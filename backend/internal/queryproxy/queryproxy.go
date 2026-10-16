@@ -14,8 +14,10 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -168,6 +170,10 @@ type Service struct {
 	lookup     Lookup
 	// watcher is nil until WithWatcher; nil watches nothing.
 	watcher Watcher
+	// audit and uow are nil until WithAudit, and then a start is recorded
+	// without its entry.
+	audit *audit.Recorder
+	uow   storage.UnitOfWork
 }
 
 // New assembles the façade around gate. It panics on a nil gate: no grace
@@ -248,6 +254,13 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 // look the same as a contest that is over.
 func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	s.answerable = answerable
+	return s
+}
+
+// WithAudit records each participant's start in the audit trail, in the
+// transaction that records the start. Only tests leave it unset.
+func (s *Service) WithAudit(recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
+	s.audit, s.uow = recorder, uow
 	return s
 }
 
@@ -450,7 +463,7 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 	if err := s.admit(contest, participant, addr); err != nil {
 		return contests.Participant{}, err
 	}
-	started, _, err := s.people.Start(ctx, participant.ID, s.now())
+	started, err := s.start(ctx, participant.ID)
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: record the participant's start: %w", ErrUnavailable, err)
 	}
@@ -466,6 +479,25 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 		return contests.Participant{}, fmt.Errorf("%w: recording the participant's start left their clock pending", ErrUnavailable)
 	}
 	return started, nil
+}
+
+// start records the participant's start and, when this call recorded it,
+// its audit entry, in one unit of work.
+func (s *Service) start(ctx context.Context, registrationID uuid.UUID) (contests.Participant, error) {
+	if s.audit == nil || s.uow == nil {
+		started, _, err := s.people.Start(ctx, registrationID, s.now())
+		return started, err
+	}
+	var started contests.Participant
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		var recorded bool
+		var err error
+		if started, recorded, err = s.people.Start(ctx, registrationID, s.now()); err != nil || !recorded {
+			return err
+		}
+		return s.audit.Record(ctx, contests.StartEntry(started))
+	})
+	return started, err
 }
 
 // resolve is the lookup Access and AccessForEvents share, classified the same

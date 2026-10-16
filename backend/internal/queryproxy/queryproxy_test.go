@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/sentineltest"
@@ -1161,6 +1162,87 @@ func TestStartOnReadCallsNoStartForAFixedTimingParticipantAlreadyStarted(t *test
 	}
 	if starts != 0 {
 		t.Fatalf("Start called %d times for a participant already started, want 0", starts)
+	}
+}
+
+// trail is the audit sink and the unit of work in one, so a test can tell an
+// entry written inside the start's transaction from one written after it.
+type trail struct {
+	entries []audit.Entry
+	loose   []audit.Entry
+}
+
+type inTxKey struct{}
+
+func (tr *trail) Do(ctx context.Context, fn func(context.Context) error) error {
+	return fn(context.WithValue(ctx, inTxKey{}, true))
+}
+
+func (tr *trail) Append(ctx context.Context, e audit.Entry) error {
+	tr.entries = append(tr.entries, e)
+	if ctx.Value(inTxKey{}) == nil {
+		tr.loose = append(tr.loose, e)
+	}
+	return nil
+}
+
+func (tr *trail) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	for _, e := range entries {
+		if err := tr.Append(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The start's entry names the participant as its actor and lands in the
+// transaction that records the start (§9.2).
+func TestStartOnReadAuditsTheStartItRecords(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	p := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationRegistered}
+	recorded := &trail{}
+	service := accessFixture(people{participant: p}, contestStore{contest: contest}).
+		WithAudit(audit.New(recorded), recorded)
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+
+	if len(recorded.entries) != 1 {
+		t.Fatalf("audit entries = %+v, want one %s", recorded.entries, audit.ActionParticipantStart)
+	}
+	got := recorded.entries[0]
+	if got.Action != audit.ActionParticipantStart || got.Entity != "contest" || got.EntityID != contest.ID.String() {
+		t.Errorf("entry = %s on %s %s, want %s on contest %s", got.Action, got.Entity, got.EntityID, audit.ActionParticipantStart, contest.ID)
+	}
+	if got.ActorID == nil || *got.ActorID != p.UserID {
+		t.Errorf("actor = %v, want the participant %s", got.ActorID, p.UserID)
+	}
+	if len(recorded.loose) != 0 {
+		t.Errorf("entries recorded outside the transaction: %+v", recorded.loose)
+	}
+}
+
+// A read that lost the start to another request writes no second entry
+// (CLAUDE.md rule 6).
+func TestStartOnReadAuditsNoStartAnotherRequestRecorded(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	p := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationRegistered}
+	starts := 0
+	earlier := time.Now().Add(-time.Minute)
+	recorded := &trail{}
+	service := accessFixture(people{participant: p, starts: &starts, stored: &earlier}, contestStore{contest: contest}).
+		WithAudit(audit.New(recorded), recorded)
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
+	}
+	if len(recorded.entries) != 0 {
+		t.Errorf("audit entries = %+v, want none from a request that did not record the start", recorded.entries)
 	}
 }
 

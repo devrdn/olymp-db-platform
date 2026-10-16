@@ -245,7 +245,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				// Run refuses once nothing is left to answer
 				// (ErrNothingLeftToAnswer); the read endpoints stay open.
 				WithAnswerable(postgres.NewAnswerable(pool)).
-				WithWatcher(participantTracker)
+				WithWatcher(participantTracker).
+				WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		}
 	}
 
@@ -410,7 +411,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			nil, nil, nil,
 			gate,
 		).WithPerMinuteDefault(cfg.QueryPerMinute).
-			WithLookup(registrations)
+			WithLookup(registrations).
+			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 	}
 	reader := contests.NewReader(
 		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))
