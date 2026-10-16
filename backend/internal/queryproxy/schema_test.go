@@ -43,6 +43,7 @@ func schemaFixture(policy sqlpolicy.Policy) (*queryproxy.Service, *databases, *s
 		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: policy}},
 		db, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(reader)
 	return service, db, reader, admitted{contest: contest, participant: registration}
 }
@@ -86,7 +87,7 @@ func TestSchemaIsRefusedWhereTheContestClosedItsCatalogues(t *testing.T) {
 func TestSchemaIsRefusedByAConsolelessBuildRatherThanPanicking(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
 	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
-	service := queryproxy.New(people{participant: participant}, contestStore{contest: contest}, nil, nil, nil, fiveSecondGate)
+	service := queryproxy.New(people{participant: participant}, contestStore{contest: contest}, nil, nil, nil, fiveSecondGate, quietTrail, quiet{})
 
 	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
 		t.Fatalf("answered %v, want ErrSchemaHidden", err)
@@ -102,6 +103,7 @@ func TestSchemaIsRefusedWhenNothingWasWiredToAnswerIt(t *testing.T) {
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "game_c1_u1"}, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	)
 
 	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
@@ -124,6 +126,7 @@ func TestSchemaDescribesThePairItWasHandedWithoutAdmittingItAgain(t *testing.T) 
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "game_c1_u1"}, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(reader)
 
 	got, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7"))
@@ -149,6 +152,7 @@ func TestSchemaRefusesARegistrationReplacedSinceItWasAdmitted(t *testing.T) {
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		db, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(reader)
 
 	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, contests.ErrNotAParticipant) {
@@ -171,6 +175,7 @@ func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*
 		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: policy}},
 		&databases{database: "game_c1_u1"}, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(reader)
 	return service, reader, &starts, admitted{contest: contest, participant: registration}
 }
@@ -196,6 +201,7 @@ func TestReadingTheSchemaRecordsAFixedTimingParticipantsStart(t *testing.T) {
 		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "game_c1_u1"}, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(&schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}})
 
 	if _, err := service.Schema(t.Context(), contest, registration, netip.MustParseAddr("192.0.2.7")); err != nil {
@@ -241,6 +247,7 @@ func TestSchemaReportsAContestWithNoGame(t *testing.T) {
 		games{err: provisioning.ErrNoGame},
 		&databases{}, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(&schemas{})
 
 	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrNoGameYet) {
@@ -266,6 +273,7 @@ func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
 		games{game: game, calls: &gameCalls},
 		db, &runner{},
 		fiveSecondGate,
+		quietTrail, quiet{},
 	).WithSchemas(reader).
 		WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: instance, calls: &lookupCalls, asked: &asked})
 
@@ -292,7 +300,7 @@ func TestSchemaOverTheSingleLookupStillRefusesAClosedCatalogueFirst(t *testing.T
 	db := &databases{database: "game_c1_u1"}
 	reader := &schemas{}
 
-	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate).
+	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate, quietTrail, quiet{}).
 		WithSchemas(reader).
 		WithLookup(lookupFake{participant: participant, contest: contest,
 			game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Policy: closed}})

@@ -108,6 +108,7 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 		&databases{database: "x"},
 		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
 		fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
 	).WithClock(func() time.Time { return clock })
 
 	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
@@ -202,6 +203,7 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{},
 		fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
 	)
 
 	if _, _, err := service.Access(ctx, running, enrolled, netip.Addr{}); err != nil {
@@ -268,6 +270,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		&databases{database: "x"},
 		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
 		fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
 	).WithAnswerable(postgres.NewAnswerable(pool))
 
 	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
@@ -316,7 +319,8 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
 		WithClock(func() time.Time { return clock })
 
 	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
@@ -371,7 +375,8 @@ func TestAFixedTimingParticipantsFirstReadRecordsTheStartOnceAndTheEventsChannel
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
 		WithClock(func() time.Time { return clock })
 
 	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
@@ -424,9 +429,9 @@ func TestAFirstReadAuditsTheStartOnceWithTheCallersAddress(t *testing.T) {
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
-		WithClock(func() time.Time { return clock }).
-		WithAudit(audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
+		WithClock(func() time.Time { return clock })
 
 	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
 	if err != nil {
@@ -587,7 +592,8 @@ func roundTripFixture(t *testing.T) roundTrips {
 	}
 
 	databases := provisioning.New(games, panicCluster{t: t})
-	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}, fiveSecondGate).
+	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}, fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
 		WithAnswerable(postgres.NewAnswerable(pool)).
 		WithLookup(registrations).
 		WithSchemas(&schemas{})
@@ -691,6 +697,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 		&databases{database: "x"},
 		journalled,
 		fiveSecondGate,
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
 	)
 
 	address := netip.MustParseAddr("203.0.113.9")

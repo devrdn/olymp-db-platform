@@ -236,6 +236,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
 				gate,
+				auditRecorder, storage.NewUnitOfWork(pool),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).
 				// Collapses Run's and Access's lookups into one round trip.
 				WithLookup(consoleRegistrations).
@@ -245,8 +246,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				// Run refuses once nothing is left to answer
 				// (ErrNothingLeftToAnswer); the read endpoints stay open.
 				WithAnswerable(postgres.NewAnswerable(pool)).
-				WithWatcher(participantTracker).
-				WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+				WithWatcher(participantTracker)
 		}
 	}
 
@@ -410,9 +410,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			registrations, postgres.NewContests(pool),
 			nil, nil, nil,
 			gate,
+			auditRecorder, storage.NewUnitOfWork(pool),
 		).WithPerMinuteDefault(cfg.QueryPerMinute).
-			WithLookup(registrations).
-			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+			WithLookup(registrations)
 	}
 	reader := contests.NewReader(
 		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))

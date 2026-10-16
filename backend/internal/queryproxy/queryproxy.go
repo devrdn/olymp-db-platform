@@ -170,20 +170,26 @@ type Service struct {
 	lookup     Lookup
 	// watcher is nil until WithWatcher; nil watches nothing.
 	watcher Watcher
-	// audit and uow are nil until WithAudit, and then a start is recorded
-	// without its entry.
+	// audit records a participant's start in the transaction uow opens.
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
 }
 
 // New assembles the façade around gate. It panics on a nil gate: no grace
-// assumed here is sure to match the rest of the installation's.
-func New(people People, contestStore Contests, games Games, databases Databases, runner Executor, gate *contests.Gate) *Service {
+// assumed here is sure to match the rest of the installation's. It panics
+// without recorder or uow too: a participant's start is never recorded
+// without its audit entry.
+func New(people People, contestStore Contests, games Games, databases Databases, runner Executor, gate *contests.Gate,
+	recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
 	if gate == nil {
 		panic("queryproxy: New needs the participation gate")
 	}
+	if recorder == nil || uow == nil {
+		panic("queryproxy: New needs the audit recorder and its unit of work")
+	}
 	return &Service{
 		people: people, databases: databases, runner: runner,
+		audit: recorder, uow: uow,
 		lookup:           defaultLookup{people: people, contests: contestStore, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
@@ -254,13 +260,6 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 // look the same as a contest that is over.
 func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	s.answerable = answerable
-	return s
-}
-
-// WithAudit records each participant's start in the audit trail, in the
-// transaction that records the start. Only tests leave it unset.
-func (s *Service) WithAudit(recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
-	s.audit, s.uow = recorder, uow
 	return s
 }
 
@@ -484,10 +483,6 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 // start records the participant's start and, when this call recorded it,
 // its audit entry, in one unit of work.
 func (s *Service) start(ctx context.Context, registrationID uuid.UUID) (contests.Participant, error) {
-	if s.audit == nil || s.uow == nil {
-		started, _, err := s.people.Start(ctx, registrationID, s.now())
-		return started, err
-	}
 	var started contests.Participant
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		var recorded bool
