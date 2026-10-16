@@ -110,6 +110,43 @@ func TestProfileSummaryCountsOnlyTheCallersOwnWork(t *testing.T) {
 	})
 }
 
+// The count reads what a contest's end writes, by either path, and only for
+// a participant who started.
+func TestProfileSummaryCountsAnEndedContestTheCallerStarted(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		repo, registrations := NewContests(testPool), NewRegistrations(testPool)
+		closedByTheScheduler, first := f.contest(contests.StatusRunning, 0)
+		closedByAnOrganiser, second := f.contest(contests.StatusRunning, time.Hour)
+		neverStartedIn, _ := f.contest(contests.StatusRunning, 2*time.Hour)
+		for _, reg := range []uuid.UUID{first, second} {
+			if _, err := registrations.Start(ctx, reg, f.base); err != nil {
+				t.Fatalf("Start() = %v", err)
+			}
+		}
+
+		for _, contest := range []uuid.UUID{closedByAnOrganiser, neverStartedIn} {
+			if err := repo.SetStatus(ctx, contest, contests.StatusRunning, contests.StatusFinished); err != nil {
+				t.Fatalf("SetStatus() = %v", err)
+			}
+		}
+		if _, err := repo.AdvanceFinished(ctx, 0); err != nil {
+			t.Fatalf("AdvanceFinished() = %v", err)
+		}
+		if c, err := repo.ByID(ctx, closedByTheScheduler); err != nil || c.Status != contests.StatusFinished {
+			t.Fatalf("after AdvanceFinished: status %q, %v; want the contest finished", c.Status, err)
+		}
+
+		got, err := NewProfile(testPool).Summary(ctx, f.user)
+		if err != nil {
+			t.Fatalf("Summary() = %v", err)
+		}
+		if got.Contests != 3 || got.Finished != 2 {
+			t.Errorf("Summary() = %+v, want 3 contests, 2 finished", got)
+		}
+	})
+}
+
 func (f *profileFixture) strangerIn(contest uuid.UUID) uuid.UUID {
 	f.t.Helper()
 	var id uuid.UUID
