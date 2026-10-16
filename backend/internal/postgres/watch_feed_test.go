@@ -520,6 +520,37 @@ func TestAnIndividualParticipantsSignInsEndWithTheirDeadline(t *testing.T) {
 	}
 }
 
+// A contest's end finishes an individual participant when it closes, which
+// may be long after their own deadline; their sign-ins still end with the
+// deadline.
+func TestAnIndividualParticipantFinishedByTheContestsEndIsBoundedByTheirDeadline(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		reg, user := f.participant("solo")
+		f.exec(`UPDATE contests SET status = 'running', timing = 'individual', duration_min = 60, starts_at = $2 WHERE id = $1`,
+			f.contest, f.at(-time.Hour))
+		f.exec(`UPDATE registrations SET created_at = $2, started_at = $3, status = 'active' WHERE id = $1`,
+			reg, f.at(-time.Hour), f.at(0))
+		if err := NewContests(testPool).SetStatus(ctx, f.contest, "running", "finished"); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+		for _, at := range []time.Duration{90 * time.Minute, 2*time.Hour + time.Minute} {
+			f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, created_at)
+			        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, $2)`, user, f.at(at))
+		}
+
+		items := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Kinds: []string{monitor.FeedSignIn}}).Items
+
+		if len(items) != 1 || !items[0].At.Equal(f.at(90*time.Minute)) {
+			var at []time.Time
+			for _, item := range items {
+				at = append(at, item.At)
+			}
+			t.Errorf("sign-ins shown at %v, want only the one within an hour of the deadline", at)
+		}
+	})
+}
+
 func ptrDuration(d time.Duration) *time.Duration { return &d }
 
 // Three hundred participants, the target contest size: enough to expose a
