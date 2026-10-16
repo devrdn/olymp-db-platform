@@ -81,7 +81,7 @@ func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
 	for _, id := range s.Contests.order {
 		c := s.Contests.byID[id]
 		if c.Status == contests.StatusPublished && c.StartsAt != nil && !c.StartsAt.After(now) {
-			due = append(due, served(c))
+			due = append(due, s.Contests.serve(c))
 		}
 	}
 	return due, nil
