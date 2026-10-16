@@ -792,6 +792,7 @@ const ro = {
         leaderboard_freeze_exceeds_window: "Înghețarea clasamentului începe înaintea olimpiadei sau olimpiada nu are un final de la care să fie numărată.",
         staff_registered: "Contul unui participant administrează toate olimpiadele, deci citește deja răspunsurile de referință ale acestei olimpiade și clasamentul ei neînghețat. Scoateți-l din lista de participanți înainte de publicare sau retrageți-i dreptul contului.",
         cover_needs_attribution: "Coperta încărcată nu are o linie care spune a cui este fotografia. Adăugați-o sau eliminați coperta, iar olimpiada va primi una desenată.",
+        no_game: "Baza olimpiadei nu este încă construită, se construiește încă sau ultima construire a eșuat, deci niciun participant nu ar avea o bază pe care să o interogheze. Construiți-o în fila Bază și așteptați să se termine construirea.",
       },
     },
     story: {
