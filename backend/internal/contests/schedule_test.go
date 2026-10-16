@@ -283,7 +283,7 @@ func blockedCodes(t *testing.T, f schedulerFixture) []string {
 func TestAdvanceDoesNotStartAContestWhoseGameWasNeverBuilt(t *testing.T) {
 	f := newScheduler()
 	c := duePublishable(f)
-	f.games.Rebuilding(c.ID)
+	f.games.Unbuilt(c.ID)
 
 	started, _, err := f.scheduler.Advance(context.Background())
 	if err != nil {
@@ -337,8 +337,8 @@ func TestAdvanceDoesNotStartAContestWhoseGameIsBeingRebuilt(t *testing.T) {
 	}
 }
 
-// An unreadable template record aborts the tick rather than read as a
-// missing game (CLAUDE.md rule 8).
+// An unreadable template record is an outage: it aborts the tick rather than
+// read as a missing game.
 func TestAdvanceFailsWhenTheGameCannotBeRead(t *testing.T) {
 	f := newScheduler()
 	duePublishable(f)

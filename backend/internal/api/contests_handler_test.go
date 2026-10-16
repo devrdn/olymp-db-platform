@@ -425,7 +425,7 @@ func TestPublishCheckNamesAGameThatIsNotBuilt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Grant() returned error: %v", err)
 	}
-	f.stores.Games.Rebuilding(c.ID)
+	f.stores.Games.Unbuilt(c.ID)
 
 	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/publish-check", "")
 

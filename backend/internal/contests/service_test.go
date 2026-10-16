@@ -730,7 +730,7 @@ func TestPublishAcceptsAContestWithNoUploadedCover(t *testing.T) {
 func TestPublishRefusesAContestWhoseGameWasNeverBuilt(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
-	f.Games.Rebuilding(c.ID)
+	f.Games.Unbuilt(c.ID)
 
 	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished)
 
@@ -775,7 +775,7 @@ func TestStartRefusesAContestWhoseGameIsBeingRebuilt(t *testing.T) {
 func TestCheckPublishNamesAMissingGame(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
-	f.Games.Rebuilding(c.ID)
+	f.Games.Unbuilt(c.ID)
 
 	err := f.Service.CheckPublish(context.Background(), c.ID)
 
@@ -784,8 +784,7 @@ func TestCheckPublishNamesAMissingGame(t *testing.T) {
 	}
 }
 
-// An unreadable template record is an outage, not a missing game
-// (CLAUDE.md rule 8).
+// An unreadable template record is an outage, not a missing game.
 func TestPublishSurfacesAFailureToReadTheGame(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
