@@ -30,7 +30,6 @@ import { useSignals } from "./use-signals";
 const MemoResultPanel = memo(ResultPanel);
 const MemoQueryLogPanel = memo(QueryLogPanel);
 const MemoSidePanel = memo(SidePanel);
-// The schema changes only when the participant resets their database.
 const MemoSchemaPanel = memo(SchemaPanel);
 
 /**
@@ -93,8 +92,6 @@ export function Workspace({
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace;
-  // Re-read after a reset, which removes the tables and views the participant
-  // made.
   const [schema, setSchema] = useState(initialSchema);
 
   // Reports leaving the page and pasting to the organiser (use-signals.ts).
@@ -158,9 +155,10 @@ export function Workspace({
     [schema, toggle],
   );
 
-  // The last result's rows came from the database the reset replaced. A
-  // contest that hides its schema is not asked for it, and a failed read keeps
-  // the panel as it was rather than taking it away.
+  // A reset replaces the participant's database: the last result's rows came
+  // from the old one, and the tables and views they made are gone from the
+  // schema. A contest that hides its schema is not asked for it, and a failed
+  // read keeps the panel as it was rather than taking it away.
   const schemaShown = schema !== null;
   const onDatabaseReset = useCallback(() => {
     setLastResult({ kind: "idle" });
