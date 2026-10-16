@@ -21,9 +21,10 @@ import (
 )
 
 // The endpoints a participant of a running contest uses: the story, the visible
-// questions, the schema, their own query log, and answering a question. Under
-// individual timing, a successful read of the story, questions or schema starts
-// the participant's clock (queryproxy.Service.StartOnRead).
+// questions, the schema, their own query log, and answering a question. A
+// successful read of the story, questions or schema records the participant's
+// start, which under individual timing starts their clock
+// (queryproxy.Service.StartOnRead).
 //
 // Nothing here may ever reveal a reference answer, a hidden question, anything
 // about another participant, or anything about a contest the caller is not
@@ -41,14 +42,14 @@ type ParticipantAccess interface {
 	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
 	// AdmitRead charges the caller's rate budget before Access runs any lookup.
 	AdmitRead(userID uuid.UUID) error
-	// StartOnRead starts an individual participant's clock on their first read
-	// of the content. The story and question endpoints call it after the read
+	// StartOnRead records the participant's start on their first read of the
+	// content. The story and question endpoints call it after the read
 	// and before sending; addr is admitted by the same gate as the read.
 	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
 	// Schema describes the game for the console's schema panel, to a
 	// participant Access has already admitted. A contest that hides its
 	// catalogues refuses with queryproxy.ErrSchemaHidden. A successful read
-	// starts the clock like the story does.
+	// records the start like the story does.
 	Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error)
 }
 
@@ -232,9 +233,9 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 	return participant, contest, true
 }
 
-// startOnRead starts an individual participant's clock after a successful read
-// and before the content is sent: a refused read starts nothing, and content is
-// never sent to a participant whose clock could not start.
+// startOnRead records the participant's start after a successful read and
+// before the content is sent: a refused read starts nothing, and content is
+// never sent to a participant whose start could not be recorded.
 func (h *ParticipantHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
 	if _, err := h.access.StartOnRead(r.Context(), contest, participant, clientAddress(r)); err != nil {
 		h.fail(w, r, err)
