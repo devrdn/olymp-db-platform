@@ -247,14 +247,14 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	}, nil
 }
 
-// startClock starts an individual participant's clock on their first answer,
-// through the registration's Start, which sets started_at only once (§8). It
+// startClock records a participant's start on their first answer, under
+// either timing, through the registration's Start, which sets started_at and
+// active only once (§8); under individual timing that starts their clock. It
 // then asks the gate again about the participant Start returned: another
 // request may have started them first and their time may be up, or they may
-// have been disqualified since. Anyone whose clock is not pending is returned
-// unchanged.
+// have been disqualified since. Anyone already started is returned unchanged.
 func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr netip.Addr) (Participant, error) {
-	if !ClockPending(c, p) {
+	if !p.AwaitsStart() {
 		return p, nil
 	}
 	started, err := s.registrations.Start(ctx, p.ID, s.now())
