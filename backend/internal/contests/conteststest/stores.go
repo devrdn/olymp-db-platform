@@ -88,6 +88,9 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.ICPCPenaltyMin == 0 {
 		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
 	}
+	if c.SQLMode == "" {
+		c.SQLMode = contests.ModeReadOnly
+	}
 	r.store(c)
 	return c
 }
@@ -140,12 +143,14 @@ func served(c contests.Contest) contests.Contest {
 
 // Create writes only the contest's own columns, as the real insert does: the
 // identity and timestamps are assigned here, languages and titles are dropped,
-// and Put's seed defaults are not applied.
+// the mode reads as for a contest with no policy row, and Put's seed defaults
+// are not applied.
 func (r *Contests) Create(_ context.Context, c contests.Contest) (contests.Contest, error) {
 	c.ID = uuid.New()
 	c.Languages, c.Translations = nil, nil
 	c.LeaderboardRevealedAt = nil
 	c.CoverHash, c.CoverAttribution = "", ""
+	c.SQLMode = contests.ModeReadOnly
 	c.CreatedAt, c.UpdatedAt = time.Time{}, time.Time{}
 	if now, ok := r.now(); ok {
 		c.CreatedAt, c.UpdatedAt = now, now

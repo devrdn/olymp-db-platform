@@ -538,7 +538,7 @@
                 }
               ]
             },
-            "description": "Which contests the caller sees depends on who they are, not on a flag they pass:\n- system administrator (`contest.admin_all`) — all of them\n- organizer (`contest.create`) — the ones they own or manage\n- anybody else — the ones they take part in, plus open ones taking signups\n\n`scope=participant` asks for the student view explicitly, which is how staff preview what a participant sees.\n\nEach item carries one **negotiated** title and the `lang` it was served in (`?lang=`, then `Accept-Language`, then the contest default, then `DEFAULT_LOCALE`).\n\nResponses: 200 `{ items: ContestSummary[], total }` · 401 `unauthenticated`"
+            "description": "Which contests the caller sees depends on who they are, not on a flag they pass:\n- system administrator (`contest.admin_all`) — all of them\n- organizer (`contest.create`) — the ones they own or manage\n- anybody else — the ones they take part in, plus open ones taking signups\n\n`scope=participant` asks for the student view explicitly, which is how staff preview what a participant sees.\n\nEach item carries one **negotiated** title and the `lang` it was served in (`?lang=`, then `Accept-Language`, then the contest default, then `DEFAULT_LOCALE`). It also carries `sql_mode`, the mode of the contest's SQL policy (`read_only` when none was set): a participant may not read the policy itself, and the play screen offers the database reset only under `read_write`.\n\nResponses: 200 `{ items: ContestSummary[], total }` · 401 `unauthenticated`"
           },
           "response": []
         },

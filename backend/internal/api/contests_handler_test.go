@@ -371,6 +371,38 @@ func TestListingCarriesTheCoverAContestWears(t *testing.T) {
 	}
 }
 
+// The play screen offers the database reset only where writing is allowed,
+// and a participant may not read the staff-only policy.
+func TestListingCarriesTheModeOfAContestsPolicy(t *testing.T) {
+	f := newContestFixture(t)
+	_, cookie := f.asParticipant(t, "s.popescu")
+	writing := f.stores.SeedContest(contests.StatusPublished)
+	writing.Enrollment = contests.EnrollmentOpen
+	writing.SQLMode = contests.ModeReadWrite
+	f.stores.Contests.Put(writing)
+	reading := f.stores.SeedContest(contests.StatusPublished)
+	reading.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(reading)
+
+	rec := f.asked(t, "/contests?scope=participant", cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	items, _ := decode(t, rec)["items"].([]any)
+	modes := map[any]any{}
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		modes[row["id"]] = row["sql_mode"]
+	}
+	if got := modes[writing.ID.String()]; got != contests.ModeReadWrite {
+		t.Errorf("sql_mode = %v, want %q", got, contests.ModeReadWrite)
+	}
+	if got := modes[reading.ID.String()]; got != contests.ModeReadOnly {
+		t.Errorf("sql_mode = %v for a contest left at the default, want %q", got, contests.ModeReadOnly)
+	}
+}
+
 // No empty strings on every row of a register that shows no pictures
 // (docs/design/SPEC.md §10).
 func TestListingSaysNothingAboutTheCoverOfAContestThatWearsADrawnOne(t *testing.T) {

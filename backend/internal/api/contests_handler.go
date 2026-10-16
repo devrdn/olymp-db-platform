@@ -240,6 +240,10 @@ type ContestSummary struct {
 	CoverHash string `json:"cover_hash,omitempty"`
 	// CoverAttribution credits the picture's author; absent for a drawn cover.
 	CoverAttribution string `json:"cover_attribution,omitempty"`
+	// SQLMode is the mode of the contest's SQL policy, which a participant may
+	// not read whole: the play screen offers the database reset only under
+	// read_write.
+	SQLMode string `json:"sql_mode"`
 }
 
 func toContestResponse(c contests.Contest) ContestResponse {
@@ -301,6 +305,7 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 
 		CoverHash:        c.CoverHash,
 		CoverAttribution: c.CoverAttribution,
+		SQLMode:          c.SQLMode,
 	}
 }
 
