@@ -89,22 +89,23 @@ func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
 
 // SetStatus is the store's, as postgres.Contests uses one method for both
 // interfaces.
-func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
+func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
 	s.SetStatusCalls++
 	if s.SetStatusErr != nil {
-		return s.SetStatusErr
+		return nil, s.SetStatusErr
 	}
-	if err := s.Contests.SetStatus(ctx, id, from, to); err != nil {
-		return err
+	finished, err := s.Contests.SetStatus(ctx, id, from, to)
+	if err != nil {
+		return nil, err
 	}
 	s.Moved = append(s.Moved, id)
-	return nil
+	return finished, nil
 }
 
 // AdvanceFinished finishes running contests whose end plus grace is at or
 // before the clock, with their active participants. A contest with no end
 // never matches.
-func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uuid.UUID, error) {
+func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]contests.FinishedContest, error) {
 	s.FinishedCalls++
 	s.GraceSeen = grace
 	if s.FinishedErr != nil {
@@ -114,7 +115,7 @@ func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uu
 	if err != nil {
 		return nil, err
 	}
-	var finished []uuid.UUID
+	var finished []contests.FinishedContest
 	for _, id := range s.Contests.order {
 		c := s.Contests.byID[id]
 		if c.Status != contests.StatusRunning || c.EndsAt == nil || c.EndsAt.Add(grace).After(now) {
@@ -123,8 +124,7 @@ func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uu
 		c.Status = contests.StatusFinished
 		c.UpdatedAt = now
 		s.Contests.byID[id] = c
-		s.Contests.finishRoster(id)
-		finished = append(finished, id)
+		finished = append(finished, contests.FinishedContest{ID: id, Users: s.Contests.finishRoster(id)})
 	}
 	return finished, nil
 }

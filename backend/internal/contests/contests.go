@@ -481,8 +481,10 @@ type Repository interface {
 	// ErrStatusChanged if a concurrent request moved it since the caller read
 	// it. A move to finished finishes every active registration of the
 	// contest in the same write, so no reader sees the contest ended and a
-	// participant still active; registered and disqualified ones stay.
-	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
+	// participant still active; registered and disqualified ones stay. It
+	// returns the users whose registrations it finished, nobody for any other
+	// move.
+	SetStatus(ctx context.Context, id uuid.UUID, from, to string) (finished []uuid.UUID, err error)
 	// Delete removes a contest and everything hanging off it.
 	Delete(ctx context.Context, id uuid.UUID) error
 	// ReplaceLanguages sets the contest's languages to exactly these.
