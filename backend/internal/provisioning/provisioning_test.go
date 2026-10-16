@@ -166,6 +166,62 @@ func TestAResetOfNothingRecordsNothing(t *testing.T) {
 	}
 }
 
+// The old database is gone once the copy starts, so a participant leaving
+// mid-copy must not leave a 'ready' row naming nothing.
+func TestAResetWhoseCallerLeavesMidCopyStillFinishes(t *testing.T) {
+	contest, people := contestFor(t, t.Context(), 1)
+	fake := &cluster{}
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	database, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	fake.mu.Lock()
+	fake.slow = 100 * time.Millisecond
+	fake.mu.Unlock()
+
+	ctx, leave := context.WithCancel(t.Context())
+	reset := make(chan error, 1)
+	go func() { reset <- service.Reset(ctx, uuid.New(), contest, people[0]) }()
+	waitUntil(t, func() bool { return fake.inFlight() == 1 })
+	leave()
+
+	if err := <-reset; err != nil {
+		t.Fatalf("reset: %v; the caller leaving after the turn was taken must not stop it", err)
+	}
+	if !fake.exists(database) {
+		t.Fatalf("%s is gone after the reset", database)
+	}
+	if status := statusOf(t, t.Context(), database); status != "ready" {
+		t.Fatalf("the row is %q, want ready over the fresh copy", status)
+	}
+}
+
+// A copy that failed after its name was dropped leaves the row saying so, so
+// the participant's next action rebuilds it rather than being handed nothing.
+func TestAResetWhoseCopyFailsLeavesTheRowDropped(t *testing.T) {
+	contest, people := contestFor(t, t.Context(), 1)
+	fake := &cluster{}
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	database, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	fake.mu.Lock()
+	fake.copyFail = errors.New("copy the template: no space left on device")
+	fake.mu.Unlock()
+
+	if err := service.Reset(t.Context(), uuid.New(), contest, people[0]); err == nil {
+		t.Fatal("a failed copy was reported as a reset")
+	}
+	if fake.exists(database) {
+		t.Fatalf("%s still exists; the fake should have dropped it first", database)
+	}
+	if status := statusOf(t, t.Context(), database); status != "dropped" {
+		t.Fatalf("the row is %q over a database that is gone, want dropped", status)
+	}
+}
+
 func waitUntil(t *testing.T, ready func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

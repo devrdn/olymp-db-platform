@@ -129,6 +129,10 @@ type cluster struct {
 	// creating and peak make the worker bound observable.
 	creating, peak int
 	slow           time.Duration
+	// live is which names hold a database; copyFail fails a copy after its
+	// name was dropped, as a failed CREATE DATABASE does.
+	live     map[string]bool
+	copyFail error
 
 	// busy makes DropIdle answer "not dropped, no error" (a live connection);
 	// failIdleDrop makes it answer a real error.
@@ -166,12 +170,21 @@ type idleCall struct {
 	err     error
 }
 
-func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpolicy.Policy) error {
+// CreateInstance drops instance first and then copies, as gamedb's does, so
+// a copy that fails or is cancelled leaves no database under the name.
+func (c *cluster) CreateInstance(ctx context.Context, _, instance string, _ sqlpolicy.Policy) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.fail != nil {
 		return c.fail
+	}
+	if c.live == nil {
+		c.live = map[string]bool{}
+	}
+	c.live[instance] = false
+	if c.copyFail != nil {
+		return c.copyFail
 	}
 
 	c.creating++
@@ -181,13 +194,30 @@ func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpol
 	slow := c.slow
 	c.mu.Unlock()
 
-	// Held open so concurrent creations overlap.
-	time.Sleep(slow)
+	// Held open so concurrent creations overlap; cut short like a statement
+	// whose context ended.
+	var cancelled error
+	select {
+	case <-time.After(slow):
+	case <-ctx.Done():
+		cancelled = ctx.Err()
+	}
 
 	c.mu.Lock()
 	c.creating--
+	if cancelled != nil {
+		return cancelled
+	}
+	c.live[instance] = true
 	c.made = append(c.made, instance)
 	return nil
+}
+
+// exists reports whether the cluster holds a database named name.
+func (c *cluster) exists(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.live[name]
 }
 
 // inFlight is how many copies are being made right now.
@@ -275,6 +305,9 @@ func (c *cluster) Drop(_ context.Context, name string) error {
 
 	if c.dropFail != nil {
 		return c.dropFail
+	}
+	if c.live != nil {
+		c.live[name] = false
 	}
 	c.dropped = append(c.dropped, name)
 	return nil

@@ -160,6 +160,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// The same budget as the tender's below, so late registrations
 			// cannot keep filling a cluster the tender stopped at.
 			WithClusterBudget(cfg.ClusterMaxBytes).
+			// A reset is one copy, and gets the bound a copy statement gets.
+			WithCopyTimeout(provisionStatementTimeout).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		// Coalesces a burst of triggers into one extra tend.
 		tender := provisioning.NewTender()
@@ -243,7 +245,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				// The schema panel; a console-less Service answers
 				// ErrSchemaHidden.
 				WithSchemas(provisioning.NewSchemaReader(games, cluster)).
-				// Run refuses once nothing is left to answer
+				// Run and Reset refuse once nothing is left to answer
 				// (ErrNothingLeftToAnswer); the read endpoints stay open.
 				WithAnswerable(postgres.NewAnswerable(pool)).
 				WithWatcher(participantTracker)
