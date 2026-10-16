@@ -249,6 +249,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 		finished = len(finishedContests)
 		for _, c := range finishedContests {
 			entries = append(entries, scheduleEntry(c.ID, StatusRunning, StatusFinished))
+			entries = append(entries, finishEntries(c.ID, c.Users)...)
 		}
 
 		if len(entries) == 0 {
@@ -275,6 +276,22 @@ func scheduleEntry(contestID uuid.UUID, from, to string) audit.Entry {
 		EntityID: contestID.String(),
 		Payload:  changes.Payload(),
 	}
+}
+
+// finishEntries records each participation a contest's move to finished
+// ended, one entry per user. The system ends them, whoever moved the contest,
+// so they carry no actor.
+func finishEntries(contestID uuid.UUID, users []uuid.UUID) []audit.Entry {
+	entries := make([]audit.Entry, 0, len(users))
+	for _, user := range users {
+		entries = append(entries, audit.Entry{
+			Action:   audit.ActionParticipantFinish,
+			Entity:   "contest",
+			EntityID: contestID.String(),
+			Payload:  map[string]any{"user_id": user.String()},
+		})
+	}
+	return entries
 }
 
 // startBlockedEntry records a due contest the publish gate refused, with the

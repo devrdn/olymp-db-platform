@@ -593,12 +593,16 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		// The write refuses if the status is no longer the one checked above.
-		if _, err := s.contests.SetStatus(ctx, contestID, c.Status, status); err != nil {
+		finished, err := s.contests.SetStatus(ctx, contestID, c.Status, status)
+		if err != nil {
 			return err
 		}
 		changes := audit.NewChanges()
 		changes.Set("status", c.Status, status)
-		return s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload())
+		if err := s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload()); err != nil {
+			return err
+		}
+		return s.audit.RecordMany(ctx, finishEntries(contestID, finished))
 	})
 	if err != nil {
 		return err

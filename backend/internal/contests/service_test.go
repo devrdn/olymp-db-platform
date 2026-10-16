@@ -851,6 +851,28 @@ func TestTransitionDoesNotTriggerThePoolForFinishingOrArchiving(t *testing.T) {
 	}
 }
 
+// Each participation the contest's end finishes gets its own entry with no
+// actor: the system finished it, not the organiser who moved the contest. A
+// participant who never started, or was disqualified, is not finished.
+func TestTransitionToFinishedAuditsEachParticipationItFinishes(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	began := f.Now.Add(-time.Hour)
+	first := f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began})
+	second := f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began})
+	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationRegistered})
+	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationDisqualified, StartedAt: &began})
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusFinished); err != nil {
+		t.Fatalf("Transition(finished) = %v", err)
+	}
+
+	wantFinishEntries(t, f.Audit.Entries, c.ID, first.UserID, second.UserID)
+	if len(f.Audit.Loose) != 0 {
+		t.Errorf("entries recorded outside the transaction: %v", f.Audit.Loose)
+	}
+}
+
 func TestTransitionDoesNotTriggerThePoolOnRefusal(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
