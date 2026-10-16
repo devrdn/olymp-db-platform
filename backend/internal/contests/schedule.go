@@ -249,13 +249,12 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 		finished = len(finishedContests)
 		for _, c := range finishedContests {
 			entries = append(entries, scheduleEntry(c.ID, StatusRunning, StatusFinished))
-			entries = append(entries, finishEntries(c.ID, c.Users)...)
 		}
 
-		if len(entries) == 0 {
-			return nil
+		if err := s.audit.RecordMany(ctx, entries); err != nil {
+			return err
 		}
-		return s.audit.RecordMany(audit.WithoutRequestMeta(ctx), entries)
+		return recordFinishes(ctx, s.audit, finishedContests)
 	})
 	if err == nil && s.poolTrigger != nil {
 		for _, id := range startedContests {
@@ -278,21 +277,24 @@ func scheduleEntry(contestID uuid.UUID, from, to string) audit.Entry {
 	}
 }
 
-// finishEntries records each participation a contest's move to finished
-// ended, one entry per user. The system ends them, whoever moved the contest,
-// so they carry no actor, and are recorded without a request's origin: an
-// organiser's own status change already says who moved it and from where.
-func finishEntries(contestID uuid.UUID, users []uuid.UUID) []audit.Entry {
-	entries := make([]audit.Entry, 0, len(users))
-	for _, user := range users {
-		entries = append(entries, audit.Entry{
-			Action:   audit.ActionParticipantFinish,
-			Entity:   "contest",
-			EntityID: contestID.String(),
-			Payload:  map[string]any{"user_id": user.String()},
-		})
+// recordFinishes records each participation the contests' move to finished
+// ended, one entry per user, in one statement. Call it inside the move's unit
+// of work. The system ends them, whoever moved the contest, so the entries
+// carry no actor and no request origin: an organiser's own status change
+// already says who moved it and from where.
+func recordFinishes(ctx context.Context, recorder *audit.Recorder, finished []FinishedContest) error {
+	var entries []audit.Entry
+	for _, c := range finished {
+		for _, user := range c.Users {
+			entries = append(entries, audit.Entry{
+				Action:   audit.ActionParticipantFinish,
+				Entity:   "contest",
+				EntityID: c.ID.String(),
+				Payload:  map[string]any{"user_id": user.String()},
+			})
+		}
 	}
-	return entries
+	return recorder.RecordMany(audit.WithoutRequestMeta(ctx), entries)
 }
 
 // startBlockedEntry records a due contest the publish gate refused, with the
