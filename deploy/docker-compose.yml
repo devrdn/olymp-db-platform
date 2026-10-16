@@ -617,9 +617,10 @@ services:
     # or an object store behind the same port — and neither is built, because
     # there is one replica today.
     #
-    # It is also the one volume in this file whose contents a database dump
-    # does not carry, so `make backup` copies it explicitly. Restoring the
-    # database alone gives back every contest without its cover.
+    # The two are also the volumes in this file whose contents a database dump
+    # does not carry, so `make backup` copies both explicitly. Restoring the
+    # database alone gives back every contest without its cover, and without
+    # the files its game was built from.
     volumes:
       - game-uploads-data:${GAME_UPLOAD_DIR:-/var/lib/dbcontest/uploads}
       - contest-covers-data:${COVER_DIR:-/var/lib/dbcontest/covers}
@@ -789,10 +790,11 @@ volumes:
   pg-core-data:
   pg-game-data:
   redis-data:
-  # An organiser's uploaded SQL dumps, in progress and complete
-  # (internal/gamefile). Local to the one host this volume lives on — see
-  # the api service's own comment above for what that costs the day a
-  # second replica is added.
+  # An organiser's uploaded SQL dumps, in progress and complete, and the
+  # table builder's CSV files (internal/gamefile). Local to the one host this
+  # volume lives on — see the api service's own comment above for what that
+  # costs the day a second replica is added. Not in the core database's dump:
+  # `make backup` archives this volume beside it, as it does the covers.
   game-uploads-data:
   # A contest's uploaded cover pictures (internal/platform/filestore), two
   # re-encoded JPEGs per contest that has one. Not in the core database on
