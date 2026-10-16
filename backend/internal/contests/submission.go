@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
 
@@ -258,15 +259,7 @@ func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, add
 	if !p.AwaitsStart() {
 		return p, nil
 	}
-	var started Participant
-	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		var recorded bool
-		var err error
-		if started, recorded, err = s.registrations.Start(ctx, p.ID, s.now()); err != nil || !recorded {
-			return err
-		}
-		return s.audit.Record(ctx, StartEntry(started))
-	})
+	started, err := StartParticipant(ctx, s.uow, s.audit, s.registrations, p.ID, s.now())
 	if err != nil {
 		return Participant{}, fmt.Errorf("record the participant's start: %w", err)
 	}
@@ -276,17 +269,34 @@ func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, add
 	return started, nil
 }
 
-// StartEntry is the audit entry for p's start. Every caller of
-// RegistrationRepository.Start writes it in Start's unit of work, and only
-// when Start reports recording the start, so a participant has one.
-func StartEntry(p Participant) audit.Entry {
-	actor := p.UserID
-	return audit.Entry{
-		ActorID:  &actor,
-		Action:   audit.ActionParticipantStart,
-		Entity:   "contest",
-		EntityID: p.ContestID.String(),
-	}
+// Starter records a participant's start, as RegistrationRepository.Start
+// does.
+type Starter interface {
+	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (p Participant, recorded bool, err error)
+}
+
+// StartParticipant records the registration's start at now and, only when
+// this call is the one that recorded it, the participant's participant.start
+// entry, in one unit of work (CLAUDE.md rule 6). Every path that starts a
+// participant goes through it, so each participant gets exactly one entry.
+func StartParticipant(ctx context.Context, uow storage.UnitOfWork, recorder *audit.Recorder, store Starter,
+	registrationID uuid.UUID, now time.Time) (Participant, error) {
+	var started Participant
+	err := uow.Do(ctx, func(ctx context.Context) error {
+		var recorded bool
+		var err error
+		if started, recorded, err = store.Start(ctx, registrationID, now); err != nil || !recorded {
+			return err
+		}
+		actor := started.UserID
+		return recorder.Record(ctx, audit.Entry{
+			ActorID:  &actor,
+			Action:   audit.ActionParticipantStart,
+			Entity:   "contest",
+			EntityID: started.ContestID.String(),
+		})
+	})
+	return started, err
 }
 
 // penaltyAmount is the points one wrong attempt costs (§6.1.1): q.PenaltyPct
