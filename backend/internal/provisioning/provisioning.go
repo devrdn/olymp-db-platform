@@ -359,8 +359,15 @@ func (s *Service) Invalidate(ctx context.Context, contest Contest) (int, error) 
 }
 
 // Reset gives a participant a fresh copy of their starting database under the
-// same name.
+// same name. It takes the registration's turn like EnsureFrom, so two resets,
+// or a reset and a first copy, never copy over each other.
 func (s *Service) Reset(ctx context.Context, contest Contest, registration uuid.UUID) error {
+	done, err := s.provideAlone(ctx, registration)
+	if err != nil {
+		return err
+	}
+	defer done()
+
 	existing, err := s.repo.Of(ctx, registration)
 	if err != nil {
 		return err
