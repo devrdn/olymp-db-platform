@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -421,5 +422,82 @@ func TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest(t *testin
 	}
 	if insertErr != nil {
 		t.Fatalf("AddSpare() = %v, want the foreign key insert to complete without waiting on LockContest", insertErr)
+	}
+}
+
+// An organiser's move to finished writes, through the real sink, one
+// participant.finish per participation it ended, with no actor and no origin,
+// while its own status change keeps the organiser's. The entries go through
+// the move's transaction: rolled back with it, none survives.
+func TestAnOrganisersFinishRecordsEachParticipationItEndedInItsTransaction(t *testing.T) {
+	var contestID uuid.UUID
+	withTx(t, func(txCtx context.Context) {
+		ctx := audit.WithRequestMeta(txCtx, "203.0.113.7", "organiser-agent")
+		suffix := uuid.NewString()[:8]
+		author := makeUser(t, ctx, "author-"+suffix)
+		contestID = makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'running' WHERE id = $1`, contestID)
+		registrations := NewRegistrations(testPool)
+		started := makeUser(t, ctx, "started-"+suffix)
+		registration := makeRegistration(t, ctx, contestID, started.ID)
+		if _, _, err := registrations.Start(ctx, registration, txNow(t, ctx).Add(-time.Hour)); err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+		idle := makeUser(t, ctx, "idle-"+suffix)
+		makeRegistration(t, ctx, contestID, idle.ID)
+
+		service := contests.NewService(contests.ServiceConfig{
+			Contests:      NewContests(testPool),
+			Registrations: registrations,
+			Audit:         audit.New(NewAuditSink(testPool)),
+			UnitOfWork:    storage.NewUnitOfWork(testPool),
+			Gate:          contests.NewGate(0),
+		})
+		if err := service.Transition(ctx, author.ID, contestID, contests.StatusFinished); err != nil {
+			t.Fatalf("Transition(finished) = %v", err)
+		}
+
+		rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx, `
+			SELECT action, actor_id, coalesce(host(ip), ''), coalesce(user_agent, ''), coalesce(payload->>'user_id', '')
+			FROM audit_log WHERE entity = 'contest' AND entity_id = $1 ORDER BY id`, contestID.String())
+		if err != nil {
+			t.Fatalf("read the trail: %v", err)
+		}
+		defer rows.Close()
+		var finishes []string
+		for rows.Next() {
+			var action, ip, agent, user string
+			var actor *uuid.UUID
+			if err := rows.Scan(&action, &actor, &ip, &agent, &user); err != nil {
+				t.Fatalf("scan the trail: %v", err)
+			}
+			switch action {
+			case audit.ActionContestStatusChange:
+				if actor == nil || *actor != author.ID || ip != "203.0.113.7" {
+					t.Errorf("the status change names %v from %q, want the organiser %s from 203.0.113.7", actor, ip, author.ID)
+				}
+			case audit.ActionParticipantFinish:
+				if actor != nil || ip != "" || agent != "" {
+					t.Errorf("a finish entry names %v from %q/%q, want no actor and no origin", actor, ip, agent)
+				}
+				finishes = append(finishes, user)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read the trail: %v", err)
+		}
+		if len(finishes) != 1 || finishes[0] != started.ID.String() {
+			t.Errorf("%s entries name %v, want only the participant who started, %s",
+				audit.ActionParticipantFinish, finishes, started.ID)
+		}
+	})
+
+	var survived int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE entity = 'contest' AND entity_id = $1`, contestID.String()).Scan(&survived); err != nil {
+		t.Fatalf("read the trail after the rollback: %v", err)
+	}
+	if survived != 0 {
+		t.Errorf("%d entries outlived the rolled-back move, want none", survived)
 	}
 }
