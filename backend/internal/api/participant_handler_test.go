@@ -1043,7 +1043,7 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{"participant finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished", ""},
 		// Removed between admission and the answer: told "not taking part",
 		// never participant_not_found, which the play screen does not know.
-		{"registration removed mid-answer", fmt.Errorf("start the participant's clock: %w", contests.ErrParticipantNotFound),
+		{"registration removed mid-answer", fmt.Errorf("record the participant's start: %w", contests.ErrParticipantNotFound),
 			http.StatusForbidden, "not_a_participant", "The caller is not taking part in this contest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
