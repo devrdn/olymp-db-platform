@@ -780,3 +780,62 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 		t.Fatal("a failed build cleared the data mark; the rows are unbuilt and nothing records it any more")
 	}
 }
+
+// The publish gate and a participant's console must agree on whether a game
+// can be played, or a contest opens to participants told there is no game.
+func TestGameReadyAgreesWithTheConsoleThroughTheBuildLifecycle(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		student := makeUser(t, ctx, "game-ready-"+uuid.NewString()[:8])
+		makeRegistration(t, ctx, contest, student.ID)
+		repo := NewGameInstances(testPool)
+		registrations := NewRegistrations(testPool)
+
+		expect := func(state string, want bool) {
+			t.Helper()
+			got, err := repo.GameReady(ctx, contest)
+			if err != nil {
+				t.Fatalf("%s: GameReady() = %v", state, err)
+			}
+			if got != want {
+				t.Errorf("%s: GameReady() = %v, want %v", state, got, want)
+			}
+			run, err := registrations.ForRun(ctx, contest, student.ID)
+			if err != nil {
+				t.Fatalf("%s: ForRun() = %v", state, err)
+			}
+			if console := run.GameErr == nil; console != got {
+				t.Errorf("%s: GameReady() = %v, but the console finds a game: %v", state, got, console)
+			}
+		}
+		build := func(outcome string) {
+			t.Helper()
+			current, err := repo.Template(ctx, contest)
+			if err != nil {
+				t.Fatalf("read the game: %v", err)
+			}
+			markBuilding(t, ctx, contest, "0 seconds")
+			if err := repo.FinishBuild(ctx, contest, current.Version, outcome, time.Now()); err != nil {
+				t.Fatalf("finish the build: %v", err)
+			}
+		}
+		save := func() {
+			t.Helper()
+			if _, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
+				t.Fatalf("save the game: %v", err)
+			}
+		}
+
+		expect("no game stored", false)
+		save()
+		expect("waiting for its first build", false)
+		markBuilding(t, ctx, contest, "0 seconds")
+		expect("building", false)
+		build("")
+		expect("built", true)
+		save()
+		expect("saved again over a built game", false)
+		build(`ERROR: type "nosuchtype" does not exist`)
+		expect("failed", false)
+	})
+}
