@@ -2117,8 +2117,11 @@ nothing.
 - **Two timing models** (`contests.timing`, chosen when the contest is
   created):
   - `fixed` (default) — a shared window: everybody starts at `starts_at` and
-    submission closes at `ends_at` for all at once. `registrations.started_at`
-    here is a fact for analysis and does not affect the deadline.
+    submission closes at `ends_at` for all at once. The participant's first
+    read of the content, first query or first answer in the running contest
+    still stamps `registrations.started_at` and moves the registration to
+    `active`, through the same `Start` transition as below; here it is a
+    fact for analysis and does not affect the deadline.
   - `individual` — each participant gets their own `duration_min` minutes
     from **their** start, and may begin at any point inside
     `[starts_at, ends_at)`. The start is not a separate button and not a

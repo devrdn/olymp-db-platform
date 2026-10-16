@@ -591,7 +591,7 @@ sequenceDiagram
     Q->>Q: rate by registration at the contest rate
     Q->>Q: participation gate, Watcher.Observe, length check
     Q->>DB: AnswerableLeft
-    Q->>Q: game exists (ErrNoGameYet), EnsureFrom, Quota if read_write, start an individual clock
+    Q->>Q: game exists (ErrNoGameYet), EnsureFrom, Quota if read_write, record the start (an individual clock starts with it)
     Q->>J: Run(queryrunner.Request, Origin)
     J->>DB: Begin - query_log row with status running
     J->>R: rpc.Client.Run with QUERY_RUNNER_TOKEN
@@ -713,7 +713,7 @@ sequenceDiagram
     H->>S: Submit(SubmitCommand)
     S->>S: participation gate again, at most 1000 characters, question in this contest
     S->>DB: sequential mode - is every earlier question closed
-    S->>S: a choice must name an option, start an individual clock
+    S->>S: a choice must name an option, record the start (an individual clock starts with it)
     S->>S: writeDeadline is Deadline plus deadline grace, grade once
     S->>DB: Submissions.Insert - attempt number, cap, now() before deadline, points minus penalty
     opt correct and worth points
