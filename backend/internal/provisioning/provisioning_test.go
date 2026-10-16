@@ -88,6 +88,36 @@ func TestTwoRequestsOfOneParticipantMakeOneCopy(t *testing.T) {
 	}
 }
 
+// The second copy's DROP … WITH (FORCE) would otherwise remove the first one
+// halfway through, so two presses of the reset at once must take turns.
+func TestTwoResetsOfOneParticipantCopyOneAfterTheOther(t *testing.T) {
+	contest, people := contestFor(t, t.Context(), 1)
+	fake := &cluster{slow: 40 * time.Millisecond}
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	if _, err := service.Ensure(t.Context(), contest, people[0]); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Go(func() {
+			errs[i] = service.Reset(t.Context(), contest, people[0])
+		})
+	}
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if made, _ := fake.counts(); made != 3 {
+		t.Fatalf("made %d databases, want the first copy and one per reset", made)
+	}
+	if peak := fake.highWater(); peak != 1 {
+		t.Fatalf("%d copies of one participant's database were being made at once", peak)
+	}
+}
+
 func waitUntil(t *testing.T, ready func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
