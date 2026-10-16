@@ -271,18 +271,37 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 	return nil
 }
 
+// finishRoster is the CTE that finishes the active registrations of every
+// contest the preceding CTE, moved, returns as finished, so the contest and
+// its roster change in one statement. finished_at is the database's clock,
+// or the participant's start if that is later: Start records the
+// application's clock, and the schema refuses a finish before the start.
+const finishRoster = `
+	finished AS (
+		UPDATE registrations r
+		SET status = 'finished', finished_at = GREATEST(now(), r.started_at)
+		FROM moved
+		WHERE moved.status = 'finished' AND r.contest_id = moved.id AND r.status = 'active'
+	)`
+
 // SetStatus moves the contest to status to, only if it is still in status
 // from. The comparison is in the WHERE clause: PostgreSQL locks the row and
 // re-evaluates it against the committed value, so of two concurrent callers
 // with the same stale status only one matches.
 func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
-	tag, err := r.querier(ctx).Exec(ctx,
-		`UPDATE contests SET status = $3, updated_at = now() WHERE id = $1 AND status = $2`,
-		id, from, to)
+	var moved int
+	err := r.querier(ctx).QueryRow(ctx, `
+		WITH moved AS (
+			UPDATE contests SET status = $3, updated_at = now()
+			WHERE id = $1 AND status = $2
+			RETURNING id, status
+		),`+finishRoster+`
+		SELECT count(*) FROM moved`,
+		id, from, to).Scan(&moved)
 	if err != nil {
 		return fmt.Errorf("set contest status: %w", err)
 	}
-	if tag.RowsAffected() == 1 {
+	if moved == 1 {
 		return nil
 	}
 
@@ -349,10 +368,13 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 // A contest with no ends_at (individual timing) stays running until an
 // organizer moves it.
 func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error) {
-	rows, err := r.querier(ctx).Query(ctx,
-		`UPDATE contests SET status = $1, updated_at = now()
-		 WHERE status = $2 AND ends_at IS NOT NULL AND ends_at + $3::interval <= now()
-		 RETURNING id`,
+	rows, err := r.querier(ctx).Query(ctx, `
+		WITH moved AS (
+			UPDATE contests SET status = $1, updated_at = now()
+			WHERE status = $2 AND ends_at IS NOT NULL AND ends_at + $3::interval <= now()
+			RETURNING id, status
+		),`+finishRoster+`
+		SELECT id FROM moved`,
 		contests.StatusFinished, contests.StatusRunning, grace)
 	if err != nil {
 		return nil, fmt.Errorf("advance contests to finished: %w", err)

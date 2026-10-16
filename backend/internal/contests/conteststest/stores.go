@@ -30,8 +30,9 @@ type Contests struct {
 	// Clock stands in for the database's now() in Create, Update and
 	// SetStatus. Nil leaves the timestamps as they are.
 	Clock func() time.Time
-	// managers and registrations back Filter.ManagedBy and Filter.VisibleTo;
-	// see Rosters.
+	// managers and registrations back Filter.ManagedBy and Filter.VisibleTo,
+	// and registrations is the roster a move to finished finishes; see
+	// Rosters.
 	managers      *Managers
 	registrations *Registrations
 }
@@ -43,8 +44,9 @@ func NewContests() *Contests {
 }
 
 // Rosters wires the stores List joins for Filter.ManagedBy and
-// Filter.VisibleTo. Until it is called, a ManagedBy listing is empty and a
-// VisibleTo listing holds only the open contests.
+// Filter.VisibleTo, and the registrations a contest's end finishes. Until it
+// is called, a ManagedBy listing is empty, a VisibleTo listing holds only the
+// open contests, and finishing a contest finishes no participant.
 func (r *Contests) Rosters(managers *Managers, registrations *Registrations) {
 	r.managers, r.registrations = managers, registrations
 }
@@ -290,7 +292,20 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) e
 		c.UpdatedAt = now
 	}
 	r.byID[id] = c
+	if to == contests.StatusFinished {
+		r.finishRoster(id)
+	}
 	return nil
+}
+
+// finishRoster finishes the contest's active registrations, as the real
+// statement moving a contest to finished does.
+func (r *Contests) finishRoster(id uuid.UUID) {
+	if r.registrations == nil {
+		return
+	}
+	now, _ := r.now()
+	r.registrations.finishActive(id, now)
 }
 
 // SetStatusRaces makes the next SetStatus find the contest already moved to
@@ -892,6 +907,22 @@ func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now t
 		r.byID[registrationID] = p
 	}
 	return p, nil
+}
+
+// finishActive mirrors postgres's finishRoster: every active registration of
+// the contest finishes at now, or at its own start if that is later.
+func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time) {
+	for id, p := range r.byID {
+		if p.ContestID != contestID || p.Status != contests.RegistrationActive {
+			continue
+		}
+		finished := now
+		if p.StartedAt != nil && p.StartedAt.After(now) {
+			finished = *p.StartedAt
+		}
+		p.Status, p.FinishedAt = contests.RegistrationFinished, &finished
+		r.byID[id] = p
+	}
 }
 
 // AddScore mirrors the real repository's atomic increment.

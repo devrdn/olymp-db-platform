@@ -102,7 +102,8 @@ func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 }
 
 // AdvanceFinished finishes running contests whose end plus grace is at or
-// before the clock. A contest with no end never matches.
+// before the clock, with their active participants. A contest with no end
+// never matches.
 func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uuid.UUID, error) {
 	s.FinishedCalls++
 	s.GraceSeen = grace
@@ -122,6 +123,7 @@ func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uu
 		c.Status = contests.StatusFinished
 		c.UpdatedAt = now
 		s.Contests.byID[id] = c
+		s.Contests.finishRoster(id)
 		finished = append(finished, id)
 	}
 	return finished, nil

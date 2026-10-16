@@ -32,7 +32,8 @@ type ScheduleRepository interface {
 	// AdvanceFinished moves to finished every running contest whose ends_at
 	// plus grace has passed by the database clock, and returns their ids.
 	// The grace is the gate's, so no request inside it is refused as
-	// finished. A contest without ends_at never matches.
+	// finished. A contest without ends_at never matches. Each contest's
+	// active registrations finish with it, as in Repository.SetStatus.
 	AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error)
 }
 

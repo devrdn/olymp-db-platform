@@ -12,6 +12,8 @@ import (
 func TestScheduleHonoursTheRepositoryContract(t *testing.T) {
 	ScheduleRepositoryContract(t, func(t *testing.T, run func(context.Context, ScheduleTarget)) {
 		schedule := NewSchedule()
+		registrations := NewRegistrations()
+		schedule.Contests.Rosters(NewManagers(), registrations)
 		run(context.Background(), ScheduleTarget{
 			Repo:     schedule,
 			Contests: schedule.Contests,
@@ -20,7 +22,9 @@ func TestScheduleHonoursTheRepositoryContract(t *testing.T) {
 					Status: status, StartsAt: startsAt, EndsAt: endsAt,
 				}).ID
 			},
-			Now: schedule.Contests.Clock,
+			Registrations: registrations,
+			NewUser:       uuid.New,
+			Now:           schedule.Contests.Clock,
 		})
 	})
 }

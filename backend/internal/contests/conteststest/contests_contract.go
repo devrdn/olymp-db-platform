@@ -25,6 +25,9 @@ type ContestTarget struct {
 	NewUser  func() uuid.UUID
 	Appoint  func(contest, user uuid.UUID, role rbac.ContestRole)
 	Register func(contest, user uuid.UUID)
+	// Registrations is the store whose rows a contest's end moves, for
+	// seeding a roster through its own operations and reading it back.
+	Registrations contests.RegistrationRepository
 	// Outside is a context outside a unit of work; every case otherwise runs
 	// inside one.
 	Outside context.Context
@@ -605,6 +608,51 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			if got := byID(t, ctx, target, theirs.ID); got.Status != contests.StatusDraft {
 				t.Errorf("another contest's Status = %q, want draft", got.Status)
 			}
+		})
+	})
+
+	running := func(t *testing.T, ctx context.Context, target ContestTarget) uuid.UUID {
+		t.Helper()
+		c := plain(target.NewUser())
+		c.Status = contests.StatusRunning
+		return create(t, ctx, target, c).ID
+	}
+
+	t.Run("SetStatus to finished finishes every participant still active, and nobody else", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			ours, theirs := running(t, ctx, target), running(t, ctx, target)
+			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, ours, target.Now())
+			another := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, theirs, target.Now())
+
+			setStatus(t, ctx, target, ours, contests.StatusRunning, contests.StatusFinished)
+
+			roster.wantFinished(t, ctx)
+			another.wantUntouched(t, ctx)
+		})
+	})
+
+	t.Run("SetStatus refused finishes nobody", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			id := running(t, ctx, target)
+			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, id, target.Now())
+
+			err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusFinished)
+
+			if !errors.Is(err, contests.ErrStatusChanged) {
+				t.Fatalf("SetStatus() error = %v, want ErrStatusChanged", err)
+			}
+			roster.wantUntouched(t, ctx)
+		})
+	})
+
+	t.Run("SetStatus to any status but finished leaves the roster alone", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			id := running(t, ctx, target)
+			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, id, target.Now())
+
+			setStatus(t, ctx, target, id, contests.StatusRunning, contests.StatusArchived)
+
+			roster.wantUntouched(t, ctx)
 		})
 	})
 
@@ -1210,4 +1258,107 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			}
 		})
 	})
+}
+
+// The states a contest's end treats differently, one participant in each.
+const (
+	neverStarted         = "never started"
+	started              = "started"
+	startedAheadOfClock  = "started ahead of the store's clock"
+	disqualifiedStarting = "disqualified after starting"
+)
+
+// endingRoster is one participant of a contest in each state its end treats
+// differently, seeded through the registration repository's own operations.
+type endingRoster struct {
+	repo    contests.RegistrationRepository
+	contest uuid.UUID
+	now     time.Time
+	users   map[string]uuid.UUID
+}
+
+// seedEndingRoster enrols the roster in contest. now is the store's clock; a
+// start an hour past it is one the application recorded on a clock ahead of
+// the database's.
+func seedEndingRoster(t *testing.T, ctx context.Context, repo contests.RegistrationRepository,
+	newUser func() uuid.UUID, contest uuid.UUID, now time.Time) endingRoster {
+	t.Helper()
+	r := endingRoster{repo: repo, contest: contest, now: now, users: map[string]uuid.UUID{}}
+	for _, state := range []string{neverStarted, started, startedAheadOfClock, disqualifiedStarting} {
+		user := newUser()
+		p, err := repo.Add(ctx, contest, user)
+		if err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+		switch state {
+		case started, disqualifiedStarting:
+			_, err = repo.Start(ctx, p.ID, now.Add(-time.Hour))
+		case startedAheadOfClock:
+			_, err = repo.Start(ctx, p.ID, now.Add(time.Hour))
+		}
+		if err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+		if state == disqualifiedStarting {
+			if err := repo.SetStatus(ctx, p.ID, contests.RegistrationDisqualified); err != nil {
+				t.Fatalf("SetStatus() = %v", err)
+			}
+		}
+		r.users[state] = user
+	}
+	return r
+}
+
+type rosterRow struct {
+	status                string
+	startedAt, finishedAt *time.Time
+}
+
+// wantFinished is the roster after its contest ended: every active
+// participant finished at the store's clock, or at their own start when that
+// is later, since a finish never precedes the start. Nobody else moved.
+func (r endingRoster) wantFinished(t *testing.T, ctx context.Context) {
+	t.Helper()
+	before, ahead := r.now.Add(-time.Hour), r.now.Add(time.Hour)
+	r.want(t, ctx, map[string]rosterRow{
+		neverStarted:         {status: contests.RegistrationRegistered},
+		started:              {contests.RegistrationFinished, &before, &r.now},
+		startedAheadOfClock:  {contests.RegistrationFinished, &ahead, &ahead},
+		disqualifiedStarting: {status: contests.RegistrationDisqualified, startedAt: &before},
+	})
+}
+
+// wantUntouched is the roster as seeded.
+func (r endingRoster) wantUntouched(t *testing.T, ctx context.Context) {
+	t.Helper()
+	before, ahead := r.now.Add(-time.Hour), r.now.Add(time.Hour)
+	r.want(t, ctx, map[string]rosterRow{
+		neverStarted:         {status: contests.RegistrationRegistered},
+		started:              {status: contests.RegistrationActive, startedAt: &before},
+		startedAheadOfClock:  {status: contests.RegistrationActive, startedAt: &ahead},
+		disqualifiedStarting: {status: contests.RegistrationDisqualified, startedAt: &before},
+	})
+}
+
+func (r endingRoster) want(t *testing.T, ctx context.Context, rows map[string]rosterRow) {
+	t.Helper()
+	sameInstant := func(a, b *time.Time) bool {
+		return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
+	}
+	show := func(at *time.Time) string {
+		if at == nil {
+			return "never"
+		}
+		return at.UTC().Format(time.RFC3339Nano)
+	}
+	for state, want := range rows {
+		p, err := r.repo.ByUser(ctx, r.contest, r.users[state])
+		if err != nil {
+			t.Fatalf("ByUser(%s) = %v", state, err)
+		}
+		if p.Status != want.status || !sameInstant(p.StartedAt, want.startedAt) || !sameInstant(p.FinishedAt, want.finishedAt) {
+			t.Errorf("the participant %s: status %q, started %s, finished %s; want %q, %s, %s", state,
+				p.Status, show(p.StartedAt), show(p.FinishedAt), want.status, show(want.startedAt), show(want.finishedAt))
+		}
+	}
 }
