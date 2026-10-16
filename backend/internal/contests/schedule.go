@@ -255,7 +255,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 		if len(entries) == 0 {
 			return nil
 		}
-		return s.audit.RecordMany(ctx, entries)
+		return s.audit.RecordMany(audit.WithoutRequestMeta(ctx), entries)
 	})
 	if err == nil && s.poolTrigger != nil {
 		for _, id := range startedContests {
@@ -280,7 +280,8 @@ func scheduleEntry(contestID uuid.UUID, from, to string) audit.Entry {
 
 // finishEntries records each participation a contest's move to finished
 // ended, one entry per user. The system ends them, whoever moved the contest,
-// so they carry no actor.
+// so they carry no actor, and are recorded without a request's origin: an
+// organiser's own status change already says who moved it and from where.
 func finishEntries(contestID uuid.UUID, users []uuid.UUID) []audit.Entry {
 	entries := make([]audit.Entry, 0, len(users))
 	for _, user := range users {

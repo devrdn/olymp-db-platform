@@ -852,8 +852,9 @@ func TestTransitionDoesNotTriggerThePoolForFinishingOrArchiving(t *testing.T) {
 }
 
 // Each participation the contest's end finishes gets its own entry with no
-// actor: the system finished it, not the organiser who moved the contest. A
-// participant who never started, or was disqualified, is not finished.
+// actor and no origin: the system finished it, and the organiser's own
+// status change records who moved the contest and from where. A participant
+// who never started, or was disqualified, is not finished.
 func TestTransitionToFinishedAuditsEachParticipationItFinishes(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -863,11 +864,17 @@ func TestTransitionToFinishedAuditsEachParticipationItFinishes(t *testing.T) {
 	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationRegistered})
 	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationDisqualified, StartedAt: &began})
 
-	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusFinished); err != nil {
+	ctx := audit.WithRequestMeta(context.Background(), "203.0.113.7", "organiser-agent")
+	if err := f.Service.Transition(ctx, uuid.New(), c.ID, contests.StatusFinished); err != nil {
 		t.Fatalf("Transition(finished) = %v", err)
 	}
 
 	wantFinishEntries(t, f.Audit.Entries, c.ID, first.UserID, second.UserID)
+	for _, e := range f.Audit.Entries {
+		if e.Action == audit.ActionContestStatusChange && e.IP != "203.0.113.7" {
+			t.Errorf("the status change records the address %q, want the organiser's", e.IP)
+		}
+	}
 	if len(f.Audit.Loose) != 0 {
 		t.Errorf("entries recorded outside the transaction: %v", f.Audit.Loose)
 	}

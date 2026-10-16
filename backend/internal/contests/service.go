@@ -602,7 +602,7 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 		if err := s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload()); err != nil {
 			return err
 		}
-		return s.audit.RecordMany(ctx, finishEntries(contestID, finished))
+		return s.audit.RecordMany(audit.WithoutRequestMeta(ctx), finishEntries(contestID, finished))
 	})
 	if err != nil {
 		return err

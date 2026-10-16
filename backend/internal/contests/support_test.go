@@ -9,7 +9,7 @@ import (
 )
 
 // wantFinishEntries checks that entries record the end of exactly users'
-// participations in contestID, one system entry each.
+// participations in contestID, one system entry each, with no origin.
 func wantFinishEntries(t *testing.T, entries []audit.Entry, contestID uuid.UUID, users ...uuid.UUID) {
 	t.Helper()
 	var got []string
@@ -19,6 +19,9 @@ func wantFinishEntries(t *testing.T, entries []audit.Entry, contestID uuid.UUID,
 		}
 		if e.ActorID != nil {
 			t.Errorf("a finish entry names the actor %s, want none: the system finished it", e.ActorID)
+		}
+		if e.IP != "" || e.UserAgent != "" {
+			t.Errorf("a finish entry records the origin %q/%q, want none: the system finished it", e.IP, e.UserAgent)
 		}
 		if e.Entity != "contest" || e.EntityID != contestID.String() {
 			t.Errorf("a finish entry is on %s %s, want contest %s", e.Entity, e.EntityID, contestID)
