@@ -4136,21 +4136,20 @@ an item of the list below.
    something a participant would hit during a contest with no way round it,
    a hole a participant could use, or data a contest depends on that the
    installation could lose, so each is cheaper to fix before an olympiad than
-   during one. Item 24 starts with its open question below, on what a
-   finished registration means; its other half, writing `active` under a
-   shared window and the audit entry for a participation's start, needs no
-   answer and can be built first.
+   during one.
 2. **The organiser's workflow:** the staff reports and the results as a file
-   (28), which also give `reports.view` its meaning (29); a contest list for
+   (28), and `reports.view` removed (29); a contest list for
    a manager without `contest.create` (30); screens for the endpoints that
    have none, the grace extension first (31); the readiness event (32); `Esc`
    aborting a query (33); the audit form's filters (8); participants from a
-   file and the contest import (12). They cost an organiser time, or a
+   file and the contest import (12); a hidden question marked as staff-only
+   (47). They cost an organiser time, or a
    participant some comfort, and each has a workaround today: the standings
    screen and monitoring's CSV, a typed address, the API called by hand, a
    first query that waits for the copy, waiting for the query's deadline, a
    pasted column of logins, a contest built again by hand. `reports.view`
-   needs none, since it guards nothing yet.
+   and the hidden question need none: the first guards nothing, and the
+   second only needs saying.
 3. **Running the installation:** off-host scheduled backups (35, paused by
    the maintainer's decision and to be resumed), restore drills (36), alerts
    and the Query Runner's metrics (37), CI and the supply chain (38),
@@ -4165,32 +4164,26 @@ an item of the list below.
    something that already works, or waits for a need the installation does
    not have yet.
 
-Item 47 is in no tier: until its open question below is answered, it is not
-known what the change is.
+### Decided
 
-### Open questions
+Product decisions the items below are built on.
 
-Product decisions the maintainer makes before the related item can be built.
-
-- **Is a hidden question meant to be answerable?** If it is, an organiser
-  reveals it during a contest and the participant's list gains it; if it is
-  not, a hidden question is staff-only and the editor says so (item 47).
-- **What does a finished registration mean, and when is it written?** By the
-  participant's choice, at their own deadline, at the contest's end, or any
-  of these. The gate's refusal, the profile's count and monitoring's events
-  all follow from the answer (item 24).
-- **Should `reports.view` gate the staff reports?** If it should, the
-  reports of item 28 require it; if not, the permission is removed rather
-  than left granting nothing (item 29).
-- **Where do archived query-log rows go, and how long is the audit trail
-  kept?** Section 9 keeps the query log for a contest's lifetime and then
-  archives it, and the audit trail for "a year and more", without saying
-  where archived rows live or when a row may finally be deleted. Archival
-  follows from the answer (item 39).
-- **Are the three superseded question endpoints removed?**
-  `PATCH /questions/{id}`, `PUT …/texts` and `PUT …/answers` predate the
-  single Save button and no screen calls them. Removing them shrinks the API;
-  keeping them leaves three write paths that no screen exercises (item 31).
+- **A hidden question is not answerable.** It is for staff only: it never
+  reaches a participant, and nothing reveals it during a contest (item 47).
+- **A registration is finished when its contest ends.** The move to
+  `finished` writes it for every participant who started (item 24).
+- **`reports.view` is removed.** Contest roles are fixed sets, owner and
+  manager, so a separate permission for reports separates nobody; the staff
+  reports of item 28 are guarded by `contest.monitor`, as monitoring is
+  (item 29).
+- **`query_log` is kept for twelve months after its contest is archived, and
+  `audit_log` for eighteen months.** Then rows are deleted, with no archive
+  file: an organiser who wants a contest's log for good downloads
+  monitoring's CSV in that time, and the backups cover the window in which a
+  restore is needed. Addresses and user agents are personal data, so neither
+  table keeps them without limit (item 39).
+- **The three superseded question endpoints are removed**
+  (`PATCH /questions/{id}`, `PUT …/texts`, `PUT …/answers`; item 31).
 
 ### Remaining
 
@@ -4375,8 +4368,11 @@ Product decisions the maintainer makes before the related item can be built.
   "finished" count (always zero) and monitoring's start and finish events.
   The audit entries section 9 promises for the start and finish of a
   participation do not exist either, and belong to the same change, since
-  they record the same transitions. What "finished" means is an open question
-  above.
+  they record the same transitions. The decision: a participant becomes
+  `active` on their start under either timing, and every `active`
+  registration becomes `finished`, with `finished_at`, in the transaction
+  that moves the contest to `finished`, whether the scheduler or an organiser
+  makes the move.
 - [ ] **25. The play screen's actions put ids into paths unchecked**
   (section 11). Every other server action that builds an API path from an id
   checks it with `isId` first, because form fields are forgeable and `fetch`
@@ -4406,13 +4402,14 @@ Product decisions the maintainer makes before the related item can be built.
   counters; there is no progress by question during a contest, no breakdown by
   question afterwards (share solved, average attempts and queries) and no
   route that exports the results. An organiser cannot hand the faculty office
-  a file of who placed where. CSV comes first, XLSX after it.
+  a file of who placed where. CSV comes first, XLSX after it. The reports
+  are guarded by `contest.monitor`, as monitoring is.
 - [ ] **29. `reports.view` is granted and checked nowhere** (section 7). The
   permission is seeded and granted to contest owners, managers and
   administrators, and the interface uses it only to choose a landing page; no
-  route requires it. A role built from it alone unlocks nothing. It gains a
-  meaning with the reports of item 28, if it is decided that it gates them
-  (an open question above).
+  route requires it. The decision is to remove it: a migration deletes the
+  permission and its grants, and `rbac` and the interface's landing rule stop
+  naming it.
 - [ ] **30. A manager without `contest.create` has no list of their
   contests** (section 7). `GET /contests` gives the staff list to holders of
   `contest.admin_all` or `contest.create`, and everyone else gets the
@@ -4427,8 +4424,8 @@ Product decisions the maintainer makes before the related item can be built.
   The grace extension comes first: it is the one needed after an olympiad,
   when there is no time to find a workaround. `PATCH /questions/{id}`,
   `PUT …/texts` and `PUT …/answers` predate the single Save button and no
-  screen needs them; they are candidates for removal rather than for
-  screens, which is an open question above.
+  screen needs them; the decision is to remove them, with their tests and
+  the Postman collection's entries.
 - [ ] **32. No readiness event for a late enrolee's database** (section 4.2).
   Section 4.2 has a late enrolee told that their database is being prepared
   and the console open on a readiness event over SSE. The event stream sends
@@ -4483,9 +4480,11 @@ Product decisions the maintainer makes before the related item can be built.
 - [ ] **39. The query log is never archived** (section 9). Section 9 keeps
   `query_log` for a contest's lifetime and then archives it; no code deletes
   or moves a row of it, or of `audit_log`. The two largest tables grow
-  without bound, and every backup carries every query ever run. Archival
-  needs a decision on where the rows go, and on how long the audit trail is
-  in fact kept, which is an open question above.
+  without bound, and every backup carries every query ever run. The decision
+  is retention without an archive file: a background task deletes a
+  contest's `query_log` rows twelve months after the contest is archived,
+  and `audit_log` rows older than eighteen months, in batches as reclamation
+  does. Section 9's retention text changes with it.
 - [ ] **40. No background disk monitor** (section 4.1). Of the disk quota's
   three levels the first exists: the Query Runner reads the database's size
   before every write and refuses one at the quota. The second does not:
@@ -4527,14 +4526,13 @@ Product decisions the maintainer makes before the related item can be built.
   Redis, with no WAL archiving and no replica. A second API replica is
   blocked by the local volumes for uploads and covers and by provisioning's
   per-process guard. The recovery point is the last `make backup` (item 35).
-- [ ] **47. A hidden question cannot be revealed once a contest runs**
+- [ ] **47. A hidden question is staff-only, and nothing says so**
   (section 6.1). A hidden question keeps its answers and points, and the
-  participant's list leaves it out, identifier included. Visibility changes
-  only while content is editable, in `draft` or `published`, so once the
-  contest is `running` a hidden question can be neither revealed nor
-  answered. Whether it is meant to be answerable is an open question above,
-  and decides whether the change is a reveal during a contest or a hidden
-  question that says it is for staff only.
+  participant's list leaves it out, identifier included, so no participant
+  can answer it. The decision is that this is what hidden means. The editor
+  says so beside the switch, and the publication gate refuses a contest
+  whose deciding question is hidden: the final question under `winner`
+  scoring, and a contest whose every question is hidden.
 - [ ] **48. The `/design` showcase** (design specification, section 12). The
   specification defers it until the constructor (section 14, step 3) can give
   it real contests to show, since invented data does not belong in the
