@@ -1877,6 +1877,7 @@ const en = {
       "contest.instance_reclaimed": "Removed a participant's database once the contest's grace period passed",
       "contest.template_reclaimed": "Removed a contest's template database once every participant's copy was already gone",
       "contest.instance_dropped": "Removed a participant's database at an organiser's request",
+      "contest.instance_reset": "Reset their own database to the contest's starting state",
       "settings.change": "Changed the installation's settings",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary

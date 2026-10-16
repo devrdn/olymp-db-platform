@@ -359,9 +359,14 @@ func (s *Service) Invalidate(ctx context.Context, contest Contest) (int, error) 
 }
 
 // Reset gives a participant a fresh copy of their starting database under the
-// same name. It takes the registration's turn like EnsureFrom, so two resets,
-// or a reset and a first copy, never copy over each other.
-func (s *Service) Reset(ctx context.Context, contest Contest, registration uuid.UUID) error {
+// same name, and records actorID as who asked. It takes the registration's
+// turn like EnsureFrom, so two resets, or a reset and a first copy, never copy
+// over each other. A registration with no database is ErrNoInstance.
+//
+// The copy comes before the row and its audit entry, as in DropInstance: a
+// failure between them leaves a fresh database under a row that a second
+// press brings up to date.
+func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest, registration uuid.UUID) error {
 	done, err := s.provideAlone(ctx, registration)
 	if err != nil {
 		return err
@@ -375,7 +380,35 @@ func (s *Service) Reset(ctx context.Context, contest Contest, registration uuid.
 	if err := s.replace(ctx, contest, existing.Database); err != nil {
 		return err
 	}
-	return s.repo.Assign(ctx, contest.ID, registration, existing.Database, contest.Version)
+
+	write := func(ctx context.Context) error {
+		if err := s.repo.Assign(ctx, contest.ID, registration, existing.Database, contest.Version); err != nil {
+			return err
+		}
+		if s.audit == nil {
+			return nil
+		}
+		return s.audit.Record(ctx, resetEntry(actorID, contest, registration, existing.Database))
+	}
+	if s.audit == nil || s.uow == nil {
+		return write(ctx)
+	}
+	return s.uow.Do(ctx, write)
+}
+
+// resetEntry records a participant's reset on the contest's trail.
+func resetEntry(actorID uuid.UUID, contest Contest, registration uuid.UUID, database string) audit.Entry {
+	return audit.Entry{
+		ActorID:  &actorID,
+		Action:   audit.ActionGameInstanceReset,
+		Entity:   "contest",
+		EntityID: contest.ID.String(),
+		Payload: map[string]any{
+			"database":         database,
+			"registration_id":  registration.String(),
+			"template_version": contest.Version,
+		},
+	}
 }
 
 // Depth answers how many spare copies one contest should keep ready. It is a

@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/google/uuid"
 )
 
 func TestParticipantsWaitingForACopyShareTheWorkerBudget(t *testing.T) {
@@ -102,7 +104,7 @@ func TestTwoResetsOfOneParticipantCopyOneAfterTheOther(t *testing.T) {
 	errs := make([]error, 2)
 	for i := range errs {
 		wg.Go(func() {
-			errs[i] = service.Reset(t.Context(), contest, people[0])
+			errs[i] = service.Reset(t.Context(), uuid.New(), contest, people[0])
 		})
 	}
 	wg.Wait()
@@ -115,6 +117,52 @@ func TestTwoResetsOfOneParticipantCopyOneAfterTheOther(t *testing.T) {
 	}
 	if peak := fake.highWater(); peak != 1 {
 		t.Fatalf("%d copies of one participant's database were being made at once", peak)
+	}
+}
+
+// The participant pressed it, so the trail names them, not the system.
+func TestAResetIsRecordedWithTheParticipantAsItsActor(t *testing.T) {
+	service, _, s, contest, people := serviceWithAudit(t, t.Context(), 1)
+	participant := uuid.New()
+	database, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	if err := service.Reset(t.Context(), participant, contest, people[0]); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	entries := entriesFor(s, contest.ID)
+	if len(entries) != 1 {
+		t.Fatalf("%d entries recorded against the contest, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != audit.ActionGameInstanceReset {
+		t.Fatalf("action = %q, want %q", entry.Action, audit.ActionGameInstanceReset)
+	}
+	if entry.ActorID == nil || *entry.ActorID != participant {
+		t.Fatalf("actor = %v, want the participant %v", entry.ActorID, participant)
+	}
+	if entry.Payload["database"] != database {
+		t.Fatalf("payload names database %v, want %q", entry.Payload["database"], database)
+	}
+	if entry.Payload["registration_id"] != people[0].String() {
+		t.Fatalf("payload names registration %v, want %s", entry.Payload["registration_id"], people[0])
+	}
+	if entry.Payload["template_version"] != contest.Version {
+		t.Fatalf("payload names template version %v, want %d", entry.Payload["template_version"], contest.Version)
+	}
+}
+
+func TestAResetOfNothingRecordsNothing(t *testing.T) {
+	service, _, s, contest, people := serviceWithAudit(t, t.Context(), 1)
+
+	if err := service.Reset(t.Context(), uuid.New(), contest, people[0]); !errors.Is(err, provisioning.ErrNoInstance) {
+		t.Fatalf("error = %v, want ErrNoInstance", err)
+	}
+	if entries := entriesFor(s, contest.ID); len(entries) != 0 {
+		t.Fatalf("%d entries recorded for a reset that copied nothing", len(entries))
 	}
 }
 

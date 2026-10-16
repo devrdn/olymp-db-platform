@@ -210,7 +210,7 @@ func TestResettingKeepsTheNameAndRemakesTheDatabase(t *testing.T) {
 	}
 	before, _ := fake.counts()
 
-	if err := service.Reset(t.Context(), contest, people[0]); err != nil {
+	if err := service.Reset(t.Context(), uuid.New(), contest, people[0]); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 
@@ -230,7 +230,7 @@ func TestResettingKeepsTheNameAndRemakesTheDatabase(t *testing.T) {
 func TestResettingSomethingThatWasNeverProvisioned(t *testing.T) {
 	service, _, contest, people := serviceFor(t, 1)
 
-	if err := service.Reset(t.Context(), contest, people[0]); !errors.Is(err, provisioning.ErrNoInstance) {
+	if err := service.Reset(t.Context(), uuid.New(), contest, people[0]); !errors.Is(err, provisioning.ErrNoInstance) {
 		t.Fatalf("error = %v, want ErrNoInstance", err)
 	}
 }
