@@ -158,10 +158,13 @@ export function Workspace({
     [schema, toggle],
   );
 
-  // A contest that hides its schema is not asked for it. A failed read keeps
+  // The last result's rows came from the database the reset replaced. A
+  // contest that hides its schema is not asked for it, and a failed read keeps
   // the panel as it was rather than taking it away.
   const schemaShown = schema !== null;
   const onDatabaseReset = useCallback(() => {
+    setLastResult({ kind: "idle" });
+    setResultFrom(null);
     if (!schemaShown) return;
     void refreshSchemaAction(contestId).then((result) => {
       if (result.kind === "ok") setSchema(result.schema);

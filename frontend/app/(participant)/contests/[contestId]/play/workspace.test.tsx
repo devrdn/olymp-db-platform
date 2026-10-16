@@ -448,6 +448,21 @@ describe("the database reset", () => {
     expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
   });
 
+  test("clears the last result, whose rows came from the database before it", async () => {
+    runResult.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    show(null, { sqlMode: "read_write" });
+    await runQuery();
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    await reset();
+
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByText(en.participant.play.workspace.resultEmpty)).toBeInTheDocument();
+  });
+
   test("asks for no schema in a contest that hides it", async () => {
     show(null, { sqlMode: "read_write" });
 
