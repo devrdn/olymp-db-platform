@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/google/uuid"
@@ -706,6 +707,64 @@ func TestSubmitCallsNoStartForAParticipantAlreadyStarted(t *testing.T) {
 	}
 }
 
+// The start's entry names the participant as its actor and lands in the
+// transaction that records the start (§9.2).
+func TestSubmitAuditsTheStartItRecords(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationRegistered})
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+	}); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	if len(f.Audit.Entries) != 1 {
+		t.Fatalf("audit entries = %v, want one %s", f.Audit.Actions(), audit.ActionParticipantStart)
+	}
+	got := f.Audit.Entries[0]
+	if got.Action != audit.ActionParticipantStart || got.Entity != "contest" || got.EntityID != c.ID.String() {
+		t.Errorf("entry = %s on %s %s, want %s on contest %s", got.Action, got.Entity, got.EntityID, audit.ActionParticipantStart, c.ID)
+	}
+	if got.ActorID == nil || *got.ActorID != p.UserID {
+		t.Errorf("actor = %v, want the participant %s", got.ActorID, p.UserID)
+	}
+	if len(f.Audit.Loose) != 0 {
+		t.Errorf("entries recorded outside the transaction: %v", f.Audit.Loose)
+	}
+}
+
+// A request that read the registration before another one started it calls
+// Start, which records nothing, so it writes no second entry (CLAUDE.md
+// rule 6).
+func TestSubmitAuditsNoStartAnotherRequestRecorded(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	began := f.Now.Add(-time.Minute)
+	stored := f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: uuid.New(), Status: contests.RegistrationActive, StartedAt: &began,
+	})
+	unstarted := stored
+	unstarted.Status, unstarted.StartedAt = contests.RegistrationRegistered, nil
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: unstarted, Contest: c, QuestionID: q.ID, Value: "anything",
+	}); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	if f.Registrations.StartCalls != 1 {
+		t.Fatalf("Start was called %d times, want 1", f.Registrations.StartCalls)
+	}
+	if f.Audit.Recorded(audit.ActionParticipantStart) {
+		t.Errorf("audit entries = %v, want no %s from a request that did not record the start",
+			f.Audit.Actions(), audit.ActionParticipantStart)
+	}
+}
+
 // A shared window that is not running yet starts nobody: the answer is
 // refused before any write.
 func TestSubmitInAFixedContestNotYetRunningStartsNobody(t *testing.T) {
@@ -837,7 +896,8 @@ func TestSubmitGivesUpAfterTooManyConflicts(t *testing.T) {
 func TestSubmitRunsInsideOneTransactionWhenItScores(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
-	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	began := f.Now.Add(-time.Minute)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &began})
 	q := f.Questions.Put(contests.Question{
 		ContestID: c.ID, Kind: contests.KindText, Points: 5, IsVisible: true,
 		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
@@ -858,7 +918,8 @@ func TestSubmitRunsInsideOneTransactionWhenItScores(t *testing.T) {
 func TestSubmitNeedsNoTransactionForAWrongAnswer(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
-	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	began := f.Now.Add(-time.Minute)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &began})
 	q := f.Questions.Put(contests.Question{
 		ContestID: c.ID, Kind: contests.KindText, Points: 5, IsVisible: true,
 		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
@@ -878,7 +939,8 @@ func TestSubmitNeedsNoTransactionForAWrongAnswer(t *testing.T) {
 func TestSubmitNeedsNoTransactionForACorrectAnswerWorthNoPoints(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
-	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	began := f.Now.Add(-time.Minute)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &began})
 	q := f.Questions.Put(contests.Question{
 		ContestID: c.ID, Kind: contests.KindText, Points: 0, IsVisible: true,
 		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},

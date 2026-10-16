@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/google/uuid"
 )
 
@@ -257,7 +258,15 @@ func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, add
 	if !p.AwaitsStart() {
 		return p, nil
 	}
-	started, _, err := s.registrations.Start(ctx, p.ID, s.now())
+	var started Participant
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		var recorded bool
+		var err error
+		if started, recorded, err = s.registrations.Start(ctx, p.ID, s.now()); err != nil || !recorded {
+			return err
+		}
+		return s.audit.Record(ctx, StartEntry(started))
+	})
 	if err != nil {
 		return Participant{}, fmt.Errorf("record the participant's start: %w", err)
 	}
@@ -265,6 +274,19 @@ func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, add
 		return Participant{}, err
 	}
 	return started, nil
+}
+
+// StartEntry is the audit entry for p's start. Every caller of
+// RegistrationRepository.Start writes it in Start's unit of work, and only
+// when Start reports recording the start, so a participant has one.
+func StartEntry(p Participant) audit.Entry {
+	actor := p.UserID
+	return audit.Entry{
+		ActorID:  &actor,
+		Action:   audit.ActionParticipantStart,
+		Entity:   "contest",
+		EntityID: p.ContestID.String(),
+	}
 }
 
 // penaltyAmount is the points one wrong attempt costs (§6.1.1): q.PenaltyPct
