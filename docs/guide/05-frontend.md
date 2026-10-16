@@ -257,10 +257,7 @@ Patterns an action must follow:
 - **Validate ids before they reach a path.** Form fields are forgeable, and
   `fetch` resolves `..`, so `/contests/${id}/enroll` could address a different
   endpoint. Use `isId` from `lib/api/ids.ts`. Every action file that builds a
-  path from an id does this except the play screen's
-  (`app/(participant)/contests/[contestId]/play/actions.ts`), whose actions put
-  `contestId` and `questionId` into the path unchecked today. That is a known
-  gap; do not copy it.
+  path from an id does this.
 - **Return a code, not text.** `failureCode(error)` from `client.ts` gives the
   API's code, or `unreachable` when the API never answered.
 - **Revalidate what changed** with `revalidatePath`, then return, or

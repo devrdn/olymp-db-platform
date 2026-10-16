@@ -2,6 +2,7 @@
 
 import type { StandingsResult } from "@/components/product/use-standings";
 import { ApiError } from "@/lib/api/client";
+import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
@@ -34,7 +35,8 @@ export async function runQueryAction(
 
   // An empty console is not a query; sending it would spend the rate limit
   // on a parse error.
-  if (!contestId || sql.trim() === "") return { kind: "idle" };
+  if (sql.trim() === "") return { kind: "idle" };
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
 
   try {
     const payload = await serverRequest(`/contests/${contestId}/query`, {
@@ -76,7 +78,9 @@ export async function submitAnswerAction(
   const value = String(form.get("value") ?? "").trim();
 
   // An empty answer is not an attempt; sending it would spend one.
-  if (!contestId || !questionId || value === "") return { kind: "idle" };
+  if (value === "") return { kind: "idle" };
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (!isId(questionId)) return { kind: "refused", code: "invalid_question_id" };
 
   try {
     const payload = await serverRequest(`/contests/${contestId}/questions/${questionId}/answer`, {
@@ -109,6 +113,7 @@ export type QuestionsRefreshResult =
  * language, as the page did, so the list does not change language.
  */
 export async function refreshQuestionsAction(contestId: string): Promise<QuestionsRefreshResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   try {
     const locale = await activeLocale();
     const payload = await serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`);
@@ -134,6 +139,7 @@ export async function fetchQueryLogAction(
   limit: number,
   offset: number,
 ): Promise<QueryLogRefreshResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   try {
     const payload = await serverRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}`);
     const parsed = queryLogResponseSchema.parse(payload);
@@ -149,6 +155,7 @@ export async function fetchQueryLogAction(
  * table plus which row is theirs, titled in the participant's language.
  */
 export async function fetchStandingsAction(contestId: string): Promise<StandingsResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   try {
     const locale = await activeLocale();
     const payload = await serverRequest(`/contests/${contestId}/play/leaderboard?lang=${locale}`);
