@@ -1485,7 +1485,7 @@ const ro = {
         reset: {
           open: "Resetează baza de date",
           title: "Resetați baza de date?",
-          body: "Fiecare tabel revine la starea de la începutul concursului. Tot ce ați schimbat în ea se pierde: rândurile adăugate, modificate sau șterse și tabelele sau vederile create de dumneavoastră.",
+          body: "Fiecare tabel revine la starea de la începutul concursului. Tot ce ați schimbat în baza de date se pierde: rândurile adăugate, modificate sau șterse și tabelele sau vederile create de dumneavoastră.",
           kept: "Răspunsurile, punctajul, notițele, filele SQL și jurnalul interogărilor rămân neschimbate.",
           cancel: "Anulează",
           confirm: "Resetează",

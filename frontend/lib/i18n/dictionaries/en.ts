@@ -1669,7 +1669,7 @@ const en = {
         reset: {
           open: "Reset database",
           title: "Reset your database?",
-          body: "Every table goes back to how it was when the contest started. Everything you changed in it is lost: rows you added, changed or deleted, and any tables or views you created.",
+          body: "Every table goes back to how it was when the contest started. Everything you changed in the database is lost: rows you added, changed or deleted, and any tables or views you created.",
           kept: "Your answers, score, notes, SQL tabs and query log stay as they are.",
           cancel: "Cancel",
           confirm: "Reset",
