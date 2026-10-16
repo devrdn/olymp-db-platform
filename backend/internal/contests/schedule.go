@@ -56,6 +56,15 @@ type scheduleCovers interface {
 	Attribution(ctx context.Context, contestID uuid.UUID) (string, bool, error)
 }
 
+// scheduleGames answers the publish gate's question about the game, from the
+// core database's template record rather than the game cluster.
+type scheduleGames interface {
+	// GameReady reports whether the contest's game template is built at its
+	// current version: the same condition under which a participant's console
+	// answers anything but no_game_yet.
+	GameReady(ctx context.Context, contestID uuid.UUID) (bool, error)
+}
+
 // blockedContests reads the audit trail so a blocked start is recorded once
 // per distinct refusal, not once per tick.
 type blockedContests interface {
@@ -79,6 +88,7 @@ type Scheduler struct {
 	stories   scheduleStories
 	questions scheduleQuestions
 	roster    scheduleRoster
+	games     scheduleGames
 	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
@@ -90,12 +100,16 @@ type Scheduler struct {
 	covers      scheduleCovers
 }
 
-// NewScheduler assembles the background scheduler. Panics without a gate.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, gate *Gate) *Scheduler {
+// NewScheduler assembles the background scheduler. Panics without a gate or
+// games.
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, games scheduleGames, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, gate *Gate) *Scheduler {
 	if gate == nil {
 		panic("contests: NewScheduler needs the participation gate")
 	}
-	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, blocked: blocked, audit: auditRecorder, uow: uow, gate: gate}
+	if games == nil {
+		panic("contests: NewScheduler needs to know whether a contest's game is built")
+	}
+	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, games: games, blocked: blocked, audit: auditRecorder, uow: uow, gate: gate}
 }
 
 // WithPoolTrigger sets the trigger Advance fires for every contest it moves
@@ -115,7 +129,7 @@ func (s *Scheduler) WithCovers(store scheduleCovers) *Scheduler {
 // checkPublishable is the publish gate, shared by Service and Scheduler, which
 // hold different stores. It reports every problem at once, so an organizer
 // fixes them in one pass.
-func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, contestCovers scheduleCovers, c Contest) error {
+func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, games scheduleGames, contestCovers scheduleCovers, c Contest) error {
 	story, err := stories.ByContest(ctx, c.ID)
 	if err != nil && !errors.Is(err, ErrStoryNotFound) {
 		return err
@@ -125,6 +139,14 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 		return err
 	}
 	problems := publishProblems(c, story, qs)
+
+	ready, err := games.GameReady(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		problems = append(problems, PublishProblem{Code: ProblemNoGame})
+	}
 
 	// See ProblemStaffRegistered.
 	staff, err := roster.RegisteredWithPermission(ctx, c.ID, rbac.PermissionContestAdminAll)
@@ -181,7 +203,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 
 		var entries []audit.Entry
 		for _, c := range due {
-			switch gateErr := checkPublishable(ctx, s.stories, s.questions, s.roster, s.covers, c); {
+			switch gateErr := checkPublishable(ctx, s.stories, s.questions, s.roster, s.games, s.covers, c); {
 			case gateErr == nil:
 				// Ready: moved below.
 			case errors.Is(gateErr, ErrNotPublishable):

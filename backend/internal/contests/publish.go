@@ -57,6 +57,10 @@ const (
 	// line (§10.1). The upload route and the column check it too; this
 	// catches a restored or hand-repaired row, or a whitespace-only credit.
 	ProblemCoverNeedsAttribution = "cover_needs_attribution"
+	// ProblemNoGame names a contest whose game template is missing, waiting
+	// for a build, building or failed: every participant's console would
+	// answer no_game_yet.
+	ProblemNoGame = "no_game"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -95,8 +99,8 @@ func (e *NotPublishableError) Is(target error) bool { return target == ErrNotPub
 // and its participants. The schema does not enforce these, since a draft
 // passes through all of them (§6.1).
 //
-// Content only: the roster and the cover are checked by checkPublishable,
-// which a caller holding repositories should use instead.
+// Content only: the roster, the game and the cover are checked by
+// checkPublishable, which a caller holding repositories should use instead.
 func CheckPublishable(c Contest, story Story, questions []Question) error {
 	if problems := publishProblems(c, story, questions); len(problems) > 0 {
 		return &NotPublishableError{Problems: problems}

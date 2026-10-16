@@ -119,6 +119,7 @@ func NewFixture() *Fixture {
 		Policies:      f.Policies,
 		Languages:     f.Languages,
 		Game:          f.Games,
+		GameReadiness: f.Games,
 		Covers:        f.Covers,
 		Submissions:   f.Submissions,
 		Sequence:      f.Sequence,
@@ -218,9 +219,11 @@ func (f *Fixture) SeedContest(status string) contests.Contest {
 }
 
 // SeedPublishableContest stores a draft that satisfies the publish gate: one
-// language, a title, a story and one question with a reference answer.
+// language, a title, a story, one question with a reference answer and a
+// built game.
 func (f *Fixture) SeedPublishableContest() contests.Contest {
 	c := f.SeedContest(contests.StatusDraft)
+	f.Games.Built(c.ID)
 
 	if _, err := f.Stories.Save(context.Background(), c.ID, map[string]string{
 		"en": "A body in the stacks.",

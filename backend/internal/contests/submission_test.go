@@ -832,10 +832,11 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 
 	svc := contests.NewService(contests.ServiceConfig{
 		Questions: questions, Registrations: registrations, Submissions: submissions,
-		UnitOfWork: &conteststest.UnitOfWork{},
-		Gate:       contests.NewGate(0),
-		Now:        func() time.Time { return conteststest.FixtureNow },
-		Sleep:      func(time.Duration) {},
+		GameReadiness: conteststest.NewGames(),
+		UnitOfWork:    &conteststest.UnitOfWork{},
+		Gate:          contests.NewGate(0),
+		Now:           func() time.Time { return conteststest.FixtureNow },
+		Sleep:         func(time.Duration) {},
 	})
 
 	_, err := svc.Submit(t.Context(), contests.SubmitCommand{

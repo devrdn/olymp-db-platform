@@ -310,6 +310,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		packageGames = gameAuthoring
 	}
 
+	// Read from the core database, so the publish gate refuses a contest
+	// without a built game even where no game cluster is configured.
+	gameReadiness := postgres.NewGameInstances(pool)
+
 	contestService := contests.NewService(contests.ServiceConfig{
 		Contests:      postgres.NewContests(pool),
 		Stories:       postgres.NewStories(pool),
@@ -319,6 +323,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Policies:      postgres.NewSQLPolicies(pool),
 		Languages:     postgres.NewLanguages(pool),
 		Game:          packageGames,
+		GameReadiness: gameReadiness,
 		Submissions:   postgres.NewSubmissions(pool),
 		Sequence:      postgres.NewSequence(pool),
 		Gate:          gate,
@@ -340,6 +345,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		postgres.NewStories(pool),
 		postgres.NewQuestions(pool),
 		postgres.NewRegistrations(pool),
+		gameReadiness,
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),

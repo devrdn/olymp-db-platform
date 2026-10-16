@@ -1252,22 +1252,43 @@ func (s *Sink) Actions() []string {
 	return actions
 }
 
-// Games is an in-memory contests.GameSource, without the template lifecycle
-// of internal/provisioning.
+// Games is an in-memory contests.GameSource and the publish gate's question
+// about a built game, without the template lifecycle of internal/provisioning.
 type Games struct {
 	byContest map[uuid.UUID]string
 	// files marks games built from an uploaded dump (PutFile). They are kept
 	// apart from byContest because an empty script there is a distinct case
 	// this fake must be able to reproduce.
 	files map[uuid.UUID]bool
+	ready map[uuid.UUID]bool
 	// Err, when set, is what Script returns: the game storage being away.
 	Err error
+	// ReadyErr, when set, is what GameReady returns.
+	ReadyErr error
 }
 
 var _ contests.GameSource = (*Games)(nil)
 
 func NewGames() *Games {
-	return &Games{byContest: map[uuid.UUID]string{}, files: map[uuid.UUID]bool{}}
+	return &Games{byContest: map[uuid.UUID]string{}, files: map[uuid.UUID]bool{}, ready: map[uuid.UUID]bool{}}
+}
+
+// Built marks the contest's game built at its current version.
+func (r *Games) Built(contestID uuid.UUID) {
+	r.ready[contestID] = true
+}
+
+// Rebuilding puts a built game back to waiting for a build, as saving it
+// again or asking for a rebuild does.
+func (r *Games) Rebuilding(contestID uuid.UUID) {
+	r.ready[contestID] = false
+}
+
+func (r *Games) GameReady(_ context.Context, contestID uuid.UUID) (bool, error) {
+	if r.ReadyErr != nil {
+		return false, r.ReadyErr
+	}
+	return r.ready[contestID], nil
 }
 
 func (r *Games) Put(contestID uuid.UUID, script string) {
