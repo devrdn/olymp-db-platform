@@ -37,6 +37,7 @@ function show(contestId = "c1") {
       storyUnavailable={null}
       questionEntries={[]}
       schema={A_SCHEMA}
+      sqlMode="read_only"
       initialLog={{ items: [], total: 0, failed: false }}
       workspace={null}
       locale="en"
