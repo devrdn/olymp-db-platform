@@ -2173,6 +2173,13 @@ nothing.
   stays `registered`, and a disqualified one stays `disqualified`. From then
   on the gate answers `contest_finished` to a participant who started, the
   profile counts the contest as finished, and monitoring shows the finish.
+- **Both ends of a participation are in the audit trail** (section 9). The
+  request that records a participant's start writes `participant.start`,
+  with the participant as its actor, in the transaction that records it;
+  a later request, or one that lost the race to start them, writes nothing.
+  The move into `finished` writes one `participant.finish` per registration
+  it finished, with no actor and the user in the payload, in the
+  transaction that moves the contest.
 
 ### 8.1 The participation gate
 
@@ -2297,9 +2304,9 @@ Three independent streams with different purposes:
 | **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | A year and more |
 | **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | The contest's lifetime, then archive |
 
-Two rows of that table are not yet what the code does: no audit entry records
-the start or finish of a participation (section 15, item 24), and nothing
-archives `query_log` or `audit_log`, so both are kept indefinitely (item 39).
+One row of that table is not yet what the code does: nothing archives
+`query_log` or `audit_log`, so both are kept indefinitely (section 15,
+item 39).
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the
