@@ -63,7 +63,7 @@ type People interface {
 	// Start records now as the participant's first deliberate action, if they
 	// have not already begun. See contests.RegistrationRepository.Start for
 	// the concurrency guarantee.
-	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error)
+	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (p contests.Participant, recorded bool, err error)
 }
 
 // Contests answers what they are asking about.
@@ -450,7 +450,7 @@ func (s *Service) recordStart(ctx context.Context, contest contests.Contest, par
 	if err := s.admit(contest, participant, addr); err != nil {
 		return contests.Participant{}, err
 	}
-	started, err := s.people.Start(ctx, participant.ID, s.now())
+	started, _, err := s.people.Start(ctx, participant.ID, s.now())
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: record the participant's start: %w", ErrUnavailable, err)
 	}

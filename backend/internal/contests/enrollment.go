@@ -158,8 +158,10 @@ type RegistrationRepository interface {
 	// begun, setting StartedAt and the active status together. Concurrent
 	// first actions must agree on one start time and an existing one must
 	// never move: a single conditional UPDATE on "started_at IS NULL", never
-	// a read then a write.
-	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (Participant, error)
+	// a read then a write. recorded is true only for the call whose write
+	// recorded the start, so of concurrent first actions exactly one reports
+	// it; the caller writes the start's audit entry on that report alone.
+	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (p Participant, recorded bool, err error)
 	// EnrolledIn reports which of these contests the user is registered for,
 	// in one query.
 	EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error)

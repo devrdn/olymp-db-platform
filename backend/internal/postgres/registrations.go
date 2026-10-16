@@ -300,17 +300,17 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 // Start records now as the participant's start, if they have not begun yet.
 //
 // The UPDATE's WHERE re-reads started_at under the row lock, so of two racing
-// transactions only the first sets it. After the first call it writes
-// nothing (CLAUDE.md rule 6). It also requires status = 'registered', an
-// allow-list, so a participant disqualified before starting, or in a status
-// added later, is not moved to 'active'.
+// transactions only the first sets it, and only it reports recorded. After
+// the first call it writes nothing (CLAUDE.md rule 6). It also requires
+// status = 'registered', an allow-list, so a participant disqualified before
+// starting, or in a status added later, is not moved to 'active'.
 //
 // The loser reads the winner's start time in a separate statement. Under
 // READ COMMITTED each statement takes its own snapshot; a SELECT folded into
 // the UPDATE's statement would see started_at still null. This relies on the
 // pool running at READ COMMITTED: under REPEATABLE READ or SERIALIZABLE the
 // second statement would also see the old snapshot.
-func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
+func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, bool, error) {
 	querier := r.querier(ctx)
 	p, err := scanParticipant(querier.QueryRow(ctx, `
 		WITH updated AS (
@@ -324,16 +324,17 @@ func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now
 		registrationID, now, contests.RegistrationActive, contests.RegistrationRegistered))
 	switch {
 	case err == nil:
-		return p, nil
+		return p, true, nil
 	case errors.Is(err, contests.ErrParticipantNotFound):
 		// Lost the race or already started: a fresh statement sees the
 		// committed start.
-		return scanParticipant(querier.QueryRow(ctx, `
+		p, err := scanParticipant(querier.QueryRow(ctx, `
 			SELECT `+participantColumns+`
 			FROM registrations r JOIN users u ON u.id = r.user_id
 			WHERE r.id = $1`, registrationID))
+		return p, false, err
 	default:
-		return contests.Participant{}, err
+		return contests.Participant{}, false, err
 	}
 }
 

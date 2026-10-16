@@ -257,7 +257,7 @@ func (s *Service) recordStart(ctx context.Context, c Contest, p Participant, add
 	if !p.AwaitsStart() {
 		return p, nil
 	}
-	started, err := s.registrations.Start(ctx, p.ID, s.now())
+	started, _, err := s.registrations.Start(ctx, p.ID, s.now())
 	if err != nil {
 		return Participant{}, fmt.Errorf("record the participant's start: %w", err)
 	}

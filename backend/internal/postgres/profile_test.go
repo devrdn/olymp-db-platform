@@ -120,7 +120,7 @@ func TestProfileSummaryCountsAnEndedContestTheCallerStarted(t *testing.T) {
 		closedByAnOrganiser, second := f.contest(contests.StatusRunning, time.Hour)
 		neverStartedIn, _ := f.contest(contests.StatusRunning, 2*time.Hour)
 		for _, reg := range []uuid.UUID{first, second} {
-			if _, err := registrations.Start(ctx, reg, f.base); err != nil {
+			if _, _, err := registrations.Start(ctx, reg, f.base); err != nil {
 				t.Fatalf("Start() = %v", err)
 			}
 		}

@@ -260,9 +260,12 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 			contest := target.NewContest()
 			p := enrol(t, ctx, target, contest, "alice")
 
-			got, err := target.Repo.Start(ctx, p.ID, started)
+			got, recorded, err := target.Repo.Start(ctx, p.ID, started)
 			if err != nil {
 				t.Fatalf("Start() = %v", err)
+			}
+			if !recorded {
+				t.Error("Start() reported it recorded nothing, want the start recorded by this call")
 			}
 			if got.StartedAt == nil || !got.StartedAt.Equal(started) {
 				t.Errorf("StartedAt = %v, want %v", got.StartedAt, started)
@@ -285,13 +288,16 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 		each(t, func(ctx context.Context, target RegistrationTarget) {
 			contest := target.NewContest()
 			p := enrol(t, ctx, target, contest, "alice")
-			if _, err := target.Repo.Start(ctx, p.ID, started); err != nil {
+			if _, _, err := target.Repo.Start(ctx, p.ID, started); err != nil {
 				t.Fatalf("first Start() = %v", err)
 			}
 
-			got, err := target.Repo.Start(ctx, p.ID, started.Add(time.Hour))
+			got, recorded, err := target.Repo.Start(ctx, p.ID, started.Add(time.Hour))
 			if err != nil {
 				t.Fatalf("second Start() = %v", err)
+			}
+			if recorded {
+				t.Error("a second Start() reported it recorded the start, want only the first to")
 			}
 			if got.StartedAt == nil || !got.StartedAt.Equal(started) {
 				t.Errorf("StartedAt after a second Start() = %v, want the first, %v", got.StartedAt, started)
@@ -312,9 +318,12 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 						t.Fatalf("SetStatus() = %v", err)
 					}
 
-					got, err := target.Repo.Start(ctx, p.ID, started)
+					got, recorded, err := target.Repo.Start(ctx, p.ID, started)
 					if err != nil {
 						t.Fatalf("Start() = %v", err)
+					}
+					if recorded {
+						t.Error("Start() reported it recorded a start it refused")
 					}
 					if got.Status != status {
 						t.Errorf("Status after Start() = %q, want %q unchanged", got.Status, status)
@@ -332,7 +341,7 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 
 	t.Run("Start reports a registration that is not there", func(t *testing.T) {
 		each(t, func(ctx context.Context, target RegistrationTarget) {
-			_, err := target.Repo.Start(ctx, uuid.New(), started)
+			_, _, err := target.Repo.Start(ctx, uuid.New(), started)
 			notFound(t, err, "Start():")
 		})
 	})
