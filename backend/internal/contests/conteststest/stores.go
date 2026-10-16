@@ -894,21 +894,23 @@ func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, s
 }
 
 // Start mirrors postgres.Registrations.Start: it sets StartedAt and the
-// active status together, once; a repeat call reads back the first. A
-// registration in any other status (disqualified, say) is returned unchanged.
-func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
+// active status together, once, and reports recording it; a repeat call
+// reads back the first. A registration in any other status (disqualified,
+// say) is returned unchanged.
+func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, bool, error) {
 	r.StartCalls++
 	p, ok := r.byID[registrationID]
 	if !ok {
-		return contests.Participant{}, contests.ErrParticipantNotFound
+		return contests.Participant{}, false, contests.ErrParticipantNotFound
 	}
-	if p.StartedAt == nil && p.Status == contests.RegistrationRegistered {
-		started := now
-		p.StartedAt = &started
-		p.Status = contests.RegistrationActive
-		r.byID[registrationID] = p
+	if p.StartedAt != nil || p.Status != contests.RegistrationRegistered {
+		return p, false, nil
 	}
-	return p, nil
+	started := now
+	p.StartedAt = &started
+	p.Status = contests.RegistrationActive
+	r.byID[registrationID] = p
+	return p, true, nil
 }
 
 // finishActive mirrors postgres's finishRoster: every active registration of

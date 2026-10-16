@@ -56,8 +56,9 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 
 // Racers each use their own connection, outside a rolled-back transaction,
 // which would serialise the race away. Every racer and the stored row must
-// agree on one start time. Cleanup deletes the contest, cascading to the
-// registration.
+// agree on one start time, and exactly one racer must report recording it,
+// since that report decides who writes the audit entry. Cleanup deletes the
+// contest, cascading to the registration.
 func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
@@ -79,6 +80,7 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 
 	type outcome struct {
 		participant contests.Participant
+		recorded    bool
 		err         error
 	}
 	results := make(chan outcome, racers)
@@ -92,8 +94,8 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 			defer done.Done()
 			start.Wait() // all of them go at once
 			now := time.Date(2026, 3, 1, 10, 0, i, 0, time.UTC)
-			p, err := repo.Start(context.Background(), registrationID, now)
-			results <- outcome{p, err}
+			p, recorded, err := repo.Start(context.Background(), registrationID, now)
+			results <- outcome{p, recorded, err}
 		}(i)
 	}
 	start.Done()
@@ -101,6 +103,7 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 	close(results)
 
 	seen := map[time.Time]int{}
+	recorders := 0
 	for r := range results {
 		if r.err != nil {
 			t.Fatalf("Start() = %v", r.err)
@@ -109,6 +112,13 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 			t.Fatal("Start() returned a participant with no StartedAt")
 		}
 		seen[r.participant.StartedAt.UTC()]++
+		if r.recorded {
+			recorders++
+		}
+	}
+
+	if recorders != 1 {
+		t.Errorf("%d racers reported they recorded the start, want exactly 1", recorders)
 	}
 
 	if len(seen) != 1 {

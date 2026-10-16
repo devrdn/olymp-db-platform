@@ -1295,9 +1295,9 @@ func seedEndingRoster(t *testing.T, ctx context.Context, repo contests.Registrat
 		}
 		switch state {
 		case rosterStarted, rosterDisqualified:
-			_, err = repo.Start(ctx, p.ID, now.Add(-time.Hour))
+			_, _, err = repo.Start(ctx, p.ID, now.Add(-time.Hour))
 		case rosterStartedAheadOfClock:
-			_, err = repo.Start(ctx, p.ID, now.Add(time.Hour))
+			_, _, err = repo.Start(ctx, p.ID, now.Add(time.Hour))
 		}
 		if err != nil {
 			t.Fatalf("Start() = %v", err)

@@ -58,24 +58,25 @@ func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Particip
 }
 
 // Start mirrors postgres.Registrations.Start: it sets StartedAt and the
-// active status together, once.
-func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.Participant, error) {
+// active status together, once, and reports recording it unless a start was
+// already stored.
+func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.Participant, bool, error) {
 	if p.starts != nil {
 		*p.starts++
 	}
 	if p.startErr != nil {
-		return contests.Participant{}, p.startErr
+		return contests.Participant{}, false, p.startErr
 	}
 	started := p.participant
 	if p.startsNothing {
-		return started, nil
+		return started, false, nil
 	}
 	started.StartedAt = &now
 	if p.stored != nil {
 		started.StartedAt = p.stored
 	}
 	started.Status = contests.RegistrationActive
-	return started, nil
+	return started, p.stored == nil, nil
 }
 
 type contestStore struct {
