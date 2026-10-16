@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -398,6 +400,68 @@ func TestAFixedTimingParticipantsFirstReadRecordsTheStartOnceAndTheEventsChannel
 	again, err := registrations.ByUser(ctx, contestID, student)
 	if err != nil || again.StartedAt == nil || !again.StartedAt.Equal(*stored.StartedAt) || again.Status != contests.RegistrationActive {
 		t.Fatalf("after a second read: %+v, err = %v; want active, started at %v unchanged", again, err, stored.StartedAt)
+	}
+}
+
+// The start's audit entry goes through the real transaction and sink: one
+// entry for the read that recorded the start, with the caller's address from
+// the request, and none for a later read holding the same stale participant.
+func TestAFirstReadAuditsTheStartOnceWithTheCallersAddress(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := audit.WithRequestMeta(context.Background(), "203.0.113.9", "integration-test")
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	contestID := makeRunningFixedContest(t, ctx, pool, author, clock.Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+
+	registrations := postgres.NewRegistrations(pool)
+	if _, err := registrations.Add(ctx, contestID, student); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate).
+		WithClock(func() time.Time { return clock }).
+		WithAudit(audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
+
+	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
+	if err != nil {
+		t.Fatalf("Access() = %v", err)
+	}
+	for read := range 2 {
+		if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
+			t.Fatalf("read %d: StartOnRead() = %v", read+1, err)
+		}
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT actor_id, host(ip) FROM audit_log
+		WHERE action = $1 AND entity = 'contest' AND entity_id = $2`,
+		audit.ActionParticipantStart, contestID.String())
+	if err != nil {
+		t.Fatalf("read the trail: %v", err)
+	}
+	type entry struct {
+		actor   uuid.UUID
+		address string
+	}
+	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) {
+		var e entry
+		err := row.Scan(&e.actor, &e.address)
+		return e, err
+	})
+	if err != nil {
+		t.Fatalf("scan the trail: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("%d %s entries after two reads, want 1", len(entries), audit.ActionParticipantStart)
+	}
+	if entries[0].actor != student || entries[0].address != "203.0.113.9" {
+		t.Errorf("entry = %+v, want actor %s from 203.0.113.9", entries[0], student)
 	}
 }
 
