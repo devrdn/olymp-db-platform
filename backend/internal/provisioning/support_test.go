@@ -133,6 +133,8 @@ type cluster struct {
 	// name was dropped, as a failed CREATE DATABASE does.
 	live     map[string]bool
 	copyFail error
+	// afterDrop runs once the forcing Drop has removed a database.
+	afterDrop func()
 
 	// busy makes DropIdle answer "not dropped, no error" (a live connection);
 	// failIdleDrop makes it answer a real error.
@@ -310,6 +312,9 @@ func (c *cluster) Drop(_ context.Context, name string) error {
 		c.live[name] = false
 	}
 	c.dropped = append(c.dropped, name)
+	if c.afterDrop != nil {
+		c.afterDrop()
+	}
 	return nil
 }
 

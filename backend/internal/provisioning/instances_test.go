@@ -192,6 +192,44 @@ func TestADropWaitsForAResetOfTheSameDatabase(t *testing.T) {
 	}
 }
 
+// An organiser leaving between the cluster's drop and the row's update must
+// not leave a 'ready' row over a database that is gone: a participant's would
+// be handed back by Ensure, a spare claimed by the next participant.
+func TestADropWhoseCallerLeavesAfterTheClusterDropStillMarksTheRow(t *testing.T) {
+	for _, held := range []bool{true, false} {
+		name := "a spare"
+		if held {
+			name = "a participant's copy"
+		}
+		t.Run(name, func(t *testing.T) {
+			service, fake, contest, people := serviceFor(t, 1)
+			var database string
+			if held {
+				var err error
+				if database, err = service.Ensure(t.Context(), contest, people[0]); err != nil {
+					t.Fatalf("ensure: %v", err)
+				}
+			} else {
+				if _, err := service.TopUp(t.Context(), contest, 1); err != nil {
+					t.Fatalf("top-up: %v", err)
+				}
+				database = instancesOf(t, t.Context(), contest.ID)[0].Database
+			}
+			ctx, leave := context.WithCancel(t.Context())
+			fake.mu.Lock()
+			fake.afterDrop = leave
+			fake.mu.Unlock()
+
+			if _, err := service.DropInstance(ctx, uuid.New(), contest.ID, database); err != nil {
+				t.Fatalf("DropInstance: %v; the organiser leaving after the cluster drop must not stop it", err)
+			}
+			if status := statusOf(t, t.Context(), database); status != "dropped" {
+				t.Fatalf("the row is %q over a database the cluster dropped, want dropped", status)
+			}
+		})
+	}
+}
+
 func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) {
 	service, fake, contest, people := serviceFor(t, 1)
 
