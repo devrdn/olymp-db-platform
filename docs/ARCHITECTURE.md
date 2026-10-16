@@ -167,7 +167,8 @@ participant.
   student's rate limit. The "show me the data" button on a table is an
   ordinary generated `SELECT * FROM t LIMIT 50` that goes through the same
   pipeline under the same rules and limits — and appears in `query_log` like
-  any other query.
+  any other query. The tree is built; the ER diagram and the button are not
+  (section 15, item 45).
 
 Rendering: the App Router, with public pages server-rendered and the console a
 client component. Every read goes to the Core API; Next.js has no database
@@ -493,22 +494,26 @@ How it holds together:
   own database, their inserts, updates and views are visible only to them. The
   integrity of anybody else's data is not at stake by construction.
 - **"Reset my database".** In a writing mode a participant can ruin their own
-  data, so the interface offers a reset: provisioning recreates their instance
-  from the template in seconds, and the fact is written to the audit trail and
-  the query log. Resets and removals use `DROP DATABASE … WITH (FORCE)`
-  (PostgreSQL 13+), so an active session is terminated automatically and a
-  hung statement cannot block the rebuild.
+  data, so the interface is meant to offer a reset: provisioning recreates
+  their instance from the template in seconds, and the fact is written to the
+  audit trail and the query log. Only the recreation is built
+  (`provisioning.Service.Reset`); no route, screen or audit action reaches it
+  (section 15, item 34). Resets and removals use
+  `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+), so an active session is
+  terminated automatically and a hung statement cannot block the rebuild.
 - **Disk quotas.** Writing opens a denial-of-service vector: fill the disk.
-  Three levels answer it. (1) Before every DML the Query Runner checks the
-  instance's size against a cache refreshed after each DML, and refuses the
-  query when the quota — five times the template's size by default,
-  configurable in the policy — is exceeded. (2) A background monitor reading
-  `pg_database_size()` is the safety net, putting an over-quota instance into
-  read-only (`ALTER DATABASE … SET default_transaction_read_only = on`) with a
-  message the participant can understand. The race inside a **single**
-  statement — an `INSERT … SELECT` that crosses the quota before the next
-  check — cannot be removed entirely, but the overshoot is bounded by what can
-  be written within `statement_timeout`, five seconds. (3) The cluster's disk
+  Three levels answer it. (1) Before every statement that writes, the Query
+  Runner reads the instance's size with `pg_database_size()` inside the
+  statement's own transaction, and refuses the statement when the quota —
+  five times the template's size by default, configurable in the policy — is
+  reached. (2) A background monitor reading `pg_database_size()` is meant to
+  be the safety net, putting an over-quota instance into read-only
+  (`ALTER DATABASE … SET default_transaction_read_only = on`) with a message
+  the participant can understand; it is not built (section 15, item 40).
+  The race inside a **single** statement — an `INSERT … SELECT` that crosses
+  the quota before the next check — cannot be removed entirely, but the
+  overshoot is bounded by what can be written within `statement_timeout`,
+  five seconds. (3) The cluster's disk
   is planned with room for that worst case multiplied by the number of
   concurrent DML statements, which the semaphore bounds.
 
@@ -577,10 +582,13 @@ it never runs in bulk at the moment that matters:
   woke it. Only a committed change can wake it — a registration rolled back
   with its transaction does not.
 - **Late enrolment, on an open contest.** Somebody enrolling just before the
-  start gets a database from the pool; if the pool is empty they see "your
-  database is being prepared", and the console opens on a readiness event over
-  SSE, usually within tens of seconds. An enrolment deadline — ten minutes
-  before the start, say — is available as an option.
+  start gets a database from the pool; if the pool is empty they are meant to
+  see "your database is being prepared", and the console to open on a
+  readiness event over SSE, usually within tens of seconds. Neither is built:
+  the copy is made by the participant's first query or first look at the
+  schema, inside that request, which waits for it (section 15, item 32). An
+  enrolment deadline — ten minutes before the start, say — is available as
+  an option.
 
   `GAME_CLUSTER_MAX_BYTES` binds here too, not only in the background tender:
   `provisioning.Service.Ensure` does the same arithmetic (`roomForOneCopy`)
@@ -608,7 +616,8 @@ it never runs in bulk at the moment that matters:
   detectable. "Every instance is at the current version" is meant to be a
   condition of a contest entering `running`, and is not yet:
   `provisioning.Service.Ready` answers the question but nothing calls it, so
-  neither publication nor the start waits for the game (see section 15).
+  neither publication nor the start waits for the game (see section 15,
+  item 23).
 - **Template discipline.** Nothing may be connected to a template while
   `CREATE DATABASE` copies it: the builder role is disconnected as soon as the
   build finishes, and an organiser previewing the game schema does so on a
@@ -1087,7 +1096,7 @@ registered as participants (section 6.2) and a cover's credit line (section
 9.7). That is a deliberate division: the database guarantees what is true
 always, the gate guarantees what is true at the transition. The gate does not
 look at the game: whether its template is built is not checked at publication
-(see section 15).
+(see section 15, item 23).
 
 ## 6.1.1 How a contest decides a result
 
@@ -2272,6 +2281,10 @@ Three independent streams with different purposes:
 | **Technical logs** | Structured JSON from the applications (slog): HTTP requests, errors, provisioning, each event carrying `request_id` and `user_id`; with `METRICS_BACKEND=log`, the metrics digest joins them | stdout → Promtail → **Loki**, dashboards in Grafana | 30–90 days |
 | **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | A year and more |
 | **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | The contest's lifetime, then archive |
+
+Two rows of that table are not yet what the code does: no audit entry records
+the start or finish of a participation (section 15, item 24), and nothing
+archives `query_log` or `audit_log`, so both are kept indefinitely (item 39).
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the
@@ -3544,7 +3557,8 @@ section 7. In addition:
   and — for the stories — a renderer that builds React elements and never an
   HTML string, so there is no sanitiser in the path to walk around
   (section 6.3); plus a strict CSP and the usual headers (HSTS,
-  `X-Content-Type-Options`, `frame-ancestors`).
+  `X-Content-Type-Options`, `frame-ancestors`). The CSP sent today still
+  allows inline scripts (section 15, item 41).
 - **Staff input:** an uploaded game script runs only on the game cluster,
   under a separate builder role, when a template is created — never against
   the core database; with validation and a size limit.
@@ -4105,7 +4119,78 @@ arrive in a migration earlier — the field in the builder may not.
 A list of what is described above as a decision. It exists so that "we thought
 about this" and "we did this" do not look the same in the document: each item
 refers to the section where the decision is argued and names what it touches.
-The order is numeric, not by priority.
+The list's order is numeric, not by priority; the priority is the next
+subsection. The sections above describe the design as decided, and point
+here where the code has not reached it; where the two disagree, this list
+says what is built.
+
+### What comes next
+
+The order of the remaining work, in four tiers. A number in parentheses is
+an item of the list below.
+
+1. **Before the next olympiad:** the game's readiness as a condition of
+   publication and start (23), the registration lifecycle (24), ids checked
+   in the play screen's actions (25), "reset my database" (34), the game
+   uploads in the backup (26) and the game side after a restore (27). Each is
+   something a participant would hit during a contest with no way round it,
+   a hole a participant could use, or data a contest depends on that the
+   installation could lose, so each is cheaper to fix before an olympiad than
+   during one. Item 24 starts with its open question below, on what a
+   finished registration means; its other half, writing `active` under a
+   shared window and the audit entry for a participation's start, needs no
+   answer and can be built first.
+2. **The organiser's workflow:** the staff reports and the results as a file
+   (28), which also give `reports.view` its meaning (29); a contest list for
+   a manager without `contest.create` (30); screens for the endpoints that
+   have none, the grace extension first (31); the readiness event (32); `Esc`
+   aborting a query (33); the audit form's filters (8); participants from a
+   file and the contest import (12). They cost an organiser time, or a
+   participant some comfort, and each has a workaround today: the standings
+   screen and monitoring's CSV, a typed address, the API called by hand, a
+   first query that waits for the copy, waiting for the query's deadline, a
+   pasted column of logins, a contest built again by hand. `reports.view`
+   needs none, since it guards nothing yet.
+3. **Running the installation:** off-host scheduled backups (35, paused by
+   the maintainer's decision and to be resumed), restore drills (36), alerts
+   and the Query Runner's metrics (37), CI and the supply chain (38),
+   query-log archival (39), the disk monitor (40), the nonce CSP (41),
+   end-to-end tests (42) and the security audit plan (43). They protect the
+   installation over months and years rather than any one contest.
+4. **Later:** the rest of the query-log panel (44), the ER diagram and "show
+   me the data" (45), the interface's side of account actions (9), the
+   accent (11), the `/design` showcase (48), high availability (46), and the
+   deferred items: team mode (10), a second visual language (14),
+   achievements (15) and several tasks in one contest (17). Each improves
+   something that already works, or waits for a need the installation does
+   not have yet.
+
+Item 47 is in no tier: until its open question below is answered, it is not
+known what the change is.
+
+### Open questions
+
+Product decisions the maintainer makes before the related item can be built.
+
+- **Is a hidden question meant to be answerable?** If it is, an organiser
+  reveals it during a contest and the participant's list gains it; if it is
+  not, a hidden question is staff-only and the editor says so (item 47).
+- **What does a finished registration mean, and when is it written?** By the
+  participant's choice, at their own deadline, at the contest's end, or any
+  of these. The gate's refusal, the profile's count and monitoring's events
+  all follow from the answer (item 24).
+- **Should `reports.view` gate the staff reports?** If it should, the
+  reports of item 28 require it; if not, the permission is removed rather
+  than left granting nothing (item 29).
+- **Where do archived query-log rows go, and how long is the audit trail
+  kept?** Section 9 keeps the query log for a contest's lifetime and then
+  archives it, and the audit trail for "a year and more", without saying
+  where archived rows live or when a row may finally be deleted. Archival
+  follows from the answer (item 39).
+- **Are the three superseded question endpoints removed?**
+  `PATCH /questions/{id}`, `PUT …/texts` and `PUT …/answers` predate the
+  single Save button and no screen calls them. Removing them shrinks the API;
+  keeping them leaves three write paths that no screen exercises (item 31).
 
 ### Remaining
 
@@ -4114,9 +4199,10 @@ The order is numeric, not by priority.
   supports them, while the form on `/audit` offers only an action, an entity
   and two dates. So "what did this administrator do" and "what happened to
   this account" are questions the server answers and the screen cannot ask.
-  Extend the form to the filter's full set, and check that each new field
-  rests on an index rather than making `audit_log` be read whole — the table
-  is kept for a year and grows faster than the rest.
+  Both filters already rest on an index (`audit_log_actor_idx`,
+  `audit_log_entity_idx`), so `audit_log` is not read whole, and the
+  interface's API helper already sends them; what remains is the form, which
+  should offer the filter's full set.
 - [ ] **9. Account actions repeat their rules in the interface.** The server
   holds each rule once: `validateReason` trims a reason, refuses an empty one
   and bounds its length for one account and for many, and `boundSelection`
@@ -4167,10 +4253,10 @@ The order is numeric, not by priority.
   design specification says the accent is "only for what is happening now",
   and that is a deliberate restriction: the pulsing dot on a running contest
   works because nothing else uses that colour. In fact it has already spread —
-  the focus ring, links in a story, the hover in the account register. A rule
-  the code contradicts stops being a rule: either narrow the usage back, or
-  rewrite the line so it describes reality. One sitting's work, and needed
-  whether or not the palette changes.
+  the focus ring, links in a story, the hover in the account register, the
+  progress bar of a game upload. A rule the code contradicts stops being a
+  rule: either narrow the usage back, or rewrite the line so it describes
+  reality. One sitting's work, and needed whether or not the palette changes.
   - [ ] **11.1 Changing the accent's hue (deferred).** An orange was
     discussed; the decision is to keep the present pair and return if a reason
     appears. What will be needed then: the hue is chosen **against** the
@@ -4205,7 +4291,10 @@ The order is numeric, not by priority.
   participants, which stays a separate mechanism with the opposite semantics.
   The package's shape is already fixed by a `format` field and an integer
   `version` in the file itself, so an importer can refuse an unknown version
-  rather than understand it halfway.
+  rather than understand it halfway. A game built from an uploaded dump or in
+  the table builder does not travel in the package: the export marks it
+  omitted, and an import has to say that the new contest's game is still to
+  be made rather than leave it silently without one.
 
   **What the format costs.** YAML needs a safe loader, because arbitrary tags
   are code execution; ZIP needs protection against path traversal and against
@@ -4269,6 +4358,191 @@ The order is numeric, not by priority.
   `winner` mode is whoever first answered the final questions of every task.
   The main price is disk, growing with the number of tasks. For now one task
   per contest is enough.
+- [ ] **23. The game's readiness is not a condition of publication or start**
+  (sections 4.2 and 6.1). `provisioning.Service.Ready` answers whether every
+  database of a contest came from its current template, and nothing calls
+  it; the publication gate's problems cover the text, the questions, the
+  schedule, the staff and the cover, none of them the game. So a contest with
+  no game, or one whose build failed, can be published and started, and every
+  participant's console then answers `no_game_yet`. Publication should refuse
+  a game that is missing, building or failed, and the start should not move a
+  contest to `running` until `Ready` holds.
+- [ ] **24. A registration never leaves `registered` under a shared window**
+  (sections 6, 8.1 and 9). The schema allows `active`, `finished` and a
+  `finished_at`; nothing writes `finished`, and `active` with `started_at` is
+  written only under individual timing. What reads those values never sees
+  them: the gate's refusal for a participant who has finished, the profile's
+  "finished" count (always zero) and monitoring's start and finish events.
+  The audit entries section 9 promises for the start and finish of a
+  participation do not exist either, and belong to the same change, since
+  they record the same transitions. What "finished" means is an open question
+  above.
+- [ ] **25. The play screen's actions put ids into paths unchecked**
+  (section 11). Every other server action that builds an API path from an id
+  checks it with `isId` first, because form fields are forgeable and `fetch`
+  resolves `..`; the play screen's `actions.ts` puts `contestId` and
+  `questionId` into the path as they arrive. The API still authorises
+  whatever it is sent, so the exposure is a request to an endpoint the action
+  did not mean, made with the participant's own session. The same check
+  belongs there, and the frontend guide then drops the exception.
+- [ ] **26. The game uploads are not in the backup** (section 13).
+  `make backup` writes the core dump and the covers archive; organisers'
+  uploaded dumps and the table builder's CSV files live on the
+  `game-uploads-data` volume, which it does not take, so the move procedure
+  copies them by hand. Without them a game built from a file cannot be built
+  again once the host is lost. The target should archive the volume beside
+  the covers under the same timestamp, with a restore target that sets the
+  owner as `restore-covers` does.
+- [ ] **27. Nothing brings the game side back after a restore**
+  (sections 4.2 and 13). A restored core database records every template and
+  instance as built, and no code checks that a recorded template exists on
+  the cluster. The move procedure rebuilds each contest still to be played by
+  calling the build route by hand, and a contest that is `running` cannot be
+  rebuilt at all. What is missing is a check that finds the templates the
+  cluster lacks, and a rebuild allowed for a running contest whose template is
+  gone, since there is nothing left for it to replace.
+- [ ] **28. Staff reports and the results as a file** (section 10; section 14,
+  step 6.3). Staff have the standings screen and monitoring's per-participant
+  counters; there is no progress by question during a contest, no breakdown by
+  question afterwards (share solved, average attempts and queries) and no
+  route that exports the results. An organiser cannot hand the faculty office
+  a file of who placed where. CSV comes first, XLSX after it.
+- [ ] **29. `reports.view` is granted and checked nowhere** (section 7). The
+  permission is seeded and granted to contest owners, managers and
+  administrators, and the interface uses it only to choose a landing page; no
+  route requires it. A role built from it alone unlocks nothing. It gains a
+  meaning with the reports of item 28, if it is decided that it gates them
+  (an open question above).
+- [ ] **30. A manager without `contest.create` has no list of their
+  contests** (section 7). `GET /contests` gives the staff list to holders of
+  `contest.admin_all` or `contest.create`, and everyone else gets the
+  participant's view. An account appointed manager of one contest lands on
+  `/my` and reaches that contest only by typing its address. The staff list
+  should follow contest roles as well as the global permission.
+- [ ] **31. Endpoints with no screen** (section 2.4; section 6.3 for the
+  single Save button). Deleting a draft (`DELETE /contests/{id}`) and
+  extending a finished contest's grace period (`PATCH /contests/{id}/grace`)
+  exist only in the API, so an organiser cannot remove an abandoned draft, or
+  keep a finished contest's databases longer, without calling it by hand.
+  The grace extension comes first: it is the one needed after an olympiad,
+  when there is no time to find a workaround. `PATCH /questions/{id}`,
+  `PUT …/texts` and `PUT …/answers` predate the single Save button and no
+  screen needs them; they are candidates for removal rather than for
+  screens, which is an open question above.
+- [ ] **32. No readiness event for a late enrolee's database** (section 4.2).
+  Section 4.2 has a late enrolee told that their database is being prepared
+  and the console open on a readiness event over SSE. The event stream sends
+  `sync`, `contest_started` and `contest_finished` only, and there is no
+  "being prepared" state: the participant's first query, or first look at
+  the schema, takes a copy from the pool or, when the pool is empty, copies
+  the template inside that request and waits for it
+  (`provisioning.Service.EnsureFrom`). Making the copy when the participant
+  enrols, with an event when it is ready, would let the console open on its
+  own instead of the first query paying for the copy.
+- [ ] **33. `Esc` does not abort a running query** (design specification,
+  section 14). The design specification promises it; the console's only
+  route is `POST /contests/{id}/query`, the editor binds no Escape key, and a
+  query ends only at the Query Runner's deadline. Aborting needs the
+  cancellation to reach the statement on the Query Runner, a binding in the
+  editor, and a query-log status for a query the participant stopped.
+- [ ] **34. "Reset my database" has no caller** (section 4.1).
+  `provisioning.Service.Reset` recreates a participant's instance from the
+  template, but no route exposes it, no screen offers it and no audit action
+  records it. In a writing contest a participant who damages their data has
+  no way back. It needs a route and a button for a `read_write` contest, an
+  audit action and a query-log entry as section 4.1 says, and a limit on how
+  often it can be pressed, since each press drops and copies a database.
+- [ ] **35. Backups are taken by hand and stay on the host** (section 13).
+  `make backup` writes into `deploy/backups` on the same machine; nothing runs
+  it on a schedule, rotates its files, encrypts them or copies them away, and
+  every run ends by asking the operator to do that. A lost disk takes the
+  backups with it, and nothing keeps the `.env` somewhere that outlives the
+  machine, which the move procedure needs. This work is paused by the
+  maintainer's decision and is to be resumed.
+- [ ] **36. Restore drills are partial and run by nobody** (section 13).
+  `make restore-check` loads a dump into a scratch database and counts its
+  tables, and `make restore-covers-check` proves the covers' ownership with a
+  synthetic archive; neither runs in CI or on a schedule. Neither runs the
+  migrations or starts the API against the restored data, and nothing in the
+  repository rehearses the move procedure. A scheduled drill restores the
+  latest backup onto a scratch stack, migrates it and signs in.
+- [ ] **37. No alerts, no dashboards, and the Query Runner is not measured**
+  (sections 2, 4.2 and 9). The provisioning queue's depth is meant to carry
+  an alert, and section 9 lists metrics for active participants, student
+  queries and the queue. The API exports HTTP and reclamation metrics only;
+  Prometheus has no rules and there is no Alertmanager, Grafana has data
+  sources and no dashboards, and the Query Runner exposes no metrics at all.
+  During an olympiad somebody has to be watching rather than being told.
+- [ ] **38. CI does not keep section 11's supply-chain promises**
+  (sections 11 and 13). The frontend's CI runs no `npm audit`, and its images
+  are published after the build alone, while the backend's wait for the
+  security scan. The Go builder is pinned to a patch release; the `node`,
+  `postgres`, `redis` and `caddy` images follow floating tags. Secrets reach
+  the containers through the environment only, and the compose file declares
+  no Docker secrets.
+- [ ] **39. The query log is never archived** (section 9). Section 9 keeps
+  `query_log` for a contest's lifetime and then archives it; no code deletes
+  or moves a row of it, or of `audit_log`. The two largest tables grow
+  without bound, and every backup carries every query ever run. Archival
+  needs a decision on where the rows go, and on how long the audit trail is
+  in fact kept, which is an open question above.
+- [ ] **40. No background disk monitor** (section 4.1). Of the disk quota's
+  three levels the first exists: the Query Runner reads the database's size
+  before every write and refuses one at the quota. The second does not:
+  nothing reads `pg_database_size()` on a schedule and puts an over-quota
+  instance into read-only. The first level acts only when the participant
+  writes again, so an instance that one statement pushed past its quota stays
+  as it is, and nothing outside the participant's own requests notices it.
+- [ ] **41. The CSP allows inline scripts** (section 11). Section 11 promises
+  a strict CSP; production sends `script-src 'self' 'unsafe-inline'` to cover
+  Next's inlined bootstrap. The replacement, a per-request nonce with
+  `strict-dynamic`, is described in the frontend README and not built.
+- [ ] **42. No end-to-end tests** (design specification, section 12). The
+  frontend's CI runs its unit tests and one smoke script against the built
+  server; nothing drives a browser through sign-in, a contest and the
+  console. The design specification gives such tests a directory of their
+  own when they arrive.
+- [ ] **43. Section 11's audit plan is not carried out** (section 11;
+  section 14, step 7). It plans an OWASP ASVS L2 checklist, gosec and semgrep,
+  an OWASP ZAP baseline scan and a manual penetration test of the Query Runner
+  written up as a regression suite, all before the first olympiad. CI runs
+  `govulncheck` and `gosec`; the repository has no checklist, no semgrep
+  configuration and no ZAP job. The plan's load test exists
+  (`cmd/consoleload`).
+- [ ] **44. The query-log panel beyond one contest** (section 9.1; section 14,
+  step 6.3). Inside a contest's monitoring the log is browsed, filtered,
+  searched per participant, followed live and exported as CSV. What section
+  9.1 describes and does not exist: one view across contests for an
+  administrator, a substring search over every participant of a contest at
+  once, NDJSON and XLSX export, and asynchronous export of a large selection.
+  "Who touched `suspects`" is answered one participant at a time.
+- [ ] **45. The schema panel has no ER diagram and no "show me the data"**
+  (section 2.1). The panel lists tables, columns, types and foreign-key
+  targets from the cached schema description. The generated ER diagram and
+  the button that runs `SELECT * FROM t LIMIT 50` through the normal
+  pipeline do not exist.
+- [ ] **46. One host, and nothing standing by** (section 12). Section 12 has
+  the API and the Query Runner scale horizontally behind the proxy; the
+  deployment is one host with one core cluster, one game cluster and one
+  Redis, with no WAL archiving and no replica. A second API replica is
+  blocked by the local volumes for uploads and covers and by provisioning's
+  per-process guard. The recovery point is the last `make backup` (item 35).
+- [ ] **47. A hidden question cannot be revealed once a contest runs**
+  (section 6.1). A hidden question keeps its answers and points, and the
+  participant's list leaves it out, identifier included. Visibility changes
+  only while content is editable, in `draft` or `published`, so once the
+  contest is `running` a hidden question can be neither revealed nor
+  answered. Whether it is meant to be answerable is an open question above,
+  and decides whether the change is a reveal during a contest or a hidden
+  question that says it is for staff only.
+- [ ] **48. The `/design` showcase** (design specification, section 12). The
+  specification defers it until the constructor (section 14, step 3) can give
+  it real contests to show, since invented data does not belong in the
+  repository. Step 3 is done and there is still no `/design` route. The
+  showcase is to render every state of the specification's section 7 with the
+  theme, density and language switches, from the product's own components;
+  until it exists, CI's lint, contrast and error-code checks hold the design
+  system on their own.
 
 ### Done
 
