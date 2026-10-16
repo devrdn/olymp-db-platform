@@ -150,9 +150,9 @@ type Service struct {
 	// budget.
 	maxClusterBytes int64
 	sizes           templateSizes
-	// copyTimeout bounds a reset's work once its turn is held, which no
-	// longer ends with the request; zero leaves it to the cluster's own
-	// statement timeout.
+	// copyTimeout bounds a reset's and an organiser's drop's work once
+	// started, which no longer ends with the request; zero leaves it to the
+	// cluster's own statement timeout.
 	copyTimeout time.Duration
 }
 
@@ -193,8 +193,9 @@ func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Servic
 	return s
 }
 
-// WithCopyTimeout sets how long a reset may take once it has its turn: the
-// copy-slot wait, the copy and the row's update together.
+// WithCopyTimeout sets how long a reset or an organiser's drop may take once
+// started: for a reset the copy-slot wait, the copy and the row's update
+// together, for a drop the cluster's drop and the row's update.
 func (s *Service) WithCopyTimeout(timeout time.Duration) *Service {
 	s.copyTimeout = timeout
 	return s
@@ -398,7 +399,7 @@ func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest,
 		return err
 	}
 	if err := s.replace(ctx, contest, existing.Database); err != nil {
-		return s.abandonCopy(ctx, existing.Database, err)
+		return s.abandonCopy(ctx, actorID, contest, registration, existing.Database, err)
 	}
 
 	write := func(ctx context.Context) error {
@@ -425,16 +426,41 @@ func (s *Service) detached(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(work, s.copyTimeout)
 }
 
+// abandonTimeout bounds abandonCopy: one forcing DROP and one transaction.
+// It is its own because the copy's bound may be what just ran out.
+const abandonTimeout = time.Minute
+
 // abandonCopy marks a failed reset's row 'dropped', which EnsureFrom rebuilds
-// on the participant's next action. The copy may have dropped the old
-// database already, so the name is cleared first: a row left 'ready' would
-// hand out nothing, and one marked 'dropped' over a live database would never
-// be reclaimed. If the name cannot be cleared the row is left as it is.
-func (s *Service) abandonCopy(ctx context.Context, database string, cause error) error {
+// on the participant's next action, and records the failed reset. The copy
+// may have dropped the old database already, so the name is cleared first: a
+// row left 'ready' would hand out nothing, and one marked 'dropped' over a
+// live database would never be reclaimed. If the name cannot be cleared the
+// row is left as it is.
+func (s *Service) abandonCopy(ctx context.Context, actorID uuid.UUID, contest Contest, registration uuid.UUID, database string, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonTimeout)
+	defer cancel()
+
 	if err := s.cluster.Drop(ctx, database); err != nil {
 		return errors.Join(cause, fmt.Errorf("clear %s after a failed copy: %w", database, err))
 	}
-	if err := s.repo.MarkDropped(ctx, database); err != nil {
+	write := func(ctx context.Context) error {
+		if err := s.repo.MarkDropped(ctx, database); err != nil {
+			return err
+		}
+		if s.audit == nil {
+			return nil
+		}
+		entry := resetEntry(actorID, contest, registration, database)
+		entry.Payload["failed"] = true
+		return s.audit.Record(ctx, entry)
+	}
+	var err error
+	if s.audit == nil || s.uow == nil {
+		err = write(ctx)
+	} else {
+		err = s.uow.Do(ctx, write)
+	}
+	if err != nil {
 		return errors.Join(cause, fmt.Errorf("mark %s dropped after a failed copy: %w", database, err))
 	}
 	return cause

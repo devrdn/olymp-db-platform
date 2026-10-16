@@ -222,6 +222,44 @@ func TestAResetWhoseCopyFailsLeavesTheRowDropped(t *testing.T) {
 	}
 }
 
+// The copy's bound running out is itself a failed copy, and the cleanup must
+// not inherit the deadline that just passed.
+func TestAResetWhoseCopyOutlastsItsBoundLeavesTheRowDropped(t *testing.T) {
+	service, fake, s, contest, people := serviceWithAudit(t, t.Context(), 1)
+	database, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	service.WithCopyTimeout(50 * time.Millisecond)
+	fake.mu.Lock()
+	fake.slow = time.Second
+	fake.mu.Unlock()
+	participant := uuid.New()
+
+	if err := service.Reset(t.Context(), participant, contest, people[0]); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want the copy's deadline", err)
+	}
+	if fake.exists(database) {
+		t.Fatalf("%s exists after a copy that never finished", database)
+	}
+	if status := statusOf(t, t.Context(), database); status != "dropped" {
+		t.Fatalf("the row is %q over a database that is gone, want dropped", status)
+	}
+
+	// Every other place that marks a row dropped says why on the trail.
+	entries := entriesFor(s, contest.ID)
+	if len(entries) != 1 {
+		t.Fatalf("%d entries recorded against the contest, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != audit.ActionGameInstanceReset || entry.Payload["failed"] != true {
+		t.Fatalf("entry = %s %v, want a failed reset", entry.Action, entry.Payload)
+	}
+	if entry.ActorID == nil || *entry.ActorID != participant {
+		t.Fatalf("actor = %v, want the participant %v", entry.ActorID, participant)
+	}
+}
+
 func waitUntil(t *testing.T, ready func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

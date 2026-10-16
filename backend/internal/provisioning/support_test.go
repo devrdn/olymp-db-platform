@@ -301,9 +301,14 @@ func (c *cluster) sizeReads() (names []string, calls int) {
 	return append([]string(nil), c.sized...), c.sizeCalls
 }
 
-func (c *cluster) Drop(_ context.Context, name string) error {
+func (c *cluster) Drop(ctx context.Context, name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// As pgx refuses a statement on a context that has already ended.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if c.dropFail != nil {
 		return c.dropFail
