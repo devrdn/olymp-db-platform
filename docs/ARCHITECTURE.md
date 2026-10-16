@@ -613,11 +613,16 @@ it never runs in bulk at the moment that matters:
   pool and every instance already created** at the old version and remakes
   them through the queue, so nobody can be handed a database with stale grants
   or stale data. `game_instances.template_version` makes the drift
-  detectable. "Every instance is at the current version" is meant to be a
-  condition of a contest entering `running`, and is not yet:
-  `provisioning.Service.Ready` answers the question but nothing calls it, so
-  neither publication nor the start waits for the game (see section 15,
-  item 23).
+  detectable. The publication gate refuses a contest whose template is not
+  built at its current version (`no_game`): missing, waiting for a build,
+  building or failed. It reads `game_templates` in the core database, with the
+  same condition the console's lookup uses, so the gate never lets in a
+  participant whose console would answer `no_game_yet`; and since it runs on
+  the start as well as on publication, a game saved again while published
+  holds the start until its rebuild has finished. The copies are not part of
+  the condition: a copy at an older version is never handed out but remade,
+  and `provisioning.Service.Ready`, which would also wait for every copy to
+  be remade, is still not called.
 - **Template discipline.** Nothing may be connected to a template while
   `CREATE DATABASE` copies it: the builder role is disconnected as soon as the
   build finishes, and an organiser previewing the game schema does so on a
@@ -1092,11 +1097,10 @@ benefit: the invariant only has to hold at publication. It is checked by the
 questions, every translation in every declared language, choice labels and
 reference answers, the schedule, the settings that only work together
 (section 6.1.1), a freeze inside the contest's window (section 10), no staff
-registered as participants (section 6.2) and a cover's credit line (section
-9.7). That is a deliberate division: the database guarantees what is true
-always, the gate guarantees what is true at the transition. The gate does not
-look at the game: whether its template is built is not checked at publication
-(see section 15, item 23).
+registered as participants (section 6.2), a cover's credit line (section
+9.7) and a game whose template is built (`no_game`, section 4.2). That is a
+deliberate division: the database guarantees what is true always, the gate
+guarantees what is true at the transition.
 
 ## 6.1.1 How a contest decides a result
 
