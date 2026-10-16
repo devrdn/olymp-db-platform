@@ -288,8 +288,11 @@ type participantFixture struct {
 	workspaceStore *failingWorkspace
 	watcher        *recordingWatcher
 	signalStore    *signalStore
+	resets         *fakeResets
 	logs           *logBuffer
 	cookie         *http.Cookie
+	// userID is the signed-in participant's account.
+	userID uuid.UUID
 }
 
 const fixtureUserAgent = "fixture-browser/1.0"
@@ -348,12 +351,14 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	workspaces := workspace.NewService(workspaceStore, auth.NewLimiter(c))
 	watcher := &recordingWatcher{}
 	signals := &signalStore{}
+	resets := &fakeResets{}
 
 	router := chi.NewRouter()
 	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
 		WithWorkspace(workspaces).
 		WithWatcher(watcher).
 		WithSignals(monitor.NewSignals(auth.NewLimiter(c), signals)).
+		WithDatabaseReset(resets).
 		Mount(router)
 
 	return &participantFixture{
@@ -362,8 +367,10 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
 		signalStore:    signals,
+		resets:         resets,
 		logs:           logs,
 		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		userID:         actor.ID,
 	}
 }
 

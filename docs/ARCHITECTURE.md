@@ -494,11 +494,18 @@ How it holds together:
   own database, their inserts, updates and views are visible only to them. The
   integrity of anybody else's data is not at stake by construction.
 - **"Reset my database".** In a writing mode a participant can ruin their own
-  data, so the interface is meant to offer a reset: provisioning recreates
-  their instance from the template in seconds, and the fact is written to the
-  audit trail and the query log. Only the recreation is built
-  (`provisioning.Service.Reset`); no route, screen or audit action reaches it
-  (section 15, item 34). Resets and removals use
+  data, so they can ask for it back: `POST /contests/{id}/play/reset`
+  (`queryproxy.Service.Reset`) admits them through the participation gate like
+  every play route, and provisioning recreates their instance from the
+  template under the same name in seconds (`provisioning.Service.Reset`). A
+  read-only contest refuses it (`reset_read_only`): nothing there can change.
+  Each press drops and copies a database, so a registration may press three
+  times in ten minutes, refused presses included (`reset_too_often`), after
+  the account's query budget is charged. The fact is written to the audit
+  trail as `contest.instance_reset`, with the participant as the actor. It is
+  not written to the query log, whose rows are statements with a statement's
+  status and text, and no screen offers the reset yet (section 15, item 34).
+  Resets and removals use
   `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+), so an active session is
   terminated automatically and a hung statement cannot block the rebuild.
 - **Disk quotas.** Writing opens a denial-of-service vector: fill the disk.

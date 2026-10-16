@@ -21,10 +21,10 @@ import (
 )
 
 // The endpoints a participant of a running contest uses: the story, the visible
-// questions, the schema, their own query log, and answering a question. A
-// successful read of the story, questions or schema records the participant's
-// start, which under individual timing starts their clock
-// (queryproxy.Service.StartOnRead).
+// questions, the schema, their own query log, answering a question, and
+// resetting their own database (participant_reset.go). A successful read of
+// the story, questions or schema records the participant's start, which under
+// individual timing starts their clock (queryproxy.Service.StartOnRead).
 //
 // Nothing here may ever reveal a reference answer, a hidden question, anything
 // about another participant, or anything about a contest the caller is not
@@ -116,6 +116,9 @@ type ParticipantHandler struct {
 	// signals takes the browser's signal batches; nil leaves that route
 	// unmounted.
 	signals SignalRecorder
+	// resets remakes the participant's database; nil leaves that route
+	// unmounted.
+	resets DatabaseReset
 }
 
 // Watcher hears of every admitted participant request, to detect a
@@ -202,6 +205,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 		h.mountWorkspace(r)
 		h.mountSignals(r)
+		h.mountReset(r)
 	})
 }
 

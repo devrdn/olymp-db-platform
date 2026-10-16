@@ -1659,6 +1659,33 @@
       ]
     },
     {
+      "name": "Participant database",
+      "description": "A participant's own game database, which only a `read_write` contest lets them change (ARCHITECTURE §4.1). Mounted only when the console is: both `GAME_PROVISIONER_DSN` and `QUERY_RUNNER_ADDR` set.\n\nAdmitted like the rest of `/play`: `403 not_a_participant` / `address_not_allowed`, `409 contest_not_running` / `contest_ended` / `deadline_passed` / `contest_finished`. It spends the account's query budget first (`429 query_too_often`), then its own of three resets in ten minutes per registration, refused presses included (`429 reset_too_often` with `Retry-After`).",
+      "item": [
+        {
+          "name": "Reset my database",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "reset"
+              ]
+            },
+            "description": "Drops the caller's database and copies the contest's template under the same name, so their tables and their own views and tables are as the contest started them. A query running at that moment is cut off. Recorded on the audit trail as `contest.instance_reset`; submissions, score and time are untouched. A participant with no database yet gets 204 and nothing is copied: their first query makes a fresh one.\n\nResponses: 204 · 400 `invalid_contest_id` · 403 · 409 `reset_read_only` / `no_game_yet` · 429 `reset_too_often` / `query_too_often` · 503 `game_cluster_full`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Participant monitoring",
       "description": "What a contest's participants did, for its staff (docs/ARCHITECTURE.md §9.4). Behind `contest.monitor` on the contest in the URL — the owner, the managers and installation administrators — and a read budget of 240 a minute per account, refused reads included: past it `429 monitor_too_often` with `Retry-After`. A registration in the URL must belong to this contest; another contest's is the same `404 monitor_participant_not_found` as one that does not exist.\n\nViewing a participant's feed, queries or workspace is itself recorded in the audit trail (`contest.monitor_view`, at most once per 15 minutes per organiser and participant), and every CSV export always is (`contest.monitor_export`).",
       "item": [

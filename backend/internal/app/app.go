@@ -423,12 +423,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// One export slot per registration across the play screen and profile
 	// routes that serve its query log.
 	logExports := api.NewExportGate()
-	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
+	participantHandler := api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
 		WithWorkspace(workspaces).
 		WithWatcher(participantTracker).
 		WithSignals(signals).
 		WithExports(logExports).
-		WithExportSlots(exportSlots))
+		WithExportSlots(exportSlots)
+	if console != nil {
+		// Only the console's Service has the game cluster behind it.
+		participantHandler = participantHandler.WithDatabaseReset(console)
+	}
+	modules = append(modules, participantHandler)
 	// The SSE channel shares participantAccess and its budget. ctx.Done() is
 	// the shutdown signal Run waits on, so open streams close as draining
 	// begins.
