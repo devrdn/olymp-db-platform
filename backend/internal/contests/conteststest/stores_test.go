@@ -95,9 +95,11 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 			repo          = NewContests()
 			managers      = NewManagers()
 			registrations = NewRegistrations()
+			policies      = NewPolicies()
 		)
 		repo.Clock = func() time.Time { return FixtureNow }
 		repo.Rosters(managers, registrations)
+		repo.ModesFrom(policies)
 		run(
 			inUnitOfWork(),
 			ContestTarget{
@@ -118,6 +120,11 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 				Registrations: registrations,
 				Outside:       context.Background(),
 				Now:           repo.Clock,
+				SavePolicy: func(p contests.SQLPolicy) {
+					if err := policies.Save(context.Background(), p); err != nil {
+						t.Fatalf("Save() = %v", err)
+					}
+				},
 			})
 	})
 }

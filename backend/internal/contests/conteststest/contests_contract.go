@@ -33,6 +33,9 @@ type ContestTarget struct {
 	Outside context.Context
 	// Now is the store's clock, which stamps CreatedAt and UpdatedAt.
 	Now func() time.Time
+	// SavePolicy stores a contest's SQL policy, from which every read takes
+	// Contest.SQLMode.
+	SavePolicy func(contests.SQLPolicy)
 }
 
 // ContestRepositoryContract is what every contests.Repository must do; both
@@ -1136,6 +1139,32 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			wantOrder(t, found)
 			if total != 5 {
 				t.Errorf("total of a page past the end = %d, want 5", total)
+			}
+		})
+	})
+
+	t.Run("a contest reads the mode of its saved policy, and read-only without one", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			marker, seed := seeder(t, ctx, target)
+			writing, unconfigured := seed("-writing"), seed("-unconfigured")
+			policy := contests.DefaultSQLPolicy(writing)
+			policy.Mode = contests.ModeReadWrite
+			target.SavePolicy(policy)
+
+			if got := byID(t, ctx, target, writing).SQLMode; got != contests.ModeReadWrite {
+				t.Errorf("ByID(writing).SQLMode = %q, want %q", got, contests.ModeReadWrite)
+			}
+			if got := byID(t, ctx, target, unconfigured).SQLMode; got != contests.ModeReadOnly {
+				t.Errorf("ByID(unconfigured).SQLMode = %q, want %q", got, contests.ModeReadOnly)
+			}
+			found, _ := list(t, ctx, target, contests.Filter{Query: marker, Limit: 10})
+			modes := map[uuid.UUID]string{}
+			for _, c := range found {
+				modes[c.ID] = c.SQLMode
+			}
+			if modes[writing] != contests.ModeReadWrite || modes[unconfigured] != contests.ModeReadOnly {
+				t.Errorf("List() modes = (%q, %q), want (%q, %q)", modes[writing], modes[unconfigured],
+					contests.ModeReadWrite, contests.ModeReadOnly)
 			}
 		})
 	})

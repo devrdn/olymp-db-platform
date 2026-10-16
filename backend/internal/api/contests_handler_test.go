@@ -378,8 +378,12 @@ func TestListingCarriesTheModeOfAContestsPolicy(t *testing.T) {
 	_, cookie := f.asParticipant(t, "s.popescu")
 	writing := f.stores.SeedContest(contests.StatusPublished)
 	writing.Enrollment = contests.EnrollmentOpen
-	writing.SQLMode = contests.ModeReadWrite
 	f.stores.Contests.Put(writing)
+	policy := contests.DefaultSQLPolicy(writing.ID)
+	policy.Mode = contests.ModeReadWrite
+	if err := f.stores.Policies.Save(context.Background(), policy); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
 	reading := f.stores.SeedContest(contests.StatusPublished)
 	reading.Enrollment = contests.EnrollmentOpen
 	f.stores.Contests.Put(reading)

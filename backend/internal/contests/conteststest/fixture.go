@@ -108,6 +108,7 @@ func NewFixture() *Fixture {
 	f.Stories.Clock = func() time.Time { return f.Now }
 	f.Policies.Clock = func() time.Time { return f.Now }
 	f.Contests.Rosters(f.Managers, f.Registrations)
+	f.Contests.ModesFrom(f.Policies)
 
 	f.Gate = contests.NewGate(0)
 	f.config = contests.ServiceConfig{

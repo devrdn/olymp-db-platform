@@ -37,6 +37,8 @@ type Contests struct {
 	// Rosters.
 	managers      *Managers
 	registrations *Registrations
+	// policies backs Contest.SQLMode; see ModesFrom.
+	policies *Policies
 }
 
 var _ contests.Repository = (*Contests)(nil)
@@ -51,6 +53,13 @@ func NewContests() *Contests {
 // open contests, and finishing a contest finishes no participant.
 func (r *Contests) Rosters(managers *Managers, registrations *Registrations) {
 	r.managers, r.registrations = managers, registrations
+}
+
+// ModesFrom wires the store every read takes Contest.SQLMode from, as the
+// real projection reads contest_sql_policies. Until it is called every
+// contest reads ModeReadOnly, like one with no policy row.
+func (r *Contests) ModesFrom(policies *Policies) {
+	r.policies = policies
 }
 
 func (r *Contests) Count() int { return len(r.byID) }
@@ -87,9 +96,6 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	}
 	if c.ICPCPenaltyMin == 0 {
 		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
-	}
-	if c.SQLMode == "" {
-		c.SQLMode = contests.ModeReadOnly
 	}
 	r.store(c)
 	return c
@@ -141,22 +147,33 @@ func served(c contests.Contest) contests.Contest {
 	return c
 }
 
+// serve is what a read hands out (served), with SQLMode from the policy
+// store.
+func (r *Contests) serve(c contests.Contest) contests.Contest {
+	c = served(c)
+	c.SQLMode = contests.ModeReadOnly
+	if r.policies != nil {
+		if p, ok := r.policies.byContest[c.ID]; ok {
+			c.SQLMode = p.Mode
+		}
+	}
+	return c
+}
+
 // Create writes only the contest's own columns, as the real insert does: the
 // identity and timestamps are assigned here, languages and titles are dropped,
-// the mode reads as for a contest with no policy row, and Put's seed defaults
-// are not applied.
+// and Put's seed defaults are not applied.
 func (r *Contests) Create(_ context.Context, c contests.Contest) (contests.Contest, error) {
 	c.ID = uuid.New()
 	c.Languages, c.Translations = nil, nil
 	c.LeaderboardRevealedAt = nil
 	c.CoverHash, c.CoverAttribution = "", ""
-	c.SQLMode = contests.ModeReadOnly
 	c.CreatedAt, c.UpdatedAt = time.Time{}, time.Time{}
 	if now, ok := r.now(); ok {
 		c.CreatedAt, c.UpdatedAt = now, now
 	}
 	r.store(c)
-	return served(c), nil
+	return r.serve(c), nil
 }
 
 func (r *Contests) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
@@ -164,7 +181,7 @@ func (r *Contests) ByID(_ context.Context, id uuid.UUID) (contests.Contest, erro
 	if !ok {
 		return contests.Contest{}, contests.ErrNotFound
 	}
-	return served(c), nil
+	return r.serve(c), nil
 }
 
 // List orders like the real query: newest start first, no start last, and
@@ -190,7 +207,7 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 		if f.Enrolled != nil && *f.Enrolled != r.registered(f.VisibleTo, c.ID) {
 			continue
 		}
-		matched = append(matched, served(c))
+		matched = append(matched, r.serve(c))
 	}
 	slices.SortStableFunc(matched, func(a, b contests.Contest) int {
 		switch {
