@@ -7,6 +7,7 @@ import { standingsSchema } from "@/lib/api/leaderboard";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
+import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
 import { activeLocale } from "@/lib/i18n/server";
 
@@ -160,6 +161,49 @@ export async function fetchStandingsAction(contestId: string): Promise<Standings
     const locale = await activeLocale();
     const payload = await serverRequest(`/contests/${contestId}/play/leaderboard?lang=${locale}`);
     return { kind: "ok", standings: standingsSchema.parse(payload) };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+/** What the reset control shows after a press. */
+export type ResetState =
+  | { kind: "idle" }
+  | { kind: "done" }
+  | { kind: "refused"; code: string; requestId?: string };
+
+/**
+ * Gives the participant their database back as the contest started it. The
+ * API decides whether the contest allows it and how often; a press it
+ * refuses still counts against that limit.
+ */
+export async function resetDatabaseAction(_previous: ResetState, form: FormData): Promise<ResetState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+
+  try {
+    await serverRequest(`/contests/${contestId}/play/reset`, { method: "POST" });
+    return { kind: "done" };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code, requestId: error.requestId };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+/** The re-read schema, or why it could not be read. */
+export type SchemaRefreshResult = { kind: "ok"; schema: GameSchema } | { kind: "refused"; code: string };
+
+/**
+ * Re-reads the schema of the participant's own database, which a reset
+ * changes: the tables and views they made are gone.
+ */
+export async function refreshSchemaAction(contestId: string): Promise<SchemaRefreshResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+
+  try {
+    const payload = await serverRequest(`/contests/${contestId}/play/schema`);
+    return { kind: "ok", schema: gameSchemaSchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };

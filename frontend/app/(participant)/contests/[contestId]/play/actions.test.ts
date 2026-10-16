@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+import { ApiError } from "@/lib/api/client";
+
+// `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
+// The real module reads the locale cookie through Next's request APIs.
 vi.mock("@/lib/i18n/server", () => ({ activeLocale: async () => "en" }));
 
 import {
   fetchQueryLogAction,
   fetchStandingsAction,
   refreshQuestionsAction,
+  refreshSchemaAction,
+  resetDatabaseAction,
   runQueryAction,
   submitAnswerAction,
 } from "./actions";
@@ -125,6 +131,66 @@ describe("fetchStandingsAction", () => {
     const result = await fetchStandingsAction(id);
 
     expect(result).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("resetDatabaseAction", () => {
+  test("asks for the caller's database back and reports it done", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    const state = await resetDatabaseAction({ kind: "idle" }, form({ contestId }));
+
+    expect(state).toEqual({ kind: "done" });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/play/reset`, { method: "POST" });
+  });
+
+  test.each([["../../auth/logout"], [""]])("refuses the contest id %j without calling the server", async (id) => {
+    const state = await resetDatabaseAction({ kind: "idle" }, form({ contestId: id }));
+
+    expect(state).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("passes the API's refusal on with its request id", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("reset_too_often", 429, "too often", "req-7"));
+
+    const state = await resetDatabaseAction({ kind: "idle" }, form({ contestId }));
+
+    expect(state).toEqual({ kind: "refused", code: "reset_too_often", requestId: "req-7" });
+  });
+
+  test("reports an API it could not reach as unreachable", async () => {
+    serverRequest.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    const state = await resetDatabaseAction({ kind: "idle" }, form({ contestId }));
+
+    expect(state).toEqual({ kind: "refused", code: "unreachable" });
+  });
+});
+
+describe("refreshSchemaAction", () => {
+  test("re-reads the schema of the caller's database", async () => {
+    const schema = {
+      truncated: false,
+      tables: [{ name: "guests", columns: [{ name: "id", type: "uuid", nullable: false, references: "" }] }],
+    };
+    serverRequest.mockResolvedValueOnce(schema);
+
+    const result = await refreshSchemaAction(contestId);
+
+    expect(result).toEqual({ kind: "ok", schema });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/play/schema`);
+  });
+
+  test("passes a refusal on as its code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("schema_hidden", 403, "hidden"));
+
+    expect(await refreshSchemaAction(contestId)).toEqual({ kind: "refused", code: "schema_hidden" });
+  });
+
+  test("refuses a contest id that is not one without calling the server", async () => {
+    expect(await refreshSchemaAction("../log")).toEqual({ kind: "refused", code: "invalid_contest_id" });
     expect(serverRequest).not.toHaveBeenCalled();
   });
 });

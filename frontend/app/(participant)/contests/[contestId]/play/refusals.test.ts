@@ -32,6 +32,7 @@ describe("refusalKind", () => {
     ["no_game_yet", "passing"],
     ["answer_too_often", "passing"],
     ["attempt_conflict", "passing"],
+    ["reset_too_often", "passing"],
     ["internal_error", "fault"],
     ["query_service_down", "fault"],
     ["game_cluster_full", "fault"],
