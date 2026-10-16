@@ -132,7 +132,7 @@ func TestEveryQueryRunnerOutcomeHasItsAnswer(t *testing.T) {
 		queryrunner.ErrTimeout: {status: http.StatusGatewayTimeout, code: "query_timed_out",
 			message: "the query took too long"},
 		queryrunner.ErrCanceled: {status: http.StatusRequestTimeout, code: "query_cancelled",
-			message: "the caller stopped waiting"},
+			message: "The caller stopped waiting"},
 		queryrunner.ErrBusy: {status: http.StatusServiceUnavailable, code: "query_busy",
 			message: "the system is busy"},
 		queryrunner.ErrAlreadyRunning: {status: http.StatusConflict, code: "query_already_running",

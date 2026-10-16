@@ -115,9 +115,12 @@ func TestAResetWhoseCallerLeftIsNotLogged(t *testing.T) {
 	f := newParticipantFixture(t)
 	f.resets.err = fmt.Errorf("%w: waiting for the reset", queryrunner.ErrCanceled)
 
-	f.reset(uuid.NewString())
+	rec := f.reset(uuid.NewString())
 
 	if f.logs.loggedError("") {
 		t.Fatal("a caller who left was logged as an error")
+	}
+	if message := decode(t, rec)["error"].(map[string]any)["message"]; message != "The caller stopped waiting" {
+		t.Fatalf("message = %q, want the declared one rather than the error's own words", message)
 	}
 }

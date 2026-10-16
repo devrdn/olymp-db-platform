@@ -526,7 +526,11 @@ func (h *GameHandler) dropInstance(w http.ResponseWriter, r *http.Request) {
 	dropped, err := h.databases.DropInstance(
 		r.Context(), identity.UserID, contestID, chi.URLParam(r, databaseParam))
 	if err != nil {
-		h.fail(w, r, err)
+		// The drop waits for a participant's reset in progress, and the
+		// organiser may give up waiting.
+		if !callerLeft(w, r, h.log, err) {
+			h.fail(w, r, err)
+		}
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, gameInstanceView(dropped))

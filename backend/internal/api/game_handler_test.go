@@ -933,6 +933,25 @@ func TestEveryInstanceRefusalHasItsOwnCode(t *testing.T) {
 	}
 }
 
+// An organiser who left while the drop waited for a participant's reset is
+// answered as the console answers a caller who left, not as our failure.
+func TestADropWhoseCallerLeftIsACancellation(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.databases.dropErr = context.Canceled
+	ctx, leave := context.WithCancel(t.Context())
+	leave()
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete,
+		"/contests/"+uuid.NewString()+"/game/instances/game_c1_u1", nil)
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestTimeout || errorCode(t, rec) != "query_cancelled" {
+		t.Fatalf("answered %d %q, want 408 query_cancelled: %s", rec.Code, errorCode(t, rec), rec.Body)
+	}
+}
+
 // As for the script, no role separates view from edit.
 func TestDroppingADatabaseIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	f := newGameFixture(t)
