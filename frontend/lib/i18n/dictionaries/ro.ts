@@ -1684,7 +1684,7 @@ const ro = {
       "contest.instance_reclaimed": "A eliminat baza de date a unui participant după expirarea perioadei de grație a olimpiadei",
       "contest.template_reclaimed": "A eliminat baza de date șablon a olimpiadei după ce fiecare copie a participanților dispăruse deja",
       "contest.instance_dropped": "A șters baza unui participant la cererea unui organizator",
-      "contest.instance_reset": "Și-a readus propria bază la starea de început a concursului",
+      "contest.instance_reset": "Și-a readus propria bază la starea de început a olimpiadei",
       "contest.instance_reset_failed": "A cerut readucerea propriei baze, dar copierea a eșuat; următoarea sa acțiune creează una nouă",
       "settings.change": "A schimbat setările instalării",
     },
@@ -1834,7 +1834,7 @@ const ro = {
     schema_hidden:
       "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
     reset_read_only:
-      "Acest concurs este doar pentru citire: nimic din ce rulați nu vă poate schimba baza, deci nu este nimic de resetat.",
+      "Această olimpiadă este doar pentru citire: nimic din ce rulați nu vă poate schimba baza, deci nu este nimic de resetat.",
     reset_too_often:
       "V-ați resetat baza de câteva ori în ultimele minute. Așteptați puțin înainte de a o reseta din nou.",
     nothing_left_to_answer:
