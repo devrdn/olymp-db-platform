@@ -3956,10 +3956,9 @@ if wanted.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
    stored, in `draft` or `published`, and in `running` only while the
    contest's template is missing from the cluster and its row is `ready`
-   (what a move leaves) or `failed` (a recovery build that failed, or a
-   first build that failed before the start, since publication and the start
-   do not yet wait for a built game — section 15, item 23). A running contest
-   whose template exists is refused (`game_not_editable`). The game screen
+   (what a move leaves) or `failed` (a recovery build that failed, such as
+   one run before the game uploads were restored). A running contest whose
+   template exists is refused (`game_not_editable`). The game screen
    offers the rebuild only for a table-builder game whose rows changed since
    its build, or whose build failed, and a restored game is normally neither,
    so the route is called directly with an organiser's session, whatever the
