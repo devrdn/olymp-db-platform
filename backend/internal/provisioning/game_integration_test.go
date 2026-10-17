@@ -96,6 +96,61 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	}
 }
 
+// A restore brings the row back as 'ready' without its database; the check
+// must see that through the real catalogue and the real query.
+func TestAScriptSavedInTheCoreDatabaseWhoseDatabaseIsGoneIsFoundByTheTemplateCheck(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if !gamedbtest.Configured() {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+	if built, err := games.Build(t.Context(), time.Minute); err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("build: %v, finished as %q", err, built.Status)
+	}
+
+	check := provisioning.NewTemplateCheck(repo, cluster)
+	// Other packages share the core database, so look only for this contest.
+	reported := func() bool {
+		t.Helper()
+		missing, err := check.Missing(t.Context())
+		if err != nil {
+			t.Fatalf("Missing: %v", err)
+		}
+		for _, template := range missing {
+			if template.ContestID == contest.ID {
+				return true
+			}
+		}
+		return false
+	}
+
+	if reported() {
+		t.Fatal("a template that is on the cluster was reported missing")
+	}
+	gamedbtest.Drop(saved.Database)
+	if !reported() {
+		t.Fatalf("the check did not report %s after its database was dropped", saved.Database)
+	}
+}
+
 // Only a real pgx connection produces the error text that could leak.
 func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhatItSaidAndNothingElse(t *testing.T) {
 	if testPool == nil {
