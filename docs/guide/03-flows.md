@@ -458,7 +458,7 @@ Which process does what:
 |---|---|
 | `cmd/gamedb` (compose service `game-prepare`) | Runs on every deploy before the Query Runner. `gamedb.PrepareCluster` creates the roles `game_reader`, `game_writer` and `game_author`, their session defaults (`statement_timeout` 5s for participants, 0 for the author) and what they may not reach. |
 | Core API, `internal/api` | `GameHandler` in [game_handler.go](../../backend/internal/api/game_handler.go): reads need `contest.view`, writes `contest.edit`. |
-| Core API, `internal/provisioning` | `Games` stores the description, queues it, and runs `Build` from the `game-build` task. Replacing or rebuilding the game is refused once the contest has started (`requireEditable`, `ErrGameNotEditable`). |
+| Core API, `internal/provisioning` | `Games` stores the description, queues it, and runs `Build` from the `game-build` task. Replacing or rebuilding the game is refused once the contest has started (`requireEditable`, `ErrGameNotEditable`), except a rebuild of a running contest whose template is missing from the game cluster (`RequestBuild`, `recoverable`). |
 | Core API, `internal/gamedb` | `Provisioner` connects with `GAME_PROVISIONER_DSN` on a maintenance pool with a 10-minute statement timeout, and runs the organiser's SQL only as `game_author` with `GAME_AUTHOR_PASSWORD`. |
 | Query Runner | Nothing here; it only runs participants' queries. |
 
