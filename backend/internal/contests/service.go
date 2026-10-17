@@ -66,7 +66,8 @@ type ServiceConfig struct {
 	// built (§4.2). Required.
 	GameReadiness scheduleGames
 	// Covers lets the publish gate refuse an uploaded cover with nobody
-	// credited (§10.1). Optional; without one the gate never asks.
+	// credited (§10.1). Required: a Service without one would let an
+	// organiser's publish or start through where the scheduler refuses.
 	Covers     scheduleCovers
 	Audit      *audit.Recorder
 	UnitOfWork storage.UnitOfWork
@@ -114,14 +115,17 @@ type Service struct {
 	poolTrigger     PoolTrigger
 }
 
-// NewService assembles the contest service. Panics without a Gate or
-// GameReadiness.
+// NewService assembles the contest service. Panics without a Gate,
+// GameReadiness or a covers store.
 func NewService(cfg ServiceConfig) *Service {
 	if cfg.Gate == nil {
 		panic("contests: NewService needs the participation gate")
 	}
 	if cfg.GameReadiness == nil {
 		panic("contests: NewService needs to know whether a contest's game is built")
+	}
+	if cfg.Covers == nil {
+		panic("contests: NewService needs the covers store the publish gate reads")
 	}
 	now := cfg.Now
 	if now == nil {
