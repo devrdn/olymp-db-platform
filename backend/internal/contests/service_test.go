@@ -35,7 +35,7 @@ func TestNewServiceRefusesToAssembleWithoutCovers(t *testing.T) {
 			t.Fatal("NewService without a covers store did not panic")
 		}
 	}()
-	contests.NewService(contests.ServiceConfig{Gate: contests.NewGate(0)})
+	contests.NewService(contests.ServiceConfig{Gate: contests.NewGate(0), GameReadiness: conteststest.NewGames()})
 }
 
 func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
