@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1034,6 +1035,12 @@ type buildCluster struct {
 	tableData     map[string]string
 	tableDataFail error
 	dropped       []string
+	// missing names the databases MissingDatabases reports absent; every
+	// other name exists. lookups records each name it was asked about, and
+	// lookupErr makes it fail.
+	missing   map[string]bool
+	lookups   []string
+	lookupErr error
 }
 
 func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
@@ -1074,15 +1081,47 @@ func (c *buildCluster) Drop(_ context.Context, name string) error {
 	return nil
 }
 
+func (c *buildCluster) MissingDatabases(_ context.Context, names []string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lookups = append(c.lookups, names...)
+	if c.lookupErr != nil {
+		return nil, c.lookupErr
+	}
+	var absent []string
+	for _, name := range names {
+		if c.missing[name] {
+			absent = append(absent, name)
+		}
+	}
+	return absent, nil
+}
+
+// asked is every name MissingDatabases was asked about.
+func (c *buildCluster) asked() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.lookups)
+}
+
+// authoring stands for the contest's status: editable is a draft or published
+// contest, running a running one, and neither a finished or archived one.
 type authoring struct {
 	editable bool
+	running  bool
 	err      error
 }
 
 func (a authoring) GameEditable(context.Context, uuid.UUID) (bool, error) { return a.editable, a.err }
 
+func (a authoring) ContestRunning(context.Context, uuid.UUID) (bool, error) { return a.running, a.err }
+
 func games(editable bool) (*provisioning.Games, *templateStore, *buildCluster) {
+	return gamesOf(authoring{editable: editable})
+}
+
+func gamesOf(author authoring) (*provisioning.Games, *templateStore, *buildCluster) {
 	store := &templateStore{policy: sqlpolicy.ReadOnly()}
 	cluster := &buildCluster{}
-	return provisioning.NewGames(store, cluster, authoring{editable: editable}), store, cluster
+	return provisioning.NewGames(store, cluster, author), store, cluster
 }

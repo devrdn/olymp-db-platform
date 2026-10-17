@@ -28,7 +28,7 @@ type Games interface {
 	StatusOf(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
 	SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (provisioning.Template, error)
 	// RequestBuild rebuilds the game from what is stored, for table data typed
-	// in after the last build.
+	// in after the last build or for a running contest whose template is gone.
 	RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (provisioning.Template, error)
 
 	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
@@ -1026,9 +1026,10 @@ func (h *GameHandler) setDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 // requestBuild asks for the game to be rebuilt from what is stored, so table
-// rows added after the last build reach a database. 202: the build runs in the
-// background, and the body is the pending game the status screen continues
-// from.
+// rows added after the last build reach a database, or so a running contest
+// whose template is gone from the cluster gets its game back. 202: the build
+// runs in the background, and the body is the pending game the status screen
+// continues from.
 func (h *GameHandler) requestBuild(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := h.contestID(w, r)
 	if !ok {

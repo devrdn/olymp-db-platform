@@ -512,6 +512,13 @@ func (e *editableUntil) GameEditable(context.Context, uuid.UUID) (bool, error) {
 	return true, nil
 }
 
+// ContestRunning is true once the contest has started, by the same count.
+func (e *editableUntil) ContestRunning(context.Context, uuid.UUID) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.left <= 0, nil
+}
+
 // storeOn opens a second handle on the directory, to plant a file behind the
 // service's back.
 func storeOn(t *testing.T, dir string) *gamefile.Store {
