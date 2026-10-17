@@ -2,6 +2,7 @@ package provisioning_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1016,18 +1017,155 @@ func TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion(t *testing.T
 	}
 }
 
-func TestRequestBuildIsRefusedOnceTheContestIsRunning(t *testing.T) {
-	t.Parallel()
-	service, store, _ := games(false)
+// storeAGame puts a built game in store, as a contest that has started has
+// one, and returns the contest.
+func storeAGame(store *templateStore, status provisioning.TemplateStatus) uuid.UUID {
 	contest := uuid.New()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.present = true
 	store.template = provisioning.Template{
 		ContestID: contest, Database: "game_x", Version: 3,
-		Status: provisioning.TemplateReady, Source: provisioning.SourceBuilder,
+		Status: status, Source: provisioning.SourceBuilder,
 	}
+	return contest
+}
+
+// A template that still exists has copies made from it in participants'
+// hands, and a rebuild would remake every one of them mid-contest.
+func TestRequestBuildIsRefusedInARunningContestWhoseTemplateIsOnTheCluster(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{running: true})
+	contest := storeAGame(store, provisioning.TemplateReady)
 
 	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrGameNotEditable) {
 		t.Fatalf("RequestBuild = %v, want ErrGameNotEditable", err)
+	}
+	if got := cluster.asked(); !slices.Equal(got, []string{"game_x"}) {
+		t.Fatalf("the cluster was asked about %v, want the template game_x", got)
+	}
+	if store.template.Version != 3 || store.template.Status != provisioning.TemplateReady {
+		t.Fatalf("a refused request left the game at version %d, %q", store.template.Version, store.template.Status)
+	}
+}
+
+// After a restore onto a new host the row says 'ready' and the cluster has
+// nothing: there is no copy left to protect, and no other way back.
+func TestRequestBuildRebuildsARunningContestWhoseTemplateIsGone(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{running: true})
+	contest := storeAGame(store, provisioning.TemplateReady)
+	cluster.missing = map[string]bool{"game_x": true}
+
+	asked, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+	if err != nil {
+		t.Fatalf("RequestBuild: %v", err)
+	}
+	if asked.Status != provisioning.TemplatePending || asked.Version != 4 {
+		t.Fatalf("the game is %q at version %d, want pending at version 4", asked.Status, asked.Version)
+	}
+}
+
+// A recovery that failed (the uploads not yet copied back, say) leaves the
+// row 'failed' and the template still absent; it must be possible to retry.
+func TestRequestBuildRetriesTheRebuildOfARunningContestWhoseTemplateIsStillGone(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{running: true})
+	contest := storeAGame(store, provisioning.TemplateFailed)
+	cluster.missing = map[string]bool{"game_x": true}
+
+	asked, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+	if err != nil {
+		t.Fatalf("RequestBuild: %v", err)
+	}
+	if asked.Status != provisioning.TemplatePending {
+		t.Fatalf("the game is %q, want pending", asked.Status)
+	}
+}
+
+// A finished contest is shown from the core database alone; rebuilding its
+// game would only fill the cluster until the reclaim sweep empties it again.
+func TestRequestBuildIsRefusedForAFinishedContestWhoseTemplateIsGone(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{})
+	contest := storeAGame(store, provisioning.TemplateReady)
+	cluster.missing = map[string]bool{"game_x": true}
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("RequestBuild = %v, want ErrGameNotEditable", err)
+	}
+	if got := cluster.asked(); len(got) != 0 {
+		t.Fatalf("the cluster was asked about %v for a contest that is not running", got)
+	}
+}
+
+// The ordinary rebuild must not cost a round trip to the game cluster.
+func TestRequestBuildDoesNotAskTheClusterWhileTheGameIsEditable(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := storeAGame(store, provisioning.TemplateReady)
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); err != nil {
+		t.Fatalf("RequestBuild: %v", err)
+	}
+	if got := cluster.asked(); len(got) != 0 {
+		t.Fatalf("the cluster was asked about %v for an editable game", got)
+	}
+}
+
+// An unreachable cluster is an outage, not the organiser's mistake, and must
+// not read as "the contest is running".
+func TestRequestBuildReportsAClusterThatCannotBeAsked(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{running: true})
+	contest := storeAGame(store, provisioning.TemplateReady)
+	unreachable := errors.New("connection refused")
+	cluster.lookupErr = unreachable
+
+	_, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+	if !errors.Is(err, unreachable) || errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("RequestBuild = %v, want the cluster's own error", err)
+	}
+	if store.template.Version != 3 {
+		t.Fatalf("a failed lookup still raised the version to %d", store.template.Version)
+	}
+}
+
+// The trail must tell a recovery mid-contest from an organiser's ordinary
+// rebuild, and being append-only it cannot be told afterwards.
+func TestABuildRequestIsRecordedWithWhetherItRecoversALostTemplate(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		author   authoring
+		recovery bool
+	}{
+		{"an ordinary rebuild", authoring{editable: true}, false},
+		{"a running contest whose template is gone", authoring{running: true}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			service, store, cluster := gamesOf(c.author)
+			trail := &sink{}
+			service = service.WithAudit(audit.New(trail), directly{})
+			contest := storeAGame(store, provisioning.TemplateReady)
+			cluster.missing = map[string]bool{"game_x": true}
+
+			asked, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+			if err != nil {
+				t.Fatalf("RequestBuild: %v", err)
+			}
+			if len(trail.entries) != 1 || trail.entries[0].Action != audit.ActionGameBuildRequested {
+				t.Fatalf("the trail holds %+v, want one %s entry", trail.entries, audit.ActionGameBuildRequested)
+			}
+			payload := trail.entries[0].Payload
+			if payload["version"] != asked.Version {
+				t.Fatalf("payload = %+v, want version %d", payload, asked.Version)
+			}
+			if recovery, _ := payload["recovery"].(bool); recovery != c.recovery {
+				t.Fatalf("payload = %+v, want recovery %v", payload, c.recovery)
+			}
+		})
 	}
 }
 

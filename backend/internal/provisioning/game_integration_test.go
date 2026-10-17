@@ -677,6 +677,8 @@ type editableContest struct{}
 
 func (editableContest) GameEditable(context.Context, uuid.UUID) (bool, error) { return true, nil }
 
+func (editableContest) ContestRunning(context.Context, uuid.UUID) (bool, error) { return false, nil }
+
 // The pre-build value check (validateScalar) must agree with PostgreSQL, or a
 // build dies inside COPY. Everything it accepts PostgreSQL must accept; a form
 // the code says PostgreSQL refuses must be refused by both. Elsewhere the

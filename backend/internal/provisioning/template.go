@@ -302,6 +302,10 @@ type TemplateRepository interface {
 // so the rule stays in one place.
 type Authoring interface {
 	GameEditable(ctx context.Context, contestID uuid.UUID) (bool, error)
+	// ContestRunning reports whether the contest is under way, the one state
+	// in which a game that is not editable may still be rebuilt
+	// (Games.RequestBuild).
+	ContestRunning(ctx context.Context, contestID uuid.UUID) (bool, error)
 }
 
 // requireEditable returns ErrGameNotEditable once the contest has started.
@@ -353,6 +357,9 @@ type TemplateCluster interface {
 	// Drop removes a database, used to tear down a template whose data load
 	// failed.
 	Drop(ctx context.Context, name string) error
+	// MissingDatabases returns the names that do not exist on the cluster, in
+	// the order given.
+	MissingDatabases(ctx context.Context, names []string) ([]string, error)
 }
 
 // unitOfWork is the transaction boundary a save and its audit entry share.
@@ -507,10 +514,12 @@ func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID,
 }
 
 // RequestBuild rebuilds a contest's game from what is already stored, so
-// table-builder rows added after the last build are loaded.
+// table-builder rows added after the last build are loaded, or so a game whose
+// template was lost comes back.
 //
 // Refused once the contest is running, like a replacement: the version rises
-// and every participant copy is remade.
+// and every participant copy is remade. The exception is a running contest
+// whose template is not on the cluster (recoverable).
 func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (Template, error) {
 	current, err := g.repo.TemplateStatus(ctx, contestID)
 	if err != nil {
@@ -521,8 +530,18 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		return Template{}, ErrBuildInProgress
 	}
 
-	if err := g.requireEditable(ctx, contestID); err != nil {
-		return Template{}, err
+	editable, err := g.author.GameEditable(ctx, contestID)
+	if err != nil {
+		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
+	}
+	recovery := false
+	if !editable {
+		if recovery, err = g.recoverable(ctx, contestID, current); err != nil {
+			return Template{}, err
+		}
+		if !recovery {
+			return Template{}, ErrGameNotEditable
+		}
 	}
 
 	var asked Template
@@ -532,10 +551,14 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		if err != nil {
 			return err
 		}
+		payload := map[string]any{"version": asked.Version}
+		if recovery {
+			payload["recovery"] = true
+		}
 		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameBuildRequested,
 			Entity: "contest", EntityID: contestID.String(),
-			Payload: map[string]any{"version": asked.Version},
+			Payload: payload,
 		})
 	}
 	err = g.atomically(ctx, run)
@@ -543,6 +566,33 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		return Template{}, err
 	}
 	return asked, nil
+}
+
+// recoverable reports whether a game that is no longer editable may still be
+// rebuilt: the contest is running and its template is not on the cluster, as
+// after a restore onto a new host. With no template, no participant can be
+// given a copy and the pool cannot be refilled, so the remade copies a rebuild
+// brings are the only way back.
+//
+// A 'failed' row qualifies as well as a 'ready' one, so a recovery whose build
+// failed can be retried; the cluster still decides. It is asked last, as the
+// only step outside the core database.
+func (g *Games) recoverable(ctx context.Context, contestID uuid.UUID, current Template) (bool, error) {
+	if current.Status != TemplateReady && current.Status != TemplateFailed {
+		return false, nil
+	}
+	running, err := g.author.ContestRunning(ctx, contestID)
+	if err != nil {
+		return false, fmt.Errorf("check whether the contest is running: %w", err)
+	}
+	if !running {
+		return false, nil
+	}
+	missing, err := g.cluster.MissingDatabases(ctx, []string{current.Database})
+	if err != nil {
+		return false, fmt.Errorf("look the template up on the game cluster: %w", err)
+	}
+	return len(missing) > 0, nil
 }
 
 // replaceGame is the one path a contest's game is replaced through (SetScript,
