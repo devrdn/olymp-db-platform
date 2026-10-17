@@ -619,7 +619,7 @@ the files as orphans and deletes them, which is also what clears away any
 upload the volume held that the restored database does not know. Section 13
 of [the architecture](../docs/ARCHITECTURE.md) has the whole move procedure.
 
-`make restore-covers-check` and `make restore-game-uploads-check` prove that
+`make restore-covers-check` and `make game-uploads-check` prove that
 ownership against a throwaway compose project, the second also that
 `make backup` takes the uploads; neither touches `deploy/.env` or a running
 stack.

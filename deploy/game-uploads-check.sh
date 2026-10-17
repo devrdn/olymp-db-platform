@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Proves that `make backup` takes the game uploads, and that
 # `make restore-game-uploads` gives them back to the API's user.
 #
@@ -14,9 +14,9 @@
 # project has its own name and compose file, every file lands in a temporary
 # directory, and the project is removed with its volumes at the end.
 #
-# Usage: deploy/restore-game-uploads-check.sh   (or `make restore-game-uploads-check`).
+# Usage: deploy/game-uploads-check.sh   (or `make game-uploads-check`).
 # Needs Docker. API_IMAGE=<tag> skips the build and checks that image instead.
-set -eu
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="uploadscheck$$"
@@ -104,7 +104,8 @@ $DUMP_ID.index
 tables/$TABLE_ID.data"
 
 echo "Backing up an installation that holds game uploads"
-compose up -d --wait pg-core >/dev/null 2>&1
+compose up -d --wait pg-core >"$WORK/pg.log" 2>&1 ||
+	{ echo "pg-core did not become healthy, so make backup cannot dump it:"; cat "$WORK/pg.log"; exit 1; }
 compose create api >/dev/null 2>&1
 seed_as_api
 if run_make "$WORK/backup.log" backup BACKUP_DIR="$WORK/backups"; then

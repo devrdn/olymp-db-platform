@@ -138,7 +138,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads restore-game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -304,8 +304,8 @@ restore-covers-check: ## Prove restored covers belong to the API's user
 
 # That `make backup` takes the game uploads and `make restore-game-uploads`
 # gives them back to the API's user, the same way and with the same guarantees.
-restore-game-uploads-check: ## Prove the backup takes the game uploads and restores them to the API's user
-	deploy/restore-game-uploads-check.sh
+game-uploads-check: ## Prove the backup takes the game uploads and restores them to the API's user
+	deploy/game-uploads-check.sh
 
 # What the bundled Caddy tells the API about the client — address, scheme, Host,
 # and which service /api/* reaches — with the real image and the real Caddyfile,
@@ -480,10 +480,10 @@ backup: require-env ## Dump the core database and archive the covers and game up
 				rm -rf $$staging; \
 			else \
 				rm -rf $$staging; \
-				echo "the $$1 volume was NOT copied: no api container to read $$2 from."; \
+				echo "the $$1 volume was NOT copied: $$2 could not be read from the api container."; \
 				echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
-				echo "$$3. Create the container ('make deploy') and"; \
-				echo "run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
+				echo "$$3. Make sure the container exists ('make deploy') and the path is its mount point,"; \
+				echo "then run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
 				return 1; \
 			fi; \
 		}; \
@@ -547,8 +547,9 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 
 # Copies a `make backup` archive into one of the api container's volumes:
 # $(1) names the volume in messages, $(2) is the archive's file prefix, $(3)
-# the directory inside the container, and $(4) an optional sentence the
-# confirmation prompt adds.
+# the directory inside the container, and $(4) optionally names a variable
+# holding a sentence the confirmation prompt adds — a name rather than the
+# sentence, because $(call) would split the sentence at its first comma.
 #
 # The files go back owned by the API's user, 65532. Copied in as they are, they
 # keep whoever ran `make` as their owner and the 0600 the API wrote them with,
@@ -568,7 +569,7 @@ define restore-volume
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
 	@test "$(CONFIRM)" = "yes" || { \
 		echo "This copies $(FILE) into the $(1) volume at $(3)."; \
-		$(if $(4),echo "$(4)";) \
+		$(if $(4),echo "$($(4))";) \
 		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
 	@staging=$$(mktemp -d); packed=$$staging.tar; \
 		tar -xzf "$(FILE)" -C $$staging || { echo "$(FILE) is not a readable archive"; rm -rf $$staging; exit 1; }; \
@@ -597,8 +598,9 @@ restore-covers: require-env ## Restore the covers volume from an archive (FILE=p
 # Run it after `make restore`, never before: the upload sweep deletes a file
 # whose upload the database does not record, which is also what clears away
 # anything newer than the backup that the volume still held.
+GAME_UPLOADS_RESTORE_NOTE := Run this after make restore: until the database records these uploads, the upload sweep deletes them.
 restore-game-uploads: require-env ## Restore the game uploads volume from an archive, after make restore (FILE=path CONFIRM=yes)
-	$(call restore-volume,game uploads,game-uploads,$(CONTAINER_GAME_UPLOAD_DIR),Run this after make restore: until the database records these uploads the upload sweep deletes them.)
+	$(call restore-volume,game uploads,game-uploads,$(CONTAINER_GAME_UPLOAD_DIR),GAME_UPLOADS_RESTORE_NOTE)
 
 # The two halves of the game circuit that are not the API.
 #
