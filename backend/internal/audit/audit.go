@@ -102,6 +102,9 @@ const (
 	// ActionGameInstanceReset records a participant remaking their own
 	// database from the contest's template.
 	ActionGameInstanceReset = "contest.instance_reset"
+	// ActionGameInstanceResetFailed records a participant's reset whose copy
+	// failed: their database is gone and the next action makes a fresh one.
+	ActionGameInstanceResetFailed = "contest.instance_reset_failed"
 	// ActionGameTemplateReclaim records a contest's template database dropped
 	// by the sweep once every instance copied from it is gone.
 	ActionGameTemplateReclaim = "contest.template_reclaimed"
@@ -148,7 +151,7 @@ var actions = []string{
 	ActionParticipantEnroll, ActionParticipantStart, ActionParticipantFinish,
 	ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
-	ActionGameInstanceReset,
+	ActionGameInstanceReset, ActionGameInstanceResetFailed,
 	ActionGameUploadComplete, ActionGameUploadAbort,
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
 	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,

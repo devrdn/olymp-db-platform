@@ -503,7 +503,8 @@ How it holds together:
   Each press drops and copies a database, so a registration may press three
   times in ten minutes, refused presses included (`reset_too_often`), after
   the account's query budget is charged. The fact is written to the audit
-  trail as `contest.instance_reset`, with the participant as the actor. It is
+  trail as `contest.instance_reset`, with the participant as the actor, and
+  a press whose copy failed as `contest.instance_reset_failed`. It is
   not written to the query log, whose rows are statements with a statement's
   status and text, and no screen offers the reset yet (section 15, item 34).
   Resets and removals use
