@@ -524,6 +524,36 @@ func (p *Provisioner) ClusterBytes(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// MissingDatabases returns the names in the list that do not exist on the
+// cluster, in the order given, in one round trip. It reads only the catalogue
+// and sizes nothing, so it is the cheap existence check.
+func (p *Provisioner) MissingDatabases(ctx context.Context, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	rows, err := p.admin.Query(ctx, `SELECT datname FROM pg_database WHERE datname = ANY($1)`, names)
+	if err != nil {
+		return nil, fmt.Errorf("look the databases up: %w", err)
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("look the databases up: %w", err)
+	}
+	present := make(map[string]bool, len(found))
+	for _, name := range found {
+		present[name] = true
+	}
+
+	var missing []string
+	for _, name := range names {
+		if !present[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing, nil
+}
+
 // DatabaseSizes is DatabaseSize for a whole list, in one round trip.
 //
 // It joins pg_database rather than calling pg_database_size(name), which
