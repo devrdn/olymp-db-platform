@@ -151,6 +151,94 @@ func TestAScriptSavedInTheCoreDatabaseWhoseDatabaseIsGoneIsFoundByTheTemplateChe
 	}
 }
 
+// After a move the row says 'ready' and the cluster holds neither the template
+// nor the participants' copies. The rebuild must be refused while the template
+// exists and allowed once it is gone, judged by the real catalogue and the
+// contest's real status, and its new version must bring the copy back.
+func TestAScriptSavedInTheCoreDatabaseWhoseTemplateIsGoneIsRebuiltWhileTheContestRuns(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if !gamedbtest.Configured() {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, people := contestFor(t, t.Context(), 1)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	saved, err := provisioning.NewGames(repo, cluster, editableContest{}).
+		SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	// The real repository answers for the contest's status from here on.
+	games := provisioning.NewGames(repo, cluster, repo)
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("build: %v, finished as %q", err, built.Status)
+	}
+
+	databases := provisioning.New(repo, cluster)
+	game, err := repo.Game(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the built game: %v", err)
+	}
+	copied, err := databases.Ensure(t.Context(), game, people[0])
+	if err != nil {
+		t.Fatalf("make the participant's copy: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(copied) })
+
+	if _, err := testPool.Exec(t.Context(),
+		`UPDATE contests SET status = 'running' WHERE id = $1`, contest.ID); err != nil {
+		t.Fatalf("start the contest: %v", err)
+	}
+
+	if _, err := games.RequestBuild(t.Context(), uuid.New(), contest.ID); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("RequestBuild with the template on the cluster = %v, want ErrGameNotEditable", err)
+	}
+
+	gamedbtest.Drop(saved.Database)
+	gamedbtest.Drop(copied)
+
+	asked, err := games.RequestBuild(t.Context(), uuid.New(), contest.ID)
+	if err != nil {
+		t.Fatalf("RequestBuild with the template gone: %v", err)
+	}
+	if asked.Version <= built.Version {
+		t.Fatalf("the rebuild is version %d, want more than %d", asked.Version, built.Version)
+	}
+	if rebuilt, err := games.Build(t.Context(), time.Minute); err != nil || rebuilt.Status != provisioning.TemplateReady {
+		t.Fatalf("rebuild: %v, finished as %q", err, rebuilt.Status)
+	}
+
+	game, err = repo.Game(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the rebuilt game: %v", err)
+	}
+	again, err := databases.Ensure(t.Context(), game, people[0])
+	if err != nil {
+		t.Fatalf("give the participant a copy after the rebuild: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(again) })
+	missing, err := cluster.MissingDatabases(t.Context(), []string{saved.Database, again})
+	if err != nil {
+		t.Fatalf("look the databases up: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("after the rebuild the cluster still lacks %v", missing)
+	}
+}
+
 // Only a real pgx connection produces the error text that could leak.
 func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhatItSaidAndNothingElse(t *testing.T) {
 	if testPool == nil {

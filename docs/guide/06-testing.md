@@ -132,10 +132,11 @@ example is `TestTheReaderCannotGrantItselfMore` in
   A missing password fails the test rather than inventing one.
 - **Across both clusters.** `make test-game-build` runs the tests that start
   from a script saved in the core database and end with a real database on
-  the game cluster: the eight `TestAScriptSavedInTheCoreDatabase...` tests in
+  the game cluster: the nine `TestAScriptSavedInTheCoreDatabase...` tests in
   `internal/provisioning/game_integration_test.go`, selected by that
   `-run` prefix. One of them drops the built database again and expects the
-  template check (`cmd/gamecheck`) to report it.
+  template check (`cmd/gamecheck`) to report it; another drops it under a
+  running contest and expects the build route to rebuild it.
 
 ### Whole-service tests: `integration_test.go`
 
