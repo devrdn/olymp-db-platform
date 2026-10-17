@@ -3947,7 +3947,7 @@ if wanted.
 5. Rebuild the game of every contest still to be played. The restored
    database records each template as built, so until then that contest has
    no game; `make game-check` lists every such contest with its status, and
-   passes once nothing is missing.
+   passes once no contest still to be played lacks its template.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
    stored, in `draft` or `published`. The game screen offers it only for a
    table-builder game whose rows changed since its build, or whose build

@@ -639,10 +639,12 @@ afterwards whether the restore worked or not.
 in no backup: they live on the game cluster, which a move leaves behind, while
 the restored rows still record every template as built. It reads both
 databases and lists each contest whose template is recorded as built and is not
-on the cluster, with the contest's status. It changes nothing and fails while
-any template is missing. A draft or published contest's game is rebuilt with
-`POST /api/v1/contests/{id}/game/build`; a running contest's cannot be; a
-finished or archived contest needs no game.
+on the cluster, with the contest's status. It changes nothing. It fails while
+a contest still to be played — draft, published or running — lacks its
+template; a finished or archived contest is listed as needing no game and does
+not fail it, since what is shown of it is read from the core database. A draft
+or published contest's game is rebuilt with
+`POST /api/v1/contests/{id}/game/build`; a running contest's cannot be.
 
 ## Logging
 

@@ -116,3 +116,15 @@ func TestTheCheckSurfacesAFailureOnEitherSide(t *testing.T) {
 		})
 	}
 }
+
+// A draft counts: its built game is what it will be published and played
+// with. An unknown status counts too, so the check fails safe.
+func TestAGameIsNeededUntilItsContestIsFinished(t *testing.T) {
+	for status, needed := range map[string]bool{
+		"draft": true, "published": true, "running": true, "finished": false, "archived": false, "": true,
+	} {
+		if got := readyTemplate("game_tpl_a", status).GameNeeded(); got != needed {
+			t.Errorf("GameNeeded() for a %q contest = %v, want %v", status, got, needed)
+		}
+	}
+}
