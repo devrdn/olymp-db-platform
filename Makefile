@@ -645,7 +645,7 @@ game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases stil
 
 # The check after a restore or a move: the contests whose template the core
 # database records as built and the game cluster does not have. It changes
-# nothing and fails when a template is missing.
+# nothing and fails when one belongs to a contest still to be played.
 .PHONY: game-check
 game-check: require-env ## List contests whose built template is missing from the game cluster
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \

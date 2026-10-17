@@ -15,6 +15,14 @@ type ReadyTemplate struct {
 	Database      string
 }
 
+// GameNeeded reports whether the contest will still be played, draft
+// included: a draft is published and played with the game it has. Only a
+// finished or archived contest is shown from the core database alone; any
+// other status, even one this package does not know, needs its game.
+func (t ReadyTemplate) GameNeeded() bool {
+	return t.ContestStatus != "finished" && t.ContestStatus != "archived"
+}
+
 // ReadyTemplateStore lists every template the core database records as
 // 'ready'.
 type ReadyTemplateStore interface {

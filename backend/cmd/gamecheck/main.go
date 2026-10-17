@@ -1,11 +1,12 @@
 // Command gamecheck lists the contests whose game the core database records as
 // built and the game cluster does not have. After a restore onto a new host
 // every template row still says 'ready' while the cluster may hold none of
-// them, and nothing in the product notices (provisioning.TemplateCheck).
+// them, and nothing else in the product notices (provisioning.TemplateCheck).
 //
-// It changes nothing, and exits non-zero when a template is missing so that
-// a move procedure stops on it. cmd/gameorphans looks the other way: at what
-// the cluster still holds that the core database has written off.
+// It changes nothing. It lists every missing template, and exits non-zero
+// when one belongs to a contest still to be played, so that a move procedure
+// stops on it. cmd/gameorphans looks the other way: at what the cluster still
+// holds that the core database has written off.
 //
 // Usage:
 //
@@ -31,7 +32,7 @@ import (
 
 // errTemplatesMissing is the check's finding, returned so the exit status
 // carries it.
-var errTemplatesMissing = errors.New("the game cluster lacks templates the core database records as built")
+var errTemplatesMissing = errors.New("contests still to be played have no template on the game cluster")
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -97,12 +98,23 @@ func check(ctx context.Context, templates templateCheck, out io.Writer) error {
 		return nil
 	}
 
+	needed := 0
 	fmt.Fprintf(out, "%d template(s) the core database records as built are not on the game cluster:\n", len(missing))
 	for _, template := range missing {
-		fmt.Fprintf(out, "  %-40s contest %s  %s\n", template.Database, template.ContestID, template.ContestStatus)
+		note := "no game needed"
+		if template.GameNeeded() {
+			note = "to be rebuilt"
+			needed++
+		}
+		fmt.Fprintf(out, "  %-40s contest %s  %-10s %s\n",
+			template.Database, template.ContestID, template.ContestStatus, note)
+	}
+	if needed == 0 {
+		fmt.Fprintln(out, "Every one belongs to a finished or archived contest, which is shown from the core database alone.")
+		return nil
 	}
 	fmt.Fprintln(out, "Rebuild the game of each draft or published contest: POST /api/v1/contests/{id}/game/build.")
-	fmt.Fprintln(out, "A running contest's game cannot be rebuilt; a finished or archived contest needs none.")
+	fmt.Fprintln(out, "A running contest's game cannot be rebuilt.")
 	return errTemplatesMissing
 }
 

@@ -70,3 +70,36 @@ func TestACheckThatCannotLookIsNotReportedClean(t *testing.T) {
 		t.Fatalf("a failed check was reported clean:\n%s", printed)
 	}
 }
+
+func TestAFinishedContestsMissingTemplateIsListedButDoesNotFailTheCheck(t *testing.T) {
+	missing := []provisioning.ReadyTemplate{
+		{ContestID: uuid.New(), ContestStatus: "finished", Database: "game_tpl_done"},
+		{ContestID: uuid.New(), ContestStatus: "archived", Database: "game_tpl_old"},
+	}
+	var out bytes.Buffer
+
+	if err := check(t.Context(), stubCheck{missing: missing}, &out); err != nil {
+		t.Fatalf("check returned %v; a contest that is over needs no game", err)
+	}
+	printed := out.String()
+	for _, template := range missing {
+		if !strings.Contains(printed, template.Database) {
+			t.Fatalf("the report does not list %s:\n%s", template.Database, printed)
+		}
+	}
+	if !strings.Contains(printed, "no game needed") {
+		t.Fatalf("the report does not say these contests need no game:\n%s", printed)
+	}
+}
+
+func TestOneContestStillToBePlayedFailsTheCheck(t *testing.T) {
+	missing := []provisioning.ReadyTemplate{
+		{ContestID: uuid.New(), ContestStatus: "finished", Database: "game_tpl_done"},
+		{ContestID: uuid.New(), ContestStatus: "draft", Database: "game_tpl_draft"},
+	}
+	var out bytes.Buffer
+
+	if err := check(t.Context(), stubCheck{missing: missing}, &out); !errors.Is(err, errTemplatesMissing) {
+		t.Fatalf("check returned %v, want errTemplatesMissing for the draft", err)
+	}
+}
