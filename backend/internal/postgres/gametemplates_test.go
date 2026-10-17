@@ -598,6 +598,37 @@ func TestGameEditableAgreesWithContentEditableForEveryStatus(t *testing.T) {
 	})
 }
 
+// Only a running contest may have a lost template rebuilt; answering yes for a
+// finished one would rebuild a game nobody will play.
+func TestContestRunningIsTrueForTheRunningStatusAlone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		for _, status := range []string{
+			contests.StatusDraft, contests.StatusPublished, contests.StatusRunning,
+			contests.StatusFinished, contests.StatusArchived,
+		} {
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE contests SET status = $2 WHERE id = $1`, contest, status); err != nil {
+				t.Fatalf("set status %s: %v", status, err)
+			}
+
+			got, err := repo.ContestRunning(ctx, contest)
+			if err != nil {
+				t.Fatalf("status %s: %v", status, err)
+			}
+			if want := status == contests.StatusRunning; got != want {
+				t.Fatalf("status %s: ContestRunning = %v, want %v", status, got, want)
+			}
+		}
+
+		if _, err := repo.ContestRunning(ctx, uuid.New()); !errors.Is(err, provisioning.ErrNoGame) {
+			t.Fatalf("a contest that does not exist answered %v, want ErrNoGame", err)
+		}
+	})
+}
+
 // A console polls the status read twice a second during a build, so it must
 // not fetch the script itself.
 func TestTheStatusReadCarriesTheScriptsLengthAndNotItsBytes(t *testing.T) {

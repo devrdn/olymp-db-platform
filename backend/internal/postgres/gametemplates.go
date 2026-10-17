@@ -270,6 +270,21 @@ func (r *GameInstances) GameReady(ctx context.Context, contestID uuid.UUID) (boo
 	return ready, nil
 }
 
+// ContestRunning reports whether a contest is under way, or ErrNoGame when
+// there is no such contest.
+func (r *GameInstances) ContestRunning(ctx context.Context, contestID uuid.UUID) (bool, error) {
+	var running bool
+	err := r.querier(ctx).QueryRow(ctx,
+		`SELECT status = 'running' FROM contests WHERE id = $1`, contestID).Scan(&running)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, provisioning.ErrNoGame
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the contest's status: %w", err)
+	}
+	return running, nil
+}
+
 // ReadyTemplates lists every template recorded as 'ready', by database name,
 // with its contest's status.
 //
