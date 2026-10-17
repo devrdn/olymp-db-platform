@@ -409,7 +409,7 @@ func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest,
 		if s.audit == nil {
 			return nil
 		}
-		return s.audit.Record(ctx, resetEntry(actorID, contest, registration, existing.Database))
+		return s.audit.Record(ctx, resetEntry(audit.ActionGameInstanceReset, actorID, contest, registration, existing.Database))
 	}
 	if s.audit == nil || s.uow == nil {
 		return write(ctx)
@@ -450,9 +450,7 @@ func (s *Service) abandonCopy(ctx context.Context, actorID uuid.UUID, contest Co
 		if s.audit == nil {
 			return nil
 		}
-		entry := resetEntry(actorID, contest, registration, database)
-		entry.Payload["failed"] = true
-		return s.audit.Record(ctx, entry)
+		return s.audit.Record(ctx, resetEntry(audit.ActionGameInstanceResetFailed, actorID, contest, registration, database))
 	}
 	var err error
 	if s.audit == nil || s.uow == nil {
@@ -466,11 +464,12 @@ func (s *Service) abandonCopy(ctx context.Context, actorID uuid.UUID, contest Co
 	return cause
 }
 
-// resetEntry records a participant's reset on the contest's trail.
-func resetEntry(actorID uuid.UUID, contest Contest, registration uuid.UUID, database string) audit.Entry {
+// resetEntry records a participant's reset, or its failure, on the contest's
+// trail.
+func resetEntry(action string, actorID uuid.UUID, contest Contest, registration uuid.UUID, database string) audit.Entry {
 	return audit.Entry{
 		ActorID:  &actorID,
-		Action:   audit.ActionGameInstanceReset,
+		Action:   action,
 		Entity:   "contest",
 		EntityID: contest.ID.String(),
 		Payload: map[string]any{

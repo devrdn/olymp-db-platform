@@ -252,8 +252,11 @@ func TestAResetWhoseCopyOutlastsItsBoundLeavesTheRowDropped(t *testing.T) {
 		t.Fatalf("%d entries recorded against the contest, want 1", len(entries))
 	}
 	entry := entries[0]
-	if entry.Action != audit.ActionGameInstanceReset || entry.Payload["failed"] != true {
-		t.Fatalf("entry = %s %v, want a failed reset", entry.Action, entry.Payload)
+	if entry.Action != audit.ActionGameInstanceResetFailed {
+		t.Fatalf("action = %q, want %q", entry.Action, audit.ActionGameInstanceResetFailed)
+	}
+	if _, flagged := entry.Payload["failed"]; flagged {
+		t.Fatalf("payload = %v, the action already says the reset failed", entry.Payload)
 	}
 	if entry.ActorID == nil || *entry.ActorID != participant {
 		t.Fatalf("actor = %v, want the participant %v", entry.ActorID, participant)

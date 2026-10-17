@@ -49,6 +49,7 @@
     "contest.template_reclaimed",
     "contest.instance_dropped",
     "contest.instance_reset",
+    "contest.instance_reset_failed",
     "contest.upload_complete",
     "contest.upload_abort",
     "contest.table_data_upload",

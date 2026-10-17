@@ -1685,6 +1685,7 @@ const ro = {
       "contest.template_reclaimed": "A eliminat baza de date șablon a olimpiadei după ce fiecare copie a participanților dispăruse deja",
       "contest.instance_dropped": "A șters baza unui participant la cererea unui organizator",
       "contest.instance_reset": "Și-a readus propria bază la starea de început a concursului",
+      "contest.instance_reset_failed": "A cerut readucerea propriei baze, dar copierea a eșuat; următoarea sa acțiune creează una nouă",
       "settings.change": "A schimbat setările instalării",
     },
     failureReasons: {
