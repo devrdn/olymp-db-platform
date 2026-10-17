@@ -438,7 +438,7 @@ func TestRequestBuildLeavesTheStoredContentUntouched(t *testing.T) {
 				before := tc.setup(t, ctx, repo, contest)
 				markStatus(t, ctx, contest, "ready")
 
-				asked, err := repo.RequestBuild(ctx, contest)
+				asked, err := repo.RequestBuild(ctx, contest, before.Version)
 				if err != nil {
 					t.Fatalf("RequestBuild: %v", err)
 				}
@@ -491,7 +491,7 @@ func TestRequestBuildAcceptsAFailedGameToo(t *testing.T) {
 			t.Fatalf("finish (failed): %v", err)
 		}
 
-		asked, err := repo.RequestBuild(ctx, contest)
+		asked, err := repo.RequestBuild(ctx, contest, saved.Version)
 		if err != nil {
 			t.Fatalf("RequestBuild on a failed game: %v", err)
 		}
@@ -522,7 +522,7 @@ func TestRequestBuildRefusesAGameNotReadyOrFailed(t *testing.T) {
 					markStatus(t, ctx, contest, status)
 				}
 
-				if _, err := repo.RequestBuild(ctx, contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+				if _, err := repo.RequestBuild(ctx, contest, saved.Version); !errors.Is(err, provisioning.ErrBuildInProgress) {
 					t.Fatalf("RequestBuild on a %s game = %v, want ErrBuildInProgress", status, err)
 				}
 
@@ -539,6 +539,34 @@ func TestRequestBuildRefusesAGameNotReadyOrFailed(t *testing.T) {
 	}
 }
 
+// The caller decided on the version it read; a rebuild that finished in
+// between must not be followed by a second one on the strength of that read.
+func TestRequestBuildRefusesAVersionThatHasMovedOn(t *testing.T) {
+	anotherPackagesPendingGame(t)
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		saved, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`)
+		if err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		markStatus(t, ctx, contest, "ready")
+
+		if _, err := repo.RequestBuild(ctx, contest, saved.Version-1); !errors.Is(err, provisioning.ErrBuildInProgress) {
+			t.Fatalf("RequestBuild against an older version = %v, want ErrBuildInProgress", err)
+		}
+		now, err := repo.Template(ctx, contest)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if now.Status != provisioning.TemplateReady || now.Version != saved.Version {
+			t.Fatalf("the refused request changed the row to %q at version %d, want ready at %d",
+				now.Status, now.Version, saved.Version)
+		}
+	})
+}
+
 // The UPDATE cannot tell a missing row from one that is not buildable.
 // Games.RequestBuild checks TemplateStatus first and returns ErrNoGame, so
 // service callers never see this answer.
@@ -547,7 +575,7 @@ func TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress(t *testing.T)
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
 
-		if _, err := repo.RequestBuild(ctx, contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+		if _, err := repo.RequestBuild(ctx, contest, 1); !errors.Is(err, provisioning.ErrBuildInProgress) {
 			t.Fatalf("RequestBuild on a contest with no game = %v, want ErrBuildInProgress", err)
 		}
 	})
@@ -792,7 +820,7 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 	if err := repo.MarkTableDataChanged(t.Context(), contest); err != nil {
 		t.Fatalf("mark the data changed before the failing build: %v", err)
 	}
-	if _, err := repo.RequestBuild(t.Context(), contest); err != nil {
+	if _, err := repo.RequestBuild(t.Context(), contest, settled.Version); err != nil {
 		t.Fatalf("ask for a third build: %v", err)
 	}
 	third := claimBuildFor(t, repo, contest)
