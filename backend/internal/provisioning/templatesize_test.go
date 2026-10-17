@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
@@ -12,7 +11,7 @@ import (
 func TestALateRegistrationIsRefusedWhenTheClusterIsFull(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 63 << 30}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).
+	service := newService(fake).
 		WithClusterBudget(64 << 30)
 
 	_, err := service.Ensure(t.Context(), contest, people[0])
@@ -27,7 +26,7 @@ func TestALateRegistrationIsRefusedWhenTheClusterIsFull(t *testing.T) {
 func TestALateRegistrationIsAllowedWhileThereIsRoom(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 60 << 30}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).
+	service := newService(fake).
 		WithClusterBudget(64 << 30)
 
 	database, err := service.Ensure(t.Context(), contest, people[0])
@@ -42,7 +41,7 @@ func TestALateRegistrationIsAllowedWhileThereIsRoom(t *testing.T) {
 func TestNoBudgetRefusesNothingAndMeasuresNothing(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30, clusterBytes: 1 << 60}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 
 	if _, err := service.Ensure(t.Context(), contest, people[0]); err != nil {
 		t.Fatalf("ensure with no budget configured: %v", err)
@@ -56,7 +55,7 @@ func TestNoBudgetRefusesNothingAndMeasuresNothing(t *testing.T) {
 func TestARebuildIsNotRefusedByTheBudget(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{templateBytes: 3 << 30}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).
+	service := newService(fake).
 		WithClusterBudget(64 << 30)
 
 	first, err := service.Ensure(t.Context(), contest, people[0])
@@ -81,7 +80,7 @@ func TestTheTemplateIsMeasuredOncePerVersionRatherThanPerRequest(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	contest.Policy.DiskQuotaRatio = 2
 	fake := &cluster{templateBytes: 4 << 20}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 
 	for range 50 {
 		if _, err := service.Quota(t.Context(), contest); err != nil {

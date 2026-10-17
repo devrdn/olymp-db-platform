@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -89,7 +91,8 @@ func provision(ctx context.Context, st *stores, f *fixture, depth, workers int, 
 		return report, err
 	}
 
-	service := provisioning.New(games, st.provisioner).WithWorkers(workers)
+	service := provisioning.New(games, st.provisioner,
+		audit.New(postgres.NewAuditSink(st.core)), storage.NewUnitOfWork(st.core)).WithWorkers(workers)
 
 	// Milestones are read off the pool's depth while TopUp works.
 	var (

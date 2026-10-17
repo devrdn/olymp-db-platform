@@ -175,20 +175,12 @@ func (s *Service) DropInstance(ctx context.Context, actorID, contestID uuid.UUID
 // markDropped writes the row and its audit entry in one core-database
 // transaction, so both land or neither does.
 func (s *Service) markDropped(ctx context.Context, actorID, contestID uuid.UUID, record InstanceRecord) error {
-	write := func(ctx context.Context) error {
+	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.MarkDropped(ctx, record.Database); err != nil {
 			return err
 		}
-		if s.audit == nil {
-			return nil
-		}
 		return s.audit.Record(ctx, dropEntry(actorID, contestID, record))
-	}
-
-	if s.audit == nil || s.uow == nil {
-		return write(ctx)
-	}
-	return s.uow.Do(ctx, write)
+	})
 }
 
 // dropEntry records an organizer's removal of a database on the contest's

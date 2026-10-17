@@ -155,12 +155,8 @@ func (s *Service) reclaimTemplates(ctx context.Context, installationGraceMin int
 }
 
 // markReclaimed writes the row and the audit entry in one core-database
-// transaction when the service was built WithAudit. The DROP DATABASE ran on
-// another cluster and cannot join it.
+// transaction. The DROP DATABASE ran on another cluster and cannot join it.
 func (s *Service) markReclaimed(ctx context.Context, c ReclaimCandidate) error {
-	if s.audit == nil || s.uow == nil {
-		return s.repo.MarkDropped(ctx, c.Database)
-	}
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.MarkDropped(ctx, c.Database); err != nil {
 			return err
@@ -171,9 +167,6 @@ func (s *Service) markReclaimed(ctx context.Context, c ReclaimCandidate) error {
 
 // markTemplateReclaimed is markReclaimed for a template.
 func (s *Service) markTemplateReclaimed(ctx context.Context, t TemplateCandidate) error {
-	if s.audit == nil || s.uow == nil {
-		return s.repo.MarkTemplateDropped(ctx, t.ContestID)
-	}
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.MarkTemplateDropped(ctx, t.ContestID); err != nil {
 			return err

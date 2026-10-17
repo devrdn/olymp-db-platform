@@ -8,15 +8,33 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
 )
 
+func TestNewNeedsTheAuditTrail(t *testing.T) {
+	games := postgres.NewGameInstances(testPool)
+	for name, build := range map[string]func(){
+		"recorder":     func() { provisioning.New(games, &cluster{}, nil, storage.NewUnitOfWork(testPool)) },
+		"unit of work": func() { provisioning.New(games, &cluster{}, audit.New(&sink{}), nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("New without the %s did not panic", name)
+				}
+			}()
+			build()
+		})
+	}
+}
+
 func TestParticipantsWaitingForACopyShareTheWorkerBudget(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 2)
 	fake := &cluster{slow: 40 * time.Millisecond}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(1)
+	service := newService(fake).WithWorkers(1)
 
 	var wg sync.WaitGroup
 	errs := make([]error, len(people))
@@ -41,7 +59,7 @@ func TestParticipantsWaitingForACopyShareTheWorkerBudget(t *testing.T) {
 func TestAParticipantWhoStopsWaitingGetsNoCopy(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 2)
 	fake := &cluster{slow: 300 * time.Millisecond}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(1)
+	service := newService(fake).WithWorkers(1)
 
 	first := make(chan error, 1)
 	go func() {
@@ -67,7 +85,7 @@ func TestAParticipantWhoStopsWaitingGetsNoCopy(t *testing.T) {
 func TestTwoRequestsOfOneParticipantMakeOneCopy(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{slow: 40 * time.Millisecond}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 
 	var wg sync.WaitGroup
 	names := make([]string, 2)
@@ -95,7 +113,7 @@ func TestTwoRequestsOfOneParticipantMakeOneCopy(t *testing.T) {
 func TestTwoResetsOfOneParticipantCopyOneAfterTheOther(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{slow: 40 * time.Millisecond}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 	if _, err := service.Ensure(t.Context(), contest, people[0]); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -171,7 +189,7 @@ func TestAResetOfNothingRecordsNothing(t *testing.T) {
 func TestAResetWhoseCallerLeavesMidCopyStillFinishes(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 	database, err := service.Ensure(t.Context(), contest, people[0])
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
@@ -202,7 +220,7 @@ func TestAResetWhoseCallerLeavesMidCopyStillFinishes(t *testing.T) {
 func TestAResetWhoseCopyFailsLeavesTheRowDropped(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 	database, err := service.Ensure(t.Context(), contest, people[0])
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
