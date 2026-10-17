@@ -650,7 +650,6 @@ game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases stil
 # It runs inside the running api container, which reaches both databases on
 # the compose network under its own environment's names; the host has neither
 # a Go toolchain nor either database's port.
-.PHONY: game-check
 game-check: require-env ## List contests whose built template is missing from the game cluster (in the running api container)
 	$(COMPOSE) exec -T api /usr/local/bin/gamecheck
 
