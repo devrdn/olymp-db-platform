@@ -67,8 +67,8 @@ type Conn interface {
 type Cluster interface {
 	Conn
 	Begin(ctx context.Context) (pgx.Tx, error)
-	// Query reads only the cluster's own catalogue (Provisioner.DatabaseSizes),
-	// never a participant's data.
+	// Query reads only the cluster's own catalogue (Provisioner.DatabaseSizes
+	// and MissingDatabases), never a participant's data.
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 

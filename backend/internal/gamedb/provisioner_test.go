@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -682,6 +683,30 @@ func TestDatabaseSizesOfNothingAsksNothing(t *testing.T) {
 	}
 	if len(sizes) != 0 {
 		t.Fatalf("measured %d databases from an empty list", len(sizes))
+	}
+}
+
+func TestMissingDatabasesNamesOnlyWhatIsNotOnTheCluster(t *testing.T) {
+	p, template, _ := buildTemplate(t, sqlpolicy.ReadOnly())
+	first := named(t, "gone1")
+	second := named(t, "gone2")
+
+	missing, err := p.MissingDatabases(t.Context(), []string{first, template, second})
+	if err != nil {
+		t.Fatalf("MissingDatabases: %v", err)
+	}
+	if want := []string{first, second}; !slices.Equal(missing, want) {
+		t.Fatalf("missing = %v, want %v in the order asked", missing, want)
+	}
+}
+
+func TestMissingDatabasesOfAnEmptyListIsEmpty(t *testing.T) {
+	missing, err := provisioner(t).MissingDatabases(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("MissingDatabases(nil): %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("an empty list came back with %v missing", missing)
 	}
 }
 
