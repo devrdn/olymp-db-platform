@@ -116,8 +116,8 @@ func check(ctx context.Context, templates templateCheck, out io.Writer) error {
 		fmt.Fprintln(out, "Every one belongs to a finished or archived contest, which is shown from the core database alone.")
 		return nil
 	}
-	fmt.Fprintln(out, "Rebuild the game of each draft or published contest: POST /api/v1/contests/{id}/game/build.")
-	fmt.Fprintln(out, "A running contest's game cannot be rebuilt.")
+	fmt.Fprintln(out, "Rebuild the game of each draft, published or running contest: POST /api/v1/contests/{id}/game/build.")
+	fmt.Fprintln(out, "A running contest's participants can run no query until it finishes; each then gets a fresh copy of the game.")
 	return errTemplatesMissing
 }
 

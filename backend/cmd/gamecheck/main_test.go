@@ -114,3 +114,22 @@ func TestTheGameClusterIsReadUnderTheAPIsName(t *testing.T) {
 		t.Fatalf("run returned %v, want it to ask for GAME_PROVISIONER_DSN", err)
 	}
 }
+
+// Every row marked "to be rebuilt" must be one the footer says how to rebuild,
+// a running contest's included.
+func TestTheReportSaysHowToRebuildARunningContestsGame(t *testing.T) {
+	var out bytes.Buffer
+
+	_ = check(t.Context(), stubCheck{missing: twoMissing()}, &out)
+
+	printed := out.String()
+	if strings.Contains(printed, "cannot be rebuilt") {
+		t.Fatalf("the report marks a running contest to be rebuilt and says it cannot be:\n%s", printed)
+	}
+	for _, line := range strings.Split(printed, "\n") {
+		if strings.Contains(line, "/game/build") && strings.Contains(line, "running") {
+			return
+		}
+	}
+	t.Fatalf("the report does not name the build route for a running contest:\n%s", printed)
+}
