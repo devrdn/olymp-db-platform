@@ -187,7 +187,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseTemplateIsGoneIsRebuiltWhileTheContes
 		t.Fatalf("build: %v, finished as %q", err, built.Status)
 	}
 
-	databases := provisioning.New(repo, cluster)
+	databases := newService(cluster)
 	game, err := repo.Game(t.Context(), contest.ID)
 	if err != nil {
 		t.Fatalf("read the built game: %v", err)
