@@ -117,7 +117,7 @@ func check(ctx context.Context, templates templateCheck, out io.Writer) error {
 		return nil
 	}
 	fmt.Fprintln(out, "Rebuild the game of each draft, published or running contest: POST /api/v1/contests/{id}/game/build.")
-	fmt.Fprintln(out, "A running contest's participants can run no query until it finishes; each then gets a fresh copy of the game.")
+	fmt.Fprintln(out, "A running contest's participants can run no query until the rebuild finishes; each then gets a fresh copy of the game.")
 	return errTemplatesMissing
 }
 
