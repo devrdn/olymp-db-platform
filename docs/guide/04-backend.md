@@ -39,7 +39,7 @@ commands share the same packages.
 flowchart TB
   subgraph bins["cmd/* binaries"]
     cmdapi["cmd/api"]
-    cmdjobs["cmd/migrate, bootstrap, gamedb, gameorphans, testdb"]
+    cmdjobs["cmd/migrate, bootstrap, gamedb, gameorphans, gamecheck, testdb"]
     cmdqr["cmd/queryrunner"]
   end
 

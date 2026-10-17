@@ -3897,10 +3897,10 @@ files; the game templates are rebuilt.**
   puts it back. Without it a game built from an uploaded dump or from the
   table builder's CSV files cannot be built again.
 - **The templates** live in `pg-game-data`, which stays behind, while the
-  restored database still records them as built; nothing checks that a
-  recorded template exists. Each contest that is still to be played needs its
-  game rebuilt on the new host, and a rebuild is refused once a contest is
-  `running`.
+  restored database still records them as built; `make game-check` lists the
+  contests whose recorded template the cluster does not have. Each contest
+  that is still to be played needs its game rebuilt on the new host, and a
+  rebuild is refused once a contest is `running`.
 
 The rest follows from decisions taken for other reasons, and it is worth
 knowing which, so as not to undo them by accident.
@@ -3945,8 +3945,9 @@ if wanted.
    uploads after `make restore`, not before: until the rows are back, the
    upload sweep treats the files as orphans and deletes them.
 5. Rebuild the game of every contest still to be played. The restored
-   database records each template as built and nothing checks the cluster,
-   so until then that contest has no game.
+   database records each template as built, so until then that contest has
+   no game; `make game-check` lists every such contest with its status, and
+   passes once nothing is missing.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
    stored, in `draft` or `published`. The game screen offers it only for a
    table-builder game whose rows changed since its build, or whose build

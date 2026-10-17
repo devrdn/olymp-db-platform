@@ -17,6 +17,7 @@ backend/
 │   ├── bootstrap/       creates the first administrator
 │   ├── gamedb/          prepares the game cluster's roles, on every deploy
 │   ├── gameorphans/     finds and removes dropped databases and orphaned covers
+│   ├── gamecheck/       finds built templates the game cluster does not have
 │   ├── testdb/          recreates the test database for `make test-db`
 │   ├── consoleload/     load test of the SQL console
 │   └── apicontract/, auditcontract/   generate docs/api/*.json
@@ -595,6 +596,7 @@ make restore-check        FILE=deploy/backups/....dump
 make restore              FILE=deploy/backups/....dump              CONFIRM=yes
 make restore-covers       FILE=deploy/backups/covers-....tar.gz       CONFIRM=yes
 make restore-game-uploads FILE=deploy/backups/game-uploads-....tar.gz CONFIRM=yes
+make game-check                               # built templates the game cluster lacks
 ```
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
@@ -632,6 +634,15 @@ believing you do — run it after every schema change.
 `CONFIRM=yes`. When the API is running it is stopped for the duration, because
 pg_restore cannot drop objects a live service holds open, and started again
 afterwards whether the restore worked or not.
+
+`game-check` is the step after `restore` on a new host. The game templates are
+in no backup: they live on the game cluster, which a move leaves behind, while
+the restored rows still record every template as built. It reads both
+databases and lists each contest whose template is recorded as built and is not
+on the cluster, with the contest's status. It changes nothing and fails while
+any template is missing. A draft or published contest's game is rebuilt with
+`POST /api/v1/contests/{id}/game/build`; a running contest's cannot be; a
+finished or archived contest needs no game.
 
 ## Logging
 

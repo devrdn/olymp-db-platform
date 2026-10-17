@@ -338,7 +338,7 @@ places you will open first.
 | Path | What is there |
 |---|---|
 | `backend/` | The Go module: both services and their tools. |
-| `backend/cmd/` | Entry points: `api`, `queryrunner`, `migrate`, `bootstrap`, `gamedb` (game cluster setup), `gameorphans` (manual cleanup), `testdb`, `apicontract` and `auditcontract` (generated contracts), `consoleload` (load test). |
+| `backend/cmd/` | Entry points: `api`, `queryrunner`, `migrate`, `bootstrap`, `gamedb` (game cluster setup), `gameorphans` (manual cleanup), `gamecheck` (templates missing from the game cluster), `testdb`, `apicontract` and `auditcontract` (generated contracts), `consoleload` (load test). |
 | `backend/internal/app/` | The composition root: builds the Core API, its modules and background jobs. |
 | `backend/internal/api/` | The HTTP layer: router, handlers (`*_handler.go`), error codes and the error table. |
 | `backend/internal/<domain>/` | Domain packages: `auth`, `rbac`, `users`, `contests`, `leaderboard`, `monitor`, `profile`, `workspace`, `provisioning`, `queryproxy`, `sqlpolicy`, `settings`, `covers`, `showcase`, `audit`, `health`, `gamefile`. `go doc ./internal/<pkg>` says what each answers. |

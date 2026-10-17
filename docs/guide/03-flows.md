@@ -908,7 +908,10 @@ an advisory lock, and a game build is claimed by one worker through its row.
 | `game-upload-sweep` | 10 min | no | `provisioning.Games.SweepUploads`: abort uploads idle past `GAME_UPLOAD_ABANDONED_AFTER` (default 24 h), remove files no row names. | `GAME_UPLOAD_DIR` set too |
 
 Not periodic: `cmd/gameorphans` lists, and with `-apply` removes, databases
-and cover files the product does not remove itself. It is run by hand.
+and cover files the product does not remove itself. `cmd/gamecheck` lists, and
+changes nothing, the contests whose template the core database records as
+built and the game cluster lacks, which is the state a restore onto a new
+host leaves. Both are run by hand.
 
 Rules that matter:
 
