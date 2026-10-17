@@ -839,3 +839,37 @@ func TestGameReadyAgreesWithTheConsoleThroughTheBuildLifecycle(t *testing.T) {
 		expect("failed", false)
 	})
 }
+
+// Only 'ready' claims a database on the cluster: pending and failed never
+// built one, building is the build sweep's, and dropped is gone on purpose.
+func TestReadyTemplatesListsOnlyBuiltTemplatesWithTheirContestStatus(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		running := reclaimContest(t, ctx, "running", 0, nil)
+		ready := reclaimTemplate(t, ctx, running, "ready")
+
+		left := map[string]bool{}
+		for _, status := range []string{"pending", "building", "failed", "dropped"} {
+			left[reclaimTemplate(t, ctx, reclaimContest(t, ctx, "published", 0, nil), status)] = true
+		}
+
+		templates, err := NewGameInstances(testPool).ReadyTemplates(ctx)
+		if err != nil {
+			t.Fatalf("ReadyTemplates: %v", err)
+		}
+
+		// The read is installation-wide, so check only this test's rows.
+		var found []provisioning.ReadyTemplate
+		for _, template := range templates {
+			if left[template.Database] {
+				t.Fatalf("%s came back although its template is not ready", template.Database)
+			}
+			if template.Database == ready {
+				found = append(found, template)
+			}
+		}
+		want := provisioning.ReadyTemplate{ContestID: running, ContestStatus: "running", Database: ready}
+		if len(found) != 1 || found[0] != want {
+			t.Fatalf("found %+v, want exactly %+v", found, want)
+		}
+	})
+}
