@@ -3955,19 +3955,21 @@ if wanted.
    Docker is needed on the host.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
    stored, in `draft` or `published`, and in `running` only while the
-   template recorded as built is missing from the cluster — which is what a
-   move leaves; a running contest whose template exists is refused
-   (`game_not_editable`), and one whose recovery build failed may be asked
-   for again. The game screen offers the rebuild only for a
-   table-builder game whose rows changed since its build, or whose build
-   failed, and a restored game is normally neither, so the route is called
-   directly with an organiser's session, whatever the game's source. The
-   rebuild raises the version, and the participants' copies are made again
-   from the new template. In a running contest the participants can run no
-   query from the request until the build finishes (`no_game_yet`); each is
-   then given a fresh copy on their next query. What they changed in their
-   own database is gone, their answers and score are not, and the contest's
-   clock does not stop meanwhile — another reason to move between olympiads.
+   contest's template is missing from the cluster and its row is `ready`
+   (what a move leaves) or `failed` (a recovery build that failed, or a
+   first build that failed before the start, since publication and the start
+   do not yet wait for a built game — section 15, item 23). A running contest
+   whose template exists is refused (`game_not_editable`). The game screen
+   offers the rebuild only for a table-builder game whose rows changed since
+   its build, or whose build failed, and a restored game is normally neither,
+   so the route is called directly with an organiser's session, whatever the
+   game's source. The rebuild raises the version, and the participants'
+   copies are made again from the new template. In a running contest the
+   participants can run no query from the request until the build finishes
+   (`no_game_yet`); each is then given a fresh copy on their next query.
+   What they changed in their own database is gone, their answers and score
+   are not, and the contest's clock does not stop meanwhile — another reason
+   to move between olympiads.
    A finished contest needs no game: what is shown of it afterwards is read
    from the core database.
 6. Exercise sign-in, a contest and the SQL console on the temporary name.

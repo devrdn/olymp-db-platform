@@ -588,9 +588,9 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 // given a copy and the pool cannot be refilled, so the remade copies a rebuild
 // brings are the only way back.
 //
-// A 'failed' row qualifies as well as a 'ready' one, so a recovery whose build
-// failed can be retried; the cluster still decides. It is asked last, as the
-// only step outside the core database.
+// A 'failed' row qualifies as well as a 'ready' one, so a build that failed,
+// a recovery or a first build, can be asked for again; the cluster still
+// decides. It is asked last, as the only step outside the core database.
 func (g *Games) recoverable(ctx context.Context, contestID uuid.UUID, current Template) (bool, error) {
 	if current.Status != TemplateReady && current.Status != TemplateFailed {
 		return false, nil
