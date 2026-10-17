@@ -32,7 +32,7 @@ func resetFixture(t *testing.T) (*queryproxy.Service, *databases, *lookupFake) {
 		calls:    &calls,
 	}
 	db := &databases{}
-	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate).
+	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate, quietTrail, quiet{}).
 		WithLookup(lookup)
 	return service, db, lookup
 }
