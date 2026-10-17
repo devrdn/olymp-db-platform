@@ -2168,7 +2168,7 @@ const en = {
     query_result_too_large:
       "The answer is too large to return. Narrow it with a WHERE or fewer columns.",
     contest_finished:
-      "You have finished this contest. The console is closed for you.",
+      "This contest has ended, and your participation with it. The console is closed for you.",
     answer_too_long:
       "That answer is longer than this installation accepts.",
     answer_too_often:

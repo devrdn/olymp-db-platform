@@ -93,7 +93,7 @@ var standingErrors = errorTable{
 	{err: contests.ErrContestEnded, status: http.StatusConflict, code: codeContestEnded,
 		message: "The contest has ended"},
 	{err: contests.ErrParticipantFinished, status: http.StatusConflict, code: codeContestFinished,
-		message: "The participant has already finished"},
+		message: "The contest has ended for this participant"},
 	{err: contests.ErrDeadlinePassed, status: http.StatusConflict, code: codeDeadlinePassed,
 		message: "The deadline for this contest has passed"},
 	// Explicit, because the participant can act on "wrong network", unlike a
