@@ -4184,17 +4184,13 @@ says what is built.
 The order of the remaining work, in four tiers. A number in parentheses is
 an item of the list below.
 
-1. **Before the next olympiad:** the game's readiness as a condition of
-   publication and start (23), the registration lifecycle (24), ids checked
-   in the play screen's actions (25), "reset my database" (34), the game
-   uploads in the backup (26) and the game side after a restore (27). Each is
-   something a participant would hit during a contest with no way round it,
-   a hole a participant could use, or data a contest depends on that the
-   installation could lose, so each is cheaper to fix before an olympiad than
-   during one.
-2. **The organiser's workflow:** the staff reports and the results as a file
-   (28), and `reports.view` removed (29); a contest list for
-   a manager without `contest.create` (30); screens for the endpoints that
+1. **Before the next olympiad:** the schema panel's cache read from the
+   starting schema, not a participant's copy (49). In a writing contest it
+   leaks one participant's tables to the others.
+2. **The organiser's workflow:** the start waiting until every copy is
+   current (23); the staff reports and the results as a file (28), and
+   `reports.view` removed (29); a contest list for a manager without
+   `contest.create` (30); screens for the endpoints that
    have none, the grace extension first (31); the readiness event (32); `Esc`
    aborting a query (33); the audit form's filters (8); participants from a
    file and the contest import (12); a hidden question marked as staff-only
@@ -4202,9 +4198,10 @@ an item of the list below.
    participant some comfort, and each has a workaround today: the standings
    screen and monitoring's CSV, a typed address, the API called by hand, a
    first query that waits for the copy, waiting for the query's deadline, a
-   pasted column of logins, a contest built again by hand. `reports.view`
-   and the hidden question need none: the first guards nothing, and the
-   second only needs saying.
+   pasted column of logins, a contest built again by hand. The start's wait,
+   `reports.view` and the hidden question need none: stale copies are remade
+   on first use, the permission guards nothing, and the hidden question only
+   needs saying.
 3. **Running the installation:** off-host scheduled backups (35, paused by
    the maintainer's decision and to be resumed), restore drills (36), alerts
    and the Query Runner's metrics (37), CI and the supply chain (38),
@@ -4406,52 +4403,13 @@ Product decisions the items below are built on.
   `winner` mode is whoever first answered the final questions of every task.
   The main price is disk, growing with the number of tasks. For now one task
   per contest is enough.
-- [ ] **23. The game's readiness is not a condition of publication or start**
-  (sections 4.2 and 6.1). `provisioning.Service.Ready` answers whether every
-  database of a contest came from its current template, and nothing calls
-  it; the publication gate's problems cover the text, the questions, the
-  schedule, the staff and the cover, none of them the game. So a contest with
-  no game, or one whose build failed, can be published and started, and every
-  participant's console then answers `no_game_yet`. Publication should refuse
-  a game that is missing, building or failed, and the start should not move a
-  contest to `running` until `Ready` holds.
-- [ ] **24. A registration never leaves `registered` under a shared window**
-  (sections 6, 8.1 and 9). The schema allows `active`, `finished` and a
-  `finished_at`; nothing writes `finished`, and `active` with `started_at` is
-  written only under individual timing. What reads those values never sees
-  them: the gate's refusal for a participant who has finished, the profile's
-  "finished" count (always zero) and monitoring's start and finish events.
-  The audit entries section 9 promises for the start and finish of a
-  participation do not exist either, and belong to the same change, since
-  they record the same transitions. The decision: a participant becomes
-  `active` on their start under either timing, and every `active`
-  registration becomes `finished`, with `finished_at`, in the transaction
-  that moves the contest to `finished`, whether the scheduler or an organiser
-  makes the move.
-- [ ] **25. The play screen's actions put ids into paths unchecked**
-  (section 11). Every other server action that builds an API path from an id
-  checks it with `isId` first, because form fields are forgeable and `fetch`
-  resolves `..`; the play screen's `actions.ts` puts `contestId` and
-  `questionId` into the path as they arrive. The API still authorises
-  whatever it is sent, so the exposure is a request to an endpoint the action
-  did not mean, made with the participant's own session. The same check
-  belongs there, and the frontend guide then drops the exception.
-- [ ] **26. The game uploads are not in the backup** (section 13).
-  `make backup` writes the core dump and the covers archive; organisers'
-  uploaded dumps and the table builder's CSV files live on the
-  `game-uploads-data` volume, which it does not take, so the move procedure
-  copies them by hand. Without them a game built from a file cannot be built
-  again once the host is lost. The target should archive the volume beside
-  the covers under the same timestamp, with a restore target that sets the
-  owner as `restore-covers` does.
-- [ ] **27. Nothing brings the game side back after a restore**
-  (sections 4.2 and 13). A restored core database records every template and
-  instance as built, and no code checks that a recorded template exists on
-  the cluster. The move procedure rebuilds each contest still to be played by
-  calling the build route by hand, and a contest that is `running` cannot be
-  rebuilt at all. What is missing is a check that finds the templates the
-  cluster lacks, and a rebuild allowed for a running contest whose template is
-  gone, since there is nothing left for it to replace.
+- [ ] **23. The start does not wait for every participant's copy to be
+  current** (section 4.2). Publication and the start already refuse a game
+  that is missing, building or failed (`no_game`, see Done). A copy at an
+  older version is never handed out but remade on first use, so starting with
+  stale copies is safe; its cost is that each such participant's first
+  request waits for a copy at the start, all at once. Holding the start until
+  `provisioning.Service.Ready` holds would move that wait before the clock.
 - [ ] **28. Staff reports and the results as a file** (section 10; section 14,
   step 6.3). Staff have the standings screen and monitoring's per-participant
   counters; there is no progress by question during a contest, no breakdown by
@@ -4497,13 +4455,6 @@ Product decisions the items below are built on.
   query ends only at the Query Runner's deadline. Aborting needs the
   cancellation to reach the statement on the Query Runner, a binding in the
   editor, and a query-log status for a query the participant stopped.
-- [ ] **34. "Reset my database" has no caller** (section 4.1).
-  `provisioning.Service.Reset` recreates a participant's instance from the
-  template, but no route exposes it, no screen offers it and no audit action
-  records it. In a writing contest a participant who damages their data has
-  no way back. It needs a route and a button for a `read_write` contest, an
-  audit action and a query-log entry as section 4.1 says, and a limit on how
-  often it can be pressed, since each press drops and copies a database.
 - [ ] **35. Backups are taken by hand and stay on the host** (section 13).
   `make backup` writes into `deploy/backups` on the same machine; nothing runs
   it on a schedule, rotates its files, encrypts them or copies them away, and
@@ -4596,6 +4547,14 @@ Product decisions the items below are built on.
   theme, density and language switches, from the product's own components;
   until it exists, CI's lint, contrast and error-code checks hold the design
   system on their own.
+- [ ] **49. The schema panel's cache is filled from a participant's copy**
+  (sections 2.1 and 4.1). The description the schema panel shows is cached
+  once per contest and template version, and it is read from whichever
+  participant's database asks first, since a template cannot be connected to
+  while it is copied. In a `read_write` contest, a participant who creates
+  tables before anyone else opens the panel puts them into every
+  participant's panel, and a rebuild during a contest opens the window again.
+  The description should come from the contest's starting schema only.
 
 ### Done
 
@@ -4637,6 +4596,32 @@ Product decisions the items below are built on.
 - [x] **20. Watching a participant** (section 9.4).
 - [x] **21. The front page** (section 9.6).
 - [x] **22. A contest's cover** (section 9.7).
+- [x] **23, first half. Publication and the start require a built game**
+  (sections 4.2 and 6.1). The publication gate refuses `no_game` unless the
+  contest's template is `ready`, on the organiser's transition, the
+  scheduler's start and the publish check. The second half stays in the list.
+- [x] **24. A registration's lifecycle** (sections 6, 8.1 and 9). A
+  participant becomes `active` on their first read, query or answer under
+  either timing; every `active` registration becomes `finished` in the same
+  statement that moves its contest to `finished`, by either path; the audit
+  trail records `participant.start` and `participant.finish`, the finish with
+  no actor and no request origin.
+- [x] **25. The play screen's actions check their ids** (section 11).
+- [x] **26. The game uploads are in the backup** (section 13). `make backup`
+  archives the `game-uploads-data` volume beside the covers;
+  `make restore-game-uploads` restores it owned by the API's user, and
+  `make game-uploads-check` proves the round trip.
+- [x] **27. The game side after a restore** (sections 4.2 and 13).
+  `make game-check` lists the templates the core database records as ready
+  and the cluster lacks, failing only for a contest still to be played; a
+  running contest whose template is gone can be rebuilt through the build
+  route.
+- [x] **34. "Reset my database"** (section 4.1). `POST …/play/reset` and a
+  button on the play screen for a `read_write` contest, behind the
+  participation gate, limited to three resets per registration in ten
+  minutes, recorded as `contest.instance_reset` (or
+  `contest.instance_reset_failed`). A reset writes no query-log row: the log's
+  statuses, counters and blind-answer detection describe queries.
 
 ## 16. Assumptions
 
