@@ -642,7 +642,7 @@ func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	f.Service = contests.NewService(contests.ServiceConfig{
 		Contests: f.Contests, Stories: f.Stories, Questions: f.Questions, Managers: f.Managers,
 		Registrations: f.Registrations, Policies: f.Policies, Languages: f.Languages,
-		Users: f.Users, Audit: audit.New(f.Audit), UnitOfWork: f.UnitOfWork, GameReadiness: f.Games,
+		Covers: f.Covers, Users: f.Users, Audit: audit.New(f.Audit), UnitOfWork: f.UnitOfWork, GameReadiness: f.Games,
 		Now:  func() time.Time { return f.Now },
 		Gate: f.Gate,
 		// PoolTrigger left unset.

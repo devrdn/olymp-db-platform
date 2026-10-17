@@ -27,6 +27,17 @@ func TestNewServiceRefusesToAssembleWithoutAGate(t *testing.T) {
 	contests.NewService(contests.ServiceConfig{})
 }
 
+// A Service built without the covers store would skip the cover check on the
+// organiser's publish and start, which the scheduler does not skip.
+func TestNewServiceRefusesToAssembleWithoutCovers(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService without a covers store did not panic")
+		}
+	}()
+	contests.NewService(contests.ServiceConfig{Gate: contests.NewGate(0)})
+}
+
 func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
 	// Somebody must be able to appoint managers from the first moment.
 	f := conteststest.NewFixture()
@@ -704,6 +715,37 @@ func TestPublishRefusesAnUploadedCoverWithNobodyCredited(t *testing.T) {
 	want := contests.PublishProblem{Code: contests.ProblemCoverNeedsAttribution}
 	if !slices.Contains(notReady.Problems, want) {
 		t.Errorf("problems = %v, want one of %v", notReady.Problems, want)
+	}
+}
+
+func TestCheckPublishReportsAnUploadedCoverWithNobodyCredited(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Covers.Put(c.ID, "")
+
+	err := f.Service.CheckPublish(context.Background(), c.ID)
+
+	var notReady *contests.NotPublishableError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("CheckPublish() = %v, want a *contests.NotPublishableError", err)
+	}
+	want := contests.PublishProblem{Code: contests.ProblemCoverNeedsAttribution}
+	if !slices.Contains(notReady.Problems, want) {
+		t.Errorf("problems = %v, want one of %v", notReady.Problems, want)
+	}
+}
+
+func TestStartRefusesAnUploadedCoverWithNobodyCredited(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	c.Status = contests.StatusPublished
+	f.Contests.Put(c)
+	f.Covers.Put(c.ID, "")
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusRunning)
+
+	if !errors.Is(err, contests.ErrNotPublishable) {
+		t.Fatalf("Transition(running) = %v, want ErrNotPublishable", err)
 	}
 }
 
