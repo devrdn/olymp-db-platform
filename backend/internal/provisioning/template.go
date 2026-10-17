@@ -311,14 +311,24 @@ type Authoring interface {
 
 // requireEditable returns ErrGameNotEditable once the contest has started.
 func (g *Games) requireEditable(ctx context.Context, contestID uuid.UUID) error {
-	editable, err := g.author.GameEditable(ctx, contestID)
+	editable, err := g.editable(ctx, contestID)
 	if err != nil {
-		return fmt.Errorf("check whether the game may be replaced: %w", err)
+		return err
 	}
 	if !editable {
 		return ErrGameNotEditable
 	}
 	return nil
+}
+
+// editable is requireEditable's question, for a caller with an exception to
+// the answer (RequestBuild).
+func (g *Games) editable(ctx context.Context, contestID uuid.UUID) (bool, error) {
+	editable, err := g.author.GameEditable(ctx, contestID)
+	if err != nil {
+		return false, fmt.Errorf("check whether the game may be replaced: %w", err)
+	}
+	return editable, nil
 }
 
 // Games owns a contest's game: the script an organiser writes and the
@@ -531,9 +541,9 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		return Template{}, ErrBuildInProgress
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
+	editable, err := g.editable(ctx, contestID)
 	if err != nil {
-		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
+		return Template{}, err
 	}
 	recovery := false
 	if !editable {
