@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -23,6 +25,19 @@ import (
 // Service tests use the real repository, since claiming and versioning are
 // properties of the SQL. The cluster is faked; internal/gamedb tests the real one.
 var testPool *pgxpool.Pool
+
+// newService is the service over the real repository with an audit trail
+// nobody reads, for tests that do not look at the entries.
+func newService(cluster provisioning.Cluster) *provisioning.Service {
+	return provisioning.New(postgres.NewGameInstances(testPool), cluster,
+		audit.New(unreadTrail{}), storage.NewUnitOfWork(testPool))
+}
+
+// unreadTrail keeps no entries, so services with several workers can share it.
+type unreadTrail struct{}
+
+func (unreadTrail) Append(context.Context, audit.Entry) error       { return nil }
+func (unreadTrail) AppendMany(context.Context, []audit.Entry) error { return nil }
 
 // TestMain opens the pool through storagetest, which refuses any database that
 // is not a test database, since these tests commit fixtures.

@@ -15,7 +15,7 @@ func serviceFor(t *testing.T, registrations int) (*provisioning.Service, *cluste
 
 	contest, people := contestFor(t, t.Context(), registrations)
 	fake := &cluster{}
-	return provisioning.New(postgres.NewGameInstances(testPool), fake), fake, contest, people
+	return newService(fake), fake, contest, people
 }
 
 func TestAClaimFromThePoolCostsNoDatabaseWork(t *testing.T) {
@@ -187,7 +187,7 @@ func TestADatabaseIsNotLeftBehindWhenItCannotBeRecorded(t *testing.T) {
 	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{}
 	// An unknown contest makes the real insert fail on its foreign key.
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake)
+	service := newService(fake)
 
 	broken := contest
 	broken.ID = uuid.New() // no such contest, so recording cannot succeed
@@ -260,7 +260,7 @@ func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
 func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{slow: 40 * time.Millisecond}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
+	service := newService(fake).WithWorkers(2)
 
 	made, err := service.TopUp(t.Context(), contest, 8)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
 func TestAFailureStopsTheFillingRatherThanGrindingOn(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{fail: errors.New("the cluster is out of disk")}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
+	service := newService(fake).WithWorkers(2)
 
 	made, err := service.TopUp(t.Context(), contest, 6)
 	if err == nil {

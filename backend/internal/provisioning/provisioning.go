@@ -142,7 +142,8 @@ type Service struct {
 	// provided, closed when that is done.
 	providingMu sync.Mutex
 	providing   map[uuid.UUID]chan struct{}
-	// audit and uow are set by WithAudit; nil means Reclaim records nothing.
+	// audit records resets, drops and reclaims in uow's transaction with the
+	// row they change.
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
 	// maxClusterBytes is a copy of PoolLimits.MaxClusterBytes, so the budget
@@ -166,10 +167,14 @@ const DefaultWorkers = 3
 // pass every ten minutes, a few thousand instances still clear within a day.
 const ReclaimBatchLimit = 200
 
-// New assembles the service.
-func New(repo Repository, cluster Cluster) *Service {
+// New assembles the service. It panics without the audit trail: a forgotten
+// wiring would otherwise drop every reset, drop and reclaim entry silently.
+func New(repo Repository, cluster Cluster, rec *audit.Recorder, uow storage.UnitOfWork) *Service {
+	if rec == nil || uow == nil {
+		panic("provisioning: New needs the audit recorder and its unit of work")
+	}
 	return &Service{
-		repo: repo, cluster: cluster,
+		repo: repo, cluster: cluster, audit: rec, uow: uow,
 		workers: DefaultWorkers, copies: semaphore.NewWeighted(DefaultWorkers),
 		providing: map[uuid.UUID]chan struct{}{},
 	}
@@ -182,14 +187,6 @@ func (s *Service) WithWorkers(workers int) *Service {
 	}
 	s.workers = workers
 	s.copies = semaphore.NewWeighted(int64(workers))
-	return s
-}
-
-// WithAudit lets Reclaim record what it drops, in the same transaction that
-// marks the row dropped. Only tests leave it unset.
-func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Service {
-	s.audit = rec
-	s.uow = uow
 	return s
 }
 
@@ -402,19 +399,12 @@ func (s *Service) Reset(ctx context.Context, actorID uuid.UUID, contest Contest,
 		return s.abandonCopy(ctx, actorID, contest, registration, existing.Database, err)
 	}
 
-	write := func(ctx context.Context) error {
+	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.Assign(ctx, contest.ID, registration, existing.Database, contest.Version); err != nil {
 			return err
 		}
-		if s.audit == nil {
-			return nil
-		}
 		return s.audit.Record(ctx, resetEntry(audit.ActionGameInstanceReset, actorID, contest, registration, existing.Database))
-	}
-	if s.audit == nil || s.uow == nil {
-		return write(ctx)
-	}
-	return s.uow.Do(ctx, write)
+	})
 }
 
 // detached is ctx without its cancellation, bounded by s.copyTimeout.
@@ -443,21 +433,12 @@ func (s *Service) abandonCopy(ctx context.Context, actorID uuid.UUID, contest Co
 	if err := s.cluster.Drop(ctx, database); err != nil {
 		return errors.Join(cause, fmt.Errorf("clear %s after a failed copy: %w", database, err))
 	}
-	write := func(ctx context.Context) error {
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.MarkDropped(ctx, database); err != nil {
 			return err
 		}
-		if s.audit == nil {
-			return nil
-		}
 		return s.audit.Record(ctx, resetEntry(audit.ActionGameInstanceResetFailed, actorID, contest, registration, database))
-	}
-	var err error
-	if s.audit == nil || s.uow == nil {
-		err = write(ctx)
-	} else {
-		err = s.uow.Do(ctx, write)
-	}
+	})
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("mark %s dropped after a failed copy: %w", database, err))
 	}

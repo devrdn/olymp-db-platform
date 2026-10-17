@@ -591,7 +591,7 @@ func roundTripFixture(t *testing.T) roundTrips {
 		t.Fatalf("Assign() = %v", err)
 	}
 
-	databases := provisioning.New(games, panicCluster{t: t})
+	databases := provisioning.New(games, panicCluster{t: t}, audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
 	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}, fiveSecondGate,
 		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
 		WithAnswerable(postgres.NewAnswerable(pool)).

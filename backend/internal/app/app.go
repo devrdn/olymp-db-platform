@@ -155,14 +155,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			return nil, err
 		}
 		games := postgres.NewGameInstances(pool)
-		databases := provisioning.New(games, cluster).
+		databases := provisioning.New(games, cluster, auditRecorder, storage.NewUnitOfWork(pool)).
 			WithWorkers(cfg.ProvisionWorkers).
 			// The same budget as the tender's below, so late registrations
 			// cannot keep filling a cluster the tender stopped at.
 			WithClusterBudget(cfg.ClusterMaxBytes).
 			// A reset is one copy, and gets the bound a copy statement gets.
-			WithCopyTimeout(provisionStatementTimeout).
-			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+			WithCopyTimeout(provisionStatementTimeout)
 		// Coalesces a burst of triggers into one extra tend.
 		tender := provisioning.NewTender()
 		poolTrigger = tender

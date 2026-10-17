@@ -56,9 +56,8 @@ func serviceWithAudit(t *testing.T, ctx context.Context, registrations int) (*pr
 	contest, people := contestFor(t, ctx, registrations)
 	fake := &cluster{}
 	s := &sink{}
-	service := provisioning.New(postgres.NewGameInstances(testPool), fake).
-		WithWorkers(1).
-		WithAudit(audit.New(s), storage.NewUnitOfWork(testPool))
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake, audit.New(s), storage.NewUnitOfWork(testPool)).
+		WithWorkers(1)
 	return service, fake, s, contest, people
 }
 
