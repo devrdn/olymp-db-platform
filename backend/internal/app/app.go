@@ -328,6 +328,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		GameReadiness: gameReadiness,
 		Submissions:   postgres.NewSubmissions(pool),
 		Sequence:      postgres.NewSequence(pool),
+		Covers:        postgres.NewCovers(pool),
 		Gate:          gate,
 		Users:         userRepo,
 		Audit:         auditRecorder,
