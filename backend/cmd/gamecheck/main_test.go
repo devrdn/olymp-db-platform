@@ -126,6 +126,10 @@ func TestTheReportSaysHowToRebuildARunningContestsGame(t *testing.T) {
 	if strings.Contains(printed, "cannot be rebuilt") {
 		t.Fatalf("the report marks a running contest to be rebuilt and says it cannot be:\n%s", printed)
 	}
+	// "Until it finishes" could be the contest as easily as the build.
+	if !strings.Contains(printed, "until the rebuild finishes") {
+		t.Fatalf("the report does not say how long a running contest's participants wait:\n%s", printed)
+	}
 	for _, line := range strings.Split(printed, "\n") {
 		if strings.Contains(line, "/game/build") && strings.Contains(line, "running") {
 			return
