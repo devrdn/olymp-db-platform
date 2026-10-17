@@ -138,7 +138,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -152,6 +152,7 @@ build: ## Compile the binaries into backend/bin
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/queryrunner ./cmd/queryrunner
 	cd $(BACKEND) && go build -trimpath -o bin/gamedb ./cmd/gamedb
 	cd $(BACKEND) && go build -trimpath -o bin/gameorphans ./cmd/gameorphans
+	cd $(BACKEND) && go build -trimpath -o bin/gamecheck ./cmd/gamecheck
 
 test: ## Run the unit tests
 	cd $(BACKEND) && go test ./...
@@ -275,7 +276,8 @@ audit-contract: ## Regenerate docs/api/audit-actions.json from audit.Actions()
 # until an image is published that cannot start.
 static-check: ## Fail if the API's binaries have picked up a cgo dependency
 	@cd $(BACKEND) && CGO_ENABLED=0 go build -o /dev/null ./cmd/api ./cmd/migrate ./cmd/bootstrap ./cmd/gameorphans \
-		&& echo "api, migrate, bootstrap and gameorphans build without cgo"
+		./cmd/gamecheck \
+		&& echo "api, migrate, bootstrap, gameorphans and gamecheck build without cgo"
 
 check: fmt vet static-check test ## Format, vet and test — run before pushing
 
@@ -640,6 +642,14 @@ game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases stil
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
 		COVER_DIR="$(COVER_DIR)" \
 		go run ./cmd/gameorphans $(ARGS)
+
+# The check after a restore or a move: the contests whose template the core
+# database records as built and the game cluster does not have. It changes
+# nothing and fails when a template is missing.
+.PHONY: game-check
+game-check: require-env ## List contests whose built template is missing from the game cluster
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
+		go run ./cmd/gamecheck
 
 # The console's load test (cmd/consoleload). It measures whatever API is
 # listening on API_PORT and whatever Query Runner that API reaches — start
