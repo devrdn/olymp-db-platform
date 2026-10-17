@@ -27,6 +27,7 @@ type schedulerFixture struct {
 	questions   *conteststest.Questions
 	roster      *conteststest.Registrations
 	games       *conteststest.Games
+	covers      *conteststest.Covers
 	users       *userstest.Repository
 	sink        *conteststest.Sink
 	uow         *conteststest.UnitOfWork
@@ -42,10 +43,11 @@ func newScheduler() schedulerFixture {
 	uow := &conteststest.UnitOfWork{}
 	poolTrigger := conteststest.NewPoolTrigger(uow)
 	roster, users := newRoster()
+	covers := conteststest.NewCovers()
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, roster, games, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace)).
+		scheduler: contests.NewScheduler(repo, stories, questions, roster, games, covers, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace)).
 			WithPoolTrigger(poolTrigger),
-		repo: repo, stories: stories, questions: questions, roster: roster, games: games, users: users,
+		repo: repo, stories: stories, questions: questions, roster: roster, games: games, covers: covers, users: users,
 		sink: sink, uow: uow, poolTrigger: poolTrigger,
 	}
 }
@@ -119,7 +121,7 @@ func TestNewSchedulerRefusesToAssembleWithoutAGate(t *testing.T) {
 	sink := conteststest.NewSink()
 	roster, _ := newRoster()
 	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
-		roster, conteststest.NewGames(), sink, audit.New(sink), &conteststest.UnitOfWork{}, nil)
+		roster, conteststest.NewGames(), conteststest.NewCovers(), sink, audit.New(sink), &conteststest.UnitOfWork{}, nil)
 }
 
 // A scheduler that cannot ask about the game would start every due contest
@@ -133,7 +135,19 @@ func TestNewSchedulerRefusesToAssembleWithoutGameReadiness(t *testing.T) {
 	sink := conteststest.NewSink()
 	roster, _ := newRoster()
 	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
-		roster, nil, sink, audit.New(sink), &conteststest.UnitOfWork{}, contests.NewGate(schedulerFixtureGrace))
+		roster, nil, conteststest.NewCovers(), sink, audit.New(sink), &conteststest.UnitOfWork{}, contests.NewGate(schedulerFixtureGrace))
+}
+
+func TestNewSchedulerRefusesToAssembleWithoutTheCoversStore(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewScheduler without the covers store did not panic")
+		}
+	}()
+	sink := conteststest.NewSink()
+	roster, _ := newRoster()
+	contests.NewScheduler(conteststest.NewSchedule(), conteststest.NewStories(), conteststest.NewQuestions(),
+		roster, conteststest.NewGames(), nil, sink, audit.New(sink), &conteststest.UnitOfWork{}, contests.NewGate(schedulerFixtureGrace))
 }
 
 func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
@@ -410,6 +424,30 @@ func TestAdvanceBlocksAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 	}
 	if !slices.Contains(problems, contests.ProblemStaffRegistered) {
 		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemStaffRegistered)
+	}
+}
+
+func TestAdvanceBlocksAContestWhoseCoverCreditsNobody(t *testing.T) {
+	f := newScheduler()
+	c := duePublishable(f)
+	f.covers.Put(c.ID, "  ")
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 {
+		t.Errorf("started = %d, want 0 — the gate refused this contest", started)
+	}
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1", len(f.sink.Entries))
+	}
+	problems, ok := f.sink.Entries[0].Payload["problems"].([]string)
+	if !ok {
+		t.Fatalf("payload problems = %v, want a []string", f.sink.Entries[0].Payload["problems"])
+	}
+	if !slices.Contains(problems, contests.ProblemCoverNeedsAttribution) {
+		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemCoverNeedsAttribution)
 	}
 }
 
@@ -697,7 +735,7 @@ func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	roster, users := newRoster()
-	scheduler := contests.NewScheduler(repo, stories, questions, roster, games, sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace))
+	scheduler := contests.NewScheduler(repo, stories, questions, roster, games, conteststest.NewCovers(), sink, audit.New(sink), uow, contests.NewGate(schedulerFixtureGrace))
 
 	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions,
 		roster: roster, games: games, users: users, sink: sink, uow: uow}
