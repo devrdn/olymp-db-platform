@@ -39,7 +39,7 @@ var (
 	codeContestEnded = httpx.NewCode("contest_ended",
 		"The contest has finished or been archived. It is over for everybody and will not open again, so nothing more is taken from anyone.")
 	codeContestFinished = httpx.NewCode("contest_finished",
-		"The participant has already finished. Their answers are in, and the console closes with them.")
+		"The contest has ended, and this participant's registration ended with it. They had started; their answers stand as given and the console is closed to them.")
 	codeNothingLeftToAnswer = httpx.NewCode("nothing_left_to_answer",
 		"No question of this contest can still be answered by this participant: every one is either answered correctly or out of attempts, so running a query cannot lead to an answer any more and the console stops taking them. A fact about the contest's current state and not a permission the caller lacks — nothing else closes: the story, the questions, the results and the timer stay open, and the console reopens if the contest gives them something to answer again.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",

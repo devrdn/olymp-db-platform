@@ -1971,7 +1971,7 @@ const ro = {
     query_result_too_large:
       "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
     contest_finished:
-      "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
+      "Această olimpiadă s-a încheiat, iar participarea dumneavoastră odată cu ea. Consola este închisă pentru dumneavoastră.",
     answer_too_long:
       "Acest răspuns este mai lung decât acceptă această instalare.",
     answer_too_often:

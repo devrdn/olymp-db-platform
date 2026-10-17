@@ -47,7 +47,7 @@
     },
     {
       "code": "contest_finished",
-      "meaning": "The participant has already finished. Their answers are in, and the console closes with them."
+      "meaning": "The contest has ended, and this participant's registration ended with it. They had started; their answers stand as given and the console is closed to them."
     },
     {
       "code": "contest_not_running",

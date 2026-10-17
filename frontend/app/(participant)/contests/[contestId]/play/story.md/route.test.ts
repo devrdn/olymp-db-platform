@@ -63,12 +63,12 @@ describe("GET .../play/story.md", () => {
 
   test("answers the API's own refusal rather than a generic failure", async () => {
     activeLocale.mockResolvedValue("en");
-    serverRequest.mockRejectedValue(new ApiError("contest_finished", 409, "The participant has already finished"));
+    serverRequest.mockRejectedValue(new ApiError("contest_finished", 409, "The contest has ended for this participant"));
 
     const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
 
     expect(response.status).toBe(409);
-    expect(await response.text()).toBe("The participant has already finished");
+    expect(await response.text()).toBe("The contest has ended for this participant");
   });
 
   test("answers 404 when this contest has no story in this language", async () => {
