@@ -665,13 +665,14 @@ func (s *templateStore) MarkTableDataChanged(_ context.Context, _ uuid.UUID) err
 	return nil
 }
 
-func (s *templateStore) RequestBuild(_ context.Context, _ uuid.UUID) (provisioning.Template, error) {
+func (s *templateStore) RequestBuild(_ context.Context, _ uuid.UUID, version int) (provisioning.Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.present {
 		return provisioning.Template{}, provisioning.ErrNoGame
 	}
-	if s.template.Status != provisioning.TemplateReady && s.template.Status != provisioning.TemplateFailed {
+	if s.template.Version != version ||
+		s.template.Status != provisioning.TemplateReady && s.template.Status != provisioning.TemplateFailed {
 		return provisioning.Template{}, provisioning.ErrBuildInProgress
 	}
 	s.template.Status = provisioning.TemplatePending
@@ -1041,6 +1042,9 @@ type buildCluster struct {
 	missing   map[string]bool
 	lookups   []string
 	lookupErr error
+	// duringLookup, when set, runs inside MissingDatabases, standing for
+	// whatever happens elsewhere while the cluster is being asked.
+	duringLookup func()
 }
 
 func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
@@ -1082,6 +1086,9 @@ func (c *buildCluster) Drop(_ context.Context, name string) error {
 }
 
 func (c *buildCluster) MissingDatabases(_ context.Context, names []string) ([]string, error) {
+	if c.duringLookup != nil {
+		c.duringLookup()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lookups = append(c.lookups, names...)
@@ -1109,12 +1116,16 @@ func (c *buildCluster) asked() []string {
 type authoring struct {
 	editable bool
 	running  bool
-	err      error
+	// err fails GameEditable, runningErr ContestRunning.
+	err        error
+	runningErr error
 }
 
 func (a authoring) GameEditable(context.Context, uuid.UUID) (bool, error) { return a.editable, a.err }
 
-func (a authoring) ContestRunning(context.Context, uuid.UUID) (bool, error) { return a.running, a.err }
+func (a authoring) ContestRunning(context.Context, uuid.UUID) (bool, error) {
+	return a.running, a.runningErr
+}
 
 func games(editable bool) (*provisioning.Games, *templateStore, *buildCluster) {
 	return gamesOf(authoring{editable: editable})

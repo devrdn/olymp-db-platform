@@ -1131,6 +1131,46 @@ func TestRequestBuildReportsAClusterThatCannotBeAsked(t *testing.T) {
 	}
 }
 
+// A rebuild that finished between this request's lookup and its write has put
+// the template back; going ahead would remake every copy a second time.
+func TestRequestBuildIsRefusedWhenARebuildFinishedWhileTheClusterWasAsked(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := gamesOf(authoring{running: true})
+	contest := storeAGame(store, provisioning.TemplateReady)
+	cluster.missing = map[string]bool{"game_x": true}
+	cluster.duringLookup = func() {
+		// Another request's rebuild, claimed, built and ready again.
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.template.Version = 4
+	}
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+		t.Fatalf("RequestBuild = %v, want ErrBuildInProgress", err)
+	}
+	if store.template.Version != 4 || store.template.Status != provisioning.TemplateReady {
+		t.Fatalf("the game is %q at version %d, want the other rebuild's ready version 4 left alone",
+			store.template.Status, store.template.Version)
+	}
+}
+
+// A status that cannot be read is an outage, not a contest that is over.
+func TestRequestBuildReportsAContestStatusThatCannotBeRead(t *testing.T) {
+	t.Parallel()
+	unreadable := errors.New("connection reset")
+	service, store, cluster := gamesOf(authoring{runningErr: unreadable})
+	contest := storeAGame(store, provisioning.TemplateReady)
+	cluster.missing = map[string]bool{"game_x": true}
+
+	_, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+	if !errors.Is(err, unreadable) || errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("RequestBuild = %v, want the status read's own error", err)
+	}
+	if got := cluster.asked(); len(got) != 0 {
+		t.Fatalf("the cluster was asked about %v without knowing the contest is running", got)
+	}
+}
+
 // The trail must tell a recovery mid-contest from an organiser's ordinary
 // rebuild, and being append-only it cannot be told afterwards.
 func TestABuildRequestIsRecordedWithWhetherItRecoversALostTemplate(t *testing.T) {

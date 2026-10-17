@@ -209,10 +209,11 @@ type TemplateRepository interface {
 	// matches its built database. Called inside the transaction of each write
 	// that changes a table's rows, so the mark commits or rolls back with it.
 	MarkTableDataChanged(ctx context.Context, contestID uuid.UUID) error
-	// RequestBuild puts a ready or failed game back to pending and raises its
-	// version. ErrBuildInProgress when the row is already pending or building,
-	// which a concurrent request may have caused after the caller checked.
-	RequestBuild(ctx context.Context, contestID uuid.UUID) (Template, error)
+	// RequestBuild puts a ready or failed game at version back to pending and
+	// raises its version. ErrBuildInProgress when the row is pending or
+	// building, or no longer at version: a concurrent request may have caused
+	// either after the caller checked.
+	RequestBuild(ctx context.Context, contestID uuid.UUID, version int) (Template, error)
 	// Policy is the contest's SQL policy, which the build grants inside the
 	// template. Repository.Game cannot supply it, because it answers only for
 	// a template that is already ready, and a first build would silently use
@@ -547,7 +548,10 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 	var asked Template
 	run := func(ctx context.Context) error {
 		var err error
-		asked, err = g.repo.RequestBuild(ctx, contestID)
+		// Against the version checked, so a rebuild that finished in
+		// between (its template back on the cluster) is not followed by
+		// another on the strength of a stale lookup.
+		asked, err = g.repo.RequestBuild(ctx, contestID, current.Version)
 		if err != nil {
 			return err
 		}

@@ -195,10 +195,10 @@ func (r *GameInstances) FinishBuild(
 }
 
 // RequestBuild puts a finished game back to pending and raises its version,
-// leaving the stored content untouched. The status condition settles a race
-// between two requests: only one raises the version, and the other gets
-// ErrBuildInProgress. The cached schema is cleared as in upsertGame.
-func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
+// leaving the stored content untouched. The status and version conditions
+// settle a race between two requests: only one raises the version, and the
+// other gets ErrBuildInProgress. The cached schema is cleared as in upsertGame.
+func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID, version int) (provisioning.Template, error) {
 	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_templates
 		SET status         = 'pending',
@@ -207,8 +207,8 @@ func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID) (
 		    schema_json    = NULL,
 		    schema_version = NULL,
 		    updated_at     = now()
-		WHERE contest_id = $1 AND status IN ('ready', 'failed')
-		RETURNING `+templateColumns, contestID))
+		WHERE contest_id = $1 AND version = $2 AND status IN ('ready', 'failed')
+		RETURNING `+templateColumns, contestID, version))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return provisioning.Template{}, provisioning.ErrBuildInProgress
 	}
