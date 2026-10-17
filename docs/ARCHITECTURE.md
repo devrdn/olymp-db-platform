@@ -3872,13 +3872,14 @@ exports get no more than two fifths of the pool. Better to learn that at
 `deploy` than on the day.
 
 **Backups.** `make backup` dumps the core database from inside the container
-and archives the covers volume; `make restore-check` loads a dump into a
-throwaway database and drops it, which is the difference between "we have
-backups" and "we think we have backups"; `make restore` replaces the live
-database and demands an explicit confirmation. Participants' instances are not
-backed up — they are rebuilt from the template. Nor is the game uploads volume:
-organisers' uploaded dumps and the table builder's CSV files are in neither
-file `make backup` writes.
+and archives the covers volume and the game uploads volume (organisers'
+uploaded dumps and the table builder's CSV files), all three under one
+timestamp; `make restore-check` loads a dump into a throwaway database and
+drops it, which is the difference between "we have backups" and "we think we
+have backups"; `make restore` replaces the live database and demands an
+explicit confirmation, and `make restore-covers` and
+`make restore-game-uploads` put the two volumes back. Participants' instances
+are not backed up — they are rebuilt from the template.
 
 ### Moving to another server
 
@@ -3889,11 +3890,12 @@ day it is needed is a bad day to work it out.
 **What is carried across is the core database's dump and two volumes of
 files; the game templates are rebuilt.**
 
-- **The covers archive** travels beside the dump: `make backup` writes both
+- **The covers archive** travels beside the dump: `make backup` writes them
   under one timestamp (section 9.7).
-- **The game uploads volume** (`game-uploads-data`) is copied by hand, since
-  `make backup` does not take it. Without it a game built from an uploaded
-  dump or from the table builder's CSV files cannot be built again.
+- **The game uploads archive** (`game-uploads-data`) travels the same way:
+  `make backup` writes it beside the dump, and `make restore-game-uploads`
+  puts it back. Without it a game built from an uploaded dump or from the
+  table builder's CSV files cannot be built again.
 - **The templates** live in `pg-game-data`, which stays behind, while the
   restored database still records them as built; nothing checks that a
   recorded template exists. Each contest that is still to be played needs its
@@ -3926,23 +3928,22 @@ if wanted.
 
 **The order:**
 
-1. Take the dump and the covers archive — `make backup` — and **verify the
-   dump**: `make restore-check FILE=…`. An unverified dump is a hypothesis,
-   not a backup. Then copy the game uploads out of the `api` container by
-   hand, `tables/` included: no `make` target does it, so it is
-   `docker compose -f deploy/docker-compose.yml cp api:<GAME_UPLOAD_DIR>/. <dir>`
-   (by default `/var/lib/dbcontest/uploads`).
+1. Take the dump, the covers archive and the game uploads archive —
+   `make backup` — and **verify the dump**: `make restore-check FILE=…`. An
+   unverified dump is a hypothesis, not a backup. The uploads can run to
+   gigabytes, and each volume is staged in a temporary directory first: on a
+   host whose `/tmp` is held in memory, point `TMPDIR` at a disk with room.
 2. Bring up the new host: Docker, `deploy/`, `.env`. `SITE_ADDRESS` is a
    **temporary** name, not the real one.
 3. `make deploy VERSION=vX.Y.Z` — the same tag that runs now. Moving and
    upgrading in one go is two suspects for one failure.
-4. `make restore FILE=… CONFIRM=yes` and
-   `make restore-covers FILE=… CONFIRM=yes` on the new host. Copy the game
-   uploads into the new `api` container by hand as well, owned by the API's
-   user (65532) as `restore-covers` does for covers — the API cannot open a
-   file it does not own — and restart the `api`. Copy them after the
-   restore, not before: until the rows are back, the upload sweep treats the
-   files as orphans and deletes them.
+4. `make restore FILE=… CONFIRM=yes`, then
+   `make restore-covers FILE=… CONFIRM=yes` and
+   `make restore-game-uploads FILE=… CONFIRM=yes` on the new host, and
+   restart the `api`. Both volume restores write the files as the API's user
+   (65532), since the API cannot open a file it does not own. Restore the
+   uploads after `make restore`, not before: until the rows are back, the
+   upload sweep treats the files as orphans and deletes them.
 5. Rebuild the game of every contest still to be played. The restored
    database records each template as built and nothing checks the cluster,
    so until then that contest has no game.
