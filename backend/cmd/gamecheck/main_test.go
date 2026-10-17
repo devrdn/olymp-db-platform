@@ -103,3 +103,14 @@ func TestOneContestStillToBePlayedFailsTheCheck(t *testing.T) {
 		t.Fatalf("check returned %v, want errTemplatesMissing for the draft", err)
 	}
 }
+
+func TestTheGameClusterIsReadUnderTheAPIsName(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://core.invalid/core")
+	t.Setenv("GAME_DB_ADMIN_DSN", "postgres://game.invalid/game")
+	t.Setenv("GAME_PROVISIONER_DSN", "")
+
+	err := run(nil)
+	if err == nil || !strings.Contains(err.Error(), "GAME_PROVISIONER_DSN") {
+		t.Fatalf("run returned %v, want it to ask for GAME_PROVISIONER_DSN", err)
+	}
+}

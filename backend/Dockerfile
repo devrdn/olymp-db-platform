@@ -20,7 +20,8 @@ ARG VERSION=dev
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api       ./cmd/api && \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/migrate   ./cmd/migrate && \
-    go build -trimpath -ldflags="-s -w"                            -o /out/bootstrap ./cmd/bootstrap
+    go build -trimpath -ldflags="-s -w"                            -o /out/bootstrap ./cmd/bootstrap && \
+    go build -trimpath -ldflags="-s -w"                            -o /out/gamecheck ./cmd/gamecheck
 
 # Where the API's two named volumes are mounted (GAME_UPLOAD_DIR and COVER_DIR's
 # defaults), made here because the runtime stage has no shell to make them.
@@ -32,6 +33,8 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=build /out/api       /usr/local/bin/api
 COPY --from=build /out/migrate   /usr/local/bin/migrate
 COPY --from=build /out/bootstrap /usr/local/bin/bootstrap
+# The check after a restore; make game-check runs it inside the api container.
+COPY --from=build /out/gamecheck /usr/local/bin/gamecheck
 
 # Owned by nonroot (65532), the user the API runs as. Docker initialises a new
 # named volume from the image's directory at its mount point, ownership

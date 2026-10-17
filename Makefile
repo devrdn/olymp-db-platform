@@ -646,10 +646,13 @@ game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases stil
 # The check after a restore or a move: the contests whose template the core
 # database records as built and the game cluster does not have. It changes
 # nothing and fails when one belongs to a contest still to be played.
+#
+# It runs inside the running api container, which reaches both databases on
+# the compose network under its own environment's names; the host has neither
+# a Go toolchain nor either database's port.
 .PHONY: game-check
-game-check: require-env ## List contests whose built template is missing from the game cluster
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
-		go run ./cmd/gamecheck
+game-check: require-env ## List contests whose built template is missing from the game cluster (in the running api container)
+	$(COMPOSE) exec -T api /usr/local/bin/gamecheck
 
 # The console's load test (cmd/consoleload). It measures whatever API is
 # listening on API_PORT and whatever Query Runner that API reaches — start

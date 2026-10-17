@@ -12,7 +12,10 @@
 //
 //	gamecheck
 //
-// It reads CORE_DB_DSN and GAME_DB_ADMIN_DSN, and is safe to run at any time.
+// It reads CORE_DB_DSN and GAME_PROVISIONER_DSN, the names the api service's
+// environment gives both databases: `make game-check` runs it inside the api
+// container, whose image has no shell to rename a variable. It is safe to run
+// at any time.
 package main
 
 import (
@@ -51,7 +54,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	gameDSN, err := required("GAME_DB_ADMIN_DSN")
+	gameDSN, err := required("GAME_PROVISIONER_DSN")
 	if err != nil {
 		return err
 	}

@@ -637,7 +637,11 @@ afterwards whether the restore worked or not.
 
 `game-check` is the step after `restore` on a new host. The game templates are
 in no backup: they live on the game cluster, which a move leaves behind, while
-the restored rows still record every template as built. It reads both
+the restored rows still record every template as built. It runs `gamecheck`,
+which the API image carries, inside the running `api` container: that
+container reaches both databases on the compose network, while the host has
+no Go toolchain and publishes neither database's port, so the stack must be up
+(`make restore` starts the `api` again if it was running). It reads both
 databases and lists each contest whose template is recorded as built and is not
 on the cluster, with the contest's status. It changes nothing. It fails while
 a contest still to be played — draft, published or running — lacks its
