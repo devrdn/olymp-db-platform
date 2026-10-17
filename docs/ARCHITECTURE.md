@@ -3947,7 +3947,10 @@ if wanted.
 5. Rebuild the game of every contest still to be played. The restored
    database records each template as built, so until then that contest has
    no game; `make game-check` lists every such contest with its status, and
-   passes once no contest still to be played lacks its template.
+   passes once no contest still to be played lacks its template. It runs
+   inside the running `api` container, whose image carries the check and
+   which reaches both databases on the compose network, so nothing but
+   Docker is needed on the host.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
    stored, in `draft` or `published`. The game screen offers it only for a
    table-builder game whose rows changed since its build, or whose build
