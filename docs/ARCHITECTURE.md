@@ -510,9 +510,12 @@ How it holds together:
   contest, whose mode travels with the participant's contest listing
   (`sql_mode`), behind a confirmation saying that the tables return to the
   contest's starting state and the participant's changes are lost; after it,
-  the screen re-reads the schema panel. Resets and removals use
-  `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+), so an active session is
-  terminated automatically and a hung statement cannot block the rebuild.
+  the screen clears the last result and re-reads the schema panel. The panel
+  shows the game's build, cached per contest and version, so the re-read
+  changes it only when the game was rebuilt since the page loaded. Resets and
+  removals use `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+), so an active
+  session is terminated automatically and a hung statement cannot block the
+  rebuild.
 - **Disk quotas.** Writing opens a denial-of-service vector: fill the disk.
   Three levels answer it. (1) Before every statement that writes, the Query
   Runner reads the instance's size with `pg_database_size()` inside the

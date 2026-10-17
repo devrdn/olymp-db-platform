@@ -155,10 +155,12 @@ export function Workspace({
     [schema, toggle],
   );
 
-  // A reset replaces the participant's database: the last result's rows came
-  // from the old one, and the tables and views they made are gone from the
-  // schema. A contest that hides its schema is not asked for it, and a failed
-  // read keeps the panel as it was rather than taking it away.
+  // A reset replaces the participant's database, so the last result's rows
+  // came from one that no longer exists. The reset copies the game's current
+  // build, and the panel shows that build, cached per contest and version,
+  // never the participant's own tables: the re-read changes the panel only
+  // when the game was rebuilt since the page loaded. A contest that hides its
+  // schema is not asked for it, and a failed read keeps the panel as it was.
   const schemaShown = schema !== null;
   const onDatabaseReset = useCallback(() => {
     setLastResult({ kind: "idle" });
