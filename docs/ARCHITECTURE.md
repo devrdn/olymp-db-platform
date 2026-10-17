@@ -623,7 +623,8 @@ it never runs in bulk at the moment that matters:
   the version — so the version is the invalidation rule
   (`provisioning.templateSizes`).
 - **Rebuilding a template invalidates copies.** Any rebuild — a new game
-  schema, a policy change before the start — increments
+  schema, a policy change before the start, or a running contest's template
+  that the cluster has lost (section 13) — increments
   `game_templates.version`. Provisioning then drops **every free copy in the
   pool and every instance already created** at the old version and remakes
   them through the queue, so nobody can be handed a database with stale grants
@@ -3899,8 +3900,9 @@ files; the game templates are rebuilt.**
 - **The templates** live in `pg-game-data`, which stays behind, while the
   restored database still records them as built; `make game-check` lists the
   contests whose recorded template the cluster does not have. Each contest
-  that is still to be played needs its game rebuilt on the new host, and a
-  rebuild is refused once a contest is `running`.
+  that is still to be played needs its game rebuilt on the new host, a
+  `running` one included: its rebuild is accepted because the template is
+  missing from the cluster.
 
 The rest follows from decisions taken for other reasons, and it is worth
 knowing which, so as not to undo them by accident.
@@ -3952,15 +3954,22 @@ if wanted.
    which reaches both databases on the compose network, so nothing but
    Docker is needed on the host.
    `POST /api/v1/contests/{id}/game/build` rebuilds a game from what is
-   stored, in `draft` or `published`. The game screen offers it only for a
+   stored, in `draft` or `published`, and in `running` only while the
+   template recorded as built is missing from the cluster — which is what a
+   move leaves; a running contest whose template exists is refused
+   (`game_not_editable`), and one whose recovery build failed may be asked
+   for again. The game screen offers the rebuild only for a
    table-builder game whose rows changed since its build, or whose build
    failed, and a restored game is normally neither, so the route is called
    directly with an organiser's session, whatever the game's source. The
    rebuild raises the version, and the participants' copies are made again
-   from the new template. A contest that is `running` cannot be rebuilt and
-   the code has no other way to bring its game back — another reason to move
-   between olympiads. A finished contest needs no game: what is shown of it
-   afterwards is read from the core database.
+   from the new template. In a running contest the participants can run no
+   query from the request until the build finishes (`no_game_yet`); each is
+   then given a fresh copy on their next query. What they changed in their
+   own database is gone, their answers and score are not, and the contest's
+   clock does not stop meanwhile — another reason to move between olympiads.
+   A finished contest needs no game: what is shown of it afterwards is read
+   from the core database.
 6. Exercise sign-in, a contest and the SQL console on the temporary name.
 7. Switch DNS, change `SITE_ADDRESS` to the real name, and `make deploy`
    again. Caddy issues a certificate for the new name.

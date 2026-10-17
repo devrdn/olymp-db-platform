@@ -646,9 +646,15 @@ databases and lists each contest whose template is recorded as built and is not
 on the cluster, with the contest's status. It changes nothing. It fails while
 a contest still to be played — draft, published or running — lacks its
 template; a finished or archived contest is listed as needing no game and does
-not fail it, since what is shown of it is read from the core database. A draft
-or published contest's game is rebuilt with
-`POST /api/v1/contests/{id}/game/build`; a running contest's cannot be.
+not fail it, since what is shown of it is read from the core database. Each
+contest still to be played gets its game back from
+`POST /api/v1/contests/{id}/game/build`, called with an organiser's session. A
+running contest is rebuilt this way too: the route accepts it only while the
+template is missing from the cluster, which is the state a move leaves, and
+records the request in the audit trail with `recovery: true`. Its participants
+can run no query until the build finishes, and then each gets a fresh copy of
+the game: what they changed in their own database is gone, their answers and
+score are not.
 
 ## Logging
 
