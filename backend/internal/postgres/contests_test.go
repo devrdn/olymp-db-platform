@@ -458,6 +458,7 @@ func TestAnOrganisersFinishRecordsEachParticipationItEndedInItsTransaction(t *te
 			UnitOfWork:    storage.NewUnitOfWork(testPool),
 			Gate:          contests.NewGate(0),
 			GameReadiness: NewGameInstances(testPool),
+			Covers:        NewCovers(testPool),
 		})
 		if err := service.Transition(ctx, author.ID, contestID, contests.StatusFinished); err != nil {
 			t.Fatalf("Transition(finished) = %v", err)
