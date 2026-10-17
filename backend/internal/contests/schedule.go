@@ -96,40 +96,37 @@ type Scheduler struct {
 	questions scheduleQuestions
 	roster    scheduleRoster
 	games     scheduleGames
+	covers    scheduleCovers
 	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
 	// gate supplies the grace AdvanceFinished uses, so the scheduler agrees
 	// with every other consumer about when a window closes.
 	gate *Gate
-	// poolTrigger and covers are nil until their With methods.
+	// poolTrigger is nil until WithPoolTrigger.
 	poolTrigger PoolTrigger
-	covers      scheduleCovers
 }
 
-// NewScheduler assembles the background scheduler. Panics without a gate or
-// games.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, games scheduleGames, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, gate *Gate) *Scheduler {
+// NewScheduler assembles the background scheduler. It panics without a gate,
+// games or the covers store, as NewService does, so the scheduled start and
+// the manual one cannot hold different gates.
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, games scheduleGames, covers scheduleCovers, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, gate *Gate) *Scheduler {
 	if gate == nil {
 		panic("contests: NewScheduler needs the participation gate")
 	}
 	if games == nil {
 		panic("contests: NewScheduler needs to know whether a contest's game is built")
 	}
-	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, games: games, blocked: blocked, audit: auditRecorder, uow: uow, gate: gate}
+	if covers == nil {
+		panic("contests: NewScheduler needs the covers store the publish gate reads")
+	}
+	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, games: games, covers: covers, blocked: blocked, audit: auditRecorder, uow: uow, gate: gate}
 }
 
 // WithPoolTrigger sets the trigger Advance fires for every contest it moves
 // to running. Optional.
 func (s *Scheduler) WithPoolTrigger(trigger PoolTrigger) *Scheduler {
 	s.poolTrigger = trigger
-	return s
-}
-
-// WithCovers sets the cover store the publish gate reads. Optional; without
-// it the gate never asks about covers.
-func (s *Scheduler) WithCovers(store scheduleCovers) *Scheduler {
-	s.covers = store
 	return s
 }
 
@@ -165,14 +162,12 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 	}
 
 	// An uploaded cover with nobody credited (§10.1).
-	if contestCovers != nil {
-		attribution, uploaded, err := contestCovers.Attribution(ctx, c.ID)
-		if err != nil {
-			return err
-		}
-		if uploaded && strings.TrimSpace(attribution) == "" {
-			problems = append(problems, PublishProblem{Code: ProblemCoverNeedsAttribution})
-		}
+	attribution, uploaded, err := contestCovers.Attribution(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if uploaded && strings.TrimSpace(attribution) == "" {
+		problems = append(problems, PublishProblem{Code: ProblemCoverNeedsAttribution})
 	}
 
 	if len(problems) > 0 {

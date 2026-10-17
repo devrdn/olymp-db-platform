@@ -349,13 +349,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		postgres.NewQuestions(pool),
 		postgres.NewRegistrations(pool),
 		gameReadiness,
+		postgres.NewCovers(pool),
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),
 		// The same gate, so a contest never finishes while a late answer
 		// inside the grace would still be admitted.
 		gate,
-	).WithPoolTrigger(poolTrigger).WithCovers(postgres.NewCovers(pool))
+	).WithPoolTrigger(poolTrigger)
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
 	// One leaderboard service for the table and the profile, so a report and
