@@ -269,3 +269,29 @@ func (r *GameInstances) GameReady(ctx context.Context, contestID uuid.UUID) (boo
 	}
 	return ready, nil
 }
+
+// ReadyTemplates lists every template recorded as 'ready', by database name,
+// with its contest's status.
+//
+// It is unbounded on purpose: a truncated list would report a lost template
+// as present. It runs by hand from cmd/gamecheck, off the request path.
+func (r *GameInstances) ReadyTemplates(ctx context.Context) ([]provisioning.ReadyTemplate, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT t.contest_id, c.status, t.template_db
+		FROM game_templates t
+		JOIN contests c ON c.id = t.contest_id
+		WHERE t.status = 'ready'
+		ORDER BY t.template_db`)
+	if err != nil {
+		return nil, fmt.Errorf("list the ready templates: %w", err)
+	}
+	templates, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (provisioning.ReadyTemplate, error) {
+		var t provisioning.ReadyTemplate
+		err := row.Scan(&t.ContestID, &t.ContestStatus, &t.Database)
+		return t, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the ready templates: %w", err)
+	}
+	return templates, nil
+}
