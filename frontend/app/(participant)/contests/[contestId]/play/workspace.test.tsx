@@ -425,7 +425,7 @@ describe("the database reset", () => {
     expect(screen.queryByRole("button", { name: r.open })).not.toBeInTheDocument();
   });
 
-  test("redraws the schema panel from the database as it now is", async () => {
+  test("redraws the schema panel with the schema read after the reset", async () => {
     schemaReads.next = {
       kind: "ok",
       schema: { truncated: false, tables: [{ name: "suspects", columns: [] }] },
