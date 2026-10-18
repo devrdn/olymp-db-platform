@@ -3124,10 +3124,11 @@ the export's page. The planner is not forced. The same rule extends to
 `contest_query_fingerprints`: it is not a journal but a set across the whole
 installation, and reading it outside one slice is the same mistake as scanning
 the journal it is derived from. The participant table is the one read that
-touches no journal at all: `TestWatchRosterCostsWhatItShows` demands zero over
-all four, demands that what it reads does not grow after five further rounds
-of the same contest, and separately that a repeated query costs the set not
-one row.
+touches no journal at all: `TestWatchRosterCostsWhatItShows` demands that its
+plan names none of the four, that five further rounds of the same contest add
+not one row to any relation it does read, and separately that a repeated query
+costs the set not one row. It compares what the history wrote, not the rows a
+plan happened to touch, so it holds whichever plan the planner picks.
 
 **The participant is told on screen** (en/ru/ro): under the contest screen's
 heading, "the organiser sees your queries, answers, notes and actions on this
