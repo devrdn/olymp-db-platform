@@ -215,12 +215,13 @@ func TestWatchRosterCostsWhatItShows(t *testing.T) {
 			}
 		}
 
-		// Only which relations the plan names is used: that is fixed by the
-		// statement, while the rows each node touched depend on the plan.
 		read := measureRows(t, func(w *Watch) error {
 			_, err := w.Roster(ctx, f.contest, monitor.MaxRosterRows)
 			return err
 		})
+		if _, named := read["registrations"]; !named {
+			t.Fatalf("the measured plan does not name registrations (it names %v): nothing below would be checked", read)
+		}
 		const set = "contest_query_fingerprints"
 		for table := range read {
 			switch {
