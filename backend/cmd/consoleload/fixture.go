@@ -171,8 +171,9 @@ type setupReport struct {
 }
 
 // setup creates the contest, its game and its participants, filling f as it
-// goes so a failure half-way can still be torn down.
-func setup(ctx context.Context, st *stores, f *fixture, source string, participants int, mode string) (setupReport, error) {
+// goes so a failure half-way can still be torn down. The contest runs until
+// ends, the run's planned end.
+func setup(ctx context.Context, st *stores, f *fixture, source string, participants int, mode string, ends time.Time) (setupReport, error) {
 	var report setupReport
 	f.RunID = randomHex(4)
 	f.Mode = mode
@@ -192,10 +193,9 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	}
 	f.OwnerID = owner.ID
 
-	// Running for a day, so the window cannot close mid-run; fixed timing,
-	// so no participant has a clock to start.
-	now := time.Now().UTC()
-	starts, ends := now.Add(-time.Minute), now.Add(24*time.Hour)
+	// Running until the run's planned end, which is also how sweep tells a
+	// run still going; fixed timing, so no participant has a clock to start.
+	starts := time.Now().UTC().Add(-time.Minute)
 	contest, err := postgres.NewContests(st.core).Create(ctx, contests.Contest{
 		Status:           contests.StatusRunning,
 		Enrollment:       contests.EnrollmentInviteOnly,
@@ -371,4 +371,13 @@ func mustHash(secret string) string {
 		panic(err)
 	}
 	return hash
+}
+
+// extendFixture moves a verified kept fixture's contest end to this run's
+// planned end, so the window stays open and sweep sees the run as going.
+func extendFixture(ctx context.Context, core *pgxpool.Pool, f *fixture, ends time.Time) error {
+	if _, err := core.Exec(ctx, `UPDATE contests SET ends_at = $2 WHERE id = $1`, f.ContestID, ends); err != nil {
+		return fmt.Errorf("extend the kept fixture's contest: %w", err)
+	}
+	return nil
 }

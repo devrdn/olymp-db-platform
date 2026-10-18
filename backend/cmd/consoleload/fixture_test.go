@@ -4,12 +4,14 @@ import (
 	"errors"
 	"math/rand/v2"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/google/uuid"
 )
 
 func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *testing.T) {
@@ -19,8 +21,16 @@ func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *t
 
 	f := &fixture{}
 	tearDownAtTheEnd(t, st, f)
-	if _, err := setup(ctx, st, f, source, 2, contests.ModeReadWrite); err != nil {
+	ends := time.Now().Add(90 * time.Minute).Truncate(time.Second)
+	if _, err := setup(ctx, st, f, source, 2, contests.ModeReadWrite, ends); err != nil {
 		t.Fatalf("setup: %v", err)
+	}
+	var recorded time.Time
+	if err := st.core.QueryRow(ctx, `SELECT ends_at FROM contests WHERE id = $1`, f.ContestID).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if !recorded.Equal(ends) {
+		t.Errorf("the contest ends at %s, want the run's planned end %s", recorded, ends)
 	}
 	if f.Mode != contests.ModeReadWrite {
 		t.Errorf("the fixture records mode %q", f.Mode)
@@ -98,11 +108,45 @@ func TestAReusedFixtureMustNameItsAccountsByTheirOwnLogins(t *testing.T) {
 	if err := verifyFixture(t.Context(), st.core, f); err != nil {
 		t.Fatalf("the fixture setup wrote is refused: %v", err)
 	}
+	other := readOnlyFixture(t, st, false)
 
-	tampered := *f
-	tampered.Participants = []participantRecord{f.Participants[0]}
-	tampered.Participants[0].Login = "teacher"
-	if err := verifyFixture(t.Context(), st.core, &tampered); !errors.Is(err, errNotTheHarness) {
-		t.Fatalf("a participant named by somebody else's login: %v, want %v", err, errNotTheHarness)
+	tests := []struct {
+		name   string
+		tamper func(*fixture)
+	}{
+		{name: "a participant named by somebody else's login", tamper: func(g *fixture) {
+			g.Participants = []participantRecord{f.Participants[0]}
+			g.Participants[0].Login = "teacher"
+		}},
+		{name: "an owner that is the contest's identifier", tamper: func(g *fixture) { g.OwnerID = f.ContestID }},
+		{name: "an owner that did not create the contest", tamper: func(g *fixture) { g.OwnerID = other.OwnerID }},
+		{name: "no owner", tamper: func(g *fixture) { g.OwnerID = uuid.Nil }},
+		{name: "a contest that does not exist", tamper: func(g *fixture) { g.ContestID = sibling(f.ContestID) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tampered := *f
+			tt.tamper(&tampered)
+			if err := verifyFixture(t.Context(), st.core, &tampered); !errors.Is(err, errNotTheHarness) {
+				t.Fatalf("verifyFixture = %v, want %v", err, errNotTheHarness)
+			}
+		})
+	}
+}
+
+func TestAReusedFixtureMovesItsContestsEndToTheNewRunsPlannedEnd(t *testing.T) {
+	st := testStores(t)
+	f := readOnlyFixture(t, st, false)
+	ends := time.Now().Add(3 * time.Hour).Truncate(time.Second)
+
+	if err := extendFixture(t.Context(), st.core, f, ends); err != nil {
+		t.Fatalf("extendFixture: %v", err)
+	}
+	var recorded time.Time
+	if err := st.core.QueryRow(t.Context(), `SELECT ends_at FROM contests WHERE id = $1`, f.ContestID).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if !recorded.Equal(ends) {
+		t.Fatalf("the contest ends at %s, want %s", recorded, ends)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -40,6 +41,11 @@ func applyCopySettings(ctx context.Context, st *stores, f *fixture, settings map
 	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return err
+	}
+	for _, database := range names {
+		if !hasAnyPrefix(database, databasePrefixes([]uuid.UUID{f.ContestID})) {
+			return fmt.Errorf("%w: database %s, recorded for a contest it is not named after", errNotTheHarness, database)
+		}
 	}
 	for _, name := range sortedKeys(settings) {
 		value := settings[name]

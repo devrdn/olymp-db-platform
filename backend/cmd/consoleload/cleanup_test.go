@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
@@ -39,6 +40,12 @@ func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
 	register(t, st, withAStudent, student)
 	withAnotherRun := testContest(t, st, owner, contests.StatusRunning, now)
 	register(t, st, withAnotherRun, otherRunsParticipant)
+	manager := testAccount(t, st, loginPrefix+randomHex(4)+"-p001", users.StatusActive)
+	if _, err := st.core.Exec(t.Context(), `
+		INSERT INTO contest_managers (contest_id, user_id, role, granted_by) VALUES ($1, $2, 'manager', $3)`,
+		real, manager, teacher); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name     string
@@ -50,6 +57,7 @@ func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
 		{name: "an owner-shaped account that is not blocked", users: []uuid.UUID{loneActiveOwner}},
 		{name: "a harness account registered in a contest outside the set", users: []uuid.UUID{otherRunsParticipant}},
 		{name: "an account that created a contest outside the set", users: []uuid.UUID{owner}},
+		{name: "a harness account that manages a contest outside the set", users: []uuid.UUID{manager}},
 		{name: "a contest somebody else created", contests: []uuid.UUID{real}},
 		{name: "a contest whose owner is an active account", contests: []uuid.UUID{ownedByAnActiveAccount}},
 		{name: "a harness contest with a stranger registered", contests: []uuid.UUID{withAStudent}},
@@ -108,14 +116,17 @@ func TestRemoveDropsNoDatabaseOfAContestItCannotTieToTheFullID(t *testing.T) {
 		{name: "a contest that does not exist, sharing the real one's prefix", contests: []uuid.UUID{sibling(real)}},
 		{name: "the real template named under a contest that does not exist", contests: []uuid.UUID{sibling(real)},
 			known: []string{template}},
-		{name: "a harness contest whose prefix a real contest shares", contests: []uuid.UUID{harnessTwin},
-			users: []uuid.UUID{owner}, refused: true},
+		// Only the contest, so the shared prefix is the one reason to refuse.
+		{name: "a harness contest whose prefix a real contest shares", contests: []uuid.UUID{harnessTwin}, refused: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := remove(ctx, st, tt.contests, tt.users, tt.known)
 			if tt.refused != errors.Is(err, errNotTheHarness) || !tt.refused && err != nil {
 				t.Fatalf("remove = %v, want refused %v", err, tt.refused)
+			}
+			if tt.refused && !strings.Contains(err.Error(), "database prefix") {
+				t.Fatalf("refused for another reason than the shared prefix: %v", err)
 			}
 			present, err := clusterDatabases(ctx, st.game, databasePrefixes([]uuid.UUID{real}))
 			if err != nil {
@@ -125,6 +136,61 @@ func TestRemoveDropsNoDatabaseOfAContestItCannotTieToTheFullID(t *testing.T) {
 				t.Fatalf("the real contest's databases are now %v, want %v", present, []string{copyName, template})
 			}
 		})
+	}
+}
+
+func TestTeardownLeavesTheAuditTrailOfEverythingItDidNotCreate(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	f := readOnlyFixture(t, st, false)
+
+	organiser := testAccount(t, st, "organiser-"+randomHex(4), users.StatusBlocked)
+	real := testContest(t, st, organiser, contests.StatusFinished, time.Now().UTC().Add(-time.Hour))
+	participant := f.Participants[0].UserID
+	entry := func(actor *uuid.UUID, entity string, id uuid.UUID) int64 {
+		var n int64
+		if err := st.core.QueryRow(ctx, `
+			INSERT INTO audit_log (actor_id, action, entity, entity_id) VALUES ($1, 'contest.update', $2, $3)
+			RETURNING id`, actor, entity, id.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = st.core.Exec(context.WithoutCancel(ctx), `DELETE FROM audit_log WHERE id = $1`, n)
+		})
+		return n
+	}
+	kept := []int64{
+		entry(&organiser, "contest", real),
+		entry(&organiser, "user", organiser),
+		// The real contest's identifier under another kind of entity.
+		entry(nil, "user", real),
+	}
+	gone := []int64{
+		entry(nil, "contest", f.ContestID),
+		entry(&participant, "contest", real),
+		entry(nil, "user", participant),
+	}
+
+	// A fixture whose owner is a real contest's identifier.
+	crafted := *f
+	crafted.OwnerID = real
+	if err := verifyFixture(ctx, st.core, &crafted); !errors.Is(err, errNotTheHarness) {
+		t.Errorf("verifyFixture accepted an owner that is a contest: %v", err)
+	}
+	if err := teardown(ctx, st, &crafted); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+
+	var survivors []int64
+	rows, err := st.core.Query(ctx, `SELECT id FROM audit_log WHERE id = ANY($1) ORDER BY id`, append(kept, gone...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if survivors, err = pgx.CollectRows(rows, pgx.RowTo[int64]); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(survivors, kept) {
+		t.Fatalf("audit entries left: %v, want exactly %v (the entries about what the run did not create)", survivors, kept)
 	}
 }
 
@@ -178,12 +244,9 @@ func TestSweepLeavesARunThatMayStillBeGoingUnlessForced(t *testing.T) {
 		t.Fatal("sweep -yes removed a run that started moments ago")
 	}
 
-	// The same run, started longer ago than any profile's run lasts.
-	backdate := time.Now().Add(-longestProfileRun() - time.Minute)
-	if _, err := st.core.Exec(ctx, `UPDATE contests SET created_at = $2 WHERE id = $1`, f.ContestID, backdate); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.core.Exec(ctx, `UPDATE users SET created_at = $2 WHERE id = ANY($1)`, f.userIDs(), backdate); err != nil {
+	// The same run, past the end it planned.
+	if _, err := st.core.Exec(ctx, `UPDATE contests SET ends_at = now() - interval '1 minute' WHERE id = $1`,
+		f.ContestID); err != nil {
 		t.Fatal(err)
 	}
 	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, remove: true}); err != nil {
@@ -197,9 +260,10 @@ func TestSweepRemovesAnAccountTiedToNoContestOnlyWithOrphans(t *testing.T) {
 	ctx := t.Context()
 	run := randomHex(4)
 	lone := testAccount(t, st, loginPrefix+run+"-p001", users.StatusActive)
+	backdate(t, st, lone)
 
 	var out strings.Builder
-	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, force: true}); err != nil {
+	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true}); err != nil {
 		t.Fatalf("sweep -yes: %v", err)
 	}
 	if !strings.Contains(out.String(), "-orphans") {
@@ -213,7 +277,7 @@ func TestSweepRemovesAnAccountTiedToNoContestOnlyWithOrphans(t *testing.T) {
 		t.Fatal("sweep -yes removed an account tied to no contest without -orphans")
 	}
 
-	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, force: true, orphans: true}); err != nil {
+	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, orphans: true}); err != nil {
 		t.Fatalf("sweep -yes -orphans: %v", err)
 	}
 	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = $1`, lone).Scan(&left); err != nil {
@@ -221,6 +285,28 @@ func TestSweepRemovesAnAccountTiedToNoContestOnlyWithOrphans(t *testing.T) {
 	}
 	if left != 0 {
 		t.Fatal("sweep -yes -orphans left the account")
+	}
+}
+
+func TestSweepHoldsARunItCannotDateWhenTheProfilesCannotBeRead(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	run := randomHex(4)
+	lone := testAccount(t, st, loginPrefix+run+"-p001", users.StatusActive)
+	backdate(t, st, lone)
+	// The profiles read this, and refuse a negative depth.
+	t.Setenv("GAME_POOL_DEPTH", "-1")
+
+	var out strings.Builder
+	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, orphans: true}); err != nil {
+		t.Fatalf("sweep -yes: %v", err)
+	}
+	var left int
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = $1`, lone).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 1 || !strings.Contains(out.String(), "-force") {
+		t.Fatalf("a run that could not be dated was removed (%d left):\n%s", left, out.String())
 	}
 }
 

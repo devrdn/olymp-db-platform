@@ -49,6 +49,9 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 		if err := verifyFixture(ctx, st.core, f); err != nil {
 			return err
 		}
+		if err := extendFixture(ctx, st.core, f, cfg.plannedEnd(time.Now())); err != nil {
+			return err
+		}
 	}
 
 	if !cfg.allowLive {
@@ -102,7 +105,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 
 	if cfg.fixture == "" {
 		fmt.Printf("setting up %d participants on a copy of %s\n", needed, cfg.sourceTemplate)
-		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed, cfg.mode)
+		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed, cfg.mode, cfg.plannedEnd(time.Now()))
 		if err != nil {
 			return err
 		}
@@ -399,4 +402,11 @@ func refuseLive(live []liveContest, horizon time.Duration) error {
 // young for a plain sweep, and the operator knows it is over.
 func teardownFailed(run string, err error) error {
 	return fmt.Errorf("teardown: %w (`consoleload sweep -run %s -yes -force` removes the rest)", err, run)
+}
+
+// plannedEnd is when a run starting at start should be over: its horizon and
+// setupMargin again, slack for a slow provisioning. The test contest runs
+// until then, and sweep leaves the run alone until then.
+func (c config) plannedEnd(start time.Time) time.Time {
+	return start.Add(c.horizon() + setupMargin)
 }

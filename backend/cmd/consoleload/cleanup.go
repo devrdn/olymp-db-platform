@@ -32,7 +32,8 @@ type queryer interface {
 }
 
 // verifyHarness refuses unless every account has a login setup makes (an
-// owner's blocked) and belongs to no contest outside contestIDs, and every
+// owner's blocked) and neither created, joined nor manages a contest outside
+// contestIDs, and every
 // contest was created by a blocked harness owner, has only that run's
 // participants registered and shares its database prefix with no other
 // contest. Identifiers that match no row pass: they name nothing.
@@ -44,7 +45,8 @@ func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UU
 		WHERE u.id = ANY($2) AND (u.login !~ $3
 		   OR u.login ~ $4 AND u.status <> $5
 		   OR EXISTS (SELECT 1 FROM registrations r WHERE r.user_id = u.id AND r.contest_id <> ALL ($1))
-		   OR EXISTS (SELECT 1 FROM contests c WHERE c.created_by = u.id AND c.id <> ALL ($1)))
+		   OR EXISTS (SELECT 1 FROM contests c WHERE c.created_by = u.id AND c.id <> ALL ($1))
+		   OR EXISTS (SELECT 1 FROM contest_managers m WHERE m.user_id = u.id AND m.contest_id <> ALL ($1)))
 		UNION ALL
 		SELECT 'contest ' || c.id FROM contests c
 		LEFT JOIN users o ON o.id = c.created_by
@@ -72,13 +74,30 @@ func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UU
 	return nil
 }
 
-// verifyFixture is verifyHarness for a kept fixture, which also refuses a
+// verifyFixture is verifyHarness for a kept fixture, which also refuses an
+// owner that is not the run's owner and the contest's creator, and a
 // participant whose login in the file is not the login of its account.
 func verifyFixture(ctx context.Context, q queryer, f *fixture) error {
 	if err := verifyHarness(ctx, q, f.contestIDs(), f.userIDs()); err != nil {
 		return err
 	}
-	rows, err := q.Query(ctx, `SELECT id, login FROM users WHERE id = ANY($1)`, append([]uuid.UUID{}, f.userIDs()...))
+	// The owner must be the run's owner account and the contest's creator,
+	// since teardown deletes it and what the trail says about it.
+	rows, err := q.Query(ctx, `
+		SELECT 1 FROM contests c JOIN users o ON o.id = c.created_by
+		WHERE c.id = $1 AND o.id = $2 AND o.login = $3`, f.ContestID, f.OwnerID, loginPrefix+f.RunID+"-owner")
+	if err != nil {
+		return fmt.Errorf("read the fixture's owner: %w", err)
+	}
+	owned, err := pgx.CollectRows(rows, pgx.RowTo[int32])
+	if err != nil {
+		return fmt.Errorf("read the fixture's owner: %w", err)
+	}
+	if len(owned) != 1 {
+		return fmt.Errorf("%w: the fixture's owner %s is not the run's owner account that created contest %s",
+			errNotTheHarness, f.OwnerID, f.ContestID)
+	}
+	rows, err = q.Query(ctx, `SELECT id, login FROM users WHERE id = ANY($1)`, append([]uuid.UUID{}, f.userIDs()...))
 	if err != nil {
 		return fmt.Errorf("read the fixture's accounts: %w", err)
 	}
@@ -108,29 +127,43 @@ func verifyFixture(ctx context.Context, q queryer, f *fixture) error {
 // contests and accounts, once verifyHarness has found all of them to be the
 // harness's. known names databases the core rows may not record.
 //
-// Database names come only from contests that exist and passed verification:
-// an identifier that matches no contest names nothing, since another
-// contest may share its prefix.
+// Every delete and drop below is named by rows that exist, passed
+// verifyHarness and stay locked until the end: an identifier that matches no
+// row names nothing, since another contest may share its prefix or its
+// identifier may be some other entity's.
 //
 // The order keeps the pool tender out and an interrupted removal
 // recoverable. The templates leave the tender's reach first. The databases
 // go next, the template last, since dropping it waits for any copy still
 // being made from it. The cluster is listed once more for a copy that
-// finished meanwhile. Only then do the core rows go, because they are how a
-// retry or `consoleload sweep` finds the databases.
+// finished meanwhile. Only then do the core rows go, in the same transaction
+// as the locks, because they are how a retry or `consoleload sweep` finds
+// the databases.
 func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, known []string) error {
-	if err := verifyHarness(ctx, st.core, contestIDs, userIDs); err != nil {
+	tx, err := st.core.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	rows, err := st.core.Query(ctx, `SELECT id FROM contests WHERE id = ANY($1)`, append([]uuid.UUID{}, contestIDs...))
-	if err != nil {
-		return fmt.Errorf("find the contests: %w", err)
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	// The transaction stays open while the databases are dropped.
+	if _, err := tx.Exec(ctx, `SET LOCAL idle_in_transaction_session_timeout = 0`); err != nil {
+		return err
 	}
-	existing, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	// Contests first, as the API locks them, each set in identifier order. A
+	// registration, a contest or a manager row naming one of these waits.
+	contests, err := lockedIDs(ctx, tx, `SELECT id FROM contests WHERE id = ANY($1) ORDER BY id FOR UPDATE`, contestIDs)
 	if err != nil {
-		return fmt.Errorf("find the contests: %w", err)
+		return fmt.Errorf("lock the contests: %w", err)
 	}
-	prefixes := databasePrefixes(existing)
+	accounts, err := lockedIDs(ctx, tx, `SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, userIDs)
+	if err != nil {
+		return fmt.Errorf("lock the accounts: %w", err)
+	}
+	if err := verifyHarness(ctx, tx, contests, accounts); err != nil {
+		return err
+	}
+	prefixes := databasePrefixes(contests)
 
 	names := map[string]bool{}
 	for _, name := range known {
@@ -145,11 +178,11 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		}
 	}
 
-	if len(existing) > 0 {
-		rows, err := st.core.Query(ctx, `
+	if len(contests) > 0 {
+		rows, err := tx.Query(ctx, `
 			SELECT db_name FROM game_instances WHERE contest_id = ANY($1)
 			UNION
-			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, existing)
+			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, contests)
 		if err != nil {
 			return fmt.Errorf("list the contests' databases: %w", err)
 		}
@@ -165,10 +198,12 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		}
 
 		// 'dropped' takes the game out of GameInstances.Live and Game: the
-		// tender stops stocking it and no participant can claim a copy.
+		// tender stops stocking it and no participant can claim a copy. It
+		// commits on its own, since the tender reads committed rows, and
+		// touches no row the transaction locked.
 		if _, err := st.core.Exec(ctx, `
 			UPDATE game_templates SET status = 'dropped', updated_at = now()
-			WHERE contest_id = ANY($1)`, existing); err != nil {
+			WHERE contest_id = ANY($1)`, contests); err != nil {
 			return fmt.Errorf("take the games out of the pool tender's reach: %w", err)
 		}
 	}
@@ -180,44 +215,48 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		return err
 	}
 
-	ids := make([]string, 0, len(contestIDs)+len(userIDs))
-	for _, id := range append(append([]uuid.UUID{}, contestIDs...), userIDs...) {
-		ids = append(ids, id.String())
+	contestKeys, accountKeys := make([]string, len(contests)), make([]string, len(accounts))
+	for i, id := range contests {
+		contestKeys[i] = id.String()
 	}
-
-	tx, err := st.core.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-
-	// Locked, then checked again: a registration takes a key-share lock on
-	// both rows, so none can arrive between the check and the deletes.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM contests WHERE id = ANY($1) FOR UPDATE`, append([]uuid.UUID{}, contestIDs...)); err != nil {
-		return fmt.Errorf("lock the contests: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = ANY($1) FOR UPDATE`, append([]uuid.UUID{}, userIDs...)); err != nil {
-		return fmt.Errorf("lock the accounts: %w", err)
-	}
-	if err := verifyHarness(ctx, tx, contestIDs, userIDs); err != nil {
-		return err
+	for i, id := range accounts {
+		accountKeys[i] = id.String()
 	}
 	// Audit entries reference the accounts through actor_id, so they go
-	// first.
+	// first; only entries by these accounts, or about these contests and
+	// accounts by kind as well as identifier.
 	for _, statement := range []struct {
 		what string
 		sql  string
 		args []any
 	}{
-		{"audit entries", `DELETE FROM audit_log WHERE actor_id = ANY($1) OR entity_id = ANY($2)`, []any{userIDs, ids}},
-		{"contests", `DELETE FROM contests WHERE id = ANY($1)`, []any{contestIDs}},
-		{"accounts", `DELETE FROM users WHERE id = ANY($1)`, []any{userIDs}},
+		{"audit entries", `
+			DELETE FROM audit_log
+			WHERE actor_id = ANY($1)
+			   OR entity = 'contest' AND entity_id = ANY($2)
+			   OR entity = 'user' AND entity_id = ANY($3)`, []any{accounts, contestKeys, accountKeys}},
+		{"contests", `DELETE FROM contests WHERE id = ANY($1)`, []any{contests}},
+		{"accounts", `DELETE FROM users WHERE id = ANY($1)`, []any{accounts}},
 	} {
 		if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
 			return fmt.Errorf("delete the %s: %w", statement.what, err)
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// lockedIDs runs a locking query over ids and returns the rows it locked;
+// an identifier that matches no row is left out.
+func lockedIDs(ctx context.Context, tx pgx.Tx, query string, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, query, append([]uuid.UUID{}, ids...))
+	if err != nil {
+		return nil, err
+	}
+	locked, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, err
+	}
+	return append([]uuid.UUID{}, locked...), nil
 }
 
 // dropAll drops names and whatever the cluster holds under prefixes, in name
@@ -294,8 +333,11 @@ type sweepOptions struct {
 
 // leftoverRun is what one run left, grouped by the identifier in its logins.
 type leftoverRun struct {
-	id         string
-	started    time.Time
+	id      string
+	started time.Time
+	// plannedEnd is the latest end of its contests, which a run sets to its
+	// planned end; zero for a run with no contest.
+	plannedEnd time.Time
 	contestIDs []uuid.UUID
 	contests   []string
 	userIDs    []uuid.UUID
@@ -308,7 +350,7 @@ var runID = regexp.MustCompile(`^[0-9a-f]{8}$`)
 // sweep finds what interrupted runs left, by run: the accounts with exactly
 // the logins setup makes, the contests their blocked owners created and those
 // contests' databases. It lists them, and with opts.remove removes each run
-// that has a contest and is old enough to be over, through remove's checks.
+// that has a contest and is past its planned end, through remove's checks.
 func sweep(ctx context.Context, st *stores, w io.Writer, opts sweepOptions) error {
 	if opts.run != "" && !runID.MatchString(opts.run) {
 		return fmt.Errorf("-run: %q is not a run's eight hex digits", opts.run)
@@ -322,7 +364,7 @@ func sweep(ctx context.Context, st *stores, w io.Writer, opts sweepOptions) erro
 		return nil
 	}
 
-	youngest := longestProfileRun()
+	longest, longestErr := longestProfileRun()
 	var failures []error
 	for _, r := range runs {
 		age := time.Since(r.started)
@@ -337,13 +379,22 @@ func sweep(ctx context.Context, st *stores, w io.Writer, opts sweepOptions) erro
 			fmt.Fprintf(w, "  database %s\n", name)
 		}
 
+		// A run without a contest is dated by the longest profile run; one
+		// that cannot be dated is held, never taken for over.
+		until := r.plannedEnd
+		if until.IsZero() && longestErr == nil {
+			until = r.started.Add(longest)
+		}
 		var held string
 		switch {
 		case len(r.contestIDs) == 0 && !opts.orphans:
 			held = "left: no contest ties these accounts to the load test (-orphans removes them)"
-		case age < youngest && !opts.force:
-			held = fmt.Sprintf("left: younger than the longest profile run (%s), so it may still be going (-force removes it)",
-				youngest.Round(time.Minute))
+		case opts.force:
+		case until.IsZero():
+			held = fmt.Sprintf("left: cannot tell when it ends (%v), so it may still be going (-force removes it)", longestErr)
+		case time.Now().Before(until):
+			held = fmt.Sprintf("left: planned to end at %s, so it may still be going (-force removes it)",
+				until.UTC().Format("2006-01-02 15:04 MST"))
 		}
 		switch {
 		case held != "":
@@ -406,7 +457,7 @@ func leftoverRuns(ctx context.Context, st *stores, run string) ([]*leftoverRun, 
 	}
 
 	rows, err = st.core.Query(ctx, `
-		SELECT c.id, c.status, c.created_at, substr(o.login, $3, 8) FROM contests c
+		SELECT c.id, c.status, c.created_at, c.ends_at, substr(o.login, $3, 8) FROM contests c
 		JOIN users o ON o.id = c.created_by
 		WHERE o.login ~ $1 AND o.status = $4 AND ($2 = '' OR substr(o.login, $3, 8) = $2)
 		ORDER BY c.id`, harnessOwner, run, idAt, users.StatusBlocked)
@@ -417,11 +468,15 @@ func leftoverRuns(ctx context.Context, st *stores, run string) ([]*leftoverRun, 
 		var id uuid.UUID
 		var status, runID string
 		var created time.Time
-		if err := rows.Scan(&id, &status, &created, &runID); err != nil {
+		var ends *time.Time
+		if err := rows.Scan(&id, &status, &created, &ends, &runID); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("find the load test's contests: %w", err)
 		}
 		r := get(runID, created)
+		if ends != nil && ends.After(r.plannedEnd) {
+			r.plannedEnd = *ends
+		}
 		r.contestIDs, r.contests = append(r.contestIDs, id), append(r.contests, fmt.Sprintf("%s (%s)", id, status))
 	}
 	rows.Close()
