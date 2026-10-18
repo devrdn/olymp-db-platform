@@ -752,7 +752,10 @@ named by a run identifier of eight hex digits, and owned by the run:
 - accounts `loadtest-<run>-owner` (blocked, for `contests.created_by`) and
   `loadtest-<run>-p001` to `-p040` (active, with random passwords that exist
   only in the command's memory);
-- one untitled, invite-only contest, running for 24 hours with fixed timing,
+- one untitled, invite-only contest with fixed timing, running until the
+  run's planned end (its load and twice the hour of setup margin, about
+  2 h 15 min for the beta profile; a reused `-fixture` moves it to the new
+  run's),
   read-write with `evidence` writable, its forty registrations and its
   `game_templates` row;
 - on the game cluster, `game_tpl_c<contest>` copied from the source, and the
@@ -770,16 +773,23 @@ At the end, however the run ended — finished, failed, or stopped with
 Ctrl+C — it removes all of it: first it marks the template dropped, so the
 API's pool tender stops stocking the contest; then it drops the databases,
 the template last, and looks at the cluster once more for a copy that
-finished meanwhile; only then does it delete the contest, its rows and the
-accounts with their audit entries, including any entry staff wrote about
-them. Only the limiter's counters stay, and they expire on their own. Before
-removing anything it checks that every account has a login of exactly that
-shape (the owner's blocked) and belongs to nothing else, and that the contest
-was created by the run's blocked owner, has only the run's participants and
-shares its twelve-hex-digit database prefix with no other contest; anything else
-is refused and nothing is removed. Database names come only from that
-verified contest, so a fixture naming a contest that does not exist drops
-nothing.
+finished meanwhile; only then does it delete the contest, its rows, the
+accounts and the audit entries by those accounts or about that contest and
+those accounts, including any entry staff wrote about them. Only the
+limiter's counters stay, and they expire on their own.
+
+Before removing anything it locks the contest and accounts and checks that
+every account has a login of exactly that shape (the owner's blocked) and
+created, joined and manages nothing else, and that the contest was created
+by the run's blocked owner, has only the run's participants and shares its
+twelve-hex-digit database prefix with no other contest; anything else is
+refused and nothing is removed. Every database dropped and every row deleted
+is named by those locked, verified rows, so an identifier in a fixture that
+matches no row, or another kind of row, removes nothing. A reused `-fixture`
+is refused unless its owner is the run's owner account that created its
+contest and its participants' logins are their accounts' own. Should a test
+contest ever share its prefix with another contest by chance, it is refused
+on every pass and has to be removed by hand.
 
 If the command is killed outright or the tunnel drops first, the contest and
 accounts are still there. A failed teardown prints the command that finishes
@@ -788,9 +798,10 @@ it, `consoleload sweep -run <run> -yes -force`. Otherwise `consoleload sweep`
 its accounts and its databases. It removes nothing until `-yes`, and even
 then leaves two kinds of run alone, saying so:
 
-- a run younger than the longest profile run (about 1 h 15 min), which may
-  be somebody else's load test still going — `-force` removes it once you
-  know it is not;
+- a run before its planned end, the end of its contest, which may be
+  somebody else's load test still going — `-force` removes it once you know
+  it is not; a run with no contest is dated by the longest profile run, and
+  if the profiles cannot be read from the environment it is held as well;
 - accounts no contest ties to the load test, left when a run died before
   creating its contest — `-orphans` removes them.
 
