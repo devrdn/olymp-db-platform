@@ -3906,8 +3906,11 @@ timestamp; `make restore-check` loads a dump into a throwaway database and
 drops it, which is the difference between "we have backups" and "we think we
 have backups"; `make restore` replaces the live database and demands an
 explicit confirmation, and `make restore-covers` and
-`make restore-game-uploads` put the two volumes back. Participants' instances
-are not backed up — they are rebuilt from the template.
+`make restore-game-uploads` put the two volumes back. A systemd timer runs
+`make backup` daily, or every 15 minutes in a contest window, keeps a bounded
+number of sets and can copy each one off the host (`deploy/backups`,
+`deploy/systemd`). Participants' instances are not backed up — they are
+rebuilt from the template.
 
 ### Moving to another server
 
@@ -4226,9 +4229,10 @@ an item of the list below.
    `reports.view` and the hidden question need none: stale copies are remade
    on first use, the permission guards nothing, and the hidden question only
    needs saying.
-2. **Running the installation:** off-host scheduled backups (35, paused by
-   the maintainer's decision and to be resumed), restore drills (36), alerts
-   and the Query Runner's metrics (37), CI and the supply chain (38),
+2. **Running the installation:** off-host backups (35: scheduled and
+   rotated now; the off-host design, encryption and WAL archiving remain),
+   restore drills (36), alerts and the Query Runner's metrics (37), CI and
+   the supply chain (38),
    query-log archival (39), the disk monitor (40), the nonce CSP (41),
    end-to-end tests (42) and the security audit plan (43). They protect the
    installation over months and years rather than any one contest.
@@ -4479,13 +4483,17 @@ Product decisions the items below are built on.
   query ends only at the Query Runner's deadline. Aborting needs the
   cancellation to reach the statement on the Query Runner, a binding in the
   editor, and a query-log status for a query the participant stopped.
-- [ ] **35. Backups are taken by hand and stay on the host** (section 13).
-  `make backup` writes into `deploy/backups` on the same machine; nothing runs
-  it on a schedule, rotates its files, encrypts them or copies them away, and
-  every run ends by asking the operator to do that. A lost disk takes the
-  backups with it, and nothing keeps the `.env` somewhere that outlives the
-  machine, which the move procedure needs. This work is paused by the
-  maintainer's decision and is to be resumed.
+- [ ] **35. Backups leave the host only when somebody configures it**
+  (section 13). A systemd timer (or a cron line) runs `make backup` daily, or
+  every 15 minutes in a contest window, rotates the sets in `deploy/backups`,
+  and can copy each new set away with rsync or rclone; that copy is off by
+  default, so a lost disk still takes the backups with it unless it was set
+  up. Nothing encrypts the sets, checks that a copy arrived whole or prunes
+  the copies on the target; the second server that pulls the backups is not
+  designed; nothing keeps the `.env` somewhere that outlives the machine,
+  which the move procedure needs; and between two dumps there is no
+  point-in-time recovery, which WAL archiving is to give as the first task
+  after the beta.
 - [ ] **36. Restore drills are partial and run by nobody** (section 13).
   `make restore-check` loads a dump into a scratch database and counts its
   tables, and `make restore-covers-check` proves the covers' ownership with a

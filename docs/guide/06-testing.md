@@ -271,6 +271,7 @@ they stop with an explanation when it is missing.
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build (not `smoke`) | Node |
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 | `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
+| `make scheduled-backup-check` | the backup rotation, the scheduled run and its systemd units, on synthetic sets in a throwaway container | Docker |
 
 One test or one package, from `backend/`:
 

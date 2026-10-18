@@ -656,6 +656,126 @@ can run no query until the build finishes, and then each gets a fresh copy of
 the game: what they changed in their own database is gone, their answers and
 score are not.
 
+### On a schedule
+
+A timer runs `deploy/backups/scheduled-backup.sh` on the host: `make backup`,
+then rotation, then, if configured, a copy of the new set off the host. It
+has two settings: **daily** at 03:30, and the **contest window**, every 15
+minutes, which is the setting for a beta or an olympiad, so that a lost disk
+costs at most the last 15 minutes of a contest.
+
+Install it once, from the checkout on the host:
+
+```bash
+sudo deploy/backups/schedule.sh install          # daily, as the checkout's owner
+sudo deploy/backups/schedule.sh install deploy   # or as a named user
+```
+
+The user must be able to run `docker compose` (the `docker` group): the one
+who runs `make deploy`. `install` renders `deploy/systemd/dbcontest-backup.service`
+and `.timer` with the checkout's path and that user, installs them in
+`/etc/systemd/system` and starts the timer. Run it again after moving the
+checkout. `sudo deploy/backups/schedule.sh uninstall` takes them away and
+leaves the sets alone.
+
+**Before the beta or the olympiad, switch to the contest window; after it,
+switch back:**
+
+```bash
+sudo deploy/backups/schedule.sh contest   # every 15 minutes, until 'daily'
+sudo deploy/backups/schedule.sh daily     # back to 03:30
+deploy/backups/schedule.sh status         # which one is on, the next run, the last result, the newest set
+```
+
+There is one timer, and the contest window is a drop-in
+(`dbcontest-backup.timer.d/contest-window.conf`) that replaces its daily time,
+so the two settings can never both be on, or both off. Switch the evening
+before, and check `status` shows the contest window. Do not deploy during
+the window: `pg_dump` holds a share lock on every table for the seconds it
+runs, and a migration waiting for its exclusive lock holds up the API's own
+queries behind it.
+
+**Rotation** runs after every successful backup. It keeps the newest
+`BACKUP_KEEP` complete sets (48) and, beyond them, the last set of each of the
+`BACKUP_KEEP_DAILY` most recent days not already covered (14). A *set* is the
+three files of one timestamp; only a complete set is ever removed, and then
+exactly those three files. An incomplete set (a failed run leaves its dump
+behind), another database's dump and any file of another name are left
+alone; rotation names the incomplete ones, for you to delete once you know
+why. It counts the sets `make backup` writes by hand too: to keep one out of
+rotation, move it out of `deploy/backups` or rename it.
+
+The arithmetic. With `S` the size of one set (the dump plus both archives),
+the directory never holds more than `(BACKUP_KEEP + BACKUP_KEEP_DAILY + 1) × S`
+— the kept sets and the one being written — and a run stages one more copy of
+the volumes in `TMPDIR` (for the timer, `BACKUP_TMPDIR` in `deploy/.env`). In the contest window four sets an hour are taken,
+so 48 sets are the last 12 hours at 15-minute steps; daily, the same 48 are
+seven weeks. With the defaults, 63 sets:
+
+| `S` | the directory at most | |
+|---|---|---|
+| 20 MiB | 1.2 GiB | a small installation's beta |
+| 200 MiB | 12.3 GiB | |
+| 2 GiB | 126 GiB | lower `BACKUP_KEEP`: 16 (four hours of a contest) makes it 31 sets, 62 GiB |
+
+The game uploads usually decide `S`, since every set archives the whole
+volume (up to `GAME_UPLOAD_MAX_DIR_BYTES` plus `GAME_UPLOAD_TABLE_MAX_DIR_BYTES`).
+Measure it with `du -ch deploy/backups/*-<timestamp>.*`; rotation also prints
+the newest set's size and the ceiling it implies after every run. A run is
+refused, and fails, while the disk has less than `BACKUP_MIN_FREE_MB` (2048)
+plus twice the last set free: Docker's volumes are usually on the same disk,
+and a full disk stops PostgreSQL in the middle of the contest, which is worse
+than a missed backup.
+
+**The off-host copy** is off by default. Set `BACKUP_OFFHOST=rsync` or
+`rclone` and `BACKUP_OFFHOST_TARGET` in `deploy/.env` (a destination directory:
+`backup@nas:/srv/backups/dbcontest`, or an rclone `remote:path`), and each run
+copies its new set there. Credentials never go in the target: rsync
+authenticates with an SSH key (`BACKUP_OFFHOST_SSH_KEY`, else the user's own,
+with no password prompt: connect once by hand as that user, so the target's
+host key is already known), rclone with its config file (`BACKUP_RCLONE_CONFIG`,
+else the user's own). The target is never written to the log either. A failed
+copy fails the run and leaves that set on this host only; the next run copies
+its own set, not the missed one. Nothing is deleted on the target: what it
+keeps is the target's business, and the design of a second server pulling the
+backups is still to come (item 35 of the architecture).
+
+**Was the last backup taken?**
+
+```bash
+deploy/backups/schedule.sh status                  # last result and the newest set's age
+journalctl -u dbcontest-backup -n 50               # the last runs, with make backup's own output
+journalctl -u dbcontest-backup -p err --since today   # only the failures, with the reason
+```
+
+A failed run exits non-zero, so `systemctl --failed` lists the unit until the
+next success, and every reason is a line in the journal. With
+`BACKUP_TEXTFILE_DIR` set, each run also writes `dbcontest_backup.prom` there
+for the textfile collector of node_exporter, or of Alloy's
+`prometheus.exporter.unix` (point its `textfile` block's `directory` at the
+same path): `dbcontest_backup_last_success_timestamp_seconds`,
+`dbcontest_backup_last_run_success`, `dbcontest_backup_last_set_bytes`,
+`dbcontest_backup_sets`, and the same two for the off-host copy when it is
+on. In the contest window, `time() - dbcontest_backup_last_success_timestamp_seconds > 1800`
+means two runs in a row have failed. A set that was written is still not a set
+that restores: `make restore-check` the newest dump before the contest.
+
+**Without systemd**, cron runs the same script. Print the lines for this
+checkout and install them; the switch is moving the comment from the contest
+line to the daily one and back:
+
+```bash
+deploy/backups/schedule.sh cron deploy | sudo tee /etc/cron.d/dbcontest-backup
+```
+
+The script holds a lock, so a run still going when the next one is due
+makes the next one fail rather than run beside it; the output goes to syslog
+under `dbcontest-backup`.
+
+`make scheduled-backup-check` proves the rotation, the run and the units on
+synthetic sets in a throwaway container: `make backup` is stubbed, nothing is
+dumped, and `deploy/backups` is never mounted. It needs Docker.
+
 ## Load testing before a contest
 
 `cmd/consoleload` drives synthetic participants through the participant's real
