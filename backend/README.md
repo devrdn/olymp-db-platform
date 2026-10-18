@@ -656,6 +656,123 @@ can run no query until the build finishes, and then each gets a fresh copy of
 the game: what they changed in their own database is gone, their answers and
 score are not.
 
+## Load testing before a contest
+
+`cmd/consoleload` drives synthetic participants through the participant's real
+path (sign-in, then `POST /api/v1/contests/{id}/query` through the API and the
+Query Runner) and reports what they waited. `-profile beta` turns it from a
+measurement into a test: forty participants in a read-write contest, fifteen
+minutes of steady load with 5–30 s between one participant's queries, a mix of
+40% lookups, 30% joins, 20% full-table aggregates and 10% writes, and a verdict
+at the end. The profile's values and the reasoning behind each threshold are
+in `cmd/consoleload/profile.go`; a flag given on the command line overrides the
+profile's (`-participants 60` asks whether the server holds sixty).
+
+Every run is judged on four checks, and fails on any of them:
+
+| check | limit |
+|---|---|
+| p95 latency of every query, refusals included | at most 2.5 s |
+| refused (any 4xx) | at most 1% of the queries |
+| errors (no answer, or one that could not be read) | at most 0.5% |
+| server errors (any 5xx: a full queue, a timeout, an internal error) | none |
+
+### Prerequisites
+
+- **Nothing else live.** Run it at a quiet time, more than two hours before
+  the contest: the load is real and its participants would share it. It
+  refuses to start while a contest it did not create is running or published
+  to start within two hours (`-allow-live-contests` overrides, never during a
+  contest).
+- **A built game of the detective story on the target cluster**, named by
+  `-source-template`. The queries read `persons`, `calls`, `statements`,
+  `cases` and `evidence`, and the writes update `evidence`; the contest's own
+  template is the most faithful source, and it is copied, never modified. On
+  the core database, `SELECT contest_id, template_db FROM game_templates
+  WHERE status = 'ready'` lists them. Another game stops the run at its first
+  query (or at provisioning, if it has no `evidence`), before any load.
+- **Room on the game cluster** for one more template copy and fifty
+  participant copies (forty plus `GAME_POOL_DEPTH` spare), within
+  `GAME_CLUSTER_MAX_BYTES` and beside the copies the contest itself will need.
+- **A Go toolchain on a workstation and SSH to the host.** The server
+  compiles nothing and publishes neither database's port, so the command runs
+  on the workstation, reaching the API as participants do and the two
+  databases through an SSH tunnel. It needs the same two credentials the API
+  holds, `CORE_DB_DSN` and `GAME_PROVISIONER_DSN` (the provisioning role), from
+  the host's `deploy/.env`; it never holds the participant roles'.
+
+### Running it against the server
+
+```bash
+# On the host: the two clusters' addresses on the compose network.
+docker inspect -f '{{.Name}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    db-contest-pg-core-1 db-contest-pg-game-1
+
+# On the workstation: tunnel both to loopback, and leave this running.
+ssh -N -L 127.0.0.1:15432:<core address>:5432 -L 127.0.0.1:15433:<game address>:5432 <host>
+
+# In another terminal, from backend/. `read -rs` keeps the passwords out of
+# the shell's history.
+read -rs CORE_PW; read -rs GAME_PW
+CORE_DB_DSN="postgres://<CORE_DB_USER>:$CORE_PW@127.0.0.1:15432/dbcontest_core?sslmode=disable" \
+GAME_PROVISIONER_DSN="postgres://<GAME_DB_USER>:$GAME_PW@127.0.0.1:15433/dbcontest_game?sslmode=disable" \
+go run ./cmd/consoleload -profile beta -api https://olympdb.usm.md \
+    -source-template game_tpl_c<12 hex> -label "beta rehearsal, $(date +%F)"
+```
+
+The database names are `CORE_DB_NAME` and `GAME_DB_NAME` from the same
+`.env`. A staging copy (a restored backup on another machine) is run the same
+way, or with `make loadtest ARGS="-profile beta -source-template …"` when it
+is the local stack. A whole run takes about twenty-five minutes: setup and
+provisioning, forty sign-ins, a first query each, half a minute of quiet, the
+fifteen minutes of load and the teardown. `docker stats` on the host, in
+another session, shows what the containers spent; `-watch-container` only
+works where the command runs.
+
+### What it creates, and how it goes away
+
+All of it is new and named so nothing can be mistaken for a real record; it
+reads no real participant's data and writes none:
+
+- accounts `loadtest-<run>-owner` (blocked, for `contests.created_by`) and
+  `loadtest-<run>-p001` to `-p040` (active, with random passwords that exist
+  only in the command's memory);
+- one untitled, invite-only contest, running for 24 hours with fixed timing,
+  read-write with `evidence` writable, its forty registrations and its
+  `game_templates` row;
+- on the game cluster, `game_tpl_c<contest>` copied from the source, and the
+  participant copies (`game_pool_c<contest>_*`, `game_c<contest>_*`), which
+  the writes change and nothing else reads;
+- what playing leaves: sessions (signed out at the end), journal rows, audit
+  entries, and the sign-in limiter's counters in the cache.
+
+At the end, however the run ended — finished, failed, or stopped with
+Ctrl+C — it drops those databases and deletes the contest, its rows and the
+accounts with their audit entries. Only the limiter's counters stay, and they
+expire on their own. If the command is killed outright or the tunnel drops
+first, `consoleload sweep` (same environment, `sweep` as its only argument)
+removes every `loadtest-` account with its contests and databases. It goes by
+the prefix, so check first that no real login begins with it:
+`SELECT login FROM users WHERE left(login, 9) = 'loadtest-'`.
+
+### Reading the result
+
+The command prints each run's percentiles and outcomes, then
+`beta profile: PASSED` or `FAILED` with every check that failed. The results
+directory it names at the start holds `report.md`, which opens with the
+verdict table (run, check, measured, limit, pass or fail), `report.json` with
+the same, and every query as a line in `<run>.jsonl`. The exit status is 0
+when every run passed, 2 when the runs were measured and torn down and missed
+a threshold, and 1 when the run itself failed or did not clean up.
+
+Where to look when a check fails: a slow p95 is explained by the latency by
+query class, the queries in flight against those the game cluster ran (the
+difference is the Query Runner's queue) and `docker stats`; refusals and
+server errors are counted by status and code in the outcomes table, and the
+API's log has the cause of a 500. The counts table at the end compares the
+installation before and after: accounts, contests and game cluster databases
+should show no difference.
+
 ## Logging
 
 Records are JSON on stdout, ready for Promtail. Every request gets a

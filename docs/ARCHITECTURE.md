@@ -4539,7 +4539,8 @@ Product decisions the items below are built on.
   written up as a regression suite, all before the first olympiad. CI runs
   `govulncheck` and `gosec`; the repository has no checklist, no semgrep
   configuration and no ZAP job. The plan's load test exists
-  (`cmd/consoleload`).
+  (`cmd/consoleload`), with a beta profile that judges a run against
+  pass/fail thresholds (backend/README.md, "Load testing before a contest").
 - [ ] **44. The query-log panel beyond one contest** (section 9.1; section 14,
   step 6.3). Inside a contest's monitoring the log is browsed, filtered,
   searched per participant, followed live and exported as CSV. What section

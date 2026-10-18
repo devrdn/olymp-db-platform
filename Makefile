@@ -691,6 +691,10 @@ game-check: require-env ## List contests whose built template is missing from th
 #       -watch-pid api=$$(lsof -ti tcp:8080 -sTCP:LISTEN) \
 #       -watch-container game=db-contest-pg-game-1"
 #
+# `ARGS="-profile beta -source-template …"` is the pass/fail test before a
+# contest; backend/README.md ("Load testing before a contest") says how to run
+# it against a server.
+#
 # It is given the provisioner's credentials, as the API is, because it makes
 # the copies through the product's own provisioning code; it never holds the
 # participant roles' credentials, which stay with the Query Runner.
