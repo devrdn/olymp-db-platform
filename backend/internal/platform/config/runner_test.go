@@ -441,12 +441,35 @@ func TestTheMetricsListenerDefaultsToLoopbackOnItsOwnPort(t *testing.T) {
 	}
 }
 
+// The two listeners clash when they would bind the same socket, however each
+// is spelled; every interface overlaps any one of them.
 func TestTheMetricsListenerMustNotBeTheQueryListener(t *testing.T) {
-	setRunnerRequired(t)
-	t.Setenv("QUERY_RUNNER_ADDR", ":9100")
-	t.Setenv("QUERY_RUNNER_METRICS_ADDR", ":9100")
+	for _, tc := range []struct {
+		name, query, metrics string
+		clash                bool
+	}{
+		{"the same string", ":9100", ":9100", true},
+		{"every interface spelled two ways", ":9100", "0.0.0.0:9100", true},
+		{"every IPv6 interface and one address", "[::]:9100", "127.0.0.1:9100", true},
+		{"one address and every interface", "127.0.0.1:9100", ":9100", true},
+		{"one address spelled two ways", "[::1]:9100", "[0:0:0:0:0:0:0:1]:9100", true},
+		{"a named port", "127.0.0.1:http", "127.0.0.1:80", true},
+		{"the defaults", "127.0.0.1:9100", "127.0.0.1:9101", false},
+		{"the compose ports", ":9100", ":9101", false},
+		{"two addresses on one port", "127.0.0.1:9100", "10.0.0.5:9100", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRunnerRequired(t)
+			t.Setenv("QUERY_RUNNER_ADDR", tc.query)
+			t.Setenv("QUERY_RUNNER_METRICS_ADDR", tc.metrics)
 
-	if _, err := LoadRunner(); err == nil {
-		t.Fatal("the metrics listener was given the query listener's address")
+			_, err := LoadRunner()
+			if tc.clash && err == nil {
+				t.Fatalf("%s and %s bind the same socket and were accepted", tc.query, tc.metrics)
+			}
+			if !tc.clash && err != nil {
+				t.Fatalf("%s and %s do not clash but were refused: %v", tc.query, tc.metrics, err)
+			}
+		})
 	}
 }

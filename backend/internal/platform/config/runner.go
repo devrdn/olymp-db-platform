@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -125,8 +127,9 @@ func LoadRunner() (Runner, error) {
 		ListenAddr:  envOrDefault("QUERY_RUNNER_ADDR", "127.0.0.1:9100"),
 		MetricsAddr: envOrDefault("QUERY_RUNNER_METRICS_ADDR", DefaultRunnerMetricsAddr),
 	}
-	if cfg.MetricsAddr == cfg.ListenAddr {
-		return Runner{}, fmt.Errorf("QUERY_RUNNER_METRICS_ADDR: must differ from QUERY_RUNNER_ADDR (both are %q)", cfg.ListenAddr)
+	if sameSocket(cfg.MetricsAddr, cfg.ListenAddr) {
+		return Runner{}, fmt.Errorf("QUERY_RUNNER_METRICS_ADDR: %q binds the same socket as QUERY_RUNNER_ADDR %q",
+			cfg.MetricsAddr, cfg.ListenAddr)
 	}
 
 	var err error
@@ -238,4 +241,34 @@ func LoadRunner() (Runner, error) {
 			ReservedMemoryBytes, cfg.GameDBMemoryBytes)
 	}
 	return cfg, nil
+}
+
+// sameSocket reports whether two listen addresses would bind the same port on
+// an overlapping interface. Ports are resolved (":http" is 80) and IP literals
+// compared as addresses; a host that is not an IP literal is compared as
+// written, since resolving it would make startup depend on DNS. An address
+// that does not parse is left to the listener to report.
+func sameSocket(a, b string) bool {
+	hostA, portA, errA := net.SplitHostPort(a)
+	hostB, portB, errB := net.SplitHostPort(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	numberA, errA := net.LookupPort("tcp", portA)
+	numberB, errB := net.LookupPort("tcp", portB)
+	if errA != nil || errB != nil || numberA != numberB {
+		return false
+	}
+
+	ipA, errA := netip.ParseAddr(hostA)
+	ipB, errB := netip.ParseAddr(hostB)
+	// Go's dual-stack listener on "::" also takes IPv4, so every unspecified
+	// host overlaps every other.
+	if hostA == "" || hostB == "" || (errA == nil && ipA.IsUnspecified()) || (errB == nil && ipB.IsUnspecified()) {
+		return true
+	}
+	if errA == nil && errB == nil {
+		return ipA.Unmap() == ipB.Unmap()
+	}
+	return strings.EqualFold(hostA, hostB)
 }
