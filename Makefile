@@ -138,7 +138,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-stack-up e2e-stack-down
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-stack-up e2e-stack-down
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -308,6 +308,12 @@ restore-covers-check: ## Prove restored covers belong to the API's user
 # gives them back to the API's user, the same way and with the same guarantees.
 game-uploads-check: ## Prove the backup takes the game uploads and restores them to the API's user
 	deploy/game-uploads-check.sh
+
+# The scheduled backup's rotation, the run the timer starts and the timer's
+# units, on synthetic sets in a throwaway container with `make backup`
+# stubbed: nothing is dumped, and deploy/backups is never mounted.
+scheduled-backup-check: ## Prove the backup rotation, the scheduled run and its systemd units
+	deploy/backups/scheduled-backup-check.sh
 
 # What the bundled Caddy tells the API about the client — address, scheme, Host,
 # and which service /api/* reaches — with the real image and the real Caddyfile,
