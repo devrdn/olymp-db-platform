@@ -565,6 +565,87 @@ Useful starting points: `sum by (outcome, reason)
 queries queue, and `queryrunner_admission_queue_depth` against
 `QUERY_QUEUE_DEPTH`: a full queue answers `busy` at once.
 
+### Alerts and the dashboard
+
+[`deploy/observability/import/`](../deploy/observability/import) holds files
+to load into a Prometheus and a Grafana you already run, whatever scrapes the
+services (the host's Alloy in production). Nothing in the repository deploys
+them, and the collector needs both targets, `api:9090` and `queryrunner:9101`,
+on the compose network.
+
+| File | What it is |
+|---|---|
+| `dbcontest-rules.yml` | recording and alert rules, a standard Prometheus rules file |
+| `dbcontest-rules.test.yml` | promtool unit tests for those rules; not a rules file, do not load it |
+| `dbcontest-dashboard.json` | the Grafana dashboard |
+
+**The selector is the one thing to edit.** The first group of the rules,
+`dbcontest-selector`, records `dbcontest:target` from two matchers,
+`up{job="core-api"}` and `up{job="queryrunner"}`, and every alert reaches the
+services through it. Change them to the labels your collector gives the two
+targets; in Grafana's Explore, `count by (job, instance)
+(game_instances_reclaimed_total)` names the API's and `count by (job, instance)
+(queryrunner_active_queries)` the Query Runner's. Add an instance or
+environment matcher when one Prometheus scrapes more than one deployment.
+Loading the file unedited is safe: a matcher that names no target fires
+`DBContestAPINotScraped` or `DBContestQueryRunnerNotScraped` five minutes later
+instead of leaving the other alerts quietly blind.
+
+**Loading the rules.**
+
+- Prometheus: copy the rules file next to its configuration, list it under
+  `rule_files`, and reload (`SIGHUP`, or `POST /-/reload` with
+  `--web.enable-lifecycle`). Its `/rules` page then lists five groups.
+- A Mimir, Cortex or Loki ruler behind a Grafana data source (data-source
+  managed rules): `mimirtool rules load dbcontest-rules.yml` against that
+  ruler, or paste the groups into Grafana's rule editor for that data source.
+- Grafana-managed alerting: import the whole file through Grafana's import of
+  Prometheus rules where your version offers it. The alerts read the recorded
+  series, so the recording group must come along and write to the Prometheus
+  the alerts query.
+
+The rules only raise alerts. Delivering them is Alertmanager's or Grafana's
+contact points' job, and this repository runs neither for production; route
+on the `severity` label, `critical` (act now, even mid-contest) and `warning`
+(look at the next break).
+
+**Importing the dashboard.** Grafana → Dashboards → New → Import, upload
+`dbcontest-dashboard.json` and pick the Prometheus data source. The data source
+is a variable and so is each service's job, found by a metric only that
+service exports, so the file carries no UID to rewrite. Its uid,
+`dbcontest-overview`, makes a second import replace the first.
+
+**What pages, and why.** Each rule carries its threshold's reasoning in a
+comment beside it. The Query Runner's thresholds assume its defaults
+(`QUERY_CONCURRENT=8`, `QUERY_QUEUE_DEPTH=32`, `QUERY_QUEUE_WAIT=15s`,
+`QUERY_DEADLINE=5s`): the runner does not export its configuration, so a
+changed setting means changing the number in the rules too.
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `DBContestAPINotScraped`, `DBContestQueryRunnerNotScraped` | critical | the selector matches no target for 5 minutes |
+| `DBContestAPIDown`, `DBContestQueryRunnerDown` | critical | the scrape fails for 2 minutes |
+| `DBContestProcessRestarted` | warning | either process restarted in the last 15 minutes |
+| `DBContestAPIErrors` | critical | over 5% of API answers are 5xx, at least 10 in 5 minutes, for 3 minutes |
+| `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s for 10 minutes |
+| `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
+| `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |
+| `DBContestQueriesTimingOut` | warning | over 20% of admitted queries hit the deadline, at least 10 in 5 minutes, for 10 minutes |
+| `DBContestQueryRunnerFull` | critical | 5 or more `busy` refusals and queue timeouts in 5 minutes, for 2 minutes |
+| `DBContestAdmissionWaitHigh` | warning | the admission wait's p95 is over 5 s for 5 minutes |
+| `DBContestAdmissionQueueDeep` | warning | 16 or more queries wait for 3 minutes |
+
+Participants' own SQL errors and checker refusals never page; the dashboard
+shows them by reason.
+
+**Checking the files.** `make observability-check` runs a Go test that
+gathers the series both services register and holds every selector in the
+rules, their tests and the dashboard to those names, labels and declared
+values; then promtool, from a throwaway `prom/prometheus` container with the
+files mounted read-only, loads the rules, runs their unit tests and parses
+every dashboard query. The Go test also runs with `go test ./...`, so CI fails
+when a metric is renamed under an alert.
+
 ## Database browser (dev only)
 
 ```bash
