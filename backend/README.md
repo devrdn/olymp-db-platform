@@ -501,7 +501,7 @@ never declared. Every declared series is exported at zero from the start.
 |---|---|---|---|
 | `queryrunner_queries_total` | counter | `outcome`, `reason` | once per query, however it ended (`queryrunner.Runner.Run`) |
 | `queryrunner_query_duration_seconds` | histogram | `outcome` | for an admitted query, from admission to its end, connecting included |
-| `queryrunner_admission_wait_seconds` | histogram | — | for a query that waited for a slot, whether it got one (zero when admitted at once) or timed out; a query refused at the gate's door never waited |
+| `queryrunner_admission_wait_seconds` | histogram | — | for a query that waited for a slot, whether it got one (zero when admitted at once), timed out or was abandoned by its caller; a query refused at the gate's door never waited |
 | `queryrunner_active_queries` | gauge | — | queries holding a running slot, read from the gate at scrape time |
 | `queryrunner_admission_queue_depth` | gauge | — | queries waiting for a slot, read from the gate at scrape time |
 | `queryrunner_result_cutoffs_total` | counter | `limit` | where an answer is cut to the result budget |
