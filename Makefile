@@ -498,38 +498,52 @@ e2e-stack-down: ## Remove the throwaway stack, its volumes and its images
 # developer who wants only the dump says so — DB_ONLY=1 — rather than reading
 # an exit code as permission.
 #
-# Each file is written under a hidden .partial name and takes its real name
-# only once it is checked: the dump carries pg_dump's custom-format header, an
-# archive passes gzip -t. A run killed at any point (a timeout, a full disk, a
-# Ctrl-C) therefore leaves only .partial files, which rotation never counts,
-# instead of a set whose last archive is cut short. The archives are renamed
-# before the dump, so a set is complete only once all three are checked.
-# umask 077: the files hold participants' answers and personal data.
+# Each file is written as .<name>.<pid>.partial and takes its real name only
+# once it is checked: the dump carries pg_dump's custom-format header, an
+# archive passes gzip -t. The archives are renamed before the dump, so a set
+# is complete only once all three are checked, and a name already taken is
+# never overwritten. A run stopped by a signal removes its own unfinished
+# files and staging directory; one killed outright (SIGKILL) leaves only its
+# .partial files. A step that fails, a full disk included, removes its
+# partial; the dump and archives already checked keep their names, as an
+# incomplete set.
+#
+# The stamp is UTC, so a clock that falls back an hour cannot give a later
+# set an earlier name; the scheduled run passes its own in BACKUP_STAMP to
+# know which set it wrote. umask 077: the files hold participants' answers.
 backup: require-env ## Dump the core database and archive the covers and game uploads volumes (DB_ONLY=1 for the dump alone)
 	@umask 077; mkdir -p $(BACKUP_DIR)
-	@umask 077; stamp=$$(date +%Y%m%d-%H%M%S); \
+	@umask 077; run=$$$$; staging=; \
+		stamp=$${BACKUP_STAMP:-$$(date -u +%Y%m%d-%H%M%SZ)}; \
+		echo "$$stamp" | grep -Eqx '[0-9]{8}-[0-9]{6}Z?' || \
+			{ echo "BACKUP_STAMP=$$stamp is not a timestamp like 20261102-091500Z"; exit 1; }; \
 		dump=$(CORE_DB_NAME)-$$stamp.dump; \
-		partial() { echo "$(BACKUP_DIR)/.$$1.partial"; }; \
+		partial() { echo "$(BACKUP_DIR)/.$$1.$$run.partial"; }; \
+		unfinished() { rm -rf "$$staging"; rm -f "$(BACKUP_DIR)"/.*-"$$stamp".*."$$run".partial; }; \
+		trap 'unfinished; echo "make backup was stopped; its unfinished files are removed"; exit 143' INT TERM HUP; \
 		publish() { \
 			for f in "$$@"; do \
-				mv -f "$$(partial $$f)" "$(BACKUP_DIR)/$$f" || return 1; \
+				mv -n "$$(partial $$f)" "$(BACKUP_DIR)/$$f"; \
+				if [ -e "$$(partial $$f)" ]; then \
+					echo "$(BACKUP_DIR)/$$f already exists; refusing to overwrite it"; unfinished; return 1; \
+				fi; \
 				echo "wrote $(BACKUP_DIR)/$$f ($$(du -h "$(BACKUP_DIR)/$$f" | cut -f1))"; \
 			done; \
 		}; \
 		$(COMPOSE) exec -T pg-core \
 			pg_dump --format=custom --no-owner --username=$(CORE_DB_USER) $(CORE_DB_NAME) > "$$(partial $$dump)" || \
-			{ echo "backup failed; removing the partial file"; rm -f "$$(partial $$dump)"; exit 1; }; \
+			{ echo "backup failed; removing the partial file"; unfinished; exit 1; }; \
 		test "$$(head -c 5 "$$(partial $$dump)")" = PGDMP || \
-			{ echo "the dump is empty or not a pg_dump archive — refusing to keep it"; rm -f "$$(partial $$dump)"; exit 1; }; \
+			{ echo "the dump is empty or not a pg_dump archive — refusing to keep it"; unfinished; exit 1; }; \
 		taken=; \
 		take() { \
 			archive=$$1-$$stamp.tar.gz; staging=$$(mktemp -d); \
 			if $(COMPOSE) cp "api:$$2/." $$staging >/dev/null; then \
 				{ tar -czf "$$(partial $$archive)" -C $$staging . && gzip -t "$$(partial $$archive)"; } || \
 					{ echo "the $$1 volume could not be archived"; rm -rf $$staging; rm -f "$$(partial $$archive)"; return 1; }; \
-				rm -rf $$staging; taken="$$taken $$archive"; \
+				rm -rf $$staging; staging=; taken="$$taken $$archive"; \
 			else \
-				rm -rf $$staging; \
+				rm -rf $$staging; staging=; \
 				echo "the $$1 volume was NOT copied: $$2 could not be read from the api container."; \
 				echo "The database dump is kept, but this backup is incomplete — restoring it would"; \
 				echo "$$3. Make sure the container exists ('make deploy') and the path is its mount point,"; \
