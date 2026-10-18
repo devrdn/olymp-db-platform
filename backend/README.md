@@ -601,12 +601,22 @@ make game-check                               # built templates the game cluster
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
 the host, and refuses to keep a dump without pg_dump's custom-format header,
-an empty one included. Each file is written as a hidden `.<name>.partial`
-and takes its real name only once it is checked (the dump's header, `gzip -t`
-for an archive), so a backup stopped half way — a timeout, a full disk, a
-Ctrl-C — leaves only `.partial` files and never a set whose last archive is
-cut short; delete them by hand. The files are readable by their owner only
-(umask 077): they hold the participants' answers. The volumes come out through
+an empty one included. Each file is written as a hidden
+`.<name>.<pid>.partial` and takes its real name only once it is checked (the
+dump's header, `gzip -t` for an archive), and a name that is already taken is
+never overwritten. A backup stopped by a signal — a timeout, a Ctrl-C —
+removes its own unfinished files and staging directory; one killed outright
+leaves only `.partial` files, never a set whose last archive is cut short, and
+those you delete by hand. A step that fails, a full disk included, removes its
+own partial file and keeps what was already checked under its real name: an
+incomplete set. The timestamp is UTC and ends in `Z`
+(`dbcontest_core-20261102-091500Z.dump`), so the hour a clock repeats when it
+falls back cannot give two sets one name or a later set an earlier one; sets
+taken before this carry local time and no `Z`, and restore exactly the same,
+since every restore takes the file you name. For a few hours after the
+change the last local-time set can sort after newer UTC ones; rotation keeps
+it that much longer, and nothing else goes by that order. The files are readable by their
+owner only (umask 077): they hold the participants' answers. The volumes come out through
 `docker compose cp` on the `api` service — the mount point is the compose
 file's business, not the Makefile's — which reads a stopped container as
 happily as a running one, but needs the container to exist. Each volume is
@@ -673,15 +683,21 @@ costs at most the last 15 minutes of a contest.
 Install it once, from the checkout on the host:
 
 ```bash
-sudo deploy/backups/schedule.sh install          # daily, as the checkout's owner
-sudo deploy/backups/schedule.sh install deploy   # or as a named user
+sudo deploy/backups/schedule.sh install deploy   # as the user who runs make deploy
+sudo deploy/backups/schedule.sh install          # as the checkout's owner
 ```
 
 The user must be able to run `docker compose` (the `docker` group): the one
-who runs `make deploy`. `install` renders `deploy/systemd/dbcontest-backup.service`
+who runs `make deploy`. Left out, it is the checkout's owner, except that a
+checkout belonging to root is refused rather than quietly scheduled as root:
+`install root` says so on purpose. `install` renders `deploy/systemd/dbcontest-backup.service`
 and `.timer` with the checkout's path and that user, installs them in
-`/etc/systemd/system` and starts the timer. Run it again after moving the
-checkout. `sudo deploy/backups/schedule.sh uninstall` takes them away and
+`/etc/systemd/system` and starts the timer, and says which schedule is on.
+Run it again after moving the checkout. The service runs sandboxed as far as
+Docker allows (a private `/tmp`, which also clears a killed run's staging
+copies; a read-only `/usr`, `/boot` and `/etc`; no devices, no kernel
+settings), and after the clock is synchronised, so a catch-up run at boot
+does not stamp its set with a time the clock is about to take back. `sudo deploy/backups/schedule.sh uninstall` takes them away and
 leaves the sets alone.
 
 **Before the beta or the olympiad, switch to the contest window; after it,
@@ -689,7 +705,7 @@ switch back:**
 
 ```bash
 sudo deploy/backups/schedule.sh contest   # every 15 minutes, until 'daily'
-sudo deploy/backups/schedule.sh daily     # back to 03:30
+sudo deploy/backups/schedule.sh daily     # back to once a day, at 03:30
 deploy/backups/schedule.sh status         # which one is on, the next run, the last result, the newest set
 ```
 
@@ -701,7 +717,8 @@ the window: `pg_dump` holds a share lock on every table for the seconds it
 runs, and a migration waiting for its exclusive lock holds up the API's own
 queries behind it.
 
-**Rotation** runs after every successful backup. It keeps the newest
+**Rotation** runs at the start of every run and again after a successful
+one, which never removes the set that run has just written. It keeps the newest
 `BACKUP_KEEP` complete sets (48) and, beyond them, the last set of each of the
 `BACKUP_KEEP_DAILY` most recent days not already covered (14). A *set* is the
 three files of one timestamp; only a complete set is ever removed, and then
@@ -732,15 +749,23 @@ the newest set's size and the ceiling it implies after every run. A run is
 refused, and fails, while the disk has less than `BACKUP_MIN_FREE_MB` (2048)
 plus twice the last set free: Docker's volumes are usually on the same disk,
 and a full disk stops PostgreSQL in the middle of the contest, which is worse
-than a missed backup.
+than a missed backup. The refusal says what frees space: lowering
+`BACKUP_KEEP` in `deploy/.env` takes effect at the next run, whose first step
+is rotation, and `BACKUP_KEEP=<n> deploy/backups/rotate.sh <dir>` frees it
+at once (`--dry-run` first shows what goes).
 
 **The off-host copy** is off by default. Set `BACKUP_OFFHOST=rsync` or
 `rclone` and `BACKUP_OFFHOST_TARGET` in `deploy/.env` (a destination directory:
 `backup@nas:/srv/backups/dbcontest`, or an rclone `remote:path`), and each run
-copies its new set there. Credentials never go in the target: rsync
-authenticates with an SSH key (`BACKUP_OFFHOST_SSH_KEY`, else the user's own,
-with no password prompt: connect once by hand as that user, so the target's
-host key is already known), rclone with its config file (`BACKUP_RCLONE_CONFIG`,
+copies its new set there. Credentials never go in the target, and a target
+that could carry them is refused before anything runs: a `user:password@`, an
+rsync URL with one, an rclone connection string (`:s3,secret_access_key=…:`)
+or any rclone target that is not a named remote or a path, and anything
+starting with `-`. The target is on the tool's command line, which every user
+on the host can read. rsync authenticates with an SSH key
+(`BACKUP_OFFHOST_SSH_KEY`, else the user's own, with no password prompt:
+connect once by hand as that user, so the target's host key is already
+known), rclone with a named remote in its config file (`BACKUP_RCLONE_CONFIG`,
 else the user's own). The target is never written to the log either. A failed
 copy fails the run and leaves that set on this host only; the next run copies
 its own set, not the missed one. Nothing is deleted on the target: what it
@@ -752,11 +777,14 @@ backups is still to come (item 35 of the architecture).
 ```bash
 deploy/backups/schedule.sh status                  # last result and the newest set's age
 journalctl -u dbcontest-backup -n 50               # the last runs, with make backup's own output
-journalctl -u dbcontest-backup -p err --since today   # only the failures, with the reason
+journalctl -u dbcontest-backup -p err --since today   # the failed runs, with the script's own reason
 ```
 
 A failed run exits non-zero, so `systemctl --failed` lists the unit until the
-next success, and every reason is a line in the journal. With
+next success. `-p err` shows the script's verdict lines (a refused disk, an
+incomplete set, a failed copy); what `make backup` itself printed, such as
+which volume could not be read, is in the full log of that run, at the
+normal priority. With
 `BACKUP_TEXTFILE_DIR` set, each run also writes `dbcontest_backup.prom` there
 for the textfile collector of node_exporter, or of Alloy's
 `prometheus.exporter.unix` (point its `textfile` block's `directory` at the
