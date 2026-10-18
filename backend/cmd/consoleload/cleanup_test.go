@@ -426,6 +426,46 @@ func TestATeardownWaitsOnlyMomentsForRowsAnotherSessionHolds(t *testing.T) {
 	assertNothingLeft(t, st, f)
 }
 
+func TestABoundTransactionLetsGoOfItsRowsWhenItsClientGoesQuiet(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	contest := testContest(t, st, testAccount(t, st, loginPrefix+randomHex(4)+"-owner", users.StatusBlocked),
+		contests.StatusRunning, time.Now().UTC())
+
+	// A client that locks a row and then falls silent, as one behind a
+	// tunnel that died does.
+	quiet, err := st.core.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = quiet.Rollback(context.WithoutCancel(ctx)) }()
+	wait := 500 * time.Millisecond
+	if err := boundTransaction(ctx, quiet, wait); err != nil {
+		t.Fatalf("boundTransaction: %v", err)
+	}
+	if _, err := quiet.Exec(ctx, `SELECT 1 FROM contests WHERE id = $1 FOR UPDATE`, contest); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * wait)
+
+	// The server must have let the row go by now: another session gets it
+	// within the same bound.
+	other, err := st.core.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback(context.WithoutCancel(ctx)) }()
+	if err := boundTransaction(ctx, other, wait); err != nil {
+		t.Fatalf("boundTransaction: %v", err)
+	}
+	if _, err := other.Exec(ctx, `SELECT 1 FROM contests WHERE id = $1 FOR UPDATE`, contest); err != nil {
+		t.Fatalf("the quiet session still holds the row after %s: %v", 3*wait, err)
+	}
+	if _, err := quiet.Exec(ctx, `SELECT 1`); err == nil {
+		t.Fatal("the quiet session is still alive, so its rows were never let go")
+	}
+}
+
 func TestATeardownStoppedHalfwayLeavesWhatSweepFinds(t *testing.T) {
 	st := testStores(t)
 	ctx := t.Context()
