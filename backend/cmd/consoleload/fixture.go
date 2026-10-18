@@ -373,11 +373,27 @@ func mustHash(secret string) string {
 	return hash
 }
 
+// errFixtureOver is a kept fixture whose contest the installation's
+// scheduler has finished, or will within its next tick. Finishing marks the
+// roster, and every query of a finished contest is refused, so it cannot be
+// revived; a new run makes a new one.
+var errFixtureOver = errors.New("the kept fixture's contest is over (finished, or past its end); run without -fixture")
+
 // extendFixture moves a verified kept fixture's contest end to this run's
-// planned end, so the window stays open and sweep sees the run as going.
+// planned end, so the window stays open and sweep sees the run as going. A
+// contest that is not running, or whose end has already passed, is refused
+// in the same statement, so the scheduler cannot finish it between the
+// check and the move.
 func extendFixture(ctx context.Context, core *pgxpool.Pool, f *fixture, ends time.Time) error {
-	if _, err := core.Exec(ctx, `UPDATE contests SET ends_at = $2 WHERE id = $1`, f.ContestID, ends); err != nil {
+	tag, err := core.Exec(ctx, `
+		UPDATE contests SET ends_at = $2
+		WHERE id = $1 AND status = $3 AND ends_at IS NOT NULL AND ends_at > now()`,
+		f.ContestID, ends, contests.StatusRunning)
+	if err != nil {
 		return fmt.Errorf("extend the kept fixture's contest: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w (contest %s)", errFixtureOver, f.ContestID)
 	}
 	return nil
 }
