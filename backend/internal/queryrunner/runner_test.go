@@ -754,3 +754,102 @@ func TestARecreatedDatabaseIsNotServedByTheConnectionToTheOldOne(t *testing.T) {
 		t.Fatalf("count = %d, want the recreated database's one row", n)
 	}
 }
+
+// The rate and the checker decide before any connection, so these reports
+// need no cluster, and a refused query never waited or ran.
+func TestARefusalIsReportedWithItsReasonAndNeverAsWaitedOrRun(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.PerMinute = 1
+	runner, observed := unreachable(t, limits, checker.NewChecker())
+
+	if _, err := runner.Run(t.Context(), request("nowhere", `SELEC 1`)); err == nil {
+		t.Fatal("a query that does not parse was run")
+	}
+	if _, err := runner.Run(t.Context(), request("nowhere", `SELECT 1`)); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("second query: error = %v, want ErrTooManyQueries", err)
+	}
+
+	endings, executed, cutoffs, waits := observed.report()
+	if endings != "rejected/parse_error,rejected/rate_limited" {
+		t.Errorf("endings = %q", endings)
+	}
+	if executed != "" || cutoffs != "" || waits != 0 {
+		t.Errorf("a refused query was reported as run (%q), cut (%q) or waited (%d)", executed, cutoffs, waits)
+	}
+}
+
+// A connection this service could not open is its own failure, not the
+// participant's.
+func TestAConnectionThatCouldNotBeOpenedIsReportedAsInternal(t *testing.T) {
+	runner, observed := unreachable(t, unlimited(), anything{})
+
+	if _, err := runner.Run(t.Context(), request("nowhere", `SELECT 1`)); err == nil {
+		t.Fatal("a query ran with nothing listening")
+	}
+
+	endings, executed, _, waits := observed.report()
+	if endings != "error/internal" || executed != "error" || waits != 1 {
+		t.Errorf("endings = %q, executed = %q, waits = %d; want error/internal, error, 1", endings, executed, waits)
+	}
+}
+
+func TestAnAnswerIsReportedAsWaitedRunAndOK(t *testing.T) {
+	runner, database, observed := observedRunner(t, unlimited(), checker.NewChecker())
+
+	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), request(database, `SELECT * FROM no_such_table`)); err == nil {
+		t.Fatal("a missing table answered")
+	}
+
+	endings, executed, cutoffs, waits := observed.report()
+	if endings != "ok/,error/database" || executed != "ok,error" || waits != 2 {
+		t.Errorf("endings = %q, executed = %q, waits = %d", endings, executed, waits)
+	}
+	if cutoffs != "" {
+		t.Errorf("a whole answer was reported as cut by %q", cutoffs)
+	}
+}
+
+func TestEachBudgetCutIsReportedWithTheLimitThatMadeIt(t *testing.T) {
+	limits := unlimited()
+	limits.MaxBytes = 64 << 10
+
+	for _, tc := range []struct {
+		name, sql, limit, ending string
+	}{
+		{"rows", `SELECT g FROM generate_series(1, 5000) g`, "rows", "ok/"},
+		{"bytes", `SELECT repeat('x', 4096) FROM generate_series(1, 100)`, "bytes", "ok/"},
+		{"socket", `SELECT string_agg(repeat('x', 10000), '') FROM generate_series(1, 1000)`, "socket", "error/result_too_large"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, database, observed := observedRunner(t, limits, checker.NewChecker())
+
+			_, _ = runner.Run(t.Context(), request(database, tc.sql))
+
+			endings, _, cutoffs, _ := observed.report()
+			if cutoffs != tc.limit {
+				t.Errorf("cut-offs = %q, want %q", cutoffs, tc.limit)
+			}
+			if endings != tc.ending {
+				t.Errorf("endings = %q, want %q", endings, tc.ending)
+			}
+		})
+	}
+}
+
+func TestADeadlineIsReportedAsATimeoutThatRan(t *testing.T) {
+	limits := unlimited()
+	limits.Deadline = 200 * time.Millisecond
+	runner, database, observed := observedRunner(t, limits, checker.NewChecker("pg_sleep"))
+
+	if _, err := runner.Run(t.Context(), request(database, `SELECT pg_sleep(5)`)); !errors.Is(err, queryrunner.ErrTimeout) {
+		t.Fatalf("error = %v, want ErrTimeout", err)
+	}
+
+	endings, executed, _, _ := observed.report()
+	if endings != "timeout/deadline" || executed != "timeout" {
+		t.Errorf("endings = %q, executed = %q; want timeout/deadline, timeout", endings, executed)
+	}
+}

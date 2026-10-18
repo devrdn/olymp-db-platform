@@ -2,6 +2,7 @@ package queryrunner_test
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -178,4 +179,70 @@ func other(participant, database, sql string) queryrunner.Request {
 	r := request(database, sql)
 	r.Registration = uuid.NewSHA1(uuid.Nil, []byte(participant))
 	return r
+}
+
+// One holder runs, one newcomer waits out the queue and a third finds it
+// full: the gauges see the first two, and each ending says where it stopped.
+func TestAdmissionIsVisibleWhileItHappensAndEachRefusalSaysWhere(t *testing.T) {
+	limits := unlimited()
+	limits.Concurrent = 1
+	limits.QueueDepth = 1
+	limits.QueueWait = 500 * time.Millisecond
+	limits.Deadline = 3 * time.Second
+	runner, database, observed := observedRunner(t, limits, checker.NewChecker("pg_sleep"))
+
+	if running, waiting := runner.Admission(); running != 0 || waiting != 0 {
+		t.Fatalf("an idle runner reports %d running and %d waiting", running, waiting)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = runner.Run(t.Context(), other("holder", database, `SELECT pg_sleep(1.5)`))
+	}()
+	until(t, func() bool { running, _ := runner.Admission(); return running == 1 })
+
+	var queued error
+	go func() {
+		defer wg.Done()
+		_, queued = runner.Run(t.Context(), other("queued", database, `SELECT 1`))
+	}()
+	until(t, func() bool { _, waiting := runner.Admission(); return waiting == 1 })
+
+	if _, err := runner.Run(t.Context(), other("refused", database, `SELECT 1`)); !errors.Is(err, queryrunner.ErrBusy) {
+		t.Fatalf("with the queue full: error = %v, want ErrBusy", err)
+	}
+
+	wg.Wait()
+	if !errors.Is(queued, queryrunner.ErrTimeout) {
+		t.Fatalf("the queued query: error = %v, want ErrTimeout", queued)
+	}
+	if running, waiting := runner.Admission(); running != 0 || waiting != 0 {
+		t.Fatalf("after everything ended: %d running, %d waiting", running, waiting)
+	}
+
+	endings, executed, _, waits := observed.report()
+	for _, want := range []string{"rejected/busy", "timeout/queue", "ok/"} {
+		if !strings.Contains(endings, want) {
+			t.Errorf("endings = %q, missing %s", endings, want)
+		}
+	}
+	// The busy refusal never waited and only the holder ran.
+	if waits != 2 || executed != "ok" {
+		t.Errorf("waits = %d, executed = %q; want 2 and ok", waits, executed)
+	}
+}
+
+// until polls cond for up to three seconds.
+func until(t *testing.T, cond func() bool) {
+	t.Helper()
+
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the condition never held")
 }

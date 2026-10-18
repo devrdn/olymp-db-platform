@@ -2,6 +2,8 @@ package queryrunner_test
 
 import (
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,4 +164,70 @@ func recreate(t *testing.T, database string) {
 	}
 	_ = conn.Close(t.Context())
 	seed(t, database)
+}
+
+// observed records what a runner reported to its Observer.
+type observed struct {
+	mu       sync.Mutex
+	endings  []string
+	waits    []time.Duration
+	executed []string
+	cutoffs  []string
+}
+
+func (o *observed) Ended(outcome, reason string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.endings = append(o.endings, outcome+"/"+reason)
+}
+
+func (o *observed) Waited(d time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.waits = append(o.waits, d)
+}
+
+func (o *observed) Executed(outcome string, _ time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.executed = append(o.executed, outcome)
+}
+
+func (o *observed) CutOff(limit string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.cutoffs = append(o.cutoffs, limit)
+}
+
+// report returns copies of what was recorded so far, as one string per
+// call kind, in order: "ok/,rejected/busy", and so on.
+func (o *observed) report() (endings, executed, cutoffs string, waits int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return strings.Join(o.endings, ","), strings.Join(o.executed, ","), strings.Join(o.cutoffs, ","), len(o.waits)
+}
+
+// observedRunner is setupWith with an observer attached.
+func observedRunner(t *testing.T, limits queryrunner.Limits, validator queryrunner.Validator) (*queryrunner.Runner, string, *observed) {
+	t.Helper()
+
+	runner, database := setupWith(t, limits, validator)
+	o := &observed{}
+	runner.WithObserver(o)
+	return runner, database, o
+}
+
+// unreachable is a runner whose cluster has nothing listening, for what is
+// decided before or instead of a connection.
+func unreachable(t *testing.T, limits queryrunner.Limits, validator queryrunner.Validator) (*queryrunner.Runner, *observed) {
+	t.Helper()
+
+	cluster, err := queryrunner.NewCluster("postgres://nobody:nothing@127.0.0.1:1/postgres?connect_timeout=2", "")
+	if err != nil {
+		t.Fatalf("building the cluster connector: %v", err)
+	}
+	o := &observed{}
+	runner := queryrunner.New(cluster, validator, limits).WithObserver(o)
+	t.Cleanup(runner.Close)
+	return runner, o
 }
