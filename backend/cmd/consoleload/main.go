@@ -16,9 +16,9 @@
 // removes everything it created at the end, except the sign-in limiter's
 // counter, which expires on its own. `consoleload sweep` lists what killed
 // runs left, by run, found by the exact logins setup makes, and `sweep -yes`
-// removes the runs that are over. Nothing is removed that the checks in cleanup.go do not find to be the
-// harness's. It will not start while another contest is live, since its
-// participants would share the load.
+// removes the runs that are past their planned end. Nothing is removed that
+// the checks in cleanup.go do not find to be the harness's. It will not start
+// while another contest is live, since its participants would share the load.
 //
 // A run only measures, unless -profile names a profile: then every run is
 // judged against the profile's thresholds, and a miss with nothing else
