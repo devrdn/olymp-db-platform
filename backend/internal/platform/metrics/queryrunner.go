@@ -25,8 +25,11 @@ type QueryRunner struct {
 	wait     prometheus.Histogram
 	cutoffs  *prometheus.CounterVec
 
-	endings map[string]map[string]struct{}
-	limits  map[string]struct{}
+	// The declared series, resolved once so a query costs a map lookup and
+	// an atomic add. A value missing here goes to "other" through the vec.
+	ended    map[string]map[string]prometheus.Counter
+	executed map[string]prometheus.Observer
+	cut      map[string]prometheus.Counter
 }
 
 // NewQueryRunner registers the set on rec's registry when rec is the
@@ -35,20 +38,7 @@ type QueryRunner struct {
 // that may cut an answer. Every declared series is exported at zero from the
 // start, so rate() sees its first increment.
 func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string) *QueryRunner {
-	q := &QueryRunner{
-		endings: make(map[string]map[string]struct{}, len(endings)),
-		limits:  make(map[string]struct{}, len(cutoffs)),
-	}
-	for outcome, reasons := range endings {
-		q.endings[outcome] = make(map[string]struct{}, len(reasons))
-		for _, reason := range reasons {
-			q.endings[outcome][reason] = struct{}{}
-		}
-	}
-	for _, limit := range cutoffs {
-		q.limits[limit] = struct{}{}
-	}
-
+	q := &QueryRunner{}
 	p, ok := rec.(*Prometheus)
 	if !ok {
 		return q
@@ -59,15 +49,15 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 		Name: "queryrunner_queries_total",
 		Help: "Queries the Query Runner answered, by outcome (ok, rejected, error, timeout) and reason.",
 	}, []string{"outcome", "reason"})
-	// Up to the deadline (5s by default) and a little past it, where a
-	// cancelled query's cleanup lands.
+	// From a fast read to past the deadline, where a cancelled query's
+	// cleanup lands. A QUERY_DEADLINE above the top bucket lands in +Inf.
 	q.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "queryrunner_query_duration_seconds",
 		Help:    "Time from admission to the end of an admitted query, connecting included, by outcome.",
 		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30},
 	}, []string{"outcome"})
-	// Zero for a query admitted at once, up to the queue wait (15s by
-	// default) for one that timed out waiting.
+	// From a query admitted at once to one that waited out the queue. A
+	// QUERY_QUEUE_WAIT above the top bucket lands in +Inf.
 	q.wait = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "queryrunner_admission_wait_seconds",
 		Help:    "Time a query waited for a running slot, whether it got one or gave up.",
@@ -79,14 +69,18 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 	}, []string{"limit"})
 	q.registry.MustRegister(q.queries, q.duration, q.wait, q.cutoffs)
 
-	for outcome, reasons := range q.endings {
-		q.duration.WithLabelValues(outcome)
-		for reason := range reasons {
-			q.queries.WithLabelValues(outcome, reason)
+	q.ended = make(map[string]map[string]prometheus.Counter, len(endings))
+	q.executed = make(map[string]prometheus.Observer, len(endings))
+	for outcome, reasons := range endings {
+		q.executed[outcome] = q.duration.WithLabelValues(outcome)
+		q.ended[outcome] = make(map[string]prometheus.Counter, len(reasons))
+		for _, reason := range reasons {
+			q.ended[outcome][reason] = q.queries.WithLabelValues(outcome, reason)
 		}
 	}
-	for limit := range q.limits {
-		q.cutoffs.WithLabelValues(limit)
+	q.cut = make(map[string]prometheus.Counter, len(cutoffs))
+	for _, limit := range cutoffs {
+		q.cut[limit] = q.cutoffs.WithLabelValues(limit)
 	}
 	return q
 }
@@ -96,15 +90,16 @@ func (q *QueryRunner) Ended(outcome, reason string) {
 	if q.queries == nil {
 		return
 	}
-	reasons, known := q.endings[outcome]
+	reasons, known := q.ended[outcome]
 	if !known {
 		q.queries.WithLabelValues(otherLabel, otherLabel).Inc()
 		return
 	}
-	if _, known := reasons[reason]; !known {
-		reason = otherLabel
+	if counter, known := reasons[reason]; known {
+		counter.Inc()
+		return
 	}
-	q.queries.WithLabelValues(outcome, reason).Inc()
+	q.queries.WithLabelValues(outcome, otherLabel).Inc()
 }
 
 // Waited records how long one query waited for admission.
@@ -120,10 +115,11 @@ func (q *QueryRunner) Executed(outcome string, d time.Duration) {
 	if q.duration == nil {
 		return
 	}
-	if _, known := q.endings[outcome]; !known {
-		outcome = otherLabel
+	if observer, known := q.executed[outcome]; known {
+		observer.Observe(d.Seconds())
+		return
 	}
-	q.duration.WithLabelValues(outcome).Observe(d.Seconds())
+	q.duration.WithLabelValues(otherLabel).Observe(d.Seconds())
 }
 
 // CutOff counts one answer cut by limit.
@@ -131,10 +127,11 @@ func (q *QueryRunner) CutOff(limit string) {
 	if q.cutoffs == nil {
 		return
 	}
-	if _, known := q.limits[limit]; !known {
-		limit = otherLabel
+	if counter, known := q.cut[limit]; known {
+		counter.Inc()
+		return
 	}
-	q.cutoffs.WithLabelValues(limit).Inc()
+	q.cutoffs.WithLabelValues(otherLabel).Inc()
 }
 
 // WatchAdmission exports how many queries run and wait, read from load at
