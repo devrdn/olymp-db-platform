@@ -2,7 +2,8 @@
 # Removes old backup sets: keeps the newest BACKUP_KEEP complete sets, and
 # beyond them the newest set of each of the BACKUP_KEEP_DAILY most recent days
 # not already covered. Everything else in the directory is left alone: an
-# incomplete set, a file of any other name, a set of another database.
+# incomplete set, the unfinished files of a stopped run, a file of any other
+# name, a set of another database.
 #
 # The two tiers bound the directory by count, whatever the schedule: at most
 # BACKUP_KEEP + BACKUP_KEEP_DAILY sets. Days are counted among the sets that
@@ -66,6 +67,9 @@ done
 while IFS= read -r stamp; do
 	echo "left alone, incomplete: $stamp (only a complete set is ever removed; delete it by hand once you know why it is partial)"
 done < <(incomplete_sets "$dir" "$db")
+while IFS= read -r name; do
+	echo "left alone, unfinished: $name (a make backup that was stopped before it finished; delete it by hand)"
+done < <(unfinished_files "$dir" "$db")
 
 total=0
 for stamp in "${kept[@]}"; do total=$((total + $(set_bytes "$dir" "$db" "$stamp"))); done

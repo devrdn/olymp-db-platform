@@ -497,37 +497,54 @@ e2e-stack-down: ## Remove the throwaway stack, its volumes and its images
 # one that is discovered to be incomplete on the day it is restored. A
 # developer who wants only the dump says so — DB_ONLY=1 — rather than reading
 # an exit code as permission.
+#
+# Each file is written under a hidden .partial name and takes its real name
+# only once it is checked: the dump carries pg_dump's custom-format header, an
+# archive passes gzip -t. A run killed at any point (a timeout, a full disk, a
+# Ctrl-C) therefore leaves only .partial files, which rotation never counts,
+# instead of a set whose last archive is cut short. The archives are renamed
+# before the dump, so a set is complete only once all three are checked.
+# umask 077: the files hold participants' answers and personal data.
 backup: require-env ## Dump the core database and archive the covers and game uploads volumes (DB_ONLY=1 for the dump alone)
-	@mkdir -p $(BACKUP_DIR)
-	@stamp=$$(date +%Y%m%d-%H%M%S); \
-		file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$stamp.dump; \
+	@umask 077; mkdir -p $(BACKUP_DIR)
+	@umask 077; stamp=$$(date +%Y%m%d-%H%M%S); \
+		dump=$(CORE_DB_NAME)-$$stamp.dump; \
+		partial() { echo "$(BACKUP_DIR)/.$$1.partial"; }; \
+		publish() { \
+			for f in "$$@"; do \
+				mv -f "$$(partial $$f)" "$(BACKUP_DIR)/$$f" || return 1; \
+				echo "wrote $(BACKUP_DIR)/$$f ($$(du -h "$(BACKUP_DIR)/$$f" | cut -f1))"; \
+			done; \
+		}; \
 		$(COMPOSE) exec -T pg-core \
-			pg_dump --format=custom --no-owner --username=$(CORE_DB_USER) $(CORE_DB_NAME) > $$file || \
-			{ echo "backup failed; removing the partial file"; rm -f $$file; exit 1; }; \
-		test -s $$file || { echo "the dump is empty — refusing to keep it"; rm -f $$file; exit 1; }; \
-		echo "wrote $$file ($$(du -h $$file | cut -f1))"; \
+			pg_dump --format=custom --no-owner --username=$(CORE_DB_USER) $(CORE_DB_NAME) > "$$(partial $$dump)" || \
+			{ echo "backup failed; removing the partial file"; rm -f "$$(partial $$dump)"; exit 1; }; \
+		test "$$(head -c 5 "$$(partial $$dump)")" = PGDMP || \
+			{ echo "the dump is empty or not a pg_dump archive — refusing to keep it"; rm -f "$$(partial $$dump)"; exit 1; }; \
+		taken=; \
 		take() { \
-			archive=$(BACKUP_DIR)/$$1-$$stamp.tar.gz; staging=$$(mktemp -d); \
+			archive=$$1-$$stamp.tar.gz; staging=$$(mktemp -d); \
 			if $(COMPOSE) cp "api:$$2/." $$staging >/dev/null; then \
-				tar -czf $$archive -C $$staging . || \
-					{ echo "the $$1 volume could not be archived"; rm -rf $$staging; rm -f $$archive; return 1; }; \
-				echo "wrote $$archive ($$(du -h $$archive | cut -f1))"; \
-				rm -rf $$staging; \
+				{ tar -czf "$$(partial $$archive)" -C $$staging . && gzip -t "$$(partial $$archive)"; } || \
+					{ echo "the $$1 volume could not be archived"; rm -rf $$staging; rm -f "$$(partial $$archive)"; return 1; }; \
+				rm -rf $$staging; taken="$$taken $$archive"; \
 			else \
 				rm -rf $$staging; \
 				echo "the $$1 volume was NOT copied: $$2 could not be read from the api container."; \
-				echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
+				echo "The database dump is kept, but this backup is incomplete — restoring it would"; \
 				echo "$$3. Make sure the container exists ('make deploy') and the path is its mount point,"; \
 				echo "then run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
 				return 1; \
 			fi; \
 		}; \
 		if [ -n "$(DB_ONLY)" ]; then \
+			publish $$dump || exit 1; \
 			echo "DB_ONLY: the covers and the game uploads were not taken. This is a dump, not a backup of the installation."; \
+		elif take covers $(CONTAINER_COVER_DIR) "bring back every contest without its cover" && \
+			take game-uploads $(CONTAINER_GAME_UPLOAD_DIR) "leave every game built from an uploaded file unable to be built again"; then \
+			publish $$taken $$dump || exit 1; \
 		else \
-			take covers $(CONTAINER_COVER_DIR) "bring back every contest without its cover" && \
-			take game-uploads $(CONTAINER_GAME_UPLOAD_DIR) "leave every game built from an uploaded file unable to be built again" || \
-				exit 1; \
+			publish $$taken $$dump; exit 1; \
 		fi; \
 		echo "Copy what was written off this machine. A backup that only exists on the host it came from is not a backup."
 

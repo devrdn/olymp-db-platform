@@ -5,14 +5,16 @@
 # Rotation deletes files, so what it may delete is checked against a
 # directory built to tempt it: incomplete sets, another database's dump, a
 # directory and a symlink named like a set, and files that only look like
-# one. `make backup` is replaced by a stub that writes a set the way the real
-# target names it; nothing here dumps or restores a database. The units are
+# one. The real `make backup` target runs against a fake Compose that hands
+# it a synthetic dump and two synthetic volumes, and is killed mid-run to show
+# that a stopped backup leaves nothing that counts as a set. Elsewhere it is
+# replaced by a stub; nothing here dumps or restores a database. The units are
 # rendered and given to `systemd-analyze verify`, and the two schedules to
 # `systemd-analyze calendar`, in the same container.
 #
-# Only the scripts and the unit files are copied into the container, never
-# deploy/backups itself, so the backups on this machine are out of reach. The
-# container has no network and is removed at the end.
+# Only the Makefile, the scripts and the unit files are copied into the
+# container, never deploy/backups itself, so the backups on this machine are
+# out of reach. The container has no network and is removed at the end.
 #
 # Usage: deploy/backups/scheduled-backup-check.sh   (or `make scheduled-backup-check`).
 # Needs Docker; the first run builds a small Debian image with systemd, rsync
@@ -35,12 +37,13 @@ outside() {
 		docker build -q -t "$image" - >/dev/null <<-'EOF'
 			FROM debian:12-slim
 			RUN apt-get update \
-			 && apt-get install -y --no-install-recommends systemd rsync rclone \
+			 && apt-get install -y --no-install-recommends systemd rsync rclone make \
 			 && rm -rf /var/lib/apt/lists/*
 		EOF
 	fi
 
 	mkdir -p "$work/srv/dbcontest/deploy/backups" "$work/srv/dbcontest/deploy/systemd"
+	cp "$root/Makefile" "$work/srv/dbcontest/"
 	cp "$root"/deploy/backups/*.sh "$work/srv/dbcontest/deploy/backups/"
 	cp -R "$root"/deploy/systemd/. "$work/srv/dbcontest/deploy/systemd/"
 
@@ -96,7 +99,7 @@ clean_env() {
 }
 
 # The tempting directory: eleven complete sets over six days, and everything
-# rotation must leave alone however old it is.
+# rotation must leave alone however old it is, a stopped run's .partial too.
 tempting() {
 	local d=$1 s
 	mkdir -p "$d"
@@ -120,13 +123,15 @@ tempting() {
 	printf dump >"$d/$DB-20261025-000000.dump"
 	printf uploads >"$d/game-uploads-20261025-000000.tar.gz"
 	ln -s "$d/notes.txt" "$d/covers-20261025-000000.tar.gz"
+	printf half >"$d/.$DB-20261028-033000.dump.partial"
 }
 untouchable() {
 	printf '%s\n' "$DB-20261020-000000.dump" "$DB-20261021-120000.dump" "covers-20261021-120000.tar.gz" \
 		notes.txt "$DB-latest.dump" covers-20261022-000000.tar.gz.part \
 		otherdb-20261023-000000.dump covers-20261023-000000.tar.gz game-uploads-20261023-000000.tar.gz \
 		"$DB-20261024-000000.dump" covers-20261024-000000.tar.gz game-uploads-20261024-000000.tar.gz \
-		"$DB-20261025-000000.dump" game-uploads-20261025-000000.tar.gz covers-20261025-000000.tar.gz
+		"$DB-20261025-000000.dump" game-uploads-20261025-000000.tar.gz covers-20261025-000000.tar.gz \
+		".$DB-20261028-033000.dump.partial"
 }
 
 check_rotation() {
@@ -142,6 +147,7 @@ check_rotation() {
 		"$(listing "$t/r1")" "$want"
 	expect_contains "says what it removed" "$out" "removed set 20261028-033000"
 	expect_contains "names the incomplete sets it left alone" "$out" "left alone, incomplete: 20261021-120000"
+	expect_contains "and the unfinished files of a stopped run" "$out" "left alone, unfinished: .$DB-20261028-033000.dump.partial"
 	expect_contains "states what it kept" "$out" "kept 5 complete sets"
 
 	clean_env
@@ -286,6 +292,88 @@ check_wrapper() {
 	expect "all before make backup runs" "$(cat "$STUB_LOG")" ""
 }
 
+# The real target, against the fake Compose: nothing it reaches is real.
+real_backup() { # dir
+	/usr/bin/make -s -C "$ROOT" backup COMPOSE="$FAKE_COMPOSE" ENV_FILE="$ROOT/deploy/.env" \
+		CORE_DB_PASSWORD=unused BACKUP_DIR="$1"
+}
+finals() { # dir: files named as a set's pieces, whatever their state
+	find "$1" -maxdepth 1 \( -name "$DB-*.dump" -o -name 'covers-*.tar.gz' -o -name 'game-uploads-*.tar.gz' \) -printf '%f\n'
+}
+partials() { find "$1" -maxdepth 1 -name '.*.partial' -printf '%f\n'; }
+killed_backup() { # dir, then the fake's setting: the target stopped mid-run
+	local pid
+	setsid env "$2" bash -c "$(declare -f real_backup); ROOT=$ROOT FAKE_COMPOSE=$FAKE_COMPOSE real_backup $1" \
+		>/dev/null 2>&1 &
+	pid=$!
+	for _ in $(seq 50); do
+		[ -n "$(partials "$1")" ] && break
+		sleep 0.1
+	done
+	sleep 0.5
+	kill -TERM -- "-$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+}
+
+check_make_backup() {
+	local t=$1 out rc stamp dump
+	echo "make backup itself"
+	clean_env
+	mkdir -p "$t/volumes/covers" "$t/volumes/uploads"
+	printf 'a cover' >"$t/volumes/covers/cover-a"
+	printf 'an upload' >"$t/volumes/uploads/upload-1"
+	export FAKE_VOLUMES="$t/volumes"
+
+	mkdir -p "$t/m1"
+	rc=0
+	out=$(umask 022 && real_backup "$t/m1" 2>&1) || rc=$?
+	expect "make backup succeeds" "$rc" "0"
+	dump=$(find "$t/m1" -maxdepth 1 -name "$DB-*.dump" -printf '%f\n')
+	stamp=${dump#"$DB-"}
+	stamp=${stamp%.dump}
+	expect "and writes one set under the names the restores read" "$(listing "$t/m1")" "$(setfiles "$stamp" | sorted)"
+	expect "every file of it readable by its owner only, whatever the caller's umask" \
+		"$(cd "$t/m1" && stat -c '%a' -- * | sort -u)" "600"
+	expect "the archives hold the volumes" \
+		"$(tar -xzOf "$t/m1/covers-$stamp.tar.gz" ./cover-a; tar -xzOf "$t/m1/game-uploads-$stamp.tar.gz" ./upload-1)" \
+		"a coveran upload"
+
+	mkdir -p "$t/m2"
+	rc=0
+	out=$(FAKE_DUMP=garbage real_backup "$t/m2" 2>&1) || rc=$?
+	expect "a dump that is not a pg_dump archive fails make backup" "$((rc != 0))" "1"
+	expect_contains "and says so" "$out" "not a pg_dump archive"
+	expect "and leaves nothing behind" "$(listing "$t/m2")" ""
+
+	mkdir -p "$t/m3"
+	rc=0
+	out=$(FAKE_DUMP=fail real_backup "$t/m3" 2>&1) || rc=$?
+	expect "a failed pg_dump fails make backup and leaves nothing" "$((rc != 0)):$(listing "$t/m3")" "1:"
+
+	mkdir -p "$t/m4"
+	rc=0
+	out=$(FAKE_CP=fail-uploads real_backup "$t/m4" 2>&1) || rc=$?
+	expect "an unreadable volume fails make backup" "$((rc != 0))" "1"
+	expect "keeping the checked dump and covers, which are no set without the uploads" \
+		"$(finals "$t/m4" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/' | sorted)" "$(printf '%s\n' covers-T.tar.gz "$DB-T.dump" | sorted)"
+	expect "and no unfinished file" "$(partials "$t/m4")" ""
+
+	mkdir -p "$t/m5"
+	killed_backup "$t/m5" FAKE_DUMP=hang
+	expect "a backup killed during the dump leaves no file named as a set's" "$(finals "$t/m5")" ""
+	expect "only its unfinished dump" "$(partials "$t/m5" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/')" ".$DB-T.dump.partial"
+
+	mkdir -p "$t/m6"
+	killed_backup "$t/m6" FAKE_CP=hang-uploads
+	expect "a backup killed while copying the uploads leaves no file named as a set's" "$(finals "$t/m6")" ""
+	expect "only its unfinished files" "$(partials "$t/m6" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/' | sorted)" \
+		"$(printf '%s\n' ".$DB-T.dump.partial" .covers-T.tar.gz.partial | sorted)"
+	out=$("$B/rotate.sh" "$t/m6" 2>&1) || fail "rotation beside unfinished files succeeds" "$out"
+	expect_contains "which rotation does not count" "$out" "kept 0 complete sets"
+	expect_contains "names as unfinished" "$out" "left alone, unfinished: .$DB-"
+	expect "and leaves in place" "$(partials "$t/m6" | wc -l | tr -d ' ')" "2"
+}
+
 calendar_step() { # expression: seconds between its next two elapses
 	local a b
 	mapfile -t lines < <(systemd-analyze calendar --iterations=2 "$1" |
@@ -381,6 +469,31 @@ inside() {
 			printf uploads >"$dir/game-uploads-$stamp.tar.gz" ;;
 		esac
 	EOF
+	# Stands in for docker compose under the real `make backup`: pg_dump prints
+	# a custom-format header, and the api container's volumes are directories.
+	export FAKE_COMPOSE="$t/bin/fake-compose"
+	cat >"$FAKE_COMPOSE" <<-'EOF'
+		#!/usr/bin/env bash
+		set -euo pipefail
+		case $1 in
+		exec)
+			case ${FAKE_DUMP:-ok} in
+			ok) printf 'PGDMP a custom-format dump' ;;
+			garbage) printf 'not a dump' ;;
+			hang) printf 'PGDMP the first half'; sleep 60 ;;
+			fail) echo "pg_dump: error: connection to server failed" >&2; exit 1 ;;
+			esac ;;
+		cp)
+			src=${2#api:}
+			name=$(basename "${src%/.}")
+			case ${FAKE_CP:-}:$name in
+			hang-uploads:uploads) sleep 60 ;;
+			fail-uploads:uploads) echo "no such directory: $src" >&2; exit 1 ;;
+			esac
+			cp -R "$FAKE_VOLUMES/$name/." "$3" ;;
+		esac
+	EOF
+	chmod +x "$FAKE_COMPOSE"
 	# Stands in for systemctl, which has no manager to talk to in here.
 	cat >"$t/bin/systemctl" <<-'EOF'
 		#!/usr/bin/env bash
@@ -390,6 +503,7 @@ inside() {
 	export PATH="$t/bin:$PATH"
 
 	check_rotation "$t"
+	check_make_backup "$t"
 	check_wrapper "$t"
 	check_schedule "$t"
 
