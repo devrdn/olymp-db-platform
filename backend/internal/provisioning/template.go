@@ -205,6 +205,9 @@ type TemplateRepository interface {
 	// before it is cleared, so a row added during the build keeps its mark for
 	// the next one.
 	FinishBuild(ctx context.Context, contestID uuid.UUID, version int, buildError string, claimedAt time.Time) error
+	// SaveSchema caches the schema panel's description of version
+	// (SchemaStore).
+	SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema Schema) error
 	// MarkTableDataChanged records that this contest's table data no longer
 	// matches its built database. Called inside the transaction of each write
 	// that changes a table's rows, so the mark commits or rolls back with it.
@@ -371,6 +374,8 @@ type TemplateCluster interface {
 	// MissingDatabases returns the names that do not exist on the cluster, in
 	// the order given.
 	MissingDatabases(ctx context.Context, names []string) ([]string, error)
+	// ReadSchema describes a database for the schema panel (SchemaSource).
+	ReadSchema(ctx context.Context, database string) (Schema, error)
 }
 
 // unitOfWork is the transaction boundary a save and its audit entry share.
@@ -834,6 +839,13 @@ func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Te
 // recordBuildOutcome finishes a claimed build's row and audit entry; every
 // build path ends here.
 func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildErr string, cause error) (Template, error) {
+	if buildErr == "" {
+		if err := g.describe(ctx, claimed); err != nil {
+			cause, buildErr = err, BuildFailedInternally
+			_ = g.cluster.Drop(context.WithoutCancel(ctx), claimed.Database)
+		}
+	}
+
 	// Bounded here, the one place the row, the audit payload and the return
 	// value all take their text from.
 	buildErr = boundBuildError(buildErr)
@@ -868,6 +880,22 @@ func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildE
 	// author's typo does not page an operator. It is set only with
 	// BuildFailedInternally, where the log is the only place the detail goes.
 	return claimed, cause
+}
+
+// describe caches the schema panel's description of a template that has just
+// been built. It is read from the template itself, before FinishBuild marks it
+// ready: until then nothing copies it, so this connection cannot make a copy
+// fail (55006), and no participant's copy exists whose changes could be read
+// instead. A failure fails the build, so a ready game is always described.
+func (g *Games) describe(ctx context.Context, claimed Template) error {
+	schema, err := g.cluster.ReadSchema(ctx, claimed.Database)
+	if err != nil {
+		return fmt.Errorf("describe the built game: %w", err)
+	}
+	if err := g.repo.SaveSchema(ctx, claimed.ContestID, claimed.Version, boundSchema(schema)); err != nil {
+		return fmt.Errorf("describe the built game: %w", err)
+	}
+	return nil
 }
 
 // templateName is the database every participant's copy of one contest is

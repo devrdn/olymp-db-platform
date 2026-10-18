@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The cached schema of a contest's game lives on its game_templates row. It is
-// derived data that can be dropped and read again from the cluster.
+// The cached schema of a contest's game lives on its game_templates row. The
+// build writes it, read from the template itself (provisioning.Games.describe).
 
 // CachedSchema reads the cached schema and the template version it describes;
 // the caller decides whether that version is current. ErrNoSchema means never

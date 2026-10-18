@@ -28,7 +28,7 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 	return s
 }
 
-// Schema describes the participant's own copy of the game, for the console's
+// Schema describes the contest's game as it was built, for the console's
 // schema panel. The caller has already admitted participant in contest through
 // Access; Schema does not admit them again.
 //
