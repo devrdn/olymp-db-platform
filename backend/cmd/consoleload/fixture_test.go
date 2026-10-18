@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
@@ -31,12 +32,7 @@ func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *t
 	source := sourceGame(t)
 
 	f := &fixture{}
-	tornDown := false
-	t.Cleanup(func() {
-		if !tornDown {
-			_ = teardown(context.WithoutCancel(ctx), st, f)
-		}
-	})
+	tearDownAtTheEnd(t, st, f)
 	if _, err := setup(ctx, st, f, source, 2, contests.ModeReadWrite); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -69,8 +65,40 @@ func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *t
 	if err := teardown(ctx, st, f); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
-	tornDown = true
 	assertNothingLeft(t, st, f)
+}
+
+// readOnlyFixture sets up one participant in a read-only contest, with its
+// copy when provisioned, and tears it down at the end.
+func readOnlyFixture(t *testing.T, st *stores, provisioned bool) *fixture {
+	t.Helper()
+
+	source := sourceGame(t)
+	f := &fixture{}
+	tearDownAtTheEnd(t, st, f)
+	if _, err := setup(t.Context(), st, f, source, 1, contests.ModeReadOnly); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if provisioned {
+		if _, err := provision(t.Context(), st, f, 1, 1, nil); err != nil {
+			t.Fatalf("provision: %v", err)
+		}
+	}
+	return f
+}
+
+// tearDownAtTheEnd removes whatever of f a failed test left, and says what
+// could not be removed. Teardown of an already removed fixture finds nothing.
+func tearDownAtTheEnd(t *testing.T, st *stores, f *fixture) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := teardown(ctx, st, f); err != nil {
+			t.Logf("tearing down the fixture %s: %v", f.RunID, err)
+		}
+	})
 }
 
 // assertNothingLeft checks that no account, contest or database of f

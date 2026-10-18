@@ -1,87 +1,15 @@
 package main
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
-
-func TestLiveContestsCountsOnlyOtherPeoplesContestsThatAreOrSoonWillBeRunning(t *testing.T) {
-	st := testStores(t)
-	ctx := t.Context()
-
-	before, err := liveContests(ctx, st.core)
-	if err != nil {
-		t.Fatalf("liveContests: %v", err)
-	}
-
-	organiser := testAccount(t, st, "organiser-"+randomHex(4))
-	ours := testAccount(t, st, loginPrefix+randomHex(4)+"-owner")
-	now := time.Now().UTC()
-	for _, c := range []struct {
-		owner    uuid.UUID
-		status   string
-		startsIn time.Duration
-	}{
-		{organiser, contests.StatusRunning, -time.Hour},         // counted
-		{organiser, contests.StatusPublished, 30 * time.Minute}, // counted: starts during a run
-		{organiser, contests.StatusPublished, 72 * time.Hour},
-		{organiser, contests.StatusFinished, -48 * time.Hour},
-		{organiser, contests.StatusDraft, -time.Hour},
-		{ours, contests.StatusRunning, -time.Minute},
-	} {
-		testContest(t, st, c.owner, c.status, now.Add(c.startsIn))
-	}
-
-	after, err := liveContests(ctx, st.core)
-	if err != nil {
-		t.Fatalf("liveContests: %v", err)
-	}
-	if after-before != 2 {
-		t.Fatalf("liveContests rose by %d, want 2", after-before)
-	}
-}
-
-func testAccount(t *testing.T, st *stores, login string) uuid.UUID {
-	t.Helper()
-
-	u, err := postgres.NewUsers(st.core).Create(t.Context(), users.User{
-		Login: login, FullName: login, Status: users.StatusBlocked, PasswordHash: mustHash(randomSecret()),
-	})
-	if err != nil {
-		t.Fatalf("create %s: %v", login, err)
-	}
-	t.Cleanup(func() {
-		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM users WHERE id = $1`, u.ID)
-	})
-	return u.ID
-}
-
-func testContest(t *testing.T, st *stores, owner uuid.UUID, status string, starts time.Time) {
-	t.Helper()
-
-	ends := starts.Add(3 * time.Hour)
-	c, err := postgres.NewContests(st.core).Create(t.Context(), contests.Contest{
-		Status: status, Enrollment: contests.EnrollmentInviteOnly, QuestionMode: contests.QuestionModeMulti,
-		Progression: contests.ProgressionFree, Scoring: contests.ScoringPoints, Timing: contests.TimingFixed,
-		StartsAt: &starts, EndsAt: &ends, CreatedBy: owner,
-		LeaderboardNames: contests.LeaderboardNamesLogin, ICPCPenaltyMin: contests.DefaultICPCPenaltyMin,
-	})
-	if err != nil {
-		t.Fatalf("create a %s contest: %v", status, err)
-	}
-	// Registered after the owner's, so it runs first.
-	t.Cleanup(func() {
-		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM contests WHERE id = $1`, c.ID)
-	})
-}
 
 func TestTheReportLeadsWithTheVerdict(t *testing.T) {
 	out, err := os.OpenRoot(t.TempDir())
@@ -113,4 +41,92 @@ func mustRead(t *testing.T, out *os.Root, name string) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+func TestLiveContestsListsWhatIsOrSoonWillBeRunningSaveTheExemptContest(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+
+	organiser := testAccount(t, st, "organiser-"+randomHex(4), users.StatusBlocked)
+	// A login shaped like the harness's earns no exemption.
+	lookalike := testAccount(t, st, loginPrefix+randomHex(4)+"-owner", users.StatusBlocked)
+	now := time.Now().UTC()
+	cases := []struct {
+		name     string
+		owner    uuid.UUID
+		status   string
+		startsIn time.Duration
+		live     bool
+	}{
+		{"running", organiser, contests.StatusRunning, -time.Hour, true},
+		{"published, starting within the horizon", organiser, contests.StatusPublished, 30 * time.Minute, true},
+		{"published, starting after the horizon", organiser, contests.StatusPublished, 72 * time.Hour, false},
+		{"finished", organiser, contests.StatusFinished, -48 * time.Hour, false},
+		{"draft", organiser, contests.StatusDraft, -time.Hour, false},
+		{"running, owned by a harness-shaped login", lookalike, contests.StatusRunning, -time.Minute, true},
+		{"running, the exempt one", lookalike, contests.StatusRunning, -time.Minute, false},
+	}
+	ids := make([]uuid.UUID, len(cases))
+	for i, c := range cases {
+		ids[i] = testContest(t, st, c.owner, c.status, now.Add(c.startsIn))
+	}
+
+	live, err := liveContests(ctx, st.core, ids[len(ids)-1], time.Hour)
+	if err != nil {
+		t.Fatalf("liveContests: %v", err)
+	}
+	listed := map[uuid.UUID]liveContest{}
+	for _, c := range live {
+		listed[c.ID] = c
+	}
+	for i, c := range cases {
+		if _, got := listed[ids[i]]; got != c.live {
+			t.Errorf("%s: listed %v, want %v", c.name, got, c.live)
+		}
+	}
+	if running := listed[ids[0]]; running.Status != contests.StatusRunning || running.StartsAt == nil {
+		t.Errorf("the running contest is listed as %+v", running)
+	}
+}
+
+func TestRefuseLiveNamesEveryContestThatBlocksTheRun(t *testing.T) {
+	if err := refuseLive(nil, time.Hour); err != nil {
+		t.Fatalf("refused with nothing live: %v", err)
+	}
+	starts := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	running, soon := uuid.New(), uuid.New()
+	err := refuseLive([]liveContest{
+		{ID: running, Status: contests.StatusRunning, StartsAt: &starts},
+		{ID: soon, Status: contests.StatusPublished, StartsAt: &starts},
+	}, time.Hour)
+	if err == nil {
+		t.Fatal("not refused with two contests live")
+	}
+	for _, want := range []string{running.String(), soon.String(), "running", "published", "2026-10-21 09:00", "-allow-live-contests"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal lacks %q: %v", want, err)
+		}
+	}
+}
+
+func TestTheLiveHorizonCoversThePlannedRun(t *testing.T) {
+	beta, err := parseFlags([]string{"-source-template", "game_tpl_x", "-profile", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := beta.horizon(), setupMargin+30*time.Second+15*time.Minute; got != want {
+		t.Errorf("the beta profile's horizon is %s, want %s", got, want)
+	}
+
+	long, err := parseFlags([]string{"-source-template", "game_tpl_x", "-participants", "30,40",
+		"-shapes", "steady,burst", "-steady-duration", "3h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two counts, each a steady run and a burst run of five rounds, every run
+	// after a 30 s cooldown.
+	burst := 5*time.Second + 4*30*time.Second
+	if got, want := long.horizon(), setupMargin+4*30*time.Second+2*3*time.Hour+2*burst; got != want {
+		t.Errorf("the horizon of two long runs is %s, want %s", got, want)
+	}
 }

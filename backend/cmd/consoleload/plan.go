@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -35,22 +36,6 @@ type report struct {
 }
 
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
-	if !cfg.allowLive {
-		live, err := liveContests(ctx, st.core)
-		if err != nil {
-			return err
-		}
-		if live > 0 {
-			return fmt.Errorf("%d contests are running or start within %s, and their participants would share this load "+
-				"(-allow-live-contests runs it anyway)", live, liveHorizon)
-		}
-	}
-
-	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix, Mode: cfg.mode}
-	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
-		return err
-	}
-
 	needed := slices.Max(cfg.participants)
 	f := &fixture{}
 	if cfg.fixture != "" {
@@ -60,6 +45,26 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 		if err := f.fits(needed, cfg.mode); err != nil {
 			return err
 		}
+		// The run will set these accounts' passwords and load this contest.
+		if err := verifyHarness(ctx, st.core, f.contestIDs(), f.userIDs()); err != nil {
+			return err
+		}
+	}
+
+	if !cfg.allowLive {
+		// A reused fixture's own contest is running, and is the one to load.
+		live, err := liveContests(ctx, st.core, f.ContestID, cfg.horizon())
+		if err != nil {
+			return err
+		}
+		if err := refuseLive(live, cfg.horizon()); err != nil {
+			return err
+		}
+	}
+
+	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix, Mode: cfg.mode}
+	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
+		return err
 	}
 
 	var parts []*participant
@@ -321,22 +326,70 @@ func writeReport(out *os.Root, rep *report) error {
 	return out.WriteFile("report.md", []byte(b.String()), 0o600)
 }
 
-// liveHorizon is how far ahead a published contest counts as live: longer
-// than a run takes, provisioning and teardown included.
-const liveHorizon = 2 * time.Hour
+// setupMargin is what a run spends beside its load, on setup, provisioning
+// and teardown, so a contest starting within it would still meet the load.
+const setupMargin = time.Hour
 
-// liveContests counts the contests this command did not create that are
-// running or will start within liveHorizon, whose participants would share
-// the load.
-func liveContests(ctx context.Context, core *pgxpool.Pool) (int, error) {
-	var n int
-	err := core.QueryRow(ctx, `
-		SELECT count(*) FROM contests c
-		WHERE (c.status = 'running' OR c.status = 'published' AND c.starts_at < now() + $3::interval)
-		  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = c.created_by AND left(u.login, $1) = $2)`,
-		len(loginPrefix), loginPrefix, liveHorizon).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("count the live contests: %w", err)
+// horizon is how far ahead a published contest counts as live: the run's
+// planned load and setupMargin.
+func (c config) horizon() time.Duration {
+	total := setupMargin
+	for range c.participants {
+		for _, shape := range c.shapes {
+			total += c.cooldown
+			switch shape {
+			case shapeSteady:
+				total += c.steadyFor
+			case shapeBurst:
+				total += time.Duration(c.burstRounds)*c.burstWindow + time.Duration(c.burstRounds-1)*c.burstGap
+			}
+		}
 	}
-	return n, nil
+	return total
+}
+
+type liveContest struct {
+	ID       uuid.UUID
+	Status   string
+	StartsAt *time.Time
+}
+
+// liveContests lists the contests, other than exempt, that are running or
+// will start within horizon: their participants would share the load.
+func liveContests(ctx context.Context, core *pgxpool.Pool, exempt uuid.UUID, horizon time.Duration) ([]liveContest, error) {
+	rows, err := core.Query(ctx, `
+		SELECT id, status, starts_at FROM contests
+		WHERE (status = 'running' OR status = 'published' AND starts_at < now() + $1::interval)
+		  AND id <> $2
+		ORDER BY starts_at, id`, horizon, exempt)
+	if err != nil {
+		return nil, fmt.Errorf("list the live contests: %w", err)
+	}
+	live, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (liveContest, error) {
+		var c liveContest
+		err := row.Scan(&c.ID, &c.Status, &c.StartsAt)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the live contests: %w", err)
+	}
+	return live, nil
+}
+
+// refuseLive names the contests that keep a run from starting, or is nil.
+func refuseLive(live []liveContest, horizon time.Duration) error {
+	if len(live) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(live))
+	for _, c := range live {
+		starts := "no start"
+		if c.StartsAt != nil {
+			starts = "starts " + c.StartsAt.UTC().Format("2006-01-02 15:04 MST")
+		}
+		names = append(names, fmt.Sprintf("%s (%s, %s)", c.ID, c.Status, starts))
+	}
+	return fmt.Errorf("%d contests are running or start within %s, and their participants would share this load: %s "+
+		"(-allow-live-contests runs it anyway; a leftover of an earlier run goes with `consoleload sweep`)",
+		len(live), horizon.Round(time.Minute), strings.Join(names, "; "))
 }
