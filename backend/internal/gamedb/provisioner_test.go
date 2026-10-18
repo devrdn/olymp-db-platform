@@ -182,6 +182,8 @@ func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
 	refused(t, writer, `INSERT INTO suspects (name) VALUES ('someone')`)
 	refused(t, writer, `UPDATE suspects SET city = 'nowhere'`)
 	refused(t, writer, `DROP TABLE evidence`)
+	// Writable is not owned: the game's shape stays the organiser's.
+	refused(t, writer, `ALTER TABLE evidence ADD COLUMN planted text`)
 }
 
 func TestOwnObjectsLiveInWorkAndNowhereElse(t *testing.T) {

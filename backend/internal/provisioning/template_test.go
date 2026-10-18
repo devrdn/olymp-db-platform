@@ -383,6 +383,90 @@ func TestBuildingRunsTheScriptAndRecordsTheOutcome(t *testing.T) {
 	}
 }
 
+// The schema panel's description is the template's, taken before the game is
+// ready and so before any participant's copy exists to be read instead.
+func TestABuildDescribesTheTemplateItBuiltBeforeItIsReady(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	cluster.schema = provisioning.Schema{Tables: []provisioning.Table{
+		{Name: "guests", Columns: []provisioning.Column{{Name: "id", Type: "integer"}}},
+	}}
+	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int);`)
+	if err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+
+	if _, err := service.Build(t.Context(), time.Minute); err != nil {
+		t.Fatalf("building: %v", err)
+	}
+
+	if len(cluster.readSchemaOf) != 1 || cluster.readSchemaOf[0] != saved.Database {
+		t.Fatalf("described %v, want the template %s", cluster.readSchemaOf, saved.Database)
+	}
+	if len(store.described) != 1 {
+		t.Fatalf("cached %d descriptions, want 1", len(store.described))
+	}
+	got := store.described[0]
+	if got.version != saved.Version || len(got.schema.Tables) != 1 || got.schema.Tables[0].Name != "guests" {
+		t.Fatalf("cached %+v at version %d, want guests at version %d", got.schema, got.version, saved.Version)
+	}
+	if got.finishedFirst != 0 {
+		t.Fatal("the description was cached after the game was marked ready, when a copy could already be read in its place")
+	}
+}
+
+// A game marked ready always carries its description, so a template that
+// cannot be described is a failed build, not a ready game with no schema.
+func TestABuildWhoseTemplateCannotBeDescribedFailsAndDropsIt(t *testing.T) {
+	t.Parallel()
+	for name, arrange := range map[string]func(*templateStore, *buildCluster){
+		"the catalogue read fails": func(_ *templateStore, c *buildCluster) { c.schemaErr = errors.New("the cluster went away") },
+		"the cache write fails":    func(s *templateStore, _ *buildCluster) { s.describeErr = errors.New("the core database went away") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			service, store, cluster := games(true)
+			arrange(store, cluster)
+			saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int);`)
+			if err != nil {
+				t.Fatalf("setting the script: %v", err)
+			}
+
+			built, err := service.Build(t.Context(), time.Minute)
+			if err == nil {
+				t.Fatal("the failure was not returned for the log")
+			}
+			if built.Status != provisioning.TemplateFailed || built.BuildError != provisioning.BuildFailedInternally {
+				t.Fatalf("finished as %q with %q, want failed with the fixed sentence", built.Status, built.BuildError)
+			}
+			if len(store.finished) != 1 || store.finished[0].err != provisioning.BuildFailedInternally {
+				t.Fatalf("recorded %+v", store.finished)
+			}
+			if !slices.Contains(cluster.dropped, saved.Database) {
+				t.Fatalf("dropped %v; the undescribed template %s is still there", cluster.dropped, saved.Database)
+			}
+		})
+	}
+}
+
+// Every build source ends in the same step, so a game from the table builder
+// is described too.
+func TestABuilderSourcedBuildDescribesItsTemplate(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), aDefinition()); err != nil {
+		t.Fatalf("setting the definition: %v", err)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("building: %v, finished as %q: %s", err, built.Status, built.BuildError)
+	}
+	if len(store.described) != 1 {
+		t.Fatalf("cached %d descriptions of a builder-sourced game, want 1", len(store.described))
+	}
+}
+
 // scriptRefusal stands for gamedb.ScriptError, the one build failure whose
 // text the organiser may read. A bare errors.New would take the internal-fault
 // branch instead.

@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The cached schema of a contest's game lives on its game_templates row. It is
-// derived data that can be dropped and read again from the cluster.
+// The cached schema of a contest's game lives on its game_templates row. The
+// build writes it, read from the template itself (provisioning.Games.describe).
 
 // CachedSchema reads the cached schema and the template version it describes;
 // the caller decides whether that version is current. ErrNoSchema means never
@@ -43,9 +43,11 @@ func (r *GameInstances) CachedSchema(ctx context.Context, contestID uuid.UUID) (
 	return schema, version, nil
 }
 
-// SaveSchema caches the schema against the template version it describes. It
-// is an UPDATE, not an upsert: a row created here would have no template_db
-// or init_script.
+// SaveSchema caches the schema against the template version it describes,
+// and writes nothing when the game has moved to another version: a
+// superseded build or a reader holding an older build must not replace the
+// current build's description. It is an UPDATE, not an upsert: a row created
+// here would have no template_db or init_script.
 func (r *GameInstances) SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema provisioning.Schema) error {
 	document, err := json.Marshal(schema)
 	if err != nil {
@@ -54,7 +56,7 @@ func (r *GameInstances) SaveSchema(ctx context.Context, contestID uuid.UUID, ver
 	if _, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_templates
 		SET schema_json = $2, schema_version = $3
-		WHERE contest_id = $1`, contestID, document, version); err != nil {
+		WHERE contest_id = $1 AND version = $3`, contestID, document, version); err != nil {
 		return fmt.Errorf("cache the game's schema: %w", err)
 	}
 	return nil

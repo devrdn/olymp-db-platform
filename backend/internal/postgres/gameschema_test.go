@@ -40,6 +40,7 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 			t.Fatalf("an unread game answered %v, want ErrNoSchema", err)
 		}
 
+		rebuild(t, ctx, contest, 3)
 		if err := repo.SaveSchema(ctx, contest, 3, aSchema()); err != nil {
 			t.Fatalf("save: %v", err)
 		}
@@ -73,6 +74,7 @@ func TestSavingTheSchemaAgainReplacesBoththeDocumentAndItsVersion(t *testing.T) 
 			t.Fatalf("first save: %v", err)
 		}
 		second := provisioning.Schema{Tables: []provisioning.Table{{Name: "only_this"}}}
+		rebuild(t, ctx, contest, 2)
 		if err := repo.SaveSchema(ctx, contest, 2, second); err != nil {
 			t.Fatalf("second save: %v", err)
 		}
@@ -85,6 +87,43 @@ func TestSavingTheSchemaAgainReplacesBoththeDocumentAndItsVersion(t *testing.T) 
 			t.Fatalf("read back version %d, %+v", version, got.Tables)
 		}
 	})
+}
+
+// A reader still holding an older build, or a superseded build, must not
+// replace the description of the build the contest now runs.
+func TestASchemaSavedForAnOlderVersionChangesNothing(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aGameWithNoSchemaYet(t, ctx)
+		repo := NewGameInstances(testPool)
+		rebuild(t, ctx, contest, 2)
+
+		current := provisioning.Schema{Tables: []provisioning.Table{{Name: "as_built"}}}
+		if err := repo.SaveSchema(ctx, contest, 2, current); err != nil {
+			t.Fatalf("save the current build's schema: %v", err)
+		}
+		stale := provisioning.Schema{Tables: []provisioning.Table{{Name: "from_an_old_copy"}}}
+		if err := repo.SaveSchema(ctx, contest, 1, stale); err != nil {
+			t.Fatalf("a stale save is a no-op, not an error: %v", err)
+		}
+
+		got, version, err := repo.CachedSchema(ctx, contest)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if version != 2 || len(got.Tables) != 1 || got.Tables[0].Name != "as_built" {
+			t.Fatalf("read back version %d, %+v; the stale save replaced the current build's", version, got.Tables)
+		}
+	})
+}
+
+// rebuild moves the game row to version, as RequestBuild and a finished
+// build would.
+func rebuild(t *testing.T, ctx context.Context, contest uuid.UUID, version int) {
+	t.Helper()
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE game_templates SET version = $2 WHERE contest_id = $1`, contest, version); err != nil {
+		t.Fatalf("move the game to version %d: %v", version, err)
+	}
 }
 
 func TestAnUnreadableCachedSchemaReadsAsNotCached(t *testing.T) {
