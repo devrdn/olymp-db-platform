@@ -69,7 +69,14 @@ func TestTheLongestProfileRunIsTheBetaProfilesWholeRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := longestProfileRun(); got != beta.horizon() {
-		t.Fatalf("longestProfileRun = %s, want the beta profile's %s", got, beta.horizon())
+	if got, err := longestProfileRun(); err != nil || got != beta.horizon() {
+		t.Fatalf("longestProfileRun = %s, %v; want the beta profile's %s", got, err, beta.horizon())
+	}
+}
+
+func TestTheLongestProfileRunIsAnErrorWhenAProfileCannotBeRead(t *testing.T) {
+	t.Setenv("GAME_PROVISION_WORKERS", "0")
+	if got, err := longestProfileRun(); err == nil {
+		t.Fatalf("longestProfileRun = %s with an unreadable environment, want an error", got)
 	}
 }

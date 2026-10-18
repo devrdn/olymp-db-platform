@@ -105,7 +105,7 @@ func readOnlyFixture(t *testing.T, st *stores, provisioned bool) *fixture {
 	source := sourceGame(t)
 	f := &fixture{}
 	tearDownAtTheEnd(t, st, f)
-	if _, err := setup(t.Context(), st, f, source, 1, contests.ModeReadOnly); err != nil {
+	if _, err := setup(t.Context(), st, f, source, 1, contests.ModeReadOnly, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	if provisioned {
@@ -188,4 +188,13 @@ func cloneContest(t *testing.T, st *stores, from, id uuid.UUID) {
 	t.Cleanup(func() {
 		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM contests WHERE id = $1`, id)
 	})
+}
+
+// backdate moves an account's creation a day back, past any run.
+func backdate(t *testing.T, st *stores, user uuid.UUID) {
+	t.Helper()
+
+	if _, err := st.core.Exec(t.Context(), `UPDATE users SET created_at = now() - interval '1 day' WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
 }

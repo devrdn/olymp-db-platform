@@ -142,3 +142,14 @@ func TestAFailedTeardownSaysHowToFinishIt(t *testing.T) {
 		t.Fatalf("the error lost its cause: %v", err)
 	}
 }
+
+func TestThePlannedEndLeavesTheRunAMarginPastItsHorizon(t *testing.T) {
+	beta, err := parseFlags([]string{"-source-template", "game_tpl_x", "-profile", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	if got, want := beta.plannedEnd(start), start.Add(beta.horizon()+setupMargin); !got.Equal(want) {
+		t.Fatalf("plannedEnd = %s, want %s", got, want)
+	}
+}

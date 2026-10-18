@@ -73,15 +73,17 @@ func applyProfile(flags *flag.FlagSet, name string) (*thresholds, error) {
 }
 
 // longestProfileRun is how long the longest profile's run can take, setup
-// and teardown included; sweep leaves a younger run alone, as it may still be
-// going.
-func longestProfileRun() time.Duration {
+// and teardown included. An error means a profile could not be read, here
+// from the environment, and sweep then holds what it would have dated by it.
+func longestProfileRun() (time.Duration, error) {
 	var longest time.Duration
 	for _, name := range sortedKeys(profiles) {
 		// The template is only required, never read, here.
-		if cfg, err := parseFlags([]string{"-profile", name, "-source-template", "game_tpl_x"}); err == nil {
-			longest = max(longest, cfg.horizon())
+		cfg, err := parseFlags([]string{"-profile", name, "-source-template", "game_tpl_x"})
+		if err != nil {
+			return 0, fmt.Errorf("the %s profile: %w", name, err)
 		}
+		longest = max(longest, cfg.horizon())
 	}
-	return longest
+	return longest, nil
 }
