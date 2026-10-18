@@ -1,0 +1,258 @@
+# promtool test rules: each alert fires on the series that should page and
+# stays quiet on the ones that should not. Targets use the selector's shipped
+# job names (core-api, queryrunner) and a 60s scrape interval. Run with
+# make observability-check.
+
+rule_files:
+  - dbcontest-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A collector that names the jobs differently: the selector matches nothing,
+  # and that is reported rather than every other alert going quiet.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus.scrape.dbcontest_api", instance="api:9090"}'
+        values: '1x10'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 4m
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestAPINotScraped", alertstate="firing", dbcontest="api", severity="critical"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DBContestQueryRunnerNotScraped", alertstate="firing", dbcontest="queryrunner", severity="critical"}'
+            value: 1
+
+  # The API stops answering at 3m; the Query Runner keeps going.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1 1 1 0x10'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x13'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 4m
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestAPIDown", alertstate="firing", instance="api:9090", job="core-api", severity="critical"}'
+            value: 1
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x30'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1 1 0x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestQueryRunnerDown", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestQueryRunnerDown", alertstate="firing", instance="queryrunner:9101", job="queryrunner", severity="critical"}'
+            value: 1
+
+  # A restart shows as a new start time; it is labelled with the role.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x10'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x10'
+      - series: 'process_start_time_seconds{job="core-api", instance="api:9090"}'
+        values: '100 100 100 400x7'
+      - series: 'process_start_time_seconds{job="queryrunner", instance="queryrunner:9101"}'
+        values: '100x10'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 2m
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestProcessRestarted", alertstate="firing", dbcontest="api", instance="api:9090", job="core-api", severity="warning"}'
+            value: 1
+
+  # 2 requests a second with 9% of them 5xx pages.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests/{contestID}/play/questions", status="200"}'
+        values: '0+120x20'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests/{contestID}/play/questions", status="500"}'
+        values: '0+12x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestAPIErrors", alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestAPIErrors", alertstate="firing", severity="critical"}'
+            value: 1
+
+  # The same share of failures on a trickle of traffic is one person, not a page.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests/{contestID}/play/questions", status="200"}'
+        values: '0+6x20'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests/{contestID}/play/questions", status="500"}'
+        values: '0+1x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 15m
+        exp_samples: []
+
+  # Every ordinary request takes about two seconds.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x30'
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x30'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests", status="200"}'
+        values: '0+60x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests", le="1"}'
+        values: '0x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests", le="2.5"}'
+        values: '0+60x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="GET", route="/api/v1/contests", le="+Inf"}'
+        values: '0+60x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestAPISlow", alertstate="firing"}
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestAPISlow", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # A slow console is the Query Runner's to report, not the API's.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x30'
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x30'
+      - series: 'http_requests_total{job="core-api", instance="api:9090", method="POST", route="/api/v1/contests/{contestID}/query", status="200"}'
+        values: '0+60x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="POST", route="/api/v1/contests/{contestID}/query", le="1"}'
+        values: '0x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="POST", route="/api/v1/contests/{contestID}/query", le="2.5"}'
+        values: '0+60x30'
+      - series: 'http_request_duration_seconds_bucket{job="core-api", instance="api:9090", method="POST", route="/api/v1/contests/{contestID}/query", le="+Inf"}'
+        values: '0+60x30'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 16m
+        exp_samples: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x10'
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x10'
+      - series: 'game_instances_reclaim_failed_total{job="core-api", instance="api:9090"}'
+        values: '0 0 0 1x7'
+      - series: 'game_templates_reclaim_failed_total{job="core-api", instance="api:9090"}'
+        values: '0x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestReclaimFailing", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestReclaimFailing", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # Two internal errors a minute: someone is locked out.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="ok", reason=""}'
+        values: '0+60x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="error", reason="internal"}'
+        values: '0+2x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestQueriesFailingInternally", alertstate="firing"}
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestQueriesFailingInternally", alertstate="firing", severity="critical"}'
+            value: 1
+
+  # Participants' own mistakes are not an alert, however many there are.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="error", reason="database"}'
+        values: '0+60x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="rejected", reason="parse_error"}'
+        values: '0+30x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="rejected", reason="rate_limited"}'
+        values: '0+30x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 15m
+        exp_samples: []
+
+  # A quarter of admitted queries run past the deadline.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x30'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x30'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="timeout", reason="deadline"}'
+        values: '0+10x30'
+      - series: 'queryrunner_query_duration_seconds_count{job="queryrunner", instance="queryrunner:9101", outcome="ok"}'
+        values: '0+30x30'
+      - series: 'queryrunner_query_duration_seconds_count{job="queryrunner", instance="queryrunner:9101", outcome="timeout"}'
+        values: '0+10x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestQueriesTimingOut", alertstate="firing"}
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestQueriesTimingOut", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # Busy refusals, queue timeouts, a long wait and a deep queue together.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="rejected", reason="busy"}'
+        values: '0+1x20'
+      - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="timeout", reason="queue"}'
+        values: '0+1x20'
+      - series: 'queryrunner_admission_wait_seconds_bucket{job="queryrunner", instance="queryrunner:9101", le="5"}'
+        values: '0x20'
+      - series: 'queryrunner_admission_wait_seconds_bucket{job="queryrunner", instance="queryrunner:9101", le="10"}'
+        values: '0+30x20'
+      - series: 'queryrunner_admission_wait_seconds_bucket{job="queryrunner", instance="queryrunner:9101", le="+Inf"}'
+        values: '0+30x20'
+      - series: 'queryrunner_admission_queue_depth{job="queryrunner", instance="queryrunner:9101"}'
+        values: '20x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestAdmissionQueueDeep", alertstate="firing", instance="queryrunner:9101", job="queryrunner", severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DBContestAdmissionWaitHigh", alertstate="firing", severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DBContestQueryRunnerFull", alertstate="firing", severity="critical"}'
+            value: 1
