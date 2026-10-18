@@ -801,9 +801,11 @@ contest ever share its prefix with another contest by chance, it is refused
 on every pass and has to be removed by hand.
 
 If the command is killed outright or the tunnel drops first, the contest and
-accounts are still there, and nothing stays locked on their account: no
-transaction is open while the databases drop, and the one that deletes the
-rows lasts moments. A failed teardown prints the command that finishes
+accounts are still there, and nothing stays locked for long: no transaction
+is open while the databases drop, and the one that deletes the rows lasts
+moments and is abandoned by the server ten seconds after the command stops
+talking, so even a tunnel that dies silently inside it holds the rows for
+ten seconds. A failed teardown prints the command that finishes
 it, `consoleload sweep -run <run> -yes -force`. Otherwise `consoleload sweep`
 (same environment) lists every leftover run: when it started, its contest,
 its accounts and its databases. It removes nothing until `-yes`, and even

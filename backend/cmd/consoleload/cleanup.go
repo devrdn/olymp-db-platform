@@ -208,11 +208,12 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	return deleteRows(ctx, st.core, contests, accounts)
 }
 
-// lockWait bounds how long deleteRows waits for its rows. Whoever else holds
-// them (a teardown or sweep of the same run, the scheduler's tick finishing
-// the contest) holds them for moments; anything longer is refused rather
-// than waited for, and the core pool's statement timeout would cut the wait
-// at ten seconds anyway.
+// lockWait bounds how long deleteRows waits for its rows, and half of how
+// long the server lets it sit idle. Whoever else holds the rows (a teardown
+// or sweep of the same run, the scheduler's tick finishing the contest)
+// holds them for moments; anything longer is refused rather than waited
+// for, and the core pool's statement timeout would cut the wait at ten
+// seconds anyway.
 const lockWait = 5 * time.Second
 
 // deleteRows deletes the contests, the accounts and the audit entries by or
@@ -227,7 +228,7 @@ func deleteRows(ctx context.Context, core *pgxpool.Pool, contestIDs, userIDs []u
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = %d`, lockWait.Milliseconds())); err != nil {
+	if err := boundTransaction(ctx, tx, lockWait); err != nil {
 		return err
 	}
 	// Contests first, as the API locks them, each set in identifier order.
@@ -273,6 +274,26 @@ func deleteRows(ctx context.Context, core *pgxpool.Pool, contestIDs, userIDs []u
 	return tx.Commit(ctx)
 }
 
+// boundTransaction bounds how long tx waits for a lock to wait, and how
+// long the server keeps it open once the client falls silent, at twice that:
+// a tunnel that dies without closing the socket would otherwise leave the
+// rows locked until the host's keepalive notices, hours later. SET takes the
+// milliseconds as a literal only.
+func boundTransaction(ctx context.Context, tx pgx.Tx, wait time.Duration) error {
+	for _, setting := range []struct {
+		name  string
+		bound time.Duration
+	}{
+		{"lock_timeout", wait},
+		{"idle_in_transaction_session_timeout", 2 * wait},
+	} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL %s = %d`, setting.name, setting.bound.Milliseconds())); err != nil {
+			return fmt.Errorf("bound the transaction: %w", err)
+		}
+	}
+	return nil
+}
+
 // selectIDs runs a query over ids and returns the rows it found; an
 // identifier that matches no row is left out.
 func selectIDs(ctx context.Context, q queryer, query string, ids []uuid.UUID) ([]uuid.UUID, error) {
@@ -287,7 +308,7 @@ func selectIDs(ctx context.Context, q queryer, query string, ids []uuid.UUID) ([
 	return append([]uuid.UUID{}, found...), nil
 }
 
-// lockNotAvailable is PostgreSQL's class for a lock_timeout that ran out.
+// lockNotAvailable is the SQLSTATE of a lock_timeout that ran out.
 const lockNotAvailable = "55P03"
 
 // lockedIDs is selectIDs for a locking query, which says what a refused wait
