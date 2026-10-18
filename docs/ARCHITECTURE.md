@@ -4244,8 +4244,8 @@ an item of the list below.
    needs saying.
 2. **Running the installation:** off-host backups (35: scheduled and
    rotated now; the off-host design, encryption and WAL archiving remain),
-   restore drills (36), alerts and the Query Runner's metrics (37), CI and
-   the supply chain (38),
+   restore drills (36), the participant and provisioning metrics (37), CI
+   and the supply chain (38),
    query-log archival (39), the disk monitor (40), the nonce CSP (41),
    end-to-end tests (42) and the security audit plan (43). They protect the
    installation over months and years rather than any one contest.
@@ -4514,17 +4514,20 @@ Product decisions the items below are built on.
   migrations or starts the API against the restored data, and nothing in the
   repository rehearses the move procedure. A scheduled drill restores the
   latest backup onto a scratch stack, migrates it and signs in.
-- [ ] **37. No alerts, no dashboards, and the Query Runner is not measured**
-  (sections 2, 4.2 and 9). The provisioning queue's depth is meant to carry
-  an alert, and section 9 lists metrics for active participants, student
-  queries and the queue. The API exports HTTP and reclamation metrics only.
-  The Query Runner exports its query path on an internal listener: queries
-  by outcome and reason, duration, admission wait, running and queued
-  queries, and result-budget cut-offs (backend/README.md, Observability).
-  What remains: Prometheus has no rules and there is no Alertmanager,
-  Grafana has data sources and no dashboards, and neither active
-  participants nor the provisioning queue is measured. During an olympiad
-  somebody has to be watching rather than being told.
+- [ ] **37. Neither active participants nor the provisioning queue is
+  measured** (sections 2, 4.2 and 9). The provisioning queue's depth is meant
+  to carry an alert, and section 9 lists metrics for active participants,
+  student queries and the queue. The API exports HTTP and reclamation
+  metrics. The Query Runner exports its query path on an internal listener:
+  queries by outcome and reason, duration, admission wait, running and queued
+  queries, and result-budget cut-offs. Alert rules, with promtool tests, and a
+  Grafana dashboard for both ship in `deploy/observability/import`, to load
+  into the Prometheus and Grafana that already watch the host
+  (backend/README.md, Observability). What remains: neither active
+  participants nor the provisioning queue is measured; the Query Runner's
+  thresholds are copied from its default configuration, which it does not
+  export; and delivering an alert to a person is left to that external
+  Alertmanager or Grafana.
 - [ ] **38. CI does not keep section 11's supply-chain promises**
   (sections 11 and 13). The frontend's CI runs no `npm audit`, and its images
   are published after the build alone, while the backend's wait for the
