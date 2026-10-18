@@ -423,3 +423,30 @@ func TestARunnerPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 		})
 	}
 }
+
+func TestTheMetricsListenerDefaultsToLoopbackOnItsOwnPort(t *testing.T) {
+	setRunnerRequired(t)
+
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.MetricsAddr != "127.0.0.1:9101" {
+		t.Fatalf("metrics address = %q, want 127.0.0.1:9101", cfg.MetricsAddr)
+	}
+
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", ":9101")
+	if cfg, err = LoadRunner(); err != nil || cfg.MetricsAddr != ":9101" {
+		t.Fatalf("QUERY_RUNNER_METRICS_ADDR=:9101 gave %q, %v", cfg.MetricsAddr, err)
+	}
+}
+
+func TestTheMetricsListenerMustNotBeTheQueryListener(t *testing.T) {
+	setRunnerRequired(t)
+	t.Setenv("QUERY_RUNNER_ADDR", ":9100")
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", ":9100")
+
+	if _, err := LoadRunner(); err == nil {
+		t.Fatal("the metrics listener was given the query listener's address")
+	}
+}

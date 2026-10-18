@@ -18,6 +18,9 @@ type Runner struct {
 	// ListenAddr defaults to loopback and is never published outside the
 	// private network.
 	ListenAddr string
+	// MetricsAddr serves /metrics over plain HTTP, never published outside
+	// the private network either.
+	MetricsAddr string
 	// Token is the shared secret every call must carry: this service runs
 	// whatever database and policy a request names. Required outside
 	// development; never logged.
@@ -109,13 +112,21 @@ const (
 	DefaultGameDBMemoryBytes = 7 << 30
 )
 
+// DefaultRunnerMetricsAddr is where the Query Runner serves /metrics when
+// QUERY_RUNNER_METRICS_ADDR is not set: loopback, like its query listener.
+const DefaultRunnerMetricsAddr = "127.0.0.1:9101"
+
 func LoadRunner() (Runner, error) {
 	cfg := Runner{
 		Env:      envOrDefault("ENV", "development"),
 		LogLevel: envOrDefault("LOG_LEVEL", "info"),
 		// Loopback by default, so a runner on a laptop is not reachable from
 		// its network; compose names ":9100" on a private network.
-		ListenAddr: envOrDefault("QUERY_RUNNER_ADDR", "127.0.0.1:9100"),
+		ListenAddr:  envOrDefault("QUERY_RUNNER_ADDR", "127.0.0.1:9100"),
+		MetricsAddr: envOrDefault("QUERY_RUNNER_METRICS_ADDR", DefaultRunnerMetricsAddr),
+	}
+	if cfg.MetricsAddr == cfg.ListenAddr {
+		return Runner{}, fmt.Errorf("QUERY_RUNNER_METRICS_ADDR: must differ from QUERY_RUNNER_ADDR (both are %q)", cfg.ListenAddr)
 	}
 
 	var err error
