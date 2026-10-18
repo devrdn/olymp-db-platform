@@ -24,9 +24,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// loginPrefix starts every login this command creates; `consoleload sweep`
-// finds leftovers by it.
+// loginPrefix starts every login this command creates. Removal trusts the
+// exact shapes below, never the prefix alone: anybody may name an account
+// loadtest-something.
 const loginPrefix = "loadtest-"
+
+// harnessLogin matches exactly the logins setup makes, loginPrefix, the run's
+// eight hex digits and owner or a participant's number; harnessOwner only the
+// owner's. runLoginLength is the part of a login that names the run.
+const (
+	harnessLogin   = `^loadtest-[0-9a-f]{8}-(owner|p[0-9]{3,})$`
+	harnessOwner   = `^loadtest-[0-9a-f]{8}-owner$`
+	runLoginLength = len(loginPrefix) + 8 + 1
+)
 
 // maintenanceTimeout bounds one statement on the game cluster, sized for
 // CREATE DATABASE … TEMPLATE (CLAUDE.md rule 15).
@@ -36,6 +46,9 @@ type stores struct {
 	core        *pgxpool.Pool
 	game        *pgxpool.Pool
 	provisioner *gamedb.Provisioner
+	// drop removes one game database: the provisioner's Drop, which tests
+	// wrap to stop a teardown halfway.
+	drop func(ctx context.Context, name string) error
 }
 
 func openStores(ctx context.Context, copyStrategy string) (*stores, error) {
@@ -64,7 +77,7 @@ func openStores(ctx context.Context, copyStrategy string) (*stores, error) {
 		game.Close()
 		return nil, err
 	}
-	return &stores{core: core, game: game, provisioner: provisioner}, nil
+	return &stores{core: core, game: game, provisioner: provisioner, drop: provisioner.Drop}, nil
 }
 
 func (s *stores) close() {
@@ -100,6 +113,13 @@ func (f *fixture) userIDs() []uuid.UUID {
 		ids = append(ids, p.UserID)
 	}
 	return ids
+}
+
+func (f *fixture) contestIDs() []uuid.UUID {
+	if f.ContestID == uuid.Nil {
+		return nil
+	}
+	return []uuid.UUID{f.ContestID}
 }
 
 func (f *fixture) registrationIDs() []uuid.UUID {
@@ -287,11 +307,10 @@ func countEverything(ctx context.Context, st *stores) (counts, error) {
 	}
 
 	var n int64
-	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE left(login, $1) = $2`,
-		len(loginPrefix), loginPrefix).Scan(&n); err != nil {
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE login ~ $1`, harnessLogin).Scan(&n); err != nil {
 		return nil, err
 	}
-	out["users (loadtest-*)"] = n
+	out["users (load test)"] = n
 
 	var databases, bytes int64
 	if err := st.game.QueryRow(ctx,
