@@ -46,7 +46,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 			return err
 		}
 		// The run will set these accounts' passwords and load this contest.
-		if err := verifyHarness(ctx, st.core, f.contestIDs(), f.userIDs()); err != nil {
+		if err := verifyFixture(ctx, st.core, f); err != nil {
 			return err
 		}
 	}
@@ -81,12 +81,12 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 			if saveErr := f.save(out, "fixture.json"); saveErr != nil {
 				err = errors.Join(err, saveErr)
 			}
-			fmt.Printf("the fixture was kept: reuse it with -fixture %s, remove it with a run that omits -keep or with `consoleload sweep`\n",
-				filepath.Join(cfg.out, "fixture.json"))
+			fmt.Printf("the fixture was kept: reuse it with -fixture %s, remove it with a run that omits -keep "+
+				"or with `consoleload sweep -run %s -yes -force`\n", filepath.Join(cfg.out, "fixture.json"), f.RunID)
 		} else {
 			fmt.Println("tearing down")
 			if downErr := teardown(cleanup, st, f); downErr != nil {
-				err = errors.Join(err, fmt.Errorf("teardown: %w (run `consoleload sweep`)", downErr))
+				err = errors.Join(err, teardownFailed(f.RunID, downErr))
 			}
 			if cfg.fixture != "" {
 				_ = os.Remove(cfg.fixture) // #nosec G703 -- the operator's own -fixture path.
@@ -390,6 +390,13 @@ func refuseLive(live []liveContest, horizon time.Duration) error {
 		names = append(names, fmt.Sprintf("%s (%s, %s)", c.ID, c.Status, starts))
 	}
 	return fmt.Errorf("%d contests are running or start within %s, and their participants would share this load: %s "+
-		"(-allow-live-contests runs it anyway; a leftover of an earlier run goes with `consoleload sweep`)",
+		"(-allow-live-contests runs it anyway; `consoleload sweep` lists a leftover of an earlier run "+
+		"and `consoleload sweep -yes` removes it)",
 		len(live), horizon.Round(time.Minute), strings.Join(names, "; "))
+}
+
+// teardownFailed says how to finish a teardown that stopped: the run is too
+// young for a plain sweep, and the operator knows it is over.
+func teardownFailed(run string, err error) error {
+	return fmt.Errorf("teardown: %w (`consoleload sweep -run %s -yes -force` removes the rest)", err, run)
 }

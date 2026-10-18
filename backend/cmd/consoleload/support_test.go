@@ -154,3 +154,38 @@ func assertNothingLeft(t *testing.T, st *stores, f *fixture) {
 		t.Fatalf("left behind: %d accounts, %d contests, %d databases", accounts, contestRows, databases)
 	}
 }
+
+// sibling is an identifier that shares id's database prefix and nothing else.
+func sibling(id uuid.UUID) uuid.UUID {
+	return uuid.MustParse(id.String()[:14] + uuid.New().String()[14:])
+}
+
+// cloneContest inserts a copy of contest from under id, so two contests can
+// share a database prefix as two random identifiers rarely do.
+func cloneContest(t *testing.T, st *stores, from, id uuid.UUID) {
+	t.Helper()
+
+	tx, err := st.core.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	for _, step := range []struct {
+		sql string
+		arg uuid.UUID
+	}{
+		{`CREATE TEMP TABLE clone ON COMMIT DROP AS SELECT * FROM contests WHERE id = $1`, from},
+		{`UPDATE clone SET id = $1`, id},
+		{`INSERT INTO contests SELECT * FROM clone WHERE id = $1`, id},
+	} {
+		if _, err := tx.Exec(t.Context(), step.sql, step.arg); err != nil {
+			t.Fatalf("%s: %v", step.sql, err)
+		}
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM contests WHERE id = $1`, id)
+	})
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -25,6 +26,7 @@ func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
 	participant := testAccount(t, st, loginPrefix+run+"-p001", users.StatusActive)
 	otherRunsParticipant := testAccount(t, st, loginPrefix+other+"-p001", users.StatusActive)
 	activeOwner := testAccount(t, st, loginPrefix+other+"-owner", users.StatusActive)
+	loneActiveOwner := testAccount(t, st, loginPrefix+randomHex(4)+"-owner", users.StatusActive)
 	teacher := testAccount(t, st, loginPrefix+"teacher-"+randomHex(2), users.StatusActive)
 	student := testAccount(t, st, "student-"+randomHex(4), users.StatusActive)
 
@@ -45,6 +47,7 @@ func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
 		known    []string
 	}{
 		{name: "an account that only begins with the prefix", users: []uuid.UUID{teacher}},
+		{name: "an owner-shaped account that is not blocked", users: []uuid.UUID{loneActiveOwner}},
 		{name: "a harness account registered in a contest outside the set", users: []uuid.UUID{otherRunsParticipant}},
 		{name: "an account that created a contest outside the set", users: []uuid.UUID{owner}},
 		{name: "a contest somebody else created", contests: []uuid.UUID{real}},
@@ -77,27 +80,69 @@ func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
 	}
 }
 
+func TestRemoveDropsNoDatabaseOfAContestItCannotTieToTheFullID(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	organiser := testAccount(t, st, "organiser-"+randomHex(4), users.StatusBlocked)
+	real := testContest(t, st, organiser, contests.StatusFinished, now.Add(-time.Hour))
+	template, copyName := "game_tpl_c"+short(real), "game_pool_c"+short(real)+"_0001"
+	for _, name := range []string{template, copyName} {
+		if _, err := st.game.Exec(ctx, `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(name)); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		t.Cleanup(func() { gamedbtest.Drop(name) })
+	}
+	owner := testAccount(t, st, loginPrefix+randomHex(4)+"-owner", users.StatusBlocked)
+	harnessTwin := sibling(real)
+	cloneContest(t, st, testContest(t, st, owner, contests.StatusRunning, now), harnessTwin)
+
+	tests := []struct {
+		name     string
+		contests []uuid.UUID
+		users    []uuid.UUID
+		known    []string
+		refused  bool
+	}{
+		{name: "a contest that does not exist, sharing the real one's prefix", contests: []uuid.UUID{sibling(real)}},
+		{name: "the real template named under a contest that does not exist", contests: []uuid.UUID{sibling(real)},
+			known: []string{template}},
+		{name: "a harness contest whose prefix a real contest shares", contests: []uuid.UUID{harnessTwin},
+			users: []uuid.UUID{owner}, refused: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := remove(ctx, st, tt.contests, tt.users, tt.known)
+			if tt.refused != errors.Is(err, errNotTheHarness) || !tt.refused && err != nil {
+				t.Fatalf("remove = %v, want refused %v", err, tt.refused)
+			}
+			present, err := clusterDatabases(ctx, st.game, databasePrefixes([]uuid.UUID{real}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(present, []string{copyName, template}) {
+				t.Fatalf("the real contest's databases are now %v, want %v", present, []string{copyName, template})
+			}
+		})
+	}
+}
+
 func TestSweepListsByDefaultAndRemovesOnlyWithYes(t *testing.T) {
 	st := testStores(t)
 	ctx := t.Context()
 	f := readOnlyFixture(t, st, false)
 
-	teacher := testAccount(t, st, loginPrefix+"teacher-"+randomHex(2), users.StatusActive)
-	real := testContest(t, st, teacher, contests.StatusRunning, time.Now().UTC())
-	teacherLogin := loginPrefix + "teacher-"
-
 	var out strings.Builder
-	if err := sweep(ctx, st, &out, false); err != nil {
+	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, force: true}); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	listing := out.String()
-	for _, want := range []string{f.Participants[0].Login, loginPrefix + f.RunID + "-owner", f.ContestID.String(), "-yes"} {
+	for _, want := range []string{"run " + f.RunID, "started", f.Participants[0].Login,
+		loginPrefix + f.RunID + "-owner", f.ContestID.String(), f.Template, "sweep -yes"} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("the listing lacks %q:\n%s", want, listing)
 		}
-	}
-	if strings.Contains(listing, teacherLogin) || strings.Contains(listing, real.String()) {
-		t.Errorf("the listing names an account or contest the harness did not create:\n%s", listing)
 	}
 	var left int
 	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = ANY($1)`, f.userIDs()).Scan(&left); err != nil {
@@ -107,18 +152,75 @@ func TestSweepListsByDefaultAndRemovesOnlyWithYes(t *testing.T) {
 		t.Fatalf("a sweep without -yes removed accounts: %d of %d left", left, len(f.userIDs()))
 	}
 
-	if err := sweep(ctx, st, &out, true); err != nil {
+	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, remove: true, force: true}); err != nil {
 		t.Fatalf("sweep -yes: %v", err)
 	}
 	assertNothingLeft(t, st, f)
-	var survivors int
-	if err := st.core.QueryRow(ctx, `
-		SELECT (SELECT count(*) FROM users WHERE id = $1) + (SELECT count(*) FROM contests WHERE id = $2)`,
-		teacher, real).Scan(&survivors); err != nil {
+}
+
+func TestSweepLeavesARunThatMayStillBeGoingUnlessForced(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	f := readOnlyFixture(t, st, false)
+
+	var out strings.Builder
+	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, remove: true}); err != nil {
+		t.Fatalf("sweep -yes: %v", err)
+	}
+	if !strings.Contains(out.String(), "-force") {
+		t.Errorf("the listing does not say how to remove a young run:\n%s", out.String())
+	}
+	var contestRows int
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM contests WHERE id = $1`, f.ContestID).Scan(&contestRows); err != nil {
 		t.Fatal(err)
 	}
-	if survivors != 2 {
-		t.Fatalf("sweep -yes removed what the harness did not create (%d of 2 left)", survivors)
+	if contestRows != 1 {
+		t.Fatal("sweep -yes removed a run that started moments ago")
+	}
+
+	// The same run, started longer ago than any profile's run lasts.
+	backdate := time.Now().Add(-longestProfileRun() - time.Minute)
+	if _, err := st.core.Exec(ctx, `UPDATE contests SET created_at = $2 WHERE id = $1`, f.ContestID, backdate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.core.Exec(ctx, `UPDATE users SET created_at = $2 WHERE id = ANY($1)`, f.userIDs(), backdate); err != nil {
+		t.Fatal(err)
+	}
+	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, remove: true}); err != nil {
+		t.Fatalf("sweep -yes: %v", err)
+	}
+	assertNothingLeft(t, st, f)
+}
+
+func TestSweepRemovesAnAccountTiedToNoContestOnlyWithOrphans(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	run := randomHex(4)
+	lone := testAccount(t, st, loginPrefix+run+"-p001", users.StatusActive)
+
+	var out strings.Builder
+	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, force: true}); err != nil {
+		t.Fatalf("sweep -yes: %v", err)
+	}
+	if !strings.Contains(out.String(), "-orphans") {
+		t.Errorf("the listing does not name the account tied to no contest:\n%s", out.String())
+	}
+	var left int
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = $1`, lone).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 1 {
+		t.Fatal("sweep -yes removed an account tied to no contest without -orphans")
+	}
+
+	if err := sweep(ctx, st, &out, sweepOptions{run: run, remove: true, force: true, orphans: true}); err != nil {
+		t.Fatalf("sweep -yes -orphans: %v", err)
+	}
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = $1`, lone).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatal("sweep -yes -orphans left the account")
 	}
 }
 
@@ -200,7 +302,7 @@ func TestATeardownStoppedHalfwayLeavesWhatSweepFinds(t *testing.T) {
 
 	st.drop = drop
 	var out strings.Builder
-	if err := sweep(ctx, st, &out, true); err != nil {
+	if err := sweep(ctx, st, &out, sweepOptions{run: f.RunID, remove: true, force: true}); err != nil {
 		t.Fatalf("sweep -yes: %v\n%s", err, out.String())
 	}
 	assertNothingLeft(t, st, f)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"math/rand/v2"
 	"testing"
 
@@ -88,5 +89,20 @@ func TestAKeptFixtureFitsOnlyARunItCanServe(t *testing.T) {
 				t.Fatalf("fits(%d, %s) = %v, want fits %v", tt.participants, tt.mode, err, tt.fits)
 			}
 		})
+	}
+}
+
+func TestAReusedFixtureMustNameItsAccountsByTheirOwnLogins(t *testing.T) {
+	st := testStores(t)
+	f := readOnlyFixture(t, st, false)
+	if err := verifyFixture(t.Context(), st.core, f); err != nil {
+		t.Fatalf("the fixture setup wrote is refused: %v", err)
+	}
+
+	tampered := *f
+	tampered.Participants = []participantRecord{f.Participants[0]}
+	tampered.Participants[0].Login = "teacher"
+	if err := verifyFixture(t.Context(), st.core, &tampered); !errors.Is(err, errNotTheHarness) {
+		t.Fatalf("a participant named by somebody else's login: %v, want %v", err, errNotTheHarness)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -102,7 +103,8 @@ func TestRefuseLiveNamesEveryContestThatBlocksTheRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("not refused with two contests live")
 	}
-	for _, want := range []string{running.String(), soon.String(), "running", "published", "2026-10-21 09:00", "-allow-live-contests"} {
+	for _, want := range []string{running.String(), soon.String(), "running", "published", "2026-10-21 09:00",
+		"-allow-live-contests", "sweep -yes"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal lacks %q: %v", want, err)
 		}
@@ -128,5 +130,15 @@ func TestTheLiveHorizonCoversThePlannedRun(t *testing.T) {
 	burst := 5*time.Second + 4*30*time.Second
 	if got, want := long.horizon(), setupMargin+4*30*time.Second+2*3*time.Hour+2*burst; got != want {
 		t.Errorf("the horizon of two long runs is %s, want %s", got, want)
+	}
+}
+
+func TestAFailedTeardownSaysHowToFinishIt(t *testing.T) {
+	err := teardownFailed("0123abcd", errors.New("drop game_tpl_c0123: connection reset"))
+	if want := "consoleload sweep -run 0123abcd -yes -force"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the error lacks %q: %v", want, err)
+	}
+	if !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("the error lost its cause: %v", err)
 	}
 }
