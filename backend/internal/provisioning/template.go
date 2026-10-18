@@ -883,10 +883,11 @@ func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildE
 }
 
 // describe caches the schema panel's description of a template that has just
-// been built. It is read from the template itself, before FinishBuild marks it
-// ready: until then nothing copies it, so this connection cannot make a copy
-// fail (55006), and no participant's copy exists whose changes could be read
-// instead. A failure fails the build, so a ready game is always described.
+// been built. This is the one place a template is read: a connection to it
+// makes CREATE DATABASE ... TEMPLATE fail (SQLSTATE 55006), but before
+// FinishBuild marks it ready nothing copies it, and no participant's copy
+// exists whose changes could be read instead. A failure fails the build, so a
+// ready game is always described.
 func (g *Games) describe(ctx context.Context, claimed Template) error {
 	schema, err := g.cluster.ReadSchema(ctx, claimed.Database)
 	if err != nil {
