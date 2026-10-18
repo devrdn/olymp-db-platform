@@ -231,8 +231,9 @@ services:
   # it is the only process holding the game cluster's credentials: the API is
   # deliberately given no route to a participant's database.
   #
-  # No published port, and no core database: it is stateless, and what it knows
-  # about a request is what the request carries.
+  # No published port, for queries (9100) or metrics (9101), and no core
+  # database: it is stateless, and what it knows about a request is what the
+  # request carries.
   queryrunner:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-queryrunner:${VERSION:-dev}
     restart: unless-stopped
@@ -242,6 +243,10 @@ services:
       # Every interface of this container, inside a network nothing outside
       # routes into. Named here because the binary's own default is loopback.
       QUERY_RUNNER_ADDR: ":9100"
+      # Plain-HTTP /metrics, the counterpart of the api's INTERNAL_ADDR: on
+      # the same private network, with no published port, so only a scraper
+      # on that network (Prometheus below, the host's collector) reads it.
+      QUERY_RUNNER_METRICS_ADDR: ":9101"
       # The secret every call must carry, the health check's included (it
       # reads it from this same environment). The runner itself refuses to
       # start without a valid one outside development. Not required here:
