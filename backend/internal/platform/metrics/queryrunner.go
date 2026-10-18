@@ -60,7 +60,7 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 	// QUERY_QUEUE_WAIT above the top bucket lands in +Inf.
 	q.wait = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "queryrunner_admission_wait_seconds",
-		Help:    "Time a query waited for a running slot, whether it got one or gave up.",
+		Help:    "Time a query waited for a running slot, whether it got one, timed out or was abandoned.",
 		Buckets: []float64{.001, .01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 30},
 	})
 	q.cutoffs = prometheus.NewCounterVec(prometheus.CounterOpts{

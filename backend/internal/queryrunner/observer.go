@@ -16,8 +16,9 @@ import (
 type Observer interface {
 	// Ended is called once per Run, however it ended.
 	Ended(outcome, reason string)
-	// Waited is how long an admitted or timed-out query waited for a slot. A
-	// query refused at the gate's door never waited and is not reported.
+	// Waited is how long a query waited for a slot, whether it was admitted,
+	// timed out or abandoned by its caller. A query refused at the gate's door
+	// never waited and is not reported.
 	Waited(d time.Duration)
 	// Executed is how long an admitted query held its slot.
 	Executed(outcome string, d time.Duration)
