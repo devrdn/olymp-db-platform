@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,15 +31,18 @@ type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// verifyHarness refuses unless every account has a login setup makes and
-// belongs to no contest outside contestIDs, and every contest was created by
-// a blocked harness owner and has only that run's participants registered.
+// verifyHarness refuses unless every account has a login setup makes (an
+// owner's blocked) and belongs to no contest outside contestIDs, and every
+// contest was created by a blocked harness owner, has only that run's
+// participants registered and shares its database prefix with no other
+// contest. Identifiers that match no row pass: they name nothing.
 func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UUID) error {
 	// A nil slice travels as NULL, and `<> ALL (NULL)` is never true.
 	contestIDs, userIDs = append([]uuid.UUID{}, contestIDs...), append([]uuid.UUID{}, userIDs...)
 	rows, err := q.Query(ctx, `
 		SELECT 'account ' || u.login FROM users u
 		WHERE u.id = ANY($2) AND (u.login !~ $3
+		   OR u.login ~ $4 AND u.status <> $5
 		   OR EXISTS (SELECT 1 FROM registrations r WHERE r.user_id = u.id AND r.contest_id <> ALL ($1))
 		   OR EXISTS (SELECT 1 FROM contests c WHERE c.created_by = u.id AND c.id <> ALL ($1)))
 		UNION ALL
@@ -47,6 +52,11 @@ func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UU
 		   OR EXISTS (SELECT 1 FROM registrations r JOIN users u ON u.id = r.user_id
 		              WHERE r.contest_id = c.id
 		                AND (u.login !~ $3 OR left(u.login, $6) <> left(o.login, $6))))
+		UNION ALL
+		SELECT 'contest ' || c.id || ', whose database prefix contest ' || x.id || ' shares' FROM contests c
+		JOIN contests x ON x.id <> c.id
+		  AND left(replace(x.id::text, '-', ''), 12) = left(replace(c.id::text, '-', ''), 12)
+		WHERE c.id = ANY($1)
 		ORDER BY 1`,
 		contestIDs, userIDs, harnessLogin, harnessOwner, users.StatusBlocked, runLoginLength)
 	if err != nil {
@@ -62,9 +72,45 @@ func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UU
 	return nil
 }
 
+// verifyFixture is verifyHarness for a kept fixture, which also refuses a
+// participant whose login in the file is not the login of its account.
+func verifyFixture(ctx context.Context, q queryer, f *fixture) error {
+	if err := verifyHarness(ctx, q, f.contestIDs(), f.userIDs()); err != nil {
+		return err
+	}
+	rows, err := q.Query(ctx, `SELECT id, login FROM users WHERE id = ANY($1)`, append([]uuid.UUID{}, f.userIDs()...))
+	if err != nil {
+		return fmt.Errorf("read the fixture's accounts: %w", err)
+	}
+	logins := map[uuid.UUID]string{}
+	for rows.Next() {
+		var id uuid.UUID
+		var login string
+		if err := rows.Scan(&id, &login); err != nil {
+			rows.Close()
+			return fmt.Errorf("read the fixture's accounts: %w", err)
+		}
+		logins[id] = login
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the fixture's accounts: %w", err)
+	}
+	for _, p := range f.Participants {
+		if got, ok := logins[p.UserID]; !ok || got != p.Login || !strings.HasPrefix(got, loginPrefix+f.RunID+"-") {
+			return fmt.Errorf("%w: the fixture names account %s as %q", errNotTheHarness, p.UserID, p.Login)
+		}
+	}
+	return nil
+}
+
 // remove drops every game database of the given contests and deletes the
 // contests and accounts, once verifyHarness has found all of them to be the
 // harness's. known names databases the core rows may not record.
+//
+// Database names come only from contests that exist and passed verification:
+// an identifier that matches no contest names nothing, since another
+// contest may share its prefix.
 //
 // The order keeps the pool tender out and an interrupted removal
 // recoverable. The templates leave the tender's reach first. The databases
@@ -76,30 +122,34 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	if err := verifyHarness(ctx, st.core, contestIDs, userIDs); err != nil {
 		return err
 	}
-	prefixes := databasePrefixes(contestIDs)
+	rows, err := st.core.Query(ctx, `SELECT id FROM contests WHERE id = ANY($1)`, append([]uuid.UUID{}, contestIDs...))
+	if err != nil {
+		return fmt.Errorf("find the contests: %w", err)
+	}
+	existing, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("find the contests: %w", err)
+	}
+	prefixes := databasePrefixes(existing)
+
 	names := map[string]bool{}
 	for _, name := range known {
 		if name == "" {
 			continue
 		}
-		if !hasAnyPrefix(name, prefixes) {
+		if !hasAnyPrefix(name, databasePrefixes(contestIDs)) {
 			return fmt.Errorf("%w: database %s", errNotTheHarness, name)
 		}
-		names[name] = true
+		if hasAnyPrefix(name, prefixes) {
+			names[name] = true
+		}
 	}
 
-	if len(contestIDs) > 0 {
-		// 'dropped' takes the game out of GameInstances.Live and Game: the
-		// tender stops stocking it and no participant can claim a copy.
-		if _, err := st.core.Exec(ctx, `
-			UPDATE game_templates SET status = 'dropped', updated_at = now()
-			WHERE contest_id = ANY($1)`, contestIDs); err != nil {
-			return fmt.Errorf("take the games out of the pool tender's reach: %w", err)
-		}
+	if len(existing) > 0 {
 		rows, err := st.core.Query(ctx, `
 			SELECT db_name FROM game_instances WHERE contest_id = ANY($1)
 			UNION
-			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, contestIDs)
+			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, existing)
 		if err != nil {
 			return fmt.Errorf("list the contests' databases: %w", err)
 		}
@@ -108,7 +158,18 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 			return fmt.Errorf("list the contests' databases: %w", err)
 		}
 		for _, name := range recorded {
+			if !hasAnyPrefix(name, prefixes) {
+				return fmt.Errorf("%w: database %s, recorded for a contest it is not named after", errNotTheHarness, name)
+			}
 			names[name] = true
+		}
+
+		// 'dropped' takes the game out of GameInstances.Live and Game: the
+		// tender stops stocking it and no participant can claim a copy.
+		if _, err := st.core.Exec(ctx, `
+			UPDATE game_templates SET status = 'dropped', updated_at = now()
+			WHERE contest_id = ANY($1)`, existing); err != nil {
+			return fmt.Errorf("take the games out of the pool tender's reach: %w", err)
 		}
 	}
 
@@ -130,8 +191,14 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	// Again inside the transaction, since the rows could have changed while
-	// the databases were dropped.
+	// Locked, then checked again: a registration takes a key-share lock on
+	// both rows, so none can arrive between the check and the deletes.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM contests WHERE id = ANY($1) FOR UPDATE`, append([]uuid.UUID{}, contestIDs...)); err != nil {
+		return fmt.Errorf("lock the contests: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = ANY($1) FOR UPDATE`, append([]uuid.UUID{}, userIDs...)); err != nil {
+		return fmt.Errorf("lock the accounts: %w", err)
+	}
 	if err := verifyHarness(ctx, tx, contestIDs, userIDs); err != nil {
 		return err
 	}
@@ -212,84 +279,179 @@ func hasAnyPrefix(name string, prefixes []string) bool {
 	return false
 }
 
-// sweep finds what interrupted runs left: the accounts with exactly the
-// logins setup makes, and the contests their blocked owners created. It lists
-// them, and removes them only when yes.
-func sweep(ctx context.Context, st *stores, w io.Writer, yes bool) error {
-	rows, err := st.core.Query(ctx, `SELECT id, login FROM users WHERE login ~ $1 ORDER BY login`, harnessLogin)
-	if err != nil {
-		return fmt.Errorf("find the load test's accounts: %w", err)
-	}
-	var userIDs []uuid.UUID
-	var logins []string
-	for rows.Next() {
-		var id uuid.UUID
-		var login string
-		if err := rows.Scan(&id, &login); err != nil {
-			rows.Close()
-			return fmt.Errorf("find the load test's accounts: %w", err)
-		}
-		userIDs, logins = append(userIDs, id), append(logins, login)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("find the load test's accounts: %w", err)
-	}
+type sweepOptions struct {
+	// remove removes the runs the listing marks; without it sweep only lists.
+	remove bool
+	// orphans also removes the accounts of a run that has no contest, which
+	// nothing ties to the load test but their login.
+	orphans bool
+	// force also removes a run that started less than longestProfileRun ago,
+	// which may still be going.
+	force bool
+	// run narrows the sweep to one run's identifier.
+	run string
+}
 
-	rows, err = st.core.Query(ctx, `
-		SELECT c.id, c.status FROM contests c JOIN users o ON o.id = c.created_by
-		WHERE o.login ~ $1 AND o.status = $2 ORDER BY c.id`, harnessOwner, users.StatusBlocked)
-	if err != nil {
-		return fmt.Errorf("find the load test's contests: %w", err)
+// leftoverRun is what one run left, grouped by the identifier in its logins.
+type leftoverRun struct {
+	id         string
+	started    time.Time
+	contestIDs []uuid.UUID
+	contests   []string
+	userIDs    []uuid.UUID
+	logins     []string
+	databases  []string
+}
+
+var runID = regexp.MustCompile(`^[0-9a-f]{8}$`)
+
+// sweep finds what interrupted runs left, by run: the accounts with exactly
+// the logins setup makes, the contests their blocked owners created and those
+// contests' databases. It lists them, and with opts.remove removes each run
+// that has a contest and is old enough to be over, through remove's checks.
+func sweep(ctx context.Context, st *stores, w io.Writer, opts sweepOptions) error {
+	if opts.run != "" && !runID.MatchString(opts.run) {
+		return fmt.Errorf("-run: %q is not a run's eight hex digits", opts.run)
 	}
-	var contestIDs []uuid.UUID
-	var contestLines []string
-	for rows.Next() {
-		var id uuid.UUID
-		var status string
-		if err := rows.Scan(&id, &status); err != nil {
-			rows.Close()
-			return fmt.Errorf("find the load test's contests: %w", err)
-		}
-		contestIDs, contestLines = append(contestIDs, id), append(contestLines, fmt.Sprintf("%s (%s)", id, status))
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("find the load test's contests: %w", err)
-	}
-	databases, err := clusterDatabases(ctx, st.game, databasePrefixes(contestIDs))
+	runs, err := leftoverRuns(ctx, st, opts.run)
 	if err != nil {
 		return err
 	}
-
-	if len(userIDs)+len(contestIDs)+len(databases) == 0 {
+	if len(runs) == 0 {
 		fmt.Fprintln(w, "nothing to sweep")
 		return nil
 	}
-	for _, list := range []struct {
-		what  string
-		items []string
-	}{{"accounts", logins}, {"contests", contestLines}, {"game databases", databases}} {
-		fmt.Fprintf(w, "%s (%d):\n", list.what, len(list.items))
-		for _, item := range list.items {
-			fmt.Fprintf(w, "  %s\n", item)
+
+	youngest := longestProfileRun()
+	var failures []error
+	for _, r := range runs {
+		age := time.Since(r.started)
+		fmt.Fprintf(w, "run %s, started %s (%s ago)\n", r.id, r.started.UTC().Format("2006-01-02 15:04 MST"), age.Round(time.Minute))
+		for _, line := range r.contests {
+			fmt.Fprintf(w, "  contest %s\n", line)
+		}
+		for _, login := range r.logins {
+			fmt.Fprintf(w, "  account %s\n", login)
+		}
+		for _, name := range r.databases {
+			fmt.Fprintf(w, "  database %s\n", name)
+		}
+
+		var held string
+		switch {
+		case len(r.contestIDs) == 0 && !opts.orphans:
+			held = "left: no contest ties these accounts to the load test (-orphans removes them)"
+		case age < youngest && !opts.force:
+			held = fmt.Sprintf("left: younger than the longest profile run (%s), so it may still be going (-force removes it)",
+				youngest.Round(time.Minute))
+		}
+		switch {
+		case held != "":
+			fmt.Fprintf(w, "  %s\n", held)
+		case !opts.remove:
+			fmt.Fprintln(w, "  to be removed")
+		default:
+			if err := remove(ctx, st, r.contestIDs, r.userIDs, nil); err != nil {
+				fmt.Fprintf(w, "  not removed: %v\n", err)
+				failures = append(failures, fmt.Errorf("run %s: %w", r.id, err))
+				continue
+			}
+			fmt.Fprintln(w, "  removed")
 		}
 	}
-	if !yes {
-		fmt.Fprintln(w, "nothing removed: `consoleload sweep -yes` removes the above")
-		return nil
+	if !opts.remove {
+		fmt.Fprintln(w, "nothing removed: `consoleload sweep -yes` removes the runs marked to be removed")
 	}
-	return remove(ctx, st, contestIDs, userIDs, nil)
+	return errors.Join(failures...)
+}
+
+// leftoverRuns groups the harness's accounts and contests by run, oldest
+// first; run narrows it to one.
+func leftoverRuns(ctx context.Context, st *stores, run string) ([]*leftoverRun, error) {
+	byID := map[string]*leftoverRun{}
+	get := func(id string, created time.Time) *leftoverRun {
+		r := byID[id]
+		if r == nil {
+			r = &leftoverRun{id: id, started: created}
+			byID[id] = r
+		}
+		if created.Before(r.started) {
+			r.started = created
+		}
+		return r
+	}
+	idAt := len(loginPrefix) + 1
+
+	rows, err := st.core.Query(ctx, `
+		SELECT id, login, created_at, substr(login, $3, 8) FROM users
+		WHERE login ~ $1 AND ($2 = '' OR substr(login, $3, 8) = $2)
+		ORDER BY login`, harnessLogin, run, idAt)
+	if err != nil {
+		return nil, fmt.Errorf("find the load test's accounts: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		var login, runID string
+		var created time.Time
+		if err := rows.Scan(&id, &login, &created, &runID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("find the load test's accounts: %w", err)
+		}
+		r := get(runID, created)
+		r.userIDs, r.logins = append(r.userIDs, id), append(r.logins, login)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find the load test's accounts: %w", err)
+	}
+
+	rows, err = st.core.Query(ctx, `
+		SELECT c.id, c.status, c.created_at, substr(o.login, $3, 8) FROM contests c
+		JOIN users o ON o.id = c.created_by
+		WHERE o.login ~ $1 AND o.status = $4 AND ($2 = '' OR substr(o.login, $3, 8) = $2)
+		ORDER BY c.id`, harnessOwner, run, idAt, users.StatusBlocked)
+	if err != nil {
+		return nil, fmt.Errorf("find the load test's contests: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		var status, runID string
+		var created time.Time
+		if err := rows.Scan(&id, &status, &created, &runID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("find the load test's contests: %w", err)
+		}
+		r := get(runID, created)
+		r.contestIDs, r.contests = append(r.contestIDs, id), append(r.contests, fmt.Sprintf("%s (%s)", id, status))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find the load test's contests: %w", err)
+	}
+
+	runs := make([]*leftoverRun, 0, len(byID))
+	for _, r := range byID {
+		if r.databases, err = clusterDatabases(ctx, st.game, databasePrefixes(r.contestIDs)); err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	slices.SortFunc(runs, func(a, b *leftoverRun) int { return a.started.Compare(b.started) })
+	return runs, nil
 }
 
 func runSweep(args []string) error {
 	flags := flag.NewFlagSet("consoleload sweep", flag.ContinueOnError)
-	yes := flags.Bool("yes", false, "remove what the listing names; without it, sweep only lists")
+	var opts sweepOptions
+	flags.BoolVar(&opts.remove, "yes", false, "remove the runs the listing marks; without it, sweep only lists")
+	flags.BoolVar(&opts.orphans, "orphans", false, "also remove the accounts of a run that has no contest")
+	flags.BoolVar(&opts.force, "force", false, "also remove a run young enough to be still going")
+	flags.StringVar(&opts.run, "run", "", "sweep only this run, by the eight hex digits in its logins")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() > 0 {
-		return fmt.Errorf("sweep takes only -yes, got %v", flags.Args())
+		return fmt.Errorf("sweep takes only flags, got %v", flags.Args())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -304,16 +466,14 @@ func runSweep(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := sweep(ctx, st, os.Stdout, *yes); err != nil {
-		return err
-	}
-	if !*yes {
-		return nil
+	sweepErr := sweep(ctx, st, os.Stdout, opts)
+	if !opts.remove {
+		return sweepErr
 	}
 	after, err := countEverything(ctx, st)
 	if err != nil {
-		return err
+		return errors.Join(sweepErr, err)
 	}
 	fmt.Print(countsTable(before, after))
-	return nil
+	return sweepErr
 }

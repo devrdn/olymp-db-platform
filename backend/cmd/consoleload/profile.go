@@ -71,3 +71,17 @@ func applyProfile(flags *flag.FlagSet, name string) (*thresholds, error) {
 	}
 	return &p.thresholds, nil
 }
+
+// longestProfileRun is how long the longest profile's run can take, setup
+// and teardown included; sweep leaves a younger run alone, as it may still be
+// going.
+func longestProfileRun() time.Duration {
+	var longest time.Duration
+	for _, name := range sortedKeys(profiles) {
+		// The template is only required, never read, here.
+		if cfg, err := parseFlags([]string{"-profile", name, "-source-template", "game_tpl_x"}); err == nil {
+			longest = max(longest, cfg.horizon())
+		}
+	}
+	return longest
+}

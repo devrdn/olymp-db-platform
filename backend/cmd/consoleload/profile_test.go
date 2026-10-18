@@ -63,3 +63,13 @@ func TestAnUnknownProfileIsRefused(t *testing.T) {
 		t.Fatalf("parseFlags = %v, want a refusal naming the known profiles", err)
 	}
 }
+
+func TestTheLongestProfileRunIsTheBetaProfilesWholeRun(t *testing.T) {
+	beta, err := parseFlags([]string{"-source-template", "game_tpl_x", "-profile", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := longestProfileRun(); got != beta.horizon() {
+		t.Fatalf("longestProfileRun = %s, want the beta profile's %s", got, beta.horizon())
+	}
+}
