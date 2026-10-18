@@ -4208,13 +4208,10 @@ says what is built.
 
 ### What comes next
 
-The order of the remaining work, in four tiers. A number in parentheses is
+The order of the remaining work, in three tiers. A number in parentheses is
 an item of the list below.
 
-1. **Before the next olympiad:** the schema panel's cache read from the
-   starting schema, not a participant's copy (49). In a writing contest it
-   leaks one participant's tables to the others.
-2. **The organiser's workflow:** the start waiting until every copy is
+1. **The organiser's workflow:** the start waiting until every copy is
    current (23); the staff reports and the results as a file (28), and
    `reports.view` removed (29); a contest list for a manager without
    `contest.create` (30); screens for the endpoints that
@@ -4229,13 +4226,13 @@ an item of the list below.
    `reports.view` and the hidden question need none: stale copies are remade
    on first use, the permission guards nothing, and the hidden question only
    needs saying.
-3. **Running the installation:** off-host scheduled backups (35, paused by
+2. **Running the installation:** off-host scheduled backups (35, paused by
    the maintainer's decision and to be resumed), restore drills (36), alerts
    and the Query Runner's metrics (37), CI and the supply chain (38),
    query-log archival (39), the disk monitor (40), the nonce CSP (41),
    end-to-end tests (42) and the security audit plan (43). They protect the
    installation over months and years rather than any one contest.
-4. **Later:** the rest of the query-log panel (44), the ER diagram and "show
+3. **Later:** the rest of the query-log panel (44), the ER diagram and "show
    me the data" (45), the interface's side of account actions (9), the
    accent (11), the `/design` showcase (48), high availability (46), and the
    deferred items: team mode (10), a second visual language (14),
@@ -4574,14 +4571,6 @@ Product decisions the items below are built on.
   theme, density and language switches, from the product's own components;
   until it exists, CI's lint, contrast and error-code checks hold the design
   system on their own.
-- [ ] **49. The schema panel's cache is filled from a participant's copy**
-  (sections 2.1 and 4.1). The description the schema panel shows is cached
-  once per contest and template version, and it is read from whichever
-  participant's database asks first, since a template cannot be connected to
-  while it is copied. In a `read_write` contest, a participant who creates
-  tables before anyone else opens the panel puts them into every
-  participant's panel, and a rebuild during a contest opens the window again.
-  The description should come from the contest's starting schema only.
 
 ### Done
 
@@ -4649,6 +4638,15 @@ Product decisions the items below are built on.
   minutes, recorded as `contest.instance_reset` (or
   `contest.instance_reset_failed`). A reset writes no query-log row: the log's
   statuses, counters and blind-answer detection describe queries.
+- [x] **49. The schema panel describes the game as built** (sections 2.1 and
+  4.1). Every build reads the description from the template before marking
+  it ready, while nothing may copy it and no participant has a copy, and a
+  template that cannot be described fails the build. A participant's own
+  tables never reached it (they live in `work`, which is not read, and only
+  `game_author` may alter the game's tables), but the organiser's
+  `SECURITY DEFINER` code run by a participant could. A participant's copy is
+  now read only for a game built before this change, and never cached over
+  the build's description.
 
 ## 16. Assumptions
 
