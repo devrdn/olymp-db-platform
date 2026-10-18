@@ -76,10 +76,13 @@ func (s *stores) close() {
 // fixture is everything one run created. It carries no password, so nothing
 // that could sign in is written to disk; a reused fixture gets fresh ones.
 type fixture struct {
-	RunID        string              `json:"run_id"`
-	ContestID    uuid.UUID           `json:"contest_id"`
-	OwnerID      uuid.UUID           `json:"owner_id"`
-	Template     string              `json:"template"`
+	RunID     string    `json:"run_id"`
+	ContestID uuid.UUID `json:"contest_id"`
+	OwnerID   uuid.UUID `json:"owner_id"`
+	Template  string    `json:"template"`
+	// Mode is the contest's SQL access mode; a fixture kept before modes
+	// existed has none and is read-only.
+	Mode         string              `json:"mode,omitempty"`
 	Participants []participantRecord `json:"participants"`
 }
 
@@ -106,6 +109,21 @@ func (f *fixture) registrationIDs() []uuid.UUID {
 		ids = append(ids, p.RegistrationID)
 	}
 	return ids
+}
+
+// fits reports why a kept fixture cannot serve a run, or nil if it can.
+func (f *fixture) fits(participants int, mode string) error {
+	kept := f.Mode
+	if kept == "" {
+		kept = contests.ModeReadOnly
+	}
+	switch {
+	case len(f.Participants) < participants:
+		return fmt.Errorf("the kept fixture has %d participants and this run needs %d", len(f.Participants), participants)
+	case kept != mode:
+		return fmt.Errorf("the kept fixture's contest is %s and this run asks for -mode %s", kept, mode)
+	}
+	return nil
 }
 
 func (f *fixture) save(out *os.Root, name string) error {
@@ -135,9 +153,10 @@ type setupReport struct {
 
 // setup creates the contest, its game and its participants, filling f as it
 // goes so a failure half-way can still be torn down.
-func setup(ctx context.Context, st *stores, f *fixture, source string, participants int) (setupReport, error) {
+func setup(ctx context.Context, st *stores, f *fixture, source string, participants int, mode string) (setupReport, error) {
 	var report setupReport
 	f.RunID = randomHex(4)
+	f.Mode = mode
 
 	accounts := postgres.NewUsers(st.core)
 
@@ -175,6 +194,19 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		return report, fmt.Errorf("create the contest: %w", err)
 	}
 	f.ContestID = contest.ID
+
+	// Before any copy exists, since provisioning grants the writable table
+	// on each copy as it makes it.
+	if mode == contests.ModeReadWrite {
+		policy := contests.DefaultSQLPolicy(contest.ID)
+		policy.Mode, policy.WritableTables, policy.UpdatedBy = mode, []string{writableTable}, &owner.ID
+		if err := policy.Validate(); err != nil {
+			return report, err
+		}
+		if err := postgres.NewSQLPolicies(st.core).Save(ctx, policy); err != nil {
+			return report, fmt.Errorf("make the contest read-write: %w", err)
+		}
+	}
 
 	// A template of its own, named by the product's scheme, so nothing the
 	// harness drops can belong to anybody else.
