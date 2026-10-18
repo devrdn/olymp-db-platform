@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -188,6 +191,33 @@ func cloneContest(t *testing.T, st *stores, from, id uuid.UUID) {
 	t.Cleanup(func() {
 		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM contests WHERE id = $1`, id)
 	})
+}
+
+// finishLikeTheScheduler runs the installation scheduler's finishing
+// statement against one contest, on its own connection, and reports an
+// error when it has to wait longer than bound for the row, or when the
+// predicate does not match the contest at all. The statement is rolled back:
+// only the wait is measured.
+func finishLikeTheScheduler(ctx context.Context, st *stores, contest uuid.UUID, bound time.Duration) error {
+	tx, err := st.core.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = `+strconv.FormatInt(bound.Milliseconds(), 10)); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE contests SET status = $2, updated_at = now()
+		WHERE id = $1 AND status = $3 AND ends_at IS NOT NULL AND ends_at + $4::interval <= now()`,
+		contest, contests.StatusFinished, contests.StatusRunning, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("waited more than %s: %w", bound, err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("the scheduler's predicate did not match the contest, so nothing was measured")
+	}
+	return nil
 }
 
 // backdate moves an account's creation a day back, past any run.

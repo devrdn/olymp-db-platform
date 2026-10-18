@@ -352,6 +352,80 @@ func TestTeardownTakesTheContestFromTheTenderFirstAndCatchesALateCopy(t *testing
 	assertNothingLeft(t, st, f)
 }
 
+func TestTheSchedulersFinishingUpdateNeverWaitsOnTheDrops(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	f := readOnlyFixture(t, st, true)
+
+	// The contest at its planned end, as a sweep from then meets it: the
+	// scheduler's finishing statement names it by predicate.
+	if _, err := st.core.Exec(ctx, `UPDATE contests SET ends_at = now() - interval '1 minute' WHERE id = $1`,
+		f.ContestID); err != nil {
+		t.Fatal(err)
+	}
+	var waited error
+	checked := false
+	drop := st.drop
+	t.Cleanup(func() { st.drop = drop })
+	st.drop = func(ctx context.Context, name string) error {
+		if !checked {
+			checked = true
+			waited = finishLikeTheScheduler(ctx, st, f.ContestID, 2*time.Second)
+		}
+		return drop(ctx, name)
+	}
+
+	if err := teardown(ctx, st, f); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if !checked {
+		t.Fatal("nothing was dropped, so the statement never ran against the drops")
+	}
+	if waited != nil {
+		t.Fatalf("the scheduler's finishing statement, run while the databases dropped: %v", waited)
+	}
+	assertNothingLeft(t, st, f)
+}
+
+func TestATeardownWaitsOnlyMomentsForRowsAnotherSessionHolds(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	f := readOnlyFixture(t, st, false)
+
+	holder, err := st.core.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM contests WHERE id = $1 FOR UPDATE`, f.ContestID); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	err = teardown(ctx, st, f)
+	if err == nil || !strings.Contains(err.Error(), "another session held the rows") {
+		t.Fatalf("teardown = %v, want a refusal naming the other session", err)
+	}
+	if waited := time.Since(started); waited > lockWait+2*time.Second {
+		t.Errorf("teardown waited %s for the row, want about %s", waited, lockWait)
+	}
+	var contestRows int
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM contests WHERE id = $1`, f.ContestID).Scan(&contestRows); err != nil {
+		t.Fatal(err)
+	}
+	if contestRows != 1 {
+		t.Fatal("the refusal said the rows are still there, and the contest is gone")
+	}
+
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := teardown(ctx, st, f); err != nil {
+		t.Fatalf("teardown after the other session let go: %v", err)
+	}
+	assertNothingLeft(t, st, f)
+}
+
 func TestATeardownStoppedHalfwayLeavesWhatSweepFinds(t *testing.T) {
 	st := testStores(t)
 	ctx := t.Context()

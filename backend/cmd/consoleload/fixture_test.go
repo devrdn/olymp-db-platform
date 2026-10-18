@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -108,18 +110,28 @@ func TestAReusedFixtureMustNameItsAccountsByTheirOwnLogins(t *testing.T) {
 	if err := verifyFixture(t.Context(), st.core, f); err != nil {
 		t.Fatalf("the fixture setup wrote is refused: %v", err)
 	}
-	other := readOnlyFixture(t, st, false)
+	// Harness accounts of other runs that are tied to nothing, so only the
+	// fixture's own checks can refuse them.
+	otherRun := randomHex(4)
+	otherOwner := testAccount(t, st, loginPrefix+otherRun+"-owner", users.StatusBlocked)
+	otherParticipant := testAccount(t, st, loginPrefix+otherRun+"-p001", users.StatusActive)
 
 	tests := []struct {
 		name   string
 		tamper func(*fixture)
+		want   string
 	}{
 		{name: "a participant named by somebody else's login", tamper: func(g *fixture) {
 			g.Participants = []participantRecord{f.Participants[0]}
 			g.Participants[0].Login = "teacher"
 		}},
 		{name: "an owner that is the contest's identifier", tamper: func(g *fixture) { g.OwnerID = f.ContestID }},
-		{name: "an owner that did not create the contest", tamper: func(g *fixture) { g.OwnerID = other.OwnerID }},
+		{name: "an owner of another run that created nothing", tamper: func(g *fixture) { g.OwnerID = otherOwner },
+			want: "is not the run's owner account"},
+		{name: "another run's identifier with that run's participants", tamper: func(g *fixture) {
+			g.RunID = otherRun
+			g.Participants = []participantRecord{{UserID: otherParticipant, Login: loginPrefix + otherRun + "-p001"}}
+		}, want: "is not the run's owner account"},
 		{name: "no owner", tamper: func(g *fixture) { g.OwnerID = uuid.Nil }},
 		{name: "a contest that does not exist", tamper: func(g *fixture) { g.ContestID = sibling(f.ContestID) }},
 	}
@@ -127,8 +139,49 @@ func TestAReusedFixtureMustNameItsAccountsByTheirOwnLogins(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tampered := *f
 			tt.tamper(&tampered)
-			if err := verifyFixture(t.Context(), st.core, &tampered); !errors.Is(err, errNotTheHarness) {
+			err := verifyFixture(t.Context(), st.core, &tampered)
+			if !errors.Is(err, errNotTheHarness) {
 				t.Fatalf("verifyFixture = %v, want %v", err, errNotTheHarness)
+			}
+			if tt.want != "" && !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("refused for another reason than the owner: %v", err)
+			}
+		})
+	}
+}
+
+func TestAReusedFixtureIsRefusedOnceItsContestIsOver(t *testing.T) {
+	st := testStores(t)
+	ctx := t.Context()
+	ends := time.Now().Add(3 * time.Hour).Truncate(time.Second)
+
+	tests := []struct {
+		name string
+		over string
+	}{
+		{name: "finished by the scheduler", over: `UPDATE contests SET status = 'finished' WHERE id = $1`},
+		{name: "past its end, so finished within a tick", over: `UPDATE contests SET ends_at = now() - interval '1 second' WHERE id = $1`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := readOnlyFixture(t, st, false)
+			if _, err := st.core.Exec(ctx, tt.over, f.ContestID); err != nil {
+				t.Fatal(err)
+			}
+			var before time.Time
+			if err := st.core.QueryRow(ctx, `SELECT ends_at FROM contests WHERE id = $1`, f.ContestID).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := extendFixture(ctx, st.core, f, ends); !errors.Is(err, errFixtureOver) {
+				t.Fatalf("extendFixture = %v, want %v", err, errFixtureOver)
+			}
+			var after time.Time
+			if err := st.core.QueryRow(ctx, `SELECT ends_at FROM contests WHERE id = $1`, f.ContestID).Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if !after.Equal(before) {
+				t.Fatalf("refused, and still moved the end from %s to %s", before, after)
 			}
 		})
 	}

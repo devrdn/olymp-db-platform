@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,10 +34,10 @@ type queryer interface {
 
 // verifyHarness refuses unless every account has a login setup makes (an
 // owner's blocked) and neither created, joined nor manages a contest outside
-// contestIDs, and every
-// contest was created by a blocked harness owner, has only that run's
-// participants registered and shares its database prefix with no other
-// contest. Identifiers that match no row pass: they name nothing.
+// contestIDs, and every contest was created by a blocked harness owner, has
+// only that run's participants registered and shares its database prefix
+// with no other contest. Identifiers that match no row pass: they name
+// nothing.
 func verifyHarness(ctx context.Context, q queryer, contestIDs, userIDs []uuid.UUID) error {
 	// A nil slice travels as NULL, and `<> ALL (NULL)` is never true.
 	contestIDs, userIDs = append([]uuid.UUID{}, contestIDs...), append([]uuid.UUID{}, userIDs...)
@@ -127,40 +128,32 @@ func verifyFixture(ctx context.Context, q queryer, f *fixture) error {
 // contests and accounts, once verifyHarness has found all of them to be the
 // harness's. known names databases the core rows may not record.
 //
-// Every delete and drop below is named by rows that exist, passed
-// verifyHarness and stay locked until the end: an identifier that matches no
-// row names nothing, since another contest may share its prefix or its
-// identifier may be some other entity's.
+// Every delete and drop below is named by rows that exist and passed
+// verifyHarness: an identifier that matches no row names nothing, since
+// another contest may share its prefix or its identifier may be some other
+// entity's. The drops are named by rows verified just before them, held by
+// no lock; the deletes by rows locked and verified again in deleteRows. No
+// core transaction stays open while a database drops: the installation's
+// scheduler finishes running contests by predicate, and a locked harness
+// contest it matched would stall its whole tick, real contests' starts and
+// finishes with it, for as long as the drops take.
 //
 // The order keeps the pool tender out and an interrupted removal
 // recoverable. The templates leave the tender's reach first. The databases
 // go next, the template last, since dropping it waits for any copy still
 // being made from it. The cluster is listed once more for a copy that
-// finished meanwhile. Only then do the core rows go, in the same transaction
-// as the locks, because they are how a retry or `consoleload sweep` finds
-// the databases.
+// finished meanwhile. Only then do the core rows go, because they are how a
+// retry or `consoleload sweep` finds the databases.
 func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, known []string) error {
-	tx, err := st.core.Begin(ctx)
+	contests, err := selectIDs(ctx, st.core, `SELECT id FROM contests WHERE id = ANY($1) ORDER BY id`, contestIDs)
 	if err != nil {
-		return err
+		return fmt.Errorf("find the contests: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-
-	// The transaction stays open while the databases are dropped.
-	if _, err := tx.Exec(ctx, `SET LOCAL idle_in_transaction_session_timeout = 0`); err != nil {
-		return err
-	}
-	// Contests first, as the API locks them, each set in identifier order. A
-	// registration, a contest or a manager row naming one of these waits.
-	contests, err := lockedIDs(ctx, tx, `SELECT id FROM contests WHERE id = ANY($1) ORDER BY id FOR UPDATE`, contestIDs)
+	accounts, err := selectIDs(ctx, st.core, `SELECT id FROM users WHERE id = ANY($1) ORDER BY id`, userIDs)
 	if err != nil {
-		return fmt.Errorf("lock the contests: %w", err)
+		return fmt.Errorf("find the accounts: %w", err)
 	}
-	accounts, err := lockedIDs(ctx, tx, `SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, userIDs)
-	if err != nil {
-		return fmt.Errorf("lock the accounts: %w", err)
-	}
-	if err := verifyHarness(ctx, tx, contests, accounts); err != nil {
+	if err := verifyHarness(ctx, st.core, contests, accounts); err != nil {
 		return err
 	}
 	prefixes := databasePrefixes(contests)
@@ -179,7 +172,7 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	}
 
 	if len(contests) > 0 {
-		rows, err := tx.Query(ctx, `
+		rows, err := st.core.Query(ctx, `
 			SELECT db_name FROM game_instances WHERE contest_id = ANY($1)
 			UNION
 			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, contests)
@@ -198,9 +191,7 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		}
 
 		// 'dropped' takes the game out of GameInstances.Live and Game: the
-		// tender stops stocking it and no participant can claim a copy. It
-		// commits on its own, since the tender reads committed rows, and
-		// touches no row the transaction locked.
+		// tender stops stocking it and no participant can claim a copy.
 		if _, err := st.core.Exec(ctx, `
 			UPDATE game_templates SET status = 'dropped', updated_at = now()
 			WHERE contest_id = ANY($1)`, contests); err != nil {
@@ -212,6 +203,43 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 		return err
 	}
 	if err := dropAll(ctx, st, map[string]bool{}, prefixes); err != nil {
+		return err
+	}
+	return deleteRows(ctx, st.core, contests, accounts)
+}
+
+// lockWait bounds how long deleteRows waits for its rows. Whoever else holds
+// them (a teardown or sweep of the same run, the scheduler's tick finishing
+// the contest) holds them for moments; anything longer is refused rather
+// than waited for, and the core pool's statement timeout would cut the wait
+// at ten seconds anyway.
+const lockWait = 5 * time.Second
+
+// deleteRows deletes the contests, the accounts and the audit entries by or
+// about them, in one transaction that locks the rows first and verifies the
+// locked rows again, so a row that changed hands since remove verified it is
+// refused. A registration, a contest or a manager row naming one of these
+// waits for the commit, which is moments away.
+func deleteRows(ctx context.Context, core *pgxpool.Pool, contestIDs, userIDs []uuid.UUID) error {
+	tx, err := core.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = %d`, lockWait.Milliseconds())); err != nil {
+		return err
+	}
+	// Contests first, as the API locks them, each set in identifier order.
+	contests, err := lockedIDs(ctx, tx, `SELECT id FROM contests WHERE id = ANY($1) ORDER BY id FOR UPDATE`, contestIDs)
+	if err != nil {
+		return fmt.Errorf("lock the contests: %w", err)
+	}
+	accounts, err := lockedIDs(ctx, tx, `SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, userIDs)
+	if err != nil {
+		return fmt.Errorf("lock the accounts: %w", err)
+	}
+	if err := verifyHarness(ctx, tx, contests, accounts); err != nil {
 		return err
 	}
 
@@ -245,18 +273,33 @@ func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, kn
 	return tx.Commit(ctx)
 }
 
-// lockedIDs runs a locking query over ids and returns the rows it locked;
-// an identifier that matches no row is left out.
+// selectIDs runs a query over ids and returns the rows it found; an
+// identifier that matches no row is left out.
+func selectIDs(ctx context.Context, q queryer, query string, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, query, append([]uuid.UUID{}, ids...))
+	if err != nil {
+		return nil, err
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, err
+	}
+	return append([]uuid.UUID{}, found...), nil
+}
+
+// lockNotAvailable is PostgreSQL's class for a lock_timeout that ran out.
+const lockNotAvailable = "55P03"
+
+// lockedIDs is selectIDs for a locking query, which says what a refused wait
+// means and that nothing was removed.
 func lockedIDs(ctx context.Context, tx pgx.Tx, query string, ids []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := tx.Query(ctx, query, append([]uuid.UUID{}, ids...))
-	if err != nil {
-		return nil, err
+	locked, err := selectIDs(ctx, tx, query, ids)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable {
+		return nil, fmt.Errorf("another session held the rows for longer than %s (a teardown or sweep of the same run, "+
+			"or the scheduler finishing the contest); the rows are still there for another try: %w", lockWait, err)
 	}
-	locked, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return nil, err
-	}
-	return append([]uuid.UUID{}, locked...), nil
+	return locked, err
 }
 
 // dropAll drops names and whatever the cluster holds under prefixes, in name
@@ -324,8 +367,8 @@ type sweepOptions struct {
 	// orphans also removes the accounts of a run that has no contest, which
 	// nothing ties to the load test but their login.
 	orphans bool
-	// force also removes a run that started less than longestProfileRun ago,
-	// which may still be going.
+	// force also removes a run before its planned end, which may still be
+	// going.
 	force bool
 	// run narrows the sweep to one run's identifier.
 	run string
