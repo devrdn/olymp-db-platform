@@ -668,10 +668,11 @@ at the end. The profile's values and the reasoning behind each threshold are
 in `cmd/consoleload/profile.go`; a flag given on the command line overrides the
 profile's (`-participants 60` asks whether the server holds sixty).
 
-Every run is judged on four checks, and fails on any of them:
+Every run is judged on five checks, and fails on any of them:
 
 | check | limit |
 |---|---|
+| queries sent | at least one |
 | p95 latency of every query, refusals included | at most 2.5 s |
 | refused (any 4xx) | at most 1% of the queries |
 | errors (no answer, or one that could not be read) | at most 0.5% |
@@ -679,11 +680,13 @@ Every run is judged on four checks, and fails on any of them:
 
 ### Prerequisites
 
-- **Nothing else live.** Run it at a quiet time, more than two hours before
-  the contest: the load is real and its participants would share it. It
-  refuses to start while a contest it did not create is running or published
-  to start within two hours (`-allow-live-contests` overrides, never during a
-  contest).
+- **Nothing else live.** Run it at a quiet time, well before the contest: the
+  load is real and its participants would share it. It refuses to start while
+  any other contest is running or published to start before the run could
+  end (its planned load plus an hour for setup and teardown, about 1 h 15 min
+  for the beta profile), and names each one. A contest an earlier, killed run
+  left counts too: sweep it first. `-allow-live-contests` overrides; never
+  use it with real participants on the server.
 - **A built game of the detective story on the target cluster**, named by
   `-source-template`. The queries read `persons`, `calls`, `statements`,
   `cases` and `evidence`, and the writes update `evidence`; the contest's own
@@ -691,15 +694,23 @@ Every run is judged on four checks, and fails on any of them:
   the core database, `SELECT contest_id, template_db FROM game_templates
   WHERE status = 'ready'` lists them. Another game stops the run at its first
   query (or at provisioning, if it has no `evidence`), before any load.
-- **Room on the game cluster** for one more template copy and fifty
-  participant copies (forty plus `GAME_POOL_DEPTH` spare), within
-  `GAME_CLUSTER_MAX_BYTES` and beside the copies the contest itself will need.
+- **Room on the game cluster**, within `GAME_CLUSTER_MAX_BYTES` and beside the
+  copies the real contest will need, for one more template copy and the
+  participant copies: forty plus `-headroom` spare. Pass the server's own
+  `GAME_POOL_DEPTH` as `-headroom` (the workstation's environment usually
+  lacks it, and the default is 10): the API's pool tender serves the test
+  contest like any live one and tops its spare copies up to that depth, so a
+  smaller headroom only means the server makes the difference itself.
 - **A Go toolchain on a workstation and SSH to the host.** The server
   compiles nothing and publishes neither database's port, so the command runs
   on the workstation, reaching the API as participants do and the two
-  databases through an SSH tunnel. It needs the same two credentials the API
-  holds, `CORE_DB_DSN` and `GAME_PROVISIONER_DSN` (the provisioning role), from
-  the host's `deploy/.env`; it never holds the participant roles'.
+  databases through an SSH tunnel.
+- **Two superuser credentials.** `CORE_DB_DSN` uses `CORE_DB_USER` and
+  `GAME_PROVISIONER_DSN` uses `GAME_DB_USER` from the host's `deploy/.env`:
+  each is its cluster's superuser, able to read or destroy everything on it.
+  Keep them out of files and shell history, close the tunnel and `unset` them
+  when the run ends, and never use `-keep` against production, which leaves
+  the accounts and the running contest behind.
 
 ### Running it against the server
 
@@ -717,7 +728,11 @@ read -rs CORE_PW; read -rs GAME_PW
 CORE_DB_DSN="postgres://<CORE_DB_USER>:$CORE_PW@127.0.0.1:15432/dbcontest_core?sslmode=disable" \
 GAME_PROVISIONER_DSN="postgres://<GAME_DB_USER>:$GAME_PW@127.0.0.1:15433/dbcontest_game?sslmode=disable" \
 go run ./cmd/consoleload -profile beta -api https://olympdb.usm.md \
-    -source-template game_tpl_c<12 hex> -label "beta rehearsal, $(date +%F)"
+    -source-template game_tpl_c<12 hex> -headroom <GAME_POOL_DEPTH> \
+    -label "beta rehearsal, $(date +%F)"
+
+# Afterwards: stop the tunnel (Ctrl+C in its terminal) and forget the passwords.
+unset CORE_PW GAME_PW
 ```
 
 The database names are `CORE_DB_NAME` and `GAME_DB_NAME` from the same
@@ -731,8 +746,8 @@ works where the command runs.
 
 ### What it creates, and how it goes away
 
-All of it is new and named so nothing can be mistaken for a real record; it
-reads no real participant's data and writes none:
+It reads no real participant's data and writes none. What it creates is new,
+named by a run identifier of eight hex digits, and owned by the run:
 
 - accounts `loadtest-<run>-owner` (blocked, for `contests.created_by`) and
   `loadtest-<run>-p001` to `-p040` (active, with random passwords that exist
@@ -746,14 +761,28 @@ reads no real participant's data and writes none:
 - what playing leaves: sessions (signed out at the end), journal rows, audit
   entries, and the sign-in limiter's counters in the cache.
 
+It is not invisible. While it runs, the untitled contest heads the public
+homepage's list of recent contests and its forty registrations count in the
+homepage's figures; staff see it in the contest list. A killed run leaves it
+there until it is swept.
+
 At the end, however the run ended — finished, failed, or stopped with
-Ctrl+C — it drops those databases and deletes the contest, its rows and the
+Ctrl+C — it removes all of it: first it marks the template dropped, so the
+API's pool tender stops stocking the contest; then it drops the databases,
+the template last, and looks at the cluster once more for a copy that
+finished meanwhile; only then does it delete the contest, its rows and the
 accounts with their audit entries. Only the limiter's counters stay, and they
-expire on their own. If the command is killed outright or the tunnel drops
-first, `consoleload sweep` (same environment, `sweep` as its only argument)
-removes every `loadtest-` account with its contests and databases. It goes by
-the prefix, so check first that no real login begins with it:
-`SELECT login FROM users WHERE left(login, 9) = 'loadtest-'`.
+expire on their own. Before removing anything it checks that every account
+has a login of exactly that shape and belongs to nothing else, and that the
+contest was created by the run's blocked owner and has only the run's
+participants; anything else is refused and nothing is removed.
+
+If the command is killed outright or the tunnel drops first, the contest and
+accounts are still there, and `consoleload sweep` (same environment) finds
+them: it lists every account of that exact shape, the contests their blocked
+owners created and those contests' databases, and removes nothing.
+`consoleload sweep -yes` removes what it listed, with the same checks.
+(`make loadtest ARGS=sweep` and `ARGS="sweep -yes"` on the local stack.)
 
 ### Reading the result
 
@@ -762,8 +791,9 @@ The command prints each run's percentiles and outcomes, then
 directory it names at the start holds `report.md`, which opens with the
 verdict table (run, check, measured, limit, pass or fail), `report.json` with
 the same, and every query as a line in `<run>.jsonl`. The exit status is 0
-when every run passed, 2 when the runs were measured and torn down and missed
-a threshold, and 1 when the run itself failed or did not clean up.
+when every run passed, 2 when the runs were measured and missed a threshold
+and nothing else failed, and 1 when the run itself failed or did not clean
+up.
 
 Where to look when a check fails: a slow p95 is explained by the latency by
 query class, the queries in flight against those the game cluster ran (the
