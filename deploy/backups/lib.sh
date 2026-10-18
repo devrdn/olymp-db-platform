@@ -7,7 +7,9 @@
 #   covers-<YYYYmmdd-HHMMSS>.tar.gz
 #   game-uploads-<YYYYmmdd-HHMMSS>.tar.gz
 # It is complete when all three are regular files. Only a complete set is
-# ever removed, and then exactly those three files.
+# ever removed, and then exactly those three files. make backup writes each
+# file as .<name>.partial and renames it once checked, so what a stopped run
+# leaves is never part of a set.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$ROOT/deploy/.env"
@@ -100,6 +102,13 @@ incomplete_sets() { # dir db: oldest first
 	while IFS= read -r s; do
 		if ! is_complete "$1" "$2" "$s"; then printf '%s\n' "$s"; fi
 	done < <(set_stamps "$1" "$2")
+}
+
+# The .partial files a stopped make backup left behind.
+unfinished_files() { # dir db
+	find "$1" -maxdepth 1 -type f -name '.*.partial' -printf '%f\n' |
+		grep -E "^\.($2-[0-9]{8}-[0-9]{6}\.dump|(covers|game-uploads)-[0-9]{8}-[0-9]{6}\.tar\.gz)\.partial\$" |
+		LC_ALL=C sort || true
 }
 
 set_bytes() { # dir db stamp
