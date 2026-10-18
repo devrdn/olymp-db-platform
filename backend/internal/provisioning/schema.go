@@ -10,8 +10,8 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// ErrNoSchema is a template whose shape is not cached: a game not built yet,
-// or built before builds described their template (Games.describe).
+// ErrNoSchema means no description is stored for the contest's game: it is
+// not built yet, or its build stored none.
 var ErrNoSchema = errors.New("the game's schema is not known yet")
 
 // Schema is the shape of a game database as the console's schema panel draws
@@ -84,15 +84,13 @@ func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
 // Schema answers what contest's game looks like, reading database only if it
 // has to.
 //
-// The build caches the description, read from the template before the game is
-// ready (Games.describe), so for a game built since, this is a cache read. A
-// miss reads database, the participant's own copy, and never the template:
-// CREATE DATABASE ... TEMPLATE fails while anything is connected to it
-// (SQLSTATE 55006). A copy's public schema is the template's for everything a
-// participant's role can do, since their own objects live in `work`, which is
-// not read, and only game_author may alter the game's tables. A copy read
-// because the cache could not be read is not saved, so it never replaces the
-// build's description.
+// The build stores the description, read from the template itself
+// (Games.describe), so this is normally a cache read. A miss reads database,
+// the participant's own copy, never the template (Games.describe says why). A
+// copy's public schema is the template's for everything a participant's role
+// can do: their own objects live in `work`, which is not read, and only
+// game_author may alter the game's tables. A copy read because the cache could
+// not be read is not saved, so it never replaces the build's description.
 //
 // Cache failures never refuse the answer; only a cluster failure does, since
 // an empty panel would claim the game has no tables.

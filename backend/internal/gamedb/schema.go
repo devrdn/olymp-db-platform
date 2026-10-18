@@ -44,10 +44,8 @@ const maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColum
 
 // ReadSchema describes one game database, for the console's schema panel.
 //
-// It reads a template only while that template is being built, before
-// anything may copy it (provisioning.Games.describe), and otherwise an
-// instance: a connection to a template makes `CREATE DATABASE ... TEMPLATE`
-// fail (55006). It connects as the superuser provisioning role, so it never
+// database is an instance, or a template only from provisioning.Games.describe,
+// whose comment says when reading a template is safe. It connects as the superuser provisioning role, so it never
 // takes a participant's connection slot.
 func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisioning.Schema, error) {
 	if !sqlpolicy.PlainIdentifier(database) {
