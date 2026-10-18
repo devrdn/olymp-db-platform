@@ -3,16 +3,18 @@
 # Sourced by the scripts beside it; it sets ROOT and defines functions only.
 #
 # A set is what one `make backup` writes under one timestamp:
-#   <CORE_DB_NAME>-<YYYYmmdd-HHMMSS>.dump
-#   covers-<YYYYmmdd-HHMMSS>.tar.gz
-#   game-uploads-<YYYYmmdd-HHMMSS>.tar.gz
-# It is complete when all three are regular files. Only a complete set is
-# ever removed, and then exactly those three files. make backup writes each
-# file as .<name>.partial and renames it once checked, so what a stopped run
-# leaves is never part of a set.
+#   <CORE_DB_NAME>-<stamp>.dump
+#   covers-<stamp>.tar.gz
+#   game-uploads-<stamp>.tar.gz
+# The stamp is YYYYmmdd-HHMMSSZ in UTC; sets taken before that change carry
+# local time and no Z, and are sets all the same. A set is complete when all
+# three are regular files. Rotation removes only complete sets, and then
+# exactly those three files: never an incomplete set, a stopped run's
+# .<name>.<pid>.partial files, another database's dump, or any other name.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$ROOT/deploy/.env"
+STAMP_RE='[0-9]{8}-[0-9]{6}Z?'
 
 # Under systemd, stderr goes to the journal and a <N> prefix sets the line's
 # priority, so `journalctl -p err` shows the reasons a run failed.
@@ -61,6 +63,18 @@ backup_dir() {
 	printf '%s' "$dir"
 }
 
+# The directory with every symlink resolved, so that find, df and the
+# printed commands all name the disk the sets are really on.
+canonical_dir() { (cd -P -- "$1" && pwd -P); }
+
+valid_stamp() { [[ $1 =~ ^${STAMP_RE}$ ]]; }
+
+stamp_epoch() { # stamp: seconds since the epoch; a stamp without Z is local time
+	local s=$1 tz=
+	if [[ $s == *Z ]]; then tz=-u; fi
+	date $tz -d "${s:0:4}-${s:4:2}-${s:6:2} ${s:9:2}:${s:11:2}:${s:13:2}" +%s
+}
+
 # The name is spliced into a find pattern and a sed expression, so it is held
 # to what a PostgreSQL identifier can be without quoting.
 core_db_name() {
@@ -83,10 +97,10 @@ is_complete() { # dir db stamp
 
 # Every timestamp some file of a set is named with, oldest first.
 set_stamps() { # dir db
-	find "$1" -maxdepth 1 -type f \( -name "$2-*.dump" -o -name 'covers-*.tar.gz' -o -name 'game-uploads-*.tar.gz' \) \
+	find -H "$1" -maxdepth 1 -type f \( -name "$2-*.dump" -o -name 'covers-*.tar.gz' -o -name 'game-uploads-*.tar.gz' \) \
 		-printf '%f\n' |
-		sed -nE -e "s/^$2-([0-9]{8}-[0-9]{6})\.dump\$/\1/p" \
-			-e 's/^(covers|game-uploads)-([0-9]{8}-[0-9]{6})\.tar\.gz$/\2/p' |
+		sed -nE -e "s/^$2-(${STAMP_RE})\.dump\$/\1/p" \
+			-e "s/^(covers|game-uploads)-(${STAMP_RE})\.tar\.gz\$/\2/p" |
 		LC_ALL=C sort -u
 }
 
@@ -106,8 +120,8 @@ incomplete_sets() { # dir db: oldest first
 
 # The .partial files a stopped make backup left behind.
 unfinished_files() { # dir db
-	find "$1" -maxdepth 1 -type f -name '.*.partial' -printf '%f\n' |
-		grep -E "^\.($2-[0-9]{8}-[0-9]{6}\.dump|(covers|game-uploads)-[0-9]{8}-[0-9]{6}\.tar\.gz)\.partial\$" |
+	find -H "$1" -maxdepth 1 -type f -name '.*.partial' -printf '%f\n' |
+		grep -E "^\.($2-${STAMP_RE}\.dump|(covers|game-uploads)-${STAMP_RE}\.tar\.gz)(\.[0-9]+)?\.partial\$" |
 		LC_ALL=C sort || true
 }
 
