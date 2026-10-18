@@ -14,12 +14,15 @@
 // are ordinary accounts with random passwords kept only in memory, signing in
 // through /auth/login. It writes into the installation's own databases and
 // removes everything it created at the end, except the sign-in limiter's
-// counter, which expires on its own. `consoleload sweep` cleans up a killed
-// run by login prefix. It will not start while somebody else's contest is
-// live, since their participants would share the load.
+// counter, which expires on its own. `consoleload sweep` lists what a killed
+// run left, found by the exact logins setup makes, and `sweep -yes` removes
+// it. Nothing is removed that the checks in cleanup.go do not find to be the
+// harness's. It will not start while another contest is live, since its
+// participants would share the load.
 //
 // A run only measures, unless -profile names a profile: then every run is
-// judged against the profile's thresholds, and a miss exits with status 2.
+// judged against the profile's thresholds, and a miss with nothing else
+// failing exits with status 2.
 // backend/README.md says how to run the beta profile against a server.
 //
 // Usage:
@@ -29,7 +32,7 @@
 //	consoleload -keep ...                              leave the fixture for another run
 //	consoleload -fixture DIR/fixture.json [flags]      reuse a kept fixture, then tear it down
 //	consoleload -fixture ... -copy-setting name=value  try a cluster setting on the copies only
-//	consoleload sweep                                  remove whatever an interrupted run left
+//	consoleload sweep [-yes]                           list, and with -yes remove, what an interrupted run left
 //
 // It reads CORE_DB_DSN and GAME_PROVISIONER_DSN (the provisioning role on the
 // game cluster) — the same two the API itself is given. `make loadtest` passes
@@ -60,10 +63,10 @@ func main() {
 	os.Exit(exitCode(err))
 }
 
-// exitCode is 2 when the runs were measured, torn down and missed their
-// profile's thresholds, and 1 for any other failure, so a script can tell a
-// slow server from a broken run. errMissedThresholds joined with anything
-// else is the latter.
+// exitCode is 2 when the runs were measured and missed their profile's
+// thresholds and nothing else failed, and 1 for any other failure, so a
+// script can tell a slow server from a broken run. errMissedThresholds joined
+// with anything else, a failed teardown say, is the latter.
 func exitCode(err error) int {
 	switch {
 	case err == nil:

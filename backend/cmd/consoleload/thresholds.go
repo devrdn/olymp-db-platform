@@ -40,8 +40,8 @@ type verdict struct {
 	Checks []check `json:"checks"`
 }
 
-// errMissedThresholds is a run that was measured and cleaned up, and missed
-// its profile's bar.
+// errMissedThresholds is a run that was measured and missed its profile's
+// bar.
 var errMissedThresholds = errors.New("the runs did not meet the profile's thresholds")
 
 // judge passes only when there was at least one run and every check of every
