@@ -41,20 +41,41 @@ var scrapeLabels = map[string]bool{"job": true, "instance": true}
 // route, status and method take whatever the traffic brings.
 var closedLabels = map[string]bool{"outcome": true, "reason": true, "limit": true}
 
-// exportedSeries maps each series name the two services export to its labels
-// and the values seen for each.
+// The two services, named as the selector's dbcontest label names them.
+const (
+	serviceAPI    = "api"
+	serviceRunner = "queryrunner"
+)
+
+// dashboardVariables names the service each of the dashboard's job variables
+// selects.
+var dashboardVariables = map[string]string{"api_job": serviceAPI, "runner_job": serviceRunner}
+
+// exportedSeries maps each series name one service exports to its labels and
+// the values seen for each.
 type exportedSeries map[string]map[string]map[string]bool
 
-func registeredSeries(t *testing.T) exportedSeries {
+// registeredSeries builds each service's metric sets with the constructors its
+// composition root uses, on a registry of its own, so a query can be held to
+// the service it claims to read.
+func registeredSeries(t *testing.T) map[string]exportedSeries {
 	t.Helper()
 
-	prom := metrics.NewPrometheus()
+	api := metrics.NewPrometheus()
 	// The HTTP vectors export nothing until a request is observed.
-	prom.ObserveRequest("GET", "/api/v1/contests", 200, time.Millisecond, false)
-	prom.ObserveRequest("GET", "/api/v1/contests/{contestID}/events", 200, time.Minute, true)
-	metrics.NewGameReclaimCounters(prom)
-	runner := metrics.NewQueryRunner(prom, queryrunner.Endings(), queryrunner.CutOffs())
-	runner.WatchAdmission(func() (int, int) { return 0, 0 })
+	api.ObserveRequest("GET", "/api/v1/contests", 200, time.Millisecond, false)
+	api.ObserveRequest("GET", "/api/v1/contests/{contestID}/events", 200, time.Minute, true)
+	metrics.NewGameReclaimCounters(api)
+
+	runner := metrics.NewPrometheus()
+	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs())
+	observed.WatchAdmission(func() (int, int) { return 0, 0 })
+
+	return map[string]exportedSeries{serviceAPI: gathered(t, api), serviceRunner: gathered(t, runner)}
+}
+
+func gathered(t *testing.T, prom *metrics.Prometheus) exportedSeries {
+	t.Helper()
 
 	families, err := prom.Registry().Gather()
 	if err != nil {
@@ -93,21 +114,80 @@ func registeredSeries(t *testing.T) exportedSeries {
 	return series
 }
 
-// problems says what is wrong with one selector. A recorded name comes from
-// the rules file itself; its closed labels still carry the code's values.
-func (e exportedSeries) problems(s selector, recorded map[string]bool) []string {
-	labels, exported := e[s.name]
-	switch {
-	case recorded[s.name]:
-		labels = e.closedValues()
-	case !exported && strings.HasPrefix(s.name, "process_") && runtime.GOOS != "linux":
+// selectorJob reads the job each service's matcher names in the rules'
+// selector, label_replace(... up{job="core-api"} ...), "dbcontest", "api", ...
+var selectorJob = regexp.MustCompile(`up\{job="([^"]+)"\}\), "dbcontest", "(\w+)"`)
+
+// servicesOf names the services a selector reads: from its job matcher when
+// that names a dashboard variable or a job the rules' selector names, from the
+// expression's dbcontest:target join otherwise, and none when neither says.
+func servicesOf(s selector, expr string, jobs map[string]string) []string {
+	found := map[string]bool{}
+	for _, m := range s.matchers {
+		if m.label != "job" {
+			continue
+		}
+		for _, part := range strings.Split(m.value, "|") {
+			if service, ok := jobs[strings.Trim(part, "$")]; ok {
+				found[service] = true
+			}
+		}
+	}
+	if len(found) == 0 {
+		for _, service := range []string{serviceAPI, serviceRunner} {
+			if strings.Contains(expr, `dbcontest="`+service+`"`) {
+				found[service] = true
+			}
+		}
+	}
+	var services []string
+	for _, service := range []string{serviceAPI, serviceRunner} {
+		if found[service] {
+			services = append(services, service)
+		}
+	}
+	return services
+}
+
+// problems says what is wrong with one selector read from services, or from
+// either when services is empty. A recorded name comes from the rules file
+// itself; its closed labels still carry the code's values.
+func problems(registries map[string]exportedSeries, s selector, services []string, recorded map[string]bool) []string {
+	if recorded[s.name] {
+		return matcherProblems(s, closedValues(registries), true)
+	}
+	if !registries[serviceAPI].has(s.name) && !registries[serviceRunner].has(s.name) &&
+		strings.HasPrefix(s.name, "process_") && runtime.GOOS != "linux" {
 		// The process collector exports a different set per platform, and
 		// production runs on Linux, where it exports them all.
 		return nil
-	case !exported:
-		return []string{fmt.Sprintf("%s is not a series the API or the Query Runner exports", s.name)}
 	}
 
+	if len(services) == 0 {
+		for _, service := range []string{serviceAPI, serviceRunner} {
+			if registries[service].has(s.name) {
+				return matcherProblems(s, registries[service][s.name], false)
+			}
+		}
+		return []string{fmt.Sprintf("%s is not a series the API or the Query Runner exports", s.name)}
+	}
+	var found []string
+	for _, service := range services {
+		if !registries[service].has(s.name) {
+			found = append(found, fmt.Sprintf("%s is not a series the %s exports", s.name, service))
+			continue
+		}
+		found = append(found, matcherProblems(s, registries[service][s.name], false)...)
+	}
+	return found
+}
+
+func (e exportedSeries) has(name string) bool {
+	_, ok := e[name]
+	return ok
+}
+
+func matcherProblems(s selector, labels map[string]map[string]bool, recorded bool) []string {
 	var found []string
 	for _, m := range s.matchers {
 		if scrapeLabels[m.label] {
@@ -115,7 +195,7 @@ func (e exportedSeries) problems(s selector, recorded map[string]bool) []string 
 		}
 		values, ok := labels[m.label]
 		switch {
-		case !ok && !recorded[s.name]:
+		case !ok && !recorded:
 			found = append(found, fmt.Sprintf("%s has no label %s", s.name, m.label))
 		case closedLabels[m.label] && m.op == "=" && !values[m.value]:
 			found = append(found, fmt.Sprintf("%s{%s=%q}: %q is not a value the code declares", s.name, m.label, m.value, m.value))
@@ -125,18 +205,20 @@ func (e exportedSeries) problems(s selector, recorded map[string]bool) []string 
 }
 
 // closedValues is every value each closed label takes on any series.
-func (e exportedSeries) closedValues() map[string]map[string]bool {
+func closedValues(registries map[string]exportedSeries) map[string]map[string]bool {
 	union := map[string]map[string]bool{}
-	for _, labels := range e {
-		for label, values := range labels {
-			if !closedLabels[label] {
-				continue
-			}
-			if union[label] == nil {
-				union[label] = map[string]bool{}
-			}
-			for v := range values {
-				union[label][v] = true
+	for _, series := range registries {
+		for _, labels := range series {
+			for label, values := range labels {
+				if !closedLabels[label] {
+					continue
+				}
+				if union[label] == nil {
+					union[label] = map[string]bool{}
+				}
+				for v := range values {
+					union[label][v] = true
+				}
 			}
 		}
 	}
@@ -144,7 +226,7 @@ func (e exportedSeries) closedValues() map[string]map[string]bool {
 }
 
 func TestObservabilityImportsReadOnlyRegisteredSeries(t *testing.T) {
-	series := registeredSeries(t)
+	registries := registeredSeries(t)
 
 	records, err := yamlScalars(rulesFile, "record")
 	if err != nil {
@@ -162,9 +244,22 @@ func TestObservabilityImportsReadOnlyRegisteredSeries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dashboard, err := dashboardQueries(dashboardFile)
+	dashboard, variables, err := dashboardQueries(dashboardFile)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	jobs := map[string]string{}
+	for variable, service := range dashboardVariables {
+		jobs[variable] = service
+	}
+	for _, expr := range ruleExprs {
+		for _, m := range selectorJob.FindAllStringSubmatch(expr, -1) {
+			jobs[m[1]] = m[2]
+		}
+	}
+	if len(jobs) != len(dashboardVariables)+2 {
+		t.Fatalf("the rules' selector should name one job per service, found %v", jobs)
 	}
 
 	sources := []struct {
@@ -189,7 +284,7 @@ func TestObservabilityImportsReadOnlyRegisteredSeries(t *testing.T) {
 				}
 				read += len(selectors)
 				for _, s := range selectors {
-					for _, p := range series.problems(s, source.recorded) {
+					for _, p := range problems(registries, s, servicesOf(s, expr, jobs), source.recorded) {
 						t.Errorf("%s\n\tin %s", p, expr)
 					}
 				}
@@ -200,10 +295,66 @@ func TestObservabilityImportsReadOnlyRegisteredSeries(t *testing.T) {
 		})
 	}
 
+	// Each job variable is found by a metric only its service exports, or it
+	// would offer the other service's job too.
+	t.Run("dashboard variables", func(t *testing.T) {
+		for variable, metric := range variables {
+			service, ok := dashboardVariables[variable]
+			if !ok {
+				t.Errorf("variable %s selects no known service", variable)
+				continue
+			}
+			for other, series := range registries {
+				if exports := series.has(metric); exports != (other == service) {
+					t.Errorf("variable %s reads %s: exported by %s = %v", variable, metric, other, exports)
+				}
+			}
+		}
+		if len(variables) != len(dashboardVariables) {
+			t.Errorf("dashboard has job variables %v, want %v", variables, dashboardVariables)
+		}
+	})
+
 	if *dashboardRules != "" {
 		if err := writeDashboardRules(*dashboardRules, dashboard); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The routes left out of the API's latency as slow by design are named in the
+// rules and again in the dashboard; one pattern in both is what makes the panel
+// show what the alert measures.
+func TestObservabilityImportsLeaveOutTheSameSlowRoutes(t *testing.T) {
+	ruleExprs, err := yamlScalars(rulesFile, "expr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dashboard, _, err := dashboardQueries(dashboardFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	excluded := func(exprs []string) map[string]bool {
+		patterns := map[string]bool{}
+		for _, expr := range exprs {
+			selectors, err := promqlSelectors(expr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range selectors {
+				for _, m := range s.matchers {
+					if m.label == "route" && m.op == "!~" {
+						patterns[m.value] = true
+					}
+				}
+			}
+		}
+		return patterns
+	}
+	inRules, inDashboard := excluded(ruleExprs), excluded(dashboard)
+	if len(inRules) != 1 || !reflect.DeepEqual(inRules, inDashboard) {
+		t.Errorf("slow routes left out: rules %v, dashboard %v; want one pattern, the same in both", inRules, inDashboard)
 	}
 }
 

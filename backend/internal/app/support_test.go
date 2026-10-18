@@ -316,6 +316,7 @@ type grafanaDashboard struct {
 	Panels     []grafanaPanel `json:"panels"`
 	Templating struct {
 		List []struct {
+			Name  string          `json:"name"`
 			Type  string          `json:"type"`
 			Query json.RawMessage `json:"query"`
 		} `json:"list"`
@@ -334,15 +335,16 @@ type grafanaPanel struct {
 var labelValuesQuery = regexp.MustCompile(`^label_values\(\s*([^,]+),\s*\w+\s*\)$`)
 
 // dashboardQueries returns the PromQL of every panel, rows' panels included,
-// and the metric of every label_values variable.
-func dashboardQueries(path string) ([]string, error) {
+// with the metric of every label_values variable, and those metrics by
+// variable name.
+func dashboardQueries(path string) ([]string, map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var d grafanaDashboard
 	if err := json.Unmarshal(raw, &d); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
 
 	var queries []string
@@ -357,6 +359,7 @@ func dashboardQueries(path string) ([]string, error) {
 	}
 	walk(d.Panels)
 
+	variables := map[string]string{}
 	for _, v := range d.Templating.List {
 		if v.Type != "query" {
 			continue
@@ -365,13 +368,14 @@ func dashboardQueries(path string) ([]string, error) {
 			Query string `json:"query"`
 		}
 		if err := json.Unmarshal(v.Query, &q); err != nil {
-			return nil, fmt.Errorf("%s: variable query: %w", path, err)
+			return nil, nil, fmt.Errorf("%s: variable query: %w", path, err)
 		}
 		m := labelValuesQuery.FindStringSubmatch(q.Query)
 		if m == nil {
-			return nil, fmt.Errorf("%s: variable query %q is not label_values(metric, label)", path, q.Query)
+			return nil, nil, fmt.Errorf("%s: variable query %q is not label_values(metric, label)", path, q.Query)
 		}
 		queries = append(queries, m[1])
+		variables[v.Name] = strings.TrimSpace(m[1])
 	}
-	return queries, nil
+	return queries, variables, nil
 }
