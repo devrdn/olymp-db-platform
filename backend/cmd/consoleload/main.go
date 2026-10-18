@@ -47,9 +47,25 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "consoleload: %v\n", err)
-		os.Exit(1)
+	}
+	os.Exit(exitCode(err))
+}
+
+// exitCode is 2 when the runs were measured, torn down and missed their
+// profile's thresholds, and 1 for any other failure, so a script can tell a
+// slow server from a broken run. errMissedThresholds joined with anything
+// else is the latter.
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case err == errMissedThresholds:
+		return 2
+	default:
+		return 1
 	}
 }
 
@@ -89,6 +105,11 @@ type config struct {
 	fixture string
 	// allowLive runs even while somebody else's contest is live.
 	allowLive bool
+
+	// profile names the profile that set this run up; thresholds, its bar,
+	// is nil for a run that is only measured.
+	profile    string
+	thresholds *thresholds
 }
 
 func run(args []string) error {
@@ -129,6 +150,9 @@ func parseFlags(args []string) (config, error) {
 	flags := flag.NewFlagSet("consoleload", flag.ContinueOnError)
 	cfg := config{}
 
+	profileName := flags.String("profile", "",
+		"a named run that sets the flags it names unless given here, and judges the result: "+
+			strings.Join(sortedKeys(profiles), ", "))
 	flags.StringVar(&cfg.api, "api", envOr("LOADTEST_API", "http://localhost:8080"),
 		"base URL of the API, without /api/v1")
 	flags.StringVar(&cfg.sourceTemplate, "source-template", "",
@@ -180,6 +204,12 @@ func parseFlags(args []string) (config, error) {
 	}
 
 	var err error
+	if *profileName != "" {
+		if cfg.thresholds, err = applyProfile(flags, *profileName); err != nil {
+			return config{}, err
+		}
+		cfg.profile = *profileName
+	}
 	if cfg.participants, err = intList(*participants); err != nil {
 		return config{}, fmt.Errorf("-participants: %w", err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,26 @@ func TestParseFlagsLetsOnlyAReadWriteContestWrite(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tt.refusal) {
 				t.Fatalf("parseFlags = %+v, %v; want an error naming %s", cfg, err, tt.refusal)
+			}
+		})
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "passed", err: nil, want: 0},
+		{name: "missed a threshold", err: errMissedThresholds, want: 2},
+		{name: "missed a threshold and failed to tear down", err: errors.Join(errMissedThresholds, errors.New("teardown: drop")), want: 1},
+		{name: "could not run", err: errors.New("CORE_DB_DSN and GAME_PROVISIONER_DSN must both be set"), want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitCode(tt.err); got != tt.want {
+				t.Fatalf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
 	}

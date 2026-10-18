@@ -30,6 +30,8 @@ type report struct {
 	CountsBefore counts            `json:"counts_before"`
 	CountsAfter  counts            `json:"counts_after,omitempty"`
 	Kept         bool              `json:"kept,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
+	Verdict      *verdict          `json:"verdict,omitempty"`
 }
 
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
@@ -186,7 +188,23 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 			}
 		}
 	}
-	return nil
+
+	if cfg.thresholds == nil {
+		return nil
+	}
+	v := cfg.thresholds.judge(rep.Runs)
+	rep.Profile, rep.Verdict = cfg.profile, &v
+	if v.Passed {
+		fmt.Printf("%s profile: PASSED\n", cfg.profile)
+		return nil
+	}
+	fmt.Printf("%s profile: FAILED\n", cfg.profile)
+	for _, c := range v.Checks {
+		if !c.Passed {
+			fmt.Printf("  %s: %s %s, limit %s\n", c.Run, c.Name, c.Measured, c.Limit)
+		}
+	}
+	return errMissedThresholds
 }
 
 func firstQueries(ctx context.Context, l load, parts []*participant) (runSummary, error) {
@@ -258,6 +276,9 @@ func writeReport(out *os.Root, rep *report) error {
 	fmt.Fprintf(&b, "# Console load test\n\n")
 	if rep.Label != "" {
 		fmt.Fprintf(&b, "%s\n\n", rep.Label)
+	}
+	if rep.Verdict != nil {
+		fmt.Fprintf(&b, "## Verdict of the %s profile\n\n%s\n", rep.Profile, rep.Verdict.markdown())
 	}
 	fmt.Fprintf(&b, "API %s; a %s contest; query mix cheap/mid/expensive/write %d/%d/%d/%d.\n\n",
 		rep.API, rep.Mode, rep.Mix[KindCheap], rep.Mix[KindMid], rep.Mix[KindExpensive], rep.Mix[KindWrite])
