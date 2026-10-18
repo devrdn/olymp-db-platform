@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type report struct {
@@ -32,6 +33,17 @@ type report struct {
 }
 
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
+	if !cfg.allowLive {
+		live, err := liveContests(ctx, st.core)
+		if err != nil {
+			return err
+		}
+		if live > 0 {
+			return fmt.Errorf("%d contests are running or start within %s, and their participants would share this load "+
+				"(-allow-live-contests runs it anyway)", live, liveHorizon)
+		}
+	}
+
 	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix, Mode: cfg.mode}
 	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
 		return err
@@ -286,4 +298,24 @@ func writeReport(out *os.Root, rep *report) error {
 		b.WriteString(countsTable(rep.CountsBefore, rep.CountsAfter))
 	}
 	return out.WriteFile("report.md", []byte(b.String()), 0o600)
+}
+
+// liveHorizon is how far ahead a published contest counts as live: longer
+// than a run takes, provisioning and teardown included.
+const liveHorizon = 2 * time.Hour
+
+// liveContests counts the contests this command did not create that are
+// running or will start within liveHorizon, whose participants would share
+// the load.
+func liveContests(ctx context.Context, core *pgxpool.Pool) (int, error) {
+	var n int
+	err := core.QueryRow(ctx, `
+		SELECT count(*) FROM contests c
+		WHERE (c.status = 'running' OR c.status = 'published' AND c.starts_at < now() + $3::interval)
+		  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = c.created_by AND left(u.login, $1) = $2)`,
+		len(loginPrefix), loginPrefix, liveHorizon).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count the live contests: %w", err)
+	}
+	return n, nil
 }

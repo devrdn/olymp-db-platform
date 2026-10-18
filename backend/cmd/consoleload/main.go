@@ -87,6 +87,8 @@ type config struct {
 	label   string
 	keep    bool
 	fixture string
+	// allowLive runs even while somebody else's contest is live.
+	allowLive bool
 }
 
 func run(args []string) error {
@@ -170,6 +172,8 @@ func parseFlags(args []string) (config, error) {
 		"a line describing what is being measured, e.g. the Query Runner's limits; printed at the top of the report")
 	flags.BoolVar(&cfg.keep, "keep", false, "leave the fixture in place and write fixture.json for -fixture")
 	flags.StringVar(&cfg.fixture, "fixture", "", "reuse the fixture a -keep run left, instead of creating one")
+	flags.BoolVar(&cfg.allowLive, "allow-live-contests", false,
+		"run even while another contest is running or about to start, whose participants would share the load")
 
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
