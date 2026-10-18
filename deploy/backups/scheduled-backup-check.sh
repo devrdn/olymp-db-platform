@@ -86,8 +86,24 @@ setfiles() { # stamp...: the file names of those sets, one per line
 }
 listing() { (cd "$1" && find . -mindepth 1 -maxdepth 1 ! -name '.*.lock' -printf '%f\n' | LC_ALL=C sort) }
 sorted() { LC_ALL=C sort; }
-complete_count() { find "$1" -maxdepth 1 -type f -name "$DB-*.dump" | wc -l | tr -d ' '; }
+complete_count() { # dir: complete sets in it
+	local d n=0
+	for d in "$1/$DB"-*.dump; do
+		d=${d##*/"$DB"-}
+		if [ -n "$(is_kept "$1" "${d%.dump}")" ]; then n=$((n + 1)); fi
+	done
+	echo "$n"
+}
 metric() { sed -n "s/^$1 //p" "$2" 2>/dev/null || true; }
+newest_dump_stamp() { # dir: the stamp of the newest dump by name
+	local d
+	d=$(find "$1" -maxdepth 1 -name "$DB-*.dump" -printf '%f\n' | LC_ALL=C sort | tail -n1)
+	d=${d#"$DB-"}
+	printf '%s' "${d%.dump}"
+}
+stamp_of_run() { # the BACKUP_STAMP the stub make was last given
+	sed -n 's/^make .* BACKUP_STAMP=\([^ ]*\)$/\1/p' "$STUB_LOG" | tail -n1
+}
 
 # Every configuration value the scripts read, cleared, so each case states
 # its own and nothing leaks from one case into the next.
@@ -196,8 +212,11 @@ check_wrapper() {
 		"$B/scheduled-backup.sh" 2>&1) || fail "a scheduled run succeeds" "$out"
 	expect_contains "runs make backup into the configured directory" "$(cat "$STUB_LOG")" \
 		"-s -C $ROOT backup BACKUP_DIR=$dir"
-	newest=$(find "$dir" -maxdepth 1 -name "$DB-*.dump" -printf '%f\n' | sort | tail -n1)
-	expect_contains "the newest set is the one just taken" "$newest" "$DB-$(date +%Y%m%d)"
+	expect_contains "naming the set in UTC" "$(stamp_of_run)" "$(date -u +%Y%m%d)-"
+	newest=$(stamp_of_run)
+	expect "with a Z" "${newest: -1}" "Z"
+	newest="$DB-$(stamp_of_run).dump"
+	expect "the newest set is the one just taken" "$(newest_dump_stamp "$dir")" "$(stamp_of_run)"
 	expect "rotation followed it" "$(complete_count "$dir")" "2"
 	expect "and left the other files alone" "$(test -f "$dir/notes.txt" && echo kept)" "kept"
 	expect "the new set is readable by its owner only" \
@@ -227,21 +246,25 @@ check_wrapper() {
 	rc=0
 	out=$(STUB_MAKE=dump-only BACKUP_DIR="$dir" "$B/scheduled-backup.sh" 2>&1) || rc=$?
 	expect "a run that leaves no complete set fails" "$((rc != 0))" "1"
-	expect_contains "and says so" "$out" "no complete set"
+	expect_contains "and says so" "$out" "did not leave a complete set"
 
 	clean_env
 	: >"$STUB_LOG"
 	rc=0
-	out=$(BACKUP_DIR="$dir" BACKUP_TEXTFILE_DIR="$tf" BACKUP_MIN_FREE_MB=9000000 "$B/scheduled-backup.sh" 2>&1) || rc=$?
+	expect "before the full-disk case there are two sets or more" "$(($(complete_count "$dir") >= 2))" "1"
+	out=$(BACKUP_DIR="$dir" BACKUP_TEXTFILE_DIR="$tf" BACKUP_KEEP=1 BACKUP_KEEP_DAILY=0 \
+		BACKUP_MIN_FREE_MB=9000000 "$B/scheduled-backup.sh" 2>&1) || rc=$?
 	expect "a disk without room fails the run" "$((rc != 0))" "1"
 	expect_contains "and says how much room it needs" "$out" "free and a run needs"
+	expect_contains "and the command that frees it now" "$out" "BACKUP_KEEP=<n> $B/rotate.sh $dir"
+	expect "a lowered BACKUP_KEEP is applied before the disk is measured" "$(complete_count "$dir")" "1"
 	expect "before make backup runs" "$(cat "$STUB_LOG")" ""
 	expect "and the textfile records the failure" \
 		"$(metric dbcontest_backup_last_run_success "$tf/dbcontest_backup.prom")" "0"
 
 	clean_env
 	(flock 9 && sleep 5) 9>"$dir/.scheduled-backup.lock" &
-	sleep 0.5
+	while flock -n "$dir/.scheduled-backup.lock" true; do sleep 0.05; done
 	rc=0
 	out=$(BACKUP_DIR="$dir" timeout 3 "$B/scheduled-backup.sh" 2>&1) || rc=$?
 	expect "a second run while one is going fails at once" "$((rc != 0 && rc != 124))" "1"
@@ -254,20 +277,14 @@ check_wrapper() {
 	mkdir -p "$t/remote-rsync"
 	out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync BACKUP_OFFHOST_TARGET="$t/remote-rsync" \
 		"$B/scheduled-backup.sh" 2>&1) || fail "a run with an rsync copy succeeds" "$out"
-	newest=$(find "$dir" -maxdepth 1 -name "$DB-*.dump" -printf '%f\n' | sort | tail -n1)
-	newest=${newest#"$DB-"}
-	newest=${newest%.dump}
-	expect "rsync copies exactly the new set" "$(listing "$t/remote-rsync")" "$(setfiles "$newest" | sorted)"
+	expect "rsync copies exactly the new set" "$(listing "$t/remote-rsync")" "$(setfiles "$(stamp_of_run)" | sorted)"
 	expect_lacks "without printing the target" "$out" "$t/remote-rsync"
 
 	clean_env
 	mkdir -p "$t/remote-rclone"
 	out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rclone BACKUP_OFFHOST_TARGET="$t/remote-rclone" \
 		"$B/scheduled-backup.sh" 2>&1) || fail "a run with an rclone copy succeeds" "$out"
-	newest=$(find "$dir" -maxdepth 1 -name "$DB-*.dump" -printf '%f\n' | sort | tail -n1)
-	newest=${newest#"$DB-"}
-	newest=${newest%.dump}
-	expect "rclone copies exactly the new set" "$(listing "$t/remote-rclone")" "$(setfiles "$newest" | sorted)"
+	expect "rclone copies exactly the new set" "$(listing "$t/remote-rclone")" "$(setfiles "$(stamp_of_run)" | sorted)"
 
 	clean_env
 	rc=0
@@ -289,7 +306,66 @@ check_wrapper() {
 		env BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync "$B/scheduled-backup.sh"
 	refused "a bad rotation count is refused" "BACKUP_KEEP=0 is not" \
 		env BACKUP_DIR="$dir" BACKUP_KEEP=0 "$B/scheduled-backup.sh"
+	local target
+	for target in 'backup:pa55word@nas:/srv/dbcontest' 'rsync://backup:pa55word@nas/dbcontest' '-e pa55word'; do
+		rc=0
+		out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync BACKUP_OFFHOST_TARGET="$target" "$B/scheduled-backup.sh" 2>&1) || rc=$?
+		expect "an rsync target carrying a password is refused: $target" "$((rc != 0))" "1"
+		expect_contains "an rsync target carrying a password or an option is refused" "$out" "BACKUP_OFFHOST_TARGET is refused"
+		expect_lacks "without echoing it" "$out" "pa55word"
+	done
+	for target in ':s3,access_key_id=AK,secret_access_key=pa55word:bucket' 's3,secret_access_key=pa55word:bucket' 'remote{pa55word}:x'; do
+		rc=0
+		out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rclone BACKUP_OFFHOST_TARGET="$target" "$B/scheduled-backup.sh" 2>&1) || rc=$?
+		expect "an rclone connection string is refused: $target" "$((rc != 0))" "1"
+		expect_contains "an rclone target that is not a named remote or a path is refused" "$out" "BACKUP_OFFHOST_TARGET is refused"
+		expect_lacks "without echoing it" "$out" "pa55word"
+	done
 	expect "all before make backup runs" "$(cat "$STUB_LOG")" ""
+
+	echo "Which set a run calls its own"
+	local fut="$t/future" remote="$t/remote-future"
+	mkdir -p "$fut" "$remote"
+	mkset "$fut" 20991231-235959Z
+	clean_env
+	rc=0
+	out=$(STUB_MAKE=dump-only BACKUP_DIR="$fut" BACKUP_TEXTFILE_DIR="$tf" BACKUP_OFFHOST=rsync \
+		BACKUP_OFFHOST_TARGET="$remote" "$B/scheduled-backup.sh" 2>&1) || rc=$?
+	expect "a set dated later than now does not pass for this run's" "$((rc != 0))" "1"
+	expect "the textfile records the failure" \
+		"$(metric dbcontest_backup_last_run_success "$tf/dbcontest_backup.prom")" "0"
+	expect "and nothing is copied off the host" "$(listing "$remote")" ""
+	clean_env
+	out=$(BACKUP_DIR="$fut" BACKUP_KEEP=1 BACKUP_KEEP_DAILY=0 BACKUP_OFFHOST=rsync \
+		BACKUP_OFFHOST_TARGET="$remote" "$B/scheduled-backup.sh" 2>&1) || fail "a run beside a future-dated set succeeds" "$out"
+	expect "it copies the set it wrote, not the newest by name" "$(listing "$remote")" "$(setfiles "$(stamp_of_run)" | sorted)"
+	expect "and rotation keeps the set it wrote" "$(is_kept "$fut" "$(stamp_of_run)")" "kept"
+
+	echo "A symlinked backup directory"
+	mkdir -p "$t/disk/sets"
+	ln -s "$t/disk/sets" "$t/sets-link"
+	for s in 20260101-033000 20260102-033000 20260103-033000; do mkset "$t/disk/sets" "$s"; done
+	clean_env
+	out=$(BACKUP_DIR="$t/sets-link" BACKUP_KEEP=2 BACKUP_KEEP_DAILY=0 "$B/scheduled-backup.sh" 2>&1) ||
+		fail "a run into a symlinked directory succeeds" "$out"
+	expect "and rotates it" "$(complete_count "$t/disk/sets")" "2"
+	expect "the link itself is left as it was" "$(test -L "$t/sets-link" && echo link)" "link"
+
+	echo "A run stopped by systemd"
+	clean_env
+	rm -f "$tf/dbcontest_backup.prom"
+	: >"$STUB_LOG"
+	setsid env STUB_MAKE=hang BACKUP_DIR="$dir" BACKUP_TEXTFILE_DIR="$tf" "$B/scheduled-backup.sh" >"$t/term.log" 2>&1 &
+	local pid=$!
+	until grep -q hanging "$STUB_LOG"; do sleep 0.05; done
+	kill -TERM -- "-$pid"
+	wait "$pid" 2>/dev/null || true
+	expect "still writes the textfile, as a failure" \
+		"$(metric dbcontest_backup_last_run_success "$tf/dbcontest_backup.prom")" "0"
+	expect_contains "and says the run failed" "$(cat "$t/term.log")" "scheduled backup FAILED"
+}
+is_kept() { # dir stamp
+	[ -f "$1/$DB-$2.dump" ] && [ -f "$1/covers-$2.tar.gz" ] && [ -f "$1/game-uploads-$2.tar.gz" ] && echo kept
 }
 
 # The real target, against the fake Compose: nothing it reaches is real.
@@ -301,18 +377,17 @@ finals() { # dir: files named as a set's pieces, whatever their state
 	find "$1" -maxdepth 1 \( -name "$DB-*.dump" -o -name 'covers-*.tar.gz' -o -name 'game-uploads-*.tar.gz' \) -printf '%f\n'
 }
 partials() { find "$1" -maxdepth 1 -name '.*.partial' -printf '%f\n'; }
-killed_backup() { # dir, then the fake's setting: the target stopped mid-run
-	local pid
-	setsid env "$2" bash -c "$(declare -f real_backup); ROOT=$ROOT FAKE_COMPOSE=$FAKE_COMPOSE real_backup $1" \
-		>/dev/null 2>&1 &
+generic() { sed -E -e 's/-[0-9]{8}-[0-9]{6}Z/-T/' -e 's/\.[0-9]+\.partial$/.P.partial/' | sorted; }
+stopped_backup() { # signal dir setting: the target stopped mid-run, its staging in dir/../tmp-<dir>
+	local pid tmp="$2.tmp"
+	mkdir -p "$tmp"
+	setsid env "$3" TMPDIR="$tmp" bash -c "$(declare -f real_backup); ROOT=$ROOT FAKE_COMPOSE=$FAKE_COMPOSE real_backup $2" \
+		>"$2.log" 2>&1 &
 	pid=$!
-	for _ in $(seq 50); do
-		[ -n "$(partials "$1")" ] && break
-		sleep 0.1
-	done
-	sleep 0.5
-	kill -TERM -- "-$pid" 2>/dev/null || true
+	until grep -q "^hanging" "$FAKE_LOG" 2>/dev/null; do sleep 0.05; done
+	kill "-$1" -- "-$pid" 2>/dev/null || true
 	wait "$pid" 2>/dev/null || true
+	: >"$FAKE_LOG"
 }
 
 check_make_backup() {
@@ -322,7 +397,8 @@ check_make_backup() {
 	mkdir -p "$t/volumes/covers" "$t/volumes/uploads"
 	printf 'a cover' >"$t/volumes/covers/cover-a"
 	printf 'an upload' >"$t/volumes/uploads/upload-1"
-	export FAKE_VOLUMES="$t/volumes"
+	export FAKE_VOLUMES="$t/volumes" FAKE_LOG="$t/fake.log"
+	: >"$FAKE_LOG"
 
 	mkdir -p "$t/m1"
 	rc=0
@@ -332,11 +408,25 @@ check_make_backup() {
 	stamp=${dump#"$DB-"}
 	stamp=${stamp%.dump}
 	expect "and writes one set under the names the restores read" "$(listing "$t/m1")" "$(setfiles "$stamp" | sorted)"
+	expect "stamped in UTC" "$(grep -cE "^$(date -u +%Y%m%d)-[0-9]{6}Z\$" <<<"$stamp")" "1"
 	expect "every file of it readable by its owner only, whatever the caller's umask" \
 		"$(cd "$t/m1" && stat -c '%a' -- * | sort -u)" "600"
 	expect "the archives hold the volumes" \
 		"$(tar -xzOf "$t/m1/covers-$stamp.tar.gz" ./cover-a; tar -xzOf "$t/m1/game-uploads-$stamp.tar.gz" ./upload-1)" \
 		"a coveran upload"
+
+	mkdir -p "$t/m1b"
+	out=$(BACKUP_STAMP=20261102-091500Z real_backup "$t/m1b" 2>&1) || fail "make backup with BACKUP_STAMP succeeds" "$out"
+	expect "BACKUP_STAMP names the set" "$(listing "$t/m1b")" "$(setfiles 20261102-091500Z | sorted)"
+	printf 'the earlier dump' >"$t/m1b/$DB-20261102-091500Z.dump"
+	refused "a set already under that stamp is not overwritten" "already exists" \
+		env BACKUP_STAMP=20261102-091500Z /usr/bin/make -s -C "$ROOT" backup COMPOSE="$FAKE_COMPOSE" \
+		ENV_FILE="$ROOT/deploy/.env" CORE_DB_PASSWORD=unused BACKUP_DIR="$t/m1b"
+	expect "the earlier file is untouched" "$(cat "$t/m1b/$DB-20261102-091500Z.dump")" "the earlier dump"
+	expect "and nothing unfinished is left" "$(partials "$t/m1b")" ""
+	refused "a BACKUP_STAMP that is not a timestamp is refused" "is not a timestamp" \
+		env BACKUP_STAMP='../x' /usr/bin/make -s -C "$ROOT" backup COMPOSE="$FAKE_COMPOSE" \
+		ENV_FILE="$ROOT/deploy/.env" CORE_DB_PASSWORD=unused BACKUP_DIR="$t/m1b"
 
 	mkdir -p "$t/m2"
 	rc=0
@@ -355,23 +445,29 @@ check_make_backup() {
 	out=$(FAKE_CP=fail-uploads real_backup "$t/m4" 2>&1) || rc=$?
 	expect "an unreadable volume fails make backup" "$((rc != 0))" "1"
 	expect "keeping the checked dump and covers, which are no set without the uploads" \
-		"$(finals "$t/m4" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/' | sorted)" "$(printf '%s\n' covers-T.tar.gz "$DB-T.dump" | sorted)"
+		"$(finals "$t/m4" | generic)" "$(printf '%s\n' covers-T.tar.gz "$DB-T.dump" | sorted)"
 	expect "and no unfinished file" "$(partials "$t/m4")" ""
 
 	mkdir -p "$t/m5"
-	killed_backup "$t/m5" FAKE_DUMP=hang
-	expect "a backup killed during the dump leaves no file named as a set's" "$(finals "$t/m5")" ""
-	expect "only its unfinished dump" "$(partials "$t/m5" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/')" ".$DB-T.dump.partial"
+	stopped_backup TERM "$t/m5" FAKE_CP=hang-uploads
+	expect "a backup stopped (SIGTERM) while copying the uploads leaves nothing in the directory" "$(listing "$t/m5")" ""
+	expect "nor in TMPDIR" "$(listing "$t/m5.tmp")" ""
+	expect_contains "and says so" "$(cat "$t/m5.log")" "make backup was stopped"
 
 	mkdir -p "$t/m6"
-	killed_backup "$t/m6" FAKE_CP=hang-uploads
-	expect "a backup killed while copying the uploads leaves no file named as a set's" "$(finals "$t/m6")" ""
-	expect "only its unfinished files" "$(partials "$t/m6" | sed -E 's/-[0-9]{8}-[0-9]{6}/-T/' | sorted)" \
-		"$(printf '%s\n' ".$DB-T.dump.partial" .covers-T.tar.gz.partial | sorted)"
-	out=$("$B/rotate.sh" "$t/m6" 2>&1) || fail "rotation beside unfinished files succeeds" "$out"
+	stopped_backup KILL "$t/m6" FAKE_DUMP=hang
+	expect "a backup killed outright during the dump leaves no file named as a set's" "$(finals "$t/m6")" ""
+	expect "only its unfinished dump" "$(partials "$t/m6" | generic)" ".$DB-T.dump.P.partial"
+
+	mkdir -p "$t/m7"
+	stopped_backup KILL "$t/m7" FAKE_CP=hang-uploads
+	expect "a backup killed outright while copying the uploads leaves no file named as a set's" "$(finals "$t/m7")" ""
+	expect "only its unfinished files" "$(partials "$t/m7" | generic)" \
+		"$(printf '%s\n' ".$DB-T.dump.P.partial" .covers-T.tar.gz.P.partial | sorted)"
+	out=$("$B/rotate.sh" "$t/m7" 2>&1) || fail "rotation beside unfinished files succeeds" "$out"
 	expect_contains "which rotation does not count" "$out" "kept 0 complete sets"
 	expect_contains "names as unfinished" "$out" "left alone, unfinished: .$DB-"
-	expect "and leaves in place" "$(partials "$t/m6" | wc -l | tr -d ' ')" "2"
+	expect "and leaves in place" "$(partials "$t/m7" | wc -l | tr -d ' ')" "2"
 }
 
 calendar_step() { # expression: seconds between its next two elapses
@@ -414,9 +510,14 @@ check_schedule() {
 	expect "the contest drop-in replaces the daily schedule rather than adding to it" \
 		"$(grep -c '^OnCalendar=$' "$ROOT/deploy/systemd/contest-window.conf")" "1"
 
-	: >"$STUB_LOG"
 	mkdir -p "$etc"
+	chown root:root "$ROOT"
+	refused "install does not choose root on its own" "install root" \
+		env SYSTEMD_DIR="$etc" "$B/schedule.sh" install
+	expect "and installs nothing" "$(listing "$etc")" ""
+	: >"$STUB_LOG"
 	out=$(SYSTEMD_DIR="$etc" "$B/schedule.sh" install deploy 2>&1) || fail "install succeeds" "$out"
+	expect_contains "install names the schedule it leaves on" "$out" "daily at 03:30"
 	expect "install puts both units in place" \
 		"$(listing "$etc")" "$(printf '%s\n' dbcontest-backup.service dbcontest-backup.timer)"
 	expect_contains "and enables the timer" "$(cat "$STUB_LOG")" "enable --now dbcontest-backup.timer"
@@ -430,6 +531,8 @@ check_schedule() {
 	out=$(SYSTEMD_DIR="$etc" BACKUP_DIR="$t/w" "$B/schedule.sh" status 2>&1) || fail "status succeeds" "$out"
 	expect_contains "status names the contest window" "$out" "contest window"
 	expect_contains "and the newest complete set" "$out" "newest complete set: "
+	out=$(SYSTEMD_DIR="$etc" "$B/schedule.sh" install deploy 2>&1) || fail "a second install succeeds" "$out"
+	expect_contains "and a second install says the contest window is still on" "$out" "contest window"
 
 	: >"$STUB_LOG"
 	out=$(SYSTEMD_DIR="$etc" "$B/schedule.sh" daily 2>&1) || fail "switching back to daily succeeds" "$out"
@@ -439,8 +542,11 @@ check_schedule() {
 	expect_contains "status names the daily schedule" "$out" "mode: daily"
 
 	out=$("$B/schedule.sh" cron deploy 2>&1) || fail "cron succeeds" "$out"
-	expect "cron gives the daily line, active" \
-		"$(grep -c "^30 3 \* \* \* deploy $B/scheduled-backup.sh" <<<"$out")" "1"
+	local at
+	at=$(oncalendar "$units/dbcontest-backup.timer")
+	at=${at#'*-*-* '}
+	expect "cron gives the daily line at the timer's own time, active" \
+		"$(grep -c "^$((10#$(cut -d: -f2 <<<"$at"))) $((10#$(cut -d: -f1 <<<"$at"))) \* \* \* deploy $B/scheduled-backup.sh" <<<"$out")" "1"
 	expect "and the contest line, commented out" \
 		"$(grep -c "^#\*/15 \* \* \* \* deploy $B/scheduled-backup.sh" <<<"$out")" "1"
 }
@@ -455,12 +561,12 @@ inside() {
 	cat >"$t/bin/make" <<-'EOF'
 		#!/usr/bin/env bash
 		set -euo pipefail
-		echo "make $*" >>"$STUB_LOG"
+		echo "make $* BACKUP_STAMP=${BACKUP_STAMP:-}" >>"$STUB_LOG"
 		dir=
 		for a in "$@"; do case $a in BACKUP_DIR=*) dir=${a#BACKUP_DIR=} ;; esac; done
-		sleep 1
-		stamp=$(date +%Y%m%d-%H%M%S)
+		stamp=${BACKUP_STAMP:?the scheduled run names the set}
 		case ${STUB_MAKE:-complete} in
+		hang) echo hanging >>"$STUB_LOG"; sleep 60 ;;
 		fail) echo "pg_dump: error: connection to server failed" >&2; exit 2 ;;
 		dump-only) printf dump >"$dir/dbcontest_core-$stamp.dump" ;;
 		complete)
@@ -480,14 +586,14 @@ inside() {
 			case ${FAKE_DUMP:-ok} in
 			ok) printf 'PGDMP a custom-format dump' ;;
 			garbage) printf 'not a dump' ;;
-			hang) printf 'PGDMP the first half'; sleep 60 ;;
+			hang) printf 'PGDMP the first half'; echo hanging >>"$FAKE_LOG"; sleep 60 ;;
 			fail) echo "pg_dump: error: connection to server failed" >&2; exit 1 ;;
 			esac ;;
 		cp)
 			src=${2#api:}
 			name=$(basename "${src%/.}")
 			case ${FAKE_CP:-}:$name in
-			hang-uploads:uploads) sleep 60 ;;
+			hang-uploads:uploads) echo hanging >>"$FAKE_LOG"; sleep 60 ;;
 			fail-uploads:uploads) echo "no such directory: $src" >&2; exit 1 ;;
 			esac
 			cp -R "$FAKE_VOLUMES/$name/." "$3" ;;
