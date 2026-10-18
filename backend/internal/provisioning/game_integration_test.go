@@ -96,6 +96,84 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	}
 }
 
+// In a read_write contest the first participant to open the panel may have
+// changed their copy already: a table of their own, and a game table altered
+// through a function the organiser offers (SECURITY DEFINER runs as the
+// table's owner, so it can do what the participant's role cannot). Every
+// participant must still be shown the game as it was built.
+func TestAScriptSavedInTheCoreDatabaseIsDescribedAsBuiltWhateverTheFirstParticipantDid(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if !gamedbtest.Configured() {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, people := contestFor(t, t.Context(), 1)
+	if _, err := testPool.Exec(t.Context(), `
+		INSERT INTO contest_sql_policies (contest_id, mode, writable_tables, allow_own_tables)
+		VALUES ($1, 'read_write', '{evidence}', true)`, contest.ID); err != nil {
+		t.Fatalf("make the contest read_write: %v", err)
+	}
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
+		CREATE TABLE suspects (id serial PRIMARY KEY, name text NOT NULL);
+		CREATE TABLE evidence (id serial PRIMARY KEY, note text);
+		CREATE FUNCTION tamper() RETURNS void LANGUAGE sql SECURITY DEFINER
+			AS $$ ALTER TABLE evidence ADD COLUMN planted text $$;
+	`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+	if built, err := games.Build(t.Context(), time.Minute); err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("build: %v, finished as %q: %s", err, built.Status, built.BuildError)
+	}
+
+	game, err := repo.Game(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the built game: %v", err)
+	}
+	copied, err := newService(cluster).Ensure(t.Context(), game, people[0])
+	if err != nil {
+		t.Fatalf("make the participant's copy: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(copied) })
+
+	writer := gamedbtest.Connect(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), copied)
+	for _, statement := range []string{`CREATE TABLE work.mine (x int)`, `SELECT tamper()`} {
+		if _, err := writer.Exec(t.Context(), statement); err != nil {
+			t.Fatalf("the participant could not run %s: %v", statement, err)
+		}
+	}
+	_ = writer.Close(t.Context())
+
+	schema, err := provisioning.NewSchemaReader(repo, cluster).Schema(t.Context(), game, copied)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	got := map[string][]string{}
+	for _, table := range schema.Tables {
+		for _, column := range table.Columns {
+			got[table.Name] = append(got[table.Name], column.Name)
+		}
+	}
+	want := map[string][]string{"evidence": {"id", "note"}, "suspects": {"id", "name"}}
+	if len(got) != len(want) || strings.Join(got["evidence"], ",") != "id,note" ||
+		strings.Join(got["suspects"], ",") != "id,name" {
+		t.Fatalf("the panel describes %v, want the game as built: %v", got, want)
+	}
+}
+
 // A restore brings the row back as 'ready' without its database; the check
 // must see that through the real catalogue and the real query.
 func TestAScriptSavedInTheCoreDatabaseWhoseDatabaseIsGoneIsFoundByTheTemplateCheck(t *testing.T) {

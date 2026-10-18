@@ -518,6 +518,9 @@ type templateStore struct {
 	templateErr error
 	policyErr   error
 	finished    []finish
+	// described records each SaveSchema; describeErr makes it fail.
+	described   []described
+	describeErr error
 	uploads     map[uuid.UUID]provisioning.Upload
 	tableData   map[uuid.UUID]provisioning.TableData
 	// deleteRowErr, when set, is what DeleteTableDataRow answers. The fake
@@ -565,6 +568,23 @@ func (directly) Do(ctx context.Context, fn func(context.Context) error) error { 
 type finish struct {
 	version int
 	err     string
+}
+
+// described is one SaveSchema call, and how many builds had finished by then.
+type described struct {
+	version       int
+	schema        provisioning.Schema
+	finishedFirst int
+}
+
+func (s *templateStore) SaveSchema(_ context.Context, _ uuid.UUID, version int, schema provisioning.Schema) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.describeErr != nil {
+		return s.describeErr
+	}
+	s.described = append(s.described, described{version: version, schema: schema, finishedFirst: len(s.finished)})
+	return nil
 }
 
 func (s *templateStore) SaveScript(_ context.Context, contestID uuid.UUID, database, script string) (provisioning.Template, error) {
@@ -1036,6 +1056,11 @@ type buildCluster struct {
 	tableData     map[string]string
 	tableDataFail error
 	dropped       []string
+	// schema is what ReadSchema describes, schemaErr makes it fail, and
+	// readSchemaOf records the databases it was asked about.
+	schema       provisioning.Schema
+	schemaErr    error
+	readSchemaOf []string
 	// missing names the databases MissingDatabases reports absent; every
 	// other name exists. lookups records each name it was asked about, and
 	// lookupErr makes it fail.
@@ -1076,6 +1101,13 @@ func (c *buildCluster) LoadTableData(_ context.Context, database, table string, 
 	}
 	c.tableData[database+"."+table] = string(body)
 	return nil
+}
+
+func (c *buildCluster) ReadSchema(_ context.Context, database string) (provisioning.Schema, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readSchemaOf = append(c.readSchemaOf, database)
+	return c.schema, c.schemaErr
 }
 
 func (c *buildCluster) Drop(_ context.Context, name string) error {
