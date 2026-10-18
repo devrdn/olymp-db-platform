@@ -2,8 +2,10 @@
 // Prometheus by default, a periodic log digest, or nothing. The call site is
 // the same for every backend, so no handler knows which one is active.
 //
-// It does not mount the scrape endpoint; internal/api does, on the internal
-// router.
+// It also holds the sets a single service reports (the reclaim sweep's, the
+// Query Runner's), so the services share one registry type. It does not mount
+// the scrape endpoint: internal/api does, on the internal router, and
+// cmd/queryrunner on its own internal listener.
 package metrics
 
 import (
