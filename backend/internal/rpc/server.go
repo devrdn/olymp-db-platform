@@ -69,16 +69,34 @@ const MaxPayloadBytes = 16 << 20
 type Server struct {
 	pb.UnimplementedQueryRunnerServer
 
-	runner queryrunner.Executor
-	limits queryrunner.Limits
-	log    *slog.Logger
+	runner  queryrunner.Executor
+	limits  queryrunner.Limits
+	log     *slog.Logger
+	cutOffs CutOffObserver
 }
+
+// CutOffObserver is told when the server cuts an answer to the budget, with
+// queryrunner.CutOffRendered. It must be safe for concurrent use.
+type CutOffObserver interface {
+	CutOff(limit string)
+}
+
+type noCutOffs struct{}
+
+func (noCutOffs) CutOff(string) {}
 
 // NewServer adapts an executor to the service. It takes the limits because
 // only this layer knows the rendered size; the runner's count over Go values
 // is a floor, not a bound.
 func NewServer(runner queryrunner.Executor, limits queryrunner.Limits, log *slog.Logger) *Server {
-	return &Server{runner: runner, limits: limits, log: log}
+	return &Server{runner: runner, limits: limits, log: log, cutOffs: noCutOffs{}}
+}
+
+// WithCutOffs reports each answer this server cuts to o. Call it before
+// serving.
+func (s *Server) WithCutOffs(o CutOffObserver) *Server {
+	s.cutOffs = o
+	return s
 }
 
 // Register attaches the service to a gRPC server.
@@ -130,6 +148,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		// ceiling the last row may not cross.
 		if spent += weigh(row); spent > s.limits.MaxBytes {
 			answer.Truncated = ptr(true)
+			s.cutOffs.CutOff(queryrunner.CutOffRendered)
 			break
 		}
 		answer.Rows = append(answer.Rows, row)
