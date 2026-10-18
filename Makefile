@@ -685,11 +685,16 @@ game-check: require-env ## List contests whose built template is missing from th
 # them first (`make run` and `make runner`, or the deployed stack) — so the
 # same command measures a laptop or the olympiad's own hardware. It creates
 # its own contest, participants and database copies and removes all of them
-# at the end; `make loadtest ARGS=sweep` removes what an interrupted run left.
+# at the end; `make loadtest ARGS=sweep` lists what interrupted runs left,
+# and `ARGS="sweep -yes"` removes the runs that are over.
 #
 #   make loadtest ARGS="-source-template game_tpl_c50372dca6388 \
 #       -watch-pid api=$$(lsof -ti tcp:8080 -sTCP:LISTEN) \
 #       -watch-container game=db-contest-pg-game-1"
+#
+# `ARGS="-profile beta -source-template …"` is the pass/fail test before a
+# contest; backend/README.md ("Load testing before a contest") says how to run
+# it against a server.
 #
 # It is given the provisioner's credentials, as the API is, because it makes
 # the copies through the product's own provisioning code; it never holds the

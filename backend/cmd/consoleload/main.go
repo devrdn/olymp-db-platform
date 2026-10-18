@@ -14,16 +14,25 @@
 // are ordinary accounts with random passwords kept only in memory, signing in
 // through /auth/login. It writes into the installation's own databases and
 // removes everything it created at the end, except the sign-in limiter's
-// counter, which expires on its own. `consoleload sweep` cleans up a killed
-// run by login prefix.
+// counter, which expires on its own. `consoleload sweep` lists what killed
+// runs left, by run, found by the exact logins setup makes, and `sweep -yes`
+// removes the runs that are past their planned end. Nothing is removed that
+// the checks in cleanup.go do not find to be the harness's. It will not start
+// while another contest is live, since its participants would share the load.
+//
+// A run only measures, unless -profile names a profile: then every run is
+// judged against the profile's thresholds, and a miss with nothing else
+// failing exits with status 2.
+// backend/README.md says how to run the beta profile against a server.
 //
 // Usage:
 //
 //	consoleload -source-template game_tpl_x [flags]   set up, provision, load, tear down
+//	consoleload -profile beta -source-template ...    the same, judged against the beta's bar
 //	consoleload -keep ...                              leave the fixture for another run
 //	consoleload -fixture DIR/fixture.json [flags]      reuse a kept fixture, then tear it down
 //	consoleload -fixture ... -copy-setting name=value  try a cluster setting on the copies only
-//	consoleload sweep                                  remove whatever an interrupted run left
+//	consoleload sweep [-yes] [-run id]                 list, and with -yes remove, what interrupted runs left
 //
 // It reads CORE_DB_DSN and GAME_PROVISIONER_DSN (the provisioning role on the
 // game cluster) — the same two the API itself is given. `make loadtest` passes
@@ -42,12 +51,30 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/contests"
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "consoleload: %v\n", err)
-		os.Exit(1)
+	}
+	os.Exit(exitCode(err))
+}
+
+// exitCode is 2 when the runs were measured and missed their profile's
+// thresholds and nothing else failed, and 1 for any other failure, so a
+// script can tell a slow server from a broken run. errMissedThresholds joined
+// with anything else, a failed teardown say, is the latter.
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case err == errMissedThresholds:
+		return 2
+	default:
+		return 1
 	}
 }
 
@@ -68,6 +95,8 @@ type config struct {
 	cooldown time.Duration
 	mix      mix
 	seed     int64
+	// mode is the fixture contest's SQL access mode.
+	mode string
 
 	headroom     int
 	workers      int
@@ -83,6 +112,13 @@ type config struct {
 	label   string
 	keep    bool
 	fixture string
+	// allowLive runs even while somebody else's contest is live.
+	allowLive bool
+
+	// profile names the profile that set this run up; thresholds, its bar,
+	// is nil for a run that is only measured.
+	profile    string
+	thresholds *thresholds
 }
 
 func run(args []string) error {
@@ -123,6 +159,9 @@ func parseFlags(args []string) (config, error) {
 	flags := flag.NewFlagSet("consoleload", flag.ContinueOnError)
 	cfg := config{}
 
+	profileName := flags.String("profile", "",
+		"a named run that sets the flags it names unless given here, and judges the result: "+
+			strings.Join(sortedKeys(profiles), ", "))
 	flags.StringVar(&cfg.api, "api", envOr("LOADTEST_API", "http://localhost:8080"),
 		"base URL of the API, without /api/v1")
 	flags.StringVar(&cfg.sourceTemplate, "source-template", "",
@@ -139,7 +178,10 @@ func parseFlags(args []string) (config, error) {
 	flags.DurationVar(&cfg.burstWindow, "burst-window", time.Second, "every participant presses Run within this window")
 
 	flags.DurationVar(&cfg.cooldown, "cooldown", 30*time.Second, "pause between runs")
-	mixFlag := flags.String("mix", "50,30,20", "percentages of cheap, mid and expensive queries")
+	mixFlag := flags.String("mix", "50,30,20",
+		"percentages of cheap, mid and expensive queries, and of writes when a fourth is given")
+	flags.StringVar(&cfg.mode, "mode", contests.ModeReadOnly,
+		"the test contest's SQL access: read_only, or read_write with "+writableTable+" writable")
 	flags.Int64Var(&cfg.seed, "seed", 1, "random seed, so two runs send the same sequence of queries")
 
 	// The pool tender's own defaults and variables.
@@ -163,12 +205,20 @@ func parseFlags(args []string) (config, error) {
 		"a line describing what is being measured, e.g. the Query Runner's limits; printed at the top of the report")
 	flags.BoolVar(&cfg.keep, "keep", false, "leave the fixture in place and write fixture.json for -fixture")
 	flags.StringVar(&cfg.fixture, "fixture", "", "reuse the fixture a -keep run left, instead of creating one")
+	flags.BoolVar(&cfg.allowLive, "allow-live-contests", false,
+		"run even while another contest is running or about to start, whose participants would share the load")
 
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
 
 	var err error
+	if *profileName != "" {
+		if cfg.thresholds, err = applyProfile(flags, *profileName); err != nil {
+			return config{}, err
+		}
+		cfg.profile = *profileName
+	}
 	if cfg.participants, err = intList(*participants); err != nil {
 		return config{}, fmt.Errorf("-participants: %w", err)
 	}
@@ -195,6 +245,10 @@ func parseFlags(args []string) (config, error) {
 	switch {
 	case cfg.fixture == "" && cfg.sourceTemplate == "":
 		return config{}, errors.New("-source-template is required unless -fixture reuses a kept fixture")
+	case cfg.mode != contests.ModeReadOnly && cfg.mode != contests.ModeReadWrite:
+		return config{}, fmt.Errorf("-mode: %q is neither %s nor %s", cfg.mode, contests.ModeReadOnly, contests.ModeReadWrite)
+	case cfg.mix[KindWrite] > 0 && cfg.mode != contests.ModeReadWrite:
+		return config{}, errors.New("-mix: writes need -mode read_write, or every one of them is refused")
 	case cfg.thinkMin <= 0 || cfg.thinkMax < cfg.thinkMin:
 		return config{}, errors.New("-think-min must be positive and no larger than -think-max")
 	case cfg.burstRounds < 1:

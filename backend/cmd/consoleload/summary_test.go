@@ -52,3 +52,22 @@ func TestSummariseCountsRefusalsAndKeepsThemOutOfAnswered(t *testing.T) {
 		t.Errorf("statement max = %v ms, want 800", s.Statement.Max)
 	}
 }
+
+func TestSummariseSortsEveryQueryIntoOneClass(t *testing.T) {
+	outcomes := []outcome{
+		{Status: 200},
+		{Status: 200, Err: "unreadable answer: unexpected end of JSON input"},
+		{Status: 400, Code: "query_database_error"},
+		{Status: 429, Code: "query_too_often"},
+		{Status: 500, Code: "internal_error"},
+		{Status: 503, Code: "query_busy"},
+		{Status: 504, Code: "query_timed_out"},
+		{Err: "connection reset by peer"},
+	}
+	s := summarise("steady-8", shapeSteady, 8, time.Time{}, time.Time{}, outcomes)
+
+	got := [4]int{s.Queries - s.Refused - s.ServerErrors - s.Errors, s.Refused, s.ServerErrors, s.Errors}
+	if want := [4]int{1, 2, 3, 2}; got != want {
+		t.Fatalf("answered, refused, server errors, errors = %v, want %v", got, want)
+	}
+}

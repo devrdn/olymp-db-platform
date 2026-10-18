@@ -20,9 +20,17 @@ const (
 	KindMid Kind = "mid"
 	// KindExpensive is an aggregate over the largest table, read in full.
 	KindExpensive Kind = "expensive"
+	// KindWrite rewrites rows of writableTable in place, so a read-write
+	// contest's queries run as the writer, check the disk quota and commit
+	// without the data changing between runs.
+	KindWrite Kind = "write"
 )
 
-var kinds = []Kind{KindCheap, KindMid, KindExpensive}
+var kinds = []Kind{KindCheap, KindMid, KindExpensive, KindWrite}
+
+// writableTable is the one game table a read-write fixture lets its
+// participants write to, as an organiser lets them mark evidence.
+const writableTable = "evidence"
 
 var templates = map[Kind][]func(r *rand.Rand) string{
 	KindCheap: {
@@ -64,16 +72,26 @@ FROM calls c JOIN persons p ON p.id = c.caller_id
 WHERE c.duration_s > %d GROUP BY p.role`, r.IntN(300))
 		},
 	},
+	KindWrite: {
+		func(r *rand.Rand) string {
+			return fmt.Sprintf(`UPDATE %s SET description = description WHERE id = %d`, writableTable, 1+r.IntN(150000))
+		},
+		func(r *rand.Rand) string {
+			return fmt.Sprintf(`UPDATE %s SET description = description WHERE case_id = %d`, writableTable, 1+r.IntN(480))
+		},
+	},
 }
 
 type mix map[Kind]int
 
+// parseMix reads the shares of cheap, mid and expensive queries, and of
+// writes when a fourth is given.
 func parseMix(s string) (mix, error) {
 	parts := strings.Split(s, ",")
-	if len(parts) != len(kinds) {
-		return nil, fmt.Errorf("want %d percentages (cheap, mid, expensive), got %q", len(kinds), s)
+	if len(parts) != len(kinds) && len(parts) != len(kinds)-1 {
+		return nil, fmt.Errorf("want 3 or 4 percentages (cheap, mid, expensive[, write]), got %q", s)
 	}
-	out := mix{}
+	out := mix{KindWrite: 0}
 	total := 0
 	for i, part := range parts {
 		n, err := strconv.Atoi(strings.TrimSpace(part))

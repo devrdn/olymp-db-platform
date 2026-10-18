@@ -21,13 +21,22 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// loginPrefix starts every login this command creates; `consoleload sweep`
-// finds leftovers by it.
+// loginPrefix starts every login this command creates. Removal trusts the
+// exact shapes below, never the prefix alone: anybody may name an account
+// loadtest-something.
 const loginPrefix = "loadtest-"
+
+// harnessLogin matches exactly the logins setup makes, loginPrefix, the run's
+// eight hex digits and owner or a participant's number; harnessOwner only the
+// owner's. runLoginLength is the part of a login that names the run.
+const (
+	harnessLogin   = `^loadtest-[0-9a-f]{8}-(owner|p[0-9]{3,})$`
+	harnessOwner   = `^loadtest-[0-9a-f]{8}-owner$`
+	runLoginLength = len(loginPrefix) + 8 + 1
+)
 
 // maintenanceTimeout bounds one statement on the game cluster, sized for
 // CREATE DATABASE … TEMPLATE (CLAUDE.md rule 15).
@@ -37,6 +46,9 @@ type stores struct {
 	core        *pgxpool.Pool
 	game        *pgxpool.Pool
 	provisioner *gamedb.Provisioner
+	// drop removes one game database: the provisioner's Drop, which tests
+	// wrap to stop a teardown halfway.
+	drop func(ctx context.Context, name string) error
 }
 
 func openStores(ctx context.Context, copyStrategy string) (*stores, error) {
@@ -65,7 +77,7 @@ func openStores(ctx context.Context, copyStrategy string) (*stores, error) {
 		game.Close()
 		return nil, err
 	}
-	return &stores{core: core, game: game, provisioner: provisioner}, nil
+	return &stores{core: core, game: game, provisioner: provisioner, drop: provisioner.Drop}, nil
 }
 
 func (s *stores) close() {
@@ -76,10 +88,13 @@ func (s *stores) close() {
 // fixture is everything one run created. It carries no password, so nothing
 // that could sign in is written to disk; a reused fixture gets fresh ones.
 type fixture struct {
-	RunID        string              `json:"run_id"`
-	ContestID    uuid.UUID           `json:"contest_id"`
-	OwnerID      uuid.UUID           `json:"owner_id"`
-	Template     string              `json:"template"`
+	RunID     string    `json:"run_id"`
+	ContestID uuid.UUID `json:"contest_id"`
+	OwnerID   uuid.UUID `json:"owner_id"`
+	Template  string    `json:"template"`
+	// Mode is the contest's SQL access mode; a fixture kept before modes
+	// existed has none and is read-only.
+	Mode         string              `json:"mode,omitempty"`
 	Participants []participantRecord `json:"participants"`
 }
 
@@ -100,12 +115,34 @@ func (f *fixture) userIDs() []uuid.UUID {
 	return ids
 }
 
+func (f *fixture) contestIDs() []uuid.UUID {
+	if f.ContestID == uuid.Nil {
+		return nil
+	}
+	return []uuid.UUID{f.ContestID}
+}
+
 func (f *fixture) registrationIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(f.Participants))
 	for _, p := range f.Participants {
 		ids = append(ids, p.RegistrationID)
 	}
 	return ids
+}
+
+// fits reports why a kept fixture cannot serve a run, or nil if it can.
+func (f *fixture) fits(participants int, mode string) error {
+	kept := f.Mode
+	if kept == "" {
+		kept = contests.ModeReadOnly
+	}
+	switch {
+	case len(f.Participants) < participants:
+		return fmt.Errorf("the kept fixture has %d participants and this run needs %d", len(f.Participants), participants)
+	case kept != mode:
+		return fmt.Errorf("the kept fixture's contest is %s and this run asks for -mode %s", kept, mode)
+	}
+	return nil
 }
 
 func (f *fixture) save(out *os.Root, name string) error {
@@ -134,10 +171,12 @@ type setupReport struct {
 }
 
 // setup creates the contest, its game and its participants, filling f as it
-// goes so a failure half-way can still be torn down.
-func setup(ctx context.Context, st *stores, f *fixture, source string, participants int) (setupReport, error) {
+// goes so a failure half-way can still be torn down. The contest runs until
+// ends, the run's planned end.
+func setup(ctx context.Context, st *stores, f *fixture, source string, participants int, mode string, ends time.Time) (setupReport, error) {
 	var report setupReport
 	f.RunID = randomHex(4)
+	f.Mode = mode
 
 	accounts := postgres.NewUsers(st.core)
 
@@ -154,10 +193,9 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	}
 	f.OwnerID = owner.ID
 
-	// Running for a day, so the window cannot close mid-run; fixed timing,
-	// so no participant has a clock to start.
-	now := time.Now().UTC()
-	starts, ends := now.Add(-time.Minute), now.Add(24*time.Hour)
+	// Running until the run's planned end, which is also how sweep tells a
+	// run still going; fixed timing, so no participant has a clock to start.
+	starts := time.Now().UTC().Add(-time.Minute)
 	contest, err := postgres.NewContests(st.core).Create(ctx, contests.Contest{
 		Status:           contests.StatusRunning,
 		Enrollment:       contests.EnrollmentInviteOnly,
@@ -175,6 +213,19 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		return report, fmt.Errorf("create the contest: %w", err)
 	}
 	f.ContestID = contest.ID
+
+	// Before any copy exists, since provisioning grants the writable table
+	// on each copy as it makes it.
+	if mode == contests.ModeReadWrite {
+		policy := contests.DefaultSQLPolicy(contest.ID)
+		policy.Mode, policy.WritableTables, policy.UpdatedBy = mode, []string{writableTable}, &owner.ID
+		if err := policy.Validate(); err != nil {
+			return report, err
+		}
+		if err := postgres.NewSQLPolicies(st.core).Save(ctx, policy); err != nil {
+			return report, fmt.Errorf("make the contest read-write: %w", err)
+		}
+	}
 
 	// A template of its own, named by the product's scheme, so nothing the
 	// harness drops can belong to anybody else.
@@ -237,160 +288,6 @@ func credentials(ctx context.Context, st *stores, f *fixture) ([]string, error) 
 	return secrets, nil
 }
 
-// teardown removes everything f names: game databases first, then core rows
-// in foreign-key order.
-func teardown(ctx context.Context, st *stores, f *fixture) error {
-	var contestIDs []uuid.UUID
-	if f.ContestID != uuid.Nil {
-		contestIDs = append(contestIDs, f.ContestID)
-	}
-	return remove(ctx, st, contestIDs, f.userIDs(), []string{f.Template})
-}
-
-// remove drops every game database of the given contests and deletes the
-// contests and accounts. Databases are found from game_instances rows, the
-// known names and the cluster catalogue, since a copy interrupted before its
-// INSERT appears only in the last.
-func remove(ctx context.Context, st *stores, contestIDs, userIDs []uuid.UUID, known []string) error {
-	names := map[string]bool{}
-	for _, name := range known {
-		if name != "" {
-			names[name] = true
-		}
-	}
-
-	if len(contestIDs) > 0 {
-		rows, err := st.core.Query(ctx, `
-			SELECT db_name FROM game_instances WHERE contest_id = ANY($1)
-			UNION
-			SELECT template_db FROM game_templates WHERE contest_id = ANY($1)`, contestIDs)
-		if err != nil {
-			return fmt.Errorf("list the contests' databases: %w", err)
-		}
-		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return fmt.Errorf("list the contests' databases: %w", err)
-		}
-		for _, name := range recorded {
-			names[name] = true
-		}
-
-		prefixes := databasePrefixes(contestIDs)
-		rows, err = st.game.Query(ctx, `
-			SELECT datname FROM pg_database
-			WHERE EXISTS (SELECT 1 FROM unnest($1::text[]) AS p WHERE left(datname, length(p)) = p)`, prefixes)
-		if err != nil {
-			return fmt.Errorf("list the cluster's databases: %w", err)
-		}
-		present, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return fmt.Errorf("list the cluster's databases: %w", err)
-		}
-		for _, name := range present {
-			names[name] = true
-		}
-	}
-
-	var failures []error
-	for _, name := range sortedKeys(names) {
-		if err := st.provisioner.Drop(ctx, name); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	if len(failures) > 0 {
-		// Rows stay while their database exists, so a retry finds it.
-		return errors.Join(failures...)
-	}
-
-	ids := make([]string, 0, len(contestIDs)+len(userIDs))
-	for _, id := range append(append([]uuid.UUID{}, contestIDs...), userIDs...) {
-		ids = append(ids, id.String())
-	}
-
-	tx, err := st.core.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-
-	// Audit entries reference the accounts through actor_id, so they go
-	// first.
-	for _, statement := range []struct {
-		what string
-		sql  string
-		args []any
-	}{
-		{"audit entries", `DELETE FROM audit_log WHERE actor_id = ANY($1) OR entity_id = ANY($2)`, []any{userIDs, ids}},
-		{"contests", `DELETE FROM contests WHERE id = ANY($1)`, []any{contestIDs}},
-		{"accounts", `DELETE FROM users WHERE id = ANY($1)`, []any{userIDs}},
-	} {
-		if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
-			return fmt.Errorf("delete the %s: %w", statement.what, err)
-		}
-	}
-	return tx.Commit(ctx)
-}
-
-// databasePrefixes are the product's database name prefixes for a contest.
-func databasePrefixes(contestIDs []uuid.UUID) []string {
-	var out []string
-	for _, id := range contestIDs {
-		s := short(id)
-		out = append(out, "game_tpl_c"+s, "game_c"+s+"_", "game_pool_c"+s+"_")
-	}
-	return out
-}
-
-func runSweep(args []string) error {
-	if len(args) > 0 {
-		return fmt.Errorf("sweep takes no arguments, got %v", args)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	st, err := openStores(ctx, "")
-	if err != nil {
-		return err
-	}
-	defer st.close()
-
-	before, err := countEverything(ctx, st)
-	if err != nil {
-		return err
-	}
-
-	// left() rather than an escaped LIKE pattern (CLAUDE.md rule 3).
-	rows, err := st.core.Query(ctx, `SELECT id FROM users WHERE left(login, $1) = $2`,
-		len(loginPrefix), loginPrefix)
-	if err != nil {
-		return err
-	}
-	userIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return err
-	}
-	rows, err = st.core.Query(ctx, `SELECT id FROM contests WHERE created_by = ANY($1)`, userIDs)
-	if err != nil {
-		return err
-	}
-	contestIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("sweeping %d accounts and %d contests\n", len(userIDs), len(contestIDs))
-	if err := remove(ctx, st, contestIDs, userIDs, nil); err != nil {
-		return err
-	}
-
-	after, err := countEverything(ctx, st)
-	if err != nil {
-		return err
-	}
-	fmt.Print(countsTable(before, after))
-	return nil
-}
-
 type counts map[string]int64
 
 var countedTables = []string{
@@ -410,11 +307,10 @@ func countEverything(ctx context.Context, st *stores) (counts, error) {
 	}
 
 	var n int64
-	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE left(login, $1) = $2`,
-		len(loginPrefix), loginPrefix).Scan(&n); err != nil {
+	if err := st.core.QueryRow(ctx, `SELECT count(*) FROM users WHERE login ~ $1`, harnessLogin).Scan(&n); err != nil {
 		return nil, err
 	}
-	out["users (loadtest-*)"] = n
+	out["users (load test)"] = n
 
 	var databases, bytes int64
 	if err := st.game.QueryRow(ctx,
@@ -475,4 +371,29 @@ func mustHash(secret string) string {
 		panic(err)
 	}
 	return hash
+}
+
+// errFixtureOver is a kept fixture whose contest the installation's
+// scheduler has finished, or will within its next tick. Finishing marks the
+// roster, and every query of a finished contest is refused, so it cannot be
+// revived; a new run makes a new one.
+var errFixtureOver = errors.New("the kept fixture's contest is over (finished, or past its end); run without -fixture")
+
+// extendFixture moves a verified kept fixture's contest end to this run's
+// planned end, so the window stays open and sweep sees the run as going. A
+// contest that is not running, or whose end has already passed, is refused
+// in the same statement, so the scheduler cannot finish it between the
+// check and the move.
+func extendFixture(ctx context.Context, core *pgxpool.Pool, f *fixture, ends time.Time) error {
+	tag, err := core.Exec(ctx, `
+		UPDATE contests SET ends_at = $2
+		WHERE id = $1 AND status = $3 AND ends_at IS NOT NULL AND ends_at > now()`,
+		f.ContestID, ends, contests.StatusRunning)
+	if err != nil {
+		return fmt.Errorf("extend the kept fixture's contest: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w (contest %s)", errFixtureOver, f.ContestID)
+	}
+	return nil
 }

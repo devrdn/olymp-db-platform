@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type report struct {
@@ -20,6 +22,7 @@ type report struct {
 	API          string            `json:"api"`
 	Source       string            `json:"source_template,omitempty"`
 	Mix          mix               `json:"mix"`
+	Mode         string            `json:"mode"`
 	CopySettings map[string]string `json:"copy_settings,omitempty"`
 	Setup        *setupReport      `json:"setup,omitempty"`
 	Provision    *provisionReport  `json:"provision,omitempty"`
@@ -28,23 +31,43 @@ type report struct {
 	CountsBefore counts            `json:"counts_before"`
 	CountsAfter  counts            `json:"counts_after,omitempty"`
 	Kept         bool              `json:"kept,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
+	Verdict      *verdict          `json:"verdict,omitempty"`
 }
 
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
-	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix}
-	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
-		return err
-	}
-
 	needed := slices.Max(cfg.participants)
 	f := &fixture{}
 	if cfg.fixture != "" {
 		if f, err = loadFixture(cfg.fixture); err != nil {
 			return err
 		}
-		if len(f.Participants) < needed {
-			return fmt.Errorf("the kept fixture has %d participants and this run needs %d", len(f.Participants), needed)
+		if err := f.fits(needed, cfg.mode); err != nil {
+			return err
 		}
+		// The run will set these accounts' passwords and load this contest.
+		if err := verifyFixture(ctx, st.core, f); err != nil {
+			return err
+		}
+		if err := extendFixture(ctx, st.core, f, cfg.plannedEnd(time.Now())); err != nil {
+			return err
+		}
+	}
+
+	if !cfg.allowLive {
+		// A reused fixture's own contest is running, and is the one to load.
+		live, err := liveContests(ctx, st.core, f.ContestID, cfg.horizon())
+		if err != nil {
+			return err
+		}
+		if err := refuseLive(live, cfg.horizon()); err != nil {
+			return err
+		}
+	}
+
+	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix, Mode: cfg.mode}
+	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
+		return err
 	}
 
 	var parts []*participant
@@ -61,12 +84,12 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 			if saveErr := f.save(out, "fixture.json"); saveErr != nil {
 				err = errors.Join(err, saveErr)
 			}
-			fmt.Printf("the fixture was kept: reuse it with -fixture %s, remove it with a run that omits -keep or with `consoleload sweep`\n",
-				filepath.Join(cfg.out, "fixture.json"))
+			fmt.Printf("the fixture was kept: reuse it with -fixture %s, remove it with a run that omits -keep "+
+				"or with `consoleload sweep -run %s -yes -force`\n", filepath.Join(cfg.out, "fixture.json"), f.RunID)
 		} else {
 			fmt.Println("tearing down")
 			if downErr := teardown(cleanup, st, f); downErr != nil {
-				err = errors.Join(err, fmt.Errorf("teardown: %w (run `consoleload sweep`)", downErr))
+				err = errors.Join(err, teardownFailed(f.RunID, downErr))
 			}
 			if cfg.fixture != "" {
 				_ = os.Remove(cfg.fixture) // #nosec G703 -- the operator's own -fixture path.
@@ -82,7 +105,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 
 	if cfg.fixture == "" {
 		fmt.Printf("setting up %d participants on a copy of %s\n", needed, cfg.sourceTemplate)
-		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed)
+		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed, cfg.mode, cfg.plannedEnd(time.Now()))
 		if err != nil {
 			return err
 		}
@@ -173,7 +196,23 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 			}
 		}
 	}
-	return nil
+
+	if cfg.thresholds == nil {
+		return nil
+	}
+	v := cfg.thresholds.judge(rep.Runs)
+	rep.Profile, rep.Verdict = cfg.profile, &v
+	if v.Passed {
+		fmt.Printf("%s profile: PASSED\n", cfg.profile)
+		return nil
+	}
+	fmt.Printf("%s profile: FAILED\n", cfg.profile)
+	for _, c := range v.Checks {
+		if !c.Passed {
+			fmt.Printf("  %s: %s %s, limit %s\n", c.Run, c.Name, c.Measured, c.Limit)
+		}
+	}
+	return errMissedThresholds
 }
 
 func firstQueries(ctx context.Context, l load, parts []*participant) (runSummary, error) {
@@ -246,8 +285,11 @@ func writeReport(out *os.Root, rep *report) error {
 	if rep.Label != "" {
 		fmt.Fprintf(&b, "%s\n\n", rep.Label)
 	}
-	fmt.Fprintf(&b, "API %s; query mix cheap/mid/expensive %d/%d/%d.\n\n",
-		rep.API, rep.Mix[KindCheap], rep.Mix[KindMid], rep.Mix[KindExpensive])
+	if rep.Verdict != nil {
+		fmt.Fprintf(&b, "## Verdict of the %s profile\n\n%s\n", rep.Profile, rep.Verdict.markdown())
+	}
+	fmt.Fprintf(&b, "API %s; a %s contest; query mix cheap/mid/expensive/write %d/%d/%d/%d.\n\n",
+		rep.API, rep.Mode, rep.Mix[KindCheap], rep.Mix[KindMid], rep.Mix[KindExpensive], rep.Mix[KindWrite])
 	if len(rep.CopySettings) > 0 {
 		settings := make([]string, 0, len(rep.CopySettings))
 		for _, name := range sortedKeys(rep.CopySettings) {
@@ -285,4 +327,86 @@ func writeReport(out *os.Root, rep *report) error {
 		b.WriteString(countsTable(rep.CountsBefore, rep.CountsAfter))
 	}
 	return out.WriteFile("report.md", []byte(b.String()), 0o600)
+}
+
+// setupMargin is what a run spends beside its load, on setup, provisioning
+// and teardown, so a contest starting within it would still meet the load.
+const setupMargin = time.Hour
+
+// horizon is how far ahead a published contest counts as live: the run's
+// planned load and setupMargin.
+func (c config) horizon() time.Duration {
+	total := setupMargin
+	for range c.participants {
+		for _, shape := range c.shapes {
+			total += c.cooldown
+			switch shape {
+			case shapeSteady:
+				total += c.steadyFor
+			case shapeBurst:
+				total += time.Duration(c.burstRounds)*c.burstWindow + time.Duration(c.burstRounds-1)*c.burstGap
+			}
+		}
+	}
+	return total
+}
+
+type liveContest struct {
+	ID       uuid.UUID
+	Status   string
+	StartsAt *time.Time
+}
+
+// liveContests lists the contests, other than exempt, that are running or
+// will start within horizon: their participants would share the load.
+func liveContests(ctx context.Context, core *pgxpool.Pool, exempt uuid.UUID, horizon time.Duration) ([]liveContest, error) {
+	rows, err := core.Query(ctx, `
+		SELECT id, status, starts_at FROM contests
+		WHERE (status = 'running' OR status = 'published' AND starts_at < now() + $1::interval)
+		  AND id <> $2
+		ORDER BY starts_at, id`, horizon, exempt)
+	if err != nil {
+		return nil, fmt.Errorf("list the live contests: %w", err)
+	}
+	live, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (liveContest, error) {
+		var c liveContest
+		err := row.Scan(&c.ID, &c.Status, &c.StartsAt)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the live contests: %w", err)
+	}
+	return live, nil
+}
+
+// refuseLive names the contests that keep a run from starting, or is nil.
+func refuseLive(live []liveContest, horizon time.Duration) error {
+	if len(live) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(live))
+	for _, c := range live {
+		starts := "no start"
+		if c.StartsAt != nil {
+			starts = "starts " + c.StartsAt.UTC().Format("2006-01-02 15:04 MST")
+		}
+		names = append(names, fmt.Sprintf("%s (%s, %s)", c.ID, c.Status, starts))
+	}
+	return fmt.Errorf("%d contests are running or start within %s, and their participants would share this load: %s "+
+		"(-allow-live-contests runs it anyway; `consoleload sweep` lists a leftover of an earlier run "+
+		"and `consoleload sweep -yes` removes it)",
+		len(live), horizon.Round(time.Minute), strings.Join(names, "; "))
+}
+
+// teardownFailed says how to finish a teardown that stopped: the run is too
+// young for a plain sweep, and the operator knows it is over.
+func teardownFailed(run string, err error) error {
+	return fmt.Errorf("teardown: %w (`consoleload sweep -run %s -yes -force` removes the rest)", err, run)
+}
+
+// plannedEnd is when a run starting at start should be over: its horizon and
+// setupMargin again, slack for a slow provisioning. The test contest runs
+// until then, and sweep leaves the run alone until then.
+func (c config) plannedEnd(start time.Time) time.Time {
+	return start.Add(c.horizon() + setupMargin)
 }
