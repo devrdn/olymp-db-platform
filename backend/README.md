@@ -685,7 +685,7 @@ Every run is judged on five checks, and fails on any of them:
   any other contest is running or published to start before the run could
   end (its planned load plus an hour for setup and teardown, about 1 h 15 min
   for the beta profile), and names each one. A contest an earlier, killed run
-  left counts too: sweep it first. `-allow-live-contests` overrides; never
+  left counts too: `consoleload sweep` lists it and `sweep -yes` removes it. `-allow-live-contests` overrides; never
   use it with real participants on the server.
 - **A built game of the detective story on the target cluster**, named by
   `-source-template`. The queries read `persons`, `calls`, `statements`,
@@ -771,18 +771,32 @@ Ctrl+C — it removes all of it: first it marks the template dropped, so the
 API's pool tender stops stocking the contest; then it drops the databases,
 the template last, and looks at the cluster once more for a copy that
 finished meanwhile; only then does it delete the contest, its rows and the
-accounts with their audit entries. Only the limiter's counters stay, and they
-expire on their own. Before removing anything it checks that every account
-has a login of exactly that shape and belongs to nothing else, and that the
-contest was created by the run's blocked owner and has only the run's
-participants; anything else is refused and nothing is removed.
+accounts with their audit entries, including any entry staff wrote about
+them. Only the limiter's counters stay, and they expire on their own. Before
+removing anything it checks that every account has a login of exactly that
+shape (the owner's blocked) and belongs to nothing else, and that the contest
+was created by the run's blocked owner, has only the run's participants and
+shares its twelve-hex-digit database prefix with no other contest; anything else
+is refused and nothing is removed. Database names come only from that
+verified contest, so a fixture naming a contest that does not exist drops
+nothing.
 
 If the command is killed outright or the tunnel drops first, the contest and
-accounts are still there, and `consoleload sweep` (same environment) finds
-them: it lists every account of that exact shape, the contests their blocked
-owners created and those contests' databases, and removes nothing.
-`consoleload sweep -yes` removes what it listed, with the same checks.
-(`make loadtest ARGS=sweep` and `ARGS="sweep -yes"` on the local stack.)
+accounts are still there. A failed teardown prints the command that finishes
+it, `consoleload sweep -run <run> -yes -force`. Otherwise `consoleload sweep`
+(same environment) lists every leftover run: when it started, its contest,
+its accounts and its databases. It removes nothing until `-yes`, and even
+then leaves two kinds of run alone, saying so:
+
+- a run younger than the longest profile run (about 1 h 15 min), which may
+  be somebody else's load test still going — `-force` removes it once you
+  know it is not;
+- accounts no contest ties to the load test, left when a run died before
+  creating its contest — `-orphans` removes them.
+
+`-run <eight hex digits>` narrows any of this to one run. A run that fails
+the checks is named and kept; the others are still removed. On the local
+stack the same goes through `make loadtest ARGS="sweep -yes"`.
 
 ### Reading the result
 

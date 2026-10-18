@@ -14,9 +14,9 @@
 // are ordinary accounts with random passwords kept only in memory, signing in
 // through /auth/login. It writes into the installation's own databases and
 // removes everything it created at the end, except the sign-in limiter's
-// counter, which expires on its own. `consoleload sweep` lists what a killed
-// run left, found by the exact logins setup makes, and `sweep -yes` removes
-// it. Nothing is removed that the checks in cleanup.go do not find to be the
+// counter, which expires on its own. `consoleload sweep` lists what killed
+// runs left, by run, found by the exact logins setup makes, and `sweep -yes`
+// removes the runs that are over. Nothing is removed that the checks in cleanup.go do not find to be the
 // harness's. It will not start while another contest is live, since its
 // participants would share the load.
 //
@@ -32,7 +32,7 @@
 //	consoleload -keep ...                              leave the fixture for another run
 //	consoleload -fixture DIR/fixture.json [flags]      reuse a kept fixture, then tear it down
 //	consoleload -fixture ... -copy-setting name=value  try a cluster setting on the copies only
-//	consoleload sweep [-yes]                           list, and with -yes remove, what an interrupted run left
+//	consoleload sweep [-yes] [-run id]                 list, and with -yes remove, what interrupted runs left
 //
 // It reads CORE_DB_DSN and GAME_PROVISIONER_DSN (the provisioning role on the
 // game cluster) — the same two the API itself is given. `make loadtest` passes
