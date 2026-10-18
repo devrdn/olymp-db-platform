@@ -1,28 +1,38 @@
 #!/usr/bin/env bash
 # Removes old backup sets: keeps the newest BACKUP_KEEP complete sets, and
 # beyond them the newest set of each of the BACKUP_KEEP_DAILY most recent days
-# not already covered. Everything else in the directory is left alone: an
-# incomplete set, the unfinished files of a stopped run, a file of any other
-# name, a set of another database.
+# not already covered. What a set is, and what is never removed: lib.sh.
 #
 # The two tiers bound the directory by count, whatever the schedule: at most
 # BACKUP_KEEP + BACKUP_KEEP_DAILY sets. Days are counted among the sets that
 # exist rather than back from today, so backups that stop for a week do not
 # age the history away while nobody is taking new ones.
 #
-# Usage: deploy/backups/rotate.sh [--dry-run] [DIR]
+# Usage: deploy/backups/rotate.sh [--dry-run] [--quiet] [--protect STAMP] [DIR]
 #   DIR defaults to BACKUP_DIR. Settings come from the environment, else
 #   deploy/.env: BACKUP_KEEP (48), BACKUP_KEEP_DAILY (14), CORE_DB_NAME.
+#   --protect keeps that set whatever its place: the scheduled run names the
+#   set it has just written. --quiet prints removals only.
 set -euo pipefail
 
 # shellcheck source=deploy/backups/lib.sh
 . "$(dirname "$0")/lib.sh"
 
-dry=
-if [ "${1:-}" = "--dry-run" ]; then
-	dry=1
+dry='' quiet='' protect=''
+while (($# > 0)); do
+	case $1 in
+	--dry-run) dry=1 ;;
+	--quiet) quiet=1 ;;
+	--protect)
+		protect=${2:-}
+		valid_stamp "$protect" || die "--protect needs a stamp like 20261102-091500Z"
+		shift
+		;;
+	-*) die "unknown option $1" ;;
+	*) break ;;
+	esac
 	shift
-fi
+done
 dir=${1:-$(backup_dir)}
 db=$(core_db_name)
 # The newest set is never removed, so keeping none is refused rather than read
@@ -30,6 +40,7 @@ db=$(core_db_name)
 keep=$(conf_int BACKUP_KEEP 48 1 10000)
 keep_daily=$(conf_int BACKUP_KEEP_DAILY 14 0 3650)
 [ -d "$dir" ] || die "no backup directory at $dir"
+dir=$(canonical_dir "$dir")
 
 mapfile -t sets < <(complete_sets "$dir" "$db")
 count=${#sets[@]}
@@ -47,6 +58,8 @@ for ((i = count - 1; i >= 0; i--)); do
 		kept+=("$stamp")
 		day_kept[$day]=1
 		days=$((days + 1))
+	elif [ "$stamp" = "$protect" ]; then
+		kept+=("$stamp")
 	else
 		remove+=("$stamp")
 	fi
@@ -63,12 +76,13 @@ for stamp in "${remove[@]}"; do
 		echo "removed set $stamp ($size)"
 	fi
 done
+[ -z "$quiet" ] || exit 0
 
 while IFS= read -r stamp; do
 	echo "left alone, incomplete: $stamp (only a complete set is ever removed; delete it by hand once you know why it is partial)"
 done < <(incomplete_sets "$dir" "$db")
 while IFS= read -r name; do
-	echo "left alone, unfinished: $name (a make backup that was stopped before it finished; delete it by hand)"
+	echo "left alone, unfinished: $name (a make backup that was killed before it finished; delete it by hand)"
 done < <(unfinished_files "$dir" "$db")
 
 total=0
