@@ -12,11 +12,14 @@
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$ROOT/deploy/.env"
 
+# Under systemd, stderr goes to the journal and a <N> prefix sets the line's
+# priority, so `journalctl -p err` shows the reasons a run failed.
+error() { printf '%s%s\n' "${JOURNAL_STREAM:+<3>}" "$*" >&2; }
+warn() { printf '%s%s\n' "${JOURNAL_STREAM:+<4>}" "$*" >&2; }
 die() {
-	printf '%s%s\n' "${JOURNAL_STREAM:+<3>}" "$*" >&2
+	error "$@"
 	exit 1
 }
-warn() { printf '%s%s\n' "${JOURNAL_STREAM:+<4>}" "$*" >&2; }
 
 # conf KEY DEFAULT: the environment's value, else deploy/.env's, else DEFAULT.
 # An empty value counts as unset. deploy/.env is read line by line rather than

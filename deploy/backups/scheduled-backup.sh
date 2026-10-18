@@ -71,7 +71,7 @@ room() {
 	free_kb=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }')
 	need_kb=$((min_free_mb * 1024 + 2 * last_bytes / 1024))
 	if ((free_kb < need_kb)); then
-		warn "backup refused: $dir has $(human $((free_kb * 1024))) free and a run needs $(human $((need_kb * 1024)))" \
+		error "backup refused: $dir has $(human $((free_kb * 1024))) free and a run needs $(human $((need_kb * 1024)))" \
 			"(BACKUP_MIN_FREE_MB=$min_free_mb plus twice the last set). Free space or lower BACKUP_KEEP."
 		return 1
 	fi
@@ -92,17 +92,17 @@ elif make -s -C "$ROOT" backup BACKUP_DIR="$dir"; then
 		set_size=$(set_bytes "$dir" "$db" "$stamp")
 		echo "backup set $stamp is complete ($(human "$set_size"))"
 	else
-		warn "make backup succeeded but left no complete set newer than $started in $dir; is DB_ONLY set in deploy/.env?"
+		error "make backup succeeded but left no complete set newer than $started in $dir; is DB_ONLY set in deploy/.env?"
 		status=1
 	fi
 else
-	warn "make backup failed; see its output above"
+	error "make backup failed; see its output above"
 	status=1
 fi
 
 if ((backup_ok)); then
 	"$(dirname "$0")/rotate.sh" "$dir" || {
-		warn "rotation failed"
+		error "rotation failed"
 		status=1
 	}
 fi
@@ -111,7 +111,7 @@ fi
 # connection-string remote it can carry a key. The tool's own messages are
 # shown with it replaced.
 copy_offhost() {
-	local list out rc=0
+	local list out line rc=0
 	list=$(mktemp)
 	set_files . "$db" "$stamp" | sed 's|^\./||' >"$list"
 	case $offhost in
@@ -132,8 +132,8 @@ copy_offhost() {
 	esac
 	rm -f "$list"
 	if ((rc != 0)); then
-		warn "off-host copy failed ($offhost exited $rc); set $stamp is only on this host:"
-		warn "${out//"$target"/<BACKUP_OFFHOST_TARGET>}"
+		error "off-host copy failed ($offhost exited $rc); set $stamp is only on this host:"
+		while IFS= read -r line; do error "  $line"; done <<<"${out//"$target"/<BACKUP_OFFHOST_TARGET>}"
 		return 1
 	fi
 }
@@ -153,7 +153,7 @@ fi
 write_metrics() {
 	local tmp
 	[ -d "$textfile_dir" ] || {
-		warn "BACKUP_TEXTFILE_DIR=$textfile_dir is not a directory; no metric written"
+		error "BACKUP_TEXTFILE_DIR=$textfile_dir is not a directory; no metric written"
 		return 1
 	}
 	tmp=$(mktemp "$textfile_dir/.dbcontest_backup.prom.XXXXXX")
@@ -190,6 +190,6 @@ write_metrics() {
 if [ -n "$textfile_dir" ]; then write_metrics || status=1; fi
 
 if ((status != 0)); then
-	printf '%s%s\n' "${JOURNAL_STREAM:+<3>}" "scheduled backup FAILED (see the messages above)" >&2
+	error "scheduled backup FAILED (see the messages above)"
 fi
 exit "$status"

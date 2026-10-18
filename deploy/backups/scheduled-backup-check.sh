@@ -210,6 +210,8 @@ check_wrapper() {
 	expect "a failed make backup fails the run" "$((rc != 0))" "1"
 	expect_contains "and says why" "$out" "make backup failed"
 	expect_contains "with what make said" "$out" "pg_dump: error"
+	out=$(JOURNAL_STREAM=8:1 STUB_MAKE=fail BACKUP_DIR="$dir" "$B/scheduled-backup.sh" 2>&1) || true
+	expect_contains "under systemd the reason is logged at error priority" "$out" "<3>make backup failed"
 	expect "the textfile records the failure" \
 		"$(metric dbcontest_backup_last_run_success "$tf/dbcontest_backup.prom")" "0"
 	expect "and keeps the last success" \
