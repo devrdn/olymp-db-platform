@@ -191,71 +191,77 @@ func TestWatchRosterIsBoundedAndSaysSo(t *testing.T) {
 	})
 }
 
-// TestWatchRosterCostsWhatItShows measures the roster twice, the second time
-// with several times the history: the rows it touches must not grow, and it
-// must touch no journal. The extra rounds repeat the same statements, so
-// contest_query_fingerprints must not grow either.
+// TestWatchRosterCostsWhatItShows gives every participant five more rounds of
+// the same contest: the roster must read no journal, and the rounds must add no
+// row to any relation it does read. Then its cost is bounded by inputs that do
+// not grow with the history, whatever plan the planner picks. Rows touched per
+// plan are not compared: a sequential scan of a small table counts every
+// contest's rows, including those another test package commits meanwhile.
 func TestWatchRosterCostsWhatItShows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
 		loadOlympiadQueries(t, f, 1, 40, 50)
-		analyzeForPlans(t, ctx)
 
-		roster := func(w *Watch) error {
-			_, err := w.Roster(ctx, f.contest, monitor.MaxRosterRows)
-			return err
-		}
-		early, earlyAggregate := measureRows(t, roster), measureAggregate(t, ctx, f.contest)
-
+		before := insertedRows(t, ctx)
 		for round := 2; round <= 6; round++ {
 			moreHistory(t, f, round, 50)
 		}
-		analyzeForPlans(t, ctx)
-		late, lateAggregate := measureRows(t, roster), measureAggregate(t, ctx, f.contest)
-		t.Logf("the table read %d rows and then %d; the aggregate it replaces, %d and then %d",
-			total(early), total(late), total(earlyAggregate), total(lateAggregate))
+		after := insertedRows(t, ctx)
+		added := func(table string) int64 { return after[table] - before[table] }
 
-		for table := range journals {
-			if early[table] != 0 || late[table] != 0 {
-				t.Errorf("the participants table read %d rows of %s and then %d: it reads no journal",
-					early[table], table, late[table])
+		for _, journal := range []string{"query_log", "participant_events", "submissions"} {
+			if added(journal) == 0 {
+				t.Fatalf("the rounds added no row to %s: there is no history for the roster to ignore", journal)
 			}
 		}
-		if total(late) > total(early) {
-			t.Errorf("the participants table read %d rows over 40 participants and %d after five more rounds "+
-				"of the same contest (%v then %v): its cost follows the history, not the table",
-				total(early), total(late), early, late)
-		}
+
+		// Only which relations the plan names is used: that is fixed by the
+		// statement, while the rows each node touched depend on the plan.
+		read := measureRows(t, func(w *Watch) error {
+			_, err := w.Roster(ctx, f.contest, monitor.MaxRosterRows)
+			return err
+		})
 		const set = "contest_query_fingerprints"
-		if late[set] != early[set] {
-			t.Errorf("the set of statements read %d rows and then %d: repeating a statement has to cost it nothing, "+
-				"or it is the journal by another name", early[set], late[set])
-		}
-		// The old aggregate must grow with history, or the fixture is too
-		// small to show the difference.
-		if total(lateAggregate) <= total(earlyAggregate) {
-			t.Errorf("the aggregate this replaces read %d rows and then %d: the fixture does not grow enough "+
-				"to show what it cost", total(earlyAggregate), total(lateAggregate))
+		for table := range read {
+			switch {
+			case journals[table]:
+				t.Errorf("the participants table reads %s: it reads no journal", table)
+			case table == set && added(table) > 0:
+				t.Errorf("repeating the same statements added %d rows to %s, which the participants table reads: "+
+					"repeating a statement has to cost it nothing, or it is the journal by another name",
+					added(table), table)
+			case added(table) > 0:
+				t.Errorf("five more rounds added %d rows to %s, which the participants table reads: "+
+					"its cost follows the history, not the table", added(table), table)
+			}
 		}
 	})
 }
 
-// measureAggregate returns how many rows of each relation rosterAggregateSQL
-// touched under EXPLAIN (ANALYZE).
-func measureAggregate(t *testing.T, ctx context.Context, contest uuid.UUID) map[string]int64 {
+// insertedRows returns how many rows the test transaction has inserted so far
+// into each table of the schema, triggers' inserts included. Unlike a count of
+// the table, it cannot see rows another session commits.
+func insertedRows(t *testing.T, ctx context.Context) map[string]int64 {
 	t.Helper()
-	touched := map[string]int64{}
-	measuringQuerier{Querier: storage.QuerierFrom(ctx, testPool), t: t, rows: touched}.
-		measure(ctx, rosterAggregateSQL, contest, monitor.MaxRosterRows, monitor.LargePasteChars)
-	return touched
-}
-
-func total(rows map[string]int64) int64 {
-	var n int64
-	for _, touched := range rows {
-		n += touched
+	rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx, `
+		SELECT relname, n_tup_ins FROM pg_stat_xact_user_tables WHERE schemaname = current_schema()`)
+	if err != nil {
+		t.Fatalf("read the transaction's inserts: %v", err)
 	}
-	return n
+	defer rows.Close()
+	inserted := map[string]int64{}
+	for rows.Next() {
+		var table string
+		var n int64
+		if err := rows.Scan(&table, &n); err != nil {
+			t.Fatalf("scan the transaction's inserts: %v", err)
+		}
+		inserted[table] = n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the transaction's inserts: %v", err)
+	}
+	return inserted
 }
 
 // rosterAggregateSQL computes the participants table directly from the
