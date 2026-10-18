@@ -15,7 +15,9 @@ coverage.out
 .vscode/
 
 # Database dumps are data, never source: they hold real participant answers.
-deploy/backups/
+# The scripts that take and rotate them live beside them and are source.
+deploy/backups/*
+!deploy/backups/*.sh
 # Dumps uploaded to an API running on the host (make run).
 deploy/game-uploads/
 # Cover pictures uploaded to an API running on the host (make run).
