@@ -11,9 +11,10 @@
 # Usage: deploy/backups/schedule.sh COMMAND
 #   install [USER]   render the units for this checkout, install and start the
 #                    timer (root). USER runs the backup: it must be able to run
-#                    docker compose. Defaults to the checkout's owner.
+#                    docker compose. Defaults to the checkout's owner, unless
+#                    that is root, which has to be named: install root.
 #   contest          every 15 minutes, from now until `daily` (root)
-#   daily            back to once a day, at 03:30 (root)
+#   daily            back to once a day, at the timer's time (root)
 #   status           the setting, the next run, the last run, the newest set
 #   uninstall        stop the timer and remove the units (root)
 #   render DIR [USER]   write the rendered units into DIR and nothing else
@@ -29,13 +30,21 @@ SYSTEMD_DIR=${SYSTEMD_DIR:-/etc/systemd/system}
 DROPIN_DIR="$SYSTEMD_DIR/dbcontest-backup.timer.d"
 DROPIN="$DROPIN_DIR/contest-window.conf"
 
+# The daily time is written once, in the timer; the cron lines and the
+# messages read it from there.
+daily_time() { sed -n 's/^OnCalendar=\*-\*-\* \([0-9][0-9]:[0-9][0-9]\):00$/\1/p' "$UNITS/dbcontest-backup.timer"; }
+
 usage() { sed -n 's/^# \{0,1\}//; /^Usage:/,/^SYSTEMD_DIR/p' "$0" >&2; exit 2; }
 
 # The path and the user are written into unit files, where a space or a
 # specifier character would change what systemd reads.
 backup_user() {
 	local user=${1:-}
-	if [ -z "$user" ]; then user=$(stat -c '%U' "$ROOT"); fi
+	if [ -z "$user" ]; then
+		user=$(stat -c '%U' "$ROOT")
+		[ "$user" != root ] || die "the checkout belongs to root: name the user who runs make deploy," \
+			"or say 'install root' if the backup really is to run as root"
+	fi
 	[[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "user $user is not a plain login name"
 	printf '%s' "$user"
 }
@@ -63,13 +72,17 @@ restart_timer() {
 	systemctl list-timers dbcontest-backup.timer --no-pager || true
 }
 
-status() {
-	local dir db sets newest age
+mode() {
 	if [ -f "$DROPIN" ]; then
 		echo "mode: contest window (every 15 minutes); switch back with: sudo $0 daily"
 	else
-		echo "mode: daily (03:30); before a contest switch with: sudo $0 contest"
+		echo "mode: daily at $(daily_time); before a contest switch with: sudo $0 contest"
 	fi
+}
+
+status() {
+	local dir db sets newest age
+	mode
 	systemctl list-timers dbcontest-backup.timer --no-pager || true
 	systemctl show dbcontest-backup.service --no-pager \
 		-p Result -p ExecMainStatus -p ExecMainExitTimestamp || true
@@ -79,18 +92,21 @@ status() {
 		echo "cannot read $dir: run status as the backup's user"
 		return
 	fi
+	dir=$(canonical_dir "$dir")
 	mapfile -t sets < <(complete_sets "$dir" "$db")
 	if ((${#sets[@]} == 0)); then
 		echo "newest complete set: none in $dir"
 		return
 	fi
 	newest=${sets[-1]}
-	age=$(($(date +%s) - $(date -d "${newest:0:4}-${newest:4:2}-${newest:6:2} ${newest:9:2}:${newest:11:2}:${newest:13:2}" +%s)))
+	age=$(($(date +%s) - $(stamp_epoch "$newest")))
 	echo "newest complete set: $newest, $((age / 3600))h $((age % 3600 / 60))m old; ${#sets[@]} complete sets in $dir"
 }
 
 cron() { # user
+	local at
 	check_root_path
+	at=$(daily_time)
 	cat <<-EOF
 		# /etc/cron.d/dbcontest-backup: DB Contest backups, for a host without systemd.
 		# Keep exactly one schedule line uncommented. Before a beta or an olympiad,
@@ -98,7 +114,7 @@ cron() { # user
 		# The output goes to syslog under dbcontest-backup.
 		PATH=/usr/local/bin:/usr/bin:/bin
 		# Daily, outside the contest window:
-		30 3 * * * $1 $ROOT/deploy/backups/scheduled-backup.sh 2>&1 | logger -t dbcontest-backup
+		$((10#${at#*:})) $((10#${at%:*})) * * * $1 $ROOT/deploy/backups/scheduled-backup.sh 2>&1 | logger -t dbcontest-backup
 		# The contest window, every 15 minutes:
 		#*/15 * * * * $1 $ROOT/deploy/backups/scheduled-backup.sh 2>&1 | logger -t dbcontest-backup
 	EOF
@@ -115,7 +131,8 @@ install)
 	render "$SYSTEMD_DIR" "$user"
 	systemctl daemon-reload
 	systemctl enable --now dbcontest-backup.timer
-	echo "installed: the backup runs daily at 03:30 as $user. Before a contest: sudo $0 contest"
+	echo "installed: the backup runs as $user"
+	mode
 	;;
 contest)
 	need_write
@@ -129,7 +146,7 @@ daily)
 	rm -f "$DROPIN"
 	rmdir "$DROPIN_DIR" 2>/dev/null || true
 	restart_timer
-	echo "daily schedule on: a backup at 03:30"
+	echo "daily schedule on: a backup at $(daily_time)"
 	;;
 status) status ;;
 uninstall)

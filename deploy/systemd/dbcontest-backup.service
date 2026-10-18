@@ -5,8 +5,10 @@
 [Unit]
 Description=DB Contest backup (core dump, covers, game uploads) and rotation
 Documentation=file://@ROOT@/backend/README.md
-After=docker.service network-online.target
-Wants=network-online.target
+# After the clock is set: a catch-up run at boot must not stamp its set with
+# a time the clock is about to take back.
+After=docker.service network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 
 [Service]
 Type=oneshot
@@ -17,6 +19,22 @@ ExecStart=@ROOT@/deploy/backups/scheduled-backup.sh
 SyslogIdentifier=dbcontest-backup
 UMask=0077
 NoNewPrivileges=yes
+# The sandbox stops short of ProtectHome and a read-only /home or /srv: the
+# run needs ~/.docker, rclone writes its token refreshes to ~/.config, and
+# the sets go to the checkout or BACKUP_DIR. Membership of the docker group
+# is root's power anyway, so this narrows mistakes rather than an attacker.
+# PrivateTmp also clears the staging copies of a run that was killed.
+PrivateTmp=yes
+ProtectSystem=full
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
