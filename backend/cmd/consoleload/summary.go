@@ -51,6 +51,11 @@ type runSummary struct {
 
 	Queries  int            `json:"queries"`
 	Outcomes map[string]int `json:"outcomes"`
+	// Refused, ServerErrors and Errors count the queries of each class
+	// other than answered; a profile's thresholds judge their shares.
+	Refused      int `json:"refused"`
+	ServerErrors int `json:"server_errors"`
+	Errors       int `json:"errors"`
 
 	// All includes refusals; Answered only queries that returned rows,
 	// split by class in ByKind.
@@ -85,6 +90,14 @@ func summarise(name, shape string, participants int, started, ended time.Time, o
 	byKind := map[Kind][]time.Duration{}
 	for _, o := range outcomes {
 		s.Outcomes[o.label()]++
+		switch o.class() {
+		case classRefused:
+			s.Refused++
+		case classServerError:
+			s.ServerErrors++
+		case classError:
+			s.Errors++
+		}
 		all = append(all, o.Latency)
 		if o.ok() {
 			answered = append(answered, o.Latency)

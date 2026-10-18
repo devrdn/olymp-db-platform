@@ -50,6 +50,29 @@ type outcome struct {
 
 func (o outcome) ok() bool { return o.Status == http.StatusOK }
 
+// What happened to a query, as a participant would see it.
+const (
+	classAnswered    = "answered"
+	classRefused     = "refused"
+	classServerError = "server error"
+	// classError is a request with no usable answer: none arrived, or the
+	// one that did could not be read.
+	classError = "error"
+)
+
+func (o outcome) class() string {
+	switch {
+	case o.Status == 0 || o.ok() && o.Err != "":
+		return classError
+	case o.ok():
+		return classAnswered
+	case o.Status >= http.StatusInternalServerError:
+		return classServerError
+	default:
+		return classRefused
+	}
+}
+
 // label is the key refusals are counted under.
 func (o outcome) label() string {
 	switch {
