@@ -595,7 +595,7 @@ instead of leaving the other alerts quietly blind.
 
 - Prometheus: copy the rules file next to its configuration, list it under
   `rule_files`, and reload (`SIGHUP`, or `POST /-/reload` with
-  `--web.enable-lifecycle`). Its `/rules` page then lists five groups.
+  `--web.enable-lifecycle`). Its `/rules` page then lists four groups.
 - A Mimir, Cortex or Loki ruler behind a Grafana data source (data-source
   managed rules): `mimirtool rules load dbcontest-rules.yml` against that
   ruler, or paste the groups into Grafana's rule editor for that data source.
@@ -623,11 +623,11 @@ changed setting means changing the number in the rules too.
 
 | Alert | Severity | Fires when |
 |---|---|---|
-| `DBContestAPINotScraped`, `DBContestQueryRunnerNotScraped` | critical | the selector matches no target for 5 minutes |
+| `DBContestAPINotScraped`, `DBContestQueryRunnerNotScraped` | critical | the selector matches no target for 5 minutes: a wrong selector, or a stopped container under a collector that discovers containers |
 | `DBContestAPIDown`, `DBContestQueryRunnerDown` | critical | the scrape fails for 2 minutes |
 | `DBContestProcessRestarted` | warning | either process restarted in the last 15 minutes |
 | `DBContestAPIErrors` | critical | over 5% of API answers are 5xx, at least 10 in 5 minutes, for 3 minutes |
-| `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s for 10 minutes |
+| `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |
 | `DBContestQueriesTimingOut` | warning | over 20% of admitted queries hit the deadline, at least 10 in 5 minutes, for 10 minutes |
@@ -639,12 +639,16 @@ Participants' own SQL errors and checker refusals never page; the dashboard
 shows them by reason.
 
 **Checking the files.** `make observability-check` runs a Go test that
-gathers the series both services register and holds every selector in the
-rules, their tests and the dashboard to those names, labels and declared
-values; then promtool, from a throwaway `prom/prometheus` container with the
-files mounted read-only, loads the rules, runs their unit tests and parses
-every dashboard query. The Go test also runs with `go test ./...`, so CI fails
-when a metric is renamed under an alert.
+gathers the series each service registers, on a registry per service, and
+holds every selector in the rules, their tests and the dashboard to the names,
+labels and declared values of the service it reads; it also holds the
+slow-by-design route pattern in the rules and the dashboard equal. Then
+promtool, from a throwaway `prom/prometheus` container with the files mounted
+read-only, loads the rules, runs their unit tests and parses every dashboard
+query. The unit tests feed both sides of every alert: the series that should
+page, the zero-valued series an idle contest exports, and values just below
+each threshold, so loosening a threshold fails them as surely as breaking it.
+CI runs the whole target whenever the code or these files change.
 
 ## Database browser (dev only)
 
