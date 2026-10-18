@@ -755,7 +755,9 @@ named by a run identifier of eight hex digits, and owned by the run:
 - one untitled, invite-only contest with fixed timing, running until the
   run's planned end (its load and twice the hour of setup margin, about
   2 h 15 min for the beta profile; a reused `-fixture` moves it to the new
-  run's),
+  run's, and is refused once the server's scheduler has finished the
+  contest, about two hours after the run that kept it, since a finished
+  contest refuses every query and cannot be revived),
   read-write with `evidence` writable, its forty registrations and its
   `game_templates` row;
 - on the game cluster, `game_tpl_c<contest>` copied from the source, and the
@@ -778,21 +780,30 @@ accounts and the audit entries by those accounts or about that contest and
 those accounts, including any entry staff wrote about them. Only the
 limiter's counters stay, and they expire on their own.
 
-Before removing anything it locks the contest and accounts and checks that
-every account has a login of exactly that shape (the owner's blocked) and
-created, joined and manages nothing else, and that the contest was created
-by the run's blocked owner, has only the run's participants and shares its
-twelve-hex-digit database prefix with no other contest; anything else is
-refused and nothing is removed. Every database dropped and every row deleted
-is named by those locked, verified rows, so an identifier in a fixture that
-matches no row, or another kind of row, removes nothing. A reused `-fixture`
+Before removing anything it checks that every account has a login of
+exactly that shape (the owner's blocked) and created, joined and manages
+nothing else, and that the contest was created by the run's blocked owner,
+has only the run's participants and shares its twelve-hex-digit database
+prefix with no other contest; anything else is refused and nothing is
+removed. Every database dropped and every row deleted is named by rows that
+exist and passed that check, so an identifier in a fixture that matches no
+row, or another kind of row, removes nothing. The databases drop with no
+transaction open on the core database: the server's scheduler finishes
+running contests by predicate, and a locked test contest would stall its
+tick, and with it every real contest's scheduled start and finish, for as
+long as the drops take. Only then does one short transaction lock the
+contest and the accounts, check them again and delete them; it waits at
+most five seconds for the rows and otherwise refuses, leaving them for
+another try. A reused `-fixture`
 is refused unless its owner is the run's owner account that created its
 contest and its participants' logins are their accounts' own. Should a test
 contest ever share its prefix with another contest by chance, it is refused
 on every pass and has to be removed by hand.
 
 If the command is killed outright or the tunnel drops first, the contest and
-accounts are still there. A failed teardown prints the command that finishes
+accounts are still there, and nothing stays locked on their account: no
+transaction is open while the databases drop, and the one that deletes the
+rows lasts moments. A failed teardown prints the command that finishes
 it, `consoleload sweep -run <run> -yes -force`. Otherwise `consoleload sweep`
 (same environment) lists every leftover run: when it started, its contest,
 its accounts and its databases. It removes nothing until `-yes`, and even
