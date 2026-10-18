@@ -15,11 +15,17 @@
 // through /auth/login. It writes into the installation's own databases and
 // removes everything it created at the end, except the sign-in limiter's
 // counter, which expires on its own. `consoleload sweep` cleans up a killed
-// run by login prefix.
+// run by login prefix. It will not start while somebody else's contest is
+// live, since their participants would share the load.
+//
+// A run only measures, unless -profile names a profile: then every run is
+// judged against the profile's thresholds, and a miss exits with status 2.
+// backend/README.md says how to run the beta profile against a server.
 //
 // Usage:
 //
 //	consoleload -source-template game_tpl_x [flags]   set up, provision, load, tear down
+//	consoleload -profile beta -source-template ...    the same, judged against the beta's bar
 //	consoleload -keep ...                              leave the fixture for another run
 //	consoleload -fixture DIR/fixture.json [flags]      reuse a kept fixture, then tear it down
 //	consoleload -fixture ... -copy-setting name=value  try a cluster setting on the copies only
