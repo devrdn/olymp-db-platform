@@ -51,6 +51,7 @@ const (
 // SchemaStore is the schema cache. CachedSchema reports ErrNoSchema when
 // nothing is cached; the version it returns is the template build the
 // document describes, so a rebuild is detected without explicit invalidation.
+// SaveSchema writes nothing unless version is the game's current one.
 type SchemaStore interface {
 	CachedSchema(ctx context.Context, contestID uuid.UUID) (Schema, int, error)
 	SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema Schema) error
