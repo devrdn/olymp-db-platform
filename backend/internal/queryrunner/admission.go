@@ -99,3 +99,10 @@ func (g *gate) enter(ctx context.Context, participant string) (func(), error) {
 		return nil, fmt.Errorf("%w: while waiting for a free slot", ErrCanceled)
 	}
 }
+
+// load reports how many queries hold a slot and how many wait for one.
+func (g *gate) load() (running, waiting int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.slots), g.waiting
+}

@@ -57,7 +57,7 @@ func trimStatement(sql string) string {
 // collect reads a result set, stopping at whichever limit comes first. It
 // takes the transaction rather than the connection so the query cannot run
 // outside the read-only transaction by mistake.
-func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, write bool) (*Result, error) {
+func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, write bool, observer Observer) (*Result, error) {
 	started := time.Now()
 
 	rows, err := tx.Query(ctx, statement)
@@ -81,6 +81,7 @@ func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, wr
 			// The extra LIMIT row: proof there is more, not part of the answer.
 			result.Truncated = true
 			stoppedEarly = true
+			observer.CutOff(CutOffRows)
 			break
 		}
 
@@ -93,6 +94,7 @@ func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, wr
 		if size += weigh(values); size > limits.MaxBytes {
 			result.Truncated = true
 			stoppedEarly = true
+			observer.CutOff(CutOffBytes)
 			break
 		}
 		result.Rows = append(result.Rows, values)

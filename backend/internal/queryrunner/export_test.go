@@ -11,3 +11,7 @@ func HoldConnection(ctx context.Context, r *Runner, database string) (func(clean
 	}
 	return func(clean bool) { r.conns.release(ctx, s, clean) }, nil
 }
+
+// Ending exposes the classification Run reports, so every error it can meet
+// is checked against Endings without staging each one on a cluster.
+var Ending = ending
