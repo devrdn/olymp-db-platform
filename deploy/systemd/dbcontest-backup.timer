@@ -1,0 +1,14 @@
+# When dbcontest-backup.service runs. Daily outside a contest; the contest
+# window (every 15 minutes) is the drop-in contest-window.conf, put in place
+# by `deploy/backups/schedule.sh contest` and removed by `... daily`.
+[Unit]
+Description=DB Contest backup schedule
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# A run missed while the host was down is taken as soon as it is back up.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
