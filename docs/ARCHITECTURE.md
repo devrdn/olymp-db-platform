@@ -4618,8 +4618,10 @@ Product decisions the items below are built on.
   tables never reached it (they live in `work`, which is not read, and only
   `game_author` may alter the game's tables), but the organiser's
   `SECURITY DEFINER` code run by a participant could. A participant's copy is
-  now read only for a game built before this change, and never cached over
-  the build's description.
+  still read when no description is stored (a game built before this change)
+  and when the cache cannot be read; the second is answered but never cached,
+  and a description saved for any version but the game's current one is not
+  written.
 
 ## 16. Assumptions
 
