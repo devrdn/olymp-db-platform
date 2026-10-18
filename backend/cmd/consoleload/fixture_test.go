@@ -9,6 +9,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 )
 
@@ -43,6 +45,18 @@ func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *t
 		t.Fatalf("provision: %v", err)
 	}
 
+	// The policy as the product reads it back, under the Query Runner's checker.
+	game, err := postgres.NewGameInstances(st.core).Game(ctx, f.ContestID)
+	if err != nil {
+		t.Fatalf("read the contest's game: %v", err)
+	}
+	r := rand.New(rand.NewPCG(7, 8))
+	for _, write := range templates[KindWrite] {
+		if sql := write(r); checker.Check(sql, game.Policy) != nil {
+			t.Errorf("the saved policy refuses %s: %v", sql, checker.Check(sql, game.Policy))
+		}
+	}
+
 	// The role the Query Runner runs a read-write contest's queries as.
 	var copyName string
 	if err := st.core.QueryRow(ctx, `SELECT db_name FROM game_instances WHERE contest_id = $1 LIMIT 1`,
@@ -50,7 +64,6 @@ func TestAReadWriteFixtureLetsTheWriterRunTheWritesAndTeardownLeavesNothing(t *t
 		t.Fatalf("find a copy: %v", err)
 	}
 	writer := gamedbtest.Connect(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), copyName)
-	r := rand.New(rand.NewPCG(7, 8))
 	for _, write := range templates[KindWrite] {
 		if _, err := writer.Exec(ctx, write(r)); err != nil {
 			t.Errorf("the writer could not run a write: %v", err)
