@@ -10,8 +10,8 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// ErrNoSchema is a template whose shape is not cached yet, or was cached for
-// an older build. It is the ordinary state until the first console opens.
+// ErrNoSchema is a template whose shape is not cached: a game not built yet,
+// or built before builds described their template (Games.describe).
 var ErrNoSchema = errors.New("the game's schema is not known yet")
 
 // Schema is the shape of a game database as the console's schema panel draws
@@ -83,10 +83,15 @@ func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
 // Schema answers what contest's game looks like, reading database only if it
 // has to.
 //
-// It reads an instance, not the template: CREATE DATABASE ... TEMPLATE fails
-// while anything is connected to the template (SQLSTATE 55006), so reading
-// the template would refuse provisioning right when a contest starts. Every
-// instance is the same copy, so the answer is cached.
+// The build caches the description, read from the template before the game is
+// ready (Games.describe), so for a game built since, this is a cache read. A
+// miss reads database, the participant's own copy, and never the template:
+// CREATE DATABASE ... TEMPLATE fails while anything is connected to it
+// (SQLSTATE 55006). A copy's public schema is the template's for everything a
+// participant's role can do, since their own objects live in `work`, which is
+// not read, and only game_author may alter the game's tables. A copy read
+// because the cache could not be read is not saved, so it never replaces the
+// build's description.
 //
 // Cache failures never refuse the answer; only a cluster failure does, since
 // an empty panel would claim the game has no tables.
@@ -98,12 +103,13 @@ func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
 // first caller's cancellation, so one participant leaving does not fail the
 // others, and takes schemaReadTimeout instead.
 func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database string) (Schema, error) {
-	if cached, ok := r.cached(ctx, contest); ok {
+	if cached, hit, _ := r.cached(ctx, contest); hit {
 		return cached, nil
 	}
 
 	answer, err, _ := r.reads.Do(fmt.Sprintf("%s@%d", contest.ID, contest.Version), func() (any, error) {
-		if cached, ok := r.cached(ctx, contest); ok {
+		cached, hit, readable := r.cached(ctx, contest)
+		if hit {
 			return cached, nil
 		}
 
@@ -116,8 +122,10 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 		}
 		schema = boundSchema(schema)
 
-		// Best effort: the next caller reads again if this fails.
-		_ = r.store.SaveSchema(shared, contest.ID, contest.Version, schema)
+		if readable {
+			// Best effort: the next caller reads again if this fails.
+			_ = r.store.SaveSchema(shared, contest.ID, contest.Version, schema)
+		}
 		return schema, nil
 	})
 	if err != nil {
@@ -126,14 +134,20 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 	return answer.(Schema), nil
 }
 
-// cached returns the cached document only when it was read without error and
-// describes the build the contest is running.
-func (r *SchemaReader) cached(ctx context.Context, contest Contest) (Schema, bool) {
+// cached returns the cached document when it describes the build the contest
+// is running (hit). readable is false when the cache itself failed, as opposed
+// to holding nothing for this build.
+func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Schema, hit, readable bool) {
 	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
-	if err != nil || version != contest.Version {
-		return Schema{}, false
+	switch {
+	case errors.Is(err, ErrNoSchema):
+		return Schema{}, false, true
+	case err != nil:
+		return Schema{}, false, false
+	case version != contest.Version:
+		return Schema{}, false, true
 	}
-	return cached, true
+	return cached, true, true
 }
 
 // boundSchema cuts the document to MaxSchemaTables and MaxSchemaColumns and

@@ -430,6 +430,23 @@ func TestSchemaFallsBackToTheClusterWhenTheCacheCannotBeRead(t *testing.T) {
 	}
 }
 
+// The cache holds what the build read from the template. A participant's copy
+// read only because that could not be read must not replace it.
+func TestSchemaDoesNotCacheACopyReadBecauseTheCacheCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	store := &schemaStore{readFail: errors.New("the core database is down")}
+	source := &schemaSource{schema: twoTables()}
+	reader := provisioning.NewSchemaReader(store, source)
+
+	if _, err := reader.Schema(context.Background(), game(1), "game_c1_r1"); err != nil {
+		t.Fatalf("a failed cache read refused the answer: %v", err)
+	}
+	if store.saveCount() != 0 {
+		t.Fatal("a participant's copy was written over the build's description")
+	}
+}
+
 func TestSchemaReportsAClusterThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 
