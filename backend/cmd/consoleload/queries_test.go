@@ -4,6 +4,9 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
 func TestParseMix(t *testing.T) {
@@ -68,6 +71,28 @@ func TestWritesUpdateOnlyTheWritableTable(t *testing.T) {
 		sql := write(r)
 		if !strings.HasPrefix(sql, "UPDATE "+writableTable+" ") {
 			t.Errorf("a write that is not an update of %s: %s", writableTable, sql)
+		}
+	}
+}
+
+// The Query Runner's own checker, under the policies setup saves: every
+// query is admitted where the profile sends it, and a write nowhere else.
+func TestTheQueryRunnersPolicyAdmitsEveryQuery(t *testing.T) {
+	readWrite, readOnly := sqlpolicy.ReadWrite(writableTable), sqlpolicy.ReadOnly()
+	r := rand.New(rand.NewPCG(9, 10))
+	for _, kind := range kinds {
+		for i, template := range templates[kind] {
+			sql := template(r)
+			if err := checker.Check(sql, readWrite); err != nil {
+				t.Errorf("%s query %d refused in a read-write contest: %v\n%s", kind, i, err, sql)
+			}
+			err := checker.Check(sql, readOnly)
+			if kind == KindWrite && err == nil {
+				t.Errorf("write %d admitted in a read-only contest: %s", i, sql)
+			}
+			if kind != KindWrite && err != nil {
+				t.Errorf("%s query %d refused in a read-only contest: %v\n%s", kind, i, err, sql)
+			}
 		}
 	}
 }
