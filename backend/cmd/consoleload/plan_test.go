@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,4 +81,36 @@ func testContest(t *testing.T, st *stores, owner uuid.UUID, status string, start
 	t.Cleanup(func() {
 		_, _ = st.core.Exec(context.WithoutCancel(t.Context()), `DELETE FROM contests WHERE id = $1`, c.ID)
 	})
+}
+
+func TestTheReportLeadsWithTheVerdict(t *testing.T) {
+	out, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	slow := runSummary{Name: "steady-40", Queries: 100, All: latency{Count: 100, P95: 4000}}
+	v := profiles["beta"].thresholds.judge([]runSummary{slow})
+	rep := &report{Profile: "beta", Verdict: &v, Runs: []runSummary{slow}, Mix: mix{}}
+
+	if err := writeReport(out, rep); err != nil {
+		t.Fatalf("writeReport: %v", err)
+	}
+	text := string(mustRead(t, out, "report.md"))
+	verdictAt, runsAt := strings.Index(text, "## Verdict of the beta profile"), strings.Index(text, "## Runs")
+	if verdictAt < 0 || verdictAt > runsAt || !strings.Contains(text, "**FAILED**") {
+		t.Fatalf("the report does not lead with a failed verdict:\n%s", text)
+	}
+	if !strings.Contains(string(mustRead(t, out, "report.json")), `"passed": false`) {
+		t.Error("report.json lacks the verdict")
+	}
+}
+
+func mustRead(t *testing.T, out *os.Root, name string) []byte {
+	t.Helper()
+	body, err := out.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
