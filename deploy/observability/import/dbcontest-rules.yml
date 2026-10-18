@@ -36,12 +36,16 @@ groups:
             * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
       # The console, database resets, exports, imports and game uploads are
       # slow by design (a query waits on the Query Runner, a reset copies a
-      # database), so they are left out and this measures the API itself.
-      - record: dbcontest:api_http_request_duration_seconds:p95_5m
+      # database), so they are left out and this measures the API itself. The
+      # dashboard's latency panel leaves out the same routes; a test holds the
+      # two patterns equal. Its le="+Inf" bucket is those routes' request rate.
+      - record: dbcontest:api_http_request_duration_seconds_bucket:rate5m
         expr: |
-          histogram_quantile(0.95, sum by (le) (
+          sum by (le) (
             rate(http_request_duration_seconds_bucket{route!~".*/(query|play/reset|export|export\\.csv|log\\.csv|import)|.*/game/(uploads|tables)/.*"}[5m])
-              * on (job, instance) group_left () dbcontest:target{dbcontest="api"}))
+              * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+      - record: dbcontest:api_http_request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, dbcontest:api_http_request_duration_seconds_bucket:rate5m)
 
       - record: dbcontest:queryrunner_queries:rate5m
         expr: |
@@ -68,8 +72,11 @@ groups:
         annotations:
           summary: No scrape target matches the API selector.
           description: >-
-            Either the collector stopped scraping the API or the selector in the
-            dbcontest-selector group does not name its job. Find the job with
+            The api container may not be running: a collector that discovers
+            containers drops a stopped one instead of reporting it down, so check
+            docker compose -f deploy/docker-compose.yml ps first. Otherwise the
+            collector stopped scraping the API, or the selector in the
+            dbcontest-selector group does not name its job: find the job with
             count by (job) (game_instances_reclaimed_total) and edit the selector.
 
       - alert: DBContestQueryRunnerNotScraped
@@ -81,9 +88,13 @@ groups:
         annotations:
           summary: No scrape target matches the Query Runner selector.
           description: >-
-            Either the collector stopped scraping queryrunner:9101 or the selector
-            in the dbcontest-selector group does not name its job. Find the job
-            with count by (job) (queryrunner_active_queries) and edit the selector.
+            The queryrunner container may not be running: a collector that
+            discovers containers drops a stopped one instead of reporting it down,
+            so check docker compose -f deploy/docker-compose.yml ps first.
+            Otherwise the collector stopped scraping queryrunner:9101, or the
+            selector in the dbcontest-selector group does not name its job: find
+            the job with count by (job) (queryrunner_active_queries) and edit the
+            selector.
 
       - alert: DBContestAPIDown
         # Two minutes tolerates one missed scrape at a 60s interval and is still short against a contest.
@@ -144,10 +155,10 @@ groups:
             on sign-in it is sign_in_busy (every password-hashing slot taken).
 
       - alert: DBContestAPISlow
-        # Apart from the slow-by-design routes the API answers from its own database in milliseconds; a p95 over 1s is the API or core database saturated (the traffic floor, 15 requests in 5 minutes, keeps a handful of requests from deciding).
+        # Apart from the slow-by-design routes the API answers from its own database in milliseconds; a p95 over 1s is the API or core database saturated (the floor, 15 of those requests in 5 minutes, keeps a handful from deciding).
         expr: |
           dbcontest:api_http_request_duration_seconds:p95_5m > 1
-          and dbcontest:api_http_requests:rate5m > 0.05
+          and on () dbcontest:api_http_request_duration_seconds_bucket:rate5m{le="+Inf"} > 0.05
         for: 10m
         labels:
           severity: warning
