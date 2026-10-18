@@ -600,7 +600,13 @@ make game-check                               # built templates the game cluster
 ```
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
-the host, and refuses to keep an empty file. The volumes come out through
+the host, and refuses to keep a dump without pg_dump's custom-format header,
+an empty one included. Each file is written as a hidden `.<name>.partial`
+and takes its real name only once it is checked (the dump's header, `gzip -t`
+for an archive), so a backup stopped half way — a timeout, a full disk, a
+Ctrl-C — leaves only `.partial` files and never a set whose last archive is
+cut short; delete them by hand. The files are readable by their owner only
+(umask 077): they hold the participants' answers. The volumes come out through
 `docker compose cp` on the `api` service — the mount point is the compose
 file's business, not the Makefile's — which reads a stopped container as
 happily as a running one, but needs the container to exist. Each volume is
@@ -699,9 +705,10 @@ queries behind it.
 `BACKUP_KEEP` complete sets (48) and, beyond them, the last set of each of the
 `BACKUP_KEEP_DAILY` most recent days not already covered (14). A *set* is the
 three files of one timestamp; only a complete set is ever removed, and then
-exactly those three files. An incomplete set (a failed run leaves its dump
-behind), another database's dump and any file of another name are left
-alone; rotation names the incomplete ones, for you to delete once you know
+exactly those three files. An incomplete set (a run that could not read a
+volume keeps its dump), the `.partial` files of a stopped run, another
+database's dump and any file of another name are left alone; rotation names
+the incomplete sets and the unfinished files, for you to delete once you know
 why. It counts the sets `make backup` writes by hand too: to keep one out of
 rotation, move it out of `deploy/backups` or rename it.
 
