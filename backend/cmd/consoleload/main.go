@@ -42,6 +42,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/contests"
 )
 
 func main() {
@@ -68,6 +70,8 @@ type config struct {
 	cooldown time.Duration
 	mix      mix
 	seed     int64
+	// mode is the fixture contest's SQL access mode.
+	mode string
 
 	headroom     int
 	workers      int
@@ -139,7 +143,10 @@ func parseFlags(args []string) (config, error) {
 	flags.DurationVar(&cfg.burstWindow, "burst-window", time.Second, "every participant presses Run within this window")
 
 	flags.DurationVar(&cfg.cooldown, "cooldown", 30*time.Second, "pause between runs")
-	mixFlag := flags.String("mix", "50,30,20", "percentages of cheap, mid and expensive queries")
+	mixFlag := flags.String("mix", "50,30,20",
+		"percentages of cheap, mid and expensive queries, and of writes when a fourth is given")
+	flags.StringVar(&cfg.mode, "mode", contests.ModeReadOnly,
+		"the test contest's SQL access: read_only, or read_write with "+writableTable+" writable")
 	flags.Int64Var(&cfg.seed, "seed", 1, "random seed, so two runs send the same sequence of queries")
 
 	// The pool tender's own defaults and variables.
@@ -195,6 +202,10 @@ func parseFlags(args []string) (config, error) {
 	switch {
 	case cfg.fixture == "" && cfg.sourceTemplate == "":
 		return config{}, errors.New("-source-template is required unless -fixture reuses a kept fixture")
+	case cfg.mode != contests.ModeReadOnly && cfg.mode != contests.ModeReadWrite:
+		return config{}, fmt.Errorf("-mode: %q is neither %s nor %s", cfg.mode, contests.ModeReadOnly, contests.ModeReadWrite)
+	case cfg.mix[KindWrite] > 0 && cfg.mode != contests.ModeReadWrite:
+		return config{}, errors.New("-mix: writes need -mode read_write, or every one of them is refused")
 	case cfg.thinkMin <= 0 || cfg.thinkMax < cfg.thinkMin:
 		return config{}, errors.New("-think-min must be positive and no larger than -think-max")
 	case cfg.burstRounds < 1:

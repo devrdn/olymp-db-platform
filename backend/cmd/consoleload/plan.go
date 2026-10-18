@@ -20,6 +20,7 @@ type report struct {
 	API          string            `json:"api"`
 	Source       string            `json:"source_template,omitempty"`
 	Mix          mix               `json:"mix"`
+	Mode         string            `json:"mode"`
 	CopySettings map[string]string `json:"copy_settings,omitempty"`
 	Setup        *setupReport      `json:"setup,omitempty"`
 	Provision    *provisionReport  `json:"provision,omitempty"`
@@ -31,7 +32,7 @@ type report struct {
 }
 
 func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err error) {
-	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix}
+	rep := &report{Label: cfg.label, API: cfg.api, Source: cfg.sourceTemplate, Mix: cfg.mix, Mode: cfg.mode}
 	if rep.CountsBefore, err = countEverything(ctx, st); err != nil {
 		return err
 	}
@@ -42,8 +43,8 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 		if f, err = loadFixture(cfg.fixture); err != nil {
 			return err
 		}
-		if len(f.Participants) < needed {
-			return fmt.Errorf("the kept fixture has %d participants and this run needs %d", len(f.Participants), needed)
+		if err := f.fits(needed, cfg.mode); err != nil {
+			return err
 		}
 	}
 
@@ -82,7 +83,7 @@ func execute(ctx context.Context, st *stores, cfg config, out *os.Root) (err err
 
 	if cfg.fixture == "" {
 		fmt.Printf("setting up %d participants on a copy of %s\n", needed, cfg.sourceTemplate)
-		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed)
+		setupRep, err := setup(ctx, st, f, cfg.sourceTemplate, needed, cfg.mode)
 		if err != nil {
 			return err
 		}
@@ -246,8 +247,8 @@ func writeReport(out *os.Root, rep *report) error {
 	if rep.Label != "" {
 		fmt.Fprintf(&b, "%s\n\n", rep.Label)
 	}
-	fmt.Fprintf(&b, "API %s; query mix cheap/mid/expensive %d/%d/%d.\n\n",
-		rep.API, rep.Mix[KindCheap], rep.Mix[KindMid], rep.Mix[KindExpensive])
+	fmt.Fprintf(&b, "API %s; a %s contest; query mix cheap/mid/expensive/write %d/%d/%d/%d.\n\n",
+		rep.API, rep.Mode, rep.Mix[KindCheap], rep.Mix[KindMid], rep.Mix[KindExpensive], rep.Mix[KindWrite])
 	if len(rep.CopySettings) > 0 {
 		settings := make([]string, 0, len(rep.CopySettings))
 		for _, name := range sortedKeys(rep.CopySettings) {

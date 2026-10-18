@@ -172,7 +172,11 @@ func markdown(runs []runSummary) string {
 	}
 
 	b.WriteString("\n### Answered latency by query class (ms, p50 / p95 / p99, count)\n\n")
-	b.WriteString("| run | cheap | mid | expensive |\n|---|---|---|---|\n")
+	b.WriteString("| run |")
+	for _, kind := range kinds {
+		fmt.Fprintf(&b, " %s |", kind)
+	}
+	b.WriteString("\n|---|" + strings.Repeat("---|", len(kinds)) + "\n")
 	for _, r := range runs {
 		fmt.Fprintf(&b, "| %s", r.Name)
 		for _, kind := range kinds {
