@@ -494,12 +494,11 @@ that reads it.
 
 No collector acts on these labels by itself. Grafana Alloy and Prometheus
 with Docker service discovery expose a container's labels and ports to relabel
-rules and act on none of them by default; a rule the operator writes keeps the
-containers whose `scrape` is `true` and points the address at the labelled
-`port`. `scrape`, `port` and
-`path` are the labels such rules for this convention usually read. `job` is not
-among them, so without a rule that reads it the series are recorded under
-whatever job name the collector chose. The names are the ones
+rules; a rule the operator writes keeps the containers whose `scrape` is
+`true` and points the address at the labelled `port`. `scrape`, `port` and
+`path` are the labels such rules for this convention usually read. `job` is
+not among them, so without a rule that reads it the series are recorded under
+whatever job name the collector chose. The job names here are the ones
 [`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml)
 scrapes, so a query selecting on `job` works unchanged when a collector does
 read them. The bundled jobs also attach a `service` target label, which a

@@ -3832,8 +3832,9 @@ writes.
 
 **Without the observability profile**, metrics are served to an endpoint
 nobody reads; such an installation should set `METRICS_BACKEND=log` so the
-statistics join the log stream (section 3.1), and set `prometheus.io/scrape:
-"false"` on the `api` service, whose `/metrics` then answers 404.
+statistics join the log stream (section 3.1), and set
+`prometheus.io/scrape: "false"` on the `api` service, whose `/metrics` then
+answers 404.
 
 ### Building and shipping
 
