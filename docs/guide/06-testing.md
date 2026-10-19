@@ -29,6 +29,7 @@ uses). The backend's own notes on its tests are in
 | Contract checks | `cmd/apicontract`, `cmd/auditcontract`, `migrations`, `sentineltest`, `internal/api/errortable_test.go` | Go and a C compiler | `make test` |
 | Frontend unit and component tests | `*.test.ts` and `*.test.tsx` beside their source in `frontend/` | nothing | `make front-test` |
 | Frontend checks | `npm run lint`, `typecheck`, `contrast`, `type-scale`, `error-codes` (in `make front-check`) and `smoke` (CI only) | nothing | `make front-check`, `npm run smoke` |
+| Browser smoke test | `frontend/e2e/` (Playwright) | a running stack; Docker for the throwaway one | `make e2e-smoke` (not in CI) |
 
 ### Go unit tests
 
@@ -191,6 +192,65 @@ stubs the two `Range` methods CodeMirror needs.
 
 How the frontend is organised: [05-frontend.md](05-frontend.md).
 
+### The browser smoke test
+
+`frontend/e2e/` drives Chromium through the main path of a running stack:
+an administrator signs in and finds the contest list; a participant opens a
+running `read_write` contest, runs a query and sees its rows, deletes a row,
+resets their database through the dialog, sees the result panel cleared and
+the row back, then answers the question wrongly and rightly and sees each
+judged. It is the only test that crosses Caddy, the interface, the API, the
+Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
+
+- **It seeds through the public API** (`e2e/seed.ts`, the global setup),
+  signed in as the stack's administrator (`E2E_ADMIN_LOGIN`,
+  `E2E_ADMIN_PASSWORD`): an administrator and a participant of its own, a
+  contest with a story, a question and its answer, a three-row game script,
+  the roster, then publish and start. Names and passwords are generated per
+  run and nothing is printed. Each object is written to
+  `frontend/e2e/.state/seed.json` (git-ignored, 0600) the moment it exists,
+  so the teardown, which Playwright runs even after a failed setup, closes
+  whatever was made: the contest is archived (deleted if never published)
+  and the two accounts are deleted. A record a failed teardown kept is
+  closed by the next setup before it starts.
+- **It leaves a one-time password alone** unless
+  `E2E_ALLOW_ADMIN_PASSWORD_CHANGE=1`, which `e2e/stack.sh` writes only into
+  the throwaway stack's `smoke.env`. Without it, an administrator still on a
+  one-time password is refused with a request to sign in once by hand. With
+  it, the new password is written to `.state/admin.json` (refused unless git
+  ignores it, read back before use) before the API is asked to change it.
+- **Selectors are roles and accessible names**, as in the component tests, so
+  the suite reads the English dictionary; the browser is pinned to `en-US`.
+- **The answer comes last** because answering a contest's only question
+  closes the console for that participant.
+- **It needs a stack and never starts one.** `make e2e-stack-up` builds the
+  images from the working tree and starts the deployment's own compose file
+  under the project `dbcontest-e2e`, on `https://localhost:18443` (Caddy's
+  local certificate) with generated secrets, its own volumes and its own
+  subnet; it reads neither `deploy/.env` nor a running stack, creates the
+  first administrator and writes `smoke.env` (the `E2E_*` variables, 0600)
+  into its directory. Then:
+
+  ```bash
+  make e2e-stack-up                      # prints where smoke.env is
+  make e2e-smoke E2E_ENV_FILE=<that path>
+  make e2e-stack-down                    # containers, volumes, network, images
+  ```
+
+  `E2E_HTTPS_PORT`, `E2E_STACK_DIR`, `E2E_PROJECT` and `E2E_SUBNET_PREFIX`
+  (the stack's /24, `10.231.40` by default) move the port, the directory,
+  the project name and the network; give `e2e-stack-down` the same ones.
+  `KEEP_IMAGES=1` keeps the images for the next `e2e-stack-up`.
+
+  Against any other stack, put `E2E_BASE_URL`, `E2E_ADMIN_LOGIN` and
+  `E2E_ADMIN_PASSWORD` in a 0600 file and pass it as `E2E_ENV_FILE`, rather
+  than on the command line, where the password reaches the shell history
+  and the process list. The run leaves an archived contest and two deleted
+  accounts in that stack's audit trail.
+- **Traces are off.** `E2E_TRACE=1` keeps one per failed test under
+  `frontend/test-results/` (git-ignored), and it records everything typed,
+  the run's passwords among it.
+
 ## 2. Running them
 
 All `make` targets run from the repository root. The database targets read
@@ -210,6 +270,7 @@ they stop with an explanation when it is missing.
 | `make front-test` | `npm test` (`vitest run`) | Node; installs dependencies if missing |
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build (not `smoke`) | Node |
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
+| `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
 
 One test or one package, from `backend/`:
 

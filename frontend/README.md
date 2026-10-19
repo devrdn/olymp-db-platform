@@ -52,9 +52,17 @@ first so the API address is set.
 | `npm run build` | production build |
 | `npm run start` | serves the standalone build (`scripts/serve.mjs`) |
 | `npm run smoke` | serves the build and asks it for `/login` |
+| `npx playwright test` | the browser smoke test (`e2e/`) against the stack in `E2E_BASE_URL`; from the root, `make e2e-smoke` |
 
-CI runs all of them but `dev`, `test:watch` and `start` on every pull request
-(`.github/workflows/frontend.yml`); `smoke` runs after the build.
+CI runs all of them but `dev`, `test:watch`, `start` and the Playwright suite
+on every pull request (`.github/workflows/frontend.yml`); `smoke` runs after
+the build.
+
+The Playwright suite needs a running stack, seeds it through the API and is
+not in CI yet. `make e2e-stack-up` starts a throwaway one from this tree and
+prints how to point `make e2e-smoke` at it; the browser is downloaded into
+Playwright's own cache, never into the repository. What the suite covers and
+how it seeds: [docs/guide/06-testing.md](../docs/guide/06-testing.md#the-browser-smoke-test).
 
 ## Environment
 
@@ -111,6 +119,7 @@ lib/
   utils.ts             cn(), which also teaches tailwind-merge our type scale
 
 scripts/               the checks CI runs
+e2e/                   the browser smoke test (Playwright), its seed and its throwaway stack
 styles/tokens.css      the single source of every colour, size, duration and radius
 proxy.ts               route protection (Next 16 calls this middleware "proxy")
 ```
@@ -131,9 +140,9 @@ moment it moves to `components/product/` — one route, keep it; two, move it.
 **A test sits next to its source.** `foo.tsx` is tested by `foo.test.tsx`. A
 mirrored `__tests__` tree has to be kept in step by hand, and renaming a file
 becomes a two-file operation whose second half is easy to forget; both Vitest
-and the Next testing guide colocate by default. End-to-end tests are the
-exception and will get their own top-level directory when they arrive, because
-they belong to a journey rather than to a file.
+and the Next testing guide colocate by default. The browser smoke test is the
+exception and lives in `e2e/`, because it belongs to a journey rather than to
+a file.
 
 ## Which direction things point
 

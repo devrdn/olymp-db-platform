@@ -1,0 +1,32 @@
+# The throwaway stack the browser smoke test runs against, layered over
+# deploy/docker-compose.yml and deploy/docker-compose.build.yml by
+# frontend/e2e/stack.sh. Every service and setting is the deployment's own;
+# only what would collide with another stack on the same machine changes.
+#
+# The base file pins 172.28.0.0/16 so TRUSTED_PROXIES can name Caddy and the
+# interface, and Docker refuses a second network on an overlapping subnet, so
+# a development stack's network would stop this one from starting. The
+# replacement is the /24 E2E_SUBNET_PREFIX names, with the same two fixed
+# addresses at .10 and .11, which stack.sh derives TRUSTED_PROXIES from.
+
+services:
+  web:
+    networks:
+      internal:
+        ipv4_address: ${E2E_SUBNET_PREFIX:?set E2E_SUBNET_PREFIX}.11
+
+  caddy:
+    networks:
+      internal:
+        ipv4_address: ${E2E_SUBNET_PREFIX:?set E2E_SUBNET_PREFIX}.10
+    # HTTPS on loopback only, and no plain HTTP port at all: the test never
+    # needs the redirect, and a throwaway stack has no business on the LAN.
+    ports: !override
+      - "127.0.0.1:${E2E_HTTPS_PORT:?set E2E_HTTPS_PORT}:443"
+
+networks:
+  internal:
+    ipam: !override
+      config:
+        - subnet: ${E2E_SUBNET_PREFIX:?set E2E_SUBNET_PREFIX}.0/24
+          ip_range: ${E2E_SUBNET_PREFIX:?set E2E_SUBNET_PREFIX}.128/25

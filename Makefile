@@ -138,10 +138,10 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-stack-up e2e-stack-down
 
 help: ## Show this help
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 ## --- Go ---------------------------------------------------------------------
 
@@ -426,6 +426,33 @@ front-lint: front-install ## Lint the interface
 front-check: front-install ## Everything CI runs for the interface but the smoke test
 	cd $(FRONTEND) && npm run lint && npm run contrast && npm run type-scale \
 		&& npm run error-codes && npm run typecheck && npm test && npm run build
+
+## --- Browser smoke test -----------------------------------------------------
+#
+# The main path in a real browser (frontend/e2e): an administrator signs in, a
+# participant runs a query, answers and resets their database. It runs against
+# a stack that is already up, named by E2E_BASE_URL or by E2E_ENV_FILE (a file
+# of the E2E_* variables, which e2e-stack-up writes), and seeds it through the
+# public API. Not in CI.
+#
+# e2e-stack-up and e2e-stack-down are a throwaway stack for it: the deployment's
+# compose file with images built from this tree, under its own project name,
+# ports, volumes and generated secrets. They read neither deploy/.env nor a
+# running stack (frontend/e2e/stack.sh).
+
+e2e-smoke: front-install ## Run the browser smoke test against E2E_BASE_URL or E2E_ENV_FILE
+	@test -n "$(E2E_BASE_URL)$(E2E_ENV_FILE)" || { \
+		echo "name the stack to test: E2E_BASE_URL=https://... or E2E_ENV_FILE=<smoke.env>"; \
+		echo "for a throwaway one: make e2e-stack-up"; \
+		exit 1; }
+	cd $(FRONTEND) && npx playwright install chromium && \
+		$(if $(E2E_ENV_FILE),E2E_ENV_FILE="$(abspath $(E2E_ENV_FILE))") npx playwright test
+
+e2e-stack-up: ## Build and start a throwaway stack for the smoke test
+	$(FRONTEND)/e2e/stack.sh up
+
+e2e-stack-down: ## Remove the throwaway stack, its volumes and its images
+	$(FRONTEND)/e2e/stack.sh down
 
 ## --- Containers -------------------------------------------------------------
 
