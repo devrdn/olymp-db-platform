@@ -236,7 +236,11 @@ A failed teardown prints the exact command that finishes it
 
    An administrator still on a one-time password is refused: sign in once by
    hand first. The run leaves an archived contest in the audit trail
-   ([The browser smoke test](06-testing.md#the-browser-smoke-test)).
+   ([The browser smoke test](06-testing.md#the-browser-smoke-test)). If it was
+   interrupted, check that no contest titled `E2E smoke …` is still running
+   and no `e2e-admin-…` or `e2e-player-…` account is left; archive or delete
+   what remains by hand, since an administrator account on production must
+   not outlive the run.
 3. **Set the feedback link.** **Installation** (`/settings`), **Feedback
    address**: a full `https` address, such as a form. Participants see
    **Send feedback** in their profile, and on the play screen only before
@@ -409,9 +413,9 @@ There is no extension for one participant. What exists:
 - **Nothing reopens a finished contest.** A finished contest moves only to
   archived. Extend before **Ends**, not after.
 
-The **Grace period, minutes** field on the same tab is not more time,
-whatever its help text says: it is how long participants' databases are kept
-after the contest finishes ([After the contest](#4-after-the-contest)).
+The **Databases kept after the end, minutes** field on the same tab is not
+more time: it is how long participants' databases are kept after the contest
+finishes ([After the contest](#4-after-the-contest)).
 
 #### Cheating is suspected
 
@@ -450,9 +454,9 @@ Do not deploy a new version mid-contest.
 `DBContestQueryRunnerFull`, or **Waiting queries** pinned at the queue's
 depth: participants are told `busy` at once, and a query that waited past
 `QUERY_QUEUE_WAIT` times out. The per-participant rate, **Queries per minute** on
-**Settings**, can be lowered while the contest runs. Despite its hint, zero
-there means the installation's `QUERY_PER_MINUTE` (30 by default), not no
-limit, and a value above it changes nothing.
+**Settings**, can be lowered while the contest runs. Zero there means the
+installation's `QUERY_PER_MINUTE` (30 by default), and a value above it
+changes nothing.
 
 The capacity itself is decided before the contest, not during it.
 `QUERY_CONCURRENT` plus `QUERY_QUEUE_DEPTH` should be at least the number of
@@ -545,7 +549,7 @@ The contest's id is the identifier in its workspace address,
 3. **Feedback.** Collect it from the form behind the feedback address. Empty
    **Feedback address** once you no longer want the link shown.
 4. **Participants' databases are dropped after the grace period**: the
-   contest's **Grace period, minutes**, or `GAME_INSTANCE_GRACE_MIN` (1440, a
+   contest's **Databases kept after the end, minutes**, or `GAME_INSTANCE_GRACE_MIN` (1440, a
    day) when it is zero. It is counted from the contest's last change of
    status or settings: the finish, and again from archiving or an extension,
    each of which restarts the count. The **Reclaim sweep per hour** panel
