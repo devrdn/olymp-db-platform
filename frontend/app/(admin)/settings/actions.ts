@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
-import { IMAGE_KINDS, SETTING_KEYS } from "@/lib/api/settings";
+import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
 
 export type SettingsState = { code?: string; saved?: boolean };
 
@@ -13,9 +13,13 @@ export async function saveSettingsAction(
   _previous: SettingsState,
   form: FormData,
 ): Promise<SettingsState> {
+  const feedback = String(form.get("feedback") ?? "").trim();
+  if (feedback !== "" && feedbackHref(feedback) === null) return { code: "invalid_feedback_url" };
+
   const values = {
     [SETTING_KEYS.name]: String(form.get("name") ?? "").trim(),
     [SETTING_KEYS.contact]: String(form.get("contact") ?? "").trim(),
+    [SETTING_KEYS.feedback]: feedback,
   };
 
   const failure = await serverRequest("/settings", { method: "PUT", body: { values } }).then(

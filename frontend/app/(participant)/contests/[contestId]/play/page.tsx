@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { StoryText } from "@/components/product/story-text";
+import { branding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
 import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
@@ -74,7 +75,8 @@ function takesTheScreen(code: string): boolean {
  */
 export default async function PlayPage({ params }: PageProps<"/contests/[contestId]/play">) {
   const { contestId } = await params;
-  const [locale, whole] = await Promise.all([activeLocale(), activeDictionary()]);
+  // `branding` shares the layout's request (React's `cache()`).
+  const [locale, whole, brand] = await Promise.all([activeLocale(), activeDictionary(), branding()]);
   // Narrowed once and never widened: everything handed to a Client Component
   // is serialised into the payload (`./dictionary.ts`).
   const dict = playDictionary(whole);
@@ -92,7 +94,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   if (contest.status === "published") {
     return (
       <Band fill>
-        <WaitingRoom contest={contest} locale={locale} dict={dict} />
+        <WaitingRoom contest={contest} feedbackUrl={brand.feedback} locale={locale} dict={dict} />
       </Band>
     );
   }
@@ -120,7 +122,13 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
           shared by the header and the workspace. */}
       <ContentLoadedProvider>
         <PanelVisibilityProvider contestId={contestId}>
-          <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
+          <PlayHeader
+            contestId={contestId}
+            title={contest.title}
+            waitingForStart={false}
+            feedbackUrl={brand.feedback}
+            dict={dict}
+          />
           <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
             <PlayPanels
               contestId={contestId}
@@ -375,10 +383,12 @@ function UnavailablePage({
  */
 function WaitingRoom({
   contest,
+  feedbackUrl,
   locale,
   dict,
 }: {
   contest: ContestSummary;
+  feedbackUrl: string;
   locale: Locale;
   dict: PlayDictionary;
 }) {
@@ -392,7 +402,13 @@ function WaitingRoom({
     <div className="flex flex-col gap-6">
       {/* Cancels `Band`'s padding so the header's border runs edge to edge. */}
       <div className="-mx-10 max-narrow:-mx-4.5">
-        <PlayHeader contestId={contest.id} title={contest.title} waitingForStart dict={dict} />
+        <PlayHeader
+          contestId={contest.id}
+          title={contest.title}
+          waitingForStart
+          feedbackUrl={feedbackUrl}
+          dict={dict}
+        />
       </div>
       <div className="flex max-w-body flex-col gap-2">
         <p className="text-body text-ink">{t.body}</p>
