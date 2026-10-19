@@ -238,12 +238,14 @@ services:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-queryrunner:${VERSION:-dev}
     restart: unless-stopped
     # What a collector needs to find this endpoint without being told our
-    # service names: the widely used prometheus.io convention, read from the
-    # Docker API. The port must stay the one QUERY_RUNNER_METRICS_ADDR binds
-    # below — a test in internal/platform/config fails when they drift. The
-    # job name must stay the one deploy/observability/prometheus.yml scrapes,
-    # so a dashboard written against the bundled Prometheus works unchanged
-    # for somebody scraping by label instead.
+    # service names, read from the Docker API. scrape, port and path are the
+    # prometheus.io convention a collector reads out of the box; job is there
+    # for a collector whose relabel rules take it. The port must stay the one
+    # QUERY_RUNNER_METRICS_ADDR binds below — a test in
+    # internal/platform/config fails when they drift. The job name must stay
+    # the one deploy/observability/prometheus.yml scrapes, so a dashboard
+    # written against the bundled Prometheus works unchanged for somebody
+    # scraping by label instead.
     labels:
       prometheus.io/scrape: "true"
       prometheus.io/port: "9101"
