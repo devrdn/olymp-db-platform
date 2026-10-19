@@ -47,7 +47,7 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 	q.registry = p.Registry()
 	q.queries = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "queryrunner_queries_total",
-		Help: "Queries the Query Runner answered, by outcome (ok, rejected, error, timeout) and reason.",
+		Help: "Queries the Query Runner answered, by outcome and reason.",
 	}, []string{"outcome", "reason"})
 	// From a fast read to past the deadline, where a cancelled query's
 	// cleanup lands. A QUERY_DEADLINE above the top bucket lands in +Inf.
