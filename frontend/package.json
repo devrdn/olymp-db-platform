@@ -14,6 +14,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "error-codes": "node scripts/error-codes.mjs",
     "type-scale": "node scripts/type-scale.mjs",
+    "icons": "node scripts/icons.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

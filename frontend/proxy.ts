@@ -53,5 +53,7 @@ export function proxy(request: NextRequest) {
  * stop guarding a route that legitimately contains one.
  */
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|apple-icon\\.png|robots\\.txt|sitemap\\.xml).*)",
+  ],
 };
