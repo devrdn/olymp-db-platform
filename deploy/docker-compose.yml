@@ -231,17 +231,36 @@ services:
   # it is the only process holding the game cluster's credentials: the API is
   # deliberately given no route to a participant's database.
   #
-  # No published port, and no core database: it is stateless, and what it knows
-  # about a request is what the request carries.
+  # No published port, for queries (9100) or metrics (9101), and no core
+  # database: it is stateless, and what it knows about a request is what the
+  # request carries.
   queryrunner:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-queryrunner:${VERSION:-dev}
     restart: unless-stopped
+    # What a collector needs to find this endpoint without being told our
+    # service names, read from the Docker API. scrape, port and path are the
+    # labels relabel rules for the prometheus.io convention usually read; job
+    # is not among them, so only a rule that reads it will use it. The port
+    # must stay the one QUERY_RUNNER_METRICS_ADDR binds below — a test in
+    # internal/platform/config fails when they drift. The job name must stay
+    # the one deploy/observability/prometheus.yml scrapes, so a dashboard
+    # written against the bundled Prometheus works unchanged for somebody
+    # scraping by label instead.
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9101"
+      prometheus.io/path: /metrics
+      prometheus.io/job: queryrunner
     environment:
       ENV: ${ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Every interface of this container, inside a network nothing outside
       # routes into. Named here because the binary's own default is loopback.
       QUERY_RUNNER_ADDR: ":9100"
+      # Plain-HTTP /metrics, the counterpart of the api's INTERNAL_ADDR: on
+      # the same private network, with no published port, so only a scraper
+      # on that network (Prometheus below, the host's collector) reads it.
+      QUERY_RUNNER_METRICS_ADDR: ":9101"
       # The secret every call must carry, the health check's included (it
       # reads it from this same environment). The runner itself refuses to
       # start without a valid one outside development. Not required here:
@@ -385,6 +404,14 @@ services:
   api:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     restart: unless-stopped
+    # As on queryrunner above; this port is the one INTERNAL_ADDR binds. The
+    # endpoint exists only with METRICS_BACKEND=prometheus, so set scrape to
+    # "false" (or drop the labels) under log or none.
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: /metrics
+      prometheus.io/job: core-api
     environment:
       ENV: ${ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -728,7 +755,8 @@ services:
   # Optional, and off by default so a small install stays small:
   #   docker compose --profile observability up -d
   # Without it, set METRICS_BACKEND=log so request statistics go to the log
-  # stream rather than to an endpoint nobody reads.
+  # stream rather than to an endpoint nobody reads, and set
+  # prometheus.io/scrape to "false" on api to match.
 
   prometheus:
     image: prom/prometheus:v3.1.0

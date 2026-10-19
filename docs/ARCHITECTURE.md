@@ -326,6 +326,17 @@ its numbers are somewhere else. An unknown `METRICS_BACKEND` is a startup
 failure: a typo should be caught when configuration loads, not discovered
 after an olympiad as "we recorded nothing".
 
+`METRICS_BACKEND` is the Core API's setting. The Query Runner always records
+into its own Prometheus registry and serves `/metrics` on an internal listener
+of its own (`QUERY_RUNNER_METRICS_ADDR`, port 9101), apart from its
+token-guarded gRPC port; its labels are fixed lists it declares at startup.
+
+Both endpoints describe themselves: the containers carry `prometheus.io/*`
+labels saying where the metrics are, for a collector that reads them from the
+Docker API. What each label means, and what a collector must do to use it, is
+in the backend README under "Finding the metrics endpoints from the Docker
+API".
+
 The principle underneath: **metrics are diagnostics**. No branch of their code
 may affect how a request is served.
 
@@ -3821,7 +3832,9 @@ writes.
 
 **Without the observability profile**, metrics are served to an endpoint
 nobody reads; such an installation should set `METRICS_BACKEND=log` so the
-statistics join the log stream (section 3.1).
+statistics join the log stream (section 3.1), and set
+`prometheus.io/scrape: "false"` on the `api` service, whose `/metrics` then
+answers 404.
 
 ### Building and shipping
 
@@ -4504,10 +4517,14 @@ Product decisions the items below are built on.
 - [ ] **37. No alerts, no dashboards, and the Query Runner is not measured**
   (sections 2, 4.2 and 9). The provisioning queue's depth is meant to carry
   an alert, and section 9 lists metrics for active participants, student
-  queries and the queue. The API exports HTTP and reclamation metrics only;
-  Prometheus has no rules and there is no Alertmanager, Grafana has data
-  sources and no dashboards, and the Query Runner exposes no metrics at all.
-  During an olympiad somebody has to be watching rather than being told.
+  queries and the queue. The API exports HTTP and reclamation metrics only.
+  The Query Runner exports its query path on an internal listener: queries
+  by outcome and reason, duration, admission wait, running and queued
+  queries, and result-budget cut-offs (backend/README.md, Observability).
+  What remains: Prometheus has no rules and there is no Alertmanager,
+  Grafana has data sources and no dashboards, and neither active
+  participants nor the provisioning queue is measured. During an olympiad
+  somebody has to be watching rather than being told.
 - [ ] **38. CI does not keep section 11's supply-chain promises**
   (sections 11 and 13). The frontend's CI runs no `npm audit`, and its images
   are published after the build alone, while the backend's wait for the

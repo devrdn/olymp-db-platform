@@ -480,6 +480,91 @@ need to give Promtail a file-based scrape target and have `make run` tee its
 output there; nothing in this repository does that today, and it has not been
 worth the plumbing so far.
 
+### Finding the metrics endpoints from the Docker API
+
+The `api` and `queryrunner` containers carry labels in
+`deploy/docker-compose.yml` that say where their metrics are, so a collector
+need not be given our service names. `prometheus.io/scrape: "true"` says there
+is something to scrape; `prometheus.io/port` is the private port the endpoint
+listens on (`9090` for the API, `9101` for the runner: the ports
+`INTERNAL_ADDR` and `QUERY_RUNNER_METRICS_ADDR` bind); `prometheus.io/path` is
+the path on it (`/metrics`); `prometheus.io/job` is the job name to record the
+series under (`core-api`, `queryrunner`), used only by a collector with a rule
+that reads it.
+
+No collector acts on these labels by itself. Grafana Alloy and Prometheus
+with Docker service discovery expose a container's labels and ports to relabel
+rules; a rule the operator writes keeps the containers whose `scrape` is
+`true` and points the address at the labelled `port`. `scrape`, `port` and
+`path` are the labels such rules for this convention usually read. `job` is
+not among them, so without a rule that reads it the series are recorded under
+whatever job name the collector chose. The job names here are the ones
+[`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml)
+scrapes, so a query selecting on `job` works unchanged when a collector does
+read them. The bundled jobs also attach a `service` target label, which a
+label-discovered target does not have, so a query selecting on `service` does
+not carry over. The ports are not published, so only a collector on the same
+Docker host or network reaches them.
+
+The runner's endpoint cannot be switched off, so its label is always true. The
+API's exists only with `METRICS_BACKEND=prometheus` (the default): with `log` or
+`none` the path answers 404. An install that sets either must set
+`prometheus.io/scrape: "false"` on `api` or drop the label, or its collector
+keeps a target that never answers.
+
+### Query Runner metrics
+
+The Query Runner serves `/metrics` over plain HTTP on a listener of its own,
+`QUERY_RUNNER_METRICS_ADDR`: `127.0.0.1:9101` by default, so `make runner`
+keeps it on loopback (`curl localhost:9101/metrics`), and `:9101` in
+`deploy/docker-compose.yml`. Like the API's `9090`, the port is never
+published: it is reachable only on the compose network, by the optional
+Prometheus (job `queryrunner`, target `queryrunner:9101`) or the host's
+collector. It is a separate port because the gRPC port (`9100`) asks every
+caller for `QUERY_RUNNER_TOKEN`, which a scraper does not carry. The runner
+always records into Prometheus; `METRICS_BACKEND` is the API's setting.
+
+There is no setting that turns this listener off, so a port conflict on `9101`
+stops the runner from starting. That is deliberate: a runner nobody can observe
+during a contest is worse than one that refuses to start.
+
+Every label is a fixed set the runner declares at startup, never a contest,
+participant, database or SQL value. A value outside that set is counted as
+`other`, so a series labelled `other` means the runner reported something it
+never declared. Every declared series is exported at zero from the start.
+
+| Metric | Type | Labels | Recorded |
+|---|---|---|---|
+| `queryrunner_queries_total` | counter | `outcome`, `reason` | once per query, however it ended (`queryrunner.Runner.Run`) |
+| `queryrunner_query_duration_seconds` | histogram | `outcome` | for an admitted query, from admission to its end, connecting included |
+| `queryrunner_admission_wait_seconds` | histogram | — | for a query that waited for a slot, whether it got one (zero when admitted at once), timed out or was abandoned by its caller; a query refused at the gate's door never waited |
+| `queryrunner_active_queries` | gauge | — | queries holding a running slot, read from the gate at scrape time |
+| `queryrunner_admission_queue_depth` | gauge | — | queries waiting for a slot, read from the gate at scrape time |
+| `queryrunner_result_cutoffs_total` | counter | `limit` | where an answer is cut to the result budget |
+
+`outcome` is the query log's status, so a dashboard and the journal agree:
+
+| `outcome` | `reason` |
+|---|---|
+| `ok` | empty |
+| `rejected` | `rate_limited` (`QUERY_PER_MINUTE`), `busy` (every slot and the queue full), `already_running` (the participant's previous query is still running), `disk_full` (the database is at its quota), or the checker's refusal code (`parse_error`, `function_not_supported`, … — `sqlpolicy.Codes()`) |
+| `timeout` | `queue` (waited past `QUERY_QUEUE_WAIT`), `deadline` (ran past `QUERY_DEADLINE`) |
+| `error` | `database` (PostgreSQL refused the query), `internal` (this service failed, including a connection it could not open), `cancelled` (the caller stopped waiting), `result_too_large` (see `socket` below) |
+
+`limit` is `rows` (`QUERY_MAX_ROWS`), `bytes` (`QUERY_MAX_BYTES`, counted
+over the values read), `socket` (the read budget on the connection refused the
+answer before any of it could be kept; the query also ends as
+`error`/`result_too_large`) or `rendered` (the gRPC server's count of the
+rendered answer cut it further; bytea, for one, doubles in hex). One answer can
+be counted under two limits when both cut it.
+
+Useful starting points: `sum by (outcome, reason)
+(rate(queryrunner_queries_total[5m]))` for what participants meet,
+`histogram_quantile(0.95, sum by (le)
+(rate(queryrunner_admission_wait_seconds_bucket[5m])))` for how long a round's
+queries queue, and `queryrunner_admission_queue_depth` against
+`QUERY_QUEUE_DEPTH`: a full queue answers `busy` at once.
+
 ## Database browser (dev only)
 
 ```bash

@@ -93,6 +93,9 @@ COPY --from=build-runner /out/queryrunner /usr/local/bin/queryrunner
 COPY --from=build-runner /out/gamedb      /usr/local/bin/gamedb
 
 USER nonroot:nonroot
-EXPOSE 9100
+# The gRPC listener and the metrics listener. EXPOSE publishes nothing; it is
+# what makes a collector discovering containers through the Docker API produce
+# a target for the metrics port at all.
+EXPOSE 9100 9101
 
 ENTRYPOINT ["/usr/local/bin/queryrunner"]

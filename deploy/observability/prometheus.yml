@@ -1,7 +1,8 @@
 # Scrape configuration for the DB Contest stack.
 #
-# The API exposes /metrics on its internal listener only; that port is never
-# published to the host, so this file is the only thing that reads it.
+# The API and the Query Runner expose /metrics on internal listeners only;
+# those ports are never published to the host, so a scraper on the compose
+# network (this one, or the host's collector) is the only thing that reads them.
 
 global:
   scrape_interval: 15s
@@ -9,6 +10,10 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # These static jobs are for the bundled Prometheus. A collector outside this
+  # compose project can use the containers' prometheus.io/* labels through
+  # relabel rules instead of this file.
+
   # The containerized api (docker-compose.yml, `make stack-up`), reached by
   # its service name on the compose network.
   - job_name: core-api
@@ -30,6 +35,15 @@ scrape_configs:
       - targets: ["host.docker.internal:9090"]
         labels:
           service: core-api
+
+  # The containerized Query Runner's own listener (QUERY_RUNNER_METRICS_ADDR),
+  # apart from its token-guarded gRPC port. `make runner` keeps it on
+  # loopback, so there is no host job for it; curl localhost:9101/metrics.
+  - job_name: queryrunner
+    static_configs:
+      - targets: ["queryrunner:9101"]
+        labels:
+          service: queryrunner
 
   - job_name: prometheus
     static_configs:

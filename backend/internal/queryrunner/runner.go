@@ -129,23 +129,35 @@ type Validator interface {
 
 // Runner executes participants' queries.
 type Runner struct {
-	conns   *pool
-	checker Validator
-	limits  Limits
-	gate    *gate
-	rate    *window
+	conns    *pool
+	checker  Validator
+	limits   Limits
+	gate     *gate
+	rate     *window
+	observer Observer
 }
 
 // New assembles a runner.
 func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 	return &Runner{
-		conns:   newPool(cluster.connect, limits.Concurrent, limits.IdleConns, limits.IdleTimeout),
-		checker: checker,
-		limits:  limits,
-		gate:    newGate(limits.Concurrent, limits.QueueDepth),
-		rate:    newWindow(limits.PerMinute, time.Minute, nil),
+		conns:    newPool(cluster.connect, limits.Concurrent, limits.IdleConns, limits.IdleTimeout),
+		checker:  checker,
+		limits:   limits,
+		gate:     newGate(limits.Concurrent, limits.QueueDepth),
+		rate:     newWindow(limits.PerMinute, time.Minute, nil),
+		observer: discard{},
 	}
 }
+
+// WithObserver reports the runner's decisions to o. Call it before the first
+// Run.
+func (r *Runner) WithObserver(o Observer) *Runner {
+	r.observer = o
+	return r
+}
+
+// Admission reports how many queries hold a slot and how many wait for one.
+func (r *Runner) Admission() (running, waiting int) { return r.gate.load() }
 
 // Close closes the kept connections. Running queries finish, and their
 // connections are then closed rather than kept.
@@ -156,7 +168,17 @@ func (r *Runner) Close() { r.conns.close() }
 // text, so a query the checker refuses still counts against the rate
 // (CLAUDE.md rule 13). Checking needs no connection, and admission comes
 // before one is opened.
-func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
+func (r *Runner) Run(ctx context.Context, req Request) (result *Result, err error) {
+	// Zero until the gate admits the query.
+	var admitted time.Time
+	defer func() {
+		outcome, reason := ending(err, !admitted.IsZero())
+		r.observer.Ended(outcome, reason)
+		if !admitted.IsZero() {
+			r.observer.Executed(outcome, time.Since(admitted))
+		}
+	}()
+
 	participant := req.Registration.String()
 	if err := r.rate.admit(participant); err != nil {
 		return nil, err
@@ -177,12 +199,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	// holding its connection, stream and journal row. The deadline covers
 	// only the wait, never the execution.
 	waiting, stopWaiting := context.WithTimeout(ctx, r.limits.QueueWait)
+	queued := time.Now()
 	release, err := r.gate.enter(waiting, participant)
 	stopWaiting()
+	if !errors.Is(err, ErrBusy) && !errors.Is(err, ErrAlreadyRunning) {
+		r.observer.Waited(time.Since(queued))
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	admitted = time.Now()
 
 	return r.execute(ctx, req, statement)
 }
@@ -225,10 +252,11 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 		text = limited(statement.Text, r.limits.MaxRows)
 	}
 
-	result, err := collect(ctx, tx, text, r.limits, statement.Writes)
+	result, err := collect(ctx, tx, text, r.limits, statement.Writes, r.observer)
 	if err != nil {
 		if sess.meter.exhausted() {
 			// The driver reports the meter's refusal as a broken connection.
+			r.observer.CutOff(CutOffSocket)
 			return nil, ErrResultTooLarge
 		}
 		return nil, timeoutOr(ctx, err)
