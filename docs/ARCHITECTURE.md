@@ -4502,11 +4502,13 @@ Product decisions the items below are built on.
   a strict CSP; production sends `script-src 'self' 'unsafe-inline'` to cover
   Next's inlined bootstrap. The replacement, a per-request nonce with
   `strict-dynamic`, is described in the frontend README and not built.
-- [ ] **42. No end-to-end tests** (design specification, section 12). The
-  frontend's CI runs its unit tests and one smoke script against the built
-  server; nothing drives a browser through sign-in, a contest and the
-  console. The design specification gives such tests a directory of their
-  own when they arrive.
+- [ ] **42. End-to-end tests are not in CI** (design specification, section
+  12). A Playwright smoke test of the main path exists (`frontend/e2e/`,
+  `make e2e-smoke`): an administrator signs in, a participant runs a query,
+  resets their database and answers, on a stack seeded through the API, with
+  a throwaway stack to run it on (`make e2e-stack-up`). It runs by hand; no
+  workflow starts a stack and runs it on a pull request, and it covers the
+  main path only.
 - [ ] **43. Section 11's audit plan is not carried out** (section 11;
   section 14, step 7). It plans an OWASP ASVS L2 checklist, gosec and semgrep,
   an OWASP ZAP baseline scan and a manual penetration test of the Query Runner
