@@ -1092,9 +1092,9 @@ const en = {
         endsAt: "Ends",
         endsAtIndividualHint: "Optional for individual timing. Left empty, the contest stays running until you finish it yourself — nothing ends it automatically.",
         enrollmentDeadline: "Enrolment closes",
-        enrollmentDeadlineHint: "Optional. Leave empty to keep enrolment open until the contest starts.",
-        grace: "Grace period, minutes",
-        graceHelp: "How long a late answer is still accepted, to absorb network delay.",
+        enrollmentDeadlineHint: "Optional. Left empty, enrolment stays open until the contest starts — under individual timing, until it finishes.",
+        grace: "Databases kept after the end, minutes",
+        graceHelp: "How long each participant's copy of the game database is kept after the contest finishes, before it is deleted. 0 means the installation's default. It gives no extra time to answer.",
         timezone: "Times are the university's local time (Europe/Chisinau).",
       },
       shape: {
@@ -1135,7 +1135,7 @@ const en = {
         network: "Allowed networks",
         networkHint: "CIDR ranges, separated by commas. Empty means anywhere.",
         rate: "Queries per minute",
-        rateHint: "Per participant. Zero means no limit.",
+        rateHint: "SQL queries each participant may run per minute. 0 means the installation's limit; a value above that limit has no effect.",
       },
       languages: {
         heading: "Languages",
