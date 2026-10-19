@@ -369,6 +369,7 @@ Read the guide in order:
 4. [04-backend.md](04-backend.md): how the backend is structured, and recipes for a new package, endpoint or migration.
 5. [05-frontend.md](05-frontend.md): how the frontend is structured, and recipes for a new page or UI string.
 6. [06-testing.md](06-testing.md): how the project is tested and which checks to run.
+7. [07-running-a-contest.md](07-running-a-contest.md): the runbook for a live contest on a deployed installation.
 
 Then keep these at hand:
 
