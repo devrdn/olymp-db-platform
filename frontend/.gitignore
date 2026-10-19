@@ -12,6 +12,11 @@
 
 # testing
 /coverage
+# Playwright: run output, and what a smoke run generated (e2e/api.ts), which
+# holds that run's passwords.
+/test-results/
+/playwright-report/
+/e2e/.state/
 
 # next.js
 /.next/
