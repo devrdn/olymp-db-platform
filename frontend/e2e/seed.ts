@@ -1,6 +1,16 @@
 import { randomBytes } from "node:crypto";
 
-import { Api, clearSeed, generatedPassword, signInAsOperator, writeSeed, type Account, type Seed } from "./api";
+import {
+  Api,
+  clearSeed,
+  generatedPassword,
+  readRecord,
+  signInAsOperator,
+  writeRecord,
+  type Account,
+  type SeedRecord,
+} from "./api";
+import { closeRecord } from "./teardown";
 
 /**
  * The global setup: everything the smoke test needs, made through the public
@@ -15,8 +25,9 @@ import { Api, clearSeed, generatedPassword, signInAsOperator, writeSeed, type Ac
  * - then publishes and starts it, and waits until a database is ready for
  *   the participant to claim.
  *
- * What it made goes to e2e/.state/seed.json (0600) for the specs and the
- * teardown. No password is printed.
+ * Each object goes into e2e/.state/seed.json (0600) the moment it exists,
+ * for the specs and for the teardown, which Playwright runs even when this
+ * setup throws. No password is printed.
  */
 
 const GAME_SCRIPT = `
@@ -38,13 +49,23 @@ const BUILD_TIMEOUT_MS = 180_000;
 const DATABASE_TIMEOUT_MS = 180_000;
 
 export default async function seed(): Promise<void> {
-  // A seed left by an earlier run would hand its contest to this run's teardown.
-  clearSeed();
   const run = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
   const operator = await signInAsOperator();
   try {
-    const admin = await createAccount(operator, `e2e-admin-${run}`, "E2E Administrator", ["admin"]);
-    const participant = await createAccount(operator, `e2e-player-${run}`, "E2E Participant", ["student"]);
+    await closeLeftovers(operator);
+
+    const record: SeedRecord = { complete: false };
+    writeRecord(record);
+
+    await createAccount(operator, record, "admin", `e2e-admin-${run}`, "E2E Administrator", ["admin"]);
+    const participant = await createAccount(
+      operator,
+      record,
+      "participant",
+      `e2e-player-${run}`,
+      "E2E Participant",
+      ["student"],
+    );
     const title = `E2E smoke ${run}`;
 
     const now = Date.now();
@@ -59,6 +80,8 @@ export default async function seed(): Promise<void> {
       languages: [{ code: "en", is_default: true }],
       translations: { en: { title, description: "Created by the browser smoke test." } },
     });
+    record.contest = { id: contest.id, title };
+    writeRecord(record);
     const at = `/contests/${contest.id}`;
 
     await operator.call("PUT", `${at}/story`, {
@@ -79,6 +102,8 @@ export default async function seed(): Promise<void> {
       is_visible: true,
       texts: { en: { body_md: "Which suspect has no alibi?" } },
     });
+    record.question = { id: question.id, answer: ANSWER, wrongAnswer: WRONG_ANSWER };
+    writeRecord(record);
     await operator.call("PUT", `${at}/questions/${question.id}/answers`, {
       answers: [{ match_kind: "exact_ci", value: ANSWER }],
     });
@@ -103,26 +128,49 @@ export default async function seed(): Promise<void> {
     await operator.call("POST", `${at}/status`, { status: "running" });
     await waitForDatabase(operator, at);
 
-    const result: Seed = {
-      admin,
-      participant,
-      contest: { id: contest.id, title },
-      question: { id: question.id, answer: ANSWER, wrongAnswer: WRONG_ANSWER },
-    };
-    writeSeed(result);
+    record.complete = true;
+    writeRecord(record);
     console.log(`seed: contest "${title}" is running with one participant`);
   } finally {
     await operator.close();
   }
 }
 
-/** Creates an account and replaces its one-time password, as its owner would at first sign-in. */
-async function createAccount(operator: Api, login: string, fullName: string, roles: string[]): Promise<Account> {
+/**
+ * Closes what an earlier run recorded and its teardown could not, before this
+ * run's record replaces the only list of it. Refuses to go on if that fails.
+ */
+async function closeLeftovers(operator: Api): Promise<void> {
+  const leftover = readRecord();
+  if (!leftover) return;
+  const failures = await closeRecord(operator, leftover);
+  if (failures.length > 0) {
+    throw new Error(`seed: an earlier run left objects that could not be closed (${failures.join("; ")}); see seed.json`);
+  }
+  clearSeed();
+  console.log("seed: closed what an earlier run left behind");
+}
+
+/**
+ * Creates an account and replaces its one-time password, as its owner would at
+ * first sign-in. It is recorded under `key` as soon as it exists, and again
+ * with its password once that is set.
+ */
+async function createAccount(
+  operator: Api,
+  record: SeedRecord,
+  key: "admin" | "participant",
+  login: string,
+  fullName: string,
+  roles: string[],
+): Promise<Account> {
   const created = await operator.call<{ user: { id: string }; one_time_password: string }>("POST", "/users", {
     login,
     full_name: fullName,
     roles,
   });
+  record[key] = { id: created.user.id, login, password: "" };
+  writeRecord(record);
 
   const password = generatedPassword();
   const owner = await Api.open();
@@ -134,7 +182,10 @@ async function createAccount(operator: Api, login: string, fullName: string, rol
   } finally {
     await owner.close();
   }
-  return { id: created.user.id, login, password };
+  const account = { id: created.user.id, login, password };
+  record[key] = account;
+  writeRecord(record);
+  return account;
 }
 
 async function waitForBuild(operator: Api, at: string): Promise<void> {

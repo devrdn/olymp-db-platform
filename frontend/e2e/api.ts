@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { request, type APIRequestContext } from "@playwright/test";
@@ -18,13 +19,21 @@ const ADMIN_FILE = path.join(STATE_DIR, "admin.json");
 
 export type Account = { id: string; login: string; password: string };
 
-/** What the seed made, read by the specs and the teardown. */
-export type Seed = {
-  admin: Account;
-  participant: Account;
-  contest: { id: string; title: string };
-  question: { id: string; answer: string; wrongAnswer: string };
+/**
+ * What the seed has made so far. Each object is recorded the moment the API
+ * creates it, so a setup that fails halfway still tells the teardown what to
+ * close; an account's password is empty until its one-time one is replaced.
+ */
+export type SeedRecord = {
+  complete: boolean;
+  admin?: Account;
+  participant?: Account;
+  contest?: { id: string; title: string };
+  question?: { id: string; answer: string; wrongAnswer: string };
 };
+
+/** A finished seed, which is all a spec ever reads. */
+export type Seed = Required<SeedRecord>;
 
 export function baseURL(): string {
   const url = process.env.E2E_BASE_URL;
@@ -111,15 +120,22 @@ function writePrivate(file: string, value: unknown): void {
   chmodSync(file, 0o600);
 }
 
-export function writeSeed(seed: Seed): void {
-  writePrivate(SEED_FILE, seed);
+export function writeRecord(record: SeedRecord): void {
+  writePrivate(SEED_FILE, record);
+}
+
+/** What an earlier setup recorded, or null when there is nothing to close. */
+export function readRecord(): SeedRecord | null {
+  if (!existsSync(SEED_FILE)) return null;
+  return JSON.parse(readFileSync(SEED_FILE, "utf8")) as SeedRecord;
 }
 
 export function readSeed(): Seed {
-  if (!existsSync(SEED_FILE)) {
-    throw new Error(`no seed at ${SEED_FILE}: the global setup (e2e/seed.ts) did not run`);
+  const record = readRecord();
+  if (!record?.complete) {
+    throw new Error(`no finished seed at ${SEED_FILE}: the global setup (e2e/seed.ts) did not complete`);
   }
-  return JSON.parse(readFileSync(SEED_FILE, "utf8")) as Seed;
+  return record as Seed;
 }
 
 /** Forgets the run's passwords once its accounts are closed. */
@@ -132,8 +148,7 @@ type SavedAdmin = { baseURL: string; login: string; password: string };
 /**
  * The passwords to try for the stack's administrator, most recent first: the
  * one this suite set on an earlier run against the same stack, then the one
- * the operator gave. A one-time password works once, so the replacement is
- * kept for the next run.
+ * the operator gave.
  */
 export function adminCandidates(login: string): string[] {
   const candidates: string[] = [];
@@ -146,12 +161,62 @@ export function adminCandidates(login: string): string[] {
   return candidates;
 }
 
-export function saveAdmin(login: string, password: string): string {
-  writePrivate(ADMIN_FILE, { baseURL: baseURL(), login, password } satisfies SavedAdmin);
-  return ADMIN_FILE;
+/**
+ * Refuses a file a commit could pick up: inside a git work tree it must be
+ * ignored. Outside one (an E2E_STATE_DIR elsewhere) there is nothing to commit.
+ */
+function assertNotCommittable(file: string): void {
+  let dir = path.dirname(file);
+  while (!existsSync(dir)) dir = path.dirname(dir);
+  try {
+    execFileSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { stdio: "ignore" });
+  } catch {
+    return;
+  }
+  try {
+    execFileSync("git", ["-C", dir, "check-ignore", "-q", file], { stdio: "ignore" });
+  } catch {
+    throw new Error(`refusing to write a password to ${file}: it is inside a git work tree and not ignored`);
+  }
 }
 
-/** The stack's administrator, replacing a one-time password if it still has one. */
+/**
+ * Writes the administrator's next password and proves it can be read back,
+ * before the API is asked to change it: a password that exists only in a
+ * failed write is an administrator nobody can sign in as. Returns a function
+ * that puts the file back as it was, for a change the API refuses.
+ */
+function saveAdminBeforeChange(login: string, password: string): () => void {
+  assertNotCommittable(ADMIN_FILE);
+  const previous = existsSync(ADMIN_FILE) ? readFileSync(ADMIN_FILE, "utf8") : null;
+  writePrivate(ADMIN_FILE, { baseURL: baseURL(), login, password } satisfies SavedAdmin);
+
+  const back = JSON.parse(readFileSync(ADMIN_FILE, "utf8")) as SavedAdmin;
+  if (back.password !== password || back.login !== login || back.baseURL !== baseURL()) {
+    throw new Error(`${ADMIN_FILE} does not read back as written; the password was not changed`);
+  }
+  if ((statSync(ADMIN_FILE).mode & 0o077) !== 0) {
+    throw new Error(`${ADMIN_FILE} is readable by others; the password was not changed`);
+  }
+
+  return () => {
+    if (previous === null) rmSync(ADMIN_FILE, { force: true });
+    else writeFileSync(ADMIN_FILE, previous, { mode: 0o600 });
+  };
+}
+
+/**
+ * Set only for a stack this suite may take over: e2e/stack.sh writes it into
+ * the smoke.env of the throwaway stack it started.
+ */
+const ALLOW_PASSWORD_CHANGE = "E2E_ALLOW_ADMIN_PASSWORD_CHANGE";
+
+/**
+ * The stack's administrator. An account still on a one-time password is
+ * refused unless ALLOW_PASSWORD_CHANGE is "1": its owner expects to choose
+ * that password, and on a real installation a password only this checkout
+ * knows is an administrator locked out.
+ */
 export async function signInAsOperator(): Promise<Api> {
   const login = process.env.E2E_ADMIN_LOGIN ?? "admin";
   const candidates = adminCandidates(login);
@@ -171,12 +236,24 @@ export async function signInAsOperator(): Promise<Api> {
     }
     if (!mustChange) return api;
 
-    // A freshly bootstrapped stack: the one-time password blocks everything
-    // else, and the replacement is kept for the next run.
+    if (process.env[ALLOW_PASSWORD_CHANGE] !== "1") {
+      await api.close();
+      throw new Error(
+        `${login} still has a one-time password. Sign in once by hand and set one, then give that ` +
+          `as E2E_ADMIN_PASSWORD; this suite replaces it only on a stack it started (${ALLOW_PASSWORD_CHANGE}=1).`,
+      );
+    }
+
     const replacement = generatedPassword();
-    await api.changePassword(password, replacement);
-    const file = saveAdmin(login, replacement);
-    console.log(`e2e: replaced ${login}'s one-time password; the new one is in ${file}`);
+    const restore = saveAdminBeforeChange(login, replacement);
+    try {
+      await api.changePassword(password, replacement);
+    } catch (error) {
+      restore();
+      await api.close();
+      throw error;
+    }
+    console.log(`e2e: replaced ${login}'s one-time password; the new one is in ${ADMIN_FILE}`);
     if (await api.signIn(login, replacement)) {
       throw new Error(`${login} still has to change its password`);
     }
