@@ -1245,7 +1245,7 @@ const en = {
     contactHelp: "Where a participant writes when something goes wrong.",
     feedback: "Feedback address",
     feedbackHint: "A full https address, such as a form. Left empty, no link is shown.",
-    feedbackHelp: "Participants see a feedback link on the olympiad screen and in their profile. It opens in a new tab, so nobody loses their place.",
+    feedbackHelp: "Participants see a feedback link in their profile, and on the olympiad screen before it starts and once it is over — never while they can still act, where opening another tab would be reported to the organiser as leaving the page. It opens in a new tab.",
     images: {
       heading: "Marks",
       hint: "PNG, JPEG, GIF or WebP, up to 512 KB and 4096 pixels on a side. SVG is not accepted.",

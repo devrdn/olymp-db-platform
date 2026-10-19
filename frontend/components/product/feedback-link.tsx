@@ -6,9 +6,10 @@ import { cn } from "@/lib/utils";
 /**
  * The installation's feedback address as a quiet link, or nothing when none
  * is set. The address passes the API's rule again before it becomes an
- * `href`. It opens in a new tab so a participant under a timer keeps the
- * page; `noopener` cuts `window.opener`, and `noreferrer` keeps the contest's
- * address out of the form service's logs.
+ * `href`. It opens in a new tab, so on the play screen it is drawn only
+ * where no workspace runs: the workspace reports a hidden page as an absence
+ * (use-signals.ts). `noopener` cuts `window.opener`, and `noreferrer` keeps
+ * the contest's address out of the form service's logs.
  */
 export function FeedbackLink({
   href,

@@ -1136,7 +1136,7 @@ const ro = {
     contactHelp: "Unde scrie un participant când ceva nu merge.",
     feedback: "Adresa pentru feedback",
     feedbackHint: "O adresă https completă, de exemplu a unui formular. Lăsată goală, nu se afișează niciun link.",
-    feedbackHelp: "Participanții văd un link de feedback pe ecranul olimpiadei și în profil. Se deschide într-o filă nouă, astfel încât nimeni nu își pierde locul.",
+    feedbackHelp: "Participanții văd un link de feedback în profil și pe ecranul olimpiadei înainte de start și după încheiere — niciodată cât timp mai pot acționa, când deschiderea altei file i-ar fi raportată organizatorului ca părăsire a paginii. Se deschide într-o filă nouă.",
     images: {
       heading: "Însemne",
       hint: "PNG, JPEG, GIF sau WebP, până la 512 KB și 4096 de pixeli pe latură. SVG nu este acceptat.",
