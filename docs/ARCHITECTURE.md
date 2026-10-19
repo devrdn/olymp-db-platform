@@ -3575,6 +3575,20 @@ fields with their old and new values (section 9.2). "Who changed the default
 language in the middle of an olympiad" is exactly the question the journal
 exists for.
 
+**The feedback address is a link on every participant's screen, so it is
+checked as one.** `installation.feedback_url` is where beta testers send
+feedback; when set, the play screen's header and the profile show a link to
+it, opening in a new tab. It is public, because the open read is the only
+settings read a participant may make. The value is an absolute `https`
+address with a host, at most 500 characters, or nothing (`invalid_feedback_url`
+otherwise). The scheme is an allow-list: `javascript:` and `data:` would turn
+the link into script, and plain `http` could be rewritten on the school
+network between a participant and the form. User information is refused, so
+`https://olympdb.usm.md@evil.example` cannot pass for this installation, and
+so are spaces and backslashes, which a browser reads differently from the
+server's parser. The interface applies the same rule again before drawing the
+link, so a value stored any other way never becomes an `href`.
+
 **A cache rather than a query per render.** Settings are read on every page
 and changed once a semester: the values are held in the process with a short
 TTL, and a write clears the cache. On one instance that is enough; on several,
