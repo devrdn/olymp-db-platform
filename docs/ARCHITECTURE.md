@@ -332,10 +332,10 @@ of its own (`QUERY_RUNNER_METRICS_ADDR`, port 9101), apart from its
 token-guarded gRPC port; its labels are fixed lists it declares at startup.
 
 Both endpoints describe themselves: the containers carry `prometheus.io/*`
-labels naming the private port, the path and the job, so a collector can find
-them through the Docker API without a configuration that lists our services.
-The backend README says what each label means, and which of them a collector
-reads by itself.
+labels saying where the metrics are, for a collector that reads them from the
+Docker API. What each label means, and what a collector must do to use it, is
+in the backend README under "Finding the metrics endpoints from the Docker
+API".
 
 The principle underneath: **metrics are diagnostics**. No branch of their code
 may affect how a request is served.
