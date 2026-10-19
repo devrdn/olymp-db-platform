@@ -263,3 +263,87 @@ describe("ContestPanel, the leaderboard", () => {
     expect(screen.getByLabelText(t.namesFullName)).toBeEnabled();
   });
 });
+
+/**
+ * The words for two installation-backed fields, checked against what the
+ * service does: grace_period_min keeps the participants' databases after the
+ * finish (late answers are DEADLINE_GRACE), and a zero rate falls back to
+ * QUERY_PER_MINUTE, which also caps a higher one. Enrolment under individual
+ * timing stays open while the contest runs.
+ */
+describe("ContestPanel, the fields say what the service does with them", () => {
+  const meaning = {
+    en: {
+      database: /database/i,
+      installation: /installation/i,
+      oldGrace: /grace|late answer/i,
+      noLimit: /no limit/i,
+      individual: /individual timing/i,
+    },
+    ro: {
+      database: /baz/i,
+      installation: /instalări/i,
+      oldGrace: /grație|întârziat/i,
+      noLimit: /fără limită/i,
+      individual: /timp propriu/i,
+    },
+    ru: {
+      database: /баз/i,
+      installation: /установк/i,
+      oldGrace: /грейс|опоздавший/i,
+      noLimit: /без ограничения/i,
+      individual: /собственном времени/i,
+    },
+  } as const;
+
+  describe.each(Object.keys(meaning) as (keyof typeof meaning)[])("in %s", (locale) => {
+    let local: Dictionary;
+    const words = meaning[locale];
+
+    beforeAll(async () => {
+      local = await getDictionary(locale);
+    });
+
+    test("names the database grace by what it keeps, not by late answers", () => {
+      render(<ContestPanel contest={contest()} editable shapeOpen dict={local} />);
+      const t = local.workspace.settings.schedule;
+
+      const field = screen.getByLabelText(t.grace);
+      expect(field).toHaveAccessibleDescription(t.graceHelp);
+      expect(t.grace).toMatch(words.database);
+      expect(t.grace).not.toMatch(words.oldGrace);
+      expect(t.graceHelp).toMatch(words.database);
+      expect(t.graceHelp).toMatch(words.installation);
+      expect(t.graceHelp).toMatch(/\b0\b/);
+    });
+
+    test("says a zero rate is the installation's limit, never no limit", () => {
+      render(<ContestPanel contest={contest()} editable shapeOpen dict={local} />);
+      const t = local.workspace.settings.access;
+
+      expect(screen.getByLabelText(t.rate)).toHaveAccessibleDescription(t.rateHint);
+      expect(t.rateHint).toMatch(words.installation);
+      expect(t.rateHint).toMatch(/\b0\b/);
+      expect(t.rateHint).not.toMatch(words.noLimit);
+      expect(t.rateHint).not.toMatch(/\b30\b/);
+    });
+
+    test("says enrolment under individual timing stays open while the contest runs", () => {
+      render(<ContestPanel contest={contest()} editable shapeOpen dict={local} />);
+      const t = local.workspace.settings.schedule;
+
+      expect(screen.getByLabelText(t.enrollmentDeadline)).toHaveAccessibleDescription(
+        t.enrollmentDeadlineHint,
+      );
+      expect(t.enrollmentDeadlineHint).toMatch(words.individual);
+    });
+  });
+
+  test("in English, the grace gives no extra time and a higher rate has no effect", () => {
+    const t = dict.workspace.settings;
+
+    expect(t.schedule.graceHelp).toMatch(/after the contest finishes/i);
+    expect(t.schedule.graceHelp).toMatch(/no extra time/i);
+    expect(t.access.rateHint).toMatch(/above .* no effect/i);
+  });
+});
