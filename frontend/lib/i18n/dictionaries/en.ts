@@ -1243,6 +1243,9 @@ const en = {
     contact: "Contact email",
     contactHint: "Left empty, participants are offered no address.",
     contactHelp: "Where a participant writes when something goes wrong.",
+    feedback: "Feedback address",
+    feedbackHint: "A full https address, such as a form. Left empty, no link is shown.",
+    feedbackHelp: "Participants see a feedback link on the olympiad screen and in their profile. It opens in a new tab, so nobody loses their place.",
     images: {
       heading: "Marks",
       hint: "PNG, JPEG, GIF or WebP, up to 512 KB and 4096 pixels on a side. SVG is not accepted.",
@@ -1494,6 +1497,11 @@ const en = {
     },
   },
   participant: {
+    /** The beta testers' way to the organisers' form; shown only when set. */
+    feedback: {
+      link: "Send feedback",
+      newTab: "(opens in a new tab)",
+    },
     console: {
       heading: "SQL console",
       label: "Your query",

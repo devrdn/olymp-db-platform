@@ -1134,6 +1134,9 @@ const ro = {
     contact: "E-mail de contact",
     contactHint: "Lăsat gol, participantului nu i se oferă nicio adresă.",
     contactHelp: "Unde scrie un participant când ceva nu merge.",
+    feedback: "Adresa pentru feedback",
+    feedbackHint: "O adresă https completă, de exemplu a unui formular. Lăsată goală, nu se afișează niciun link.",
+    feedbackHelp: "Participanții văd un link de feedback pe ecranul olimpiadei și în profil. Se deschide într-o filă nouă, astfel încât nimeni nu își pierde locul.",
     images: {
       heading: "Însemne",
       hint: "PNG, JPEG, GIF sau WebP, până la 512 KB și 4096 de pixeli pe latură. SVG nu este acceptat.",
@@ -1353,6 +1356,10 @@ const ro = {
     },
   },
   participant: {
+    feedback: {
+      link: "Trimiteți feedback",
+      newTab: "(se deschide într-o filă nouă)",
+    },
     console: {
       heading: "Consolă SQL",
       label: "Interogarea dumneavoastră",

@@ -100,6 +100,31 @@ describe("PlayHeader", () => {
     expect(screen.getByText(en.participant.play.observed)).toBeInTheDocument();
   });
 
+  test("offers the installation's feedback link when one is set", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+    render(
+      <PlayHeader
+        contestId="c1"
+        title="X"
+        waitingForStart={false}
+        feedbackUrl="https://forms.gle/beta"
+        dict={en}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: new RegExp(en.participant.feedback.link) });
+    expect(link).toHaveAttribute("href", "https://forms.gle/beta");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  test("offers no feedback link when the installation has none", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="" dict={en} />);
+
+    expect(screen.queryByRole("link", { name: new RegExp(en.participant.feedback.link) })).not.toBeInTheDocument();
+  });
+
   test("shows a waiting clock before the contest has started", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
