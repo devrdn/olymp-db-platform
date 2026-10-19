@@ -404,7 +404,9 @@ services:
   api:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     restart: unless-stopped
-    # As on queryrunner above; this port is the one INTERNAL_ADDR binds.
+    # As on queryrunner above; this port is the one INTERNAL_ADDR binds. The
+    # endpoint exists only with METRICS_BACKEND=prometheus, so set scrape to
+    # "false" (or drop the labels) under log or none.
     labels:
       prometheus.io/scrape: "true"
       prometheus.io/port: "9090"
@@ -753,7 +755,8 @@ services:
   # Optional, and off by default so a small install stays small:
   #   docker compose --profile observability up -d
   # Without it, set METRICS_BACKEND=log so request statistics go to the log
-  # stream rather than to an endpoint nobody reads.
+  # stream rather than to an endpoint nobody reads, and set
+  # prometheus.io/scrape to "false" on api to match.
 
   prometheus:
     image: prom/prometheus:v3.1.0

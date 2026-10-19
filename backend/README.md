@@ -493,16 +493,25 @@ series under (`core-api`, `queryrunner`), used only by a collector with a rule
 that reads it.
 
 No collector acts on these labels by itself. Grafana Alloy and Prometheus
-with Docker service discovery expose a container's labels to relabel rules and
-nothing more; a rule the operator writes keeps the containers whose `scrape`
-is `true` and points the address at the labelled `port`. `scrape`, `port` and
+with Docker service discovery expose a container's labels and ports to relabel
+rules and act on none of them by default; a rule the operator writes keeps the
+containers whose `scrape` is `true` and points the address at the labelled
+`port`. `scrape`, `port` and
 `path` are the labels such rules for this convention usually read. `job` is not
 among them, so without a rule that reads it the series are recorded under
 whatever job name the collector chose. The names are the ones
 [`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml)
-scrapes, so a dashboard written against the bundled Prometheus works unchanged
-when a collector does read them. The ports are not published, so only a
-collector on the same Docker host or network reaches them.
+scrapes, so a query selecting on `job` works unchanged when a collector does
+read them. The bundled jobs also attach a `service` target label, which a
+label-discovered target does not have, so a query selecting on `service` does
+not carry over. The ports are not published, so only a collector on the same
+Docker host or network reaches them.
+
+The runner's endpoint cannot be switched off, so its label is always true. The
+API's exists only with `METRICS_BACKEND=prometheus` (the default): with `log` or
+`none` the path answers 404. An install that sets either must set
+`prometheus.io/scrape: "false"` on `api` or drop the label, or its collector
+keeps a target that never answers.
 
 ### Query Runner metrics
 
@@ -515,6 +524,10 @@ Prometheus (job `queryrunner`, target `queryrunner:9101`) or the host's
 collector. It is a separate port because the gRPC port (`9100`) asks every
 caller for `QUERY_RUNNER_TOKEN`, which a scraper does not carry. The runner
 always records into Prometheus; `METRICS_BACKEND` is the API's setting.
+
+There is no setting that turns this listener off, so a port conflict on `9101`
+stops the runner from starting. That is deliberate: a runner nobody can observe
+during a contest is worse than one that refuses to start.
 
 Every label is a fixed set the runner declares at startup, never a contest,
 participant, database or SQL value. A value outside that set is counted as
