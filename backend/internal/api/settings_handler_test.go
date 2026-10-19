@@ -228,6 +228,48 @@ func TestASettingNothingReadsIsRefusedByTheAPI(t *testing.T) {
 	}
 }
 
+// The interface picks its sentence by code, and "not acceptable" would not tell
+// the administrator that only an https address is taken.
+func TestAFeedbackAddressThatIsNotHTTPSIsRefusedWithItsOwnCode(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	for _, value := range []string{"http://forms.gle/beta", "javascript:alert(1)", "forms.gle/beta"} {
+		t.Run(value, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"values": map[string]string{settings.KeyFeedback: value}})
+
+			rec := f.do(http.MethodPut, "/settings", string(body), f.cookie)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != "invalid_feedback_url" {
+				t.Errorf("code = %q, want invalid_feedback_url", code)
+			}
+			if _, stored := f.store.values[settings.KeyFeedback]; stored {
+				t.Errorf("a refused address was stored: %v", f.store.values)
+			}
+		})
+	}
+}
+
+// A participant has no session the settings register would admit, so the
+// address has to come back from the open read.
+func TestASavedFeedbackAddressIsReadWithoutASession(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodPut, "/settings",
+		`{"values":{"installation.feedback_url":"https://forms.gle/beta"}}`, f.cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec = f.do(http.MethodGet, "/settings", "")
+
+	if got := settingsOf(t, rec)[settings.KeyFeedback]; got != "https://forms.gle/beta" {
+		t.Errorf("public feedback = %q, want the saved address (%s)", got, rec.Body.String())
+	}
+}
+
 // pngBytes is a small real PNG, so the endpoint exercises the decoder rather
 // than a shape that happens to sniff right.
 func pngBytes(t *testing.T) []byte { return pngOf(t, 4, 4) }

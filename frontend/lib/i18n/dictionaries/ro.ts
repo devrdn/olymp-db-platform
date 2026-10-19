@@ -2018,6 +2018,7 @@ const ro = {
       "Serviciul de interogări nu răspunde acum. Nu are legătură cu interogarea dumneavoastră — încercați peste puțin timp.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
+    invalid_feedback_url: "Adresa pentru feedback trebuie să fie o adresă https completă, de exemplu https://forms.gle/…, fără spații sau bare oblice inverse și de cel mult 500 de caractere. Lăsați câmpul gol pentru a nu afișa niciun link.",
     invalid_contest_id: "Identificator de olimpiadă greșit.",
     invalid_question_id: "Identificator de întrebare greșit.",
     invalid_tab_id: "Identificator de filă greșit.",
