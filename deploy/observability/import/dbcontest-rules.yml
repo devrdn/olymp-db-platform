@@ -1,0 +1,260 @@
+# Alert and recording rules for the DB Contest API and Query Runner, to load
+# into an existing Prometheus (rule_files) or a ruler-backed Grafana data
+# source. backend/README.md (Observability) says how.
+#
+# Severity: critical means act now, even mid-contest; warning means look at the
+# next break or the same day.
+#
+# The Query Runner thresholds assume its defaults (QUERY_CONCURRENT=8,
+# QUERY_QUEUE_DEPTH=32, QUERY_QUEUE_WAIT=15s, QUERY_DEADLINE=5s). The runner
+# does not export its configuration, so a changed setting means changing the
+# number here too.
+#
+# Windows assume a scrape every 15 to 60 seconds (Alloy's default is 60).
+
+groups:
+  # THE SELECTOR. Edit the matchers inside up{...} to the labels your collector
+  # gives the two targets: their job, and an instance or environment label too
+  # if one Prometheus scrapes more than one deployment. Every rule below
+  # reaches the services only through dbcontest:target. A matcher that names
+  # no target fires DBContestAPINotScraped or DBContestQueryRunnerNotScraped
+  # five minutes after loading.
+  - name: dbcontest-selector
+    rules:
+      - record: dbcontest:target
+        expr: |
+          label_replace(group by (job, instance) (up{job="core-api"}), "dbcontest", "api", "job", ".*")
+          or label_replace(group by (job, instance) (up{job="queryrunner"}), "dbcontest", "queryrunner", "job", ".*")
+
+      - record: dbcontest:api_http_requests:rate5m
+        expr: |
+          sum(rate(http_requests_total[5m])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+      - record: dbcontest:api_http_requests_5xx:rate5m
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+      # The console, database resets, exports, imports and game uploads are
+      # slow by design (a query waits on the Query Runner, a reset copies a
+      # database), so they are left out and this measures the API itself. The
+      # dashboard's latency panel leaves out the same routes; a test holds the
+      # two patterns equal. Its le="+Inf" bucket is those routes' request rate.
+      - record: dbcontest:api_http_request_duration_seconds_bucket:rate5m
+        expr: |
+          sum by (le) (
+            rate(http_request_duration_seconds_bucket{route!~".*/(query|play/reset|export|export\\.csv|log\\.csv|import)|.*/game/(uploads|tables)/.*"}[5m])
+              * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+      - record: dbcontest:api_http_request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, dbcontest:api_http_request_duration_seconds_bucket:rate5m)
+
+      - record: dbcontest:queryrunner_queries:rate5m
+        expr: |
+          sum by (outcome, reason) (rate(queryrunner_queries_total[5m])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"})
+      - record: dbcontest:queryrunner_admitted:rate5m
+        expr: |
+          sum(rate(queryrunner_query_duration_seconds_count[5m])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"})
+      - record: dbcontest:queryrunner_admission_wait_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95, sum by (le) (
+            rate(queryrunner_admission_wait_seconds_bucket[5m])
+              * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"}))
+
+  - name: dbcontest-availability
+    rules:
+      - alert: DBContestAPINotScraped
+        # Five minutes covers the first scrapes after loading the rules or restarting the collector.
+        expr: absent(dbcontest:target{dbcontest="api"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: No scrape target matches the API selector.
+          description: >-
+            The api container may not be running: a collector that discovers
+            containers drops a stopped one instead of reporting it down, so check
+            docker compose -f deploy/docker-compose.yml ps first. Otherwise the
+            collector stopped scraping the API, or the selector in the
+            dbcontest-selector group does not name its job: find the job with
+            count by (job) (game_instances_reclaimed_total) and edit the selector.
+
+      - alert: DBContestQueryRunnerNotScraped
+        # Five minutes covers the first scrapes after loading the rules or restarting the collector.
+        expr: absent(dbcontest:target{dbcontest="queryrunner"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: No scrape target matches the Query Runner selector.
+          description: >-
+            The queryrunner container may not be running: a collector that
+            discovers containers drops a stopped one instead of reporting it down,
+            so check docker compose -f deploy/docker-compose.yml ps first.
+            Otherwise the collector stopped scraping queryrunner:9101, or the
+            selector in the dbcontest-selector group does not name its job: find
+            the job with count by (job) (queryrunner_active_queries) and edit the
+            selector.
+
+      - alert: DBContestAPIDown
+        # Two minutes tolerates one missed scrape at a 60s interval and is still short against a contest.
+        expr: up * on (job, instance) group_left () dbcontest:target{dbcontest="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The API on {{ $labels.instance }} does not answer its scrape.
+          description: >-
+            Participants cannot sign in, read questions or run queries. On the host,
+            read docker compose -f deploy/docker-compose.yml logs --tail 200 api,
+            then start it again with docker compose -f deploy/docker-compose.yml
+            up -d --no-deps api (not make deploy-api, which runs the migration job).
+
+      - alert: DBContestQueryRunnerDown
+        # Two minutes tolerates one missed scrape at a 60s interval and is still short against a contest.
+        expr: up * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Query Runner on {{ $labels.instance }} does not answer its scrape.
+          description: >-
+            Participants cannot run queries; the rest of the contest still works.
+            On the host, read docker compose -f deploy/docker-compose.yml logs
+            --tail 200 queryrunner, then start it again with docker compose -f
+            deploy/docker-compose.yml up -d queryrunner.
+
+      - alert: DBContestProcessRestarted
+        # Any restart mid-contest drops every live channel and running query, so one is worth knowing about.
+        expr: changes(process_start_time_seconds[15m]) * on (job, instance) group_left (dbcontest) dbcontest:target >= 1
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: The {{ $labels.dbcontest }} process on {{ $labels.instance }} restarted in the last 15 minutes.
+          description: >-
+            Expected right after a deploy. Otherwise read its logs from before the
+            restart (docker compose -f deploy/docker-compose.yml logs --since 20m)
+            and check docker inspect for OOMKilled; a second restart is a crash loop.
+
+  - name: dbcontest-api
+    rules:
+      - alert: DBContestAPIErrors
+        # Forty participants make a few requests a second: 5% with ten failures in five minutes is several people failing, not one retry.
+        expr: |
+          dbcontest:api_http_requests_5xx:rate5m / dbcontest:api_http_requests:rate5m > 0.05
+          and dbcontest:api_http_requests_5xx:rate5m * 300 >= 10
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $value | humanizePercentage }} of API requests fail with a 5xx.'
+          description: >-
+            The dashboard's 5xx by route panel names the route, and the API log
+            the error. A 503 on the console means the Query Runner is down or full;
+            on sign-in it is sign_in_busy (every password-hashing slot taken).
+
+      - alert: DBContestAPISlow
+        # Apart from the slow-by-design routes the API answers from its own database in milliseconds; a p95 over 1s is the API or core database saturated (the floor, 15 of those requests in 5 minutes, keeps a handful from deciding).
+        expr: |
+          dbcontest:api_http_request_duration_seconds:p95_5m > 1
+          and on () dbcontest:api_http_request_duration_seconds_bucket:rate5m{le="+Inf"} > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The API's p95 latency is {{ $value | humanizeDuration }}.
+          description: >-
+            The dashboard's p95 by route panel shows whether one route or all of
+            them slowed. All of them points at the core database or the host's
+            CPU; one points at that route's query.
+
+      - alert: DBContestReclaimFailing
+        # The sweep runs every ten minutes; any failure leaves a database on the game cluster taking disk the next contest needs.
+        expr: |
+          sum(increase(game_instances_reclaim_failed_total[1h])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+          + sum(increase(game_templates_reclaim_failed_total[1h])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+          > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: The game-database reclaim sweep failed in the last hour.
+          description: >-
+            Not urgent during a contest. The API log has a warning beside its
+            "reclaimed game instances" line; make game-orphans lists what the
+            game cluster still holds, and ARGS=-apply removes it.
+
+  - name: dbcontest-queryrunner
+    rules:
+      - alert: DBContestQueriesFailingInternally
+        # An internal error is never the participant's doing; five in five minutes is at least one participant locked out, not a one-off.
+        expr: sum(dbcontest:queryrunner_queries:rate5m{outcome="error", reason="internal"}) * 300 >= 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Query Runner is failing participants' queries itself.
+          description: >-
+            Usually a database it cannot open. Run make game-check: a contest it
+            lists needs its game rebuilt (POST /api/v1/contests/{id}/game/build as
+            an organiser). If one participant is affected, have them use Reset
+            database in the console. Otherwise read the queryrunner logs.
+
+      - alert: DBContestQueriesTimingOut
+        # A runaway join hits the 5s deadline now and then; a fifth of admitted queries for ten minutes means the game cluster itself is slow.
+        expr: |
+          sum(dbcontest:queryrunner_queries:rate5m{outcome="timeout", reason="deadline"}) / dbcontest:queryrunner_admitted:rate5m > 0.2
+          and sum(dbcontest:queryrunner_queries:rate5m{outcome="timeout", reason="deadline"}) * 300 >= 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value | humanizePercentage }} of admitted queries run past their deadline.'
+          description: >-
+            Check the game cluster's CPU and I/O on the host. If one question's
+            expected query is itself heavy, every attempt at it times out; the
+            dashboard's duration panel shows whether all queries slowed.
+
+      - alert: DBContestQueryRunnerFull
+        # busy and queue timeouts both mean every slot and the queue were taken; five in five minutes is several participants refused.
+        expr: |
+          (sum(dbcontest:queryrunner_queries:rate5m{outcome="rejected", reason="busy"})
+            + sum(dbcontest:queryrunner_queries:rate5m{outcome="timeout", reason="queue"})) * 300 >= 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Query Runner is turning queries away because it is full.
+          description: >-
+            Participants are told the console is busy. Check active queries and the
+            game cluster's CPU: one heavy question can hold every slot for the whole
+            deadline. Raising QUERY_CONCURRENT needs game-cluster memory
+            (deploy/docker-compose.yml) and a queryrunner restart.
+
+      - alert: DBContestAdmissionWaitHigh
+        # A third of QUERY_QUEUE_WAIT (15s): past it a growing share of a round's queries is close to timing out in the queue.
+        expr: dbcontest:queryrunner_admission_wait_seconds:p95_5m > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Queries wait {{ $value | humanizeDuration }} (p95) for a running slot.
+          description: >-
+            Every slot is busy most of the time. Watch DBContestQueryRunnerFull;
+            the dashboard's active queries and duration panels show whether queries
+            got slower or more numerous.
+
+      - alert: DBContestAdmissionQueueDeep
+        # Half of QUERY_QUEUE_DEPTH (32): with forty participants and eight slots, sixteen waiting is 40% of the room in line.
+        expr: queryrunner_admission_queue_depth * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"} >= 16
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value }} queries are waiting for a running slot.'
+          description: >-
+            The queue is half full; at 32 the Query Runner answers busy at once.
+            See DBContestAdmissionWaitHigh and the dashboard's queue panels.

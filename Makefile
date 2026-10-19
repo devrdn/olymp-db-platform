@@ -322,6 +322,24 @@ scheduled-backup-check: ## Prove the backup rotation, the scheduled run and its 
 edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge proxy
 	deploy/edge-check.sh
 
+# The alert rules and the dashboard to import (deploy/observability/import):
+# every series they read is one the services register, the rules load and
+# their unit tests pass, and every dashboard query parses. promtool runs in a
+# throwaway container of the image the optional stack uses, pulled on first
+# use, with the files mounted read-only; nothing reaches a running Prometheus
+# or Grafana.
+PROMETHEUS_IMAGE  ?= prom/prometheus:v3.1.0
+OBSERVABILITY_DIR := $(CURDIR)/deploy/observability/import
+PROMTOOL           = docker run --rm --entrypoint promtool
+.PHONY: observability-check
+observability-check: ## Check the alert rules and the dashboard against the code and with promtool
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && chmod 755 "$$tmp" && \
+	(cd $(BACKEND) && go test -count=1 -run 'TestObservabilityImports|TestPromQLSelectors' ./internal/app/ \
+		-args -dashboard-rules="$$tmp/dashboard.yml") && \
+	$(PROMTOOL) -v "$(OBSERVABILITY_DIR):/rules:ro" $(PROMETHEUS_IMAGE) check rules /rules/dbcontest-rules.yml && \
+	$(PROMTOOL) -v "$(OBSERVABILITY_DIR):/rules:ro" $(PROMETHEUS_IMAGE) test rules /rules/dbcontest-rules.test.yml && \
+	$(PROMTOOL) -v "$$tmp:/rules:ro" $(PROMETHEUS_IMAGE) check rules /rules/dashboard.yml
+
 # The full gate, mirroring the CI workflow so a green run here means a green run
 # there. Unlike `check` it changes nothing on disk: every step verifies rather
 # than reformats, so it is safe to run on a dirty tree.

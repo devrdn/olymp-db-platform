@@ -22,10 +22,12 @@ on:
     tags: ["v*"]
     paths:
       - "backend/**"
+      - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
 
 # Least privilege: the workflow only reads the repository.
@@ -171,6 +173,26 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1
 
       - run: go build ./...
+
+  # The alert rules and the dashboard are loaded by a Prometheus and a
+  # Grafana outside this repository: this is where their series check,
+  # promtool's load and unit tests, and the dashboard's syntax are proven.
+  observability:
+    name: alert rules and dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: make observability-check
+        run: make observability-check
 
   security:
     name: security scan
