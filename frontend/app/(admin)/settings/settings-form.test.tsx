@@ -70,3 +70,20 @@ describe("SettingsForm, the feedback address", () => {
     await waitFor(() => expect(saveSettingsAction).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("SettingsForm, the API's refusal of the feedback address", () => {
+  test("is shown under the field, not as a form-level failure", async () => {
+    saveSettingsAction.mockResolvedValueOnce({ code: "invalid_feedback_url" } as never);
+    render(<SettingsForm settings={settings()} dict={en} />);
+
+    // Passes the form's own check; the API is the authority.
+    fireEvent.change(feedbackField(), { target: { value: "https://forms.gle/beta" } });
+    fireEvent.click(screen.getByRole("button", { name: en.settings.save }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.errors.invalid_feedback_url);
+    expect(alert).toHaveAttribute("id", "feedback-message");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(feedbackField()).toHaveAttribute("aria-invalid", "true");
+  });
+});

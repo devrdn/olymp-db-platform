@@ -22,12 +22,12 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
     {},
   );
   // Checked here as well as in the action, so the message sits under the field
-  // it is about.
+  // it is about; the API's refusal of the same field goes there too.
   const [feedbackInvalid, setFeedbackInvalid] = useState(false);
+  const feedbackRefused = feedbackInvalid || state.code === "invalid_feedback_url";
 
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
+  const failure =
+    state.code && state.code !== "invalid_feedback_url" ? messageForCode(state.code, dict.errors) : null;
 
   return (
     // Keyed on the server's values, so a save replaces the draft.
@@ -60,7 +60,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
         id="feedback"
         label={t.feedback}
         hint={t.feedbackHint}
-        error={feedbackInvalid ? dict.errors.invalid_feedback_url : undefined}
+        error={feedbackRefused ? dict.errors.invalid_feedback_url : undefined}
         help={t.feedbackHelp}
         helpLabel={dict.chrome.helpLabel}
       >

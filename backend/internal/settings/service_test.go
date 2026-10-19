@@ -2,7 +2,10 @@ package settings_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,55 +181,62 @@ func TestTheFeedbackAddressReachesAParticipant(t *testing.T) {
 	}
 }
 
+// feedbackCases is the table the interface's feedbackHref is tested against
+// too, so the two sides keep one rule.
+func feedbackCases(t *testing.T) (accept, refuse []feedbackCase) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "feedback-urls.json"))
+	if err != nil {
+		t.Fatalf("read the shared cases: %v", err)
+	}
+	var cases struct {
+		Accept []feedbackCase `json:"accept"`
+		Refuse []feedbackCase `json:"refuse"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatalf("decode the shared cases: %v", err)
+	}
+	return cases.Accept, cases.Refuse
+}
+
+type feedbackCase struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 func TestTheFeedbackAddressIsAnAbsoluteHTTPSAddressOrNothing(t *testing.T) {
-	for name, value := range map[string]string{
-		"nothing, which removes the link": "",
-		"a short form address":            "https://forms.gle/beta",
-		"a query and a fragment":          "https://docs.google.com/forms/d/e/1FAIpQLSf/viewform?usp=sf_link#top",
-		"a port":                          "https://feedback.example:8443/form",
-		"the scheme in capitals":          "HTTPS://forms.gle/beta",
-		"the longest allowed":             "https://forms.gle/" + strings.Repeat("a", 500-len("https://forms.gle/")),
-	} {
-		t.Run("accepts "+name, func(t *testing.T) {
+	accept, refuse := feedbackCases(t)
+	// Lengths are counted in bytes; the cases are ASCII, so bytes are characters.
+	accept = append(accept,
+		feedbackCase{"nothing, which removes the link", ""},
+		feedbackCase{"the longest allowed", "https://forms.gle/" + strings.Repeat("a", 500-len("https://forms.gle/"))},
+	)
+	refuse = append(refuse,
+		feedbackCase{"one byte past the longest", "https://forms.gle/" + strings.Repeat("a", 501-len("https://forms.gle/"))},
+	)
+
+	for _, c := range accept {
+		t.Run("accepts "+c.Name, func(t *testing.T) {
 			f := newFixture()
 
 			if err := f.service.Save(context.Background(), uuid.New(), settings.Values{
-				settings.KeyFeedback: value,
+				settings.KeyFeedback: c.Value,
 			}); err != nil {
-				t.Errorf("Save(%q) = %v, want it accepted", value, err)
+				t.Errorf("Save(%q) = %v, want it accepted", c.Value, err)
 			}
 		})
 	}
 
-	for name, value := range map[string]string{
-		"plain http, readable and rewritable on the way": "http://forms.gle/beta",
-		"a script":                               "javascript:alert(document.cookie)",
-		"a document written inline":              "data:text/html,<script>alert(1)</script>",
-		"a mail address":                         "mailto:olymp@usm.md",
-		"another scheme":                         "ftp://files.example/form",
-		"no scheme":                              "forms.gle/beta",
-		"a scheme-relative address":              "//forms.gle/beta",
-		"a path alone":                           "/feedback",
-		"no host":                                "https:///beta",
-		"only a scheme":                          "https://",
-		"credentials":                            "https://user:secret@forms.gle/beta",
-		"a host disguised as userinfo":           "https://olympdb.usm.md@evil.example/",
-		"a leading space":                        " https://forms.gle/beta",
-		"a trailing newline":                     "https://forms.gle/beta\n",
-		"a space inside":                         "https://forms.gle/be ta",
-		"a control character":                    "https://forms.gle/\x00beta",
-		"a backslash a browser reads as a slash": "https://forms.gle/\\evil.example/",
-		"one character past the longest":         "https://forms.gle/" + strings.Repeat("a", 501-len("https://forms.gle/")),
-	} {
-		t.Run("refuses "+name, func(t *testing.T) {
+	for _, c := range refuse {
+		t.Run("refuses "+c.Name, func(t *testing.T) {
 			f := newFixture()
 
 			err := f.service.Save(context.Background(), uuid.New(), settings.Values{
-				settings.KeyFeedback: value,
+				settings.KeyFeedback: c.Value,
 			})
 
 			if !errors.Is(err, settings.ErrInvalidFeedbackURL) {
-				t.Errorf("Save(%q) = %v, want ErrInvalidFeedbackURL", value, err)
+				t.Errorf("Save(%q) = %v, want ErrInvalidFeedbackURL", c.Value, err)
 			}
 			if len(f.repo.values) != 0 {
 				t.Errorf("stored %v, want nothing written", f.repo.values)
