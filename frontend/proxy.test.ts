@@ -166,6 +166,10 @@ describe("proxy's matcher", () => {
   test.each([
     ["/_next/static/chunk.js", "the framework's own asset"],
     ["/favicon.ico", "an asset, not a screen"],
+    // The default icons: the sign-in screen names them, and a redirect to it
+    // would leave a signed-out tab without one.
+    ["/icon.svg", "an asset, not a screen"],
+    ["/apple-icon.png", "an asset, not a screen"],
   ])("leaves %s alone — %s", (path) => {
     expect(pattern.test(path)).toBe(false);
   });
