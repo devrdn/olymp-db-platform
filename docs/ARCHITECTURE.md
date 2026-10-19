@@ -331,6 +331,12 @@ into its own Prometheus registry and serves `/metrics` on an internal listener
 of its own (`QUERY_RUNNER_METRICS_ADDR`, port 9101), apart from its
 token-guarded gRPC port; its labels are fixed lists it declares at startup.
 
+Both endpoints describe themselves: the containers carry `prometheus.io/*`
+labels naming the private port, the path and the job, so a collector can find
+them through the Docker API without a configuration that lists our services.
+The backend README says what each label means, and which of them a collector
+reads by itself.
+
 The principle underneath: **metrics are diagnostics**. No branch of their code
 may affect how a request is served.
 
