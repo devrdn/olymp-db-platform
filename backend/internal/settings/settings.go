@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -22,6 +24,8 @@ const (
 	KeyName    = "installation.name"
 	KeyContact = "installation.contact_email"
 	KeyLogo    = "installation.logo"
+	// KeyFeedback is where participants send feedback; empty shows no link.
+	KeyFeedback = "installation.feedback_url"
 )
 
 var (
@@ -29,11 +33,19 @@ var (
 	// like a saved change.
 	ErrUnknownKey = errors.New("no such setting")
 	ErrInvalid    = errors.New("setting value is not valid")
+	// ErrInvalidFeedbackURL has its own code: "not valid" alone would not say
+	// that only an absolute https address is taken.
+	ErrInvalidFeedbackURL = errors.New("the feedback address is not an absolute https address")
 )
 
 // maxValueLength bounds a value; values are names and addresses, read on
 // every page.
 const maxValueLength = 200
+
+// maxFeedbackURLLength is longer than maxValueLength because form services
+// put a long identifier in the path (a Microsoft Forms address runs to about
+// two hundred characters).
+const maxFeedbackURLLength = 500
 
 // Definition describes one setting the product knows about. The catalogue is
 // code and the values are data, so every stored key is one something reads.
@@ -54,6 +66,9 @@ var Catalogue = []Definition{
 	{Key: KeyContact, Public: true, Validate: optionalEmail},
 	// The stored value is a reference to an uploaded file, not the file.
 	{Key: KeyLogo, Public: true, Validate: anything},
+	// Public because the play screen and the profile show it, and the public
+	// read is the only one a participant may make.
+	{Key: KeyFeedback, Public: true, Validate: optionalFeedbackURL},
 }
 
 func Definitions() map[string]Definition {
@@ -88,6 +103,33 @@ func optionalEmail(value string) error {
 		return fmt.Errorf("%w: %q is not an email address", ErrInvalid, value)
 	}
 	return anything(value)
+}
+
+// optionalFeedbackURL takes an absolute https address with a host, or nothing.
+// The value becomes a link on every participant's screen, so the scheme is an
+// allow-list: it refuses javascript: and data:, and refuses plain http, which
+// anybody on a school network could rewrite into a page of their own. User
+// information is refused so that "https://olympdb.usm.md@evil.example" cannot
+// pass for this installation.
+func optionalFeedbackURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > maxFeedbackURLLength {
+		return fmt.Errorf("%w: at most %d characters", ErrInvalidFeedbackURL, maxFeedbackURLLength)
+	}
+	// url.Parse tolerates a space in a path, and a browser reads a backslash as
+	// a slash where Go does not, so the address checked would not be the one
+	// followed.
+	if strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || r == '\\' }) {
+		return fmt.Errorf("%w: it contains a space, a backslash or a control character", ErrInvalidFeedbackURL)
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" ||
+		parsed.User != nil || parsed.Opaque != "" {
+		return fmt.Errorf("%w: %q", ErrInvalidFeedbackURL, value)
+	}
+	return nil
 }
 
 func anything(value string) error {

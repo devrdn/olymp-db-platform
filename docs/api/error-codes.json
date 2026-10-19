@@ -330,6 +330,10 @@
       "meaning": "The login or the password is wrong. Deliberately the same answer for both, so the endpoint cannot be used to discover which logins exist."
     },
     {
+      "code": "invalid_feedback_url",
+      "meaning": "The feedback address is not an absolute https address with a host, carries a user name or password, contains a space or a backslash, or is longer than 500 characters. Plain http is refused because the link is shown to every participant and could be rewritten on the way. An empty value removes the link."
+    },
+    {
       "code": "invalid_question_id",
       "meaning": "A question identifier in the path or body is not a valid UUID."
     },

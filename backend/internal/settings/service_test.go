@@ -3,6 +3,7 @@ package settings_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/settings"
@@ -140,5 +141,96 @@ func TestASaveThatChangesNothingSaysSo(t *testing.T) {
 
 	if len(f.sink.entries) != 1 || f.sink.entries[0].Payload["changed"] != false {
 		t.Errorf("payload = %+v, want it to say nothing changed", f.sink.entries[0].Payload)
+	}
+}
+
+func TestTheFeedbackAddressIsUnsetUntilSomebodySetsIt(t *testing.T) {
+	f := newFixture()
+
+	all, err := f.service.All(context.Background())
+	if err != nil {
+		t.Fatalf("All() = %v", err)
+	}
+
+	if all[settings.KeyFeedback] != "" {
+		t.Errorf("feedback = %q, want empty so that no link is shown", all[settings.KeyFeedback])
+	}
+}
+
+// A participant reads it on the play screen, where the only settings read is
+// the public one.
+func TestTheFeedbackAddressReachesAParticipant(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture()
+	if err := f.service.Save(ctx, uuid.New(), settings.Values{
+		settings.KeyFeedback: "https://forms.gle/beta",
+	}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	public, err := f.service.Public(ctx)
+	if err != nil {
+		t.Fatalf("Public() = %v", err)
+	}
+
+	if public[settings.KeyFeedback] != "https://forms.gle/beta" {
+		t.Errorf("public feedback = %q, want the saved address", public[settings.KeyFeedback])
+	}
+}
+
+func TestTheFeedbackAddressIsAnAbsoluteHTTPSAddressOrNothing(t *testing.T) {
+	for name, value := range map[string]string{
+		"nothing, which removes the link": "",
+		"a short form address":            "https://forms.gle/beta",
+		"a query and a fragment":          "https://docs.google.com/forms/d/e/1FAIpQLSf/viewform?usp=sf_link#top",
+		"a port":                          "https://feedback.example:8443/form",
+		"the scheme in capitals":          "HTTPS://forms.gle/beta",
+		"the longest allowed":             "https://forms.gle/" + strings.Repeat("a", 500-len("https://forms.gle/")),
+	} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			f := newFixture()
+
+			if err := f.service.Save(context.Background(), uuid.New(), settings.Values{
+				settings.KeyFeedback: value,
+			}); err != nil {
+				t.Errorf("Save(%q) = %v, want it accepted", value, err)
+			}
+		})
+	}
+
+	for name, value := range map[string]string{
+		"plain http, readable and rewritable on the way": "http://forms.gle/beta",
+		"a script":                               "javascript:alert(document.cookie)",
+		"a document written inline":              "data:text/html,<script>alert(1)</script>",
+		"a mail address":                         "mailto:olymp@usm.md",
+		"another scheme":                         "ftp://files.example/form",
+		"no scheme":                              "forms.gle/beta",
+		"a scheme-relative address":              "//forms.gle/beta",
+		"a path alone":                           "/feedback",
+		"no host":                                "https:///beta",
+		"only a scheme":                          "https://",
+		"credentials":                            "https://user:secret@forms.gle/beta",
+		"a host disguised as userinfo":           "https://olympdb.usm.md@evil.example/",
+		"a leading space":                        " https://forms.gle/beta",
+		"a trailing newline":                     "https://forms.gle/beta\n",
+		"a space inside":                         "https://forms.gle/be ta",
+		"a control character":                    "https://forms.gle/\x00beta",
+		"a backslash a browser reads as a slash": "https://forms.gle/\\evil.example/",
+		"one character past the longest":         "https://forms.gle/" + strings.Repeat("a", 501-len("https://forms.gle/")),
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			f := newFixture()
+
+			err := f.service.Save(context.Background(), uuid.New(), settings.Values{
+				settings.KeyFeedback: value,
+			})
+
+			if !errors.Is(err, settings.ErrInvalidFeedbackURL) {
+				t.Errorf("Save(%q) = %v, want ErrInvalidFeedbackURL", value, err)
+			}
+			if len(f.repo.values) != 0 {
+				t.Errorf("stored %v, want nothing written", f.repo.values)
+			}
+		})
 	}
 }

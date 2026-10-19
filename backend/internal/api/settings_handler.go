@@ -210,6 +210,9 @@ func (h *SettingsHandler) save(w http.ResponseWriter, r *http.Request) {
 
 	switch err := h.settings.Save(r.Context(), identity.UserID, req.Values); {
 	case err == nil:
+	case errors.Is(err, settings.ErrInvalidFeedbackURL):
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidFeedbackURL, err.Error())
+		return
 	case errors.Is(err, settings.ErrUnknownKey), errors.Is(err, settings.ErrInvalid):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return

@@ -24,6 +24,10 @@ var (
 	codeInvalidCIDR = httpx.NewCode("invalid_cidr",
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 
+	// --- Installation settings ----------------------------------------------
+	codeInvalidFeedbackURL = httpx.NewCode("invalid_feedback_url",
+		"The feedback address is not an absolute https address with a host, carries a user name or password, contains a space or a backslash, or is longer than 500 characters. Plain http is refused because the link is shown to every participant and could be rewritten on the way. An empty value removes the link.")
+
 	// --- Installation pictures ----------------------------------------------
 	// Separate codes so the uploader learns what to change.
 	codeImageTooLarge = httpx.NewCode("image_too_large",

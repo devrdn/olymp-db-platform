@@ -2217,6 +2217,7 @@ const en = {
       "The query service is not answering right now. Nothing to do with your query — try again in a moment.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
+    invalid_feedback_url: "The feedback address must be a full https address, such as https://forms.gle/…, with no spaces or backslashes and at most 500 characters. Leave it empty to show no link.",
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
     invalid_tab_id: "Wrong tab identifier.",
