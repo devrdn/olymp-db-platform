@@ -798,22 +798,44 @@ func serviceLabels(t *testing.T, service string) map[string]string {
 }
 
 // composePort is the port of a service's listener variable as the compose file
-// sets it — `QUERY_RUNNER_METRICS_ADDR: ":9101"` gives "9101".
+// sets it on that service — `QUERY_RUNNER_METRICS_ADDR: ":9101"` gives "9101".
+// Only the named service's block is read, so the same variable on another
+// service can neither satisfy the check nor stand in for a missing one.
 func composePort(t *testing.T, service, variable string) string {
 	t.Helper()
+	var inService bool
 	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), variable+":") {
-			continue
+		switch {
+		case strings.HasPrefix(line, "  "+service+":"):
+			inService = true
+		case inService && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.TrimSpace(line) != "":
+			inService = false // the next service begins
+		case inService && strings.HasPrefix(strings.TrimSpace(line), variable+":"):
+			_, value, _ := strings.Cut(strings.TrimSpace(line), ":")
+			address := strings.Trim(strings.TrimSpace(value), `"`)
+			if _, port, ok := strings.Cut(address, ":"); ok {
+				return port
+			}
+			t.Fatalf("%s in the %s service reads %q, which carries no port", variable, service, address)
 		}
-		_, value, _ := strings.Cut(strings.TrimSpace(line), ":")
-		address := strings.Trim(strings.TrimSpace(value), `"`)
-		if _, port, ok := strings.Cut(address, ":"); ok {
-			return port
-		}
-		t.Fatalf("%s in the %s service reads %q, which carries no port", variable, service, address)
 	}
 	t.Fatalf("%s is not set on the %s service", variable, service)
 	return ""
+}
+
+// scrapeJobs are the job names deploy/observability/prometheus.yml scrapes.
+// They are compared whole: a job named core-api-dev is not core-api.
+func scrapeJobs(t *testing.T) map[string]bool {
+	t.Helper()
+	jobs := map[string]bool{}
+	for _, line := range strings.Split(repoFile(t, "deploy/observability/prometheus.yml"), "\n") {
+		trimmed := strings.TrimPrefix(strings.TrimSpace(line), "- ")
+		if value, ok := strings.CutPrefix(trimmed, "job_name:"); ok {
+			jobs[strings.Trim(strings.TrimSpace(value), `"'`)] = true
+		}
+	}
+	return jobs
 }
 
 // exposedPorts are the ports one stage of backend/Dockerfile declares.
@@ -863,8 +885,8 @@ func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
 			if labels["prometheus.io/job"] != service.job {
 				t.Errorf("prometheus.io/job is %q, want %q", labels["prometheus.io/job"], service.job)
 			}
-			if !strings.Contains(repoFile(t, "deploy/observability/prometheus.yml"), "job_name: "+service.job) {
-				t.Errorf("prometheus.yml scrapes no job named %q", service.job)
+			if jobs := scrapeJobs(t); !jobs[service.job] {
+				t.Errorf("prometheus.yml scrapes no job named %q; it scrapes %v", service.job, jobs)
 			}
 
 			port := composePort(t, service.name, service.variable)
