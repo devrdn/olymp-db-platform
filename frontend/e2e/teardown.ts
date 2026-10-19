@@ -1,42 +1,61 @@
-import { clearSeed, readSeed, signInAsOperator } from "./api";
+import { ApiError, clearSeed, readRecord, signInAsOperator, type Api, type SeedRecord } from "./api";
 
 /**
- * The global teardown: closes what the seed opened, so a run against a
- * longer-lived stack leaves an archived contest and two deleted (restorable)
- * accounts behind rather than a running contest and live credentials. Every
- * step is attempted even if an earlier one fails, and a failure fails the run.
- * It acts as the stack's administrator, because an account cannot delete
- * itself.
+ * The global teardown, which Playwright runs even when the setup threw:
+ * closes whatever the setup recorded, so a run against a longer-lived stack
+ * leaves an archived (or, if never published, deleted) contest and two
+ * deleted, restorable accounts rather than a running contest and live
+ * credentials. A failure fails the run and keeps seed.json, which the next
+ * setup closes before it starts.
  */
 export default async function teardown(): Promise<void> {
-  let seed;
-  try {
-    seed = readSeed();
-  } catch {
-    return; // The seed never finished; there is nothing of ours to close.
-  }
+  const record = readRecord();
+  if (!record) return;
 
   const operator = await signInAsOperator();
+  let failures: string[];
+  try {
+    failures = await closeRecord(operator, record);
+  } finally {
+    await operator.close();
+  }
+  if (failures.length > 0) throw new Error(`teardown: ${failures.join("; ")}`);
+  clearSeed();
+}
+
+/**
+ * Closes every object in `record` that still exists, attempting each even if
+ * an earlier one fails, and returns what failed. Safe to repeat: a closed
+ * contest and a deleted account are left as they are. Acts as the stack's
+ * administrator, because an account cannot delete itself.
+ */
+export async function closeRecord(operator: Api, record: SeedRecord): Promise<string[]> {
   const failures: string[] = [];
   const attempt = async (what: string, step: () => Promise<unknown>) => {
     try {
       await step();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return; // Already gone.
       failures.push(`${what}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
-  try {
-    const at = `/contests/${seed.contest.id}`;
-    const reason = { reason: "Created by the browser smoke test" };
-    await attempt("finish the contest", () => operator.call("POST", `${at}/status`, { status: "finished" }));
-    await attempt("archive the contest", () => operator.call("POST", `${at}/status`, { status: "archived" }));
-    await attempt("delete the participant", () => operator.call("POST", `/users/${seed.participant.id}/delete`, reason));
-    await attempt("delete the administrator", () => operator.call("POST", `/users/${seed.admin.id}/delete`, reason));
-  } finally {
-    await operator.close();
+  if (record.contest) {
+    const at = `/contests/${record.contest.id}`;
+    await attempt("close the contest", async () => {
+      const { status } = await operator.call<{ status: string }>("GET", at);
+      // The lifecycle's own steps: a draft can be deleted; anything that was
+      // published is a record and can only be archived.
+      if (status === "draft") return operator.call("DELETE", at);
+      if (status === "running") await operator.call("POST", `${at}/status`, { status: "finished" });
+      if (status !== "archived") await operator.call("POST", `${at}/status`, { status: "archived" });
+    });
   }
-  // Kept on failure: the ids in it are what is left to close by hand.
-  if (failures.length > 0) throw new Error(`teardown: ${failures.join("; ")}`);
-  clearSeed();
+
+  const reason = { reason: "Created by the browser smoke test" };
+  for (const account of [record.participant, record.admin]) {
+    if (!account) continue;
+    await attempt(`delete ${account.login}`, () => operator.call("POST", `/users/${account.id}/delete`, reason));
+  }
+  return failures;
 }
