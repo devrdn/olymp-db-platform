@@ -1,0 +1,43 @@
+# The scheduled backup of DB Contest: `make backup`, rotation, and the
+# optional off-host copy, run by deploy/backups/scheduled-backup.sh.
+# Rendered and installed by `deploy/backups/schedule.sh install`, which fills
+# in the checkout and the user; started by dbcontest-backup.timer.
+[Unit]
+Description=DB Contest backup (core dump, covers, game uploads) and rotation
+Documentation=file://@ROOT@/backend/README.md
+# After the clock is set: a catch-up run at boot must not stamp its set with
+# a time the clock is about to take back.
+After=docker.service network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The user must be able to run docker compose: the one who runs make deploy.
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/deploy/backups/scheduled-backup.sh
+SyslogIdentifier=dbcontest-backup
+UMask=0077
+NoNewPrivileges=yes
+# The sandbox stops short of ProtectHome and a read-only /home or /srv: the
+# run needs ~/.docker, rclone writes its token refreshes to ~/.config, and
+# the sets go to the checkout or BACKUP_DIR. Membership of the docker group
+# is root's power anyway, so this narrows mistakes rather than an attacker.
+# PrivateTmp also clears the staging copies of a run that was killed.
+PrivateTmp=yes
+ProtectSystem=full
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# A hung run is a failure, not a silence: without a limit a stuck docker exec
+# would hold the unit, and every later trigger with it, for good.
+TimeoutStartSec=40min
