@@ -515,8 +515,9 @@ backup: require-env ## Dump the core database and archive the covers and game up
 	@umask 077; mkdir -p $(BACKUP_DIR)
 	@umask 077; run=$$$$; staging=; \
 		stamp=$${BACKUP_STAMP:-$$(date -u +%Y%m%d-%H%M%SZ)}; \
+		case $$stamp in *[!0-9Z-]*) stamp=invalid ;; esac; \
 		echo "$$stamp" | grep -Eqx '[0-9]{8}-[0-9]{6}Z?' || \
-			{ echo "BACKUP_STAMP=$$stamp is not a timestamp like 20261102-091500Z"; exit 1; }; \
+			{ echo "BACKUP_STAMP is not a timestamp like 20261102-091500Z"; exit 1; }; \
 		dump=$(CORE_DB_NAME)-$$stamp.dump; \
 		partial() { echo "$(BACKUP_DIR)/.$$1.$$run.partial"; }; \
 		unfinished() { rm -rf "$$staging"; rm -f "$(BACKUP_DIR)"/.*-"$$stamp".*."$$run".partial; }; \

@@ -8,7 +8,7 @@ Documentation=file://@ROOT@/backend/README.md
 # After the clock is set: a catch-up run at boot must not stamp its set with
 # a time the clock is about to take back.
 After=docker.service network-online.target time-sync.target
-Wants=network-online.target time-sync.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
