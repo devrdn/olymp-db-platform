@@ -207,10 +207,18 @@ Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
   `E2E_ADMIN_PASSWORD`): an administrator and a participant of its own, a
   contest with a story, a question and its answer, a three-row game script,
   the roster, then publish and start. Names and passwords are generated per
-  run and kept in `frontend/e2e/.state/` (git-ignored, 0600); nothing is
-  printed. A one-time administrator password is replaced on first use and the
-  replacement kept there for the next run. The teardown archives the contest
-  and deletes the two accounts.
+  run and nothing is printed. Each object is written to
+  `frontend/e2e/.state/seed.json` (git-ignored, 0600) the moment it exists,
+  so the teardown, which Playwright runs even after a failed setup, closes
+  whatever was made: the contest is archived (deleted if never published)
+  and the two accounts are deleted. A record a failed teardown kept is
+  closed by the next setup before it starts.
+- **It leaves a one-time password alone** unless
+  `E2E_ALLOW_ADMIN_PASSWORD_CHANGE=1`, which `e2e/stack.sh` writes only into
+  the throwaway stack's `smoke.env`. Without it, an administrator still on a
+  one-time password is refused with a request to sign in once by hand. With
+  it, the new password is written to `.state/admin.json` (refused unless git
+  ignores it, read back before use) before the API is asked to change it.
 - **Selectors are roles and accessible names**, as in the component tests, so
   the suite reads the English dictionary; the browser is pinned to `en-US`.
 - **The answer comes last** because answering a contest's only question
@@ -229,11 +237,19 @@ Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
   make e2e-stack-down                    # containers, volumes, network, images
   ```
 
-  `E2E_HTTPS_PORT`, `E2E_STACK_DIR` and `E2E_PROJECT` move the port, the
-  directory and the project name (give `e2e-stack-down` the same ones);
-  `KEEP_IMAGES=1` keeps the images for the next `e2e-stack-up`. Against any other stack, set `E2E_BASE_URL` and the
-  administrator's credentials instead of `E2E_ENV_FILE`; the run leaves an
-  archived contest and two deleted accounts in its audit trail.
+  `E2E_HTTPS_PORT`, `E2E_STACK_DIR`, `E2E_PROJECT` and `E2E_SUBNET_PREFIX`
+  (the stack's /24, `10.231.40` by default) move the port, the directory,
+  the project name and the network; give `e2e-stack-down` the same ones.
+  `KEEP_IMAGES=1` keeps the images for the next `e2e-stack-up`.
+
+  Against any other stack, put `E2E_BASE_URL`, `E2E_ADMIN_LOGIN` and
+  `E2E_ADMIN_PASSWORD` in a 0600 file and pass it as `E2E_ENV_FILE`, rather
+  than on the command line, where the password reaches the shell history
+  and the process list. The run leaves an archived contest and two deleted
+  accounts in that stack's audit trail.
+- **Traces are off.** `E2E_TRACE=1` keeps one per failed test under
+  `frontend/test-results/` (git-ignored), and it records everything typed,
+  the run's passwords among it.
 
 ## 2. Running them
 
