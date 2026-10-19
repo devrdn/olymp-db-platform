@@ -24,7 +24,7 @@ screens and the rules behind them in [2. Use cases](02-use-cases.md) and
 | Where | What runs there | Needs |
 |---|---|---|
 | The host, in the checkout | every `make` target that touches the stack (`deploy`, `backup`, `restore-check`, `game-check`), `docker compose`, `deploy/backups/schedule.sh` | `deploy/.env`, membership of the `docker` group, `sudo` for the backup timer |
-| A workstation | `make images` and the release checks, the load test, the browser smoke test | the repository, Go, Node and Docker; SSH to the host for the load test |
+| A workstation | `make images` and the release checks, the load test, the browser smoke test | the repository at the release tag, Go, Node and Docker; a `deploy/.env` with the database passwords for `make test-game` and `make test-game-build`; SSH to the host for the load test |
 | The browser | everything an organiser does: accounts, the contest, monitoring, standings | an administrator's account, or the contest's owner or a manager |
 | Grafana and Prometheus | the dashboard and the alert rules | run outside this repository; the host's Alloy collects the metrics |
 
@@ -45,28 +45,46 @@ not care.
 **1. Back up, then deploy the release.** The release is the first v0.3 tag
 that carries the schema fix, the Query Runner's metrics, the scheduled backup
 and the feedback link. Before it reaches the host, run the checks from the
-v0.3.0 release notes on a workstation, against the new images:
+v0.3.0 release notes on a workstation. `make images` builds from the working
+tree, so check the tag out first; `make test-game` and `make test-game-build`
+read the database passwords from `deploy/.env`:
 
 ```bash
+git fetch --tags
+git checkout v0.3.<n>
 make images
 make game-uploads-check
 make test-game
 make test-game-build
 ```
 
-On the host:
+On the host, back up with the checkout as it is, then bring the checkout to
+the same tag. The images carry the code, but `make deploy` runs the compose
+file, the Makefile and the scripts of the host's checkout: the Query Runner's
+metrics listener (`QUERY_RUNNER_METRICS_ADDR: ":9101"`) is set in
+`deploy/docker-compose.yml`, and `deploy/backups/schedule.sh` exists only
+there. New images under an old checkout deploy without either.
 
 ```bash
 make backup                                         # a set from before the deploy
-make restore-check FILE=deploy/backups/<that>.dump  # it loads
+make restore-check FILE=deploy/backups/<CORE_DB_NAME>-<stamp>.dump   # the dump it wrote
+git status                                          # nothing modified in tracked files
+git fetch --tags
+git checkout v0.3.<n>
+diff <(grep -o '^[A-Z0-9_]*=' deploy/.env.example | sort -u) \
+     <(grep -o '^[A-Z0-9_]*=' deploy/.env | sort -u)   # settings the release added
 make deploy VERSION=v0.3.<n>
 make deployed                                       # every service on the new tag
 make game-check                                     # no game the core database expects is missing
 ```
 
-Use `make deploy`, not `make deploy-api`: the release changes the Query Runner
-too, and `deploy-api` pulls only the API and its migration job. Rolling back is
-the same command with the previous version
+`make backup` prints the name of each file it writes. The `diff` compares
+setting names only, so no secret reaches the screen. A name only in
+`.env.example` is a setting your `deploy/.env` lacks: read its comment there
+and decide (the scheduled backup's `BACKUP_*` ones are optional). Use
+`make deploy`, not `make deploy-api`: the release changes the Query Runner
+too, and `deploy-api` pulls only the API and its migration job. Rolling back
+is checking out the previous tag and the same command with that version
 ([Releases and deployment](../../backend/README.md#releases-and-deployment)).
 
 **2. Rebuild any game built before this release.** A game built before the
@@ -78,7 +96,7 @@ For a game written as a script, open the contest's **Database** tab and press
 route as staff ([below](#calling-a-staff-route-from-the-command-line)):
 
 ```bash
-curl -sS -b "$JAR" -X POST https://olympdb.usm.md/api/v1/contests/<contest id>/game/build
+curl -sS --fail-with-body -b "$JAR" -X POST https://olympdb.usm.md/api/v1/contests/<contest id>/game/build
 ```
 
 Wait until the tab shows the game as **ready**. The rebuild raises the game's
@@ -127,8 +145,8 @@ has the arithmetic.
 the timer has written its first set:
 
 ```bash
-deploy/backups/schedule.sh status                  # the last result and the newest set
-make restore-check FILE=deploy/backups/<newest>.dump
+deploy/backups/schedule.sh status                  # the last result and the newest set's stamp
+make restore-check FILE=deploy/backups/<CORE_DB_NAME>-<stamp>.dump
 du -ch deploy/backups/*-<its timestamp>.*          # S, the size of one set
 ```
 
@@ -322,7 +340,7 @@ ones you hear about, and what to do
 | `contest_ended`, `contest_finished` | "The contest has ended…" | it is over; it cannot reopen |
 | `deadline_passed` | "Your own deadline for this contest has passed." | their time is up. See [more time](#a-participant-needs-more-time) |
 | `address_not_allowed` | "Access is allowed only from the university network." | the contest has **Allowed networks** set; for a remote contest, empty it |
-| `no_game_yet` | "This contest's database has not been prepared yet…" | their copy is not ready; see [the game is missing](#the-game-is-missing-or-the-game-cluster-was-lost) if it persists |
+| `no_game_yet` | "This contest's database has not been prepared yet…" | the contest's game is not built or is still building, for everybody: expected while a [recovery rebuild](#the-game-is-missing-or-the-game-cluster-was-lost) runs |
 | `game_cluster_full` | "There is no room left on the game cluster…" | see [disk filling](#the-disk-is-filling) |
 | `query_service_down` | "The query service is not answering right now…" | the Query Runner is down |
 | `query_busy` | "The system is busy. Try again in a moment." | the Query Runner is full |
@@ -342,12 +360,25 @@ ones you hear about, and what to do
 
 #### The game is missing, or the game cluster was lost
 
-Signs: participants get `no_game_yet`, `error/internal` climbs on the
-dashboard, or `pg-game` lost its volume.
+Signs: 5xx answers on the console and `error/internal` climbing on the
+dashboard (`DBContestQueriesFailingInternally`), or `pg-game` lost its volume.
+The core database still records the game as ready, so participants are not
+told `no_game_yet` until the rebuild below is pending.
 
-1. If `pg-game` came back empty, run `make deploy VERSION=<the running
-   version>` again: its `game-prepare` job recreates the game cluster's roles
-   on every deploy.
+1. If `pg-game` came back empty, recreate the game cluster's roles by running
+   its preparation job, alone. It is the one part of a deploy a running
+   contest may take, and the only exception to "do not deploy": never
+   `make deploy` here, which pulls and recreates the whole stack and runs the
+   migration job.
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d game-prepare
+   docker compose -f deploy/docker-compose.yml ps -a game-prepare    # Exited (0)
+   docker compose -f deploy/docker-compose.yml logs game-prepare     # what it did
+   ```
+
+   `game-prepare` is a one-shot job that exits when done; `up -d` starts its
+   stopped container again, after `pg-game` reports healthy.
 2. `make game-check` lists every contest whose game the core database records
    as built and the cluster lacks, with its status, and fails while one still
    to be played is among them.
@@ -355,7 +386,7 @@ dashboard, or `pg-game` lost its volume.
    ([below](#calling-a-staff-route-from-the-command-line)):
 
    ```bash
-   curl -sS -b "$JAR" -X POST https://olympdb.usm.md/api/v1/contests/<contest id>/game/build
+   curl -sS --fail-with-body -b "$JAR" -X POST https://olympdb.usm.md/api/v1/contests/<contest id>/game/build
    ```
 
    A running contest is accepted only while its game is missing from the
@@ -376,7 +407,7 @@ There is no extension for one participant. What exists:
   frozen, so a later end helps only those whose time the contest's end was
   cutting short.
 - **Nothing reopens a finished contest.** A finished contest moves only to
-  archived. Extend before **Ends** plus the grace, not after.
+  archived. Extend before **Ends**, not after.
 
 The **Grace period, minutes** field on the same tab is not more time,
 whatever its help text says: it is how long participants' databases are kept
@@ -418,8 +449,7 @@ Do not deploy a new version mid-contest.
 
 `DBContestQueryRunnerFull`, or **Waiting queries** pinned at the queue's
 depth: participants are told `busy` at once, and a query that waited past
-`QUERY_QUEUE_WAIT` times out. Ask participants to wait for one query before
-sending the next. The per-participant rate, **Queries per minute** on
+`QUERY_QUEUE_WAIT` times out. The per-participant rate, **Queries per minute** on
 **Settings**, can be lowered while the contest runs. Despite its hint, zero
 there means the installation's `QUERY_PER_MINUTE` (30 by default), not no
 limit, and a value above it changes nothing.
@@ -437,7 +467,8 @@ what showed the hardware holds them.
 ```bash
 df -h
 docker system df
-deploy/backups/schedule.sh status       # the newest set and its size
+deploy/backups/schedule.sh status       # the newest set's stamp and the number of sets
+du -ch deploy/backups/*-<stamp>.*       # the size of that set
 ```
 
 - **Backups.** A run is refused while the disk has less than
@@ -461,23 +492,31 @@ deploy/backups/schedule.sh status       # the newest set and its size
 
 A few actions have no screen: rebuilding a running contest's lost game, and
 extending the grace period after the end. Call them with an organiser's
-session (an administrator, or the contest's owner or a manager). `read -rs`
-keeps the password off the screen and out of history, and `printf` is a shell
-builtin, so it never reaches the process list:
+session (an administrator, or the contest's owner or a manager), from a
+machine with `curl` 7.76 or later and `jq`:
 
 ```bash
-read -r LOGIN; read -rs PASSWORD
-JAR=$(mktemp)
-printf '{"login":"%s","password":"%s"}' "$LOGIN" "$PASSWORD" |
-  curl -sS -c "$JAR" -H 'Content-Type: application/json' --data-binary @- \
-    https://olympdb.usm.md/api/v1/auth/login
+umask 077                         # curl rewrites the cookie jar; keep it owner-only
+IFS= read -r LOGIN
+IFS= read -rs PASSWORD            # typed, not echoed, never in history
+export LOGIN PASSWORD
+JAR=$(mktemp)                     # a 0600 file of its own
+jq -n '{login: env.LOGIN, password: env.PASSWORD}' |
+  curl -sS --fail-with-body -c "$JAR" -H 'Content-Type: application/json' \
+    --data-binary @- https://olympdb.usm.md/api/v1/auth/login
 unset PASSWORD
 
-# ... the calls, each with -b "$JAR" ...
+# ... the calls, each with --fail-with-body -b "$JAR" ...
 
-curl -sS -b "$JAR" -X POST https://olympdb.usm.md/api/v1/auth/logout
-rm -f "$JAR"
+curl -sS --fail-with-body -b "$JAR" -X POST https://olympdb.usm.md/api/v1/auth/logout
+rm -f "$JAR"; unset LOGIN JAR
 ```
+
+`jq` builds the body from the environment, so a quote or a backslash in the
+password stays a valid string, and the password is never an argument any
+process list shows. `IFS=` keeps leading and trailing spaces. With
+`--fail-with-body` a refused call prints the API's answer and exits non-zero,
+so a failed sign-in shows as itself rather than as a 401 on the next call.
 
 The contest's id is the identifier in its workspace address,
 `/contests/<id>`. Every route is listed with its permission in
@@ -491,8 +530,8 @@ The contest's id is the identifier in its workspace address,
    ```bash
    sudo deploy/backups/schedule.sh daily
    deploy/backups/schedule.sh status
-   make backup
-   make restore-check FILE=deploy/backups/<that>.dump
+   make backup                                                  # prints the files it writes
+   make restore-check FILE=deploy/backups/<CORE_DB_NAME>-<stamp>.dump
    ```
 
    A set taken by hand counts in rotation like the others. With no off-host
@@ -507,14 +546,16 @@ The contest's id is the identifier in its workspace address,
    **Feedback address** once you no longer want the link shown.
 4. **Participants' databases are dropped after the grace period**: the
    contest's **Grace period, minutes**, or `GAME_INSTANCE_GRACE_MIN` (1440, a
-   day) when it is zero, counted from the finish. The **Reclaim sweep per
-   hour** panel shows them go. To keep them longer, for a dispute or a look
-   at someone's work, extend it before it runs out
+   day) when it is zero. It is counted from the contest's last change of
+   status or settings: the finish, and again from archiving or an extension,
+   each of which restarts the count. The **Reclaim sweep per hour** panel
+   shows them go. To keep them longer, for a dispute or a look at someone's
+   work, extend it before it runs out
    ([as staff](#calling-a-staff-route-from-the-command-line)); a new value
    must be longer than the one in force:
 
    ```bash
-   curl -sS -b "$JAR" -X PATCH -H 'Content-Type: application/json' \
+   curl -sS --fail-with-body -b "$JAR" -X PATCH -H 'Content-Type: application/json' \
      -d '{"grace_period_min": 4320}' \
      https://olympdb.usm.md/api/v1/contests/<contest id>/grace
    ```
