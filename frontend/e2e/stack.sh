@@ -16,13 +16,18 @@
 #
 #   make e2e-smoke E2E_ENV_FILE=<stack dir>/smoke.env
 #
+# E2E_SUBNET_PREFIX (10.231.40 by default) is the stack's /24; change it to
+# avoid a VPN or LAN route, or to run a second stack beside the first under
+# another E2E_PROJECT and E2E_HTTPS_PORT. KEEP_IMAGES=1 makes `down` leave the
+# built images for the next `up`. Give `down` the same variables as `up`.
+#
 # Needs Docker with Compose 2.24 or later (for `!override`) and openssl.
-# KEEP_IMAGES=1 makes `down` leave the built images for the next `up`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT="${E2E_PROJECT:-dbcontest-e2e}"
 PORT="${E2E_HTTPS_PORT:-18443}"
+SUBNET="${E2E_SUBNET_PREFIX:-10.231.40}"
 DIR="${E2E_STACK_DIR:-${TMPDIR:-/tmp}/${PROJECT}}"
 DIR="${DIR%/}"
 ENV_FILE="$DIR/stack.env"
@@ -59,9 +64,10 @@ write_env() {
 REGISTRY=$IMAGE_REGISTRY
 VERSION=$IMAGE_TAG
 E2E_HTTPS_PORT=$PORT
+E2E_SUBNET_PREFIX=$SUBNET
 ENV=production
 SITE_ADDRESS=localhost
-TRUSTED_PROXIES=10.231.40.10/32,10.231.40.11/32
+TRUSTED_PROXIES=$SUBNET.10/32,$SUBNET.11/32
 CORE_DB_USER=dbcontest
 CORE_DB_NAME=dbcontest_core
 CORE_DB_PASSWORD=$(secret)
@@ -115,6 +121,7 @@ E2E_BASE_URL=https://localhost:$PORT
 E2E_ADMIN_LOGIN=admin
 E2E_ADMIN_PASSWORD=$password
 E2E_IGNORE_HTTPS_ERRORS=1
+E2E_ALLOW_ADMIN_PASSWORD_CHANGE=1
 EOF
 	fi
 	[ -f "$SMOKE_ENV" ] || {
@@ -126,14 +133,41 @@ EOF
 	echo "stack: run the suite with: make e2e-smoke E2E_ENV_FILE=$SMOKE_ENV"
 }
 
+# The password the suite set for this stack's administrator (e2e/api.ts)
+# dies with the stack; left behind it would be tried, and refused, first on
+# every run against the next stack on this port.
+forget_admin_password() {
+	local file="${E2E_STATE_DIR:-$ROOT/frontend/e2e/.state}/admin.json"
+	if [ -f "$file" ] && grep -qF "\"baseURL\": \"https://localhost:$PORT\"" "$file"; then
+		rm -f "$file"
+	fi
+}
+
 down() {
 	if [ -f "$ENV_FILE" ]; then
 		compose --profile bootstrap down -v --remove-orphans
+	else
+		# Without the env file compose cannot even read the project (the
+		# directory was purged, or `down` was given another E2E_STACK_DIR), so
+		# what carries the project's label is removed directly.
+		echo "stack: $ENV_FILE is missing; removing project $PROJECT by its label"
+		local label="label=com.docker.compose.project=$PROJECT"
+		docker ps -aq --filter "$label" | xargs docker rm -f >/dev/null 2>&1 || true
+		docker volume ls -q --filter "$label" | xargs docker volume rm >/dev/null 2>&1 || true
+		docker network ls -q --filter "$label" | xargs docker network rm >/dev/null 2>&1 || true
 	fi
 	if [ "${KEEP_IMAGES:-}" != "1" ]; then
 		docker image rm "${IMAGES[@]}" >/dev/null 2>&1 || true
 	fi
+	forget_admin_password
 	rm -rf "$DIR"
+
+	local left
+	left="$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT")$(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT")"
+	if [ -n "$left" ]; then
+		echo "stack: project $PROJECT still has containers or volumes" >&2
+		exit 1
+	fi
 	echo "stack: project $PROJECT removed"
 }
 
