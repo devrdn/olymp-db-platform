@@ -19,7 +19,7 @@ vi.mock("next/font/google", () => {
 vi.mock("@/lib/api/branding", () => ({ branding: vi.fn() }));
 
 function installation(images: Settings["images"]) {
-  vi.mocked(branding).mockResolvedValue({ name: "", contact: "", images });
+  vi.mocked(branding).mockResolvedValue({ name: "", contact: "", feedback: "", images });
 }
 
 /** Every icon the head will carry, as rel and address. */
