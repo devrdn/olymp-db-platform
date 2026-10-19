@@ -15,6 +15,10 @@
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$ROOT/deploy/.env"
 STAMP_RE='[0-9]{8}-[0-9]{6}Z?'
+# How far ahead of this host's clock a stamp may be and still count: a set
+# dated later than that was taken by a wrong clock, and taking it for the
+# newest would let rotation remove the sets that really are.
+FUTURE_SKEW=300
 
 # Under systemd, stderr goes to the journal and a <N> prefix sets the line's
 # priority, so `journalctl -p err` shows the reasons a run failed.
@@ -104,11 +108,34 @@ set_stamps() { # dir db
 		LC_ALL=C sort -u
 }
 
-complete_sets() { # dir db: oldest first
-	local s
+# "<epoch> <stamp>" for each complete set; the epoch is "future" for a set
+# dated beyond FUTURE_SKEW and "invalid" for a stamp that is no real date.
+dated_sets() { # dir db
+	local s e now
+	now=$(date +%s)
 	while IFS= read -r s; do
-		if is_complete "$1" "$2" "$s"; then printf '%s\n' "$s"; fi
+		is_complete "$1" "$2" "$s" || continue
+		if ! e=$(stamp_epoch "$s" 2>/dev/null); then
+			echo "invalid $s"
+		elif ((e > now + FUTURE_SKEW)); then
+			echo "future $s"
+		else
+			echo "$e $s"
+		fi
 	done < <(set_stamps "$1" "$2")
+}
+
+# The complete sets ordered by the time they were taken, oldest first. Never
+# by name: a local-time stamp from before the switch to UTC sorts after the
+# UTC stamps of the hours that followed it.
+complete_sets() { # dir db
+	dated_sets "$1" "$2" | awk '$1 ~ /^[0-9]+$/' | LC_ALL=C sort -n -k1,1 -k2,2 | awk '{ print $2 }'
+}
+
+# Complete sets dated in the future or on no real date: never counted, never
+# removed.
+undated_sets() { # dir db: "future <stamp>" or "invalid <stamp>"
+	dated_sets "$1" "$2" | awk '$1 !~ /^[0-9]+$/'
 }
 
 incomplete_sets() { # dir db: oldest first

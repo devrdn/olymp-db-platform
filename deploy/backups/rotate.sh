@@ -81,6 +81,13 @@ done
 while IFS= read -r stamp; do
 	echo "left alone, incomplete: $stamp (only a complete set is ever removed; delete it by hand once you know why it is partial)"
 done < <(incomplete_sets "$dir" "$db")
+while read -r why stamp; do
+	if [ "$why" = future ]; then
+		echo "left alone, dated in the future: $stamp (more than $((FUTURE_SKEW / 60)) minutes ahead of this host's clock, so taken by a wrong one; never counted as the newest)"
+	else
+		echo "left alone, no real date: $stamp"
+	fi
+done < <(undated_sets "$dir" "$db")
 while IFS= read -r name; do
 	echo "left alone, unfinished: $name (a make backup that was killed before it finished; delete it by hand)"
 done < <(unfinished_files "$dir" "$db")
