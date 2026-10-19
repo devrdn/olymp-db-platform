@@ -65,6 +65,19 @@ expect_contains() { # name, haystack, needle
 expect_lacks() { # name, haystack, needle
 	case "$2" in *"$3"*) fail "$1" "$2 (it must not contain: $3)" ;; *) pass "$1" ;; esac
 }
+within() { # seconds, name, command...: poll the command until it succeeds, or fail by the deadline
+	local deadline=$((SECONDS + $1)) name=$2
+	shift 2
+	until "$@"; do
+		if ((SECONDS >= deadline)); then
+			fail "$name" "not within the deadline"
+			return 1
+		fi
+		sleep 0.05
+	done
+}
+lock_free() { flock -n "$1" true; }
+lock_held() { ! lock_free "$1"; }
 refused() { # name, message, command...: the command fails, saying message
 	local name=$1 message=$2 out
 	shift 2
@@ -119,35 +132,35 @@ clean_env() {
 tempting() {
 	local d=$1 s
 	mkdir -p "$d"
-	for s in 20261028-033000 20261029-033000 20261030-033000 20261031-033000 \
-		20261101-090000 20261101-091500 20261101-093000 \
-		20261102-090000 20261102-091500 20261102-093000 20261102-094500; do
+	for s in 20260828-033000 20260829-033000 20260830-033000 20260831-033000 \
+		20260901-090000 20260901-091500 20260901-093000 \
+		20260902-090000 20260902-091500 20260902-093000 20260902-094500; do
 		mkset "$d" "$s"
 	done
-	printf dump >"$d/$DB-20261020-000000.dump"
-	printf dump >"$d/$DB-20261021-120000.dump"
-	printf covers >"$d/covers-20261021-120000.tar.gz"
+	printf dump >"$d/$DB-20260820-000000.dump"
+	printf dump >"$d/$DB-20260821-120000.dump"
+	printf covers >"$d/covers-20260821-120000.tar.gz"
 	printf notes >"$d/notes.txt"
 	printf dump >"$d/$DB-latest.dump"
-	printf part >"$d/covers-20261022-000000.tar.gz.part"
-	printf dump >"$d/otherdb-20261023-000000.dump"
-	printf covers >"$d/covers-20261023-000000.tar.gz"
-	printf uploads >"$d/game-uploads-20261023-000000.tar.gz"
-	printf dump >"$d/$DB-20261024-000000.dump"
-	printf covers >"$d/covers-20261024-000000.tar.gz"
-	mkdir "$d/game-uploads-20261024-000000.tar.gz"
-	printf dump >"$d/$DB-20261025-000000.dump"
-	printf uploads >"$d/game-uploads-20261025-000000.tar.gz"
-	ln -s "$d/notes.txt" "$d/covers-20261025-000000.tar.gz"
-	printf half >"$d/.$DB-20261028-033000.dump.partial"
+	printf part >"$d/covers-20260822-000000.tar.gz.part"
+	printf dump >"$d/otherdb-20260823-000000.dump"
+	printf covers >"$d/covers-20260823-000000.tar.gz"
+	printf uploads >"$d/game-uploads-20260823-000000.tar.gz"
+	printf dump >"$d/$DB-20260824-000000.dump"
+	printf covers >"$d/covers-20260824-000000.tar.gz"
+	mkdir "$d/game-uploads-20260824-000000.tar.gz"
+	printf dump >"$d/$DB-20260825-000000.dump"
+	printf uploads >"$d/game-uploads-20260825-000000.tar.gz"
+	ln -s "$d/notes.txt" "$d/covers-20260825-000000.tar.gz"
+	printf half >"$d/.$DB-20260828-033000.dump.partial"
 }
 untouchable() {
-	printf '%s\n' "$DB-20261020-000000.dump" "$DB-20261021-120000.dump" "covers-20261021-120000.tar.gz" \
-		notes.txt "$DB-latest.dump" covers-20261022-000000.tar.gz.part \
-		otherdb-20261023-000000.dump covers-20261023-000000.tar.gz game-uploads-20261023-000000.tar.gz \
-		"$DB-20261024-000000.dump" covers-20261024-000000.tar.gz game-uploads-20261024-000000.tar.gz \
-		"$DB-20261025-000000.dump" game-uploads-20261025-000000.tar.gz covers-20261025-000000.tar.gz \
-		".$DB-20261028-033000.dump.partial"
+	printf '%s\n' "$DB-20260820-000000.dump" "$DB-20260821-120000.dump" "covers-20260821-120000.tar.gz" \
+		notes.txt "$DB-latest.dump" covers-20260822-000000.tar.gz.part \
+		otherdb-20260823-000000.dump covers-20260823-000000.tar.gz game-uploads-20260823-000000.tar.gz \
+		"$DB-20260824-000000.dump" covers-20260824-000000.tar.gz game-uploads-20260824-000000.tar.gz \
+		"$DB-20260825-000000.dump" game-uploads-20260825-000000.tar.gz covers-20260825-000000.tar.gz \
+		".$DB-20260828-033000.dump.partial"
 }
 
 check_rotation() {
@@ -158,12 +171,12 @@ check_rotation() {
 	tempting "$t/r1"
 	out=$(BACKUP_KEEP=3 BACKUP_KEEP_DAILY=2 "$B/rotate.sh" "$t/r1" 2>&1) ||
 		fail "rotate.sh succeeds" "$out"
-	want=$({ setfiles 20261031-033000 20261101-093000 20261102-091500 20261102-093000 20261102-094500; untouchable; } | sorted)
+	want=$({ setfiles 20260831-033000 20260901-093000 20260902-091500 20260902-093000 20260902-094500; untouchable; } | sorted)
 	expect "keeps the newest 3 sets and the last set of the 2 days before them, and nothing else is touched" \
 		"$(listing "$t/r1")" "$want"
-	expect_contains "says what it removed" "$out" "removed set 20261028-033000"
-	expect_contains "names the incomplete sets it left alone" "$out" "left alone, incomplete: 20261021-120000"
-	expect_contains "and the unfinished files of a stopped run" "$out" "left alone, unfinished: .$DB-20261028-033000.dump.partial"
+	expect_contains "says what it removed" "$out" "removed set 20260828-033000"
+	expect_contains "names the incomplete sets it left alone" "$out" "left alone, incomplete: 20260821-120000"
+	expect_contains "and the unfinished files of a stopped run" "$out" "left alone, unfinished: .$DB-20260828-033000.dump.partial"
 	expect_contains "states what it kept" "$out" "kept 5 complete sets"
 
 	clean_env
@@ -172,13 +185,13 @@ check_rotation() {
 	out=$(BACKUP_KEEP=3 BACKUP_KEEP_DAILY=2 "$B/rotate.sh" --dry-run "$t/r2" 2>&1) ||
 		fail "a dry run succeeds" "$out"
 	expect "a dry run removes nothing" "$(listing "$t/r2")" "$want"
-	expect_contains "and says what it would remove" "$out" "would remove set 20261102-090000"
+	expect_contains "and says what it would remove" "$out" "would remove set 20260902-090000"
 
 	clean_env
 	mkdir -p "$t/r3"
-	for s in 20261101-090000 20261101-091500 20261101-093000 20261101-094500 20261101-100000; do mkset "$t/r3" "$s"; done
+	for s in 20260901-090000 20260901-091500 20260901-093000 20260901-094500 20260901-100000; do mkset "$t/r3" "$s"; done
 	out=$(BACKUP_KEEP=1 BACKUP_KEEP_DAILY=0 "$B/rotate.sh" "$t/r3" 2>&1) || fail "keep one succeeds" "$out"
-	expect "keeping one keeps the newest set" "$(listing "$t/r3")" "$(setfiles 20261101-100000 | sorted)"
+	expect "keeping one keeps the newest set" "$(listing "$t/r3")" "$(setfiles 20260901-100000 | sorted)"
 
 	want=$(listing "$t/r3")
 	refused "keeping none is refused" "BACKUP_KEEP=0 is not a whole number from 1" \
@@ -193,10 +206,34 @@ check_rotation() {
 
 	clean_env
 	mkdir -p "$t/r4"
-	for s in 20261101-090000 20261101-091500 20261101-093000 20261101-094500; do mkset "$t/r4" "$s"; done
+	for s in 20260901-090000 20260901-091500 20260901-093000 20260901-094500; do mkset "$t/r4" "$s"; done
 	printf 'ADMIN_NAME=System Administrator\nBACKUP_KEEP=2\nBACKUP_KEEP_DAILY=0\n' >"$ROOT/deploy/.env"
 	out=$("$B/rotate.sh" "$t/r4" 2>&1) || fail "rotation reading deploy/.env succeeds" "$out"
-	expect "reads its counts from deploy/.env" "$(listing "$t/r4")" "$(setfiles 20261101-093000 20261101-094500 | sorted)"
+	expect "reads its counts from deploy/.env" "$(listing "$t/r4")" "$(setfiles 20260901-093000 20260901-094500 | sorted)"
+
+	# Local-time sets from before the switch to UTC, and the UTC sets just
+	# after it: in Chisinau in September 15:00 local is 12:00Z, so by string
+	# the local sets sort after the newer UTC ones.
+	clean_env
+	mkdir -p "$t/r5"
+	for s in 20260915-143000 20260915-144500 20260915-150000 20260915-121500Z 20260915-123000Z; do mkset "$t/r5" "$s"; done
+	out=$(TZ=Europe/Chisinau BACKUP_KEEP=2 BACKUP_KEEP_DAILY=0 "$B/rotate.sh" "$t/r5" 2>&1) ||
+		fail "rotation across the switch to UTC succeeds" "$out"
+	expect "orders local-time and UTC sets by their time, keeping the two newest" \
+		"$(listing "$t/r5")" "$(setfiles 20260915-121500Z 20260915-123000Z | sorted)"
+	out=$(TZ=Europe/Chisinau BACKUP_DIR="$t/r5" SYSTEMD_DIR="$t/no-units" "$B/schedule.sh" status 2>&1) || true
+	expect_contains "status names the newest by time" "$out" "newest complete set: 20260915-123000Z"
+
+	clean_env
+	mkdir -p "$t/r6"
+	for s in 20260915-120000Z 20260915-121500Z 20260915-123000Z 20991231-235959Z; do mkset "$t/r6" "$s"; done
+	out=$(BACKUP_KEEP=1 BACKUP_KEEP_DAILY=0 "$B/rotate.sh" "$t/r6" 2>&1) || fail "rotation beside a future set succeeds" "$out"
+	expect "a set dated in the future is neither counted as the newest nor removed" \
+		"$(listing "$t/r6")" "$(setfiles 20260915-123000Z 20991231-235959Z | sorted)"
+	expect_contains "and is named" "$out" "left alone, dated in the future: 20991231-235959Z"
+	out=$(BACKUP_DIR="$t/r6" SYSTEMD_DIR="$t/no-units" "$B/schedule.sh" status 2>&1) || true
+	expect_contains "status names the newest set that is not in the future" "$out" "newest complete set: 20260915-123000Z"
+	expect_lacks "and never a negative age" "$out" "h -"
 }
 
 check_wrapper() {
@@ -264,7 +301,7 @@ check_wrapper() {
 
 	clean_env
 	(flock 9 && sleep 5) 9>"$dir/.scheduled-backup.lock" &
-	while flock -n "$dir/.scheduled-backup.lock" true; do sleep 0.05; done
+	within 10 "the holder takes the lock" lock_held "$dir/.scheduled-backup.lock"
 	rc=0
 	out=$(BACKUP_DIR="$dir" timeout 3 "$B/scheduled-backup.sh" 2>&1) || rc=$?
 	expect "a second run while one is going fails at once" "$((rc != 0 && rc != 124))" "1"
@@ -307,7 +344,8 @@ check_wrapper() {
 	refused "a bad rotation count is refused" "BACKUP_KEEP=0 is not" \
 		env BACKUP_DIR="$dir" BACKUP_KEEP=0 "$B/scheduled-backup.sh"
 	local target
-	for target in 'backup:pa55word@nas:/srv/dbcontest' 'rsync://backup:pa55word@nas/dbcontest' '-e pa55word'; do
+	for target in 'backup:pa55word@nas:/srv/dbcontest' 'rsync://backup:pa55word@nas/dbcontest' \
+		'RSYNC://backup:pa55word@nas/dbcontest' '-e pa55word'; do
 		rc=0
 		out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync BACKUP_OFFHOST_TARGET="$target" "$B/scheduled-backup.sh" 2>&1) || rc=$?
 		expect "an rsync target carrying a password is refused: $target" "$((rc != 0))" "1"
@@ -322,6 +360,14 @@ check_wrapper() {
 		expect_lacks "without echoing it" "$out" "pa55word"
 	done
 	expect "all before make backup runs" "$(cat "$STUB_LOG")" ""
+	for target in 'nas:/srv/backups@daily' 'backup@nas:/srv/backups@daily'; do
+		out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync BACKUP_OFFHOST_TARGET="$target" "$B/scheduled-backup.sh" 2>&1) || true
+		expect_lacks "an rsync path with an @ in it is not taken for a credential: $target" "$out" "is refused"
+	done
+	mkdir -p "$t/remote@daily"
+	out=$(BACKUP_DIR="$dir" BACKUP_OFFHOST=rsync BACKUP_OFFHOST_TARGET="$t/remote@daily" "$B/scheduled-backup.sh" 2>&1) ||
+		fail "a copy to a path with an @ succeeds" "$out"
+	expect "and copies the set there" "$(listing "$t/remote@daily")" "$(setfiles "$(stamp_of_run)" | sorted)"
 
 	echo "Which set a run calls its own"
 	local fut="$t/future" remote="$t/remote-future"
@@ -341,6 +387,18 @@ check_wrapper() {
 	expect "it copies the set it wrote, not the newest by name" "$(listing "$remote")" "$(setfiles "$(stamp_of_run)" | sorted)"
 	expect "and rotation keeps the set it wrote" "$(is_kept "$fut" "$(stamp_of_run)")" "kept"
 
+	echo "The last set a run wrote"
+	local good="$t/good"
+	mkdir -p "$good"
+	clean_env
+	out=$(BACKUP_DIR="$good" "$B/scheduled-backup.sh" 2>&1) || fail "a first run succeeds" "$out"
+	local last
+	last=$(stamp_of_run)
+	mkset "$good" "$(date -u -d '+2 minutes' +%Y%m%d-%H%M%SZ)"
+	out=$(STUB_MAKE=fail BACKUP_DIR="$good" BACKUP_KEEP=1 BACKUP_KEEP_DAILY=0 "$B/scheduled-backup.sh" 2>&1) || true
+	expect "is never removed by the rotation that opens the next run, whatever sorts after it" \
+		"$(is_kept "$good" "$last")" "kept"
+
 	echo "A symlinked backup directory"
 	mkdir -p "$t/disk/sets"
 	ln -s "$t/disk/sets" "$t/sets-link"
@@ -357,7 +415,7 @@ check_wrapper() {
 	: >"$STUB_LOG"
 	setsid env STUB_MAKE=hang BACKUP_DIR="$dir" BACKUP_TEXTFILE_DIR="$tf" "$B/scheduled-backup.sh" >"$t/term.log" 2>&1 &
 	local pid=$!
-	until grep -q hanging "$STUB_LOG"; do sleep 0.05; done
+	within 20 "the stopped run reaches make" grep -q hanging "$STUB_LOG"
 	kill -TERM -- "-$pid"
 	wait "$pid" 2>/dev/null || true
 	expect "still writes the textfile, as a failure" \
@@ -384,7 +442,7 @@ stopped_backup() { # signal dir setting: the target stopped mid-run, its staging
 	setsid env "$3" TMPDIR="$tmp" bash -c "$(declare -f real_backup); ROOT=$ROOT FAKE_COMPOSE=$FAKE_COMPOSE real_backup $2" \
 		>"$2.log" 2>&1 &
 	pid=$!
-	until grep -q "^hanging" "$FAKE_LOG" 2>/dev/null; do sleep 0.05; done
+	within 20 "make backup reaches the step it is stopped in" grep -q "^hanging" "$FAKE_LOG"
 	kill "-$1" -- "-$pid" 2>/dev/null || true
 	wait "$pid" 2>/dev/null || true
 	: >"$FAKE_LOG"
@@ -427,6 +485,10 @@ check_make_backup() {
 	refused "a BACKUP_STAMP that is not a timestamp is refused" "is not a timestamp" \
 		env BACKUP_STAMP='../x' /usr/bin/make -s -C "$ROOT" backup COMPOSE="$FAKE_COMPOSE" \
 		ENV_FILE="$ROOT/deploy/.env" CORE_DB_PASSWORD=unused BACKUP_DIR="$t/m1b"
+	refused "so is one with a second line" "is not a timestamp" \
+		env BACKUP_STAMP="$(printf '20261102-101500Z\n../x')" /usr/bin/make -s -C "$ROOT" backup COMPOSE="$FAKE_COMPOSE" \
+		ENV_FILE="$ROOT/deploy/.env" CORE_DB_PASSWORD=unused BACKUP_DIR="$t/m1b"
+	expect "and writes nothing" "$(listing "$t/m1b" | grep -c 101500 || true)" "0"
 
 	mkdir -p "$t/m2"
 	rc=0
@@ -492,6 +554,8 @@ check_schedule() {
 	expect "the service runs the wrapper of this checkout" \
 		"$(sed -n 's/^ExecStart=//p' "$units/dbcontest-backup.service")" "$B/scheduled-backup.sh"
 	expect "as the user named" "$(sed -n 's/^User=//p' "$units/dbcontest-backup.service")" "deploy"
+	expect "ordered after time sync without pulling it in" \
+		"$(grep -c '^After=.*time-sync.target' "$units/dbcontest-backup.service"):$(grep -c '^Wants=.*time-sync.target' "$units/dbcontest-backup.service")" "1:0"
 
 	mkdir -p /etc/systemd/system/dbcontest-backup.timer.d
 	cp "$units"/dbcontest-backup.service "$units"/dbcontest-backup.timer /etc/systemd/system/
@@ -515,6 +579,11 @@ check_schedule() {
 	refused "install does not choose root on its own" "install root" \
 		env SYSTEMD_DIR="$etc" "$B/schedule.sh" install
 	expect "and installs nothing" "$(listing "$etc")" ""
+	refused "render does not either" "install root" "$B/schedule.sh" render "$t/root-units"
+	expect "and writes nothing" "$(listing "$t/root-units" 2>/dev/null)" ""
+	refused "nor cron" "install root" "$B/schedule.sh" cron
+	out=$("$B/schedule.sh" cron 2>/dev/null) || true
+	expect "which prints no line" "$out" ""
 	: >"$STUB_LOG"
 	out=$(SYSTEMD_DIR="$etc" "$B/schedule.sh" install deploy 2>&1) || fail "install succeeds" "$out"
 	expect_contains "install names the schedule it leaves on" "$out" "daily at 03:30"
