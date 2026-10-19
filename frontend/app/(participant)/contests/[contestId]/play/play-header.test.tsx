@@ -74,7 +74,7 @@ beforeEach(() => {
 describe("PlayHeader", () => {
   test("shows the contest's own title", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
-    render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
 
     expect(screen.getByRole("heading", { name: "The Greenhouse Case" })).toBeInTheDocument();
   });
@@ -83,7 +83,7 @@ describe("PlayHeader", () => {
   // for the right ranges.
   test("the title truncates on a shared row and wraps on the narrow fallback", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
-    render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
 
     const title = screen.getByRole("heading", { level: 1 });
     expect(title.className).toMatch(/(^|\s)truncate(\s|$)/);
@@ -92,7 +92,7 @@ describe("PlayHeader", () => {
 
   test("says under the title that the organiser sees this page", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="The Greenhouse Case" waitingForStart={false} dict={en} />);
 
     expect(en.participant.play.observed).toBe(
       "The organiser sees your queries, answers, notes and actions on this page.",
@@ -100,34 +100,75 @@ describe("PlayHeader", () => {
     expect(screen.getByText(en.participant.play.observed)).toBeInTheDocument();
   });
 
-  test("offers the installation's feedback link when one is set", () => {
-    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(
-      <PlayHeader
-        contestId="c1"
-        title="X"
-        waitingForStart={false}
-        feedbackUrl="https://forms.gle/beta"
-        dict={en}
-      />,
-    );
+  // The workspace reports leaving the page to the organiser (use-signals.ts),
+  // and the link opens a new tab: offered mid-contest, filling in the form
+  // would read as an absence. So it is offered only where no workspace runs.
+  describe("the feedback link", () => {
+    const feedbackLink = () => screen.queryByRole("link", { name: new RegExp(en.participant.feedback.link) });
 
-    const link = screen.getByRole("link", { name: new RegExp(en.participant.feedback.link) });
-    expect(link).toHaveAttribute("href", "https://forms.gle/beta");
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-  });
+    test("is offered in the waiting room, which has no workspace", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart feedbackUrl="https://forms.gle/beta" dict={en} />);
 
-  test("offers no feedback link when the installation has none", () => {
-    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="" dict={en} />);
+      const link = feedbackLink();
+      expect(link).toHaveAttribute("href", "https://forms.gle/beta");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    });
 
-    expect(screen.queryByRole("link", { name: new RegExp(en.participant.feedback.link) })).not.toBeInTheDocument();
+    test("is not offered while the participant can act, where leaving counts as an absence", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: Date.now() + 90_000 }, phase: "running" };
+      render(
+        <PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="https://forms.gle/beta" dict={en} />,
+      );
+
+      expect(feedbackLink()).not.toBeInTheDocument();
+    });
+
+    test("is offered once the contest has finished", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "finished" };
+      render(
+        <PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="https://forms.gle/beta" dict={en} />,
+      );
+
+      expect(feedbackLink()).toHaveAttribute("href", "https://forms.gle/beta");
+    });
+
+    test("is offered when the page shows that the contest is over for this participant", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+      render(
+        <ContentLoadedProvider>
+          <PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="https://forms.gle/beta" dict={en} />
+          <RenderedRefusalSignal code="contest_finished" />
+        </ContentLoadedProvider>,
+      );
+
+      expect(feedbackLink()).toHaveAttribute("href", "https://forms.gle/beta");
+    });
+
+    test("is not offered when the page shows a refusal that may lift", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+      render(
+        <ContentLoadedProvider>
+          <PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="https://forms.gle/beta" dict={en} />
+          <RenderedRefusalSignal code="contest_not_running" />
+        </ContentLoadedProvider>,
+      );
+
+      expect(feedbackLink()).not.toBeInTheDocument();
+    });
+
+    test("is not offered when the installation has none", () => {
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "finished" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} feedbackUrl="" dict={en} />);
+
+      expect(feedbackLink()).not.toBeInTheDocument();
+    });
   });
 
   test("shows a waiting clock before the contest has started", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart dict={en} />);
 
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.waiting);
   });
@@ -138,7 +179,7 @@ describe("PlayHeader", () => {
       deadlineRef: { current: Date.now() + 90_000 },
       phase: "running",
     };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByRole("timer")).toHaveTextContent(/1:2\d|1:3\d/);
   });
@@ -147,7 +188,7 @@ describe("PlayHeader", () => {
   // starts with the first action would be false in a fixed-window contest.
   test("says it is synchronising rather than claiming how the contest is timed", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: undefined }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.syncing);
     expect(screen.getByRole("timer")).not.toHaveTextContent(en.participant.play.clock.notStarted);
@@ -161,7 +202,7 @@ describe("PlayHeader", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", resync };
     const { rerender } = render(
       <ContentLoadedProvider>
-        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+        <PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />
         <ContentLoadedSignal />
       </ContentLoadedProvider>,
     );
@@ -172,7 +213,7 @@ describe("PlayHeader", () => {
 
     rerender(
       <ContentLoadedProvider>
-        <PlayHeader contestId="c1" title="Y" waitingForStart={false} dict={en} />
+        <PlayHeader feedbackUrl="" contestId="c1" title="Y" waitingForStart={false} dict={en} />
         <ContentLoadedSignal />
       </ContentLoadedProvider>,
     );
@@ -184,7 +225,7 @@ describe("PlayHeader", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", resync };
     render(
       <ContentLoadedProvider>
-        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+        <PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />
       </ContentLoadedProvider>,
     );
 
@@ -193,14 +234,14 @@ describe("PlayHeader", () => {
 
   test("says a deadline has not started rather than showing a blank clock", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.notStarted);
   });
 
   test("does not disable anything once the deadline has passed", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: Date.now() - 5_000 }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     // The screen only reads the clock; nothing is disabled.
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.timeUp);
@@ -208,14 +249,14 @@ describe("PlayHeader", () => {
 
   test("refreshes the page once, the moment a waiting room learns the contest started", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart dict={en} />);
 
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   test("never refreshes a screen that already knows the contest is running", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -224,17 +265,17 @@ describe("PlayHeader", () => {
   // refresh brings the workspace.
   test("refreshes the page once when the channel reopens after the contest was not open", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", reopened: true };
-    const { rerender } = render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    const { rerender } = render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(refresh).toHaveBeenCalledTimes(1);
 
-    rerender(<PlayHeader contestId="c1" title="Y" waitingForStart={false} dict={en} />);
+    rerender(<PlayHeader feedbackUrl="" contestId="c1" title="Y" waitingForStart={false} dict={en} />);
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   test("does not refresh on a channel that has not reopened", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", reopened: false };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -256,7 +297,7 @@ describe("PlayHeader", () => {
     function under(signal: React.ReactNode, { title = "X", waitingForStart = false } = {}) {
       return (
         <ContentLoadedProvider>
-          <PlayHeader contestId="c1" title={title} waitingForStart={waitingForStart} dict={en} />
+          <PlayHeader feedbackUrl="" contestId="c1" title={title} waitingForStart={waitingForStart} dict={en} />
           {signal}
         </ContentLoadedProvider>
       );
@@ -314,14 +355,14 @@ describe("PlayHeader", () => {
   // (a contest republished after draft) leaves it waiting.
   test("leaves the waiting room alone when its channel reopens", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting", reopened: true };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart dict={en} />);
 
     expect(refresh).not.toHaveBeenCalled();
   });
 
   test("marks the contest finished once the channel says so", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "finished" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByText(en.participant.play.finishedTag)).toBeInTheDocument();
   });
@@ -334,14 +375,14 @@ describe("PlayHeader", () => {
       phase: "running",
       channelError: "too_many_connections",
     };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByText(en.errors.too_many_connections)).toBeInTheDocument();
   });
 
   test("shows no channel notice when the channel has no error", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", channelError: null };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.queryByText(en.errors.too_many_connections)).not.toBeInTheDocument();
   });
@@ -355,7 +396,7 @@ describe("PlayHeader", () => {
     test("does not tick while waiting", () => {
       const setIntervalSpy = vi.spyOn(window, "setInterval");
       events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
-      render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+      render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart dict={en} />);
 
       expect(setIntervalSpy).not.toHaveBeenCalled();
     });
@@ -363,7 +404,7 @@ describe("PlayHeader", () => {
     test("does not tick once finished", () => {
       const setIntervalSpy = vi.spyOn(window, "setInterval");
       events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "finished" };
-      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+      render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
       expect(setIntervalSpy).not.toHaveBeenCalled();
     });
@@ -371,7 +412,7 @@ describe("PlayHeader", () => {
     test("ticks while running", () => {
       const setIntervalSpy = vi.spyOn(window, "setInterval");
       events.current = { offsetRef: { current: 0 }, deadlineRef: { current: Date.now() + 90_000 }, phase: "running" };
-      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+      render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
       expect(setIntervalSpy).toHaveBeenCalled();
     });
@@ -388,7 +429,7 @@ describe("PlayHeader", () => {
       vi.useFakeTimers();
       const deadline = Date.now() + 5 * 60_000 + 1_000;
       events.current = { offsetRef: { current: 0 }, deadlineRef: { current: deadline }, phase: "running" };
-      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+      render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
       expect(screen.queryByText(en.participant.play.clock.fiveMinutesLeft)).not.toBeInTheDocument();
 
@@ -403,7 +444,7 @@ describe("PlayHeader", () => {
       vi.useFakeTimers();
       const deadline = Date.now() + 1_000;
       events.current = { offsetRef: { current: 0 }, deadlineRef: { current: deadline }, phase: "running" };
-      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+      render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
       act(() => {
         vi.advanceTimersByTime(1_000);
@@ -428,7 +469,7 @@ describe("the panel toggles", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
     render(
       <PanelVisibilityProvider contestId="c1">
-        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+        <PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />
       </PanelVisibilityProvider>,
     );
 
@@ -440,7 +481,7 @@ describe("the panel toggles", () => {
   // The waiting room has no panels to control.
   test("are absent in the waiting room", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
-    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+    render(<PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart dict={en} />);
 
     expect(screen.queryByRole("button", { name: t.bottom })).not.toBeInTheDocument();
   });

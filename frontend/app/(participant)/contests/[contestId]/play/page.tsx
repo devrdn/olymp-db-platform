@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
+import { FeedbackLink } from "@/components/product/feedback-link";
 import { StoryText } from "@/components/product/story-text";
 import { branding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
@@ -102,7 +103,16 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   if (contest.status !== "running") {
     // draft, finished or archived: none ever becomes `running` while this
     // screen is open, so there is nothing to wait for.
-    return <UnavailablePage title={contest.title} body={dict.participant.play.unavailable.body} dict={dict} />;
+    // A contest that is over offers the feedback link; a draft may still run.
+    const over = contest.status === "finished" || contest.status === "archived";
+    return (
+      <UnavailablePage
+        title={contest.title}
+        body={dict.participant.play.unavailable.body}
+        feedbackUrl={over ? brand.feedback : ""}
+        dict={dict}
+      />
+    );
   }
 
   // `PlayHeader` renders outside the Suspense boundary so the title and the
@@ -357,11 +367,14 @@ function UnavailablePage({
   title,
   body,
   code,
+  feedbackUrl,
   dict,
 }: {
   title: string;
   body: string;
   code?: string;
+  /** Empty draws no link. */
+  feedbackUrl: string;
   dict: PlayDictionary;
 }) {
   return (
@@ -370,6 +383,7 @@ function UnavailablePage({
         <h1 className="text-h2 text-ink">{title}</h1>
         <p className="max-w-body text-body text-ink">{body}</p>
         {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
+        <FeedbackLink href={feedbackUrl} labels={dict.participant.feedback} className="self-start text-small" />
       </div>
     </Band>
   );
