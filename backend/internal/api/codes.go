@@ -26,7 +26,7 @@ var (
 
 	// --- Installation settings ----------------------------------------------
 	codeInvalidFeedbackURL = httpx.NewCode("invalid_feedback_url",
-		"The feedback address is not an absolute https address with a host, carries a user name or password, contains a space or a backslash, or is longer than 500 characters. Plain http is refused because the link is shown to every participant and could be rewritten on the way. An empty value removes the link.")
+		"The feedback address is not an absolute https address naming a host by its DNS name, with an optional port from 1 to 65535; or it has a user name, an IP address, a punycode label or a broken percent escape; or it holds anything but printable ASCII (a space, a backslash, a non-Latin letter); or it is longer than 500 characters. Plain http is refused because the link is shown to every participant and could be rewritten on the way. An empty value removes the link.")
 
 	// --- Installation pictures ----------------------------------------------
 	// Separate codes so the uploader learns what to change.

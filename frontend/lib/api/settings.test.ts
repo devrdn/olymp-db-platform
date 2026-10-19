@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, test } from "vitest";
 
 import { FEEDBACK_URL_MAX, SETTING_KEYS, feedbackHref, settingsSchema } from "./settings";
@@ -16,34 +19,26 @@ describe("the settings payload", () => {
   });
 });
 
-// The API is the authority; this is the same rule, so the form can say so
-// before a round trip and a link is never drawn from a value it would refuse.
+// The API's own table (backend/internal/settings/testdata), so the two sides
+// keep one rule: a value the form lets through is one the API takes, and a
+// stored value the API took is one the link draws.
+type FeedbackCase = { name: string; value: string };
+const shared = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../backend/internal/settings/testdata/feedback-urls.json"), "utf8"),
+) as { accept: FeedbackCase[]; refuse: FeedbackCase[] };
+
+const longest = "https://forms.gle/" + "a".repeat(FEEDBACK_URL_MAX - "https://forms.gle/".length);
+
 describe("feedbackHref", () => {
-  test.each([
-    "https://forms.gle/beta",
-    "https://docs.google.com/forms/d/e/1FAIpQLSf/viewform?usp=sf_link#top",
-    "HTTPS://forms.gle/beta",
-    "https://forms.gle/" + "a".repeat(FEEDBACK_URL_MAX - "https://forms.gle/".length),
-  ])("takes %s", (value) => {
+  test.each([...shared.accept, { name: "the longest allowed", value: longest }])("takes $name", ({ value }) => {
     expect(feedbackHref(value)).toBe(value);
   });
 
   test.each([
-    ["nothing", ""],
-    ["plain http", "http://forms.gle/beta"],
-    ["a script", "javascript:alert(1)"],
-    ["an inline document", "data:text/html,<script>alert(1)</script>"],
-    ["no scheme", "forms.gle/beta"],
-    ["a scheme-relative address", "//forms.gle/beta"],
-    ["https without its slashes", "https:forms.gle/beta"],
-    ["no host", "https://"],
-    ["credentials", "https://user:secret@forms.gle/beta"],
-    ["a host disguised as userinfo", "https://olympdb.usm.md@evil.example/"],
-    ["a space", "https://forms.gle/be ta"],
-    ["a backslash, which a browser reads as a slash", "https://forms.gle/\\evil.example/"],
-    ["a trailing newline", "https://forms.gle/beta\n"],
-    ["one character too many", "https://forms.gle/" + "a".repeat(FEEDBACK_URL_MAX + 1 - "https://forms.gle/".length)],
-  ])("refuses %s", (_name, value) => {
+    ...shared.refuse,
+    { name: "nothing", value: "" },
+    { name: "one byte past the longest", value: longest + "a" },
+  ])("refuses $name", ({ value }) => {
     expect(feedbackHref(value)).toBeNull();
   });
 });
