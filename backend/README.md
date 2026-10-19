@@ -480,6 +480,28 @@ need to give Promtail a file-based scrape target and have `make run` tee its
 output there; nothing in this repository does that today, and it has not been
 worth the plumbing so far.
 
+### Finding the metrics endpoints from the Docker API
+
+The `api` and `queryrunner` containers carry labels in
+`deploy/docker-compose.yml` that say where their metrics are, so a collector
+need not be given our service names. `prometheus.io/scrape: "true"` says there
+is something to scrape; `prometheus.io/port` is the private port the endpoint
+listens on (`9090` for the API, `9101` for the runner: the ports
+`INTERNAL_ADDR` and `QUERY_RUNNER_METRICS_ADDR` bind); `prometheus.io/path` is
+the path on it (`/metrics`); `prometheus.io/job` is the job name to record the
+series under (`core-api`, `queryrunner`). A collector that keeps the containers
+with `scrape=true` and the target whose private port equals `port`, such as
+Grafana Alloy or a Prometheus with Docker service discovery, finds both.
+
+`scrape`, `port` and `path` are the convention such collectors read out of the
+box. `job` is not part of it: it is honoured only if the collector's relabel
+rules read it, and without one the series are recorded under whatever job name
+the collector chose. The names are the ones
+[`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml)
+scrapes, so a dashboard written against the bundled Prometheus works unchanged
+when a collector does read them. The ports are not published, so only a
+collector on the same Docker host or network reaches them.
+
 ### Query Runner metrics
 
 The Query Runner serves `/metrics` over plain HTTP on a listener of its own,
