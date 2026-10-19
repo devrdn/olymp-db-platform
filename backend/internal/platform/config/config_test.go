@@ -824,18 +824,45 @@ func composePort(t *testing.T, service, variable string) string {
 	return ""
 }
 
-// scrapeJobs are the job names deploy/observability/prometheus.yml scrapes.
-// They are compared whole: a job named core-api-dev is not core-api.
-func scrapeJobs(t *testing.T) map[string]bool {
+// scrapeTargets maps each job deploy/observability/prometheus.yml scrapes to
+// its target. Jobs are compared whole: a job named core-api-dev is not
+// core-api.
+func scrapeTargets(t *testing.T) map[string]string {
 	t.Helper()
-	jobs := map[string]bool{}
+	targets := map[string]string{}
+	var job string
 	for _, line := range strings.Split(repoFile(t, "deploy/observability/prometheus.yml"), "\n") {
 		trimmed := strings.TrimPrefix(strings.TrimSpace(line), "- ")
 		if value, ok := strings.CutPrefix(trimmed, "job_name:"); ok {
-			jobs[strings.Trim(strings.TrimSpace(value), `"'`)] = true
+			job = strings.Trim(strings.TrimSpace(value), `"'`)
+			targets[job] = ""
+		} else if value, ok := strings.CutPrefix(trimmed, "targets:"); ok && job != "" && targets[job] == "" {
+			targets[job] = strings.Trim(strings.TrimSpace(value), `[]"' `)
 		}
 	}
-	return jobs
+	return targets
+}
+
+// buildTarget is the Dockerfile stage docker-compose.build.yml builds a
+// service from.
+func buildTarget(t *testing.T, service string) string {
+	t.Helper()
+	var inService bool
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.build.yml"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "  "+service+":"):
+			inService = true
+		case inService && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.TrimSpace(line) != "":
+			inService = false // the next service begins
+		case inService:
+			if value, ok := strings.CutPrefix(strings.TrimSpace(line), "target:"); ok {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	t.Fatalf("the %s service sets no build target in docker-compose.build.yml", service)
+	return ""
 }
 
 // exposedPorts are the ports one stage of backend/Dockerfile declares.
@@ -860,14 +887,15 @@ func exposedPorts(t *testing.T, stage string) map[string]bool {
 // TestAMetricsLabelNamesThePortItsListenerBinds is the drift guard. A
 // collector reads the label and scrapes that port; the process listens on the
 // address the variable sets; and the image has to declare the port or
-// Docker-API discovery produces no target for it at all. Three places, one
-// number, and nothing but this test keeps them equal.
+// Docker-API discovery produces no target for it at all; and the bundled
+// Prometheus scrapes it by the static target in prometheus.yml. Four places,
+// one number, and nothing but this test keeps them equal.
 func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
 	for _, service := range []struct {
-		name, variable, stage, job string
+		name, variable, job, target string
 	}{
-		{name: "api", variable: "INTERNAL_ADDR", stage: "runtime", job: "core-api"},
-		{name: "queryrunner", variable: "QUERY_RUNNER_METRICS_ADDR", stage: "queryrunner", job: "queryrunner"},
+		{name: "api", variable: "INTERNAL_ADDR", job: "core-api", target: "api:9090"},
+		{name: "queryrunner", variable: "QUERY_RUNNER_METRICS_ADDR", job: "queryrunner", target: "queryrunner:9101"},
 	} {
 		t.Run(service.name, func(t *testing.T) {
 			labels := serviceLabels(t, service.name)
@@ -885,8 +913,10 @@ func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
 			if labels["prometheus.io/job"] != service.job {
 				t.Errorf("prometheus.io/job is %q, want %q", labels["prometheus.io/job"], service.job)
 			}
-			if jobs := scrapeJobs(t); !jobs[service.job] {
-				t.Errorf("prometheus.yml scrapes no job named %q; it scrapes %v", service.job, jobs)
+			targets := scrapeTargets(t)
+			scraped, ok := targets[service.job]
+			if !ok {
+				t.Errorf("prometheus.yml scrapes no job named %q; it scrapes %v", service.job, targets)
 			}
 
 			port := composePort(t, service.name, service.variable)
@@ -894,9 +924,14 @@ func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
 				t.Errorf("prometheus.io/port is %q but %s binds %q: a collector would scrape the wrong port",
 					labels["prometheus.io/port"], service.variable, port)
 			}
-			if exposed := exposedPorts(t, service.stage); !exposed[port] {
+			if scraped != service.target || !strings.HasSuffix(scraped, ":"+port) {
+				t.Errorf("prometheus.yml scrapes job %q at %q but %s binds %q: the bundled Prometheus would scrape a closed port",
+					service.job, scraped, service.variable, port)
+			}
+			stage := buildTarget(t, service.name)
+			if exposed := exposedPorts(t, stage); !exposed[port] {
 				t.Errorf("the %s stage does not EXPOSE %s, so Docker-API discovery produces no target for it; it declares %v",
-					service.stage, port, exposed)
+					stage, port, exposed)
 			}
 		})
 	}
