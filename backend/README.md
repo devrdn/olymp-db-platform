@@ -489,14 +489,16 @@ is something to scrape; `prometheus.io/port` is the private port the endpoint
 listens on (`9090` for the API, `9101` for the runner: the ports
 `INTERNAL_ADDR` and `QUERY_RUNNER_METRICS_ADDR` bind); `prometheus.io/path` is
 the path on it (`/metrics`); `prometheus.io/job` is the job name to record the
-series under (`core-api`, `queryrunner`). A collector that keeps the containers
-with `scrape=true` and the target whose private port equals `port`, such as
-Grafana Alloy or a Prometheus with Docker service discovery, finds both.
+series under (`core-api`, `queryrunner`), used only by a collector with a rule
+that reads it.
 
-`scrape`, `port` and `path` are the convention such collectors read out of the
-box. `job` is not part of it: it is honoured only if the collector's relabel
-rules read it, and without one the series are recorded under whatever job name
-the collector chose. The names are the ones
+No collector acts on these labels by itself. Grafana Alloy and Prometheus
+with Docker service discovery expose a container's labels to relabel rules and
+nothing more; a rule the operator writes keeps the containers whose `scrape`
+is `true` and points the address at the labelled `port`. `scrape`, `port` and
+`path` are the labels such rules for this convention usually read. `job` is not
+among them, so without a rule that reads it the series are recorded under
+whatever job name the collector chose. The names are the ones
 [`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml)
 scrapes, so a dashboard written against the bundled Prometheus works unchanged
 when a collector does read them. The ports are not published, so only a

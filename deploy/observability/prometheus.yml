@@ -13,6 +13,7 @@ scrape_configs:
   # These static jobs are for the bundled Prometheus. A collector outside this
   # compose project can use the containers' prometheus.io/* labels instead of
   # this file.
+
   # The containerized api (docker-compose.yml, `make stack-up`), reached by
   # its service name on the compose network.
   - job_name: core-api
