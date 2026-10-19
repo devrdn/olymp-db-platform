@@ -30,6 +30,8 @@ export type DictionaryScope<Section extends keyof Dictionary> = {
 
 function dictionaryScope<const Sections extends readonly (keyof Dictionary)[]>(
   name: string,
+  // Read for its type alone: it is what infers the scope's sections.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   sections: Sections,
 ): DictionaryScope<Sections[number]> {
   type Sliced = Pick<Dictionary, Sections[number]>;
