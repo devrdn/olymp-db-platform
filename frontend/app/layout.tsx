@@ -39,24 +39,38 @@ const literata = Literata({
 });
 
 /**
+ * The product mark, drawn by scripts/icons.mjs into public/. The ICO declares
+ * its size because Chrome prefers an icon marked `any` over the SVG.
+ */
+const MARK_TAB = [
+  { url: "/favicon.ico", sizes: "32x32" },
+  { url: "/icon.svg", type: "image/svg+xml" },
+];
+const MARK_HOME = { url: "/apple-icon.png", sizes: "180x180", type: "image/png" };
+
+/**
  * Title and icons come from the installation's settings, so a rename reaches
  * the tab and bookmarks; both fall back to the product's own if the read fails.
+ *
+ * The icons are always named here and nothing under app/ uses an icon file
+ * convention: Next adds app/favicon.ico beside whatever the metadata names, so
+ * an uploaded favicon would compete with it.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const brand = await branding();
   const name = brand.name.trim() || "DB Contest";
-
-  const icons: Metadata["icons"] = {};
-  if (brand.images.favicon) icons.icon = imageHref("favicon", brand.images.favicon);
-  // The large icon falls back to the favicon: scaled up beats none.
-  const large = brand.images.icon ?? brand.images.favicon;
-  if (large) icons.apple = imageHref(brand.images.icon ? "icon" : "favicon", large);
+  const { favicon, icon } = brand.images;
 
   return {
     title: { default: name, template: `%s · ${name}` },
     description:
       "SQL detective contests for universities: a crime story, an isolated game database and a timer.",
-    ...(icons.icon || icons.apple ? { icons } : {}),
+    icons: {
+      icon: favicon ? [{ url: imageHref("favicon", favicon) }] : MARK_TAB,
+      // Not the favicon scaled up: it is drawn for 16 pixels, and iOS takes
+      // only PNG or JPEG here.
+      apple: icon ? [{ url: imageHref("icon", icon) }] : [MARK_HOME],
+    },
   };
 }
 
