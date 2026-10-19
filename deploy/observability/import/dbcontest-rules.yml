@@ -106,9 +106,9 @@ groups:
           summary: The API on {{ $labels.instance }} does not answer its scrape.
           description: >-
             Participants cannot sign in, read questions or run queries. On the host,
-            read docker compose -f deploy/docker-compose.yml logs --tail 200 api;
-            make deployed shows the running version, and make deploy-api
-            VERSION=<that version> starts it again.
+            read docker compose -f deploy/docker-compose.yml logs --tail 200 api,
+            then start it again with docker compose -f deploy/docker-compose.yml
+            up -d --no-deps api (not make deploy-api, which runs the migration job).
 
       - alert: DBContestQueryRunnerDown
         # Two minutes tolerates one missed scrape at a 60s interval and is still short against a contest.
