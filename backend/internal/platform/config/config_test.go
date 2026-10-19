@@ -767,6 +767,119 @@ func apiServiceEnvironment(t *testing.T) map[string]bool {
 	return keys
 }
 
+// serviceLabels are the labels the compose file's service carries, parsed by
+// indentation for the reason apiServiceEnvironment gives. A service with no
+// labels block returns an empty map, which the test below reads as a failure
+// rather than as "nothing to check".
+func serviceLabels(t *testing.T, service string) map[string]string {
+	t.Helper()
+	labels := map[string]string{}
+	var inService, inLabels bool
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "  "+service+":"):
+			inService = true
+		case inService && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.TrimSpace(line) != "":
+			inService, inLabels = false, false // the next service begins
+		case inService && strings.HasPrefix(line, "    labels:"):
+			inLabels = true
+		case inService && inLabels && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") &&
+			strings.TrimSpace(line) != "":
+			inLabels = false // the next key of this service
+		case inService && inLabels && strings.HasPrefix(line, "      "):
+			name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if ok && !strings.HasPrefix(name, "#") {
+				labels[name] = strings.Trim(strings.TrimSpace(value), `"`)
+			}
+		}
+	}
+	return labels
+}
+
+// composePort is the port of a service's listener variable as the compose file
+// sets it — `QUERY_RUNNER_METRICS_ADDR: ":9101"` gives "9101".
+func composePort(t *testing.T, service, variable string) string {
+	t.Helper()
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), variable+":") {
+			continue
+		}
+		_, value, _ := strings.Cut(strings.TrimSpace(line), ":")
+		address := strings.Trim(strings.TrimSpace(value), `"`)
+		if _, port, ok := strings.Cut(address, ":"); ok {
+			return port
+		}
+		t.Fatalf("%s in the %s service reads %q, which carries no port", variable, service, address)
+	}
+	t.Fatalf("%s is not set on the %s service", variable, service)
+	return ""
+}
+
+// exposedPorts are the ports one stage of backend/Dockerfile declares.
+func exposedPorts(t *testing.T, stage string) map[string]bool {
+	t.Helper()
+	ports := map[string]bool{}
+	var inStage bool
+	for _, line := range strings.Split(repoFile(t, "backend/Dockerfile"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "FROM "):
+			inStage = strings.HasSuffix(trimmed, " AS "+stage)
+		case inStage && strings.HasPrefix(trimmed, "EXPOSE "):
+			for _, port := range strings.Fields(strings.TrimPrefix(trimmed, "EXPOSE ")) {
+				ports[port] = true
+			}
+		}
+	}
+	return ports
+}
+
+// TestAMetricsLabelNamesThePortItsListenerBinds is the drift guard. A
+// collector reads the label and scrapes that port; the process listens on the
+// address the variable sets; and the image has to declare the port or
+// Docker-API discovery produces no target for it at all. Three places, one
+// number, and nothing but this test keeps them equal.
+func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
+	for _, service := range []struct {
+		name, variable, stage, job string
+	}{
+		{name: "api", variable: "INTERNAL_ADDR", stage: "runtime", job: "core-api"},
+		{name: "queryrunner", variable: "QUERY_RUNNER_METRICS_ADDR", stage: "queryrunner", job: "queryrunner"},
+	} {
+		t.Run(service.name, func(t *testing.T) {
+			labels := serviceLabels(t, service.name)
+			if len(labels) == 0 {
+				t.Fatalf("the %s service carries no labels; the metrics endpoint no longer describes itself", service.name)
+			}
+			if labels["prometheus.io/scrape"] != "true" {
+				t.Errorf("prometheus.io/scrape is %q, want \"true\"", labels["prometheus.io/scrape"])
+			}
+			if labels["prometheus.io/path"] != "/metrics" {
+				t.Errorf("prometheus.io/path is %q, want \"/metrics\"", labels["prometheus.io/path"])
+			}
+			// The job name is what a dashboard written against the bundled
+			// Prometheus selects on, so it has to be the one that file scrapes.
+			if labels["prometheus.io/job"] != service.job {
+				t.Errorf("prometheus.io/job is %q, want %q", labels["prometheus.io/job"], service.job)
+			}
+			if !strings.Contains(repoFile(t, "deploy/observability/prometheus.yml"), "job_name: "+service.job) {
+				t.Errorf("prometheus.yml scrapes no job named %q", service.job)
+			}
+
+			port := composePort(t, service.name, service.variable)
+			if labels["prometheus.io/port"] != port {
+				t.Errorf("prometheus.io/port is %q but %s binds %q: a collector would scrape the wrong port",
+					labels["prometheus.io/port"], service.variable, port)
+			}
+			if exposed := exposedPorts(t, service.stage); !exposed[port] {
+				t.Errorf("the %s stage does not EXPOSE %s, so Docker-API discovery produces no target for it; it declares %v",
+					service.stage, port, exposed)
+			}
+		})
+	}
+}
+
 func TestPasswordHashConcurrencyIsLeftToThePasswordPackageByDefault(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
