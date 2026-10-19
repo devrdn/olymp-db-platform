@@ -46,8 +46,17 @@ plain_target() {
 	case $target in -* | *[[:space:]]*) return 1 ;; esac
 	case $offhost in
 	rsync)
-		local rest=${target#rsync://}
-		if [[ $rest == *@* && ${rest%%@*} == *:* ]]; then return 1; fi
+		# A local path may hold any @; a remote one may name a user
+		# (user@host:path) but never a password (user:password@host:path, or
+		# one inside an rsync:// URL).
+		local url=${target,,}
+		if [[ $url == rsync://* ]]; then
+			local authority=${target:8}
+			authority=${authority%%/*}
+			if [[ $authority == *@* && ${authority%@*} == *:* ]]; then return 1; fi
+		elif [[ $target =~ ^[^/:@]+:[^/:@]*@ ]]; then
+			return 1
+		fi
 		;;
 	rclone)
 		[[ $target == /* || $target =~ ^[A-Za-z0-9_.+-]+: ]] || return 1
@@ -134,7 +143,14 @@ trap 'error "the run was stopped by a signal"; exit 143' INT TERM HUP
 
 # A lowered BACKUP_KEEP takes effect before the disk is measured, so it is a
 # remedy for the refusal below rather than something only a success applies.
-"$here/rotate.sh" --quiet "$dir" || {
+# The set the last successful run wrote is protected by name, so no set that
+# sorts after it, whatever its date says, can make this the run that removes
+# the newest good backup before failing to write its own.
+last_file="$dir/.scheduled-backup.last"
+protect_last=()
+last=$(cat "$last_file" 2>/dev/null || true)
+if valid_stamp "$last"; then protect_last=(--protect "$last"); fi
+"$here/rotate.sh" --quiet "${protect_last[@]}" "$dir" || {
 	error "rotation failed"
 	status=1
 }
@@ -183,6 +199,7 @@ elif BACKUP_STAMP=$stamp make -s -C "$ROOT" backup BACKUP_DIR="$dir"; then
 	if is_complete "$dir" "$db" "$stamp"; then
 		backup_ok=1
 		last_success=$(date +%s)
+		printf '%s\n' "$stamp" >"$last_file"
 		set_size=$(set_bytes "$dir" "$db" "$stamp")
 		echo "backup set $stamp is complete ($(human "$set_size"))"
 	else

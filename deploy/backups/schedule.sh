@@ -53,6 +53,7 @@ check_root_path() {
 }
 
 render() { # dir user
+	[ -n "$2" ] || die "no user to run the backup as"
 	check_root_path
 	mkdir -p "$1"
 	local unit
@@ -100,11 +101,16 @@ status() {
 	fi
 	newest=${sets[-1]}
 	age=$(($(date +%s) - $(stamp_epoch "$newest")))
+	if ((age < 0)); then age=0; fi
 	echo "newest complete set: $newest, $((age / 3600))h $((age % 3600 / 60))m old; ${#sets[@]} complete sets in $dir"
+	while read -r why stamp; do
+		echo "left out, $why: $stamp (see deploy/backups/rotate.sh's output)"
+	done < <(undated_sets "$dir" "$db")
 }
 
 cron() { # user
 	local at
+	[ -n "$1" ] || die "no user to run the backup as"
 	check_root_path
 	at=$(daily_time)
 	cat <<-EOF
@@ -159,8 +165,12 @@ uninstall)
 	;;
 render)
 	[ -n "${2:-}" ] || usage
-	render "$2" "$(backup_user "${3:-}")"
+	user=$(backup_user "${3:-}")
+	render "$2" "$user"
 	;;
-cron) cron "$(backup_user "${2:-}")" ;;
+cron)
+	user=$(backup_user "${2:-}")
+	cron "$user"
+	;;
 *) usage ;;
 esac
