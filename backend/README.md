@@ -613,9 +613,13 @@ incomplete set. The timestamp is UTC and ends in `Z`
 (`dbcontest_core-20261102-091500Z.dump`), so the hour a clock repeats when it
 falls back cannot give two sets one name or a later set an earlier one; sets
 taken before this carry local time and no `Z`, and restore exactly the same,
-since every restore takes the file you name. For a few hours after the
-change the last local-time set can sort after newer UTC ones; rotation keeps
-it that much longer, and nothing else goes by that order. The files are readable by their
+since every restore takes the file you name. Rotation, `status` and the disk
+check order sets by the time their stamp names, reading a stamp without `Z`
+in the host's own time zone, so the two forms sort together by when they
+were taken and never by their text. A set dated more than five minutes
+ahead of the host's clock was taken by a wrong one: it is left alone and
+named, and never counted as the newest. The scheduled run also protects
+the set the last successful run wrote, whatever sorts after it. The files are readable by their
 owner only (umask 077): they hold the participants' answers. The volumes come out through
 `docker compose cp` on the `api` service — the mount point is the compose
 file's business, not the Makefile's — which reads a stopped container as
