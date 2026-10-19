@@ -1243,6 +1243,9 @@ const en = {
     contact: "Contact email",
     contactHint: "Left empty, participants are offered no address.",
     contactHelp: "Where a participant writes when something goes wrong.",
+    feedback: "Feedback address",
+    feedbackHint: "A full https address, such as a form. Left empty, no link is shown.",
+    feedbackHelp: "Participants see a feedback link in their profile, and on the olympiad screen before it starts and once it is over — never while they can still act, where opening another tab would be reported to the organiser as leaving the page. It opens in a new tab.",
     images: {
       heading: "Marks",
       hint: "PNG, JPEG, GIF or WebP, up to 512 KB and 4096 pixels on a side. SVG is not accepted.",
@@ -1494,6 +1497,11 @@ const en = {
     },
   },
   participant: {
+    /** The beta testers' way to the organisers' form; shown only when set. */
+    feedback: {
+      link: "Send feedback",
+      newTab: "(opens in a new tab)",
+    },
     console: {
       heading: "SQL console",
       label: "Your query",
@@ -2217,6 +2225,7 @@ const en = {
       "The query service is not answering right now. Nothing to do with your query — try again in a moment.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
+    invalid_feedback_url: "The feedback address must be a full https address in plain Latin characters, such as https://forms.gle/…, naming the site by its name rather than an IP address, with no spaces or backslashes and at most 500 characters. Leave it empty to show no link.",
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
     invalid_tab_id: "Wrong tab identifier.",

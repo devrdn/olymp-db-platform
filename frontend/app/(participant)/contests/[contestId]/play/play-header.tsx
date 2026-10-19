@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { FeedbackLink } from "@/components/product/feedback-link";
 import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
 import { readableDuration } from "@/lib/format/bytes";
@@ -23,6 +24,7 @@ export function PlayHeader({
   contestId,
   title,
   waitingForStart,
+  feedbackUrl,
   dict,
 }: {
   contestId: string;
@@ -32,6 +34,11 @@ export function PlayHeader({
    * only case where a start means the page must be fetched again.
    */
   waitingForStart: boolean;
+  /**
+   * The installation's feedback address; empty draws no link. Required so a
+   * page that stops passing it does not compile.
+   */
+  feedbackUrl: string;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play;
@@ -41,6 +48,7 @@ export function PlayHeader({
   // channel.
   const renderedRefusal = useRenderedRefusal();
   const renderedDormant = renderedRefusal !== null && refusalKind(renderedRefusal) === "dormant";
+  const renderedClosed = renderedRefusal !== null && refusalKind(renderedRefusal) === "closed";
   const { offsetRef, deadlineRef, phase, channelError, resync, reopened } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
@@ -86,7 +94,15 @@ export function PlayHeader({
           </div>
           {/* The participant is told the organiser sees what they do here
               (docs/ARCHITECTURE.md §9.4). A standing fact, so not a dismissible banner. */}
-          <p className="text-small text-ink-2">{t.observed}</p>
+          <div className="flex flex-wrap items-baseline gap-x-3">
+            <p className="text-small text-ink-2">{t.observed}</p>
+            {/* Only where no workspace runs: the link opens a new tab, which the
+                workspace would report to the organiser as an absence
+                (use-signals.ts), and a form takes minutes. */}
+            {waitingForStart || phase === "finished" || renderedClosed ? (
+              <FeedbackLink href={feedbackUrl} labels={dict.participant.feedback} className="text-small" />
+            ) : null}
+          </div>
         </div>
       </div>
       {/* The clock and the panel toggles, one flex row so they wrap together

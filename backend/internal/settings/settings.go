@@ -12,6 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -22,6 +25,8 @@ const (
 	KeyName    = "installation.name"
 	KeyContact = "installation.contact_email"
 	KeyLogo    = "installation.logo"
+	// KeyFeedback is where participants send feedback; empty shows no link.
+	KeyFeedback = "installation.feedback_url"
 )
 
 var (
@@ -29,11 +34,19 @@ var (
 	// like a saved change.
 	ErrUnknownKey = errors.New("no such setting")
 	ErrInvalid    = errors.New("setting value is not valid")
+	// ErrInvalidFeedbackURL has its own code: "not valid" alone would not say
+	// that only an absolute https address is taken.
+	ErrInvalidFeedbackURL = errors.New("the feedback address is not an absolute https address")
 )
 
 // maxValueLength bounds a value; values are names and addresses, read on
 // every page.
 const maxValueLength = 200
+
+// maxFeedbackURLLength is longer than maxValueLength because form services
+// put a long identifier in the path (a Microsoft Forms address runs to about
+// two hundred characters).
+const maxFeedbackURLLength = 500
 
 // Definition describes one setting the product knows about. The catalogue is
 // code and the values are data, so every stored key is one something reads.
@@ -54,6 +67,9 @@ var Catalogue = []Definition{
 	{Key: KeyContact, Public: true, Validate: optionalEmail},
 	// The stored value is a reference to an uploaded file, not the file.
 	{Key: KeyLogo, Public: true, Validate: anything},
+	// Public because the play screen and the profile show it, and the public
+	// read is the only one a participant may make.
+	{Key: KeyFeedback, Public: true, Validate: optionalFeedbackURL},
 }
 
 func Definitions() map[string]Definition {
@@ -88,6 +104,93 @@ func optionalEmail(value string) error {
 		return fmt.Errorf("%w: %q is not an email address", ErrInvalid, value)
 	}
 	return anything(value)
+}
+
+// feedbackAuthority is the host and optional port the feedback address may
+// name: DNS labels of ASCII letters, digits and hyphens whose last label starts
+// with a letter. No IP literal, no userinfo, no brackets: on those Go's parser
+// and a browser's disagree, or a browser reads the host as a number.
+// frontend/lib/api/settings-terms.ts holds the same expression.
+var feedbackAuthority = regexp.MustCompile(`^((?:[A-Za-z0-9-]+\.)*[A-Za-z][A-Za-z0-9-]*)(?::([0-9]{1,5}))?$`)
+
+// optionalFeedbackURL takes an absolute https address, or nothing. The value
+// becomes a link on every participant's screen, so the scheme is an
+// allow-list: it refuses javascript: and data:, and refuses plain http, which
+// anybody on a school network could rewrite into a page of their own.
+//
+// The rule is written out rather than left to url.Parse, because the
+// interface applies it too (feedbackHref) and the two parsers disagree on
+// edge cases. Printable ASCII only, so a byte is a character, and a homograph
+// or a bidirectional override cannot dress up the host; a punycode label is
+// refused for the same reason. The shared cases are in
+// testdata/feedback-urls.json.
+func optionalFeedbackURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > maxFeedbackURLLength {
+		return fmt.Errorf("%w: at most %d characters", ErrInvalidFeedbackURL, maxFeedbackURLLength)
+	}
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; c < 0x21 || c > 0x7e || c == '\\' {
+			return fmt.Errorf("%w: only printable ASCII, with no spaces or backslashes", ErrInvalidFeedbackURL)
+		}
+	}
+	const scheme = "https://"
+	if !strings.EqualFold(value[:min(len(scheme), len(value))], scheme) ||
+		!validFeedbackAuthority(value[len(scheme):]) ||
+		!validPercentEscapes(value) {
+		return fmt.Errorf("%w: %q", ErrInvalidFeedbackURL, value)
+	}
+	// What passed above is a URL Go reads the same way; this is a backstop.
+	if parsed, err := url.Parse(value); err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+		return fmt.Errorf("%w: %q", ErrInvalidFeedbackURL, value)
+	}
+	return nil
+}
+
+// validFeedbackAuthority reads the authority at the start of rest, up to the
+// first "/", "?" or "#".
+func validFeedbackAuthority(rest string) bool {
+	authority := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority = rest[:i]
+	}
+	match := feedbackAuthority.FindStringSubmatch(authority)
+	if match == nil {
+		return false
+	}
+	for _, label := range strings.Split(match[1], ".") {
+		if len(label) >= 4 && strings.EqualFold(label[:4], "xn--") {
+			return false
+		}
+	}
+	if match[2] != "" {
+		port, err := strconv.Atoi(match[2])
+		if err != nil || port < 1 || port > 65535 {
+			return false
+		}
+	}
+	return true
+}
+
+// validPercentEscapes holds when every "%" starts a two-digit hex escape.
+// url.Parse checks the path and fragment but not the query, and a browser
+// checks none.
+func validPercentEscapes(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] != '%' {
+			continue
+		}
+		if i+2 >= len(value) || !isHex(value[i+1]) || !isHex(value[i+2]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
 func anything(value string) error {

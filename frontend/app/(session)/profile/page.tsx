@@ -3,10 +3,13 @@ import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { SignOutButton } from "@/components/layout/sign-out-button";
+import { FeedbackLink } from "@/components/product/feedback-link";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
+import { branding } from "@/lib/api/branding";
 import { profileContestsSchema, profileSummarySchema } from "@/lib/api/profile";
 import { serverRequest } from "@/lib/api/server";
+import { feedbackHref } from "@/lib/api/settings";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { fetchIdentity } from "@/lib/auth/session";
 import { initials } from "@/lib/format/initials";
@@ -22,17 +25,20 @@ export async function generateMetadata() {
 
 /**
  * The account: who is signed in, their record and their contests (SPEC.md §5.2),
- * plus sign-out and password change, kept out of the bar.
+ * plus sign-out, password change and the installation's feedback link, kept
+ * out of the bar.
  *
  * Roles, not permissions: a role is what a person would say they are. No
  * "member since": `/auth/me` does not report it. The two reads are independent,
  * so a failure costs one section a line, never the page.
  */
 export default async function ProfilePage() {
-  const [dict, locale, identity] = await Promise.all([
+  // `branding` shares the layout's request (React's `cache()`).
+  const [dict, locale, identity, brand] = await Promise.all([
     activeDictionary(),
     activeLocale(),
     fetchIdentity(),
+    branding(),
   ]);
   if (!identity) redirect("/login?next=%2Fprofile");
 
@@ -86,6 +92,12 @@ export default async function ProfilePage() {
             >
               {t.changePassword}
             </Link>
+            {feedbackHref(brand.feedback) !== null ? (
+              <>
+                <span aria-hidden className="h-4 w-px bg-line-2" />
+                <FeedbackLink href={brand.feedback} labels={dict.participant.feedback} className="text-control" />
+              </>
+            ) : null}
             <span aria-hidden className="h-4 w-px bg-line-2" />
             <SignOutButton label={t.signOut} withLabel />
             {/* Changing the password ends every session, signing out only this

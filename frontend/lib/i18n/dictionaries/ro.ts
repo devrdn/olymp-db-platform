@@ -1134,6 +1134,9 @@ const ro = {
     contact: "E-mail de contact",
     contactHint: "Lăsat gol, participantului nu i se oferă nicio adresă.",
     contactHelp: "Unde scrie un participant când ceva nu merge.",
+    feedback: "Adresa pentru feedback",
+    feedbackHint: "O adresă https completă, de exemplu a unui formular. Lăsată goală, nu se afișează niciun link.",
+    feedbackHelp: "Participanții văd un link de feedback în profil și pe ecranul olimpiadei înainte de start și după încheiere — niciodată cât timp mai pot acționa, când deschiderea altei file i-ar fi raportată organizatorului ca părăsire a paginii. Se deschide într-o filă nouă.",
     images: {
       heading: "Însemne",
       hint: "PNG, JPEG, GIF sau WebP, până la 512 KB și 4096 de pixeli pe latură. SVG nu este acceptat.",
@@ -1353,6 +1356,10 @@ const ro = {
     },
   },
   participant: {
+    feedback: {
+      link: "Trimiteți feedback",
+      newTab: "(se deschide într-o filă nouă)",
+    },
     console: {
       heading: "Consolă SQL",
       label: "Interogarea dumneavoastră",
@@ -2018,6 +2025,7 @@ const ro = {
       "Serviciul de interogări nu răspunde acum. Nu are legătură cu interogarea dumneavoastră — încercați peste puțin timp.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
+    invalid_feedback_url: "Adresa pentru feedback trebuie să fie o adresă https completă, scrisă doar cu caractere latine simple, de exemplu https://forms.gle/…, care numește site-ul prin nume, nu printr-o adresă IP, fără spații sau bare oblice inverse și de cel mult 500 de caractere. Lăsați câmpul gol pentru a nu afișa niciun link.",
     invalid_contest_id: "Identificator de olimpiadă greșit.",
     invalid_question_id: "Identificator de întrebare greșit.",
     invalid_tab_id: "Identificator de filă greșit.",

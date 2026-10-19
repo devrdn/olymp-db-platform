@@ -3576,6 +3576,32 @@ fields with their old and new values (section 9.2). "Who changed the default
 language in the middle of an olympiad" is exactly the question the journal
 exists for.
 
+**The feedback address is a link on every participant's screen, so it is
+checked as one.** `installation.feedback_url` is where beta testers send
+feedback. When set, the profile shows a link to it, and so does the play
+screen, but only in the waiting room and once the contest is over for the
+participant: the link opens a new tab, and while the workspace runs a hidden
+page is reported to the organiser as an absence (section 9.4), so a form
+filled in mid-contest would raise the long-absence flag. The setting is
+public, because the open read is the only settings read a participant may
+make.
+
+The value is an absolute `https` address or nothing (`invalid_feedback_url`
+otherwise), and the rule is written out rather than left to a URL parser,
+because the server (`optionalFeedbackURL`) and the interface (`feedbackHref`)
+both apply it and Go's parser and a browser's disagree at the edges. Both
+sides test it against one table, `internal/settings/testdata/feedback-urls.json`.
+The scheme is an allow-list: `javascript:` and `data:` would turn the link
+into script, and plain `http` could be rewritten on the school network between
+a participant and the form. The address is printable ASCII only, at most 500
+bytes, so a homograph or a bidirectional override cannot dress up the host
+and both sides count the same length. The host is a DNS name whose last label
+starts with a letter, with no punycode label, no IP literal and no user
+information (so `https://olympdb.usm.md@evil.example` cannot pass for this
+installation), and a port, if any, is from 1 to 65535. The interface applies
+the rule again before drawing the link, so a value stored any other way never
+becomes an `href`.
+
 **A cache rather than a query per render.** Settings are read on every page
 and changed once a semester: the values are held in the process with a short
 TTL, and a write clears the cache. On one instance that is enough; on several,
