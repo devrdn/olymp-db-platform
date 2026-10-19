@@ -984,9 +984,9 @@ const ro = {
         endsAt: "Se încheie",
         endsAtIndividualHint: "Opțional pentru timp propriu. Lăsat gol, olimpiada rămâne în desfășurare până o încheiați chiar dumneavoastră — nimic nu o încheie automat.",
         enrollmentDeadline: "Înscrierea se închide",
-        enrollmentDeadlineHint: "Opțional. Lăsați gol pentru a ține înscrierea deschisă până la start.",
-        grace: "Perioadă de grație, minute",
-        graceHelp: "Cât timp mai este acceptat un răspuns întârziat, pentru a absorbi întârzierea rețelei.",
+        enrollmentDeadlineHint: "Opțional. Lăsat gol, înscrierea rămâne deschisă până la start — la timp propriu, până la încheierea olimpiadei.",
+        grace: "Păstrarea bazelor după încheiere, minute",
+        graceHelp: "Cât timp se păstrează copia bazei de joc a fiecărui participant după încheierea olimpiadei, înainte de a fi ștearsă. 0 înseamnă valoarea implicită a instalării. Nu oferă timp în plus pentru răspunsuri.",
         timezone: "Orele sunt ora locală a universității (Europe/Chisinau).",
       },
       shape: {
@@ -1027,7 +1027,7 @@ const ro = {
         network: "Rețele permise",
         networkHint: "Intervale CIDR, separate prin virgulă. Gol înseamnă oriunde.",
         rate: "Interogări pe minut",
-        rateHint: "Per participant. Zero înseamnă fără limită.",
+        rateHint: "Interogări SQL pe care fiecare participant le poate rula pe minut. 0 înseamnă limita instalării; o valoare peste această limită nu are efect.",
       },
       languages: {
         heading: "Limbi",
