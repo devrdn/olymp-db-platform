@@ -771,6 +771,11 @@ Why the runner is separate and what it enforces:
    - `deploy/docker-compose.yml`: the `api` (or `queryrunner`) service's
      `environment`, as `NAME: ${NAME:-default}`.
    - The `run` target in the `Makefile`, if the API run on the host needs it.
+   - One exception: `QUERY_RUNNER_METRICS_ADDR`. Compose pins it as the
+     literal `":9101"` and `.env.example` leaves it commented out, because
+     the value in `deploy/.env` belongs to `make runner`, and an interpolated
+     `127.0.0.1:9101` would bind loopback inside the container. Do not teach
+     `composePort` the `${NAME:-default}` form to make the recipe fit.
 6. **Document it** in the table in
    [backend/README.md, Configuration](../../backend/README.md#configuration).
 

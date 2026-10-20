@@ -261,6 +261,9 @@ services:
       # Plain-HTTP /metrics, the counterpart of the api's INTERNAL_ADDR: on
       # the same private network, with no published port, so only a scraper
       # on that network (Prometheus below, the host's collector) reads it.
+      # A literal on purpose, not `${NAME:-default}`: the host-side value in
+      # deploy/.env belongs to `make runner`, and a loopback one here would
+      # make the container stop answering queryrunner:9101.
       QUERY_RUNNER_METRICS_ADDR: ":9101"
       # The secret every call must carry, the health check's included (it
       # reads it from this same environment). The runner itself refuses to

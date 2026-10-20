@@ -46,6 +46,11 @@ API_PORT         ?= 8080
 # request names and a laptop in a lecture hall is on that hall's network.
 QUERY_RUNNER_ADDR ?= localhost:9100
 QUERY_RUNNER_LISTEN ?= 127.0.0.1:$(lastword $(subst :, ,$(QUERY_RUNNER_ADDR)))
+# The same reasoning for the runner's metrics listener, which is unauthenticated:
+# only its port is taken from deploy/.env's value, and `off` passes through
+# unchanged. Unset stays empty, and the runner's own default is loopback.
+QUERY_RUNNER_METRICS_ADDR ?=
+QUERY_RUNNER_METRICS_LISTEN ?= $(if $(filter off,$(QUERY_RUNNER_METRICS_ADDR)),off,$(if $(QUERY_RUNNER_METRICS_ADDR),127.0.0.1:$(lastword $(subst :, ,$(QUERY_RUNNER_METRICS_ADDR)))))
 
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
 # The game cluster, as the provisioning role. Only the development overlay
@@ -767,7 +772,7 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 		GAME_DB_DSN="postgres://game_reader:$(GAME_READER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_LISTEN)" \
-		QUERY_RUNNER_METRICS_ADDR="$(QUERY_RUNNER_METRICS_ADDR)" \
+		QUERY_RUNNER_METRICS_ADDR="$(QUERY_RUNNER_METRICS_LISTEN)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
 
 # The API and the runner share one token (see `run` above).

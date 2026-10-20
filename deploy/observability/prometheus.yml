@@ -39,6 +39,10 @@ scrape_configs:
   # The containerized Query Runner's own listener (QUERY_RUNNER_METRICS_ADDR),
   # apart from its token-guarded gRPC port. `make runner` keeps it on
   # loopback, so there is no host job for it; curl localhost:9101/metrics.
+  # With QUERY_RUNNER_METRICS_ADDR=off drop this job, and the runner's two
+  # availability rules in import/dbcontest-rules.yml: the target would stay
+  # down and DBContestQueryRunnerDown would page that queries cannot run, and
+  # without the target DBContestQueryRunnerNotScraped fires instead.
   - job_name: queryrunner
     static_configs:
       - targets: ["queryrunner:9101"]
