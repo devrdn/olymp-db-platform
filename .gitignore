@@ -30,3 +30,5 @@ deploy/covers/
 .superpowers/
 docs/superpowers/
 .claude/
+
+skills-lock.json
