@@ -673,17 +673,29 @@ func TestTheCoverDirectoryIsConfigurable(t *testing.T) {
 // A variable compose does not pass into the api container is silently never
 // set. Only variables deploy/.env.example documents are required to reach it.
 func TestEveryDocumentedVariableReachesTheAPIContainer(t *testing.T) {
-	documented := documentedVariables(t)
-	passed := apiServiceEnvironment(t)
+	assertDocumentedVariablesReach(t, "api", sourceVariables(t, "config.go"))
+}
 
-	for _, name := range configVariables(t) {
+// The same for the Query Runner, whose variables runner.go names. The token is
+// named explicitly: the runner reads it through queryRunnerToken in config.go,
+// shared with the API, so no pattern over runner.go finds it.
+func TestEveryDocumentedRunnerVariableReachesTheQueryRunnerContainer(t *testing.T) {
+	assertDocumentedVariablesReach(t, "queryrunner", append(sourceVariables(t, "runner.go"), "QUERY_RUNNER_TOKEN"))
+}
+
+func assertDocumentedVariablesReach(t *testing.T, service string, read []string) {
+	t.Helper()
+	documented := documentedVariables(t)
+	passed := serviceEnvironment(t, service, 10)
+
+	for _, name := range read {
 		if !documented[name] {
 			continue
 		}
-		if !passed[name] {
-			t.Errorf("%s is read by config.Load and documented in deploy/.env.example, but "+
-				"deploy/docker-compose.yml never passes it to the api service — an operator "+
-				"setting it gets no effect and no error", name)
+		if _, ok := passed[name]; !ok {
+			t.Errorf("%s is read by the %s service's code and documented in deploy/.env.example, but "+
+				"deploy/docker-compose.yml never passes it to that service — an operator "+
+				"setting it gets no effect and no error", name, service)
 		}
 	}
 }
@@ -697,25 +709,26 @@ func repoFile(t *testing.T, name string) string {
 	return string(raw)
 }
 
-// configVariables are the environment variables config.go names, read from
-// its source so the list cannot drift.
-func configVariables(t *testing.T) []string {
+// sourceVariables are the environment variables a source file of this package
+// names, read from the file so the list cannot drift.
+func sourceVariables(t *testing.T, file string) []string {
 	t.Helper()
-	source, err := os.ReadFile("config.go")
+	source, err := os.ReadFile(file)
 	if err != nil {
-		t.Fatalf("read config.go: %v", err)
+		t.Fatalf("read %s: %v", file, err)
 	}
 	var names []string
 	for _, match := range envNamePattern.FindAllStringSubmatch(string(source), -1) {
 		names = append(names, match[1])
 	}
 	if len(names) < 10 {
-		t.Fatalf("found only %d variables in config.go (%v); the pattern has stopped matching", len(names), names)
+		t.Fatalf("found only %d variables in %s (%v); the pattern has stopped matching", len(names), file, names)
 	}
 	return names
 }
 
-// In config.go a quoted SCREAMING_SNAKE_CASE literal is always a variable name.
+// In config.go and runner.go a quoted SCREAMING_SNAKE_CASE literal is always a
+// variable name.
 var envNamePattern = regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
 
 func documentedVariables(t *testing.T) map[string]bool {
@@ -736,39 +749,41 @@ func documentedVariables(t *testing.T) map[string]bool {
 	return found
 }
 
-// apiServiceEnvironment are the keys the compose file's `api` service passes
-// in, parsed by indentation to avoid a YAML dependency; the guard below fails
-// loudly if the shape changes.
-func apiServiceEnvironment(t *testing.T) map[string]bool {
+// serviceEnvironment are the keys, with their values, that the compose file's
+// service passes in, parsed by indentation to avoid a YAML dependency; the
+// guard below fails loudly if the shape changes: fewer than minKeys keys means
+// the parse has stopped matching, so a caller passes what its service really has.
+func serviceEnvironment(t *testing.T, service string, minKeys int) map[string]string {
 	t.Helper()
-	keys := map[string]bool{}
-	var inAPI, inEnv bool
+	env := map[string]string{}
+	var inService, inEnv bool
 	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
 		switch {
-		case strings.HasPrefix(line, "  api:"):
-			inAPI = true
-		case inAPI && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+		case strings.HasPrefix(line, "  "+service+":"):
+			inService = true
+		case inService && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
 			strings.TrimSpace(line) != "":
-			inAPI, inEnv = false, false // the next service begins
-		case inAPI && strings.HasPrefix(line, "    environment:"):
+			inService, inEnv = false, false // the next service begins
+		case inService && strings.HasPrefix(line, "    environment:"):
 			inEnv = true
-		case inAPI && inEnv && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") &&
+		case inService && inEnv && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") &&
 			strings.TrimSpace(line) != "":
-			inEnv = false // the next key of the api service
-		case inAPI && inEnv && strings.HasPrefix(line, "      "):
-			if name, _, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && !strings.HasPrefix(name, "#") {
-				keys[name] = true
+			inEnv = false // the next key of this service
+		case inService && inEnv && strings.HasPrefix(line, "      "):
+			if name, value, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && !strings.HasPrefix(name, "#") {
+				env[name] = strings.Trim(strings.TrimSpace(value), `"`)
 			}
 		}
 	}
-	if len(keys) < 10 {
-		t.Fatalf("the api service parsed as %d environment keys; docker-compose.yml's shape has changed", len(keys))
+	if len(env) < minKeys {
+		t.Fatalf("the %s service parsed as %d environment keys, want at least %d; docker-compose.yml's shape has changed",
+			service, len(env), minKeys)
 	}
-	return keys
+	return env
 }
 
 // serviceLabels are the labels the compose file's service carries, parsed by
-// indentation for the reason apiServiceEnvironment gives. A service with no
+// indentation for the reason serviceEnvironment gives. A service with no
 // labels block returns an empty map, which the test below reads as a failure
 // rather than as "nothing to check".
 func serviceLabels(t *testing.T, service string) map[string]string {
@@ -790,7 +805,7 @@ func serviceLabels(t *testing.T, service string) map[string]string {
 		case inService && inLabels && strings.HasPrefix(line, "      "):
 			name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 			if ok && !strings.HasPrefix(name, "#") {
-				labels[name] = strings.Trim(strings.TrimSpace(value), `"`)
+				labels[name] = strings.Trim(strings.TrimSpace(value), `"'`)
 			}
 		}
 	}
@@ -935,6 +950,127 @@ func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// composeServices are the names under the compose file's top-level `services:`
+// key.
+func composeServices(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	var inServices bool
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "services:"):
+			inServices = true
+		case inServices && line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#"):
+			inServices = false // volumes:, networks:
+		case inServices && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   "):
+			if name, rest, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && rest == "" && !strings.HasPrefix(name, "#") {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) < 10 {
+		t.Fatalf("docker-compose.yml parsed as %d services (%v); its shape has changed", len(names), names)
+	}
+	return names
+}
+
+// composeDefault is the value an environment assignment falls back to:
+// `${NAME:-fallback}` gives "fallback" and a plain value gives itself.
+func composeDefault(value string) string {
+	inner, ok := strings.CutPrefix(value, "${")
+	if !ok {
+		return value
+	}
+	inner = strings.TrimSuffix(inner, "}")
+	_, fallback, _ := strings.Cut(inner, ":-")
+	return fallback
+}
+
+// endpointRules say, per service, which of its own environment variables makes
+// the endpoint its prometheus.io labels advertise exist, and what that
+// variable's value must not defeat. A service labelled for scraping needs a
+// row here, or TestAScrapeLabelIsOnlyOnAServiceWhoseEndpointExists fails.
+var endpointRules = map[string]struct {
+	variable string
+	serves   func(value string) bool
+	want     string
+}{
+	"api": {
+		variable: "METRICS_BACKEND",
+		serves:   func(value string) bool { return value == "prometheus" },
+		want:     "default to prometheus: with log or none the path answers 404",
+	},
+	"queryrunner": {
+		variable: "QUERY_RUNNER_METRICS_ADDR",
+		serves:   func(value string) bool { return value != MetricsOff },
+		want:     "not be " + MetricsOff + ", which turns the listener off",
+	},
+}
+
+// A scrape label is a promise that the endpoint exists. The compose file sets
+// the variable that decides it on the same service, so the promise can be read
+// from there: this test finds every service labelled for scraping and checks
+// it against the rule its service needs.
+func TestAScrapeLabelIsOnlyOnAServiceWhoseEndpointExists(t *testing.T) {
+	var scraped, withLabel int
+	for _, service := range composeServices(t) {
+		value, ok := serviceLabels(t, service)["prometheus.io/scrape"]
+		if ok {
+			withLabel++
+		}
+		if ok && value != "true" && value != "false" {
+			t.Errorf("%s carries prometheus.io/scrape with a value this test could not read, %q: "+
+				"write it as exactly \"true\" or \"false\", with no trailing comment", service, value)
+			continue
+		}
+		if value != "true" {
+			continue
+		}
+		scraped++
+		t.Run(service, func(t *testing.T) {
+			rule, ok := endpointRules[service]
+			if !ok {
+				t.Fatalf("%s is labelled prometheus.io/scrape: \"true\" but this test knows no rule for it: "+
+					"a new scraped service needs a row in endpointRules naming the variable that makes its endpoint exist", service)
+			}
+			value, passed := serviceEnvironment(t, service, 0)[rule.variable]
+			if !passed {
+				t.Fatalf("%s is labelled prometheus.io/scrape: \"true\" but its environment never sets %s, "+
+					"so the endpoint it advertises is left to the binary's default", service, rule.variable)
+			}
+			if !rule.serves(composeDefault(value)) {
+				t.Errorf("%s is labelled prometheus.io/scrape: \"true\" but %s is %q; it must %s",
+					service, rule.variable, value, rule.want)
+			}
+		})
+	}
+	if scraped == 0 {
+		t.Fatal("no service in docker-compose.yml is labelled prometheus.io/scrape: \"true\"; the parse has stopped matching")
+	}
+	// serviceLabels reads only the mapping form (`key: value`). A label written
+	// as a list item (`- prometheus.io/scrape=true`) is valid compose it would
+	// not see, and the service would then escape every rule above.
+	if mentions := scrapeLabelMentions(t); mentions != withLabel {
+		t.Fatalf("docker-compose.yml mentions prometheus.io/scrape on %d lines but %d services were read as carrying it: "+
+			"a label in list form (- prometheus.io/scrape=true) is not understood here, write it as a mapping (prometheus.io/scrape: \"true\")",
+			mentions, withLabel)
+	}
+}
+
+// scrapeLabelMentions counts the compose file's non-comment lines naming the
+// scrape label, in whatever form.
+func scrapeLabelMentions(t *testing.T) int {
+	t.Helper()
+	var count int
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") && strings.Contains(line, "prometheus.io/scrape") {
+			count++
+		}
+	}
+	return count
 }
 
 func TestPasswordHashConcurrencyIsLeftToThePasswordPackageByDefault(t *testing.T) {

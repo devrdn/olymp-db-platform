@@ -241,8 +241,9 @@ services:
     # service names, read from the Docker API. scrape, port and path are the
     # labels relabel rules for the prometheus.io convention usually read; job
     # is not among them, so only a rule that reads it will use it. The port
-    # must stay the one QUERY_RUNNER_METRICS_ADDR binds below — a test in
-    # internal/platform/config fails when they drift. The job name must stay
+    # must stay the one QUERY_RUNNER_METRICS_ADDR binds below, and that
+    # address must not be "off" while scrape is "true" — a test in
+    # internal/platform/config fails when either drifts. The job name must stay
     # the one deploy/observability/prometheus.yml scrapes, so a dashboard
     # written against the bundled Prometheus works unchanged for somebody
     # scraping by label instead.
@@ -405,8 +406,12 @@ services:
     image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     restart: unless-stopped
     # As on queryrunner above; this port is the one INTERNAL_ADDR binds. The
-    # endpoint exists only with METRICS_BACKEND=prometheus, so set scrape to
-    # "false" (or drop the labels) under log or none.
+    # endpoint exists only with METRICS_BACKEND=prometheus, so an install that
+    # sets log or none must set scrape to "false" (or drop the labels), or its
+    # collector keeps a target that answers 404. A test in
+    # internal/platform/config fails when the METRICS_BACKEND default below
+    # stops being prometheus while scrape is "true"; it cannot see an override
+    # in an operator's environment.
     labels:
       prometheus.io/scrape: "true"
       prometheus.io/port: "9090"
@@ -755,8 +760,8 @@ services:
   # Optional, and off by default so a small install stays small:
   #   docker compose --profile observability up -d
   # Without it, set METRICS_BACKEND=log so request statistics go to the log
-  # stream rather than to an endpoint nobody reads, and set
-  # prometheus.io/scrape to "false" on api to match.
+  # stream rather than to an endpoint nobody reads; the labels on api say what
+  # else that changes.
 
   prometheus:
     image: prom/prometheus:v3.1.0
