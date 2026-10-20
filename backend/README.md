@@ -506,11 +506,10 @@ label-discovered target does not have, so a query selecting on `service` does
 not carry over. The ports are not published, so only a collector on the same
 Docker host or network reaches them.
 
-The runner's endpoint cannot be switched off, so its label is always true. The
-API's exists only with `METRICS_BACKEND=prometheus` (the default): with `log` or
-`none` the path answers 404. An install that sets either must set
-`prometheus.io/scrape: "false"` on `api` or drop the label, or its collector
-keeps a target that never answers.
+Whether a labelled endpoint exists depends on one variable per service:
+`METRICS_BACKEND` for the API, `QUERY_RUNNER_METRICS_ADDR` for the runner. What
+an install must do with the label when it changes the variable is written beside
+the labels in `deploy/docker-compose.yml`, where a test also holds it.
 
 ### Query Runner metrics
 
