@@ -524,9 +524,13 @@ collector. It is a separate port because the gRPC port (`9100`) asks every
 caller for `QUERY_RUNNER_TOKEN`, which a scraper does not carry. The runner
 always records into Prometheus; `METRICS_BACKEND` is the API's setting.
 
-There is no setting that turns this listener off, so a port conflict on `9101`
-stops the runner from starting. That is deliberate: a runner nobody can observe
-during a contest is worse than one that refuses to start.
+`QUERY_RUNNER_METRICS_ADDR=off` (exactly that lowercase word; an empty value
+means the default) turns the listener off, and the runner logs one line saying
+metrics are not served. Any other value is an address, and an address that
+cannot be bound, a port conflict on `9101` for one, stops the runner from
+starting. That is deliberate: whoever names an address asked for metrics, and a
+refusal at startup is instant and visible, where a runner that silently has no
+observability during a contest is not.
 
 Every label is a fixed set the runner declares at startup, never a contest,
 participant, database or SQL value. A value outside that set is counted as

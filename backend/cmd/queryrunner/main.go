@@ -4,7 +4,8 @@
 // holds the participants' roles (game_reader, game_writer) and runs their
 // SQL; the Core API reaches the game cluster only as the provisioning role.
 // It is stateless and has no core database connection. Its metrics are served
-// over plain HTTP on a second, internal listener (QUERY_RUNNER_METRICS_ADDR).
+// over plain HTTP on a second, internal listener (QUERY_RUNNER_METRICS_ADDR),
+// unless that is set to off.
 package main
 
 import (
@@ -103,17 +104,21 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	metricsListener := metricsServer(cfg.MetricsAddr, prom, log)
-	if err := metricsListener.Start(); err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.MetricsAddr, err)
-	}
-	defer func() {
-		ending, cancel := context.WithTimeout(context.Background(), metricsShutdownTimeout)
-		defer cancel()
-		if err := metricsListener.Shutdown(ending); err != nil {
-			log.Warn("metrics listener did not stop cleanly", "error", err)
+	if cfg.MetricsAddr == "" {
+		log.Info("metrics are not served: QUERY_RUNNER_METRICS_ADDR is off")
+	} else {
+		metricsListener := metricsServer(cfg.MetricsAddr, prom, log)
+		if err := metricsListener.Start(); err != nil {
+			return fmt.Errorf("listen on %s: %w", cfg.MetricsAddr, err)
 		}
-	}()
+		defer func() {
+			ending, cancel := context.WithTimeout(context.Background(), metricsShutdownTimeout)
+			defer cancel()
+			if err := metricsListener.Shutdown(ending); err != nil {
+				log.Warn("metrics listener did not stop cleanly", "error", err)
+			}
+		}()
+	}
 
 	lis, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {

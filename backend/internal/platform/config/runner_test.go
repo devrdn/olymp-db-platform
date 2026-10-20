@@ -473,3 +473,66 @@ func TestTheMetricsListenerMustNotBeTheQueryListener(t *testing.T) {
 		})
 	}
 }
+
+func TestTheLiteralOffTurnsTheMetricsListenerOff(t *testing.T) {
+	setRunnerRequired(t)
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", "off")
+
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("QUERY_RUNNER_METRICS_ADDR=off was refused: %v", err)
+	}
+	if cfg.MetricsAddr != "" {
+		t.Fatalf("metrics address = %q with the listener off, want empty", cfg.MetricsAddr)
+	}
+}
+
+func TestAnEmptyMetricsAddressMeansTheDefaultNotOff(t *testing.T) {
+	setRunnerRequired(t)
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", "")
+
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.MetricsAddr != DefaultRunnerMetricsAddr {
+		t.Fatalf("metrics address = %q, want the %q default", cfg.MetricsAddr, DefaultRunnerMetricsAddr)
+	}
+}
+
+// With nothing to bind there is nothing to collide with, so the check against
+// the query listener does not apply.
+func TestAnOffMetricsListenerCannotClashWithTheQueryListener(t *testing.T) {
+	setRunnerRequired(t)
+	t.Setenv("QUERY_RUNNER_ADDR", ":9101")
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", ":9101")
+	if _, err := LoadRunner(); err == nil {
+		t.Fatal("the same address on both listeners was accepted; the off case below proves nothing")
+	}
+
+	t.Setenv("QUERY_RUNNER_METRICS_ADDR", "off")
+	if _, err := LoadRunner(); err != nil {
+		t.Fatalf("an off metrics listener was refused against QUERY_RUNNER_ADDR=:9101: %v", err)
+	}
+}
+
+// Only the lowercase literal is the switch. Any other spelling is an address;
+// an address that does not parse is not rejected at load time (sameSocket
+// leaves it to the listener), so it is kept verbatim and the listener refuses
+// to bind it at startup.
+func TestOtherSpellingsOfOffAreKeptAsAddressesNotTakenAsTheSwitch(t *testing.T) {
+	for _, value := range []string{"OFF", "Off", " off", "off "} {
+		t.Run(value, func(t *testing.T) {
+			setRunnerRequired(t)
+			t.Setenv("QUERY_RUNNER_METRICS_ADDR", value)
+
+			cfg, err := LoadRunner()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.MetricsAddr != value {
+				t.Fatalf("metrics address = %q, want %q kept verbatim", cfg.MetricsAddr, value)
+			}
+		})
+	}
+}

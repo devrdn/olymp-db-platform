@@ -767,6 +767,7 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 		GAME_DB_DSN="postgres://game_reader:$(GAME_READER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_LISTEN)" \
+		QUERY_RUNNER_METRICS_ADDR="$(QUERY_RUNNER_METRICS_ADDR)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
 
 # The API and the runner share one token (see `run` above).

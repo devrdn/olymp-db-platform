@@ -338,7 +338,12 @@ in the backend README under "Finding the metrics endpoints from the Docker
 API".
 
 The principle underneath: **metrics are diagnostics**. No branch of their code
-may affect how a request is served.
+may affect how a request is served. The principle governs the path that serves
+a query; a metrics misconfiguration is refused at startup like every other bad
+value. The Query Runner's listener can be turned off with
+`QUERY_RUNNER_METRICS_ADDR=off`, but an address that is named and cannot be
+bound stops the service, since a service that silently has no observability
+during an olympiad is worse than one that refuses to start.
 
 ## 3.2 Changing the database: where the seam runs
 
