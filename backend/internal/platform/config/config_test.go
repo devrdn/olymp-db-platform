@@ -750,9 +750,11 @@ func documentedVariables(t *testing.T) map[string]bool {
 }
 
 // serviceEnvironment are the keys, with their values, that the compose file's
-// service passes in, parsed by indentation to avoid a YAML dependency; the
-// guard below fails loudly if the shape changes: fewer than minKeys keys means
-// the parse has stopped matching, so a caller passes what its service really has.
+// service passes in, parsed by indentation to avoid a YAML dependency. It
+// understands the mapping form (`NAME: value`) only; a line whose key is not a
+// plain variable name, which is what the list form (`- NAME=value`) parses to,
+// fails the test naming that form. Fewer than minKeys keys means the parse has
+// stopped matching, so a caller passes what its service really has.
 func serviceEnvironment(t *testing.T, service string, minKeys int) map[string]string {
 	t.Helper()
 	env := map[string]string{}
@@ -770,9 +772,16 @@ func serviceEnvironment(t *testing.T, service string, minKeys int) map[string]st
 			strings.TrimSpace(line) != "":
 			inEnv = false // the next key of this service
 		case inService && inEnv && strings.HasPrefix(line, "      "):
-			if name, value, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && !strings.HasPrefix(name, "#") {
-				env[name] = strings.Trim(strings.TrimSpace(value), `"`)
+			text := strings.TrimSpace(line)
+			if text == "" || strings.HasPrefix(text, "#") {
+				continue
 			}
+			name, value, ok := strings.Cut(text, ":")
+			if !ok || !environmentName.MatchString(name) {
+				t.Fatalf("the %s service's environment has the line %q, which is not NAME: value: "+
+					"the list form (- NAME=value) is not understood here, write it as a mapping", service, text)
+			}
+			env[name] = strings.Trim(strings.TrimSpace(value), `"`)
 		}
 	}
 	if len(env) < minKeys {
@@ -781,6 +790,9 @@ func serviceEnvironment(t *testing.T, service string, minKeys int) map[string]st
 	}
 	return env
 }
+
+// environmentName is what an environment key of the mapping form looks like.
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // serviceLabels are the labels the compose file's service carries, parsed by
 // indentation for the reason serviceEnvironment gives. A service with no
@@ -899,56 +911,88 @@ func exposedPorts(t *testing.T, stage string) map[string]bool {
 	return ports
 }
 
-// TestAMetricsLabelNamesThePortItsListenerBinds is the drift guard. A
-// collector reads the label and scrapes that port; the process listens on the
-// address the variable sets; and the image has to declare the port or
+// TestAMetricsLabelNamesThePortItsListenerBinds is the drift guard. A service
+// labelled for scraping is in one of two consistent states. With scrape "true"
+// a collector reads the label and scrapes that port; the process listens on
+// the address the variable sets; the image has to declare the port or
 // Docker-API discovery produces no target for it at all; and the bundled
-// Prometheus scrapes it by the static target in prometheus.yml. Four places,
-// one number, and nothing but this test keeps them equal.
+// Prometheus scrapes it by the static target in prometheus.yml: four places,
+// one number, and nothing but this test keeps them equal. With scrape "false"
+// the compose file sets the variable that disables the endpoint, so the label
+// is not a promise the service breaks. That the endpoint exists in the first
+// state is held by TestAScrapeLabelIsOnlyOnAServiceWhoseEndpointExists.
 func TestAMetricsLabelNamesThePortItsListenerBinds(t *testing.T) {
+	var scraped int
 	for _, service := range []struct {
 		name, variable, job, target string
 	}{
 		{name: "api", variable: "INTERNAL_ADDR", job: "core-api", target: "api:9090"},
 		{name: "queryrunner", variable: "QUERY_RUNNER_METRICS_ADDR", job: "queryrunner", target: "queryrunner:9101"},
 	} {
-		t.Run(service.name, func(t *testing.T) {
-			labels := serviceLabels(t, service.name)
-			if len(labels) == 0 {
-				t.Fatalf("the %s service carries no labels; the metrics endpoint no longer describes itself", service.name)
-			}
-			if labels["prometheus.io/scrape"] != "true" {
-				t.Errorf("prometheus.io/scrape is %q, want \"true\"", labels["prometheus.io/scrape"])
-			}
-			if labels["prometheus.io/path"] != "/metrics" {
-				t.Errorf("prometheus.io/path is %q, want \"/metrics\"", labels["prometheus.io/path"])
-			}
-			// The job name is what a dashboard written against the bundled
-			// Prometheus selects on, so it has to be the one that file scrapes.
-			if labels["prometheus.io/job"] != service.job {
-				t.Errorf("prometheus.io/job is %q, want %q", labels["prometheus.io/job"], service.job)
-			}
-			targets := scrapeTargets(t)
-			scraped, ok := targets[service.job]
-			if !ok {
-				t.Errorf("prometheus.yml scrapes no job named %q; it scrapes %v", service.job, targets)
-			}
+		labels := serviceLabels(t, service.name)
+		if len(labels) == 0 {
+			t.Fatalf("the %s service carries no labels; the metrics endpoint no longer describes itself", service.name)
+		}
+		switch labels["prometheus.io/scrape"] {
+		case "true":
+			scraped++
+			t.Run(service.name, func(t *testing.T) {
+				assertScrapedLabelsMatchListener(t, service.name, service.variable, service.job, service.target, labels)
+			})
+		case "false":
+			t.Run(service.name+" is not scraped", func(t *testing.T) {
+				rule := endpointRules[service.name]
+				value, set := serviceEnvironment(t, service.name, 0)[rule.variable]
+				if !set {
+					t.Fatalf("%s is labelled prometheus.io/scrape: \"false\" but its environment never sets %s, "+
+						"so whether the endpoint exists is left to the binary's default", service.name, rule.variable)
+				}
+				if rule.serves(composeDefault(value)) {
+					t.Errorf("%s is labelled prometheus.io/scrape: \"false\" but %s is %q and the endpoint exists: "+
+						"set the label to \"true\", or disable the endpoint", service.name, rule.variable, value)
+				}
+			})
+		default:
+			t.Errorf("%s carries prometheus.io/scrape %q, want exactly \"true\" or \"false\"",
+				service.name, labels["prometheus.io/scrape"])
+		}
+	}
+	// With every label "false" nothing below would run, and the port could
+	// drift unseen.
+	if scraped == 0 {
+		t.Fatal("no service in docker-compose.yml is scraped; the port-drift guard has nothing to guard")
+	}
+}
 
-			port := composePort(t, service.name, service.variable)
-			if labels["prometheus.io/port"] != port {
-				t.Errorf("prometheus.io/port is %q but %s binds %q: a collector would scrape the wrong port",
-					labels["prometheus.io/port"], service.variable, port)
-			}
-			if scraped != service.target || !strings.HasSuffix(scraped, ":"+port) {
-				t.Errorf("prometheus.yml scrapes job %q at %q but %s binds %q: the bundled Prometheus would scrape a closed port",
-					service.job, scraped, service.variable, port)
-			}
-			stage := buildTarget(t, service.name)
-			if exposed := exposedPorts(t, stage); !exposed[port] {
-				t.Errorf("the %s stage does not EXPOSE %s, so Docker-API discovery produces no target for it; it declares %v",
-					stage, port, exposed)
-			}
-		})
+func assertScrapedLabelsMatchListener(t *testing.T, service, variable, job, target string, labels map[string]string) {
+	t.Helper()
+	if labels["prometheus.io/path"] != "/metrics" {
+		t.Errorf("prometheus.io/path is %q, want \"/metrics\"", labels["prometheus.io/path"])
+	}
+	// The job name is what a dashboard written against the bundled
+	// Prometheus selects on, so it has to be the one that file scrapes.
+	if labels["prometheus.io/job"] != job {
+		t.Errorf("prometheus.io/job is %q, want %q", labels["prometheus.io/job"], job)
+	}
+	targets := scrapeTargets(t)
+	scraped, ok := targets[job]
+	if !ok {
+		t.Errorf("prometheus.yml scrapes no job named %q; it scrapes %v", job, targets)
+	}
+
+	port := composePort(t, service, variable)
+	if labels["prometheus.io/port"] != port {
+		t.Errorf("prometheus.io/port is %q but %s binds %q: a collector would scrape the wrong port",
+			labels["prometheus.io/port"], variable, port)
+	}
+	if scraped != target || !strings.HasSuffix(scraped, ":"+port) {
+		t.Errorf("prometheus.yml scrapes job %q at %q but %s binds %q: the bundled Prometheus would scrape a closed port",
+			job, scraped, variable, port)
+	}
+	stage := buildTarget(t, service)
+	if exposed := exposedPorts(t, stage); !exposed[port] {
+		t.Errorf("the %s stage does not EXPOSE %s, so Docker-API discovery produces no target for it; it declares %v",
+			stage, port, exposed)
 	}
 }
 

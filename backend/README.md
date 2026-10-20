@@ -531,6 +531,20 @@ starting. That is deliberate: whoever names an address asked for metrics, and a
 refusal at startup is instant and visible, where a runner that silently has no
 observability during a contest is not.
 
+With metrics off, also drop the `queryrunner` job from `prometheus.yml` (or from
+the collector) and the `DBContestQueryRunnerDown` and
+`DBContestQueryRunnerNotScraped` rules from `dbcontest-rules.yml`, with their
+cases in `dbcontest-rules.test.yml`: until those go too, promtool's unit tests
+fail in `make observability-check`, which CI runs as its alert rules and
+dashboard job. On the compose stack `deploy/.env` does not reach the container,
+so set the literal in `deploy/docker-compose.yml` to `"off"` and the service's
+`prometheus.io/scrape` label to `"false"`. Left in place, the job reports the
+runner down and `DBContestQueryRunnerDown` pages critically that participants
+cannot run queries, and its annotation says to start the runner again, which
+does nothing to a running container; an operator who restarts it instead drops
+every running query and live channel mid-contest. With the job dropped and the
+rules kept, `DBContestQueryRunnerNotScraped` fires five minutes later.
+
 Every label is a fixed set the runner declares at startup, never a contest,
 participant, database or SQL value. A value outside that set is counted as
 `other`, so a series labelled `other` means the runner reported something it
