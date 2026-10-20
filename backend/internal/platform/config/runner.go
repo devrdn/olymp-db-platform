@@ -21,7 +21,8 @@ type Runner struct {
 	// private network.
 	ListenAddr string
 	// MetricsAddr serves /metrics over plain HTTP, never published outside
-	// the private network either.
+	// the private network either. Empty means the listener is off
+	// (QUERY_RUNNER_METRICS_ADDR=off).
 	MetricsAddr string
 	// Token is the shared secret every call must carry: this service runs
 	// whatever database and policy a request names. Required outside
@@ -118,6 +119,10 @@ const (
 // QUERY_RUNNER_METRICS_ADDR is not set: loopback, like its query listener.
 const DefaultRunnerMetricsAddr = "127.0.0.1:9101"
 
+// MetricsOff is the QUERY_RUNNER_METRICS_ADDR value that turns the metrics
+// listener off. An empty variable means the default, so it cannot be the switch.
+const MetricsOff = "off"
+
 func LoadRunner() (Runner, error) {
 	cfg := Runner{
 		Env:      envOrDefault("ENV", "development"),
@@ -127,7 +132,9 @@ func LoadRunner() (Runner, error) {
 		ListenAddr:  envOrDefault("QUERY_RUNNER_ADDR", "127.0.0.1:9100"),
 		MetricsAddr: envOrDefault("QUERY_RUNNER_METRICS_ADDR", DefaultRunnerMetricsAddr),
 	}
-	if sameSocket(cfg.MetricsAddr, cfg.ListenAddr) {
+	if cfg.MetricsAddr == MetricsOff {
+		cfg.MetricsAddr = ""
+	} else if sameSocket(cfg.MetricsAddr, cfg.ListenAddr) {
 		return Runner{}, fmt.Errorf("QUERY_RUNNER_METRICS_ADDR: %q binds the same socket as QUERY_RUNNER_ADDR %q",
 			cfg.MetricsAddr, cfg.ListenAddr)
 	}
