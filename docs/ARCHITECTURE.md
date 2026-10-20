@@ -327,9 +327,10 @@ failure: a typo should be caught when configuration loads, not discovered
 after an olympiad as "we recorded nothing".
 
 `METRICS_BACKEND` is the Core API's setting. The Query Runner always records
-into its own Prometheus registry and serves `/metrics` on an internal listener
-of its own (`QUERY_RUNNER_METRICS_ADDR`, port 9101), apart from its
-token-guarded gRPC port; its labels are fixed lists it declares at startup.
+into its own Prometheus registry and, unless that listener is switched off
+(below), serves `/metrics` on an internal listener of its own
+(`QUERY_RUNNER_METRICS_ADDR`, port 9101), apart from its token-guarded gRPC
+port; its labels are fixed lists it declares at startup.
 
 Both endpoints describe themselves: the containers carry `prometheus.io/*`
 labels saying where the metrics are, for a collector that reads them from the
@@ -688,7 +689,11 @@ governed by **admission control in the Query Runner**:
   concurrent executions on the instance, N being on the order of two to three
   times the core count. Beyond N there is a short FIFO queue; when that
   overflows the answer is immediate — "the system is busy, try again in a few
-  seconds" — rather than a hang.
+  seconds" — rather than a hang. A queued query waits at most
+  `QUERY_QUEUE_WAIT` for a slot (fifteen seconds by default, and it must be
+  positive) and is then answered as a timeout, so a request the browser has
+  given up on stops holding its connection; the wait is separate from the
+  query's own deadline, which starts only once it runs.
 - **A read connection is kept until the next query.** Establishing one — TCP,
   SCRAM-SHA-256, forking a backend — costs about five milliseconds of server
   CPU on the test cluster, as much as a participant's typical join. So the
@@ -697,14 +702,17 @@ governed by **admission control in the Query Runner**:
   session with `DISCARD ALL` before leaving it. Only a read that finished
   without an error and without a cancellation leaves its connection behind;
   a write, an error, a cancellation and a deadline all close it as before.
-  Idle connections have a budget of their own (`QUERY_IDLE_CONNS`, four per
-  `QUERY_CONCURRENT` by default), past which the least recently used is
-  closed; an idle backend holds a few MiB rather than the per-process cap, so
-  the memory arithmetic counts only running queries, and the Runner refuses to
-  start when `QUERY_CONCURRENT` + `QUERY_IDLE_CONNS` exceeds the participant
-  roles' connection limit. The database's own backstop is `CONNECTION LIMIT 2`
-  per instance and the role's overall limit — both of which only ever fire if
-  the semaphore is broken.
+  Idle connections have a budget of their own (`QUERY_IDLE_CONNS`, on top of
+  the `QUERY_CONCURRENT` running ones), past which the least recently kept is
+  closed. Unset, it is four per `QUERY_CONCURRENT`, cut back where that would
+  not leave as many of the participant roles' 60 connections free as run, so
+  that the default never adds idle connections past the limit. An idle backend
+  holds a few MiB rather than the per-process cap, so the memory arithmetic
+  counts only running queries, and the Runner refuses to start when
+  `QUERY_CONCURRENT` + `QUERY_IDLE_CONNS` exceeds the participant roles'
+  connection limit. The database's own backstop is `CONNECTION LIMIT 2` per
+  instance and the role's overall limit — both of which only ever fire if the
+  semaphore is broken.
 - **Container boundaries.** The game cluster runs in a container with cgroup
   limits on CPU, IO and memory, so even total degradation stays inside the
   resources it was given, and the core database on its own instance is
@@ -3687,7 +3695,7 @@ to look and which variable governs what.
 | Trusted proxies narrowed to two fixed addresses; the secret the interface proves an address with | 7.2 | `TRUSTED_PROXIES`, `INGRESS_SECRET` |
 | Refusing to start outside development on a placeholder from `.env.example` | 7.2 | — |
 | Refilling the spare pool on a wake-up rather than only on a timer | 4.2 | `GAME_POOL_DEPTH` |
-| The Runner keeps one idle connection per game database between queries | 4.3, and 5 item 6 | `QUERY_CONN_IDLE_TIMEOUT` |
+| The Runner keeps one idle connection per game database between queries, within a budget of its own | 4.3, and 5 item 6 | `QUERY_CONN_IDLE_TIMEOUT`, `QUERY_IDLE_CONNS` |
 | One leaderboard computation per cache miss; a separate cache for the organiser's live table; a cache generation tied to revealing the results | 10 | — |
 | The API's connection pool to the core database | 12 | `CORE_DB_POOL_MAX` |
 | How many CSV exports hold a connection from that pool at once | 12 | `EXPORT_CONCURRENCY` |
@@ -3742,8 +3750,10 @@ year group.
   round-robin. That is the main advantage of the database-per-participant
   model.
 - **Connections to the game cluster** are managed by the Query Runner: at most
-  one idle connection per database plus the global semaphore (section 4.3),
-  and the total of busy and idle together never exceeds `QUERY_CONCURRENT`.
+  one idle connection per database plus the global semaphore (section 4.3).
+  Running connections never exceed `QUERY_CONCURRENT`, idle ones never exceed
+  `QUERY_IDLE_CONNS` on top of them, and the Runner refuses to start when the
+  two together could pass the participant roles' `CONNECTION LIMIT`.
   PgBouncer is not used: its pools are keyed by database and role, so with a
   database per participant it multiplexes nothing.
 - **The core database** will not be the bottleneck at these volumes, and the
@@ -4521,16 +4531,16 @@ Product decisions the items below are built on.
   measured** (sections 2, 4.2 and 9). The provisioning queue's depth is meant
   to carry an alert, and section 9 lists metrics for active participants,
   student queries and the queue. The API exports HTTP and reclamation
-  metrics. The Query Runner exports its query path on an internal listener:
-  queries by outcome and reason, duration, admission wait, running and queued
-  queries, and result-budget cut-offs. Alert rules, with promtool tests, and a
-  Grafana dashboard for both ship in `deploy/observability/import`, to load
-  into the Prometheus and Grafana that already watch the host
-  (backend/README.md, Observability). What remains: neither active
-  participants nor the provisioning queue is measured; the Query Runner's
-  thresholds are copied from its default configuration, which it does not
-  export; and delivering an alert to a person is left to that external
-  Alertmanager or Grafana.
+  metrics. The Query Runner exports its query path on an internal listener,
+  unless that is switched off: queries by outcome and reason, duration,
+  admission wait, running and queued queries, and result-budget cut-offs. Alert
+  rules, with promtool tests, and a Grafana dashboard for both ship in
+  `deploy/observability/import`, to load into the Prometheus and Grafana that
+  already watch the host (backend/README.md, Observability). What remains:
+  neither active participants nor the provisioning queue is measured; the
+  Query Runner's thresholds are copied from its default configuration, which
+  it does not export; and delivering an alert to a person is left to that
+  external Alertmanager or Grafana.
 - [ ] **38. CI does not keep section 11's supply-chain promises**
   (sections 11 and 13). The frontend's CI runs no `npm audit`, and its images
   are published after the build alone, while the backend's wait for the
