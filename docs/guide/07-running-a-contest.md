@@ -42,20 +42,26 @@ not care.
 
 ### A week before
 
-**1. Back up, then deploy the release.** The release is the first v0.3 tag
-that carries the schema fix, the Query Runner's metrics, the scheduled backup
-and the feedback link. Before it reaches the host, run the checks from the
-v0.3.0 release notes on a workstation. `make images` builds from the working
-tree, so check the tag out first; `make test-game` and `make test-game-build`
-read the database passwords from `deploy/.env`:
+**1. Back up, then deploy the release.** The release is v0.4.0. It carries
+the schema fix, the Query Runner's metrics, the scheduled backup and the
+feedback link, and its notes list the rest. Before it reaches the host, run
+the checks from the v0.4.0 release notes on a workstation. `make images`
+builds from the working tree, so check the tag out first; `make test-game`
+and `make test-game-build` read the database passwords from `deploy/.env`.
+The first run of `make observability-check` pulls a Prometheus image, and
+the first run of `make scheduled-backup-check` builds one from Debian unless
+`CHECK_IMAGE` names an image built already, so each needs the network when
+its image is missing:
 
 ```bash
 git fetch --tags
-git checkout v0.3.<n>
+git checkout v0.4.0
 make images
 make game-uploads-check
 make test-game
 make test-game-build
+make observability-check
+make scheduled-backup-check
 ```
 
 On the host, back up with the checkout as it is, then bring the checkout to
@@ -70,10 +76,10 @@ make backup                                         # a set from before the depl
 make restore-check FILE=deploy/backups/<CORE_DB_NAME>-<stamp>.dump   # the dump it wrote
 git status                                          # nothing modified in tracked files
 git fetch --tags
-git checkout v0.3.<n>
+git checkout v0.4.0
 diff <(grep -o '^[A-Z0-9_]*=' deploy/.env.example | sort -u) \
      <(grep -o '^[A-Z0-9_]*=' deploy/.env | sort -u)   # settings the release added
-make deploy VERSION=v0.3.<n>
+make deploy VERSION=v0.4.0
 make deployed                                       # every service on the new tag
 make game-check                                     # no game the core database expects is missing
 ```
