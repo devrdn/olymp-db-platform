@@ -138,9 +138,14 @@ FRONT_API_ORIGIN := http://localhost:$(API_PORT)
 
 # Security tools are installed on demand into the Go bin directory, so a fresh
 # checkout can run the full gate without a separate setup step.
-GOBIN  := $(shell go env GOPATH)/bin
-GOVULN := $(GOBIN)/govulncheck
-GOSEC  := $(GOBIN)/gosec
+#
+# Lazy, not `:=`: an immediate assignment runs `go env` on every make
+# invocation, and the scheduled backup runs `make backup` on a deployment host,
+# which has no Go. Only `vuln` and `sec` expand these, and each installs its
+# tool with `go` on the line before it uses it.
+GOBIN   = $(shell go env GOPATH)/bin
+GOVULN  = $(GOBIN)/govulncheck
+GOSEC   = $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
 .PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-stack-up e2e-stack-down
