@@ -1,5 +1,6 @@
-// Package settings answers what this installation calls itself and what it
-// looks like, changed from a screen rather than a deploy.
+// Package settings answers what this installation calls itself, what it looks
+// like and which language its email is written in, changed from a screen
+// rather than a deploy.
 //
 // It does not hold what the process needs to start or anything secret; those
 // stay in the environment (platform/config). A wrong value here makes the
@@ -17,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/google/uuid"
 )
 
@@ -27,6 +29,8 @@ const (
 	KeyLogo    = "installation.logo"
 	// KeyFeedback is where participants send feedback; empty shows no link.
 	KeyFeedback = "installation.feedback_url"
+	// KeyMailLanguage is the language of every email the installation sends.
+	KeyMailLanguage = "installation.mail_language"
 )
 
 var (
@@ -70,6 +74,8 @@ var Catalogue = []Definition{
 	// Public because the play screen and the profile show it, and the public
 	// read is the only one a participant may make.
 	{Key: KeyFeedback, Public: true, Validate: optionalFeedbackURL},
+	// Romanian because most of the people an olympiad writes to read it.
+	{Key: KeyMailLanguage, Fallback: string(mailing.Romanian), Validate: mailLanguage},
 }
 
 func Definitions() map[string]Definition {
@@ -191,6 +197,17 @@ func validPercentEscapes(value string) bool {
 
 func isHex(c byte) bool {
 	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+func mailLanguage(value string) error {
+	names := make([]string, 0, len(mailing.Languages()))
+	for _, lang := range mailing.Languages() {
+		if value == string(lang) {
+			return nil
+		}
+		names = append(names, string(lang))
+	}
+	return fmt.Errorf("%w: the mail language is one of %s", ErrInvalid, strings.Join(names, ", "))
 }
 
 func anything(value string) error {

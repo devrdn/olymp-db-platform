@@ -6,7 +6,11 @@ export const SETTING_KEYS = {
   name: "installation.name",
   contact: "installation.contact_email",
   feedback: "installation.feedback_url",
+  mailLanguage: "installation.mail_language",
 } as const;
+
+/** The languages the API writes its email in (`mailing.Languages`). */
+export const MAIL_LANGUAGES = ["en", "ro", "ru"] as const;
 
 /** The API's bound on the feedback address, in bytes (`maxFeedbackURLLength`). */
 export const FEEDBACK_URL_MAX = 500;

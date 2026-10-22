@@ -5,8 +5,10 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { feedbackHref, type Settings } from "@/lib/api/settings";
+import { MAIL_LANGUAGES, feedbackHref, type Settings } from "@/lib/api/settings";
+import { LOCALE_NAMES } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { cn } from "@/lib/utils";
 
 import { saveSettingsAction, type SettingsState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
@@ -32,7 +34,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
   return (
     // Keyed on the server's values, so a save replaces the draft.
     <form
-      key={settings.name + settings.contact + settings.feedback}
+      key={settings.name + settings.contact + settings.feedback + settings.mailLanguage}
       action={formAction}
       onSubmit={(event) => {
         const feedback = String(new FormData(event.currentTarget).get("feedback") ?? "").trim();
@@ -67,6 +69,24 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
         {/* Not `type="url"`: the browser would answer "forms.gle/x" with its own
             message, which says nothing about https. */}
         <Input name="feedback" inputMode="url" spellCheck={false} defaultValue={settings.feedback} />
+      </Field>
+
+      <Field id="mailLanguage" label={t.mailLanguage} hint={t.mailLanguageHint}>
+        <select
+          name="mailLanguage"
+          defaultValue={settings.mailLanguage}
+          className={cn(
+            "h-(--control-h) max-w-60 rounded-none border border-edge bg-transparent px-3",
+            "text-control text-ink transition-colors duration-(--t-input) ease-standard",
+            "hover:border-ink-2 focus-visible:border-ink",
+          )}
+        >
+          {MAIL_LANGUAGES.map((code) => (
+            <option key={code} value={code}>
+              {LOCALE_NAMES[code]}
+            </option>
+          ))}
+        </select>
       </Field>
 
       <div className="flex flex-wrap items-center gap-4">

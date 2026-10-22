@@ -20,6 +20,7 @@ export async function saveSettingsAction(
     [SETTING_KEYS.name]: String(form.get("name") ?? "").trim(),
     [SETTING_KEYS.contact]: String(form.get("contact") ?? "").trim(),
     [SETTING_KEYS.feedback]: feedback,
+    [SETTING_KEYS.mailLanguage]: String(form.get("mailLanguage") ?? ""),
   };
 
   const failure = await serverRequest("/settings", { method: "PUT", body: { values } }).then(

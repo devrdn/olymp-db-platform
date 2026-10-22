@@ -30,7 +30,7 @@ backend/
 │   ├── leaderboard/, monitor/, profile/, showcase/, covers/, workspace/
 │   │                    standings, watching participants, own profile, front page,
 │   │                    cover pictures, notes and SQL tabs
-│   ├── mailing/         the mail outbox and the background job that delivers it
+│   ├── mailing/         the texts of email, the outbox and the job that delivers it
 │   ├── provisioning/, gamefile/, gamedb/
 │   │                    game templates and per-participant databases, uploaded dumps,
 │   │                    the game cluster's roles and grants
@@ -202,6 +202,13 @@ PUBLIC_URL=https://olympdb.usm.md
   December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
   follow-up.
 - STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
+
+**The texts.** Every message is written in English, Romanian and Russian
+(`internal/mailing/texts`, one plain-text template per message and language),
+and the installation sends all of its email in the one chosen on the
+Installation settings screen (`installation.mail_language`, Romanian until
+somebody changes it). A message's sign-in link is `PUBLIC_URL` followed by
+`/login`.
 
 **The outbox.** A request never waits on the relay. It queues the message in
 the `mail_outbox` table, inside its own transaction, and the API's background

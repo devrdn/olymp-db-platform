@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { FEEDBACK_URL_MAX, SETTING_KEYS, feedbackHref, settingsSchema } from "./settings";
+import { FEEDBACK_URL_MAX, MAIL_LANGUAGES, SETTING_KEYS, feedbackHref, settingsSchema } from "./settings";
 
 describe("the settings payload", () => {
   test("carries the feedback address under its own name", () => {
@@ -16,6 +16,17 @@ describe("the settings payload", () => {
 
   test("reads an unset feedback address as empty", () => {
     expect(settingsSchema.parse({ values: {} }).feedback).toBe("");
+  });
+
+  test("carries the mail language under its own name", () => {
+    const settings = settingsSchema.parse({ values: { [SETTING_KEYS.mailLanguage]: "ru" } });
+
+    expect(settings.mailLanguage).toBe("ru");
+  });
+
+  // The public read leaves it out; only the administrator's carries it.
+  test("reads an absent mail language as empty", () => {
+    expect(settingsSchema.parse({ values: {} }).mailLanguage).toBe("");
   });
 });
 
@@ -41,4 +52,12 @@ describe("feedbackHref", () => {
   ])("refuses $name", ({ value }) => {
     expect(feedbackHref(value)).toBeNull();
   });
+});
+
+// The API writes a message in a language only when its texts are there, one
+// directory per language, so the screen offers exactly those.
+test("the mail languages are the ones the API has texts in", () => {
+  const written = readdirSync(resolve(__dirname, "../../../backend/internal/mailing/texts")).sort();
+
+  expect([...MAIL_LANGUAGES].sort()).toEqual(written);
 });

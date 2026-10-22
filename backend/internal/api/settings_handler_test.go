@@ -252,6 +252,24 @@ func TestAFeedbackAddressThatIsNotHTTPSIsRefusedWithItsOwnCode(t *testing.T) {
 	}
 }
 
+// The screen offers only the languages there are, so a refusal reaches an API
+// client alone, and the message tells it what is taken.
+func TestAMailLanguageWithNoTextsIsRefusedNamingTheOnesThereAre(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodPut, "/settings", `{"values":{"installation.mail_language":"de"}}`, f.cookie)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "invalid_request" {
+		t.Errorf("code = %q, want invalid_request", code)
+	}
+	if !strings.Contains(rec.Body.String(), "en, ro, ru") {
+		t.Errorf("the refusal does not name the languages: %s", rec.Body.String())
+	}
+}
+
 // A participant has no session the settings register would admit, so the
 // address has to come back from the open read.
 func TestASavedFeedbackAddressIsReadWithoutASession(t *testing.T) {

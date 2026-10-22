@@ -23,12 +23,12 @@ beforeEach(() => {
 });
 
 describe("saveSettingsAction", () => {
-  test("sends the feedback address under the API's key, trimmed", async () => {
+  test("sends the feedback address trimmed and the mail language, under the API's keys", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
 
     const state = await saveSettingsAction(
       {},
-      form({ name: "USM", contact: "", feedback: "  https://forms.gle/beta  " }),
+      form({ name: "USM", contact: "", feedback: "  https://forms.gle/beta  ", mailLanguage: "ru" }),
     );
 
     expect(serverRequest).toHaveBeenCalledWith("/settings", {
@@ -38,6 +38,7 @@ describe("saveSettingsAction", () => {
           "installation.name": "USM",
           "installation.contact_email": "",
           "installation.feedback_url": "https://forms.gle/beta",
+          "installation.mail_language": "ru",
         },
       },
     });
