@@ -135,6 +135,7 @@ export function StaffStandingsView({
           <Link
             href={`/contests/${contestId}/leaderboard`}
             target="_blank"
+            rel="noopener noreferrer"
             className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
           >
             {t.staff.publicPage}

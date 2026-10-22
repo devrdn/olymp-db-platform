@@ -4,4 +4,7 @@ node_modules
 *.log
 test-results
 playwright-report
-e2e/.state
+# A developer's .env.local would otherwise be read by `next build` and baked
+# into the image's rewrite table; the browser suite is never run from the image.
+.env*
+e2e/
