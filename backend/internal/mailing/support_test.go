@@ -33,10 +33,17 @@ type fakeStore struct {
 	claimedLease     []time.Duration
 	sent             []int64
 	retried          []retry
+	released         []retry
 	abandoned        []abandon
 	due              int
 
-	claimErr error
+	// expired is what the next Expire reports; expiredAsked records its
+	// arguments.
+	expired      map[mailing.Kind]int
+	expiredAsked []expireCall
+
+	claimErr    error
+	claimedLast mailing.Queued
 	// recordCtxErr is the error of the context each record call received.
 	recordCtxErr []error
 }
@@ -45,6 +52,11 @@ type retry struct {
 	id        int64
 	after     time.Duration
 	lastError string
+}
+
+type expireCall struct {
+	maxAge, lease time.Duration
+	reason        string
 }
 
 type abandon struct {
@@ -66,6 +78,7 @@ func (s *fakeStore) Claim(ctx context.Context, perMinute int, lease time.Duratio
 	q := s.pending[0]
 	s.pending = s.pending[1:]
 	q.Attempts++
+	s.claimedLast = q
 	return q, true, nil
 }
 
@@ -83,6 +96,26 @@ func (s *fakeStore) Retry(ctx context.Context, id int64, after time.Duration, la
 	s.recordCtxErr = append(s.recordCtxErr, ctx.Err())
 	s.retried = append(s.retried, retry{id, after, lastError})
 	return nil
+}
+
+// Release puts the message back as the next one due, its attempt refunded.
+func (s *fakeStore) Release(ctx context.Context, id int64, after time.Duration, lastError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordCtxErr = append(s.recordCtxErr, ctx.Err())
+	s.released = append(s.released, retry{id, after, lastError})
+	s.pending = append([]mailing.Queued{s.claimedLast}, s.pending...)
+	s.pending[0].Attempts--
+	return nil
+}
+
+func (s *fakeStore) Expire(ctx context.Context, maxAge, lease time.Duration, reason string) (map[mailing.Kind]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expiredAsked = append(s.expiredAsked, expireCall{maxAge, lease, reason})
+	expired := s.expired
+	s.expired = nil
+	return expired, nil
 }
 
 func (s *fakeStore) Abandon(ctx context.Context, id int64, lastError string) error {
@@ -124,9 +157,14 @@ func (f *fakeTransport) Send(_ context.Context, to, subject, body string) error 
 }
 
 type fakeCounters struct {
-	counted map[string]int
-	due     int
+	counted       map[string]int
+	due           int
+	relayFailures int
+	relayFailing  bool
 }
+
+func (c *fakeCounters) RelayFailed()                 { c.relayFailures++ }
+func (c *fakeCounters) SetRelayFailing(failing bool) { c.relayFailing = failing }
 
 func (c *fakeCounters) Count(kind, outcome string) {
 	if c.counted == nil {

@@ -28,13 +28,15 @@ CREATE TABLE mail_outbox (
     body            text CHECK (octet_length(body) BETWEEN 1 AND 65536),
     created_at      timestamptz NOT NULL DEFAULT now(),
     -- Counted when a sender claims the row, so a sender that dies mid-send
-    -- still spends one.
+    -- still spends one; refunded when the relay, not the message, failed.
     attempts        int NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     -- When the row is next due: on insert, after a claim's lease, or after a
     -- retry's backoff.
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
-    -- The last claim. The rate limit counts the claims of the last minute
-    -- across every replica.
+    -- The last claim. The rate limit counts the rows claimed in the last
+    -- minute across every replica, so a row claimed twice in one minute (a
+    -- release, then a claim) counts once and the minute can see one claim
+    -- more than the rate.
     last_attempt_at timestamptz,
     sent_at         timestamptz,
     abandoned_at    timestamptz,

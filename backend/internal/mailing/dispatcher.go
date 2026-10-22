@@ -2,26 +2,37 @@ package mailing
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 )
 
-// The retry policy. A temporary failure is tried again after a wait that
-// doubles from a minute up to an hour; the MaxAttempts-th failure, or one
-// MaxAge after the message was queued, abandons it. Eight attempts span about
-// two hours, so a relay that never answers (a mistyped SMTP_HOST is a lookup
-// failure, which reads as temporary) ends in abandoned messages and an alert.
+// The retry policy for a message the relay defers. It is tried again after a
+// wait that doubles from a minute up to an hour; the MaxAttempts-th deferral,
+// or one whose retry would come MaxAge after the message was queued, abandons
+// it. A failure of the relay itself charges no message (see relayPause).
 const (
 	MaxAttempts = 8
-	MaxAge      = 24 * time.Hour
 
 	firstRetry = time.Minute
 	lastRetry  = time.Hour
+)
+
+// MaxAge bounds how long a message, and the one-time password its body may
+// hold, is kept unsent: an older one is abandoned and never sent, whatever
+// the relay is doing.
+const MaxAge = 24 * time.Hour
+
+// The dispatcher's pause after a failure of the relay: from thirty seconds,
+// doubling to fifteen minutes, back to thirty after the relay next answers
+// for a message.
+const (
+	firstPause = 30 * time.Second
+	lastPause  = 15 * time.Minute
 )
 
 // ClaimLease is how long a claimed message stays out of every other
@@ -59,26 +70,34 @@ type Queued struct {
 
 // Store is the dispatcher's view of the outbox table.
 type Store interface {
-	// Claim takes the oldest due message and leases it for lease, unless
-	// perMinute messages were claimed in the last minute by any replica; ok
-	// is false when it took nothing.
+	Expirer
+	// Claim takes the oldest due message, counts an attempt and leases it for
+	// lease, unless perMinute messages were claimed in the last minute by any
+	// replica; ok is false when it took nothing.
 	Claim(ctx context.Context, perMinute int, lease time.Duration) (q Queued, ok bool, err error)
 	// MarkSent and Abandon finish a message and erase its body.
 	MarkSent(ctx context.Context, id int64) error
-	Retry(ctx context.Context, id int64, after time.Duration, lastError string) error
 	Abandon(ctx context.Context, id int64, lastError string) error
+	// Retry makes the message due again after the given wait.
+	Retry(ctx context.Context, id int64, after time.Duration, lastError string) error
+	// Release is Retry with the claim's attempt refunded, for an attempt that
+	// said nothing about the message.
+	Release(ctx context.Context, id int64, after time.Duration, lastError string) error
 	CountDue(ctx context.Context) (int, error)
 }
 
 // Transport hands one message to the relay; its errors are classified by
-// mail.IsTemporary.
+// mail.IsTemporary and mail.IsRelayFailure.
 type Transport interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
 
-// Counters receives each attempt's outcome and the number of due messages.
+// Counters receives each attempt's outcome, the relay's failures and the
+// number of due messages.
 type Counters interface {
 	Count(kind, outcome string)
+	RelayFailed()
+	SetRelayFailing(failing bool)
 	SetDue(n int)
 }
 
@@ -96,8 +115,17 @@ type DispatcherConfig struct {
 // Dispatcher delivers what the outbox holds.
 type Dispatcher struct {
 	cfg DispatcherConfig
+
+	// mu keeps runs apart: the pause below is their shared state.
+	mu sync.Mutex
+	// pausedUntil and pauses are the relay's backoff, kept per process: each
+	// replica learns of a failing relay on its own attempt.
+	pausedUntil time.Time
+	pauses      int
 }
 
+// NewDispatcher needs every field of cfg but Now; it panics when PerMinute is
+// below 1.
 func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 	if cfg.PerMinute < 1 {
 		panic("mailing: the dispatcher needs a rate of at least one message a minute")
@@ -108,11 +136,18 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 	return &Dispatcher{cfg: cfg}
 }
 
-// Drain sends due messages one at a time until none is due, the rate is
-// spent, the relay fails temporarily, or ctx ends. It returns only storage
+// Drain first abandons the messages past MaxAge, then, unless a failure of the
+// relay paused it, sends due messages one at a time until none is due, the
+// rate is spent, the relay fails, or ctx ends. It returns only storage
 // failures; the relay's are recorded on the message.
 func (d *Dispatcher) Drain(ctx context.Context) error {
-	for ctx.Err() == nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := expire(ctx, d.cfg.Store, d.cfg.Counters, d.cfg.Logger); err != nil {
+		return err
+	}
+	for ctx.Err() == nil && !d.cfg.Now().Before(d.pausedUntil) {
 		q, ok, err := d.cfg.Store.Claim(ctx, d.cfg.PerMinute, ClaimLease)
 		if err != nil {
 			return err
@@ -141,11 +176,14 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 }
 
 // attempt sends one claimed message and records how it ended. next is false
-// when the run should stop: the relay is failing for now, or ctx ended.
+// when the run should stop: the relay failed, or ctx ended.
 func (d *Dispatcher) attempt(ctx context.Context, q Queued) (next bool, err error) {
 	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 
+	if age := d.cfg.Now().Sub(q.CreatedAt); age >= MaxAge {
+		return true, d.abandon(record, q, "abandoned unsent: queued more than "+MaxAge.String()+" ago")
+	}
 	if q.Attempts > MaxAttempts {
 		return true, d.abandon(record, q, "abandoned unsent: the message was claimed again after its last attempt")
 	}
@@ -156,28 +194,63 @@ func (d *Dispatcher) attempt(ctx context.Context, q Queued) (next bool, err erro
 		if err := d.cfg.Store.MarkSent(record, q.ID); err != nil {
 			return false, err
 		}
+		d.relayAnswered()
 		d.cfg.Counters.Count(string(q.Kind), OutcomeSent)
 		d.cfg.Logger.DebugContext(ctx, "sent a message", "message", q.ID, "kind", q.Kind, "attempt", q.Attempts)
 		return ctx.Err() == nil, nil
 
 	case ctx.Err() != nil:
-		// Shutdown cut the send; the relay did not refuse it.
-		return false, d.cfg.Store.Retry(record, q.ID, 0, reason(sendErr, q.Body))
+		// Shutdown cut the send; neither the relay nor the message failed.
+		return false, d.cfg.Store.Release(record, q.ID, 0, reason(sendErr, q.Body))
 
-	case mail.IsTemporary(sendErr) && q.Attempts < MaxAttempts && d.cfg.Now().Sub(q.CreatedAt) < MaxAge:
-		after := backoff(q.Attempts)
-		why := reason(sendErr, q.Body)
-		if err := d.cfg.Store.Retry(record, q.ID, after, why); err != nil {
-			return false, err
-		}
-		d.cfg.Counters.Count(string(q.Kind), OutcomeRetry)
-		d.cfg.Logger.InfoContext(ctx, "the relay refused a message for now; it will be tried again",
-			"message", q.ID, "kind", q.Kind, "attempt", q.Attempts, "retry_in", after.String(), "error", why)
-		return false, nil
-
-	default:
-		return true, d.abandon(record, q, reason(sendErr, q.Body))
+	case mail.IsRelayFailure(sendErr):
+		return false, d.relayFailed(ctx, record, q, sendErr)
 	}
+
+	d.relayAnswered()
+	why := reason(sendErr, q.Body)
+	after := backoff(q.Attempts)
+	if !mail.IsTemporary(sendErr) || q.Attempts >= MaxAttempts || d.cfg.Now().Add(after).Sub(q.CreatedAt) >= MaxAge {
+		return true, d.abandon(record, q, why)
+	}
+	if err := d.cfg.Store.Retry(record, q.ID, after, why); err != nil {
+		return false, err
+	}
+	d.cfg.Counters.Count(string(q.Kind), OutcomeRetry)
+	d.cfg.Logger.InfoContext(ctx, "the relay deferred a message; it will be tried again",
+		"message", q.ID, "kind", q.Kind, "attempt", q.Attempts, "retry_in", after.String(), "error", why)
+	return true, nil
+}
+
+// relayFailed puts the message back uncharged and pauses the dispatcher. The
+// message waits out the pause too, so a message the transport misjudged as
+// the relay's fault does not stand first in line at every probe.
+func (d *Dispatcher) relayFailed(ctx, record context.Context, q Queued, sendErr error) error {
+	pause := min(firstPause<<min(d.pauses, 10), lastPause)
+	d.pauses++
+	d.pausedUntil = d.cfg.Now().Add(pause)
+
+	why := reason(sendErr, q.Body)
+	if err := d.cfg.Store.Release(record, q.ID, pause, why); err != nil {
+		return err
+	}
+	d.cfg.Counters.RelayFailed()
+	d.cfg.Counters.SetRelayFailing(true)
+
+	level := slog.LevelWarn
+	if !mail.IsTemporary(sendErr) {
+		// A refused account or certificate does not mend by itself.
+		level = slog.LevelError
+	}
+	d.cfg.Logger.Log(ctx, level, "the relay failed; no message is sent until it is tried again",
+		"message", q.ID, "retry_in", pause.String(), "error", why)
+	return nil
+}
+
+// relayAnswered ends the pause's backoff: the relay answered for a message.
+func (d *Dispatcher) relayAnswered() {
+	d.pauses = 0
+	d.cfg.Counters.SetRelayFailing(false)
 }
 
 func (d *Dispatcher) abandon(ctx context.Context, q Queued, why string) error {
@@ -199,14 +272,14 @@ func backoff(attempt int) time.Duration {
 	return min(after, lastRetry)
 }
 
-// secretLength is the shortest word of a body treated as a possible secret:
-// a one-time password is longer (users.MinPasswordLength is 12).
+// secretLength is the shortest word of a body that reason redacts: a one-time
+// password is at least this long (users.MinPasswordLength).
 const secretLength = 12
 
 // reason is what is stored and logged about a failed attempt: the error's
 // text, printable and bounded. A relay that quotes the message back would
-// put a password in it, so a text containing any long word of the body is
-// replaced by its class alone.
+// put a password in it, so every long word of the body is redacted from it;
+// the reply's code stays.
 func reason(err error, body string) string {
 	text := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -216,9 +289,8 @@ func reason(err error, body string) string {
 	}, err.Error())
 
 	for _, word := range strings.Fields(body) {
-		if len(word) >= secretLength && strings.Contains(text, word) {
-			text = errorClass(err) + " (the reply quoted the message and is not kept)"
-			break
+		if len(word) >= secretLength {
+			text = strings.ReplaceAll(text, word, "[redacted]")
 		}
 	}
 
@@ -230,15 +302,4 @@ func reason(err error, body string) string {
 		text = text[:cut]
 	}
 	return text
-}
-
-func errorClass(err error) string {
-	switch {
-	case errors.Is(err, mail.ErrTemporary):
-		return "temporary failure"
-	case errors.Is(err, mail.ErrInvalidMessage):
-		return "invalid message"
-	default:
-		return "permanent failure"
-	}
 }

@@ -79,11 +79,11 @@ type mailStore interface {
 }
 
 // newMailOutbox returns the outbox requests queue mail in and, with mail on,
-// the job that delivers it. With mail off the outbox refuses every message
-// and no job runs.
+// the job that delivers it. With mail off the outbox refuses every message,
+// and the only job erases what was queued before mail was turned off.
 func newMailOutbox(log *slog.Logger, sender *mail.Sender, store mailStore, perMinute int, recorder metrics.Recorder) (*mailing.Outbox, []task) {
 	if !sender.Enabled() {
-		return mailing.Disabled(), nil
+		return mailing.Disabled(), []task{expireMail(mailing.NewSweeper(store, log).Sweep)}
 	}
 	outbox := mailing.NewOutbox(store)
 	dispatcher := mailing.NewDispatcher(mailing.DispatcherConfig{

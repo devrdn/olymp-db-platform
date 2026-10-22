@@ -212,22 +212,36 @@ replica (the claims of the last minute are counted in the table, under an
 advisory lock), so five hundred messages leave over twenty minutes. Each
 replica claims a message with `FOR UPDATE SKIP LOCKED` and a five-minute
 lease, so no two send the same one. With mail off nothing is queued and the
-job does not run.
+job does not run; a sweep every ten minutes abandons, and erases, what was
+queued before mail was turned off once it is a day old.
 
-- A temporary failure (a 4xx reply such as Microsoft's throttling, a dropped
-  connection, a name that does not resolve) is tried again after 1, 2, 4, 8,
-  16 and 32 minutes, then an hour. The job leaves the other messages for its
-  next run, ten seconds later, since they would meet the same relay. The
-  eighth failed attempt, or a failure 24 hours after the message was
-  queued, abandons it.
-- A permanent failure (a 5xx reply, a refused account or address) abandons
-  the message at once, and the job goes on to the next.
+- A failure of the relay itself says nothing about the message: it could not
+  be reached or secured, refused the account (`535`, for instance SMTP AUTH
+  disabled for the mailbox) or the sender (Exchange's `SendAsDenied`, even at
+  the end of DATA), dropped the connection, or deferred a message after
+  accepting its recipient (Microsoft's throttling).
+  The message is put back with its attempt refunded, and the job stops
+  sending for 30 seconds, then 1, 2, 4 and 8 minutes, then every 15, until
+  the relay next answers for a message.
+- A refusal of the message itself (a 5xx reply to RCPT or DATA, such as an
+  unknown recipient) abandons it, and the job goes on to the next. A
+  deferral of the recipient (a 4xx reply to RCPT) is tried again after 1, 2,
+  4, 8, 16 and 32 minutes, then an hour; the eighth, or one whose retry would
+  come a day after the message was queued, abandons it.
+- A message is never sent, and its body is not kept, once it was queued 24
+  hours ago (a claim's five-minute lease aside): each run first abandons
+  those, whatever the relay is doing.
 - The body, which can hold a one-time password, is erased when the message
   is sent or abandoned; the table refuses a finished row that keeps one. The
-  last error is kept, at most 500 bytes, and never quotes the body.
+  last error is kept, at most 500 bytes, with any long word of the body (the
+  password, the address) replaced by `[redacted]`.
 - `mail_messages_total{kind,outcome}` counts attempts as `sent`, `retry` or
-  `abandoned`; `mail_outbox_due` is how many messages were due at the job's
-  last run. `DBContestMailAbandoned` fires on any abandoned message.
+  `abandoned`; `mail_relay_failures_total` counts the relay's own failures and
+  `mail_relay_failing` is 1 while sending is paused for one;
+  `mail_outbox_due` is how many messages were due at the job's last run, the
+  same on every replica (read it with `max()`). `DBContestMailAbandoned` fires
+  on any abandoned message and `DBContestMailRelayFailing` on ten minutes of
+  a failing relay.
 
 ## Running locally
 
@@ -721,6 +735,7 @@ changed setting means changing the number in the rules too.
 | `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
 | `DBContestMailAbandoned` | warning | an email message was abandoned in the last hour |
+| `DBContestMailRelayFailing` | warning | the mail relay itself (connection, TLS, the account) has failed for 10 minutes, so no email is sent |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |
 | `DBContestQueriesTimingOut` | warning | over 20% of admitted queries hit the deadline, at least 10 in 5 minutes, for 10 minutes |
 | `DBContestQueryRunnerFull` | critical | 5 or more `busy` refusals and queue timeouts in 5 minutes, for 2 minutes |

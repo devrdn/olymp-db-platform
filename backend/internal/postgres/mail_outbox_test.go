@@ -339,13 +339,12 @@ func TestTheTableRefusesAFinishedMessageWithABodyAndAnUnboundedError(t *testing.
 	} {
 		t.Run(name, func(t *testing.T) {
 			withTx(t, func(ctx context.Context) {
-				if err := NewMailOutbox(testPool).Insert(ctx, outboxMessage("ana@usm.md", uuid.Nil)); err != nil {
-					t.Fatalf("insert: %v", err)
-				}
 				q := storage.QuerierFrom(ctx, testPool)
 				var id int64
-				if err := q.QueryRow(ctx, `SELECT max(id) FROM mail_outbox`).Scan(&id); err != nil {
-					t.Fatal(err)
+				if err := q.QueryRow(ctx, `
+					INSERT INTO mail_outbox (kind, recipient, subject, body)
+					VALUES ('sign_in_details', 'ana@usm.md', 'Subject', 'Body') RETURNING id`).Scan(&id); err != nil {
+					t.Fatalf("insert: %v", err)
 				}
 				_, err := q.Exec(ctx, `SAVEPOINT refused`)
 				if err != nil {
@@ -358,4 +357,83 @@ func TestTheTableRefusesAFinishedMessageWithABodyAndAnUnboundedError(t *testing.
 			})
 		})
 	}
+}
+
+func TestAReleaseRefundsTheAttemptAndKeepsTheBody(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewMailOutbox(testPool)
+		if err := repo.Insert(ctx, outboxMessage("ana@usm.md", uuid.Nil)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+		q, _ := claimOne(t, ctx, 25)
+
+		if err := repo.Release(ctx, q.ID, 30*time.Second, "mail: permanent failure: mail: relay failure: 535 5.7.139"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		row := readOutboxRow(t, ctx, q.ID)
+		if row.attempts != 0 || row.body == nil || row.sent || row.abandoned {
+			t.Fatalf("attempts %d body %v sent %v abandoned %v; want a pending message with its body and no attempt",
+				row.attempts, row.body, row.sent, row.abandoned)
+		}
+		if row.nextAttemptAfterNow != 30*time.Second {
+			t.Errorf("next attempt at now+%s, want now+30s", row.nextAttemptAfterNow)
+		}
+		if row.lastError == nil || !strings.Contains(*row.lastError, "535") {
+			t.Errorf("last_error = %v", row.lastError)
+		}
+		if err := repo.Release(ctx, q.ID, 0, "again"); err == nil {
+			t.Error("a message with no attempt to refund was released")
+		}
+	})
+}
+
+func TestMessagesPastTheMaximumAgeExpireUnlessASenderHoldsThem(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewMailOutbox(testPool)
+		for _, to := range []string{"old@usm.md", "retrying@usm.md", "held@usm.md", "fresh@usm.md", "sent@usm.md"} {
+			if err := repo.Insert(ctx, outboxMessage(to, uuid.Nil)); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}
+		q := storage.QuerierFrom(ctx, testPool)
+		for _, statement := range []string{
+			`UPDATE mail_outbox SET created_at = now() - interval '25 hours' WHERE recipient <> 'fresh@usm.md'`,
+			// Claimed ten minutes ago and waiting for its retry: nobody holds it.
+			`UPDATE mail_outbox SET attempts = 1, last_attempt_at = now() - interval '10 minutes',
+			        next_attempt_at = now() + interval '1 hour' WHERE recipient = 'retrying@usm.md'`,
+			// Claimed a minute ago: a sender may be talking to the relay.
+			`UPDATE mail_outbox SET attempts = 1, last_attempt_at = now() - interval '1 minute',
+			        next_attempt_at = now() + interval '4 minutes' WHERE recipient = 'held@usm.md'`,
+			`UPDATE mail_outbox SET sent_at = now(), body = NULL WHERE recipient = 'sent@usm.md'`,
+		} {
+			if _, err := q.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		expired, err := repo.Expire(ctx, 24*time.Hour, mailing.ClaimLease, "abandoned unsent: queued more than 24h0m0s ago")
+		if err != nil {
+			t.Fatalf("expire: %v", err)
+		}
+		if len(expired) != 1 || expired[mailing.KindSignInDetails] != 2 {
+			t.Fatalf("expired %v, want two sign-in messages", expired)
+		}
+
+		rows, err := q.Query(ctx, `SELECT recipient FROM mail_outbox WHERE abandoned_at IS NOT NULL AND body IS NULL
+			AND last_error LIKE 'abandoned unsent%' ORDER BY recipient`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gone []string
+		for rows.Next() {
+			var to string
+			if err := rows.Scan(&to); err != nil {
+				t.Fatal(err)
+			}
+			gone = append(gone, to)
+		}
+		if strings.Join(gone, " ") != "old@usm.md retrying@usm.md" {
+			t.Errorf("expired %v, want the old and the retrying message only", gone)
+		}
+	})
 }

@@ -313,3 +313,15 @@ func deliverMail(drain func(context.Context) error, wake <-chan struct{}) task {
 		run:     drain,
 	}
 }
+
+// expireMail erases messages past mailing.MaxAge while mail is off, when no
+// dispatcher runs to do it. Nothing waits on it, so a tick is ten minutes.
+func expireMail(sweep func(context.Context) error) task {
+	return task{
+		name: "mail-expiry",
+		// At startup too: a boot is when mail was turned off.
+		atStart: true,
+		every:   10 * time.Minute,
+		run:     sweep,
+	}
+}
