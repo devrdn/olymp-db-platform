@@ -96,7 +96,47 @@ describe("signIn", () => {
     expect(sent?.get("cookie")).toBe("dbcontest_device=AQID.c2ln");
   });
 
-  test("sends no cookie header when the browser has no device cookie", async () => {
+  test("sends the session the browser still holds beside the device cookie, so the API can end it", async () => {
+    let sent: Headers | undefined;
+
+    await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async (_input, init) => {
+          sent = new Headers(init?.headers);
+          return new Response(JSON.stringify({ error: { code: "invalid_credentials" } }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
+        },
+        setCookie: () => {},
+        deviceToken: "AQID.c2ln",
+        sessionToken: "old-session",
+      },
+    );
+
+    expect(sent?.get("cookie")).toBe("dbcontest_device=AQID.c2ln; dbcontest_session=old-session");
+  });
+
+  test("sends the previous session alone when the browser has no device cookie", async () => {
+    let sent: Headers | undefined;
+
+    await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async (_input, init) => {
+          sent = new Headers(init?.headers);
+          return new Response(JSON.stringify({ error: { code: "invalid_credentials" } }), { status: 401 });
+        },
+        setCookie: () => {},
+        sessionToken: "old-session",
+      },
+    );
+
+    expect(sent?.get("cookie")).toBe("dbcontest_session=old-session");
+  });
+
+  test("sends no cookie header when the browser has neither cookie", async () => {
     let sent: Headers | undefined;
 
     await signIn(
