@@ -187,6 +187,26 @@ groups:
             "reclaimed game instances" line; make game-orphans lists what the
             game cluster still holds, and ARGS=-apply removes it.
 
+      - alert: DBContestMailAbandoned
+        # A message is abandoned only on the relay's permanent refusal or after about two hours of failed retries, so each one is a person who will not get it.
+        expr: |
+          sum(increase(mail_messages_total{outcome="abandoned"}[1h])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+          > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Email was abandoned in the last hour and will not be sent.
+          description: >-
+            The API log has the warning "a message was abandoned and will not
+            be sent" with the relay's reply, and mail_outbox.last_error keeps it.
+            A 535 or 5.7.x reply is the relay account (SMTP_USERNAME,
+            SMTP_PASSWORD, Authenticated SMTP on the mailbox); "no such host"
+            is SMTP_HOST; a 5.1.x reply is the recipient's address. Sign-in
+            details in an abandoned message never arrived: hand them over or
+            reset the password again once the cause is fixed.
+
   - name: dbcontest-queryrunner
     rules:
       - alert: DBContestQueriesFailingInternally

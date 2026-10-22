@@ -53,6 +53,8 @@ tests:
         values: '0x30'
       - series: 'game_templates_reclaim_failed_total{job="core-api", instance="api:9090"}'
         values: '0x30'
+      - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="abandoned"}'
+        values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="ok", reason=""}'
         values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="error", reason="internal"}'
@@ -305,6 +307,43 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="DBContestReclaimFailing", alertstate="firing", severity="warning"}'
             value: 1
+
+  # One abandoned message is one person without it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x10'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x10'
+      - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="abandoned"}'
+        values: '0 0 0 1x7'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 2m
+        exp_samples: []
+      - expr: ALERTS{alertname="DBContestMailAbandoned", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestMailAbandoned", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # A busy send, retries included, is not an alert while nothing is abandoned.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x70'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x70'
+      - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="sent"}'
+        values: '0+25x70'
+      - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="retry"}'
+        values: '0+3x70'
+      - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="abandoned"}'
+        values: '0x70'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 65m
+        exp_samples: []
 
   # Two internal errors a minute: someone is locked out.
   - interval: 1m

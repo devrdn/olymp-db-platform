@@ -227,7 +227,7 @@ job does not run.
   last error is kept, at most 500 bytes, and never quotes the body.
 - `mail_messages_total{kind,outcome}` counts attempts as `sent`, `retry` or
   `abandoned`; `mail_outbox_due` is how many messages were due at the job's
-  last run.
+  last run. `DBContestMailAbandoned` fires on any abandoned message.
 
 ## Running locally
 
@@ -720,6 +720,7 @@ changed setting means changing the number in the rules too.
 | `DBContestAPIErrors` | critical | over 5% of API answers are 5xx, at least 10 in 5 minutes, for 3 minutes |
 | `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
+| `DBContestMailAbandoned` | warning | an email message was abandoned in the last hour |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |
 | `DBContestQueriesTimingOut` | warning | over 20% of admitted queries hit the deadline, at least 10 in 5 minutes, for 10 minutes |
 | `DBContestQueryRunnerFull` | critical | 5 or more `busy` refusals and queue timeouts in 5 minutes, for 2 minutes |
