@@ -370,6 +370,26 @@
       "meaning": "Another account already uses this login."
     },
     {
+      "code": "mail_no_address",
+      "meaning": "The caller's own account has no email address the relay can take, and the test message goes only to the caller. Nothing was sent."
+    },
+    {
+      "code": "mail_off",
+      "meaning": "Email is off on this installation: no SMTP relay is configured (SMTP_HOST is empty). Nothing was sent."
+    },
+    {
+      "code": "mail_refused",
+      "meaning": "The SMTP relay took the sending account and refused this message, most often for its recipient (an unknown, disabled or full mailbox). `subject` carries the relay's reply: its code, its enhanced code and at most 200 bytes of its text."
+    },
+    {
+      "code": "mail_relay_failed",
+      "meaning": "The SMTP relay could not be reached or secured, or refused the sending account: its password, or its permission to send as the From address. Mended in the deployment's SMTP settings or the mailbox's. When the relay replied, `subject` carries the reply: its code, its enhanced code and at most 200 bytes of its text."
+    },
+    {
+      "code": "mail_test_too_often",
+      "meaning": "The caller has sent as many test messages as one may in a minute; each opens a session with the relay. Retry-After says when to try again."
+    },
+    {
       "code": "manager_not_found",
       "meaning": "That account does not staff this contest."
     },

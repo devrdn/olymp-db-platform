@@ -17,8 +17,11 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail/mailtest"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -31,10 +34,23 @@ type settingsFixture struct {
 	router http.Handler
 	store  *settingsRepo
 	cookie *http.Cookie
+	// relay is the fake SMTP relay the installation sends through; nil with
+	// mail off.
+	relay *mailtest.Server
 }
 
-// settingsRepo is in-memory storage behind the real service, so the endpoint
-// carries the service's own answers about which keys and values are valid.
+// settingsSetup shapes a fixture beyond its permissions.
+type settingsSetup struct {
+	permissions []string
+	// email is the administrator's own address.
+	email   string
+	mailOff bool
+	// relay shapes the fake relay; relayPassword is what the installation
+	// signs in with, the relay taking only "relay-secret-4f1c".
+	relay         mailtest.Options
+	relayPassword string
+}
+
 type settingsRepo struct{ values settings.Values }
 
 func (r *settingsRepo) All(context.Context) (settings.Values, error) {
@@ -88,14 +104,21 @@ func (settingsUnitOfWork) Do(ctx context.Context, fn func(context.Context) error
 
 func newSettingsFixture(t *testing.T, permissions ...string) *settingsFixture {
 	t.Helper()
+	return newSettingsFixtureWith(t, settingsSetup{permissions: permissions, email: "root@usm.md"})
+}
+
+const relaySecret = "relay-secret-4f1c"
+
+func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture {
+	t.Helper()
 
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 
 	repo := userstest.New()
-	repo.GrantRole("admin", permissions...)
+	repo.GrantRole("admin", setup.permissions...)
 	admin := repo.Add(users.User{
-		Login: "root", FullName: "Root", Status: users.StatusActive, Roles: []string{"admin"},
+		Login: "root", FullName: "Root", Email: setup.email, Status: users.StatusActive, Roles: []string{"admin"},
 	})
 
 	log := logging.New("error", io.Discard)
@@ -111,16 +134,46 @@ func newSettingsFixture(t *testing.T, permissions ...string) *settingsFixture {
 	})
 
 	store := &settingsRepo{values: settings.Values{}}
+	trail := audit.New(&apiSink{})
 	service := settings.NewService(store, &settingsImages{byKind: map[string]settings.Image{}},
-		audit.New(&apiSink{}), settingsUnitOfWork{})
+		trail, settingsUnitOfWork{})
+
+	var relay *mailtest.Server
+	relayConfig := mail.Config{}
+	if !setup.mailOff {
+		opts := setup.relay
+		opts.StartTLS, opts.AuthMechs, opts.User, opts.Password = true, "PLAIN", "noreply@usm.md", relaySecret
+		relay = mailtest.NewServer(t, opts)
+		password := setup.relayPassword
+		if password == "" {
+			password = relaySecret
+		}
+		relayConfig = mail.Config{
+			Host: relay.Host(), Port: relay.Port(), Username: "noreply@usm.md", Password: password,
+			From: "Olimpiada USM <noreply@usm.md>", TLS: mail.TLSStartTLS, RootCAs: relay.Roots,
+			DialTimeout: 2 * time.Second, SendTimeout: 5 * time.Second,
+		}
+	}
+	sender, err := mail.New(relayConfig)
+	if err != nil {
+		t.Fatalf("mail.New() = %v", err)
+	}
+	tester := mailing.NewTester(mailing.TesterConfig{
+		Transport: sender,
+		Texts:     mailing.NewTexts("https://olympdb.usm.md"),
+		Limiter:   auth.NewLimiter(c),
+		Audit:     trail,
+		Logger:    log,
+	})
 
 	router := chi.NewRouter()
-	api.NewSettingsHandler(service, mw, log).Mount(router)
+	api.NewSettingsHandler(service, tester, repo, mw, log).Mount(router)
 
 	return &settingsFixture{
 		router: router,
 		store:  store,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		relay:  relay,
 	}
 }
 
@@ -436,5 +489,170 @@ func TestAnEmptySlotIsNotFoundRatherThanEmpty(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// mailOf reads the mail status the administrator's read carries.
+func mailOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body struct {
+		Mail map[string]any `json:"mail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	return body.Mail
+}
+
+func TestTheAdministratorsReadSaysMailIsOnAndAsWhomWithNoSecret(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodGet, "/settings/all", "", f.cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	got := mailOf(t, rec)
+	if got["enabled"] != true || got["from"] != "noreply@usm.md" || len(got) != 2 {
+		t.Errorf("mail = %v, want enabled and the bare sending address only", got)
+	}
+	if body := rec.Body.String(); strings.Contains(body, relaySecret) || strings.Contains(body, "127.0.0.1") {
+		t.Errorf("the read gives away the relay's password or host: %s", body)
+	}
+}
+
+func TestTheAdministratorsReadSaysMailIsOff(t *testing.T) {
+	f := newSettingsFixtureWith(t, settingsSetup{permissions: []string{rbac.PermissionSettingsManage}, mailOff: true})
+
+	got := mailOf(t, f.do(http.MethodGet, "/settings/all", "", f.cookie))
+
+	if got["enabled"] != false || got["from"] != "" {
+		t.Errorf("mail = %v, want off with no address", got)
+	}
+}
+
+func TestTheOpenReadSaysNothingAboutMail(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	if got := mailOf(t, f.do(http.MethodGet, "/settings", "")); got != nil {
+		t.Errorf("the open read carries mail = %v", got)
+	}
+}
+
+func TestSendingTheTestMessageNeedsThePermissionToManageSettings(t *testing.T) {
+	f := newSettingsFixture(t)
+
+	if rec := f.do(http.MethodPost, "/settings/mail-test", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 without a session", rec.Code)
+	}
+	if rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie); rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 without the permission", rec.Code)
+	}
+	if got := f.relay.Messages(); len(got) != 0 {
+		t.Errorf("the relay received %d messages", len(got))
+	}
+}
+
+// Only to the caller's own address, whatever the request names, so the route
+// cannot mail a stranger.
+func TestTheTestMessageGoesToTheCallersOwnAddressInTheMailLanguage(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f.store.values[settings.KeyMailLanguage] = "en"
+	f.store.values[settings.KeyName] = "Olimpiada USM"
+
+	rec := f.do(http.MethodPost, "/settings/mail-test", `{"to":"stranger@example.com"}`, f.cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if to := decode(t, rec)["to"]; to != "root@usm.md" {
+		t.Errorf("to = %v, want the caller's own address", to)
+	}
+	got := f.relay.Messages()
+	if len(got) != 1 || len(got[0].To) != 1 || got[0].To[0] != "root@usm.md" {
+		t.Fatalf("the relay received %+v, want one message to root@usm.md", got)
+	}
+	if !strings.Contains(got[0].Data, "Subject: Test message from Olimpiada USM") {
+		t.Errorf("the message is not the English test message:\n%s", got[0].Data)
+	}
+}
+
+// Each refusal has its own code, so the screen says what to mend. A relay's
+// reply travels as the subject: the code, the enhanced code and its text.
+func TestEachRefusalOfTheTestMessageSaysWhichItWas(t *testing.T) {
+	admin := []string{rbac.PermissionSettingsManage}
+	for _, tc := range []struct {
+		name    string
+		setup   settingsSetup
+		status  int
+		code    string
+		subject string
+	}{
+		{"mail off", settingsSetup{mailOff: true, email: "root@usm.md"},
+			http.StatusConflict, "mail_off", ""},
+		{"no address", settingsSetup{},
+			http.StatusConflict, "mail_no_address", ""},
+		{"wrong relay password", settingsSetup{email: "root@usm.md", relayPassword: "a-wrong-one"},
+			http.StatusBadGateway, "mail_relay_failed", "535 5.7.8 authentication credentials invalid"},
+		{"recipient refused", settingsSetup{email: "root@usm.md", relay: mailtest.Options{
+			RefuseRecipients: map[string]string{"root@usm.md": "550 5.1.1 RESOLVER.ADR.RecipNotFound; not found"},
+		}}, http.StatusBadGateway, "mail_refused", "550 5.1.1 RESOLVER.ADR.RecipNotFound; not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup.permissions = admin
+			f := newSettingsFixtureWith(t, tc.setup)
+
+			rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie)
+
+			if rec.Code != tc.status || errorCode(t, rec) != tc.code {
+				t.Fatalf("answer = %d %s, want %d %s (%s)", rec.Code, errorCode(t, rec), tc.status, tc.code, rec.Body.String())
+			}
+			if subject, _ := decode(t, rec)["subject"].(string); subject != tc.subject {
+				t.Errorf("subject = %q, want %q", subject, tc.subject)
+			}
+			if f.relay != nil && len(f.relay.Messages()) != 0 {
+				t.Error("the relay delivered a refused message")
+			}
+		})
+	}
+}
+
+func TestAnUnreachableRelayIsARelayFailureWithNoReply(t *testing.T) {
+	f := newSettingsFixtureWith(t, settingsSetup{
+		permissions: []string{rbac.PermissionSettingsManage}, email: "root@usm.md",
+		relay: mailtest.Options{DropAt: "GREETING"},
+	})
+
+	rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie)
+
+	if rec.Code != http.StatusBadGateway || errorCode(t, rec) != "mail_relay_failed" {
+		t.Fatalf("answer = %d %s, want 502 mail_relay_failed", rec.Code, errorCode(t, rec))
+	}
+	if _, carried := decode(t, rec)["subject"]; carried {
+		t.Errorf("a failure with no reply carries a subject: %s", rec.Body.String())
+	}
+	if message := errorMessage(t, rec); strings.Contains(message, "127.0.0.1") {
+		t.Errorf("the message gives away the relay's address: %q", message)
+	}
+}
+
+func TestTheTestMessageIsRefusedPastTheCallersBudget(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	for range mailing.TestsPerMinute {
+		if rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 within the budget (%s)", rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie)
+
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "mail_test_too_often" {
+		t.Fatalf("answer = %d %s, want 429 mail_test_too_often", rec.Code, errorCode(t, rec))
+	}
+	if after := rec.Header().Get("Retry-After"); after != "60" {
+		t.Errorf("Retry-After = %q, want 60", after)
+	}
+	if got := len(f.relay.Messages()); got != mailing.TestsPerMinute {
+		t.Errorf("the relay received %d messages, want %d", got, mailing.TestsPerMinute)
 	}
 }

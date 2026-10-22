@@ -387,6 +387,7 @@ flowchart LR
 | Change global roles | `/users/{userID}` | `PUT /users/{userID}/roles` | `users` | `users.manage`; never removes the last account able to manage accounts |
 | Read the audit trail | `/audit` | `GET /audit`, `GET /audit/actions` | `audit` | `audit.view` |
 | Brand the installation | `/settings` | `GET /settings/all`, `PUT /settings`, `PUT`, `DELETE /settings/images/{kind}` | `settings` | `settings.manage` |
+| Send oneself the test email | `/settings` | `POST /settings/mail-test` | `mailing` | `settings.manage`; only to the caller's own address, three a minute |
 | Act on any contest as its staff | every `/contests/{contestID}/...` staff screen | every contest-scoped route | `rbac` | `contest.admin_all` |
 
 The links in the staff shell (`/users`, `/audit`, `/settings`) appear only

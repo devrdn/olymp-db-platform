@@ -433,7 +433,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
 		api.NewSettingsHandler(
 			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
-			authMiddleware, log),
+			mailing.NewTester(mailing.TesterConfig{
+				Transport: sender,
+				Texts:     mailing.NewTexts(cfg.PublicURL),
+				Limiter:   limiter,
+				Audit:     auditRecorder,
+				Logger:    log,
+			}),
+			userService, authMiddleware, log),
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 		api.NewLeaderboardHandler(standings, limiter, authMiddleware, log, cfg.DefaultLocale),
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
