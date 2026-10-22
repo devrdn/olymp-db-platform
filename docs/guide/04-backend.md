@@ -47,7 +47,7 @@ flowchart TB
   api["internal/api (HTTP adapters, error table, codes)"]
 
   subgraph domain["Domain packages"]
-    dom["contests, users, auth, rbac, audit, settings, workspace, monitor, leaderboard, profile, showcase, covers, health"]
+    dom["contests, users, auth, rbac, audit, settings, workspace, monitor, leaderboard, profile, showcase, covers, mailing, health"]
     game["provisioning, queryproxy, gamefile"]
   end
 

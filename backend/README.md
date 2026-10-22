@@ -30,6 +30,7 @@ backend/
 │   ├── leaderboard/, monitor/, profile/, showcase/, covers/, workspace/
 │   │                    standings, watching participants, own profile, front page,
 │   │                    cover pictures, notes and SQL tabs
+│   ├── mailing/         the mail outbox and the background job that delivers it
 │   ├── provisioning/, gamefile/, gamedb/
 │   │                    game templates and per-participant databases, uploaded dumps,
 │   │                    the game cluster's roles and grants
@@ -170,6 +171,7 @@ boot like any other setting.
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | together, or neither | — | the relay account; both empty sends no AUTH. The password is refused outside `development` while it carries the `.env.example` placeholder |
 | `SMTP_FROM` | with mail | — | the sending address, optionally named: `Olimpiada USM <noreply-olymp@usm.md>` |
 | `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
+| `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
 | `PUBLIC_URL` | with mail | — | the site's absolute `https://` address, for the links in messages (`http://` only in `development`) |
 
 USM's relay is Microsoft 365 (Exchange Online) SMTP AUTH client submission,
@@ -194,11 +196,38 @@ PUBLIC_URL=https://olympdb.usm.md
   or lands in spam.
 - Authenticated SMTP must be enabled for that mailbox in the Exchange admin
   center, and the account must not require MFA.
-- Microsoft limits a mailbox to 30 messages a minute.
+- Microsoft limits a mailbox to 30 messages a minute; `SMTP_MAX_PER_MINUTE`
+  stays under it by default.
 - Microsoft keeps basic authentication for SMTP AUTH until the end of
   December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
   follow-up.
 - STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
+
+**The outbox.** A request never waits on the relay. It queues the message in
+the `mail_outbox` table, inside its own transaction, and the API's background
+job `mail-outbox` (`internal/mailing`) sends it within seconds: a queued
+message wakes the job, which also runs every ten seconds. It sends one
+message at a time, at most `SMTP_MAX_PER_MINUTE` in any minute across every
+replica (the claims of the last minute are counted in the table, under an
+advisory lock), so five hundred messages leave over twenty minutes. Each
+replica claims a message with `FOR UPDATE SKIP LOCKED` and a five-minute
+lease, so no two send the same one. With mail off nothing is queued and the
+job does not run.
+
+- A temporary failure (a 4xx reply such as Microsoft's throttling, a dropped
+  connection, a name that does not resolve) is tried again after 1, 2, 4, 8,
+  16 and 32 minutes, then an hour. The job leaves the other messages for its
+  next run, ten seconds later, since they would meet the same relay. The
+  eighth failed attempt, or a failure 24 hours after the message was
+  queued, abandons it.
+- A permanent failure (a 5xx reply, a refused account or address) abandons
+  the message at once, and the job goes on to the next.
+- The body, which can hold a one-time password, is erased when the message
+  is sent or abandoned; the table refuses a finished row that keeps one. The
+  last error is kept, at most 500 bytes, and never quotes the body.
+- `mail_messages_total{kind,outcome}` counts attempts as `sent`, `retry` or
+  `abandoned`; `mail_outbox_due` is how many messages were due at the job's
+  last run.
 
 ## Running locally
 

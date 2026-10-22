@@ -1,10 +1,15 @@
 package app
 
 import (
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
+	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
 )
 
 func TestProbeURLTargetsTheConfiguredInternalListener(t *testing.T) {
@@ -46,5 +51,45 @@ func TestTheMailSenderIsBuiltFromTheConfiguration(t *testing.T) {
 	}
 	if !on.Enabled() || on.From() != "olympiad@usm.md" {
 		t.Errorf("enabled=%v from=%q, want an enabled sender from olympiad@usm.md", on.Enabled(), on.From())
+	}
+}
+
+func TestWithMailOffNothingIsQueuedAndNoSenderRuns(t *testing.T) {
+	off, err := newMailSender(config.Config{})
+	if err != nil {
+		t.Fatalf("newMailSender() = %v", err)
+	}
+
+	outbox, jobs := newMailOutbox(quiet(), off, postgres.NewMailOutbox(nil), 25, metrics.Noop{})
+
+	if len(jobs) != 0 {
+		t.Errorf("mail is off and %d delivery jobs would run", len(jobs))
+	}
+	err = outbox.Enqueue(t.Context(), mailing.Message{
+		Kind: mailing.KindSignInDetails, To: "ana@usm.md", Subject: "Subject", Body: "Body",
+	})
+	if !errors.Is(err, mailing.ErrDisabled) {
+		t.Errorf("Enqueue() with mail off = %v, want ErrDisabled", err)
+	}
+}
+
+func TestWithMailOnAnEnqueueWakesTheDeliveryJob(t *testing.T) {
+	on, err := newMailSender(config.Config{
+		SMTPHost: "smtp.usm.md", SMTPPort: 587, SMTPFrom: "olympiad@usm.md", SMTPTLS: mail.TLSStartTLS,
+	})
+	if err != nil {
+		t.Fatalf("newMailSender() = %v", err)
+	}
+
+	outbox, jobs := newMailOutbox(quiet(), on, postgres.NewMailOutbox(nil), 25, metrics.Noop{})
+
+	if !outbox.Enabled() || len(jobs) != 1 {
+		t.Fatalf("enabled=%v jobs=%d, want an enabled outbox and one delivery job", outbox.Enabled(), len(jobs))
+	}
+	outbox.Wake()
+	select {
+	case <-jobs[0].wake:
+	case <-time.After(time.Second):
+		t.Fatal("the delivery job does not listen to the outbox's wake channel")
 	}
 }
