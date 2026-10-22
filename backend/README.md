@@ -591,6 +591,16 @@ service. Check the network from the host first when nothing answers at all:
 nc -vz smtp.office365.com 587    # "succeeded" or "open"; a timeout is a firewall
 ```
 
+**A wrong address outside the tenant is counted as sent.** Microsoft 365
+client submission checks a recipient at RCPT only in the tenant's own domains,
+`usm.md` for USM. It accepts any other address, so a mistyped
+`student@gmial.com` is marked sent, its body erased, and
+`DBContestMailAbandoned` never fires; the failure comes back later as a
+non-delivery report ("Undeliverable") to the sending mailbox,
+`noreply-olymp@usm.md`, where nothing in this service sees it. After a bulk
+send, and again the next morning, read that mailbox; correct each bounced
+account's address and reset its password with the option ticked.
+
 **What Microsoft 365 commonly answers.** The enhanced code (the second
 number) says more than the first, and the text after it usually names the
 cause.
@@ -603,7 +613,7 @@ cause.
 | `550 5.7.60 Client does not have permissions to send as this sender`, or `SendAsDenied` (`554 5.2.0 STOREDRV.Submission.Exception:SendAsDeniedException…`) | `SMTP_FROM`'s address is not the signed-in mailbox | make it the `SMTP_USERNAME` mailbox, or have the administrators grant Send As |
 | `550 5.1.8 Access denied, bad outbound sender` | Microsoft has restricted the mailbox for sending spam, usually because the account was compromised | the administrators release it in the Microsoft Defender portal (Restricted entities) and change its password; then update `SMTP_PASSWORD` |
 | a 4xx, such as `432 4.3.2 STOREDRV.ClientSubmit; sender thread limit exceeded` | throttling: the relay will take the message later | nothing; the job waits and tries again. If it persists, lower `SMTP_MAX_PER_MINUTE` |
-| `550 5.1.10 RESOLVER.ADR.RecipientNotFound`, `550 5.1.1` | the recipient's address does not exist | correct the address on the account and reset its password again with the option |
+| `550 5.1.10 RESOLVER.ADR.RecipientNotFound`, `550 5.1.1` | the recipient's address does not exist. Only a `usm.md` recipient meets this reply; any other bounces later (above) | correct the address on the account and reset its password again with the option |
 | no reply: `no such host`, a timeout, `connection refused` | `SMTP_HOST` is wrong, or outbound port 587 is closed | correct the host, or open the port (`nc` above) |
 | no reply: a certificate or TLS error | the relay's certificate is not trusted, or something on the network intercepts TLS | the host's network, not the settings |
 

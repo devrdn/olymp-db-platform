@@ -227,6 +227,12 @@ choose their own password.
   hand it to its owner by a channel only they read.
 - Watch `DBContestMailAbandoned` and `DBContestMailRelayFailing` until the
   queue has gone ([What to watch](#what-to-watch)).
+- Then read the `noreply-olymp@usm.md` mailbox, and again the next morning.
+  Microsoft 365 checks only `usm.md` addresses while sending: a mistyped
+  address anywhere else is counted as sent, no alert fires, and its failure
+  arrives there as a non-delivery report ("Undeliverable"). For each one,
+  correct the account's address and reset its password with the option
+  ticked.
 - To send someone their details again, reset their password with the option
   ticked, on their account's page or for several at once from the list. The
   new message replaces an older one that has not gone out yet, and the
