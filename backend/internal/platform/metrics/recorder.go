@@ -4,9 +4,8 @@
 //
 // It also holds the sets a single service reports (the reclaim sweep's, the
 // mail outbox's, the Query Runner's), so the services share one registry
-// type. It does not mount
-// the scrape endpoint: internal/api does, on the internal router, and
-// cmd/queryrunner on its own internal listener.
+// type. It does not mount the scrape endpoint: internal/api does, on the
+// internal router, and cmd/queryrunner on its own internal listener.
 package metrics
 
 import (
