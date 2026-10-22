@@ -309,7 +309,7 @@ groups:
             got slower or more numerous.
 
       - alert: DBContestAdmissionQueueDeep
-        # Half of QUERY_QUEUE_DEPTH (32): with forty participants and eight slots, sixteen waiting is 40% of the room in line.
+        # Twice the running slots: sixteen waiting means every slot has been busy for a while and the line is growing. The depth itself (QUERY_QUEUE_DEPTH, 512 by default) only decides when the runner answers busy.
         expr: queryrunner_admission_queue_depth * on (job, instance) group_left () dbcontest:target{dbcontest="queryrunner"} >= 16
         for: 3m
         labels:
@@ -317,5 +317,5 @@ groups:
         annotations:
           summary: '{{ $value }} queries are waiting for a running slot.'
           description: >-
-            The queue is half full; at 32 the Query Runner answers busy at once.
+            Queries are queuing behind every slot; at QUERY_QUEUE_DEPTH (512 by default) the Query Runner answers busy at once.
             See DBContestAdmissionWaitHigh and the dashboard's queue panels.

@@ -170,7 +170,10 @@ func LoadRunner() (Runner, error) {
 	if cfg.Concurrent, err = intEnv("QUERY_CONCURRENT", 8); err != nil {
 		return Runner{}, err
 	}
-	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 32); err != nil {
+	// A waiting query is one goroutine and one open request, so the queue is
+	// sized for a roster, not for the cluster: an olympiad of three hundred
+	// pressing Run at once waits instead of being told "busy".
+	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 512); err != nil {
 		return Runner{}, err
 	}
 	if cfg.QueueWait, err = durationEnv("QUERY_QUEUE_WAIT", 15*time.Second); err != nil {
