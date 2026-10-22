@@ -245,6 +245,8 @@ trail records `user.sign_in_details_emailed`, never the password.
   handing to the relay at that moment is left to finish. These are not
   delivery outcomes, so `mail_messages_total` does not count them and
   `DBContestMailAbandoned` does not fire for them.
+- `GET /users/mail-status` (`users.manage`) tells the accounts screen whether
+  mail is on and how many messages leave a minute.
 
 **The outbox.** Every other message is queued: a request never waits on the
 relay. It queues the message in

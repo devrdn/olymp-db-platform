@@ -41,12 +41,12 @@ type apiFixture struct {
 // holding the given permissions.
 func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 	t.Helper()
-	return newAPIFixtureWithMail(t, nil, permissions...)
+	return newAPIFixtureWithMail(t, nil, api.MailStatus{}, permissions...)
 }
 
 // newAPIFixtureWithMail is newAPIFixture with the service's mail wired, or
-// none when mail is nil.
-func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, permissions ...string) *apiFixture {
+// none when mail is nil, and the handler reporting status.
+func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, status api.MailStatus, permissions ...string) *apiFixture {
 	t.Helper()
 
 	c := cache.NewMemory(1000)
@@ -77,7 +77,7 @@ func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, permissions ...string
 	unlocker := &recordingUnlocker{}
 
 	router := chi.NewRouter()
-	api.NewUsersHandler(service, repo, unlocker, mw, log).Mount(router)
+	api.NewUsersHandler(service, repo, unlocker, mw, log).WithMailStatus(status).Mount(router)
 
 	return &apiFixture{
 		router:   router,
@@ -804,10 +804,17 @@ func (s fixedMailSettings) All(context.Context) (settings.Values, error) {
 // the returned table, or with mail off when on is false.
 func newEmailingFixture(t *testing.T, on bool) (*apiFixture, *memoryQueue) {
 	t.Helper()
+	return newEmailingFixtureFor(t, on, rbac.PermissionUsersManage)
+}
+
+func newEmailingFixtureFor(t *testing.T, on bool, permissions ...string) (*apiFixture, *memoryQueue) {
+	t.Helper()
 	queue := &memoryQueue{}
 	outbox := mailing.Disabled(queue)
+	status := api.MailStatus{}
 	if on {
 		outbox = mailing.NewOutbox(queue)
+		status = api.MailStatus{Enabled: true, PerMinute: 25}
 	}
 	f := newAPIFixtureWithMail(t, &users.Mail{
 		Outbox: outbox,
@@ -816,7 +823,7 @@ func newEmailingFixture(t *testing.T, on bool) (*apiFixture, *memoryQueue) {
 			settings.KeyName:         "Olimpiada USM",
 			settings.KeyMailLanguage: string(mailing.Romanian),
 		},
-	}, rbac.PermissionUsersManage)
+	}, status, permissions...)
 	return f, queue
 }
 
@@ -1018,7 +1025,7 @@ func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
 		Outbox:   mailing.NewOutbox(queue),
 		Texts:    mailing.NewTexts("https://olympdb.usm.md"),
 		Settings: fixedMailSettings{settings.KeyMailLanguage: string(mailing.English)},
-	}, rbac.PermissionUsersManage)
+	}, api.MailStatus{Enabled: true, PerMinute: 25}, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodPost, "/users",
 		`{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
@@ -1028,6 +1035,37 @@ func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
 	}
 	if _, err := f.repo.ByLogin(context.Background(), "a.rusu"); err == nil {
 		t.Error("the account was created without its message")
+	}
+}
+
+func TestMailStatusSaysWhetherMailIsOnAndHowFastItLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		on   bool
+		want string
+	}{
+		{true, `{"enabled":true,"per_minute":25}`},
+		{false, `{"enabled":false,"per_minute":0}`},
+	} {
+		f, _ := newEmailingFixture(t, tc.on)
+
+		rec := f.do(http.MethodGet, "/users/mail-status", "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != tc.want {
+			t.Errorf("mail on %v: body = %s, want exactly %s", tc.on, got, tc.want)
+		}
+	}
+}
+
+func TestMailStatusNeedsThePermissionToManageAccounts(t *testing.T) {
+	f, _ := newEmailingFixtureFor(t, true, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodGet, "/users/mail-status", "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 without users.manage", rec.Code)
 	}
 }
 

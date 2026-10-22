@@ -39,6 +39,22 @@ type UsersHandler struct {
 	unlocker SignInUnlocker
 	mw       *auth.Middleware
 	log      *slog.Logger
+	mail     MailStatus
+}
+
+// MailStatus is what the accounts screens need to offer email: whether mail
+// is on, and how many messages leave a minute, from which a roster's wait
+// follows. It is fixed when the process starts.
+type MailStatus struct {
+	Enabled bool
+	// PerMinute is 0 while mail is off.
+	PerMinute int
+}
+
+// WithMailStatus is for the composition root; without it mail reads as off.
+func (h *UsersHandler) WithMailStatus(status MailStatus) *UsersHandler {
+	h.mail = status
+	return h
 }
 
 // NewUsersHandler assembles the account endpoints.
@@ -61,6 +77,7 @@ func (h *UsersHandler) Mount(r chi.Router) {
 		r.Get("/", h.list)
 		r.Post("/", h.create)
 		r.Post("/import", h.importRoster)
+		r.Get("/mail-status", h.mailStatus)
 
 		// Registered before /{userID} so chi does not read "bulk" as an account
 		// identifier.
@@ -312,6 +329,21 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, accountImportResponse{
 		Created: created, Skipped: skipped, NotImported: emptyIfNil(result.NotImported), Stopped: stopped,
 	})
+}
+
+// mailStatusResponse carries no address and nothing about the relay: the
+// accounts screens need only whether to offer email and how long it takes.
+type mailStatusResponse struct {
+	Enabled   bool `json:"enabled"`
+	PerMinute int  `json:"per_minute"`
+}
+
+func (h *UsersHandler) mailStatus(w http.ResponseWriter, r *http.Request) {
+	status := mailStatusResponse{Enabled: h.mail.Enabled}
+	if h.mail.Enabled {
+		status.PerMinute = h.mail.PerMinute
+	}
+	httpx.JSON(w, r, http.StatusOK, status)
 }
 
 type listResponse struct {

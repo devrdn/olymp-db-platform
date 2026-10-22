@@ -433,7 +433,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	modules := []api.Module{
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
-		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
+		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log).
+			WithMailStatus(api.MailStatus{Enabled: outbox.Enabled(), PerMinute: cfg.SMTPMaxPerMinute}),
 		api.NewSettingsHandler(
 			installation,
 			mailing.NewTester(mailing.TesterConfig{

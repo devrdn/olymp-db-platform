@@ -377,7 +377,7 @@ flowchart LR
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
-| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles` | `users` | `users.manage`; `send_by_email` also emails the sign-in details (`mail_off` while mail is off) |
+| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles`; `GET /users/mail-status` | `users` | `users.manage`; `send_by_email` also emails the sign-in details (`mail_off` while mail is off) |
 | Import a roster of accounts | `/users` | `POST /users/import` | `users` | `users.manage`; partial success, a skipped row carries its reason; `send_by_email` as for one account |
 | Act on many accounts at once | `/users` | `POST /users/bulk/status`, `/bulk/roles`, `/bulk/password-reset` | `users` | `users.manage`; a bounded selection (`too_many_accounts`) |
 | See and edit one account | `/users/{userID}` | `GET`, `PATCH /users/{userID}` | `users` | `users.manage` |
