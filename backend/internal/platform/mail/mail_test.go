@@ -215,7 +215,8 @@ func TestARelayWithoutAuthenticationRefusesCredentialsPermanently(t *testing.T) 
 
 // relay says whether the failure is the relay's, whatever the message: a
 // reply before RCPT, a deferral or a lost connection after it, or Exchange
-// refusing the sending mailbox at the end of DATA. Only a refusal of the
+// refusing the sending mailbox at DATA (STOREDRV.Submission, or 5.7.60 for a
+// sender the account may not send as). Only a refusal of the
 // recipient or of the message itself is the message's.
 func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 	for _, tc := range []struct {
@@ -239,6 +240,8 @@ func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 		{"DOT", "451 4.7.1 greylisted", true, true},
 		{"DOT", "432 4.3.2 STOREDRV.ClientSubmit; sender thread limit exceeded", true, true},
 		{"DOT", "554 5.2.252 SendAsDenied; noreply@usm.md not allowed to send as other@usm.md; STOREDRV.Submission.Exception:SendAsDeniedException.MapiExceptionSendAsDenied", false, true},
+		{"DOT", "550 5.7.60 SMTP; Client does not have permissions to send as this sender", false, true},
+		{"DATA", "550 5.7.60 SMTP; Client does not have permissions to send as this sender", false, true},
 	} {
 		t.Run(tc.stage+" "+tc.reply[:9], func(t *testing.T) {
 			server := mailtest.NewServer(t, mailtest.Options{
