@@ -140,10 +140,11 @@ var outcomes = []struct {
 	{ErrRefused, "refused"},
 }
 
-// record writes the attempt to the trail. The message has left (or not) by
-// now, so a trail that cannot be written is logged rather than failing a
-// request the administrator would only repeat.
+// record writes the attempt to the trail, even when the caller has gone. The
+// message has left (or not) by now, so a trail that cannot be written is
+// logged rather than failing a request the administrator would only repeat.
 func (t *Tester) record(ctx context.Context, actor uuid.UUID, sendErr error) {
+	ctx = context.WithoutCancel(ctx)
 	payload := map[string]any{"outcome": "sent"}
 	if sendErr != nil {
 		payload["outcome"] = "failed"

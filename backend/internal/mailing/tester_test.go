@@ -49,9 +49,13 @@ type auditSink struct {
 	err     error
 }
 
-func (s *auditSink) Append(_ context.Context, e audit.Entry) error {
+// Append refuses on a finished context, as a database write does.
+func (s *auditSink) Append(ctx context.Context, e audit.Entry) error {
 	if s.err != nil {
 		return s.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	s.entries = append(s.entries, e)
 	return nil
@@ -343,4 +347,29 @@ func decodedSubject(t *testing.T, data string) string {
 		t.Fatalf("decode the subject: %v", err)
 	}
 	return subject
+}
+
+// leavingCaller is a relay that delivers while the caller's request ends.
+type leavingCaller struct{ cancel context.CancelFunc }
+
+func (leavingCaller) Enabled() bool { return true }
+
+func (leavingCaller) From() string { return "noreply@usm.md" }
+
+func (l leavingCaller) Send(context.Context, string, string, string) error {
+	l.cancel()
+	return nil
+}
+
+func TestTheAttemptIsRecordedWhenTheCallerHasGone(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	f := newTester(t, leavingCaller{cancel: cancel})
+
+	if err := f.tester.Send(ctx, testRequest("ana@usm.md")); err != nil {
+		t.Fatalf("Send() = %v", err)
+	}
+
+	if payload := f.outcomeOf(t); payload["outcome"] != "sent" {
+		t.Errorf("payload = %v, want outcome sent", payload)
+	}
 }
