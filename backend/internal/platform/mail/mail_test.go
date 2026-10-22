@@ -262,6 +262,46 @@ func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 	}
 }
 
+// A refusal naming the recipient (RFC 3463 X.1.1, X.1.2, X.1.3, X.1.6, X.1.10,
+// X.2.1, X.2.2, or a 5xx to RCPT without an enhanced code) is that address's
+// alone; any other refusal of the message may be the relay's for everyone.
+func TestARefusalNamingTheRecipientIsToldApart(t *testing.T) {
+	for _, tc := range []struct {
+		stage, reply string
+		recipient    bool
+	}{
+		{"RCPT", "550 5.1.1 no such user", true},
+		{"RCPT", "550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient not found", true},
+		{"RCPT", "553 5.1.3 bad recipient address syntax", true},
+		{"RCPT", "550 5.1.6 recipient has moved", true},
+		{"RCPT", "550 5.2.1 mailbox disabled", true},
+		{"RCPT", "550 no such user here", true},
+		{"DOT", "552 5.2.2 mailbox full", true},
+		{"RCPT", "550 5.1.8 Access denied, bad outbound sender", false},
+		{"RCPT", "550 5.7.1 relaying denied", false},
+		{"DOT", "550 5.1.10.5 not a code", false},
+		{"RCPT", "452 4.2.2 mailbox full", false},
+		{"DATA", "554 5.6.0 no", false},
+		{"DOT", "550 message refused", false},
+		{"MAIL", "550 5.1.1 sender unknown", false},
+	} {
+		t.Run(tc.stage+" "+tc.reply[:9], func(t *testing.T) {
+			server := mailtest.NewServer(t, mailtest.Options{
+				StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword,
+				Replies: map[string]string{tc.stage: tc.reply},
+			})
+			err := send(t, newSender(t, relayConfig(server, mail.TLSStartTLS)))
+
+			if got := mail.IsRecipientRefusal(err); got != tc.recipient {
+				t.Errorf("IsRecipientRefusal(%v) = %v, want %v", err, got, tc.recipient)
+			}
+			if mail.IsRecipientRefusal(err) && (mail.IsTemporary(err) || mail.IsRelayFailure(err)) {
+				t.Errorf("a recipient refusal is also temporary or the relay's: %v", err)
+			}
+		})
+	}
+}
+
 func TestADroppedConnectionIsTemporary(t *testing.T) {
 	for _, stage := range []string{"GREETING", "EHLO", "AUTH", "MAIL", "RCPT", "DATA", "DOT"} {
 		t.Run(stage, func(t *testing.T) {

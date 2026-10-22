@@ -44,3 +44,19 @@ func TestOnlyAFailureMarkedAsTheRelaysIsARelayFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyAFailureMarkedAsTheRecipientsIsARecipientRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{fmt.Errorf("%w: %w: 550 5.1.1", mail.ErrPermanent, mail.ErrRecipient), true},
+		{fmt.Errorf("%w: 550 5.1.8", mail.ErrPermanent), false},
+		{mail.ErrInvalidMessage, false},
+	} {
+		if got := mail.IsRecipientRefusal(tc.err); got != tc.want {
+			t.Errorf("IsRecipientRefusal(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
