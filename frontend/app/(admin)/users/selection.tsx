@@ -36,6 +36,7 @@ import {
   type BulkPasswordState,
   type BulkState,
 } from "./bulk-actions";
+import { EmailSummary, SendByEmailOption } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
 
 export type SelectedAccount = { id: string; display: string };
@@ -741,11 +742,13 @@ function RolesForm({
 function ResetPasswordForm({
   ids,
   dict,
+  mailEnabled,
   onClose,
   reportDismissible,
 }: {
   ids: readonly string[];
   dict: Dictionary;
+  mailEnabled: boolean;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -779,6 +782,15 @@ function ResetPasswordForm({
             ))}
           </ul>
         ) : null}
+
+        <EmailSummary
+          rows={state.result.issued.map((row) => ({
+            login: row.login,
+            emailed: row.emailed,
+            reason: row.emailSkippedReason,
+          }))}
+          dict={dict}
+        />
 
         <SkippedList skipped={state.result.skipped} dict={dict} />
 
@@ -814,6 +826,8 @@ function ResetPasswordForm({
         <DialogDescription>{t.resetDialog.description}</DialogDescription>
       </DialogHeader>
 
+      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+
       {failure ? (
         <p role="alert" className="text-small text-bad">
           {failure}
@@ -840,9 +854,12 @@ export function SelectionBar({
   dict,
   roles,
   pageIds,
+  mailEnabled,
 }: {
   dict: Dictionary;
   roles: Role[];
+  /** Whether the password reset offers emailing the sign-in details. */
+  mailEnabled: boolean;
   /**
    * Ids on the current page, used only to report how much of the selection is
    * off screen; bulk actions always act on the whole selection.
@@ -969,6 +986,7 @@ export function SelectionBar({
             <ResetPasswordForm
               ids={ids}
               dict={dict}
+              mailEnabled={mailEnabled}
               onClose={close}
               reportDismissible={reportDismissible}
             />

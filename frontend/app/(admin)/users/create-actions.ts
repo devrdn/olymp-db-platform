@@ -11,6 +11,7 @@ import {
 import { ApiError } from "@/lib/api/client";
 import { MAX_IMPORT_ROWS } from "@/lib/api/accounts-terms";
 
+import { sendByEmail } from "./delivery";
 import { parseRoster } from "./roster";
 
 /**
@@ -37,7 +38,13 @@ export async function createAccountAction(
 
   const email = String(form.get("email") ?? "").trim();
 
-  const outcome = await createAccount({ login, fullName, email, roles: checkedRoles(form) }).then(
+  const outcome = await createAccount({
+    login,
+    fullName,
+    email,
+    roles: checkedRoles(form),
+    sendByEmail: sendByEmail(form),
+  }).then(
     (result) => ({ ok: true as const, result }),
     (error: unknown) => ({ ok: false as const, error }),
   );
@@ -60,7 +67,7 @@ export async function importAccountsAction(
   // `users.maxImportRows`) is refused before the request.
   if (rows.length === 0 || rows.length > MAX_IMPORT_ROWS) return { code: "invalid_request" };
 
-  const outcome = await importAccounts(rows, checkedRoles(form)).then(
+  const outcome = await importAccounts(rows, checkedRoles(form), sendByEmail(form)).then(
     (result) => ({ ok: true as const, result }),
     (error: unknown) => ({ ok: false as const, error }),
   );

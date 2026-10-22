@@ -1515,6 +1515,19 @@ const en = {
       no_address: "the account has no email address",
       not_active: "the account is not active",
     },
+    /**
+     * The option to email sign-in details, offered beside every action that
+     * issues a one-time password while mail is on, and what it did. `group`
+     * heads the accounts one reason left unemailed.
+     */
+    signInMail: {
+      option: "Send sign-in details by email",
+      optionHint:
+        "Accounts with an email address get their login and one-time password by email. The passwords are still shown here.",
+      queued: "Sign-in emails queued: {n}. They go out over the next few minutes.",
+      notEmailed: "Not emailed: {n}",
+      group: "{n} — {reason}",
+    },
   },
   participant: {
     /** The beta testers' way to the organisers' form; shown only when set. */

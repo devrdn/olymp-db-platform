@@ -94,6 +94,50 @@ describe("createAccountAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  // A ticked box submits "on"; an unticked or absent one submits nothing, and
+  // the request then carries no option at all.
+  test("asks for the sign-in details by email when the box is ticked, and returns what happened", async () => {
+    serverRequest.mockResolvedValueOnce({
+      user: wireAccount,
+      one_time_password: "swordfish-1",
+      emailed: false,
+      email_skipped_reason: "no_address",
+    });
+
+    const state = await createAccountAction(
+      {},
+      form({ login: "s.popescu", full_name: "Sergiu Popescu", send_by_email: "on" }),
+    );
+
+    expect(serverRequest).toHaveBeenCalledWith("/users", {
+      method: "POST",
+      body: {
+        login: "s.popescu",
+        full_name: "Sergiu Popescu",
+        email: "",
+        roles: [],
+        send_by_email: true,
+      },
+    });
+    expect(state.result).toMatchObject({
+      one_time_password: "swordfish-1",
+      emailed: false,
+      email_skipped_reason: "no_address",
+    });
+  });
+
+  test("passes the mail-off refusal through by its own code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("mail_off", 409, "mail is off"));
+
+    const state = await createAccountAction(
+      {},
+      form({ login: "s.popescu", full_name: "Sergiu Popescu", send_by_email: "on" }),
+    );
+
+    expect(state).toEqual({ code: "mail_off" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
   test("reports an unreachable server distinctly from a refusal it explained", async () => {
     serverRequest.mockRejectedValueOnce(new TypeError("fetch failed"));
 
@@ -142,6 +186,39 @@ describe("importAccountsAction", () => {
     expect(state.result?.created[0]?.one_time_password).toBe("swordfish-1");
     expect(state.result?.skipped).toEqual([{ login: "i.ivanov", reason: "login_taken" }]);
     expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
+  });
+
+  test("asks for the sign-in details by email when the box is ticked", async () => {
+    serverRequest.mockResolvedValueOnce({
+      created: [{ user: wireAccount, one_time_password: "swordfish-1", emailed: true }],
+      skipped: [],
+    });
+
+    const state = await importAccountsAction(
+      {},
+      form({ roster: "s.popescu, Sergiu Popescu, s@example.edu", send_by_email: "on" }),
+    );
+
+    expect(serverRequest).toHaveBeenCalledWith("/users/import", {
+      method: "POST",
+      body: {
+        rows: [{ login: "s.popescu", full_name: "Sergiu Popescu", email: "s@example.edu" }],
+        roles: [],
+        send_by_email: true,
+      },
+    });
+    expect(state.result?.created[0]?.emailed).toBe(true);
+  });
+
+  test("passes the mail-off refusal through by its own code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("mail_off", 409, "mail is off"));
+
+    const state = await importAccountsAction(
+      {},
+      form({ roster: "s.popescu, Sergiu Popescu", send_by_email: "on" }),
+    );
+
+    expect(state).toEqual({ code: "mail_off" });
   });
 
   test("reports a server refusal by its own code rather than a generic failure", async () => {
