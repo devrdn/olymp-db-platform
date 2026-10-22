@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/textproto"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	gomail "github.com/wneessen/go-mail"
 )
@@ -176,4 +178,92 @@ func temporary(ctx context.Context, err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, net.ErrClosed)
+}
+
+// MaxReplyTextBytes bounds the text ReplyOf returns. A reply is shown to an
+// administrator and kept in the audit trail, and Exchange's diagnostics run
+// long after the sentence that says what is wrong.
+const MaxReplyTextBytes = 200
+
+// Reply is the relay's answer that failed a send.
+type Reply struct {
+	Code int
+	// Enhanced is the RFC 3463 code, such as 5.7.139; empty when the relay
+	// gave none.
+	Enhanced string
+	// Text is the rest of the reply, on one line and at most
+	// MaxReplyTextBytes.
+	Text string
+}
+
+func (r Reply) String() string {
+	parts := []string{strconv.Itoa(r.Code)}
+	for _, part := range []string{r.Enhanced, r.Text} {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// leadingStatus is an RFC 3463 code at the start of a reply's text.
+var leadingStatus = regexp.MustCompile(`^[245]\.\d{1,3}\.\d{1,3}(?:\s+|$)`)
+
+// ReplyOf returns the relay's reply a failed Send carries, and false when
+// the failure was not a reply (an unreachable relay, a TLS refusal, a
+// dropped connection). The text comes only from the relay, never from the
+// message.
+func ReplyOf(err error) (Reply, bool) {
+	var code int
+	var text string
+	var reply *textproto.Error
+	var sendErr *gomail.SendError
+	switch {
+	case errors.As(err, &reply):
+		code, text = reply.Code, reply.Msg
+	case errors.As(err, &sendErr) && sendErr.ErrorCode() != 0:
+		code = sendErr.ErrorCode()
+		text = replyText(sendErr.Error(), code)
+	default:
+		return Reply{}, false
+	}
+
+	text = strings.TrimSpace(text)
+	enhanced := strings.TrimSpace(leadingStatus.FindString(text))
+	text = oneLine(text[len(leadingStatus.FindString(text)):])
+	return Reply{Code: code, Enhanced: enhanced, Text: text}, true
+}
+
+// replyText finds the reply in a SendError's text, which is the only place
+// go-mail keeps it: the code and the text as net/textproto quotes it, among
+// the stage before and the recipients and message ID after.
+func replyText(s string, code int) string {
+	at := strings.Index(s, strconv.Itoa(code)+` "`)
+	if at < 0 {
+		return ""
+	}
+	quoted, err := strconv.QuotedPrefix(s[at+4:])
+	if err != nil {
+		return ""
+	}
+	text, err := strconv.Unquote(quoted)
+	if err != nil {
+		return ""
+	}
+	return text
+}
+
+// oneLine makes a reply's text printable, on one line and bounded.
+func oneLine(text string) string {
+	text = strings.Join(strings.FieldsFunc(strings.ToValidUTF8(text, ""), func(r rune) bool {
+		return r < 0x20 || r == 0x7f || r == ' '
+	}), " ")
+	if len(text) <= MaxReplyTextBytes {
+		return text
+	}
+	cut := MaxReplyTextBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }

@@ -12,7 +12,8 @@
 // (IsRelayFailure): everything before RCPT, a lost connection, a deferral
 // after the recipient was accepted. A permanent refusal naming the recipient
 // (an unknown or full mailbox, by its RFC 3463 code) also wraps ErrRecipient
-// (IsRecipientRefusal). TLS is 1.2 or later. A Sender built without a host is
+// (IsRecipientRefusal). ReplyOf reads back the relay's reply a failure
+// carries, bounded, for a person to read. TLS is 1.2 or later. A Sender built without a host is
 // disabled rather than missing, so a deployment without a relay still starts.
 //
 // It does not queue, retry, render texts or decide who is written to; it
