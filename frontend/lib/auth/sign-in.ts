@@ -1,6 +1,7 @@
 import { API_PREFIX } from "@/lib/api/client";
 
 import { parseSetCookie, type ParsedCookie } from "./cookie";
+import { SESSION_COOKIE } from "./session";
 
 /**
  * Signing in, on the server: the API's `Set-Cookie` arrives here and has to be
@@ -21,10 +22,16 @@ export type SignInDeps = {
   headers?: Record<string, string>;
   /**
    * The browser's device cookie, so the API can throttle a known browser on
-   * its own rather than with a whole lecture hall's shared address. Only this
-   * cookie is sent.
+   * its own rather than with a whole lecture hall's shared address.
    */
   deviceToken?: string;
+  /**
+   * The browser's current session cookie, if it still has one: the API ends
+   * that session when it issues the new one, so signing in again does not
+   * leave the previous token valid until it expires. Nothing else of the jar
+   * is sent.
+   */
+  sessionToken?: string;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -52,14 +59,19 @@ export async function signIn(
   credentials: Credentials,
   deps: SignInDeps,
 ): Promise<SignInOutcome> {
-  const { fetchImpl, setCookie, origin = "", headers = {}, deviceToken, sleep = realSleep } = deps;
+  const { fetchImpl, setCookie, origin = "", headers = {}, deviceToken, sessionToken, sleep = realSleep } = deps;
+
+  const cookie = [
+    ...(deviceToken ? [`${DEVICE_COOKIE}=${deviceToken}`] : []),
+    ...(sessionToken ? [`${SESSION_COOKIE}=${sessionToken}`] : []),
+  ].join("; ");
 
   const attempt = () =>
     fetchImpl(`${origin}${API_PREFIX}/auth/login`, {
       method: "POST",
       headers: {
         ...headers,
-        ...(deviceToken ? { cookie: `${DEVICE_COOKIE}=${deviceToken}` } : {}),
+        ...(cookie ? { cookie } : {}),
         "content-type": "application/json",
       },
       body: JSON.stringify(credentials),
