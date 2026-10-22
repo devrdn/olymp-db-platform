@@ -12,6 +12,8 @@ vi.mock("@/lib/i18n/server", () => ({ activeLocale }));
 
 import { GET } from "./route";
 
+const CONTEST = "0f4d1c3e-9a8b-4c7d-8e6f-1a2b3c4d5e6f";
+
 function ctx(contestId: string) {
   return { params: Promise.resolve({ contestId }) };
 }
@@ -20,7 +22,7 @@ function contestListPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     items: [
       {
-        id: "c1",
+        id: CONTEST,
         status: "running",
         enrollment: "open",
         question_mode: "multi",
@@ -37,10 +39,22 @@ function contestListPayload(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe("GET .../play/story.md", () => {
+  test("refuses an identifier that is not one before asking the API anything", async () => {
+    // `fetch` resolves `..` before sending, so an unchecked segment reaches
+    // another endpoint; the file name would carry it too.
+    activeLocale.mockResolvedValue("en");
+    serverRequest.mockReset();
+
+    const response = await GET(new Request("http://x/contests/..%2Fauth/play/story.md"), ctx("..%2Fauth"));
+
+    expect(response.status).toBe(404);
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
   test("serves the contest's title and the cleaned story as a Markdown file", async () => {
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
-      if (path.startsWith("/contests/c1/play/story")) {
+      if (path.startsWith(`/contests/${CONTEST}/play/story`)) {
         // The literal `<br />` older stories still carry
         // (lib/format/markdown.ts); the export must clean it.
         return { lang: "en", body_md: "A.\n\n<br />\n\nB." };
@@ -51,12 +65,12 @@ describe("GET .../play/story.md", () => {
       throw new Error(`unexpected path ${path}`);
     });
 
-    const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
+    const response = await GET(new Request(`http://x/contests/${CONTEST}/play/story.md`), ctx(CONTEST));
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
     // The identifier, not the title: the header is ASCII.
-    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="story-c1.md"');
+    expect(response.headers.get("Content-Disposition")).toBe(`attachment; filename="story-${CONTEST}.md"`);
     const text = await response.text();
     expect(text).toBe("# The Warehouse Fire\n\nA.\n\nB.\n");
   });
@@ -65,7 +79,7 @@ describe("GET .../play/story.md", () => {
     activeLocale.mockResolvedValue("en");
     serverRequest.mockRejectedValue(new ApiError("contest_finished", 409, "The contest has ended for this participant"));
 
-    const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
+    const response = await GET(new Request(`http://x/contests/${CONTEST}/play/story.md`), ctx(CONTEST));
 
     expect(response.status).toBe(409);
     expect(await response.text()).toBe("The contest has ended for this participant");
@@ -75,7 +89,7 @@ describe("GET .../play/story.md", () => {
     activeLocale.mockResolvedValue("en");
     serverRequest.mockRejectedValue(new ApiError("story_not_found", 404, "This contest has no story yet"));
 
-    const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
+    const response = await GET(new Request(`http://x/contests/${CONTEST}/play/story.md`), ctx(CONTEST));
 
     expect(response.status).toBe(404);
   });
@@ -85,7 +99,7 @@ describe("GET .../play/story.md", () => {
     // session is not taking part in it.
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
-      if (path.startsWith("/contests/c1/play/story")) {
+      if (path.startsWith(`/contests/${CONTEST}/play/story`)) {
         return { lang: "en", body_md: "A story." };
       }
       if (path.startsWith("/contests?")) {
@@ -94,7 +108,7 @@ describe("GET .../play/story.md", () => {
       throw new Error(`unexpected path ${path}`);
     });
 
-    const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
+    const response = await GET(new Request(`http://x/contests/${CONTEST}/play/story.md`), ctx(CONTEST));
 
     expect(response.status).toBe(403);
   });
@@ -103,13 +117,13 @@ describe("GET .../play/story.md", () => {
     // A failed title read fails the download rather than degrading quietly.
     activeLocale.mockResolvedValue("en");
     serverRequest.mockImplementation(async (path: string) => {
-      if (path.startsWith("/contests/c1/play/story")) {
+      if (path.startsWith(`/contests/${CONTEST}/play/story`)) {
         return { lang: "en", body_md: "A story." };
       }
       throw new ApiError("unreachable", 502, "Unparseable response from the API");
     });
 
-    const response = await GET(new Request("http://x/contests/c1/play/story.md"), ctx("c1"));
+    const response = await GET(new Request(`http://x/contests/${CONTEST}/play/story.md`), ctx(CONTEST));
 
     expect(response.status).toBe(502);
   });
