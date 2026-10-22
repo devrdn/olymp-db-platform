@@ -83,7 +83,7 @@ func classify(ctx context.Context, err error) error {
 // RCPT only a reply naming the recipient is the message's. After RCPT a
 // deferral is the relay throttling or busy, and Exchange Online reports a
 // refusal of the sending mailbox (Send As denied, the submission quota) as
-// STOREDRV.Submission at the end of DATA; any other refusal there is the
+// STOREDRV.Submission or 5.7.60 at DATA; any other refusal there is the
 // message's.
 func relayFailure(err error) bool {
 	var sendErr *gomail.SendError
@@ -97,7 +97,8 @@ func relayFailure(err error) bool {
 	case gomail.ErrSMTPRcptTo:
 		return code == 0 || code == 421
 	case gomail.ErrSMTPData, gomail.ErrSMTPDataClose, gomail.ErrWriteContent:
-		return code < 500 || strings.Contains(sendErr.Error(), "STOREDRV.Submission")
+		text := sendErr.Error()
+		return code < 500 || strings.Contains(text, "STOREDRV.Submission") || enhancedCode(text) == "7.60"
 	default:
 		return true
 	}
@@ -120,10 +121,19 @@ func recipientRefusal(err error) bool {
 	if !errors.As(err, &sendErr) {
 		return false
 	}
-	if m := enhancedStatus.FindStringSubmatch(sendErr.Error()); m != nil {
-		return recipientStatus[m[1]]
+	if code := enhancedCode(sendErr.Error()); code != "" {
+		return recipientStatus[code]
 	}
 	return sendErr.Reason == gomail.ErrSMTPRcptTo
+}
+
+// enhancedCode is the subject and detail of the reply's RFC 3463 code ("1.1"
+// for 5.1.1), or "" when the reply carries none.
+func enhancedCode(reply string) string {
+	if m := enhancedStatus.FindStringSubmatch(reply); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func temporary(ctx context.Context, err error) bool {
