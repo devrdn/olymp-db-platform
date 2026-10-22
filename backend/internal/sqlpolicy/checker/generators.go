@@ -12,11 +12,12 @@ import (
 	pg "github.com/pganalyze/pg_query_go/v6"
 )
 
-// MaxGeneratedLength is the constant length above which repeat, lpad and rpad
-// are refused. It only gives an early, clear refusal for an obviously abusive
-// constant; the real bound is the game cluster's per-process memory limit
-// (deploy/docker-compose.yml, ulimits.data), which fails one backend with
-// "out of memory". A non-constant length such as count(*)::int is admitted.
+// MaxGeneratedLength is the constant length above which repeat, lpad, rpad
+// and a format width are refused. It only gives an early, clear refusal for
+// an obviously abusive constant; the real bound is the game cluster's
+// per-process memory limit (deploy/docker-compose.yml, ulimits.data), which
+// fails one backend with "out of memory". A non-constant length such as
+// count(*)::int is admitted.
 const MaxGeneratedLength = 10_000
 
 // MaxSeriesLength is the number of values above which generate_series with
@@ -33,8 +34,149 @@ func sizeAllowed(name string, call *pg.FuncCall) error {
 		return lengthAllowed(name, call)
 	case "generate_series":
 		return seriesAllowed(call)
+	case "format":
+		return formatAllowed(call)
 	}
 	return nil
+}
+
+// formatAllowed reads the widths of a format string written as a literal: one
+// over MaxGeneratedLength, whether typed in the string or taken by "*" from a
+// constant argument, is refused, since format pads the value whole like lpad.
+// A format string that is a column, a parameter or an expression is left to
+// the memory limit, like the other non-constant cases.
+func formatAllowed(call *pg.FuncCall) error {
+	args := call.GetArgs()
+	if call.GetFuncVariadic() || len(args) == 0 {
+		return nil
+	}
+	for _, arg := range args {
+		if arg.GetNamedArgExpr() != nil {
+			return nil
+		}
+	}
+	spec, ok := constantString(args[0])
+	if !ok {
+		return nil
+	}
+	width, ok := widestFormatWidth(spec, args[1:])
+	if !ok || width <= MaxGeneratedLength {
+		return nil
+	}
+	if math.IsInf(width, 0) {
+		return &sqlpolicy.Refusal{
+			Code:    sqlpolicy.CodeArgumentNotBounded,
+			Subject: fmt.Sprintf("format was given a width that is not a real number, far over the %d limit", MaxGeneratedLength),
+		}
+	}
+	return &sqlpolicy.Refusal{
+		Code:    sqlpolicy.CodeArgumentNotBounded,
+		Subject: fmt.Sprintf("format width %s exceeds the %d limit", formatSize(width), MaxGeneratedLength),
+	}
+}
+
+// widestFormatWidth walks the specifiers of a format string,
+// %[position][flags][width]type, and returns the largest width it can read
+// as a constant: digits in the string, or the constant argument a "*" width
+// names. Arguments are consumed as PostgreSQL consumes them, a specifier
+// without a position taking the one after the last consumed, so "*" is
+// resolved to the right argument when positions and "*" are mixed. A "*"
+// taking a non-constant argument reads no width. The second result is false
+// when no width was read.
+func widestFormatWidth(spec string, args []*pg.Node) (float64, bool) {
+	var (
+		widest float64
+		found  bool
+		// last is the index in args of the last argument consumed, -1 before
+		// any.
+		last = -1
+	)
+	consider := func(w float64) {
+		if !found || w > widest {
+			widest, found = w, true
+		}
+	}
+	for i := 0; i < len(spec); i++ {
+		if spec[i] != '%' {
+			continue
+		}
+		i++
+		if i < len(spec) && spec[i] == '%' {
+			continue
+		}
+		position := -1
+		if n := digitRun(spec[i:]); n > 0 && i+n < len(spec) && spec[i+n] == '$' {
+			position = argumentIndex(spec[i : i+n])
+			i += n + 1
+		}
+		for i < len(spec) && (spec[i] == '-' || spec[i] == '.') {
+			i++
+		}
+		switch {
+		case i < len(spec) && spec[i] == '*':
+			i++
+			source := last + 1
+			if n := digitRun(spec[i:]); n > 0 && i+n < len(spec) && spec[i+n] == '$' {
+				source = argumentIndex(spec[i : i+n])
+				i += n + 1
+			}
+			last = source
+			if source >= 0 && source < len(args) {
+				// A negative width left-justifies; the padding is its size.
+				if w, ok := constantNumber(args[source]); ok {
+					consider(math.Abs(w))
+				}
+			}
+		default:
+			if n := digitRun(spec[i:]); n > 0 {
+				// Too many digits for a float64 parse to infinity with
+				// ErrRange: still a width, and over any bound.
+				w, err := strconv.ParseFloat(spec[i:i+n], 64)
+				if err == nil || errors.Is(err, strconv.ErrRange) {
+					consider(w)
+				}
+				i += n
+			}
+		}
+		// The value itself consumes the positioned argument or the next one;
+		// the loop's own increment steps over the type letter.
+		if position >= 0 {
+			last = position
+		} else {
+			last++
+		}
+	}
+	return widest, found
+}
+
+// digitRun is the length of the decimal digits s starts with.
+func digitRun(s string) int {
+	n := 0
+	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	return n
+}
+
+// argumentIndex turns a 1-based position in a format string into an index
+// into the arguments after the format string; -1 when it cannot be one
+// (zero, or too many digits).
+func argumentIndex(digits string) int {
+	p, err := strconv.Atoi(digits)
+	if err != nil || p < 1 {
+		return -1
+	}
+	return p - 1
+}
+
+// constantString reads a string literal written in the query; anything else
+// is unknown.
+func constantString(node *pg.Node) (string, bool) {
+	c := node.GetAConst()
+	if c == nil || c.GetSval() == nil {
+		return "", false
+	}
+	return c.GetSval().GetSval(), true
 }
 
 // lengthAllowed checks the length, which is the second argument of all three.

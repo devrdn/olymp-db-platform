@@ -111,6 +111,70 @@ func TestAConstantOverTheLimitIsRefused(t *testing.T) {
 	overBound(t, `SELECT count(*) FROM generate_series(1, 1000000, 9)`, "generate_series", sqlpolicy.ReadOnly())
 }
 
+// format pads the value whole, like lpad; a width in a literal format string
+// is a constant the checker can read, in the string or through "*".
+func TestAFormatWidthIsBoundedLikeALength(t *testing.T) {
+	length := strconv.Itoa(checker.MaxGeneratedLength)
+	past := strconv.Itoa(checker.MaxGeneratedLength + 1)
+
+	for _, sql := range []string{
+		`SELECT format('%s is %s', name, city) FROM suspects`,
+		`SELECT format('%-12s|%5s', name, city) FROM suspects`,
+		`SELECT format('%2$s %1$s', 'a', 'b')`,
+		`SELECT format('%*s', 10, 'x')`,
+		`SELECT format('%2$*1$s', 10, 'x')`,
+		`SELECT format('100%% sure')`,
+		`SELECT format('%` + length + `s', 'x')`,
+		`SELECT format('%*s', ` + length + `, 'x')`,
+		`SELECT format('%I.%L', 'tbl', 'val')`,
+		`SELECT format('%s', 'x', 2000000000)`,
+	} {
+		t.Run(sql, func(t *testing.T) { allow(t, sql, sqlpolicy.ReadOnly()) })
+	}
+
+	for _, sql := range []string{
+		`SELECT format('%` + past + `s', 'x')`,
+		`SELECT format('%2000000000s', 'x')`,
+		`SELECT format('%-2000000000s', 'x')`,
+		`SELECT format('%1$2000000000s', 'x')`,
+		`SELECT format('%s|%2000000000s', 'a', 'x')`,
+		`SELECT format('%*s', ` + past + `, 'x')`,
+		`SELECT format('%*s', -2000000000, 'x')`,
+		`SELECT format('%s %*s', 'a', 2000000000, 'x')`,
+		`SELECT format('%2$*1$s', 2000000000, 'x')`,
+		`SELECT format('%1$s %*s', 'a', 2000000000, 'x')`,
+		`SELECT format('%*s', 2000000000::bigint, 'x')`,
+		`SELECT length(format('%2000000000s', 'x'))`,
+	} {
+		t.Run(sql, func(t *testing.T) { overBound(t, sql, "format", sqlpolicy.ReadOnly()) })
+	}
+
+	// Too many digits for a float64 is still a width over the bound, and the
+	// subject must not print an infinity.
+	r := refusal(t, `SELECT format('%`+strings.Repeat("9", 400)+`s', 'x')`, sqlpolicy.ReadOnly())
+	if r.Code != sqlpolicy.CodeArgumentNotBounded || !strings.Contains(r.Subject, "not a real number") {
+		t.Fatalf("format with a 400-digit width subject = %q", r.Subject)
+	}
+}
+
+// A width the checker cannot read is left to the memory limit, like a
+// non-constant length.
+func TestANonConstantFormatIsAdmitted(t *testing.T) {
+	for name, sql := range map[string]string{
+		"format string from a column":    `SELECT format(name, 'x') FROM suspects`,
+		"format string from a parameter": `SELECT format($1, 'x')`,
+		"format string concatenated":     `SELECT format('%' || '2000000000' || 's', 'x')`,
+		"format string behind a cast":    `SELECT format('%2000000000s'::text, 'x')`,
+		"star width from a column":       `SELECT format('%*s', age, name) FROM suspects`,
+		"star width from arithmetic":     `SELECT format('%*s', 1000 * 1000 * 1000, 'x')`,
+		"star width from a subquery":     `SELECT format('%*s', (SELECT max(age) FROM suspects), 'x')`,
+		"star width missing":             `SELECT format('%*s')`,
+		"named argument":                 `SELECT format(formatstr => '%2000000000s')`,
+	} {
+		t.Run(name, func(t *testing.T) { allow(t, sql, sqlpolicy.ReadOnly()) })
+	}
+}
+
 func TestAConstantOverTheLimitIsFoundWhereverItHides(t *testing.T) {
 	for name, sql := range map[string]string{
 		"inside string_agg":   `SELECT string_agg(repeat('x', 1000000), ',') FROM suspects`,
