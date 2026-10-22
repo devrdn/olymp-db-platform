@@ -8,8 +8,10 @@ package users
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -43,7 +45,7 @@ const MaxRolesPerAccount = 16
 var (
 	ErrNotFound = errors.New("user not found")
 	// ErrInvalidAccount reports an empty login or name, a field over its
-	// bound, or an invalid email.
+	// bound, an invalid email, or a listing query over MaxQueryLength.
 	ErrInvalidAccount = errors.New("account details are not valid")
 	ErrLoginTaken     = errors.New("login already in use")
 	ErrEmailTaken     = errors.New("email already in use")
@@ -187,11 +189,25 @@ type Role struct {
 	Name string
 }
 
+// MaxQueryLength bounds Filter.Query, in runes (CLAUDE.md rule 2): the text
+// runs through three trigram ILIKEs, twice, on every listing.
+const MaxQueryLength = 100
+
 type Filter struct {
 	Query  string
 	Status string
 	Limit  int
 	Offset int
+}
+
+// Validate refuses a Query over MaxQueryLength with ErrInvalidAccount.
+// Normalize cannot: it corrects the paging silently, and a cut query would
+// list the wrong accounts without saying so.
+func (f Filter) Validate() error {
+	if utf8.RuneCountInString(f.Query) > MaxQueryLength {
+		return fmt.Errorf("%w: the search text must be at most %d characters", ErrInvalidAccount, MaxQueryLength)
+	}
+	return nil
 }
 
 func (f Filter) Normalize() Filter {
