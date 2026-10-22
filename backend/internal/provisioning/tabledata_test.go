@@ -968,6 +968,76 @@ func TestBuildingATableBuilderGameLoadsEachTablesDataMinusItsHeaderAndTombstones
 	}
 }
 
+// A value is refused rather than written: a line break inside a row would be
+// two physical lines to every reader that counts them, and the count stored
+// alongside would be off by one from there on.
+func TestAppendTableRowRefusesAValueWithALineBreakAndWritesNothing(t *testing.T) {
+	t.Parallel()
+	service, _, _, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	for name, value := range map[string]string{"a newline": "Mar\ngot", "a carriage return": "Mar\rgot"} {
+		_, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", value, ""})
+		if !errors.Is(err, provisioning.ErrTableValueInvalid) {
+			t.Fatalf("%s: error = %v, want ErrTableValueInvalid", name, err)
+		}
+		if !strings.Contains(err.Error(), `"name"`) {
+			t.Fatalf("%s: error = %q, does not name the column", name, err)
+		}
+	}
+	ids, err := files.UploadIDs(anyAge())
+	if err != nil {
+		t.Fatalf("list the table data volume: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
+	}
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("TableDataWindow: %v", err)
+	}
+	if window.TotalRows != 0 {
+		t.Fatalf("the table counts %d row(s) after two refused values", window.TotalRows)
+	}
+}
+
+// COPY reads a bare `\.` line as the end of the data even in CSV format, so
+// a one-column text table holding that value would load every row before it
+// and none after, with no error. The reader quotes that one line.
+func TestBuildingATableBuilderGameQuotesARowCopyWouldReadAsEndOfData(t *testing.T) {
+	t.Parallel()
+	service, _, cluster, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+		Tables: []provisioning.TableDefinition{{
+			Name:    "notes",
+			Columns: []provisioning.ColumnDefinition{{Name: "body", Type: provisioning.ColumnText}},
+		}},
+	}); err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	for _, body := range []string{`\.`, `\.x`, "after"} {
+		if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "notes", []string{body}); err != nil {
+			t.Fatalf("row %q: %v", body, err)
+		}
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("build finished as %q: %s", built.Status, built.BuildError)
+	}
+
+	got := cluster.tableData[built.Database+".notes"]
+	want := "\"\\.\"\n\\.x\nafter\n"
+	if got != want {
+		t.Fatalf("loaded table data = %q, want %q (only the bare end-of-data line quoted)", got, want)
+	}
+}
+
 func TestABuildToreDownTheTemplateWhenLoadingTableDataFailed(t *testing.T) {
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)

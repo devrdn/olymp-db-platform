@@ -2,6 +2,7 @@ package provisioning_test
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,11 +21,9 @@ func TestCompleteTableUploadAcceptsCRLFLineEndings(t *testing.T) {
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
-	// The last row's quoted field holds a literal CR, which must survive while
-	// the CRLF around it is stripped.
 	content := "id,name,nickname\r\n" +
 		"1,Ann,\r\n" +
-		"2,Bob,\"Bo\rbby\"\r\n"
+		"2,Bob,\"Bobby\"\r\n"
 	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
 
 	completed, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
@@ -45,8 +44,157 @@ func TestCompleteTableUploadAcceptsCRLFLineEndings(t *testing.T) {
 	if window.Rows[0].Fields[1] != "Ann" {
 		t.Errorf("row 1's name = %q, want %q (no trailing CR)", window.Rows[0].Fields[1], "Ann")
 	}
-	if window.Rows[1].Fields[2] != "Bo\rbby" {
-		t.Errorf("row 2's nickname = %q, want %q (the quoted field's own CR kept intact)", window.Rows[1].Fields[2], "Bo\rbby")
+	if window.Rows[1].Fields[2] != "Bobby" {
+		t.Errorf("row 2's nickname = %q, want %q (the quotes stripped, the CRLF too)", window.Rows[1].Fields[2], "Bobby")
+	}
+}
+
+// This package's CSV is one row per physical line: the row counts, the
+// tombstone numbers and the window reads all count lines. A value holding a
+// line break would be written as two lines by the form and read as two rows
+// by everything after, so both line-break characters are refused for every
+// column type, including the quoted CR a spreadsheet could put in a file.
+func TestValidateScalarRefusesALineBreakInEveryColumnType(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"a newline":         "a\nb",
+		"a carriage return": "a\rb",
+		"a trailing CRLF":   "a\r\n",
+	} {
+		for _, typ := range []provisioning.ColumnType{
+			provisioning.ColumnText, provisioning.ColumnInteger, provisioning.ColumnNumeric,
+			provisioning.ColumnBoolean, provisioning.ColumnDate, provisioning.ColumnTimestamp,
+		} {
+			err := provisioning.ValidateScalar(text, typ)
+			if err == nil {
+				t.Fatalf("%s in a %s column was accepted", name, typ)
+			}
+			if !strings.Contains(err.Error(), "line break") {
+				t.Fatalf("%s in a %s column: %q does not say it is the line break", name, typ, err)
+			}
+		}
+	}
+}
+
+func TestCompleteTableUploadRefusesAQuotedCarriageReturnInAValue(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	data := beginTableUploadWithContent(t, service, contest, "suspects",
+		"id,name,nickname\n1,Ann,\"Bo\rbby\"\n")
+
+	_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
+	if !errors.Is(err, provisioning.ErrTableValueInvalid) {
+		t.Fatalf("error = %v, want ErrTableValueInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), `"nickname"`) {
+		t.Fatalf("error = %q, does not name row 1's nickname column", err)
+	}
+}
+
+// Every value the validator accepts survives being written by the form's
+// writer and read back by the parser, as one line with the same fields and
+// the same NULL-ness; a value this does not hold for would corrupt the file
+// rather than be refused.
+func TestEveryAcceptedValueRoundTripsThroughTheWriterAndTheParserAsOneLine(t *testing.T) {
+	t.Parallel()
+	values := []string{
+		"", "plain", "with,comma", `with"quote`, `"`, `""`, `"quoted"`, "a,\"b\",c",
+		" padded ", "\t", "Марго", "1_000.5", "2024-01-01 10:00", "x,,y", ",", `\.`,
+		strings.Repeat("x", provisioning.MaxTableFieldBytes),
+	}
+	for _, v := range values {
+		if err := provisioning.ValidateScalar(v, provisioning.ColumnText); err != nil {
+			t.Fatalf("%q is not a value this test should be using: %v", v, err)
+		}
+	}
+
+	line, err := provisioning.FormatCSVRow(values)
+	if err != nil {
+		t.Fatalf("FormatCSVRow: %v", err)
+	}
+	if strings.ContainsAny(line, "\n\r") {
+		t.Fatalf("the row was written with a line break inside it: %q", line)
+	}
+	fields, err := provisioning.SplitCSVLine([]byte(line))
+	if err != nil {
+		t.Fatalf("SplitCSVLine(%q): %v", line, err)
+	}
+	if len(fields) != len(values) {
+		t.Fatalf("read back %d fields from %d values: %q", len(fields), len(values), line)
+	}
+	for i, f := range fields {
+		if f.Text != values[i] {
+			t.Errorf("field %d read back as %q, written from %q", i, f.Text, values[i])
+		}
+		if f.Null != (values[i] == "") {
+			t.Errorf("field %d read back with Null=%v, written from %q", i, f.Null, values[i])
+		}
+	}
+}
+
+// CLAUDE.md rule 12: a line of MaxTableLineBytes commas is four million
+// fields and the parser must not allocate for them, whether the commas are
+// fields of their own or all sit inside one quoted field. It is sequential so
+// the allocation it measures is its own.
+func TestSplitCSVLineAllocatesForNoMoreFieldsThanATableMayHave(t *testing.T) {
+	commas := []byte(strings.Repeat(",", provisioning.MaxTableLineBytes))
+	quoted := append(append([]byte{'"'}, commas[:len(commas)-2]...), '"')
+
+	for name, tc := range map[string]struct {
+		line []byte
+		want error
+	}{
+		"bare commas":   {commas, provisioning.ErrTableRowFieldCount},
+		"quoted commas": {quoted, provisioning.ErrTableFieldTooLong},
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := provisioning.SplitCSVLine(tc.line)
+		runtime.ReadMemStats(&after)
+
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: error = %v, want %v", name, err, tc.want)
+		}
+		// The bound is generous: the point is 100 MiB against a few KiB.
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+			t.Fatalf("%s: parsing allocated %d bytes for a line that is refused anyway", name, allocated)
+		}
+	}
+}
+
+// The parser reads one field past the widest table, so a row one column too
+// wide is still refused by validateRow with its exact count, and stops
+// there; a header that wide is a header mismatch, as any other width is.
+func TestSplitCSVLineStopsOneFieldPastTheWidestTable(t *testing.T) {
+	t.Parallel()
+	widest := strings.Repeat("x,", provisioning.MaxDefinitionTableColumns-1) + "x"
+	fields, err := provisioning.SplitCSVLine([]byte(widest))
+	if err != nil || len(fields) != provisioning.MaxDefinitionTableColumns {
+		t.Fatalf("the widest allowed row: %d fields, %v", len(fields), err)
+	}
+	fields, err = provisioning.SplitCSVLine([]byte(widest + ",x"))
+	if err != nil || len(fields) != provisioning.MaxDefinitionTableColumns+1 {
+		t.Fatalf("one field past the widest table: %d fields, %v; want it parsed so its count can be reported", len(fields), err)
+	}
+	if _, err := provisioning.SplitCSVLine([]byte(widest + ",x,x")); !errors.Is(err, provisioning.ErrTableRowFieldCount) {
+		t.Fatalf("two fields past the widest table: %v, want ErrTableRowFieldCount", err)
+	}
+
+	// The first chunk's early header check is where such a file is refused.
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	content := widest + ",x,x\n1,Ann,\n"
+	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	if err != nil {
+		t.Fatalf("begin table upload: %v", err)
+	}
+	_, err = service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content))
+	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
+		t.Fatalf("a header wider than any table = %v, want ErrTableHeaderMismatch", err)
 	}
 }
 
