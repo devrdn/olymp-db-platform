@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestRemoveRefusesWhatTheHarnessDidNotCreate(t *testing.T) {
@@ -154,9 +155,7 @@ func TestTeardownLeavesTheAuditTrailOfEverythingItDidNotCreate(t *testing.T) {
 			RETURNING id`, actor, entity, id.String()).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			_, _ = st.core.Exec(context.WithoutCancel(ctx), `DELETE FROM audit_log WHERE id = $1`, n)
-		})
+		t.Cleanup(func() { deleteAuditEntry(t, st.core, n) })
 		return n
 	}
 	kept := []int64{
@@ -506,4 +505,30 @@ func TestATeardownStoppedHalfwayLeavesWhatSweepFinds(t *testing.T) {
 		t.Fatalf("sweep -yes: %v\n%s", err, out.String())
 	}
 	assertNothingLeft(t, st, f)
+}
+
+// deleteAuditEntry removes one entry a test wrote, the way deleteRows does:
+// the trail refuses a bare DELETE, so the guard is off for the transaction.
+func deleteAuditEntry(t *testing.T, core *pgxpool.Pool, id int64) {
+	t.Helper()
+	ctx := context.WithoutCancel(t.Context())
+	tx, err := core.Begin(ctx)
+	if err != nil {
+		t.Logf("deleting audit entry %d: %v", id, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, sql := range []string{
+		`ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only`,
+		`DELETE FROM audit_log WHERE id = $1`,
+		`ALTER TABLE audit_log ENABLE TRIGGER audit_log_append_only`,
+	} {
+		if _, err := tx.Exec(ctx, sql, id); err != nil {
+			t.Logf("deleting audit entry %d: %v", id, err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Logf("deleting audit entry %d: %v", id, err)
+	}
 }
