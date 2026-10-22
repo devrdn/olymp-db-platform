@@ -8,9 +8,12 @@ import (
 	"net/http"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/settings"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -26,16 +29,31 @@ type SettingsStore interface {
 	RemoveImage(ctx context.Context, actorID uuid.UUID, kind string) error
 }
 
+// SettingsMail is the slice of mailing.Tester these endpoints need.
+type SettingsMail interface {
+	Enabled() bool
+	From() string
+	Send(ctx context.Context, req mailing.TestRequest) error
+}
+
+// SettingsAccounts finds the caller's own address for the test message.
+type SettingsAccounts interface {
+	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
+}
+
 // SettingsHandler serves what the installation calls itself.
 type SettingsHandler struct {
 	settings SettingsStore
+	mail     SettingsMail
+	accounts SettingsAccounts
 	mw       *auth.Middleware
 	log      *slog.Logger
 }
 
 // NewSettingsHandler assembles the settings endpoints.
-func NewSettingsHandler(store SettingsStore, mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
-	return &SettingsHandler{settings: store, mw: mw, log: log}
+func NewSettingsHandler(store SettingsStore, mail SettingsMail, accounts SettingsAccounts,
+	mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
+	return &SettingsHandler{settings: store, mail: mail, accounts: accounts, mw: mw, log: log}
 }
 
 // Mount registers the routes under /settings. The read is open because the
@@ -55,6 +73,7 @@ func (h *SettingsHandler) Mount(r chi.Router) {
 			r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionSettingsManage))
 			r.Get("/all", h.all)
 			r.Put("/", h.save)
+			r.Post("/mail-test", h.sendTestMail)
 			r.Put("/images/{kind}", h.uploadImage)
 			r.Delete("/images/{kind}", h.removeImage)
 		})
@@ -66,6 +85,15 @@ type settingsResponse struct {
 	// Images maps a slot to the hash its URL carries, so a page can link a
 	// picture without fetching it.
 	Images map[string]string `json:"images"`
+	// Mail is only in the administrator's read.
+	Mail *mailStatus `json:"mail,omitempty"`
+}
+
+// mailStatus says whether the installation sends email and as whom; never
+// the relay or its credentials.
+type mailStatus struct {
+	Enabled bool   `json:"enabled"`
+	From    string `json:"from"`
 }
 
 // maxUploadBytes bounds the request body before any of it is held. Larger than
@@ -193,7 +221,10 @@ func (h *SettingsHandler) all(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values, Images: h.presentImages(r)})
+	httpx.JSON(w, r, http.StatusOK, settingsResponse{
+		Values: values, Images: h.presentImages(r),
+		Mail: &mailStatus{Enabled: h.mail.Enabled(), From: h.mail.From()},
+	})
 }
 
 type saveSettingsRequest struct {
@@ -229,4 +260,65 @@ func (h *SettingsHandler) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values})
+}
+
+// sendTestMail sends the caller the test message, to the address on their own
+// account and in the installation's mail language, and answers with how the
+// relay took it. The request body is ignored: no address comes from it.
+func (h *SettingsHandler) sendTestMail(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFrom(r.Context())
+
+	account, err := h.accounts.ByID(r.Context(), identity.UserID)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not read the caller's account", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+	values, err := h.settings.All(r.Context())
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not read the settings", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+
+	err = h.mail.Send(r.Context(), mailing.TestRequest{
+		Actor:        identity.UserID,
+		To:           account.Email,
+		Language:     mailing.Language(values[settings.KeyMailLanguage]),
+		Installation: values[settings.KeyName],
+	})
+	switch {
+	case err == nil:
+		httpx.JSON(w, r, http.StatusOK, map[string]string{"to": account.Email})
+	case errors.Is(err, mailing.ErrTestTooOften):
+		w.Header().Set("Retry-After", "60")
+		httpx.Error(w, r, http.StatusTooManyRequests, codeMailTestTooOften, "Too many test messages; wait a minute")
+	case errors.Is(err, mailing.ErrDisabled):
+		httpx.Error(w, r, http.StatusConflict, codeMailOff, "Mail is off on this installation")
+	case errors.Is(err, mailing.ErrNoAddress):
+		httpx.Error(w, r, http.StatusConflict, codeMailNoAddress, "Your account has no email address to send to")
+	case errors.Is(err, mailing.ErrRelayFailed):
+		h.log.WarnContext(r.Context(), "the test message did not reach the relay", "error", err)
+		h.relayAnswer(w, r, codeMailRelayFailed, "The relay could not be reached or refused the sending account", err)
+	case errors.Is(err, mailing.ErrRefused):
+		h.log.WarnContext(r.Context(), "the relay refused the test message", "error", err)
+		h.relayAnswer(w, r, codeMailRefused, "The relay refused the message", err)
+	default:
+		// Among them mailing.ErrUnknownLanguage and ErrIncompleteMessage,
+		// which only a hand-edited settings row or a wiring fault can cause.
+		h.log.ErrorContext(r.Context(), "could not send the test message", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+	}
+}
+
+// relayAnswer is a 502 carrying the relay's reply, when it gave one, as the
+// subject. The wire message is fixed: the transport's own text names the
+// relay's address.
+func (h *SettingsHandler) relayAnswer(w http.ResponseWriter, r *http.Request, code httpx.Code, message string, err error) {
+	reply, ok := mail.ReplyOf(err)
+	if !ok {
+		httpx.Error(w, r, http.StatusBadGateway, code, message)
+		return
+	}
+	httpx.ErrorWithDetails(w, r, http.StatusBadGateway, code, message, map[string]any{"subject": reply.String()})
 }

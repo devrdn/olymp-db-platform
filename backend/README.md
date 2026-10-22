@@ -210,7 +210,19 @@ Installation settings screen (`installation.mail_language`, Romanian until
 somebody changes it). A message's sign-in link is `PUBLIC_URL` followed by
 `/login`.
 
-**The outbox.** A request never waits on the relay. It queues the message in
+**The test message.** An administrator checks the relay from the
+Installation settings screen: `POST /settings/mail-test` (`settings.manage`)
+sends the test message at once, not through the outbox, to the address on the
+caller's own account and never another, and answers with the relay's reply:
+`mail_relay_failed` when the relay could not be reached or refused the sending
+account, `mail_refused` when it refused the message, each with the SMTP code,
+the enhanced code and at most 200 bytes of the reply's text. An administrator
+may send three a minute, refusals included, and every attempt is recorded in
+the audit trail as `settings.mail_test` with its outcome and the reply's code.
+`GET /settings/all` says whether mail is on and the address it is sent as.
+
+**The outbox.** Every other message is queued: a request never waits on the
+relay. It queues the message in
 the `mail_outbox` table, inside its own transaction, and the API's background
 job `mail-outbox` (`internal/mailing`) sends it within seconds: a queued
 message wakes the job, which also runs every ten seconds. It sends one
