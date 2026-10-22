@@ -1903,6 +1903,7 @@ const en = {
       "contest.instance_reset": "Reset their own database to the contest's starting state",
       "contest.instance_reset_failed": "Asked to reset their own database, but the copy failed; their next action makes a fresh one",
       "settings.change": "Changed the installation's settings",
+      "settings.mail_test": "Sent themselves a test email",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary
     // backend/internal/auth's Reason* constants declare. Never say more than

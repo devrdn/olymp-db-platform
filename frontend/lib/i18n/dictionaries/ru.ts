@@ -1705,6 +1705,7 @@ const ru = {
       "contest.instance_reset": "Вернул свою базу к исходному состоянию олимпиады",
       "contest.instance_reset_failed": "Попросил вернуть свою базу, но копирование не удалось; следующее действие создаст новую",
       "settings.change": "Изменил настройки установки",
+      "settings.mail_test": "Отправил себе тестовое письмо",
     },
     failureReasons: {
       invalid_credentials: "Неверный логин или пароль",

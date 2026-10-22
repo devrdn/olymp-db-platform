@@ -127,6 +127,9 @@ const (
 	// ActionSettingsChange is entity "settings" with no identifier: there is
 	// one of it.
 	ActionSettingsChange = "settings.change"
+	// ActionSettingsMailTest records an administrator sending themselves the
+	// test message, with how the relay answered; it changes nothing.
+	ActionSettingsMailTest = "settings.mail_test"
 )
 
 // actions lists every action code declared above; TestEveryActionIsListed
@@ -156,7 +159,7 @@ var actions = []string{
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
 	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,
 
-	ActionSettingsChange,
+	ActionSettingsChange, ActionSettingsMailTest,
 }
 
 var actionSet = func() map[string]struct{} {

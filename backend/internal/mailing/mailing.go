@@ -3,8 +3,10 @@
 // outbox a request writes a message to, inside its own transaction when it has
 // one, and a dispatcher the background job runs, which claims due messages,
 // hands them to the relay at a bounded rate, retries what a retry can help and
-// abandons the rest. It does not speak SMTP (internal/platform/mail does) or
-// decide who receives a message, or in which language.
+// abandons the rest. The test message alone skips the outbox: the Tester sends
+// it at once, so the administrator who asked sees the relay's answer. It does
+// not speak SMTP (internal/platform/mail does) or decide who receives a
+// message, or in which language.
 package mailing
 
 import (
