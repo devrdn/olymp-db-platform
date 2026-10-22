@@ -4,8 +4,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
-import { ResultPanel } from "./result-panel";
-import type { ConsoleState } from "./actions";
+import { CELL_CLIP_CHARS, ResultPanel } from "./result-panel";
+import type { ConsoleState } from "./requests";
 
 function show(state: ConsoleState, contestId = "c1") {
   return render(<ResultPanel contestId={contestId} state={state} dict={en} />);
@@ -298,6 +298,30 @@ describe("a large result", () => {
     });
 
     expect(screen.getByRole("cell")).toHaveAttribute("title", statement);
+  });
+
+  // One value can be the whole result budget (`SELECT repeat('x', 5000000)`
+  // fits in 5 MiB); laid out whole and copied into `title`, it froze the tab.
+  test("cuts a huge value on the cell, keeping the whole for the open row and the CSV", async () => {
+    const huge = "x".repeat(5_000_000);
+    const created = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    show({ kind: "answer", result: { columns: ["v"], rows: [[huge]], truncated: false, rows_affected: 0 } });
+
+    const cell = screen.getByRole("cell");
+    expect(cell.textContent?.length).toBeLessThanOrEqual(CELL_CLIP_CHARS + 1);
+    expect(cell.textContent?.endsWith("…")).toBe(true);
+    expect(cell.getAttribute("title")?.length).toBeLessThanOrEqual(CELL_CLIP_CHARS + 1);
+
+    await userEvent.click(cell.closest("tr") as HTMLElement);
+    const region = screen.getByRole("region", { name: en.participant.play.workspace.row.region.replace("{n}", "1") });
+    expect(region.querySelector("dd")?.textContent).toBe(huge);
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.download }));
+    // The last call: the spy may carry the earlier download's call.
+    const blob = created.mock.calls.at(-1)?.[0] as Blob;
+    expect((await blob.text()).length).toBe("v\r\n".length + huge.length + "\r\n".length);
   });
 
   // A declared width per column lets the browser place the first row

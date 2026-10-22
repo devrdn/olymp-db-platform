@@ -8,8 +8,9 @@ import { useStandings } from "@/components/product/use-standings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Scoring } from "@/lib/api/contests";
 import type { WorkspaceNotes } from "@/lib/api/workspace";
-import { fetchStandingsAction } from "./actions";
+import type { Locale } from "@/lib/i18n/config";
 import type { PlayDictionary } from "./dictionary";
+import { fetchStandings } from "./requests";
 
 import { NotesPanel } from "./notes-panel";
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
@@ -78,7 +79,7 @@ export function SidePanel({
   scoring?: Scoring;
   icpcPenaltyMin?: number;
   dict: PlayDictionary;
-  locale: string;
+  locale: Locale;
 }) {
   const t = dict.participant.play.workspace.tabs;
   const storyT = dict.participant.play.workspace.story;
@@ -148,6 +149,7 @@ export function SidePanel({
           scoring={scoring}
           icpcPenaltyMin={icpcPenaltyMin}
           dict={dict}
+          locale={locale}
         />
       </TabsContent>
       {/* The one tab whose child fills the height; the field scrolls inside
@@ -176,9 +178,9 @@ function LeaderboardTab({
   contestId: string;
   active: boolean;
   dict: PlayDictionary;
-  locale: string;
+  locale: Locale;
 }) {
-  const { standings, failed } = useStandings({ load: () => fetchStandingsAction(contestId), active });
+  const { standings, failed } = useStandings({ load: () => fetchStandings(contestId, locale), active });
 
   if (!standings) {
     return <p className="text-body text-ink-2">{failed ? dict.leaderboard.failed : dict.leaderboard.heading}</p>;

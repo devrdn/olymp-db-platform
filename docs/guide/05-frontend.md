@@ -230,9 +230,13 @@ straight to the API, same-origin through `/api/v1` (Caddy in production, the
 `next.config.ts` rewrite otherwise), using `request(path, { credentials:
 "same-origin" })` from `client.ts`:
 
-- the play screen's autosave of notes and SQL tabs and its browser signals
-  (`lib/api/workspace.ts`), because the last save must leave as a `keepalive`
-  fetch while the page closes, which a server action cannot do;
+- everything the play screen sends or reads while the contest runs: queries,
+  answers, the question list, the query log, the standings, the schema and
+  the database reset (`play/requests.ts`), and the autosave of notes and SQL
+  tabs with its browser signals (`lib/api/workspace.ts`). Next dispatches a
+  page's server actions one at a time, so as actions an answer would wait
+  behind a running query (section 6); the autosave additionally needs a
+  `keepalive` fetch as the page closes, which an action cannot make;
 - the live monitoring reads (`lib/api/monitor.ts`) and the profile's query
   pages (`lib/api/profile.ts`);
 - the game database's chunked upload
@@ -313,9 +317,10 @@ sequenceDiagram
   hydrates (Next docs, `07-mutating-data.md`, on forms in Client Components).
 
 The Next client dispatches server actions one at a time (see
-`node_modules/next/dist/docs/01-app/01-getting-started/07-mutating-data.md`).
-That is why the play screen's autosave bypasses them: an autosave queued behind
-a running query would wait for it.
+`node_modules/next/dist/docs/01-app/02-guides/server-actions.md`, "Sequential
+dispatch on the client"). That is why the play screen uses none while the
+contest runs: anything queued behind a running query would wait for it
+(section 6).
 
 ## 4. Text, languages and error messages
 
@@ -461,22 +466,22 @@ budgets and surviving a closed tab.
 | `dictionary.ts` | `PlayDictionary`: the `participant`, `errors` and `leaderboard` sections only. |
 | `play-header.tsx` | Title, clock and panel toggles. The only place that opens the events channel. Rendered outside `<Suspense>` so it streams before the slow reads. |
 | `workspace.tsx` | The full-screen grid: schema panel, console, bottom panel (Result and Query log tabs), side panel. Here "workspace" names the screen's layout; the server-side *workspace* in the glossary is the participant's notes and SQL tabs. |
-| `console.tsx` | The SQL editor (`components/product/code-editor.tsx`, CodeMirror), the SQL tab strip and the Run button, bound to `runQueryAction`. |
+| `console.tsx` | The SQL editor (`components/product/code-editor.tsx`, CodeMirror), the SQL tab strip and the Run button, bound to `runQuery`. |
 | `sql-tabs.tsx`, `use-sql-tabs.ts` | The tab strip (draws only) and its state: which tabs exist, which is open, one autosave engine per tab. |
 | `result-panel.tsx`, `row-detail.tsx` | The last query's result or refusal; one row opened in full. |
 | `query-log-panel.tsx` | Every statement this participant ran, paged by `QUERY_LOG_PAGE_SIZE`. |
 | `side-panel.tsx` | Tabs for story, questions, notes and leaderboard; the story's Markdown and print exports. |
-| `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswerAction`. |
+| `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswer`. |
 | `notes-panel.tsx` | One self-saving notes field. |
 | `schema-panel.tsx` | Tables, columns, types and foreign keys. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
-| `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabaseAction`, that stays open until it can say how the reset went. |
+| `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. |
 | `panel-toggles.tsx`, `pane-splitter.tsx` | Collapsible panels with keyboard shortcuts; draggable, remembered pane sizes. |
 | `use-autosave.ts` | The autosave engine for notes and SQL tabs. |
 | `use-contest-events.ts` | The Server-Sent Events channel and the corrected clock. |
 | `use-signals.ts` | Page-left and paste signals reported to the organiser. |
 | `refusals.ts` | What each refusal code means for this screen. |
 | `content-loaded.tsx` | Tells the header, across the Suspense boundary, whether the workspace or a refusal rendered. |
-| `actions.ts` | Server actions: run a query, submit an answer, refresh questions, page the query log, read the standings, reset the database and re-read the schema. |
+| `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log, read the standings, reset the database and re-read the schema. Not server actions; see below. |
 | `story.md/route.ts` | Route Handler: the story as a Markdown download. |
 | `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `reload-link.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton, rate-limit reload button. |
 
@@ -491,8 +496,8 @@ flowchart TD
     ws --> bottom["ResultPanel and QueryLogPanel"]
     ws --> side["SidePanel"]
     console --> tabs["useSqlTabs: one autosave engine per tab"]
-    console --> run["runQueryAction"]
-    side --> questions["QuestionsPanel: submitAnswerAction"]
+    console --> run["runQuery"]
+    side --> questions["QuestionsPanel: submitAnswer"]
     side --> notes["NotesPanel: useAutosave"]
     ws --> signals["useSignals"]
 ```
@@ -502,19 +507,35 @@ The deeper rationale is in docs/ARCHITECTURE.md: the workspace in
 clock in [§8](../ARCHITECTURE.md#8-the-contest-clock), signals and monitoring
 in [§9.4](../ARCHITECTURE.md#94-watching-a-participant).
 
-### Queries and answers go through server actions
+### Queries and answers go straight to the API
 
-`runQueryAction` and `submitAnswerAction` in `actions.ts` return a
-discriminated union (`idle`, `answer` or `refused` with `code`, `subject`,
-`requestId` and, for a syntax error, `position`). A union keeps stale rows from
-being shown next to a refusal. The editor's form stays mounted outside every
-tab; the result goes to `ResultPanel` through the workspace.
+The play screen has no server actions. Next dispatches a page's server
+actions one at a time per client, so with a query in flight (up to fifteen
+seconds in the queue plus five running) an answer, the standings poll, the
+query log and the question list would all wait behind it, and in the last
+minute of a contest an answer sent on time would reach the API as
+`deadline_passed`. Routing a 5 MiB result through the Next process also
+held it there several times over (as text, parsed, validated and encoded
+for the client). So every call in `requests.ts` goes from the browser to
+the same-origin API with the session cookie, as the autosave does, using
+`request(path, { credentials: "same-origin" })` from `lib/api/client.ts`;
+Caddy routes `/api/*` to the API, and the API checks `Origin` on writes.
+
+The functions keep the server-action shape so a form binds them with
+`useActionState` all the same: `runQuery` and `submitAnswer` take `(previous,
+formData)` and return a discriminated union (`idle`, `answer` or `refused`
+with `code`, `subject`, `requestId` and, for a syntax error, `position`). A
+union keeps stale rows from being shown next to a refusal. Ids are still
+checked with `isId` before they reach a path, and the reads that depend on
+language (`refreshQuestions`, `fetchStandings`) take the page's `locale`, so
+the list does not change language. The editor's form stays mounted outside
+every tab; the result goes to `ResultPanel` through the workspace.
 
 ### Autosave
 
 Notes and SQL tabs save without a button. The browser writes directly to the
-API (`saveNotes`, `updateTab` in `lib/api/workspace.ts`), not through server
-actions. `AutosaveEngine` in `use-autosave.ts`:
+API (`saveNotes`, `updateTab` in `lib/api/workspace.ts`), like everything
+else on this screen. `AutosaveEngine` in `use-autosave.ts`:
 
 - saves 1.5 s after the last edit, and at least every 10 s while typing;
 - saves at once when the editor loses focus, and as a `keepalive` request

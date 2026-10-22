@@ -12,7 +12,7 @@ import type { Scoring } from "@/lib/api/contests";
 import type { WorkspaceSnapshot } from "@/lib/api/workspace";
 import type { Locale } from "@/lib/i18n/config";
 
-import { refreshSchemaAction, type ConsoleState } from "./actions";
+import { refreshSchema, type ConsoleState } from "./requests";
 import { ConsoleEditor } from "./console";
 import { usePanelVisibility, useSchemaPanel } from "./panel-toggles";
 import { QueryLogPanel } from "./query-log-panel";
@@ -166,7 +166,7 @@ export function Workspace({
     setLastResult({ kind: "idle" });
     setResultFrom(null);
     if (!schemaShown) return;
-    void refreshSchemaAction(contestId).then((result) => {
+    void refreshSchema(contestId).then((result) => {
       if (result.kind === "ok") setSchema(result.schema);
     });
   }, [contestId, schemaShown]);
