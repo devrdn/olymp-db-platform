@@ -3,7 +3,9 @@
 import { useId } from "react";
 
 import { EMAIL_SKIP_REASONS } from "@/lib/api/accounts-terms";
+import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { plural } from "@/lib/i18n/plural";
 
 /**
  * Emailing sign-in details beside an issued one-time password: the option on
@@ -13,13 +15,33 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  */
 
 /**
- * Offered only while mail is on, ticked by default. Submitted as
- * `send_by_email=on`, which `sendByEmail` in `delivery.ts` reads; unticked, the
- * request asks for nothing.
+ * What the page learnt about mail (`readMailOffer` in `delivery.ts`):
+ * `unknown` when the status could not be read.
  */
-export function SendByEmailOption({ dict }: { dict: Dictionary }) {
+export type MailOffer =
+  | { status: "on"; perMinute: number }
+  | { status: "off" }
+  | { status: "unknown" };
+
+/** The outbox's rate for `EmailSummary`; 0 when it is not known. */
+export function sendingRate(mail: MailOffer): number {
+  return mail.status === "on" ? mail.perMinute : 0;
+}
+
+/**
+ * The option while mail is on, ticked by default; a notice instead when the
+ * status could not be read, so a missing option is never a mystery; nothing
+ * while mail is off. Submitted as `send_by_email=on`, which `sendByEmail` in
+ * `delivery.ts` reads; unticked, the request asks for nothing.
+ */
+export function SendByEmailOption({ mail, dict }: { mail: MailOffer; dict: Dictionary }) {
   const t = dict.accounts.signInMail;
   const hintId = useId();
+
+  if (mail.status === "off") return null;
+  if (mail.status === "unknown") {
+    return <p className="max-w-body text-small text-warn">{t.unknown}</p>;
+  }
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -83,6 +105,22 @@ export function summariseEmail(rows: readonly EmailRow[]): EmailSummaryData | nu
   return { queued, notEmailed, groups };
 }
 
+/**
+ * How long the queued messages take at the outbox's rate: whole minutes,
+ * rounded up, and at least one. Messages already waiting make it longer, which
+ * the sentence says.
+ */
+export function sendingTime(
+  queued: number,
+  perMinute: number,
+  dict: Dictionary,
+  locale: Locale,
+): string {
+  const t = dict.accounts.signInMail;
+  const minutes = plural(t.minutes, Math.max(1, Math.ceil(queued / perMinute)), locale);
+  return (queued === 1 ? t.etaOne : t.etaMany).replace("{minutes}", minutes);
+}
+
 /** Up to this many accounts not emailed, their logins show without a click. */
 const OPEN_UP_TO = 10;
 
@@ -92,7 +130,18 @@ const OPEN_UP_TO = 10;
  * does not name is shown raw, and nothing renders when email was not asked
  * for.
  */
-export function EmailSummary({ rows, dict }: { rows: readonly EmailRow[]; dict: Dictionary }) {
+export function EmailSummary({
+  rows,
+  perMinute,
+  dict,
+  locale,
+}: {
+  rows: readonly EmailRow[];
+  /** The outbox's sending rate as the page read it; 0 leaves the time out. */
+  perMinute: number;
+  dict: Dictionary;
+  locale: Locale;
+}) {
   const summary = summariseEmail(rows);
   if (!summary) return null;
 
@@ -103,7 +152,13 @@ export function EmailSummary({ rows, dict }: { rows: readonly EmailRow[]; dict: 
   return (
     <div className="flex flex-col gap-2 border-t border-line pt-3">
       {summary.queued > 0 ? (
-        <p className="text-small text-good">{t.queued.replace("{n}", String(summary.queued))}</p>
+        <div className="flex flex-col gap-1">
+          <p className="text-small text-good">{plural(t.queued, summary.queued, locale)}</p>
+          <p className="max-w-body text-small text-ink-2">
+            {perMinute > 0 ? `${sendingTime(summary.queued, perMinute, dict, locale)} ` : null}
+            {t.replaced}
+          </p>
+        </div>
       ) : null}
 
       {summary.notEmailed > 0 ? (

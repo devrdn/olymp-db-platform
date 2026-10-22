@@ -15,6 +15,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { Role } from "@/lib/api/accounts";
+import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import {
@@ -23,7 +24,7 @@ import {
   type CreateAccountState,
   type ImportAccountsState,
 } from "./create-actions";
-import { EmailSummary, SendByEmailOption } from "./email-delivery";
+import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
@@ -182,13 +183,15 @@ function NotImportedRows({ logins, title, why }: { logins: readonly string[]; ti
 function NewAccountForm({
   roles,
   dict,
-  mailEnabled,
+  locale,
+  mail,
   onClose,
   reportDismissible,
 }: {
   roles: Role[];
   dict: Dictionary;
-  mailEnabled: boolean;
+  locale: Locale;
+  mail: MailOffer;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -228,7 +231,9 @@ function NewAccountForm({
               reason: state.result.email_skipped_reason,
             },
           ]}
+          perMinute={sendingRate(mail)}
           dict={dict}
+          locale={locale}
         />
 
         <DialogFooter>
@@ -264,7 +269,7 @@ function NewAccountForm({
 
       <RolesPicker roles={roles} label={t.one.rolesLabel} />
 
-      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+      <SendByEmailOption mail={mail} dict={dict} />
 
       {failure ? (
         <p role="alert" className="text-small text-bad">
@@ -287,13 +292,15 @@ function NewAccountForm({
 function ImportRosterForm({
   roles,
   dict,
-  mailEnabled,
+  locale,
+  mail,
   onClose,
   reportDismissible,
 }: {
   roles: Role[];
   dict: Dictionary;
-  mailEnabled: boolean;
+  locale: Locale;
+  mail: MailOffer;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -372,7 +379,9 @@ function ImportRosterForm({
             emailed: row.emailed,
             reason: row.email_skipped_reason,
           }))}
+          perMinute={sendingRate(mail)}
           dict={dict}
+          locale={locale}
         />
 
         <SkippedRows skipped={skipped} reasons={reasons} />
@@ -427,7 +436,7 @@ function ImportRosterForm({
 
       <RolesPicker roles={roles} label={t.roster.rolesLabel} />
 
-      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+      <SendByEmailOption mail={mail} dict={dict} />
 
       {failure ? (
         <p role="alert" className="text-small text-bad">
@@ -449,16 +458,18 @@ function ImportRosterForm({
 
 /**
  * Triggers for one account and for a roster. `roles` is the server's
- * catalogue; `mailEnabled` offers emailing the sign-in details.
+ * catalogue; `mail` decides whether emailing the sign-in details is offered.
  */
 export function AccountCreateControls({
   roles,
   dict,
-  mailEnabled,
+  locale,
+  mail,
 }: {
   roles: Role[];
   dict: Dictionary;
-  mailEnabled: boolean;
+  locale: Locale;
+  mail: MailOffer;
 }) {
   const t = dict.accounts.create;
 
@@ -469,7 +480,8 @@ export function AccountCreateControls({
           <NewAccountForm
             roles={roles}
             dict={dict}
-            mailEnabled={mailEnabled}
+            locale={locale}
+            mail={mail}
             onClose={close}
             reportDismissible={reportDismissible}
           />
@@ -480,7 +492,8 @@ export function AccountCreateControls({
           <ImportRosterForm
             roles={roles}
             dict={dict}
-            mailEnabled={mailEnabled}
+            locale={locale}
+            mail={mail}
             onClose={close}
             reportDismissible={reportDismissible}
           />

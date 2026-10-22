@@ -49,7 +49,7 @@ const props = {
   filtered: false,
   roles,
   locale: "en" as const,
-  mailEnabled: false,
+  mail: { status: "off" } as const,
 };
 
 describe("AccountRegister", () => {

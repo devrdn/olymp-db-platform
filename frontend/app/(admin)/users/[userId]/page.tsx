@@ -12,7 +12,7 @@ import { fetchIdentity } from "@/lib/auth/session";
 import { formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
-import { readMailEnabled } from "../delivery";
+import { readMailOffer } from "../delivery";
 import { AccountCard } from "./account-card";
 
 export async function generateMetadata(props: PageProps<"/users/[userId]">) {
@@ -47,13 +47,13 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
   const { userId } = await props.params;
   if (!isId(userId)) notFound();
 
-  const [dict, locale, account, rolesPayload, identity, mailEnabled] = await Promise.all([
+  const [dict, locale, account, rolesPayload, identity, mail] = await Promise.all([
     activeDictionary(),
     activeLocale(),
     loadAccount(userId),
     serverRequest("/roles"),
     fetchIdentity(),
-    readMailEnabled(),
+    readMailOffer(),
   ]);
 
   const { items: roles } = roleListSchema.parse(rolesPayload);
@@ -98,7 +98,8 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
         viewerId={identity?.id ?? ""}
         dict={dict}
         statusChangedAtLabel={statusChangedAtLabel}
-        mailEnabled={mailEnabled}
+        locale={locale}
+        mail={mail}
       />
     </Band>
   );
