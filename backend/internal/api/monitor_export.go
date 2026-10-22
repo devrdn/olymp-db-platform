@@ -21,7 +21,8 @@ import (
 // oldest first.
 //
 // Streamed as a k-way merge of each source's forward range
-// (monitor.StreamFeed): one page per source in memory, no transaction held
+// (monitor.StreamFeed): one page per source in memory, plus one per
+// participant for the sign-ins of a contest export; no transaction held
 // between pages.
 //
 // Bounded by rows and bytes (counted as written, CLAUDE.md rule 12), each

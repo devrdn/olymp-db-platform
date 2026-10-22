@@ -63,7 +63,9 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 }
 
 // FeedSource reads one source of the feed past q's cursor, at most
-// q.Limit+1 named items, for monitor.StreamFeed to merge an export from.
+// q.Limit+1 named items, for monitor.StreamFeed to merge an export from. A
+// contest-wide read of a journal is one range of its (contest_id, time, id)
+// index, as in Feed; the participants of each page are named once per page.
 func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
 	q, err := q.Normalize()
 	if err != nil {
@@ -87,9 +89,10 @@ func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source moni
 	return items, nil
 }
 
-// FeedRegistrations lists the contest's registrations for a contest-wide
-// stream. A contest past monitor.MaxRosterRows is refused rather than
-// streamed with participants missing.
+// FeedRegistrations lists the contest's registrations, for the sources a
+// contest-wide stream reads one registration at a time. A contest past
+// monitor.MaxRosterRows is refused rather than streamed with participants
+// missing.
 func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := w.querier(ctx).Query(ctx, `
 		SELECT id FROM registrations WHERE contest_id = $1 ORDER BY id LIMIT $2`,
