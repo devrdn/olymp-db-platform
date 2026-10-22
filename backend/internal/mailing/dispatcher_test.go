@@ -366,6 +366,37 @@ func TestARefusalQuotingTheRecipientKeepsItsCode(t *testing.T) {
 		"550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient [redacted] not found", "ana.popescu@usm.md")
 }
 
+// go-mail ends its error with the addresses the send was for, which the body
+// of a test message does not name: the list is dropped, the reply and the
+// message ID kept.
+func TestTheRecordedErrorNamesNoRecipient(t *testing.T) {
+	q := queuedTo(1, "student@gmial.com")
+	q.Body = "This is a test message.\n"
+	store := &fakeStore{pending: []mailing.Queued{q}}
+	transport := &fakeTransport{replies: []error{fmt.Errorf(
+		"%w: %w: send failed: sending SMTP RCPT command: 550 \"5.1.1 no such user\", "+
+			"affected recipient(s): student@gmial.com, affected message ID: <c0ffee@usm.md>",
+		mail.ErrPermanent, mail.ErrRecipient)}}
+	var logs bytes.Buffer
+	store.clock = func() time.Time { return now }
+	d := mailing.NewDispatcher(mailing.DispatcherConfig{
+		Store: store, Transport: transport, PerMinute: 25, Counters: &fakeCounters{},
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)), Now: store.clock,
+	})
+
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != 1 {
+		t.Fatalf("abandoned %+v", store.abandoned)
+	}
+	assertRecordedError(t, store.abandoned[0].lastError,
+		`550 "5.1.1 no such user", affected message ID: <c0ffee@usm.md>`, "student@gmial.com")
+	if !strings.Contains(logs.String(), "5.1.1") || strings.Contains(logs.String(), "student@gmial.com") {
+		t.Errorf("log %q, want the reply without the recipient", logs.String())
+	}
+}
+
 func assertRecordedError(t *testing.T, got, keep, reject string) {
 	t.Helper()
 	if !strings.Contains(got, keep) || strings.Contains(got, reject) {

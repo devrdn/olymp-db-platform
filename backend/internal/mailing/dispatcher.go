@@ -342,10 +342,17 @@ func backoff(attempt int) time.Duration {
 // password is at least this long (users.MinPasswordLength).
 const secretLength = 12
 
+// go-mail's SendError lists the addresses the send was for between these two
+// markers; the message ID after them is the sender's own.
+const (
+	recipientsMarker = ", affected recipient(s): "
+	messageIDMarker  = ", affected message ID: "
+)
+
 // reason is what is stored and logged about a failed attempt: the error's
-// text, printable and bounded. A relay that quotes the message back would
-// put a password in it, so every long word of the body is redacted from it;
-// the reply's code stays.
+// text, printable and bounded, without go-mail's list of recipients. A relay
+// that quotes the message back would put a password in it, so every long
+// word of the body is redacted from it; the reply's code stays.
 func reason(err error, body string) string {
 	text := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -353,6 +360,13 @@ func reason(err error, body string) string {
 		}
 		return r
 	}, err.Error())
+
+	if before, recipients, found := strings.Cut(text, recipientsMarker); found {
+		text = before
+		if _, id, found := strings.Cut(recipients, messageIDMarker); found {
+			text += messageIDMarker + id
+		}
+	}
 
 	for _, word := range strings.Fields(body) {
 		if len(word) >= secretLength {
