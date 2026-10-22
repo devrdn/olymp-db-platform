@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/api/client";
 import { contestListSchema } from "@/lib/api/contests";
+import { isId } from "@/lib/api/ids";
 import { playStorySchema } from "@/lib/api/play";
 import { serverRequest } from "@/lib/api/server";
 import { cleanEditorMarkdown } from "@/lib/format/markdown";
@@ -27,6 +28,11 @@ export async function GET(
   { params }: { params: Promise<{ contestId: string }> },
 ): Promise<Response> {
   const { contestId } = await params;
+  // The segment is the visitor's: unchecked, it is interpolated into the API
+  // path (where `..` resolves to another endpoint) and into the download's
+  // file name. Refused here, before any request is made.
+  if (!isId(contestId)) return new Response("Not found", { status: 404 });
+
   const locale = await activeLocale();
 
   try {
