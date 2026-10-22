@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
-import { fetchStandingsAction } from "./actions";
+import { fetchStandings } from "./requests";
 import { SidePanel } from "./side-panel";
 
-vi.mock("./actions", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./actions")>()),
-  fetchStandingsAction: vi.fn(),
+vi.mock("./requests", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./requests")>()),
+  fetchStandings: vi.fn(),
 }));
 
 function show() {
@@ -329,7 +329,7 @@ test("scrolls the newly selected tab into view, since the strip may be scrolled 
 
 describe("the side panel's table", () => {
   test("is read only once its tab is chosen, and shows whose row is whose", async () => {
-    vi.mocked(fetchStandingsAction).mockResolvedValue({
+    vi.mocked(fetchStandings).mockResolvedValue({
       kind: "ok",
       standings: {
         state: "live", scoring: "points", title: "", generatedAt: "2026-09-20T10:00:00Z", truncated: false,
@@ -340,11 +340,11 @@ describe("the side panel's table", () => {
     show();
 
     const tab = screen.getByRole("tab", { name: en.leaderboard.tab });
-    expect(fetchStandingsAction).not.toHaveBeenCalled();
+    expect(fetchStandings).not.toHaveBeenCalled();
 
     await userEvent.click(tab);
     expect(await screen.findByText("sherlock")).toBeInTheDocument();
-    expect(fetchStandingsAction).toHaveBeenCalledWith("c1");
+    expect(fetchStandings).toHaveBeenCalledWith("c1", "en");
     expect(screen.getByText(en.leaderboard.you)).toBeInTheDocument();
   });
 });

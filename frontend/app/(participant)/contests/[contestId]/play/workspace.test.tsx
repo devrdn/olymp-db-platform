@@ -19,22 +19,22 @@ import type {
   QueryLogRefreshResult,
   ResetState,
   SchemaRefreshResult,
-} from "./actions";
+} from "./requests";
 
 const runResult = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
 const logCalls = vi.hoisted(() => ({ count: 0 }));
 const schemaReads = vi.hoisted(() => ({ count: 0, next: { kind: "refused", code: "unreachable" } as SchemaRefreshResult }));
 
-vi.mock("./actions", () => ({
-  runQueryAction: async () => runResult.current,
-  submitAnswerAction: async () => ({ kind: "idle" }) as AnswerState,
-  refreshQuestionsAction: async () => ({ kind: "ok", items: [] }) as QuestionsRefreshResult,
-  fetchQueryLogAction: async (): Promise<QueryLogRefreshResult> => {
+vi.mock("./requests", () => ({
+  runQuery: async () => runResult.current,
+  submitAnswer: async () => ({ kind: "idle" }) as AnswerState,
+  refreshQuestions: async () => ({ kind: "ok", items: [] }) as QuestionsRefreshResult,
+  fetchQueryLog: async (): Promise<QueryLogRefreshResult> => {
     logCalls.count++;
     return { kind: "ok", items: [], total: 0 };
   },
-  resetDatabaseAction: async (): Promise<ResetState> => ({ kind: "done" }),
-  refreshSchemaAction: async (): Promise<SchemaRefreshResult> => {
+  resetDatabase: async (): Promise<ResetState> => ({ kind: "done" }),
+  refreshSchema: async (): Promise<SchemaRefreshResult> => {
     schemaReads.count++;
     return schemaReads.next;
   },

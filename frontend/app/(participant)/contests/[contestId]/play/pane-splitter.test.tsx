@@ -6,11 +6,11 @@ import en from "@/lib/i18n/dictionaries/en";
 
 // The whole workspace is rendered, since a divider needs two panes; its
 // collaborators are stubbed out and tested where they live.
-vi.mock("./actions", () => ({
-  runQueryAction: async () => ({ kind: "idle" }),
-  submitAnswerAction: async () => ({ kind: "idle" }),
-  refreshQuestionsAction: async () => ({ kind: "ok", items: [] }),
-  fetchQueryLogAction: async () => ({ kind: "ok", items: [], total: 0 }),
+vi.mock("./requests", () => ({
+  runQuery: async () => ({ kind: "idle" }),
+  submitAnswer: async () => ({ kind: "idle" }),
+  refreshQuestions: async () => ({ kind: "ok", items: [] }),
+  fetchQueryLog: async () => ({ kind: "ok", items: [], total: 0 }),
 }));
 vi.mock("./use-contest-events", () => ({
   useContestEvents: () => ({ offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" }),

@@ -6,7 +6,7 @@ import en from "@/lib/i18n/dictionaries/en";
 import type { PlayQuestion } from "@/lib/api/play";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
-import type { AnswerState, QuestionsRefreshResult } from "./actions";
+import type { AnswerState, QuestionsRefreshResult } from "./requests";
 import { pasteTargetOf } from "./use-signals";
 
 // The two actions are the boundary; what lies behind them is tested where
@@ -17,9 +17,9 @@ const refresh = vi.hoisted(() => ({
   calls: 0,
 }));
 
-vi.mock("./actions", () => ({
-  submitAnswerAction: async () => answer.current,
-  refreshQuestionsAction: async () => {
+vi.mock("./requests", () => ({
+  submitAnswer: async () => answer.current,
+  refreshQuestions: async () => {
     refresh.calls++;
     return refresh.current;
   },
@@ -56,14 +56,14 @@ async function submit(value = "the gardener") {
 
 describe("the questions panel", () => {
   test("says there is nothing to answer yet rather than rendering an empty list", () => {
-    render(<QuestionsPanel contestId="c1" items={[]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[]} dict={en} />);
 
     expect(screen.getByText(en.participant.play.questions.empty)).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   test("shows the question's own rendered wording and its points", () => {
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     expect(screen.getByText(/Who was in the greenhouse/)).toBeInTheDocument();
     expect(screen.getByText("10 pts")).toBeInTheDocument();
@@ -74,7 +74,7 @@ describe("the questions panel", () => {
   // once failed under CPU contention.
   test("a correct answer shows the verdict and the points awarded", async () => {
     answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 2, closed: false } };
-    render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 3 })]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ attemptsRemaining: 3 })]} dict={en} />);
 
     await submit();
 
@@ -86,7 +86,7 @@ describe("the questions panel", () => {
       kind: "answer",
       result: { correct: false, pointsAwarded: 0, attemptsRemaining: 1, closed: false },
     };
-    render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 2 })]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ attemptsRemaining: 2 })]} dict={en} />);
 
     await submit("wrong guess");
 
@@ -98,7 +98,7 @@ describe("the questions panel", () => {
       kind: "answer",
       result: { correct: false, pointsAwarded: 0, attemptsRemaining: 1, closed: false },
     };
-    render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 2 })]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ attemptsRemaining: 2 })]} dict={en} />);
 
     await submit("wrong guess");
 
@@ -108,7 +108,7 @@ describe("the questions panel", () => {
   test("a closed question shows no form, and keeps the verdict that closed it", async () => {
     answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
     refresh.current = { kind: "ok", items: [question({ attemptsRemaining: 0, closed: true })] };
-    render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 1 })]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ attemptsRemaining: 1 })]} dict={en} />);
 
     await submit();
 
@@ -133,6 +133,7 @@ describe("the questions panel", () => {
     refresh.calls = 0;
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ id: "q1" }), entry({ id: "q2", canAnswer: false, bodyMd: "Name the hour." })]}
         dict={en}
@@ -153,6 +154,7 @@ describe("the questions panel", () => {
   test("a question not yet open in sequence is shown but cannot be answered", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ canAnswer: false, closed: false })]}
         dict={en}
@@ -167,6 +169,7 @@ describe("the questions panel", () => {
   test("a choice question offers its own labelled options, never free text", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[
           entry({
@@ -189,6 +192,7 @@ describe("the questions panel", () => {
   test("a choice's own label is the hit area, and is kept at least 24px tall", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ kind: "choice", choiceIds: ["a"], choices: { a: "The butler" } })]}
         dict={en}
@@ -202,7 +206,7 @@ describe("the questions panel", () => {
 
   test("a refusal names what it was about, from the caller's own words", async () => {
     answer.current = { kind: "refused", code: "question_not_open" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     await submit();
 
@@ -214,7 +218,7 @@ describe("the questions panel", () => {
 
   test("a value refused as not one of the options says so in a sentence, not the fallback", async () => {
     answer.current = { kind: "refused", code: "answer_not_a_choice" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     await submit();
 
@@ -239,6 +243,7 @@ describe("the questions panel", () => {
     };
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ id: "q1" }), entry({ id: "q2", bodyMd: "Name the hour." })]}
         dict={en}
@@ -261,6 +266,7 @@ describe("the questions panel", () => {
   test("shows the question's own display number as an element separate from its wording", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({}, 1), entry({ id: "q2", bodyMd: "Name the hour." }, 2)]}
         dict={en}
@@ -276,7 +282,7 @@ describe("the questions panel", () => {
   // These refusals say "try again", so the typed text must still be there.
   test("a refusal that says try again leaves what the student typed in the field", async () => {
     answer.current = { kind: "refused", code: "attempt_conflict" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     await submit("the gardener");
 
@@ -286,7 +292,7 @@ describe("the questions panel", () => {
   // A wait, not a fault: quiet, no reference, the text kept.
   test("answering too often reads as a wait and keeps what the student typed", async () => {
     answer.current = { kind: "refused", code: "answer_too_often", requestId: "req-7" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     await submit("the gardener");
 
@@ -300,14 +306,14 @@ describe("the questions panel", () => {
   // As in the console: a reference under an ordinary refusal reads as a fault.
   test("carries a reference for a fault, and not for an ordinary refusal", async () => {
     answer.current = { kind: "refused", code: "answer_too_long", requestId: "req-7" };
-    const { unmount } = render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    const { unmount } = render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
     await submit("the gardener");
     await screen.findByText(en.errors.answer_too_long);
     expect(screen.queryByText(/req-7/)).not.toBeInTheDocument();
     unmount();
 
     answer.current = { kind: "refused", code: "internal_error", requestId: "req-8" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
     await submit("the gardener");
     expect(await screen.findByText(/req-8/)).toBeInTheDocument();
   });
@@ -317,6 +323,7 @@ describe("the questions panel", () => {
   test("a closed question loaded from the server shows what it was won for", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ closed: true, canAnswer: false, correct: true, pointsAwarded: 7 })]}
         dict={en}
@@ -329,6 +336,7 @@ describe("the questions panel", () => {
   test("a closed question loaded from the server that was never solved says so rather than staying silent", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ closed: true, canAnswer: false, correct: false, pointsAwarded: 0 })]}
         dict={en}
@@ -345,7 +353,7 @@ describe("the questions panel", () => {
       result: { correct: true, pointsAwarded: 10, attemptsRemaining: undefined, closed: true },
     };
     refresh.current = { kind: "refused", code: "unreachable" };
-    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
 
     await submit();
 
@@ -366,6 +374,7 @@ describe("a question's state", () => {
   test("marks the first still-open question as the one being worked on", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={threeQuestions(
           { closed: true, correct: true },
@@ -386,6 +395,7 @@ describe("a question's state", () => {
   test("tells a closed question that was answered from one that ran out of attempts", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={threeQuestions(
           { closed: true, correct: true },
@@ -405,6 +415,7 @@ describe("a question's state", () => {
   test("names the question a locked one is waiting on", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={threeQuestions(
           { closed: true, correct: true },
@@ -423,6 +434,7 @@ describe("a question's state", () => {
   test("marks nothing as current when the server says nothing can be answered", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={threeQuestions(
           { closed: false, canAnswer: false },
@@ -442,6 +454,7 @@ describe("a question's state", () => {
   test("an olympiad with everything answered marks nothing as current", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={threeQuestions(
           { closed: true, correct: true },
@@ -462,7 +475,7 @@ describe("a question's state", () => {
 describe("the questions panel, ICPC scoring", () => {
   test("hides a question's own points, and states the penalty once for the whole list", () => {
     render(
-      <QuestionsPanel contestId="c1" items={[entry()]} scoring="icpc" icpcPenaltyMin={20} dict={en} />,
+      <QuestionsPanel locale="en" contestId="c1" items={[entry()]} scoring="icpc" icpcPenaltyMin={20} dict={en} />,
     );
 
     expect(screen.queryByText("10 pts")).not.toBeInTheDocument();
@@ -472,7 +485,7 @@ describe("the questions panel, ICPC scoring", () => {
   });
 
   test("says nothing about points in the other two scorings", () => {
-    render(<QuestionsPanel contestId="c1" items={[entry()]} scoring="points" icpcPenaltyMin={20} dict={en} />);
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} scoring="points" icpcPenaltyMin={20} dict={en} />);
 
     expect(
       screen.queryByText(en.participant.play.questions.icpcPenalty.replace("{n}", "20")),
@@ -483,6 +496,7 @@ describe("the questions panel, ICPC scoring", () => {
     answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 0, attemptsRemaining: 2, closed: false } };
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ attemptsRemaining: 3 })]}
         scoring="icpc"
@@ -500,6 +514,7 @@ describe("the questions panel, ICPC scoring", () => {
   test("a question closed from an earlier visit also shows the pointless verdict", () => {
     render(
       <QuestionsPanel
+        locale="en"
         contestId="c1"
         items={[entry({ closed: true, canAnswer: false, correct: true, pointsAwarded: 0 })]}
         scoring="icpc"
@@ -514,6 +529,6 @@ describe("the questions panel, ICPC scoring", () => {
 });
 
 test("a paste into an answer is watched as one into the answer", () => {
-  render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+  render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
   expect(pasteTargetOf(screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }))).toBe("answer");
 });

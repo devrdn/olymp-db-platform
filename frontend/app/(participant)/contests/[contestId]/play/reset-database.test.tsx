@@ -4,17 +4,17 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
-import type { ResetState } from "./actions";
+import type { ResetState } from "./requests";
 
-// The real Server Actions module would pull in Next's server runtime.
-const { resetDatabaseAction } = vi.hoisted(() => ({
-  resetDatabaseAction: vi.fn(async (previous: ResetState, form: FormData): Promise<ResetState> => {
+// The request is the boundary; what it sends is tested where it lives.
+const { resetDatabase } = vi.hoisted(() => ({
+  resetDatabase: vi.fn(async (previous: ResetState, form: FormData): Promise<ResetState> => {
     void previous;
     void form;
     return { kind: "done" };
   }),
 }));
-vi.mock("./actions", () => ({ resetDatabaseAction }));
+vi.mock("./requests", () => ({ resetDatabase }));
 
 import { ResetDatabase } from "./reset-database";
 
@@ -22,7 +22,7 @@ const t = en.participant.play.workspace.reset;
 const contestId = "11111111-1111-1111-1111-111111111111";
 
 beforeEach(() => {
-  resetDatabaseAction.mockClear();
+  resetDatabase.mockClear();
 });
 
 function show(onReset = vi.fn()) {
@@ -44,7 +44,7 @@ describe("ResetDatabase", () => {
     const dialog = screen.getByRole("dialog", { name: t.title });
     expect(dialog).toHaveTextContent(t.body);
     expect(dialog).toHaveTextContent(t.kept);
-    expect(resetDatabaseAction).not.toHaveBeenCalled();
+    expect(resetDatabase).not.toHaveBeenCalled();
   });
 
   test("cancelling resets nothing", async () => {
@@ -54,7 +54,7 @@ describe("ResetDatabase", () => {
     await userEvent.click(screen.getByRole("button", { name: t.cancel }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(resetDatabaseAction).not.toHaveBeenCalled();
+    expect(resetDatabase).not.toHaveBeenCalled();
     expect(onReset).not.toHaveBeenCalled();
   });
 
@@ -64,13 +64,13 @@ describe("ResetDatabase", () => {
     await openAndConfirm();
 
     expect(await screen.findByRole("status")).toHaveTextContent(t.done);
-    expect(resetDatabaseAction).toHaveBeenCalledTimes(1);
-    expect(resetDatabaseAction.mock.calls[0][1].get("contestId")).toBe(contestId);
+    expect(resetDatabase).toHaveBeenCalledTimes(1);
+    expect(resetDatabase.mock.calls[0][1].get("contestId")).toBe(contestId);
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
   test("a refusal is shown in the participant's language and changes nothing on screen", async () => {
-    resetDatabaseAction.mockResolvedValueOnce({ kind: "refused", code: "reset_too_often", requestId: "req-7" });
+    resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "reset_too_often", requestId: "req-7" });
     const onReset = show();
 
     await openAndConfirm();
@@ -83,7 +83,7 @@ describe("ResetDatabase", () => {
   });
 
   test("a fault on our side carries the request reference", async () => {
-    resetDatabaseAction.mockResolvedValueOnce({ kind: "refused", code: "internal_error", requestId: "req-9" });
+    resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "internal_error", requestId: "req-9" });
     show();
 
     await openAndConfirm();
@@ -95,7 +95,7 @@ describe("ResetDatabase", () => {
 
   test("cannot be pressed twice while a reset is in flight", async () => {
     let finish: (state: ResetState) => void = () => {};
-    resetDatabaseAction.mockImplementationOnce(
+    resetDatabase.mockImplementationOnce(
       () => new Promise<ResetState>((resolve) => (finish = resolve)),
     );
     show();

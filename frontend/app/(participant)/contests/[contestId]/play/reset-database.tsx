@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { messageForCode } from "@/lib/i18n/errors";
 
-import { resetDatabaseAction, type ResetState } from "./actions";
+import { resetDatabase, type ResetState } from "./requests";
 import type { PlayDictionary } from "./dictionary";
 import { showsReference } from "./refusals";
 
@@ -36,7 +36,7 @@ export function ResetDatabase({
 }) {
   const t = dict.participant.play.workspace.reset;
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<ResetState, FormData>(resetDatabaseAction, IDLE);
+  const [state, formAction, pending] = useActionState<ResetState, FormData>(resetDatabase, IDLE);
   // The state when the dialog was last opened: an outcome is shown only if it
   // came after, so reopening asks again.
   const [askedAt, setAskedAt] = useState<ResetState>(IDLE);

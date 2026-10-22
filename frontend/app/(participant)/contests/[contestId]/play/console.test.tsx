@@ -10,7 +10,7 @@ import en from "@/lib/i18n/dictionaries/en";
 
 import { ConsoleEditor } from "./console";
 import { activeTabStorageKey } from "./use-sql-tabs";
-import type { ConsoleState } from "./actions";
+import type { ConsoleState } from "./requests";
 import { pasteTargetOf } from "./use-signals";
 
 /** The tab every run reports in fixtures with only one open. */
@@ -55,14 +55,14 @@ afterEach(() => {
 const answer = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
 /** What the browser's FormData carried into the last run. */
 const submitted = vi.hoisted(() => ({ current: null as FormData | null }));
-const runQueryAction = vi.hoisted(() =>
+const runQuery = vi.hoisted(() =>
   vi.fn(async (_state: ConsoleState, form: FormData) => {
     submitted.current = form;
     return answer.current;
   }),
 );
 
-vi.mock("./actions", () => ({ runQueryAction }));
+vi.mock("./requests", () => ({ runQuery }));
 
 /** The hidden mirror field FormData reads (console.tsx). */
 function mirror(container: HTMLElement): HTMLTextAreaElement {
@@ -120,7 +120,7 @@ describe("the SQL editor", () => {
 
   test("disables the run button while a query is in flight", async () => {
     let resolve: (value: ConsoleState) => void = () => {};
-    runQueryAction.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    runQuery.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT 1");
@@ -248,14 +248,14 @@ describe("⌘↵", () => {
     const { container } = render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={onResult} />);
     await waitForRealEditor(container);
 
-    runQueryAction.mockClear();
+    runQuery.mockClear();
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT 1");
     // Ctrl, not Cmd: CodeMirror resolves `Mod` by platform, and the test
     // environment is not a Mac.
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
 
-    await waitFor(() => expect(runQueryAction).toHaveBeenCalled());
+    await waitFor(() => expect(runQuery).toHaveBeenCalled());
   });
 });
 

@@ -9,9 +9,10 @@ import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
 import type { PlayQuestion } from "@/lib/api/play";
 import type { Scoring } from "@/lib/api/contests";
+import type { Locale } from "@/lib/i18n/config";
 import { cn } from "@/lib/utils";
 
-import { refreshQuestionsAction, submitAnswerAction, type AnswerState } from "./actions";
+import { refreshQuestions, submitAnswer, type AnswerState } from "./requests";
 import { messageForCode } from "@/lib/i18n/errors";
 import { refusalKind, showsReference } from "./refusals";
 
@@ -35,6 +36,7 @@ export function QuestionsPanel({
   scoring = "points",
   icpcPenaltyMin = 20,
   dict,
+  locale,
 }: {
   contestId: string;
   items: QuestionEntry[];
@@ -42,6 +44,8 @@ export function QuestionsPanel({
   /** Minutes added to the penalty time per wrong attempt on a question later solved. Read only under `icpc`. */
   icpcPenaltyMin?: number;
   dict: PlayDictionary;
+  /** The language the questions were rendered in; a re-read asks for the same. */
+  locale: Locale;
 }) {
   const t = dict.participant.play.questions;
   const [entries, setEntries] = useState(items);
@@ -53,7 +57,7 @@ export function QuestionsPanel({
   // events channel has no push for that, so the list is re-read once. Only
   // the mutable fields are replaced; the wording never changes.
   const onClosed = useCallback(async () => {
-    const result = await refreshQuestionsAction(contestId);
+    const result = await refreshQuestions(contestId, locale);
     if (result.kind !== "ok") {
       setRefreshFailed(true);
       return;
@@ -64,7 +68,7 @@ export function QuestionsPanel({
       const fresh = byId.get(entry.question.id);
       return fresh ? { ...entry, question: fresh } : entry;
     }));
-  }, [contestId]);
+  }, [contestId, locale]);
 
   if (entries.length === 0) {
     return <p className="text-body text-ink-2">{t.empty}</p>;
@@ -143,7 +147,7 @@ function QuestionCard({
   onClosed: () => void;
 }) {
   const t = dict.participant.play.questions;
-  const [state, formAction, pending] = useActionState<AnswerState, FormData>(submitAnswerAction, {
+  const [state, formAction, pending] = useActionState<AnswerState, FormData>(submitAnswer, {
     kind: "idle",
   });
 

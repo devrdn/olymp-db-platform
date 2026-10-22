@@ -7,7 +7,7 @@ import { toCsv } from "@/lib/format/csv";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
-import type { ConsoleState } from "./actions";
+import type { ConsoleState } from "./requests";
 import { PaneHandle, SHARE_BOUNDS, useResultRows } from "./pane-splitter";
 import { RowDetail } from "./row-detail";
 import { messageForCode } from "@/lib/i18n/errors";
@@ -393,6 +393,19 @@ const MIN_COL_CH = 6;
 const MAX_COL_CH = 38;
 
 /**
+ * The most characters a cell puts in the DOM. A column is at most
+ * `MAX_COL_CH` wide, so nothing past this can show, but a single value may
+ * run to the whole result budget (`SELECT repeat('x', 5000000)`), and laying
+ * that out, and copying it into `title`, froze the tab. The row detail and
+ * the CSV keep the whole value.
+ */
+export const CELL_CLIP_CHARS = 2000;
+
+function clipCell(value: string): string {
+  return value.length > CELL_CLIP_CHARS ? `${value.slice(0, CELL_CLIP_CHARS)}…` : value;
+}
+
+/**
  * Column widths from the header and a sample of the rows, clamped at both
  * ends. `table-layout: fixed` needs them stated, and fixed layout is what
  * gives every row a known height for the window. Sampling fifty rows from
@@ -595,16 +608,18 @@ function ResultTable({
             >
               {columns.map((_, c) => {
                 const cell = row[c] ?? null;
+                const shown = cell === null ? null : clipCell(cell);
                 return (
                   <td
                     key={c}
-                    // The whole value, for a column too narrow to show it.
-                    title={cell ?? undefined}
+                    // The value, for a column too narrow to show it; the open
+                    // row has the whole of a value longer than the clip.
+                    title={shown ?? undefined}
                     className="truncate p-2 align-top text-ink"
                   >
                     {/* NULL and the empty string differ in SQL, and a participant
                         debugging a left join is looking at exactly that. */}
-                    {cell === null ? <span className="text-ink-2 italic">{nullLabel}</span> : cell}
+                    {shown === null ? <span className="text-ink-2 italic">{nullLabel}</span> : shown}
                   </td>
                 );
               })}
