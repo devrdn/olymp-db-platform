@@ -33,19 +33,23 @@ func (r *Showcase) querier(ctx context.Context) storage.Querier {
 }
 
 // Numbers counts the installation's four numbers in one statement. Only
-// finished and archived contests count, so publishing something nobody sat
-// cannot raise the figure.
+// finished and archived contests count, and only their registrations'
+// activity: publishing something nobody sat cannot raise the figure, and an
+// anonymous poller cannot watch a running contest's solves grow through a
+// frozen leaderboard.
 func (r *Showcase) Numbers(ctx context.Context) (showcase.Numbers, error) {
 	var n showcase.Numbers
 	err := r.querier(ctx).QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM contests WHERE status IN ('finished', 'archived')),
-		       (SELECT count(*) FROM registrations),
-		       a.queries, a.correct
+		       h.participants, h.queries, h.correct
 		FROM (
-		    SELECT COALESCE(sum(queries), 0) AS queries,
-		           COALESCE(sum(correct), 0) AS correct
-		    FROM registration_activity
-		) a`).
+		    SELECT count(r.id) AS participants,
+		           COALESCE(sum(a.queries), 0) AS queries,
+		           COALESCE(sum(a.correct), 0) AS correct
+		    FROM registrations r
+		    JOIN contests c ON c.id = r.contest_id AND c.status IN ('finished', 'archived')
+		    LEFT JOIN registration_activity a ON a.registration_id = r.id
+		) h`).
 		Scan(&n.Contests, &n.Participants, &n.Queries, &n.Solved)
 	if err != nil {
 		return showcase.Numbers{}, fmt.Errorf("count the showcase numbers: %w", err)

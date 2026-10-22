@@ -203,6 +203,47 @@ func TestNumbersCountTheSummaryTableAndNotTheQueryJournal(t *testing.T) {
 	})
 }
 
+// /public/stats is anonymous and refreshed every minute; counting a running
+// contest's activity would let a poller watch solves land behind a frozen
+// leaderboard. Its registrations and activity count once it is over.
+func TestNumbersLeaveOutARunningContestsRegistrationsAndActivity(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewShowcase(testPool)
+		before, err := repo.Numbers(ctx)
+		if err != nil {
+			t.Fatalf("Numbers() = %v", err)
+		}
+
+		author := makeUser(t, ctx, "author-showcase-running")
+		contest := makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'running' WHERE id = $1`, contest)
+		registration := makeRegistration(t, ctx, contest, author.ID)
+		exec(t, ctx, `INSERT INTO registration_activity (registration_id, queries, correct) VALUES ($1, 7, 3)`, registration)
+
+		during, err := repo.Numbers(ctx)
+		if err != nil {
+			t.Fatalf("Numbers() = %v", err)
+		}
+		if during != before {
+			t.Errorf("Numbers() during the contest = %+v, want unchanged from %+v", during, before)
+		}
+
+		exec(t, ctx, `UPDATE contests SET status = 'finished' WHERE id = $1`, contest)
+
+		after, err := repo.Numbers(ctx)
+		if err != nil {
+			t.Fatalf("Numbers() = %v", err)
+		}
+		want := showcase.Numbers{
+			Contests: before.Contests + 1, Participants: before.Participants + 1,
+			Queries: before.Queries + 7, Solved: before.Solved + 3,
+		}
+		if after != want {
+			t.Errorf("Numbers() after the finish = %+v, want %+v", after, want)
+		}
+	})
+}
+
 // A counter raised with no answers behind it still moves Solved, which only a
 // read of registration_activity can do.
 func TestSolvedCountsTheAnswerCounterAndNotTheAnswersJournal(t *testing.T) {
