@@ -38,6 +38,7 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 		"work_mem":                            "16MB",
 		"temp_file_limit":                     "64MB",
 		"max_parallel_workers_per_gather":     "1",
+		"jit":                                 "off",
 		"client_connection_check_interval":    "250ms",
 	} {
 		t.Run(setting, func(t *testing.T) {

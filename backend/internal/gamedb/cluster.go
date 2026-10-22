@@ -90,6 +90,11 @@ var sessionDefaults = [][2]string{
 	// memory is sized for (config.Runner's MaxParallelWorkers). A real bound:
 	// the SQL validator does not admit SET.
 	{"max_parallel_workers_per_gather", "1"},
+	// A participant's query runs once and is gone: JIT compilation is spent
+	// inside the five-second deadline, holding one of the few running slots,
+	// and its peak was measured at half the per-process memory cap. Off, a
+	// query costs what it costs and nothing more.
+	{"jit", "off"},
 	// Stops a backend whose client vanished without a cancel (runner crash,
 	// dropped network) within this interval instead of at statement_timeout,
 	// so it does not hold a memory cap's worth of the cluster.
