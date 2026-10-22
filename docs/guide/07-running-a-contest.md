@@ -172,8 +172,7 @@ A set that was written is not yet a set that restores; this is the drill
 that proves it. Check `S` against the table in the README before the contest
 window multiplies it.
 
-**6. Set up email.** Skip it to hand every password over by hand, as before
-email.
+**6. Set up email.** Skip it to hand every password over by hand.
 
 1. From the host, check that the relay can be reached. A timeout means
    outbound port 587 is closed, which the university's network team opens:
@@ -187,14 +186,22 @@ email.
    and Microsoft's conditions on the mailbox. `SMTP_PASSWORD` comes from the
    university's administrators; `SMTP_MAX_PER_MINUTE` stays at 25, under
    the 30 a minute Microsoft allows; `PUBLIC_URL` is
-   `https://olympdb.usm.md`. Set after step 1's deploy, they take effect with
-   `make deploy-api VERSION=<tag>`, the tag `make deployed` prints. The
-   API's log then says `mail relay configured`.
+   `https://olympdb.usm.md`. Set after step 1's deploy, they take effect
+   when the API is recreated, with the tag of the `api` image that
+   `make deployed` prints:
+
+   ```bash
+   VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d --no-deps api
+   ```
+
+   The API's log then says `mail relay configured`.
 3. On **Installation** (`/settings`), **Email** says it is on and the
    address it sends as. Give your own account an email address on
    **Accounts**, press **Send a test message**, and check that it arrived in
-   the inbox rather than in spam. A refusal shows the relay's reply beside
-   it; [Diagnosing](../../backend/README.md#diagnosing) says what Microsoft's
+   the inbox rather than in spam. If it lands in spam, tell the university's
+   administrators: SPF, DKIM and DMARC for `usm.md` are theirs. A refusal
+   shows the relay's reply beside it;
+   [Diagnosing](../../backend/README.md#diagnosing) says what Microsoft's
    codes mean.
 4. In the same screen's form, choose the **Email language**, the one every
    message is written in (Romanian until changed), and set the **Contact
@@ -442,13 +449,16 @@ told `no_game_yet` until the rebuild below is pending.
    migration job.
 
    ```bash
-   docker compose -f deploy/docker-compose.yml up -d game-prepare
+   VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d game-prepare
    docker compose -f deploy/docker-compose.yml ps -a game-prepare    # Exited (0)
    docker compose -f deploy/docker-compose.yml logs game-prepare     # what it did
    ```
 
    `game-prepare` is a one-shot job that exits when done; `up -d` starts its
-   stopped container again, after `pg-game` reports healthy.
+   stopped container again, after `pg-game` reports healthy. `<tag>` is the
+   running one, from the `queryrunner` image `make deployed` prints:
+   `deploy/.env` does not set `VERSION`, and without it Compose looks for the
+   tag `dev`, which the registry does not have.
 2. `make game-check` lists every contest whose game the core database records
    as built and the cluster lacks, with its status, and fails while one still
    to be played is among them.
