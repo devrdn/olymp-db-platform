@@ -42,8 +42,8 @@ not care.
 
 ### A week before
 
-**For the release that brings email (v0.5.0).** It is deployed by step 1,
-with its tag wherever step 1 names v0.4.0. Two things go with it:
+**For the release that brings email (v0.5.0).** Step 1 deploys it. Two
+things go with it:
 
 - Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_MAX_PER_MINUTE` and `PUBLIC_URL` in
@@ -54,10 +54,11 @@ with its tag wherever step 1 names v0.4.0. Two things go with it:
   `DBContestMailAbandoned` and `DBContestMailRelayFailing`, to a group the
   file already had, so the rules page still lists four groups.
 
-**1. Back up, then deploy the release.** The release is v0.4.0. It carries
-the schema fix, the Query Runner's metrics, the scheduled backup and the
-feedback link, and its notes list the rest. Before it reaches the host, run
-the checks from the v0.4.0 release notes on a workstation. `make images`
+**1. Back up, then deploy the release.** The release is v0.5.0. It carries
+email, and everything v0.4.0 brought to a host still on an earlier tag: the
+schema fix, the Query Runner's metrics, the scheduled backup and the feedback
+link; the two releases' notes list the rest. Before it reaches the host, run
+the checks from both releases' notes on a workstation. `make images`
 builds from the working tree, so check the tag out first; `make test-game`
 and `make test-game-build` read the database passwords from `deploy/.env`.
 The first run of `make observability-check` pulls a Prometheus image, and
@@ -67,7 +68,7 @@ its image is missing:
 
 ```bash
 git fetch --tags
-git checkout v0.4.0
+git checkout v0.5.0
 make images
 make game-uploads-check
 make test-game
@@ -88,10 +89,10 @@ make backup                                         # a set from before the depl
 make restore-check FILE=deploy/backups/<CORE_DB_NAME>-<stamp>.dump   # the dump it wrote
 git status                                          # nothing modified in tracked files
 git fetch --tags
-git checkout v0.4.0
+git checkout v0.5.0
 diff <(grep -o '^[A-Z0-9_]*=' deploy/.env.example | sort -u) \
      <(grep -o '^[A-Z0-9_]*=' deploy/.env | sort -u)   # settings the release added
-make deploy VERSION=v0.4.0
+make deploy VERSION=v0.5.0
 make deployed                                       # every service on the new tag
 make game-check                                     # no game the core database expects is missing
 ```
@@ -100,13 +101,13 @@ make game-check                                     # no game the core database 
 setting names only, so no secret reaches the screen. A name only in
 `.env.example` is a setting your `deploy/.env` lacks: read its comment there
 and decide (the scheduled backup's `BACKUP_*` ones are optional). Use
-`make deploy`, not `make deploy-api`: the release changes the Query Runner
-too, and `deploy-api` pulls only the API and its migration job. Rolling back
+`make deploy`, not `make deploy-api`: `deploy-api` pulls only the API and
+its migration job, and the Query Runner moves to the new tag too. Rolling back
 is checking out the previous tag and the same command with that version
 ([Releases and deployment](../../backend/README.md#releases-and-deployment)).
 
-**2. Rebuild any game built before this release.** A game built before the
-schema fix has no stored description, so the schema panel still reads it from
+**2. Rebuild any game built before v0.4.0.** A host already on v0.4.0 skips
+this step. A game built before the schema fix has no stored description, so the schema panel still reads it from
 a participant's copy (ARCHITECTURE.md §15, item 49). Rebuild the beta's game
 while the contest is a draft or published; once it runs, a rebuild is refused.
 For a game written as a script, open the contest's **Database** tab and press
