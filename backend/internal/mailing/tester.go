@@ -61,7 +61,12 @@ type Tester struct {
 	cfg TesterConfig
 }
 
+// NewTester panics on a missing field, so a wiring fault stops the boot
+// rather than the first request.
 func NewTester(cfg TesterConfig) *Tester {
+	if cfg.Transport == nil || cfg.Texts == nil || cfg.Limiter == nil || cfg.Audit == nil || cfg.Logger == nil {
+		panic("mailing: the tester needs a transport, texts, a limiter, an audit recorder and a logger")
+	}
 	return &Tester{cfg: cfg}
 }
 
@@ -71,8 +76,8 @@ func (t *Tester) Enabled() bool { return t.cfg.Transport.Enabled() }
 // From is the address mail is sent as, or empty while mail is off.
 func (t *Tester) From() string { return t.cfg.Transport.From() }
 
-// TestRequest is who asks for the test message and what it says. To is the
-// caller's own address, so nobody can mail a stranger through this.
+// TestRequest is who asks for the test message, where it goes and what it
+// says.
 type TestRequest struct {
 	Actor        uuid.UUID
 	To           string
