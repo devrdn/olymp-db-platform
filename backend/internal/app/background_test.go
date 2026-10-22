@@ -412,6 +412,11 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			why:     "a game left in `building` by a dead process is recovered only by a tick of this",
 		},
 		{
+			job:     deliverMail(func(context.Context) error { return nil }, nil),
+			atStart: true,
+			why:     "messages queued before a restart, sign-in details among them, wait on its first run",
+		},
+		{
 			job: reclaimInstances(quiet(), func(context.Context, int) (provisioning.ReclaimResult, error) {
 				return provisioning.ReclaimResult{}, nil
 			}, 60, counters),

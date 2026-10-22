@@ -22,6 +22,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -71,6 +72,30 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 	})
 }
 
+// mailStore is the outbox table, as the outbox and its dispatcher use it.
+type mailStore interface {
+	mailing.Queue
+	mailing.Store
+}
+
+// newMailOutbox returns the outbox requests queue mail in and, with mail on,
+// the job that delivers it. With mail off the outbox refuses every message
+// and no job runs.
+func newMailOutbox(log *slog.Logger, sender *mail.Sender, store mailStore, perMinute int, recorder metrics.Recorder) (*mailing.Outbox, []task) {
+	if !sender.Enabled() {
+		return mailing.Disabled(), nil
+	}
+	outbox := mailing.NewOutbox(store)
+	dispatcher := mailing.NewDispatcher(mailing.DispatcherConfig{
+		Store:     store,
+		Transport: sender,
+		PerMinute: perMinute,
+		Counters:  metrics.NewMailCounters(recorder, mailing.KindNames(), mailing.Outcomes()),
+		Logger:    log,
+	})
+	return outbox, []task{deliverMail(dispatcher.Drain, outbox.C())}
+}
+
 // New builds the service, failing fast on any unusable dependency or setting
 // before a request is accepted.
 func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
@@ -116,10 +141,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	if sender.Enabled() {
 		log.Info("mail relay configured", "host", cfg.SMTPHost, "port", cfg.SMTPPort, "tls", cfg.SMTPTLS,
-			"from", sender.From())
+			"from", sender.From(), "max_per_minute", cfg.SMTPMaxPerMinute)
 	} else {
 		log.Info("mail is off: SMTP_HOST is not set")
 	}
+	_, mailJobs := newMailOutbox(log, sender, postgres.NewMailOutbox(pool), cfg.SMTPMaxPerMinute, recorder)
+	a.tasks = append(a.tasks, mailJobs...)
 
 	// Forwarded headers are believed only from configured proxies (CLAUDE.md
 	// rule 9).

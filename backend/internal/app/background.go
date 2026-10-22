@@ -20,7 +20,8 @@ type task struct {
 	// wants it; one bounded by a grace period of minutes to days does not.
 	atStart bool
 	// wake, when set, runs the job immediately on a send, besides its ticks.
-	// nil for every job but the pool tender; a nil channel is never selected.
+	// nil for every job but the pool tender and the mail dispatcher; a nil
+	// channel is never selected.
 	wake <-chan struct{}
 	run  func(context.Context) error
 }
@@ -293,5 +294,22 @@ func abandonedUploads(log *slog.Logger, games *provisioning.Games, olderThan tim
 			}
 			return err
 		},
+	}
+}
+
+// mailOutboxEvery bounds how late the dispatcher notices a retry come due, the
+// rate's minute pass, or a message queued inside a transaction (whose wake
+// arrives before it commits). An idle tick is one claim that finds nothing.
+const mailOutboxEvery = 10 * time.Second
+
+// deliverMail runs the mail dispatcher on every enqueue and on its tick.
+func deliverMail(drain func(context.Context) error, wake <-chan struct{}) task {
+	return task{
+		name: "mail-outbox",
+		// At startup too: messages queued before a restart wait on it.
+		atStart: true,
+		every:   mailOutboxEvery,
+		wake:    wake,
+		run:     drain,
 	}
 }
