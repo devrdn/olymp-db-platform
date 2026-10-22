@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"strings"
 
 	gomail "github.com/wneessen/go-mail"
 )
@@ -26,6 +27,11 @@ var (
 	// refused address) or the connection cannot be made safely (TLS). A retry
 	// fails the same way until the configuration or the message changes.
 	ErrPermanent = errors.New("mail: permanent failure")
+
+	// ErrRelay marks, beside ErrTemporary or ErrPermanent, a failure of the
+	// relay rather than of the message: any other message would fail the same
+	// way now.
+	ErrRelay = errors.New("mail: relay failure")
 )
 
 // IsTemporary reports whether a retry of the send may succeed.
@@ -33,13 +39,53 @@ func IsTemporary(err error) bool {
 	return errors.Is(err, ErrTemporary)
 }
 
-// classify wraps an SMTP failure in ErrTemporary or ErrPermanent. ctx is the
-// send's own context: once it is done the connection was cut on purpose.
+// IsRelayFailure reports whether the failure is the relay's: it could not be
+// reached or secured, refused the account or the sender, deferred the message
+// after accepting its recipient, or dropped the connection. Such a failure
+// says nothing about the message, so a caller holding a queue stops sending
+// rather than give up on the message.
+func IsRelayFailure(err error) bool {
+	return errors.Is(err, ErrRelay)
+}
+
+// classify wraps an SMTP failure in ErrTemporary or ErrPermanent, and in
+// ErrRelay when it is the relay's. ctx is the send's own context: once it is
+// done the connection was cut on purpose.
 func classify(ctx context.Context, err error) error {
+	class := ErrPermanent
 	if temporary(ctx, err) {
-		return fmt.Errorf("%w: %w", ErrTemporary, err)
+		class = ErrTemporary
 	}
-	return fmt.Errorf("%w: %w", ErrPermanent, err)
+	if relayFailure(err) {
+		return fmt.Errorf("%w: %w: %w", class, ErrRelay, err)
+	}
+	return fmt.Errorf("%w: %w", class, err)
+}
+
+// relayFailure tells the relay's failures from the message's by the stage the
+// session reached. Dialling, TLS, the greeting, EHLO, AUTH and MAIL FROM come
+// before go-mail knows the recipient, so their failures are the relay's. At
+// RCPT only a reply naming the recipient is the message's. After RCPT a
+// deferral is the relay throttling or busy, and Exchange Online reports a
+// refusal of the sending mailbox (Send As denied, the submission quota) as
+// STOREDRV.Submission at the end of DATA; any other refusal there is the
+// message's.
+func relayFailure(err error) bool {
+	var sendErr *gomail.SendError
+	if !errors.As(err, &sendErr) {
+		return true
+	}
+	code := sendErr.ErrorCode()
+	switch sendErr.Reason {
+	case gomail.ErrGetRcpts, gomail.ErrNoUnencoded:
+		return false
+	case gomail.ErrSMTPRcptTo:
+		return code == 0 || code == 421
+	case gomail.ErrSMTPData, gomail.ErrSMTPDataClose, gomail.ErrWriteContent:
+		return code < 500 || strings.Contains(sendErr.Error(), "STOREDRV.Submission")
+	default:
+		return true
+	}
 }
 
 func temporary(ctx context.Context, err error) bool {
