@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bufio"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -16,4 +19,19 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeOptionalBody is decodeBody for a route whose body may be left out,
+// which leaves v as it was. Only a body with no bytes at all counts as absent:
+// whitespace or a stray character is still a malformed one.
+func decodeOptionalBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	buffered := bufio.NewReader(r.Body)
+	if _, err := buffered.Peek(1); errors.Is(err, io.EOF) {
+		return true
+	}
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{buffered, r.Body}
+	return decodeBody(w, r, v)
 }

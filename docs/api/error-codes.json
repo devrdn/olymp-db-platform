@@ -375,7 +375,7 @@
     },
     {
       "code": "mail_off",
-      "meaning": "Email is off on this installation: no SMTP relay is configured (SMTP_HOST is empty). Nothing was sent."
+      "meaning": "Email is off on this installation: no SMTP relay is configured (SMTP_HOST is empty). Answers the test message, and a request that issues one-time passwords (creating an account, importing a roster, resetting one password or many) with `send_by_email` set. Nothing was sent and nothing changed: no account was created and no password was reset."
     },
     {
       "code": "mail_refused",

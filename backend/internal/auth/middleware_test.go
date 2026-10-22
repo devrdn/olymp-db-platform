@@ -569,11 +569,11 @@ func TestEveryChangeToAccessIsHonouredOnTheNextRequest(t *testing.T) {
 			})
 		}},
 		{"ResetPassword", func(f *cachedFixture) error {
-			_, err := f.service.ResetPassword(context.Background(), actor, f.user.ID)
+			_, err := f.service.ResetPassword(context.Background(), actor, f.user.ID, users.Delivery{})
 			return err
 		}},
 		{"BulkResetPassword", func(f *cachedFixture) error {
-			_, err := f.service.BulkResetPassword(context.Background(), actor, []uuid.UUID{f.user.ID})
+			_, err := f.service.BulkResetPassword(context.Background(), actor, []uuid.UUID{f.user.ID}, users.Delivery{})
 			return err
 		}},
 	}

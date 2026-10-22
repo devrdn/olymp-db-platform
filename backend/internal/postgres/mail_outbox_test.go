@@ -2,12 +2,17 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/settings"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -436,4 +441,153 @@ func TestMessagesPastTheMaximumAgeExpireUnlessASenderHoldsThem(t *testing.T) {
 			t.Errorf("expired %v, want the old and the retrying message only", gone)
 		}
 	})
+}
+
+// refusingSink stores the audit trail but refuses one action, so a test can
+// fail a unit of work after the outbox has taken its message.
+type refusingSink struct {
+	*AuditSink
+	action string
+}
+
+var errSinkRefused = errors.New("the audit sink refused the entry")
+
+func (s refusingSink) Append(ctx context.Context, e audit.Entry) error {
+	return s.AppendMany(ctx, []audit.Entry{e})
+}
+
+func (s refusingSink) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	for _, e := range entries {
+		if e.Action == s.action {
+			return errSinkRefused
+		}
+	}
+	return s.AuditSink.AppendMany(ctx, entries)
+}
+
+type mailSettings settings.Values
+
+func (s mailSettings) All(context.Context) (settings.Values, error) { return settings.Values(s), nil }
+
+// emailingUsers is the account service as the deployment assembles it, with
+// mail on and the real outbox.
+func emailingUsers(sink audit.Sink) *users.Service {
+	return users.NewService(NewUsers(testPool), audit.New(sink), storage.NewUnitOfWork(testPool), passwordtest.NewHasher()).
+		WithMail(users.Mail{
+			Outbox: mailing.NewOutbox(NewMailOutbox(testPool)),
+			Texts:  mailing.NewTexts("https://olympdb.usm.md"),
+			Settings: mailSettings{
+				settings.KeyName:         "Olimpiada USM",
+				settings.KeyMailLanguage: string(mailing.Romanian),
+			},
+		})
+}
+
+// queuedFor reads the pending messages for an account through ctx.
+func queuedFor(t *testing.T, ctx context.Context, user uuid.UUID) []outboxMessageRow {
+	t.Helper()
+	rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx, `
+		SELECT kind, recipient, body FROM mail_outbox
+		WHERE user_id = $1 AND sent_at IS NULL AND abandoned_at IS NULL`, user)
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	defer rows.Close()
+	var out []outboxMessageRow
+	for rows.Next() {
+		var m outboxMessageRow
+		if err := rows.Scan(&m.kind, &m.to, &m.body); err != nil {
+			t.Fatalf("scan the outbox: %v", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	return out
+}
+
+type outboxMessageRow struct {
+	kind, to, body string
+}
+
+func TestSignInDetailsAreQueuedInTheTransactionThatCreatesTheAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		created, err := emailingUsers(NewAuditSink(testPool)).Create(ctx, users.CreateCommand{
+			Login: "outbox-ana", FullName: "Ana Rusu", Email: "outbox-ana@usm.md",
+			Delivery: users.Delivery{ByEmail: true},
+		})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		queued := queuedFor(t, ctx, created.User.ID)
+		if len(queued) != 1 {
+			t.Fatalf("queued %d messages for the account, want 1", len(queued))
+		}
+		m := queued[0]
+		if m.kind != string(mailing.KindSignInDetails) || m.to != "outbox-ana@usm.md" ||
+			!strings.Contains(m.body, created.OneTimePassword) {
+			t.Errorf("queued %s to %s, want the sign-in details with the issued password to outbox-ana@usm.md",
+				m.kind, m.to)
+		}
+	})
+}
+
+func TestEveryAccountOfABulkResetIsQueuedItsOwnPassword(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		var ids []uuid.UUID
+		for _, login := range []string{"outbox-first", "outbox-second"} {
+			u, err := repo.Create(ctx, users.User{Login: login, FullName: login, Email: login + "@usm.md",
+				Status: users.StatusActive, PasswordHash: "x"})
+			if err != nil {
+				t.Fatalf("Create() = %v", err)
+			}
+			ids = append(ids, u.ID)
+		}
+
+		res, err := emailingUsers(NewAuditSink(testPool)).BulkResetPassword(ctx, uuid.Nil, ids,
+			users.Delivery{ByEmail: true})
+		if err != nil {
+			t.Fatalf("BulkResetPassword() = %v", err)
+		}
+
+		for _, issued := range res.Issued {
+			queued := queuedFor(t, ctx, issued.ID)
+			if len(queued) != 1 || !strings.Contains(queued[0].body, issued.OneTimePassword) {
+				t.Errorf("%s: queued %d messages, want one with its own password", issued.Login, len(queued))
+			}
+		}
+	})
+}
+
+// Committed, not in a test transaction: the service's unit of work must be
+// the outermost one for its rollback to be the one that drops the message.
+func TestAMessageIsRolledBackWithTheAccountItWasFor(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := t.Context()
+	login := "outbox-rollback-" + uuid.NewString()[:8]
+	address := login + "@usm.md"
+
+	_, err := emailingUsers(refusingSink{NewAuditSink(testPool), audit.ActionUserSignInDetailsEmailed}).
+		Create(ctx, users.CreateCommand{
+			Login: login, FullName: "Ana Rusu", Email: address, Delivery: users.Delivery{ByEmail: true},
+		})
+
+	if !errors.Is(err, errSinkRefused) {
+		t.Fatalf("Create() = %v, want the refused audit entry to fail it", err)
+	}
+	var accounts, messages int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM users WHERE login = $1`, login).Scan(&accounts); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE recipient = $1`, address).Scan(&messages); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if accounts != 0 || messages != 0 {
+		t.Errorf("%d accounts and %d messages committed, want neither", accounts, messages)
+	}
 }

@@ -33,6 +33,10 @@ const (
 	// ActionUserSignInUnlock records staff clearing an account's sign-in
 	// throttling, so the trail explains why a guessing limit did not hold.
 	ActionUserSignInUnlock = "user.sign_in_unlock"
+	// ActionUserSignInDetailsEmailed records an account's sign-in details
+	// queued to its address, in the transaction that issued the password; it
+	// carries neither the password nor the message.
+	ActionUserSignInDetailsEmailed = "user.sign_in_details_emailed"
 
 	ActionContestCreate       = "contest.create"
 	ActionContestUpdate       = "contest.update"
@@ -139,6 +143,7 @@ var actions = []string{
 	ActionUserCreate, ActionUserUpdate, ActionUserBlock, ActionUserUnblock,
 	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
 	ActionUserPasswordReset, ActionPasswordChange, ActionUserSignInUnlock,
+	ActionUserSignInDetailsEmailed,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,

@@ -201,6 +201,8 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "too many rows in one import"},
 		users.ErrTooManyAccounts: {status: http.StatusBadRequest, code: "too_many_accounts",
 			message: "too many accounts in one operation"},
+		users.ErrMailOff: {status: http.StatusConflict, code: "mail_off",
+			message: "Email is off on this installation, so sign-in details cannot be emailed"},
 		users.ErrUnknownRole: {status: http.StatusBadRequest, code: "unknown_role",
 			message: "One of the roles does not exist"},
 	}

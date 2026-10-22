@@ -174,6 +174,8 @@ type createRequest struct {
 	Email    string   `json:"email"`
 	FullName string   `json:"full_name"`
 	Roles    []string `json:"roles"`
+	// SendByEmail also emails the sign-in details to the account's address.
+	SendByEmail bool `json:"send_by_email"`
 }
 
 type createResponse struct {
@@ -181,6 +183,31 @@ type createResponse struct {
 	// OneTimePassword is shown once, here; it is not stored in clear and a lost
 	// one is reset.
 	OneTimePassword string `json:"one_time_password"`
+	emailOutcome
+}
+
+// emailOutcome says whether an issued one-time password was also emailed.
+// The administrator is handed the password either way.
+type emailOutcome struct {
+	// Emailed means the sign-in details were queued to the account's address
+	// with the password; the message leaves after the answer.
+	Emailed bool `json:"emailed"`
+	// EmailSkippedReason is why they were not although asked for, from a
+	// closed set (users.EmailSkipNoAddress) the client translates; absent
+	// when email was not asked for or was queued.
+	EmailSkippedReason string `json:"email_skipped_reason,omitempty"`
+}
+
+func toEmailOutcome(o users.EmailOutcome) emailOutcome {
+	return emailOutcome{Emailed: o.Emailed, EmailSkippedReason: o.SkipReason}
+}
+
+func toCreateResponse(created users.CreateResult) createResponse {
+	return createResponse{
+		User:            toUserResponse(created.User),
+		OneTimePassword: created.OneTimePassword,
+		emailOutcome:    toEmailOutcome(created.Email),
+	}
 }
 
 func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -196,16 +223,14 @@ func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
 		Email:    req.Email,
 		FullName: req.FullName,
 		Roles:    req.Roles,
+		Delivery: users.Delivery{ByEmail: req.SendByEmail},
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 
-	httpx.JSON(w, r, http.StatusCreated, createResponse{
-		User:            toUserResponse(created.User),
-		OneTimePassword: created.OneTimePassword,
-	})
+	httpx.JSON(w, r, http.StatusCreated, toCreateResponse(created))
 }
 
 // importRequest is a whole group at once: accounts are created by an
@@ -214,6 +239,9 @@ type importRequest struct {
 	Rows []importRow `json:"rows"`
 	// Roles every created account receives, typically the student role.
 	Roles []string `json:"roles"`
+	// SendByEmail also emails each created account with an address its
+	// sign-in details.
+	SendByEmail bool `json:"send_by_email"`
 }
 
 type importRow struct {
@@ -257,9 +285,10 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	result, err := h.service.Import(r.Context(), users.ImportCommand{
-		ActorID: identity.UserID,
-		Rows:    rows,
-		Roles:   req.Roles,
+		ActorID:  identity.UserID,
+		Rows:     rows,
+		Roles:    req.Roles,
+		Delivery: users.Delivery{ByEmail: req.SendByEmail},
 	})
 	stopped := ""
 	switch {
@@ -274,10 +303,7 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 
 	created := make([]createResponse, 0, len(result.Created))
 	for _, one := range result.Created {
-		created = append(created, createResponse{
-			User:            toUserResponse(one.User),
-			OneTimePassword: one.OneTimePassword,
-		})
+		created = append(created, toCreateResponse(one))
 	}
 	skipped := make([]skippedAccount, 0, len(result.Skipped))
 	for _, one := range result.Skipped {
@@ -439,8 +465,15 @@ func (h *UsersHandler) restore(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
+// resetRequest is optional: a reset with no body hands the password to the
+// administrator only.
+type resetRequest struct {
+	SendByEmail bool `json:"send_by_email"`
+}
+
 type resetResponse struct {
 	OneTimePassword string `json:"one_time_password"`
+	emailOutcome
 }
 
 func (h *UsersHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
@@ -449,13 +482,21 @@ func (h *UsersHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req resetRequest
+	if !decodeOptionalBody(w, r, &req) {
+		return
+	}
+
 	identity, _ := auth.IdentityFrom(r.Context())
-	issued, err := h.service.ResetPassword(r.Context(), identity.UserID, id)
+	issued, err := h.service.ResetPassword(r.Context(), identity.UserID, id, users.Delivery{ByEmail: req.SendByEmail})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, resetResponse{OneTimePassword: issued})
+	httpx.JSON(w, r, http.StatusOK, resetResponse{
+		OneTimePassword: issued.OneTimePassword,
+		emailOutcome:    toEmailOutcome(issued.Email),
+	})
 }
 
 // unlockSignIn clears the account's sign-in throttling, so an owner locked out

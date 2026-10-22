@@ -175,3 +175,41 @@ func TestBulkEndpointsRequireThePermission(t *testing.T) {
 		}
 	}
 }
+
+func TestBulkPasswordResetEmailsEachAccountWithAnAddress(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+	withAddress := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md"})
+	without := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivan"})
+
+	rec := f.do(http.MethodPost, "/users/bulk/password-reset",
+		`{"ids":["`+withAddress.ID.String()+`","`+without.ID.String()+`"],"send_by_email":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[struct {
+		Issued []emailed `json:"issued"`
+	}](t, rec)
+	if len(body.Issued) != 2 {
+		t.Fatalf("issued %d, want 2", len(body.Issued))
+	}
+	for _, one := range body.Issued {
+		switch one.Login {
+		case "petrov":
+			if !one.Emailed || one.SkippedReason != nil {
+				t.Errorf("petrov reads emailed %v, reason %v", one.Emailed, one.SkippedReason)
+			}
+			assertQueuedTo(t, queue, "petrov@usm.md", one.OneTimePassword)
+		case "ivanov":
+			if one.Emailed || one.SkippedReason == nil || *one.SkippedReason != "no_address" {
+				t.Errorf("ivanov reads emailed %v, reason %v; want no_address", one.Emailed, one.SkippedReason)
+			}
+			if one.OneTimePassword == "" {
+				t.Error("ivanov's password was not handed to the administrator")
+			}
+		}
+	}
+	if len(queue.messages) != 1 {
+		t.Errorf("queued %d messages, want 1", len(queue.messages))
+	}
+}

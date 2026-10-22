@@ -1,6 +1,8 @@
 // Package users owns accounts: who exists, what global roles they hold, and
-// the operations an administrator performs on them. It declares the storage it
-// needs and never imports a database driver. Signing in belongs to auth.
+// the operations an administrator performs on them, including emailing an
+// issued one-time password through the outbox it is given. It declares the
+// storage it needs and never imports a database driver. Signing in belongs
+// to auth, and writing and sending email to mailing.
 package users
 
 import (
@@ -75,7 +77,7 @@ func Errors() []error {
 		ErrNotFound, ErrInvalidAccount, ErrLoginTaken, ErrEmailTaken,
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
-		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole,
+		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
 	}
 }
 

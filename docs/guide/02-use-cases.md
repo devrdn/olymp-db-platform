@@ -377,12 +377,12 @@ flowchart LR
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
-| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles` | `users` | `users.manage` |
-| Import a roster of accounts | `/users` | `POST /users/import` | `users` | `users.manage`; partial success, a skipped row carries its reason |
+| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles` | `users` | `users.manage`; `send_by_email` also emails the sign-in details (`mail_off` while mail is off) |
+| Import a roster of accounts | `/users` | `POST /users/import` | `users` | `users.manage`; partial success, a skipped row carries its reason; `send_by_email` as for one account |
 | Act on many accounts at once | `/users` | `POST /users/bulk/status`, `/bulk/roles`, `/bulk/password-reset` | `users` | `users.manage`; a bounded selection (`too_many_accounts`) |
 | See and edit one account | `/users/{userID}` | `GET`, `PATCH /users/{userID}` | `users` | `users.manage` |
 | Block, unblock, delete, restore | `/users/{userID}` | `POST /users/{userID}/block`, `/unblock`, `/delete`, `/restore` | `users` | `users.manage`; blocking and deleting need a reason; never on oneself; never the last administrator |
-| Reset a password | `/users/{userID}` | `POST /users/{userID}/password-reset` | `users` | `users.manage`; the account must change it at next sign-in |
+| Reset a password | `/users/{userID}` | `POST /users/{userID}/password-reset` | `users` | `users.manage`; the account must change it at next sign-in; `send_by_email` here and on `/bulk/password-reset` |
 | Lift a sign-in lockout | `/users/{userID}` | `POST /users/{userID}/sign-in/unlock` | `auth` | `users.manage` |
 | Change global roles | `/users/{userID}` | `PUT /users/{userID}/roles` | `users` | `users.manage`; never removes the last account able to manage accounts |
 | Read the audit trail | `/audit` | `GET /audit`, `GET /audit/actions` | `audit` | `audit.view` |

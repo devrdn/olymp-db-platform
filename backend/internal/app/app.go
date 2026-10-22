@@ -145,7 +145,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	} else {
 		log.Info("mail is off: SMTP_HOST is not set")
 	}
-	_, mailJobs := newMailOutbox(log, sender, postgres.NewMailOutbox(pool), cfg.SMTPMaxPerMinute, recorder)
+	outbox, mailJobs := newMailOutbox(log, sender, postgres.NewMailOutbox(pool), cfg.SMTPMaxPerMinute, recorder)
+	texts := mailing.NewTexts(cfg.PublicURL)
 	a.tasks = append(a.tasks, mailJobs...)
 
 	// Forwarded headers are believed only from configured proxies (CLAUDE.md
@@ -350,7 +351,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Cookies:    cookies,
 		Logger:     log,
 	})
-	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords)
+	installation := settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool))
+	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords).
+		WithMail(users.Mail{Outbox: outbox, Texts: texts, Settings: installation})
 	if accounts != nil {
 		// Guarded: a nil *AccountCache in an interface is not a nil interface.
 		userService.WithAccessCache(accounts)
@@ -432,10 +435,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
 		api.NewSettingsHandler(
-			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
+			installation,
 			mailing.NewTester(mailing.TesterConfig{
 				Transport: sender,
-				Texts:     mailing.NewTexts(cfg.PublicURL),
+				Texts:     texts,
 				Limiter:   limiter,
 				Audit:     auditRecorder,
 				Logger:    log,

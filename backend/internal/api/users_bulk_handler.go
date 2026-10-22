@@ -81,14 +81,18 @@ func (h *UsersHandler) bulkRoles(w http.ResponseWriter, r *http.Request) {
 
 type bulkPasswordResetRequest struct {
 	IDs []uuid.UUID `json:"ids"`
+	// SendByEmail also emails each account with an address its sign-in
+	// details.
+	SendByEmail bool `json:"send_by_email"`
 }
 
-// issuedResponse is one account's new one-time password, shown only here: never
-// stored in clear, never logged.
+// issuedResponse is one account's new one-time password, shown only here (and
+// in the email when asked for): never stored in clear, never logged.
 type issuedResponse struct {
 	ID              uuid.UUID `json:"id"`
 	Login           string    `json:"login"`
 	OneTimePassword string    `json:"one_time_password"`
+	emailOutcome
 }
 
 type bulkPasswordResetResponse struct {
@@ -103,7 +107,8 @@ func (h *UsersHandler) bulkResetPassword(w http.ResponseWriter, r *http.Request)
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
 
-	res, err := h.service.BulkResetPassword(r.Context(), identity.UserID, req.IDs)
+	res, err := h.service.BulkResetPassword(r.Context(), identity.UserID, req.IDs,
+		users.Delivery{ByEmail: req.SendByEmail})
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -111,7 +116,10 @@ func (h *UsersHandler) bulkResetPassword(w http.ResponseWriter, r *http.Request)
 
 	issued := make([]issuedResponse, 0, len(res.Issued))
 	for _, one := range res.Issued {
-		issued = append(issued, issuedResponse{ID: one.ID, Login: one.Login, OneTimePassword: one.OneTimePassword})
+		issued = append(issued, issuedResponse{
+			ID: one.ID, Login: one.Login, OneTimePassword: one.OneTimePassword,
+			emailOutcome: toEmailOutcome(one.Email),
+		})
 	}
 	skipped := make([]skippedResponse, 0, len(res.Skipped))
 	for _, s := range res.Skipped {
