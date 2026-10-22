@@ -52,6 +52,14 @@ const contentSecurityPolicy = [
   "object-src 'none'",
 ].join("; ");
 
+/**
+ * Production only, beside the policy: the development server is plain http
+ * and must never ask a browser to pin localhost to https. A plain-http
+ * `make front-start` sends it too, harmlessly, since a browser honours the
+ * header only on a TLS response. One year, including subdomains, is the floor
+ * the preload list accepts.
+ */
+const strictTransportSecurity = "max-age=31536000; includeSubDomains";
 
 const nextConfig: NextConfig = {
   /**
@@ -63,10 +71,29 @@ const nextConfig: NextConfig = {
   /** Do not advertise the framework. */
   poweredByHeader: false,
 
+  /**
+   * Nothing renders `next/image`: every picture is an `<img>` on purpose,
+   * because the API already crops, resizes and re-encodes what it serves.
+   * Without this the optimizer still mounts `/_next/image`, an unauthenticated
+   * endpoint that decodes whatever bytes it is pointed at.
+   */
+  images: { unoptimized: true },
+
+  /**
+   * Caddy's `encode zstd gzip` (deploy/Caddyfile) compresses every response
+   * on its own cores; this single Node process should not gzip the same bytes
+   * first. Behind no proxy a response is merely uncompressed.
+   */
+  compress: false,
+
   async headers() {
     const headers = isDevelopment
       ? securityHeaders
-      : [...securityHeaders, { key: "Content-Security-Policy", value: contentSecurityPolicy }];
+      : [
+          ...securityHeaders,
+          { key: "Content-Security-Policy", value: contentSecurityPolicy },
+          { key: "Strict-Transport-Security", value: strictTransportSecurity },
+        ];
 
     return [{ source: "/:path*", headers }];
   },
