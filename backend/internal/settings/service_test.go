@@ -268,7 +268,10 @@ func TestTheMailLanguageIsOneTheMessagesAreWrittenIn(t *testing.T) {
 				t.Fatalf("Save(%q) = %v, want it accepted", value, err)
 			}
 
-			all, _ := f.service.All(ctx)
+			all, err := f.service.All(ctx)
+			if err != nil {
+				t.Fatalf("All() = %v", err)
+			}
 			if all[settings.KeyMailLanguage] != value {
 				t.Errorf("mail language = %q, want %q", all[settings.KeyMailLanguage], value)
 			}
