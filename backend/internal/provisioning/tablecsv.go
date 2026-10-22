@@ -78,9 +78,7 @@ type csvField struct {
 // quote still open at the end of the line is refused (ErrTableValueInvalid)
 // rather than continued onto the next line.
 func splitCSVLine(line []byte) ([]csvField, error) {
-	// One field per comma: exact unless a comma is quoted, a floor otherwise.
-	// Saves regrowing the slice on every row of a large file.
-	fields := make([]csvField, 0, bytes.Count(line, commaByte)+1)
+	fields := make([]csvField, 0, fieldCountHint(line))
 	i := 0
 	for {
 		// Fast path for a field with no quote, which is nearly every field:
@@ -91,6 +89,9 @@ func splitCSVLine(line []byte) ([]csvField, error) {
 				return nil, ErrTableFieldTooLong
 			}
 			fields = append(fields, csvField{Text: string(line[i:end]), Null: end == i})
+			if len(fields) > maxCSVFields {
+				return nil, errTooManyCSVFields
+			}
 			if end >= len(line) {
 				break
 			}
@@ -134,6 +135,9 @@ func splitCSVLine(line []byte) ([]csvField, error) {
 			return nil, fmt.Errorf("%w: an opening quote is never closed", ErrTableValueInvalid)
 		}
 		fields = append(fields, csvField{Text: string(buf), Null: !quoted && len(buf) == 0})
+		if len(fields) > maxCSVFields {
+			return nil, errTooManyCSVFields
+		}
 
 		if i >= len(line) {
 			break
@@ -141,6 +145,23 @@ func splitCSVLine(line []byte) ([]csvField, error) {
 		i++ // the comma; a field always follows, including a trailing empty one
 	}
 	return fields, nil
+}
+
+// maxCSVFields is the most fields splitCSVLine parses from one line: one past
+// the widest table the definition allows, so the row is refused as too wide
+// rather than parsed to the end. Without it a MaxTableLineBytes line of commas
+// is four million fields, about 100 MiB, before the count is ever compared
+// with the table's (CLAUDE.md rule 12).
+const maxCSVFields = MaxDefinitionTableColumns + 1
+
+var errTooManyCSVFields = fmt.Errorf("%w: more than %d fields", ErrTableRowFieldCount, MaxDefinitionTableColumns)
+
+// fieldCountHint is the capacity splitCSVLine reserves: one field per comma,
+// exact unless a comma is quoted, but never more than it would parse. The
+// commas may all sit inside one quoted field, which is a single field however
+// many there are.
+func fieldCountHint(line []byte) int {
+	return min(bytes.Count(line, commaByte)+1, maxCSVFields)
 }
 
 var commaByte = []byte{','}
@@ -173,7 +194,9 @@ func formatCSVRow(fields []string) (string, error) {
 }
 
 // csvWriter writes one row per line and quotes a field only when it holds a
-// comma, a quote or a line break. An empty field is written bare, which is
+// comma, a quote or a line break. A quoted line break is valid CSV but not one
+// row per line, so validateScalar refuses it before any row reaches here. An
+// empty field is written bare, which is
 // NULL to COPY and to splitCSVLine alike: AppendTableRow validated it as NULL,
 // and writing `""` would store an empty string instead (and fail COPY for a
 // nullable integer column). encoding/csv.Writer gives no control over that.
@@ -308,8 +331,15 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // byte-order mark. Left in, the mark becomes part of the first column's name
 // and the header is refused for a difference no one can see. Only the header
 // carries one, and the build skips the header line.
+//
+// A header wider than any table is a header mismatch, not a row's field
+// count: that is the answer validateHeader gives for every other width.
 func splitHeaderLine(line []byte) ([]csvField, error) {
-	return splitCSVLine(bytes.TrimPrefix(line, utf8BOM))
+	fields, err := splitCSVLine(bytes.TrimPrefix(line, utf8BOM))
+	if errors.Is(err, ErrTableRowFieldCount) {
+		return nil, fmt.Errorf("%w: the file has more than %d columns", ErrTableHeaderMismatch, MaxDefinitionTableColumns)
+	}
+	return fields, err
 }
 
 // headerFields is the header a CSV must start with: the table's column names,
@@ -377,13 +407,19 @@ func validateRow(fields []csvField, table TableDefinition, row int64) error {
 //
 // Every column, text included, refuses bytes that are not UTF-8 (Excel's
 // plain "CSV" in a Russian or Romanian locale is cp1251) and NUL, as
-// PostgreSQL does.
+// PostgreSQL does, and a line break of either kind. This package's CSV is one
+// row per physical line throughout (splitCSVLine, the row counts, the
+// tombstone numbers), and csvWriter would otherwise write a form's value as
+// two lines that every later reader counts as two rows.
 func validateScalar(text string, t ColumnType) error {
 	if !utf8.ValidString(text) {
 		return errors.New("is not UTF-8 text; save the file as CSV UTF-8 and upload it again")
 	}
 	if strings.ContainsRune(text, 0) {
 		return errors.New("holds a NUL character, which PostgreSQL cannot store in any column")
+	}
+	if strings.ContainsAny(text, "\n\r") {
+		return errors.New("holds a line break; a value must fit on one line")
 	}
 	switch t {
 	case ColumnText:
