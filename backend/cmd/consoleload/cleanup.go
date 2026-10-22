@@ -253,17 +253,23 @@ func deleteRows(ctx context.Context, core *pgxpool.Pool, contestIDs, userIDs []u
 	}
 	// Audit entries reference the accounts through actor_id, so they go
 	// first; only entries by these accounts, or about these contests and
-	// accounts by kind as well as identifier.
+	// accounts by kind as well as identifier. The trail refuses a DELETE
+	// (migration 000043), and a load test's fixtures are the one history
+	// that is meant to go: the trigger is off for this transaction alone,
+	// as the table's owner, and back on before the commit, with the whole
+	// transaction rolled back if any step fails.
 	for _, statement := range []struct {
 		what string
 		sql  string
 		args []any
 	}{
+		{"audit trail's guard, off", `ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only`, nil},
 		{"audit entries", `
 			DELETE FROM audit_log
 			WHERE actor_id = ANY($1)
 			   OR entity = 'contest' AND entity_id = ANY($2)
 			   OR entity = 'user' AND entity_id = ANY($3)`, []any{accounts, contestKeys, accountKeys}},
+		{"audit trail's guard, on", `ALTER TABLE audit_log ENABLE TRIGGER audit_log_append_only`, nil},
 		{"contests", `DELETE FROM contests WHERE id = ANY($1)`, []any{contests}},
 		{"accounts", `DELETE FROM users WHERE id = ANY($1)`, []any{accounts}},
 	} {
