@@ -223,10 +223,10 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 // login, email and the identifier the grant and add endpoints take. Not
 // UserResponse: no status, roles or password state.
 //
-// The email is an accepted trade-off: this search runs under
-// participant.manage, so any contest's staff can see every account's email, but
-// neither a login nor a full name alone reliably tells two people apart (see
-// contests.Person). Email is omitted when the account has none, so a missing
+// This search runs under participant.manage, so any contest's staff may call
+// it; the email is whole only when the query matched it and masked otherwise
+// (see contests.Person), since a login and a full name do not always tell two
+// people apart. Email is omitted when the account has none, so a missing
 // address is not read as a blank one.
 type PersonResponse struct {
 	UserID   string `json:"user_id"`

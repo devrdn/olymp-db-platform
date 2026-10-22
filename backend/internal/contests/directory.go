@@ -36,10 +36,13 @@ var ErrQueryTooLong = errors.New("search text is too long")
 // Person is a search result for appointing or enrolling somebody: a narrow
 // view of users.User with no status, roles or password state.
 //
-// Email is an accepted exposure: the search runs behind participant.manage,
-// not users.manage, so any holder can read every account's email in the
-// installation. It is shown because a login and a full name do not always tell
-// two people apart. An account without an email has Email == "".
+// The search runs behind participant.manage, not users.manage, so any
+// contest's staff can call it against every account in the installation.
+// Email is therefore the full address only when the query matched the email
+// itself, which tells two same-named people apart without handing a
+// throwaway contest's owner every address: for a match on the login or the
+// name it is masked to the local part's first character, "…" and the domain.
+// An account without an email has Email == "".
 type Person struct {
 	UserID   uuid.UUID
 	Login    string
@@ -75,7 +78,37 @@ func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]
 	}
 	out := make([]Person, 0, len(found))
 	for _, u := range found {
-		out = append(out, Person{UserID: u.ID, Login: u.Login, FullName: u.FullName, Email: u.Email})
+		out = append(out, Person{UserID: u.ID, Login: u.Login, FullName: u.FullName, Email: shownEmail(u.Email, query)})
 	}
 	return out, nil
+}
+
+// shownEmail is the address as Person publishes it: whole when query is a
+// case-insensitive substring of it (what the repository's ILIKE matched),
+// masked otherwise, and "" for an account without one.
+func shownEmail(email, query string) string {
+	if email == "" || strings.Contains(strings.ToLower(email), strings.ToLower(query)) {
+		return email
+	}
+	return maskEmail(email)
+}
+
+// maskEmail keeps the local part's first character and the domain:
+// "sergei@example.edu" becomes "s…@example.edu". An address without "@"
+// cannot be split, so it keeps only its first character.
+func maskEmail(email string) string {
+	local, domain, found := strings.Cut(email, "@")
+	first, _ := utf8.DecodeRuneInString(local)
+	if first == utf8.RuneError {
+		first = 0
+	}
+	var masked strings.Builder
+	if first != 0 {
+		masked.WriteRune(first)
+	}
+	masked.WriteString("…")
+	if found {
+		masked.WriteString("@" + domain)
+	}
+	return masked.String()
 }

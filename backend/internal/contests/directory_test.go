@@ -31,9 +31,55 @@ func TestSearchPeopleMatchesLoginNameOrEmail(t *testing.T) {
 		if len(found) != 1 || found[0].UserID != target.ID {
 			t.Errorf("SearchPeople(%q) = %+v, want only %v", query, found, target.ID)
 		}
-		if found[0].Email != target.Email {
-			t.Errorf("SearchPeople(%q) email = %q, want %q", query, found[0].Email, target.Email)
+	}
+}
+
+// The search is open to every contest's staff, so a match on the login or
+// the name must not hand over the address; only a query that matched the
+// address itself (case-insensitively, as the repository matches) reads it
+// whole.
+func TestSearchPeopleShowsTheWholeEmailOnlyWhenTheQueryMatchedIt(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Users.Add(users.User{
+		Login: "s.ivanov", FullName: "Ivanov Sergei", Email: "Sergei.I@example.edu",
+		Status: users.StatusActive,
+	})
+
+	cases := map[string]string{
+		"ivanov":          "S…@example.edu",
+		"Ivanov S":        "S…@example.edu",
+		"sergei.i@exampl": "Sergei.I@example.edu",
+		"@EXAMPLE.edu":    "Sergei.I@example.edu",
+	}
+	for query, want := range cases {
+		found, err := f.Service.SearchPeople(context.Background(), query, 0)
+		if err != nil {
+			t.Fatalf("SearchPeople(%q) = %v", query, err)
 		}
+		if len(found) != 1 {
+			t.Fatalf("SearchPeople(%q) = %+v, want one match", query, found)
+		}
+		if found[0].Email != want {
+			t.Errorf("SearchPeople(%q) email = %q, want %q", query, found[0].Email, want)
+		}
+	}
+}
+
+// The mask keeps one character of the local part, so a Cyrillic address is
+// cut on a character, not in the middle of one.
+func TestSearchPeopleMasksAnEmailOnItsFirstCharacter(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Users.Add(users.User{
+		Login: "s.ivanov", FullName: "Ivanov", Email: "ярослав@example.edu",
+		Status: users.StatusActive,
+	})
+
+	found, err := f.Service.SearchPeople(context.Background(), "ivanov", 0)
+	if err != nil {
+		t.Fatalf("SearchPeople() = %v", err)
+	}
+	if len(found) != 1 || found[0].Email != "я…@example.edu" {
+		t.Errorf("SearchPeople() = %+v, want the email masked to its first character and domain", found)
 	}
 }
 
