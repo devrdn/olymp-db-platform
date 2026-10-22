@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"regexp"
 	"strings"
 
 	gomail "github.com/wneessen/go-mail"
@@ -32,6 +33,10 @@ var (
 	// relay rather than of the message: any other message would fail the same
 	// way now.
 	ErrRelay = errors.New("mail: relay failure")
+
+	// ErrRecipient marks, beside ErrPermanent, a refusal that names the
+	// recipient: another message, to another address, would not meet it.
+	ErrRecipient = errors.New("mail: recipient refused")
 )
 
 // IsTemporary reports whether a retry of the send may succeed.
@@ -48,6 +53,13 @@ func IsRelayFailure(err error) bool {
 	return errors.Is(err, ErrRelay)
 }
 
+// IsRecipientRefusal reports whether the relay refused the message for its
+// recipient's sake (an unknown, moved, disabled or full mailbox). Every other
+// refusal of the message may be the relay refusing everyone the same way.
+func IsRecipientRefusal(err error) bool {
+	return errors.Is(err, ErrRecipient)
+}
+
 // classify wraps an SMTP failure in ErrTemporary or ErrPermanent, and in
 // ErrRelay when it is the relay's. ctx is the send's own context: once it is
 // done the connection was cut on purpose.
@@ -58,6 +70,9 @@ func classify(ctx context.Context, err error) error {
 	}
 	if relayFailure(err) {
 		return fmt.Errorf("%w: %w: %w", class, ErrRelay, err)
+	}
+	if class == ErrPermanent && recipientRefusal(err) {
+		return fmt.Errorf("%w: %w: %w", class, ErrRecipient, err)
 	}
 	return fmt.Errorf("%w: %w", class, err)
 }
@@ -86,6 +101,29 @@ func relayFailure(err error) bool {
 	default:
 		return true
 	}
+}
+
+// recipientStatus are the RFC 3463 subjects and details that name the
+// recipient's address or mailbox: X.1.1-3, X.1.6, X.1.10, X.2.1 and X.2.2.
+var recipientStatus = map[string]bool{
+	"1.1": true, "1.2": true, "1.3": true, "1.6": true, "1.10": true, "2.1": true, "2.2": true,
+}
+
+// enhancedStatus finds the RFC 3463 code at the start of a reply's text, as
+// go-mail quotes it: 550 "5.1.1 no such user".
+var enhancedStatus = regexp.MustCompile(`\b[245]\.(\d{1,3}\.\d{1,3})(?:[\s"]|$)`)
+
+// recipientRefusal reports whether a refusal names the recipient: by its
+// enhanced code, or, without one, by coming in answer to RCPT.
+func recipientRefusal(err error) bool {
+	var sendErr *gomail.SendError
+	if !errors.As(err, &sendErr) {
+		return false
+	}
+	if m := enhancedStatus.FindStringSubmatch(sendErr.Error()); m != nil {
+		return recipientStatus[m[1]]
+	}
+	return sendErr.Reason == gomail.ErrSMTPRcptTo
 }
 
 func temporary(ctx context.Context, err error) bool {

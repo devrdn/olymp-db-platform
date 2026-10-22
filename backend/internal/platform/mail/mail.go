@@ -10,9 +10,10 @@
 // certificate or a refused TLS handshake no. A temporary or permanent failure
 // also wraps ErrRelay when it is the relay's and not the message's
 // (IsRelayFailure): everything before RCPT, a lost connection, a deferral
-// after the recipient was accepted. TLS is 1.2 or later. A Sender
-// built without a host is disabled rather than missing, so a deployment
-// without a relay still starts.
+// after the recipient was accepted. A permanent refusal naming the recipient
+// (an unknown or full mailbox, by its RFC 3463 code) also wraps ErrRecipient
+// (IsRecipientRefusal). TLS is 1.2 or later. A Sender built without a host is
+// disabled rather than missing, so a deployment without a relay still starts.
 //
 // It does not queue, retry, render texts or decide who is written to; it
 // sends what it is given, once. It imports no domain package.
