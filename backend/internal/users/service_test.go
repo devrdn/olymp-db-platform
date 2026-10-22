@@ -989,6 +989,12 @@ func TestCreateRefusesAccountDetailsItCannotStore(t *testing.T) {
 		"email with a display name": {
 			Login: "somebody", FullName: "Somebody", Email: "Somebody <s@example.edu>",
 		},
+		"NUL in the login":             {Login: "some\x00body", FullName: "Somebody"},
+		"NUL in the name":              {Login: "somebody", FullName: "\x00"},
+		"line break in the name":       {Login: "somebody", FullName: "Some\nbody"},
+		"tab in the login":             {Login: "some\tbody", FullName: "Somebody"},
+		"delete character in the name": {Login: "somebody", FullName: "Some\x7fbody"},
+		"C1 control in the name":       {Login: "somebody", FullName: "Some\u0085body"},
 	}
 
 	for name, cmd := range cases {
@@ -996,6 +1002,28 @@ func TestCreateRefusesAccountDetailsItCannotStore(t *testing.T) {
 		if _, err := f.service.Create(context.Background(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
 			t.Errorf("%s: Create() = %v, want ErrInvalidAccount", name, err)
 		}
+	}
+}
+
+// A control character is the row's fault, so an import skips the row
+// rather than stopping at it.
+func TestImportSkipsARowWithAControlCharacter(t *testing.T) {
+	f := newFixture(t)
+
+	result, err := f.service.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows: []users.ImportRow{
+			{Login: "s.popescu", FullName: "\x00"},
+			{Login: "i.ivanov", FullName: "Ivan Ivanov"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Import() = %v, want the row skipped, not the import stopped", err)
+	}
+
+	if len(result.Created) != 1 || len(result.Skipped) != 1 || result.Skipped[0].Reason != users.SkipInvalidRow {
+		t.Errorf("created %d, skipped %+v; want the other row created and this one an invalid_row",
+			len(result.Created), result.Skipped)
 	}
 }
 

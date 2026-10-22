@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
@@ -463,9 +464,10 @@ func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, 
 	return s.audit.Record(ctx, s.entry(actorID, action, subject, payload))
 }
 
-// validateAccount checks trimmed descriptive fields. The email must parse
-// back to exactly the bare address, since net/mail also accepts a display
-// name with brackets.
+// validateAccount checks trimmed descriptive fields. A login or name with a
+// control character is refused: PostgreSQL cannot store a NUL, and the
+// sign-in message must not carry one. The email must parse back to exactly
+// the bare address, since net/mail also accepts a display name with brackets.
 func validateAccount(login, fullName, email string) error {
 	switch {
 	case login == "":
@@ -476,6 +478,10 @@ func validateAccount(login, fullName, email string) error {
 		return fmt.Errorf("%w: full name must not be empty", ErrInvalidAccount)
 	case len(fullName) > MaxFullNameLength:
 		return fmt.Errorf("%w: full name must be at most %d characters", ErrInvalidAccount, MaxFullNameLength)
+	case strings.ContainsFunc(login, unicode.IsControl):
+		return fmt.Errorf("%w: login must not contain control characters", ErrInvalidAccount)
+	case strings.ContainsFunc(fullName, unicode.IsControl):
+		return fmt.Errorf("%w: full name must not contain control characters", ErrInvalidAccount)
 	}
 
 	if email == "" {
