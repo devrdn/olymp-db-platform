@@ -573,7 +573,7 @@ func TestBulkResetPasswordIssuesOnePerAccount(t *testing.T) {
 
 	res, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{first.ID, second.ID}, users.Delivery{})
 	if err != nil {
-		t.Fatalf("BulkResetPassword(, users.Delivery{}) returned error: %v", err)
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
 	}
 	if len(res.Issued) != 2 {
 		t.Fatalf("Issued = %v, want 2 accounts", res.Issued)
@@ -606,7 +606,7 @@ func TestBulkResetPasswordSkipsDeletedAccounts(t *testing.T) {
 
 	res, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{gone.ID}, users.Delivery{})
 	if err != nil {
-		t.Fatalf("BulkResetPassword(, users.Delivery{}) returned error: %v", err)
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
 	}
 	if len(res.Issued) != 0 {
 		t.Errorf("Issued = %v, want none", res.Issued)
@@ -628,7 +628,7 @@ func TestBulkResetPasswordAppliesInOneTransaction(t *testing.T) {
 	}
 
 	if _, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, ids, users.Delivery{}); err != nil {
-		t.Fatalf("BulkResetPassword(, users.Delivery{}) returned error: %v", err)
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
 	}
 	if f.uow.Calls != 1 {
 		t.Errorf("uow.Calls = %d, want 1", f.uow.Calls)
@@ -648,10 +648,10 @@ func TestBulkResetPasswordAbortsWhenTheParallelPhaseFailsRatherThanSkipping(t *t
 
 	res, err := f.service.BulkResetPassword(ctx, f.admin.ID, []uuid.UUID{first.ID, second.ID}, users.Delivery{})
 	if err == nil {
-		t.Fatalf("BulkResetPassword(, users.Delivery{}) = %+v, %v, want an error", res, err)
+		t.Fatalf("BulkResetPassword() = %+v, %v, want an error", res, err)
 	}
 	if len(res.Issued) != 0 || len(res.Skipped) != 0 {
-		t.Errorf("BulkResetPassword(, users.Delivery{}) returned %+v on failure, want a zero result", res)
+		t.Errorf("BulkResetPassword() returned %+v on failure, want a zero result", res)
 	}
 	if f.uow.Calls != 0 {
 		t.Errorf("uow.Calls = %d, want 0: a failure before the transaction must never open one", f.uow.Calls)
@@ -675,7 +675,7 @@ func TestBulkResetPasswordWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
 	res, err := service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{first.ID}, users.Delivery{})
 
 	if err != nil {
-		t.Fatalf("BulkResetPassword(, users.Delivery{}) = %v, want it to wait for the slot", err)
+		t.Fatalf("BulkResetPassword() = %v, want it to wait for the slot", err)
 	}
 	if len(res.Issued) != 1 {
 		t.Errorf("issued %d passwords, want 1", len(res.Issued))
