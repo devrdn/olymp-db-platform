@@ -151,6 +151,9 @@ type Service struct {
 	// budget.
 	maxClusterBytes int64
 	sizes           templateSizes
+	usage           clusterUsage
+	// now is the clock the cluster measurement ages by; tests set it.
+	now func() time.Time
 	// copyTimeout bounds a reset's and an organiser's drop's work once
 	// started, which no longer ends with the request; zero leaves it to the
 	// cluster's own statement timeout.
@@ -177,6 +180,7 @@ func New(repo Repository, cluster Cluster, rec *audit.Recorder, uow storage.Unit
 		repo: repo, cluster: cluster, audit: rec, uow: uow,
 		workers: DefaultWorkers, copies: semaphore.NewWeighted(DefaultWorkers),
 		providing: map[uuid.UUID]chan struct{}{},
+		now:       time.Now,
 	}
 }
 
@@ -268,6 +272,7 @@ func (s *Service) EnsureFrom(ctx context.Context, contest Contest, registration 
 	if err := s.copyTemplate(ctx, contest, database); err != nil {
 		return "", err
 	}
+	s.noteCopyMade(contest)
 	if err := s.repo.Assign(ctx, contest.ID, registration, database, contest.Version); err != nil {
 		// Nothing points at the new database; drop it so a retry does not
 		// collide with it.
@@ -333,6 +338,7 @@ func (s *Service) addSpare(ctx context.Context, contest Contest) error {
 	if err := s.copyTemplate(ctx, contest, database); err != nil {
 		return err
 	}
+	s.noteCopyMade(contest)
 	if err := s.repo.AddSpare(ctx, contest.ID, database, contest.Version); err != nil {
 		// Nothing points at the copy; drop it so it does not leak.
 		_ = s.cluster.Drop(context.WithoutCancel(ctx), database)
@@ -710,7 +716,7 @@ func (s *Service) copiesThatFit(ctx context.Context, contest Contest, budget int
 		return 0, fmt.Errorf("size the pool for contest %s: the template %s measures %d bytes",
 			contest.ID, contest.Template, size)
 	}
-	used, err := s.cluster.ClusterBytes(ctx)
+	used, err := s.clusterBytes(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
 	}

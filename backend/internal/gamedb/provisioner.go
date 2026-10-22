@@ -513,8 +513,10 @@ func (p *Provisioner) DatabaseSize(ctx context.Context, name string) (int64, err
 //
 // Every database, not only this platform's, because any of them fills the
 // same disk. Read from the catalogue so a role without shell access can ask,
-// in the same unit as DatabaseSize. Measured at 5.7 ms for eighteen databases;
-// called once per live contest every ten-minute pool tick.
+// in the same unit as DatabaseSize. Measured at 5.7 ms for eighteen databases,
+// and it grows with every file of every database; provisioning.Service
+// serves it from a short-lived cache, so a burst of late registrations costs
+// one scan.
 func (p *Provisioner) ClusterBytes(ctx context.Context) (int64, error) {
 	var total int64
 	if err := p.admin.QueryRow(ctx,
