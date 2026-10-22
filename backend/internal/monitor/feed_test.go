@@ -201,14 +201,21 @@ func TestStreamFeedStopsOnAFailedRead(t *testing.T) {
 	}
 }
 
-func TestAContestStreamReadsEachRegistrationsQueriesOnItsOwn(t *testing.T) {
+// A contest export reads each journal as one stream of full pages, whatever
+// the roster's size, and only the sign-ins one registration at a time.
+func TestAContestStreamReadsTheJournalsWholeAndSignInsPerRegistration(t *testing.T) {
 	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
-	a, b := uuid.New(), uuid.New()
-	sources := &pagedSources{registrations: []uuid.UUID{a, b}, items: map[Source][]FeedItem{}}
+	registrations := make([]uuid.UUID, 30)
+	for i := range registrations {
+		registrations[i] = uuid.New()
+	}
+	sources := &pagedSources{registrations: registrations, items: map[Source][]FeedItem{}}
 	for i := range 300 {
-		reg := []uuid.UUID{a, b}[i%2]
+		reg := registrations[i%len(registrations)]
 		sources.items[SourceQuery] = append(sources.items[SourceQuery],
 			FeedItem{Source: SourceQuery, ID: strconv.Itoa(i + 1), At: at.Add(time.Duration(i) * time.Second), Registration: reg})
+		sources.items[SourceAnswer] = append(sources.items[SourceAnswer],
+			FeedItem{Source: SourceAnswer, ID: uuid.NewString(), At: at.Add(time.Duration(i) * time.Second), Registration: reg})
 	}
 	streamed := 0
 	if err := StreamFeed(t.Context(), sources, FeedQuery{Contest: uuid.New()}, at.Add(time.Hour), func(FeedItem) error {
@@ -217,13 +224,35 @@ func TestAContestStreamReadsEachRegistrationsQueriesOnItsOwn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if streamed != 300 {
-		t.Fatalf("streamed %d, want 300", streamed)
+	if streamed != 600 {
+		t.Fatalf("streamed %d, want 600", streamed)
 	}
+	reads := map[Source]int{}
+	auditOf := map[uuid.UUID]bool{}
 	for i, q := range sources.queries {
-		if perRegistration[sources.sources[i]] && (q.Registration == uuid.Nil || q.Limit != streamPage) {
-			t.Errorf("source %d was read for the whole contest or by a large page: %+v", sources.sources[i], q)
+		source := sources.sources[i]
+		reads[source]++
+		if source == SourceAudit {
+			if q.Registration == uuid.Nil || q.Limit != streamPage {
+				t.Errorf("sign-ins were read for the whole contest or by a large page: %+v", q)
+			}
+			auditOf[q.Registration] = true
+			continue
 		}
+		if q.Registration != uuid.Nil || q.Limit != MaxFeedPage {
+			t.Errorf("source %d was read per registration or by a small page: %+v", source, q)
+		}
+	}
+	// 300 items are a full page and a short one; the roster's size must not
+	// show in the count.
+	for _, source := range []Source{SourceQuery, SourceAnswer} {
+		if reads[source] != 2 {
+			t.Errorf("source %d read %d times over %d registrations, want 2 (a full page, then a short one)",
+				source, reads[source], len(registrations))
+		}
+	}
+	if reads[SourceAudit] != len(registrations) || len(auditOf) != len(registrations) {
+		t.Errorf("sign-ins read %d times for %d registrations, want once each", reads[SourceAudit], len(auditOf))
 	}
 }
 

@@ -325,19 +325,24 @@ type FeedSourceReader interface {
 }
 
 // streamPage is small because a contest-wide stream holds one page per
-// registration source at once.
+// registration of each perRegistration source at once.
 const streamPage = 50
 
 // perRegistration are the sources a contest-wide stream reads one
-// registration at a time, since they are indexed per registration.
-var perRegistration = map[Source]bool{SourceAudit: true, SourceQuery: true, SourceAnswer: true}
+// registration at a time. Only audit_log is indexed per actor and not per
+// contest: a contest-wide sign-in page is a union of one index range per
+// registration past the cursor, so every page would read every
+// participant's sign-ins again. The journals carry the contest and its
+// (contest_id, time, id) index, so one stream reads each of them whole.
+var perRegistration = map[Source]bool{SourceAudit: true}
 
 // StreamFeed hands every item after q.After (or from the start) to yield,
 // oldest first, until the feed ends or yield refuses.
 //
 // It is a k-way merge over streams read a page at a time, so every row is
-// read once. Memory is one page per stream: at most registrations ×
-// streamPage × 3 items. The stream ends at now − FeedSettle, fixed at the
+// read once. Memory is one page per stream: at most MaxFeedPage+1 items for
+// each source read whole, and streamPage+1 for each registration of a
+// perRegistration source. The stream ends at now − FeedSettle, fixed at the
 // start, so nothing still settling is exported.
 func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.Time, yield func(FeedItem) error) error {
 	q, err := q.Normalize()
