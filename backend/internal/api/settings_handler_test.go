@@ -43,14 +43,16 @@ type settingsFixture struct {
 type settingsSetup struct {
 	permissions []string
 	// email is the administrator's own address.
-	email   string
-	mailOff bool
-	// relay shapes the fake relay; relayPassword is what the installation
-	// signs in with, the relay taking only "relay-secret-4f1c".
-	relay         mailtest.Options
+	email string
+	// relay shapes a fake relay to send through; nil leaves mail off.
+	// relayPassword is what the installation signs in with, the relay taking
+	// only relaySecret.
+	relay         *mailtest.Options
 	relayPassword string
 }
 
+// settingsRepo is in-memory storage behind the real service, so the endpoint
+// carries the service's own answers about which keys and values are valid.
 type settingsRepo struct{ values settings.Values }
 
 func (r *settingsRepo) All(context.Context) (settings.Values, error) {
@@ -107,6 +109,12 @@ func newSettingsFixture(t *testing.T, permissions ...string) *settingsFixture {
 	return newSettingsFixtureWith(t, settingsSetup{permissions: permissions, email: "root@usm.md"})
 }
 
+// newMailFixture is newSettingsFixture with mail on, through a fake relay.
+func newMailFixture(t *testing.T, relay mailtest.Options, permissions ...string) *settingsFixture {
+	t.Helper()
+	return newSettingsFixtureWith(t, settingsSetup{permissions: permissions, email: "root@usm.md", relay: &relay})
+}
+
 const relaySecret = "relay-secret-4f1c"
 
 func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture {
@@ -140,8 +148,8 @@ func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture 
 
 	var relay *mailtest.Server
 	relayConfig := mail.Config{}
-	if !setup.mailOff {
-		opts := setup.relay
+	if setup.relay != nil {
+		opts := *setup.relay
 		opts.StartTLS, opts.AuthMechs, opts.User, opts.Password = true, "PLAIN", "noreply@usm.md", relaySecret
 		relay = mailtest.NewServer(t, opts)
 		password := setup.relayPassword
@@ -505,7 +513,7 @@ func mailOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestTheAdministratorsReadSaysMailIsOnAndAsWhomWithNoSecret(t *testing.T) {
-	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f := newMailFixture(t, mailtest.Options{}, rbac.PermissionSettingsManage)
 
 	rec := f.do(http.MethodGet, "/settings/all", "", f.cookie)
 
@@ -522,7 +530,7 @@ func TestTheAdministratorsReadSaysMailIsOnAndAsWhomWithNoSecret(t *testing.T) {
 }
 
 func TestTheAdministratorsReadSaysMailIsOff(t *testing.T) {
-	f := newSettingsFixtureWith(t, settingsSetup{permissions: []string{rbac.PermissionSettingsManage}, mailOff: true})
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
 
 	got := mailOf(t, f.do(http.MethodGet, "/settings/all", "", f.cookie))
 
@@ -532,7 +540,7 @@ func TestTheAdministratorsReadSaysMailIsOff(t *testing.T) {
 }
 
 func TestTheOpenReadSaysNothingAboutMail(t *testing.T) {
-	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f := newMailFixture(t, mailtest.Options{}, rbac.PermissionSettingsManage)
 
 	if got := mailOf(t, f.do(http.MethodGet, "/settings", "")); got != nil {
 		t.Errorf("the open read carries mail = %v", got)
@@ -540,7 +548,7 @@ func TestTheOpenReadSaysNothingAboutMail(t *testing.T) {
 }
 
 func TestSendingTheTestMessageNeedsThePermissionToManageSettings(t *testing.T) {
-	f := newSettingsFixture(t)
+	f := newMailFixture(t, mailtest.Options{})
 
 	if rec := f.do(http.MethodPost, "/settings/mail-test", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 without a session", rec.Code)
@@ -553,10 +561,8 @@ func TestSendingTheTestMessageNeedsThePermissionToManageSettings(t *testing.T) {
 	}
 }
 
-// Only to the caller's own address, whatever the request names, so the route
-// cannot mail a stranger.
 func TestTheTestMessageGoesToTheCallersOwnAddressInTheMailLanguage(t *testing.T) {
-	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f := newMailFixture(t, mailtest.Options{}, rbac.PermissionSettingsManage)
 	f.store.values[settings.KeyMailLanguage] = "en"
 	f.store.values[settings.KeyName] = "Olimpiada USM"
 
@@ -578,7 +584,9 @@ func TestTheTestMessageGoesToTheCallersOwnAddressInTheMailLanguage(t *testing.T)
 }
 
 // Each refusal has its own code, so the screen says what to mend. A relay's
-// reply travels as the subject: the code, the enhanced code and its text.
+// reply travels as the subject: the code, the enhanced code and its text. A
+// 4xx, not a 5xx: the API worked and reports a third party's answer, which
+// must not page anyone as an API outage.
 func TestEachRefusalOfTheTestMessageSaysWhichItWas(t *testing.T) {
 	admin := []string{rbac.PermissionSettingsManage}
 	for _, tc := range []struct {
@@ -588,15 +596,15 @@ func TestEachRefusalOfTheTestMessageSaysWhichItWas(t *testing.T) {
 		code    string
 		subject string
 	}{
-		{"mail off", settingsSetup{mailOff: true, email: "root@usm.md"},
+		{"mail off", settingsSetup{email: "root@usm.md"},
 			http.StatusConflict, "mail_off", ""},
-		{"no address", settingsSetup{},
+		{"no address", settingsSetup{relay: &mailtest.Options{}},
 			http.StatusConflict, "mail_no_address", ""},
-		{"wrong relay password", settingsSetup{email: "root@usm.md", relayPassword: "a-wrong-one"},
-			http.StatusBadGateway, "mail_relay_failed", "535 5.7.8 authentication credentials invalid"},
-		{"recipient refused", settingsSetup{email: "root@usm.md", relay: mailtest.Options{
+		{"wrong relay password", settingsSetup{email: "root@usm.md", relay: &mailtest.Options{}, relayPassword: "a-wrong-one"},
+			http.StatusUnprocessableEntity, "mail_relay_failed", "535 5.7.8 authentication credentials invalid"},
+		{"recipient refused", settingsSetup{email: "root@usm.md", relay: &mailtest.Options{
 			RefuseRecipients: map[string]string{"root@usm.md": "550 5.1.1 RESOLVER.ADR.RecipNotFound; not found"},
-		}}, http.StatusBadGateway, "mail_refused", "550 5.1.1 RESOLVER.ADR.RecipNotFound; not found"},
+		}}, http.StatusUnprocessableEntity, "mail_refused", "550 5.1.1 RESOLVER.ADR.RecipNotFound; not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setup.permissions = admin
@@ -618,15 +626,12 @@ func TestEachRefusalOfTheTestMessageSaysWhichItWas(t *testing.T) {
 }
 
 func TestAnUnreachableRelayIsARelayFailureWithNoReply(t *testing.T) {
-	f := newSettingsFixtureWith(t, settingsSetup{
-		permissions: []string{rbac.PermissionSettingsManage}, email: "root@usm.md",
-		relay: mailtest.Options{DropAt: "GREETING"},
-	})
+	f := newMailFixture(t, mailtest.Options{DropAt: "GREETING"}, rbac.PermissionSettingsManage)
 
 	rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie)
 
-	if rec.Code != http.StatusBadGateway || errorCode(t, rec) != "mail_relay_failed" {
-		t.Fatalf("answer = %d %s, want 502 mail_relay_failed", rec.Code, errorCode(t, rec))
+	if rec.Code != http.StatusUnprocessableEntity || errorCode(t, rec) != "mail_relay_failed" {
+		t.Fatalf("answer = %d %s, want 422 mail_relay_failed", rec.Code, errorCode(t, rec))
 	}
 	if _, carried := decode(t, rec)["subject"]; carried {
 		t.Errorf("a failure with no reply carries a subject: %s", rec.Body.String())
@@ -637,7 +642,7 @@ func TestAnUnreachableRelayIsARelayFailureWithNoReply(t *testing.T) {
 }
 
 func TestTheTestMessageIsRefusedPastTheCallersBudget(t *testing.T) {
-	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f := newMailFixture(t, mailtest.Options{}, rbac.PermissionSettingsManage)
 	for range mailing.TestsPerMinute {
 		if rec := f.do(http.MethodPost, "/settings/mail-test", "", f.cookie); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 within the budget (%s)", rec.Code, rec.Body.String())
