@@ -417,6 +417,11 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			why:     "messages queued before a restart, sign-in details among them, wait on its first run",
 		},
 		{
+			job:     expireMail(func(context.Context) error { return nil }),
+			atStart: true,
+			why:     "with mail off it is all that erases one-time passwords queued before, and a boot is when mail was turned off",
+		},
+		{
 			job: reclaimInstances(quiet(), func(context.Context, int) (provisioning.ReclaimResult, error) {
 				return provisioning.ReclaimResult{}, nil
 			}, 60, counters),

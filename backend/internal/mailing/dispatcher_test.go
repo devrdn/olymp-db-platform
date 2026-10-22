@@ -13,23 +13,37 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail/mailtest"
 )
 
 var now = time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 
-func dispatcher(store *fakeStore, transport *fakeTransport, counters *fakeCounters) *mailing.Dispatcher {
+func dispatcher(store *fakeStore, transport mailing.Transport, counters *fakeCounters) *mailing.Dispatcher {
+	return dispatcherAt(store, transport, counters, func() time.Time { return now })
+}
+
+func dispatcherAt(store *fakeStore, transport mailing.Transport, counters *fakeCounters, clock func() time.Time) *mailing.Dispatcher {
 	return mailing.NewDispatcher(mailing.DispatcherConfig{
 		Store:     store,
 		Transport: transport,
 		PerMinute: 25,
 		Counters:  counters,
 		Logger:    quiet(),
-		Now:       func() time.Time { return now },
+		Now:       clock,
 	})
 }
 
-func throttled() error { return fmt.Errorf("%w: 421 4.7.0 too many messages", mail.ErrTemporary) }
-func refused() error   { return fmt.Errorf("%w: 550 5.1.1 no such mailbox", mail.ErrPermanent) }
+// The message's own failures, as the transport classes them.
+func deferred() error { return fmt.Errorf("%w: 452 4.2.2 mailbox full", mail.ErrTemporary) }
+func refused() error  { return fmt.Errorf("%w: 550 5.1.1 no such mailbox", mail.ErrPermanent) }
+
+// The relay's failures, whatever the message.
+func badPassword() error {
+	return fmt.Errorf("%w: %w: 535 5.7.139 Authentication unsuccessful", mail.ErrPermanent, mail.ErrRelay)
+}
+func unreachable() error {
+	return fmt.Errorf("%w: %w: dial tcp: lookup smtp.offfice365.com: no such host", mail.ErrTemporary, mail.ErrRelay)
+}
 
 func TestADueMessageIsSentAndRecorded(t *testing.T) {
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0)}, due: 3}
@@ -80,11 +94,10 @@ func TestEveryClaimCarriesTheRateAndALeaseLongerThanASend(t *testing.T) {
 	}
 }
 
-// A throttling relay refuses the next message too: the run stops at the first
-// temporary failure instead of spending every due message's attempts.
-func TestATemporaryFailureIsRetriedLaterAndEndsTheRun(t *testing.T) {
+// A deferral of one recipient says nothing about the next message.
+func TestAMessageDeferredByTheRelayIsRetriedLaterAndTheRunGoesOn(t *testing.T) {
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0)}}
-	transport := &fakeTransport{replies: []error{throttled()}}
+	transport := &fakeTransport{replies: []error{deferred()}}
 	counters := &fakeCounters{}
 
 	if err := dispatcher(store, transport, counters).Drain(t.Context()); err != nil {
@@ -94,11 +107,11 @@ func TestATemporaryFailureIsRetriedLaterAndEndsTheRun(t *testing.T) {
 	if len(store.retried) != 1 || store.retried[0].id != 1 || store.retried[0].after != time.Minute {
 		t.Fatalf("retried %+v, want message 1 after a minute", store.retried)
 	}
-	if !strings.Contains(store.retried[0].lastError, "421 4.7.0") {
+	if !strings.Contains(store.retried[0].lastError, "452 4.2.2") {
 		t.Errorf("last error %q does not carry the relay's reply", store.retried[0].lastError)
 	}
-	if len(transport.sent) != 1 {
-		t.Errorf("tried %d messages, want the run to stop after the throttled one", len(transport.sent))
+	if fmt.Sprint(store.sent) != "[2]" {
+		t.Errorf("sent %v, want the next message sent in the same run", store.sent)
 	}
 	if counters.counted["sign_in_details/retry"] != 1 {
 		t.Errorf("counted %v, want one retry", counters.counted)
@@ -115,7 +128,7 @@ func TestTheWaitBeforeARetryDoublesUpToAnHour(t *testing.T) {
 	}
 	for i, after := range want {
 		store := &fakeStore{pending: []mailing.Queued{queued(1, now, i)}}
-		transport := &fakeTransport{replies: []error{throttled()}}
+		transport := &fakeTransport{replies: []error{deferred()}}
 		if err := dispatcher(store, transport, &fakeCounters{}).Drain(t.Context()); err != nil {
 			t.Fatalf("Drain() = %v", err)
 		}
@@ -160,7 +173,7 @@ func TestAMessageTheRelayCannotTakeIsAbandoned(t *testing.T) {
 
 func TestTheLastTemporaryFailureAbandonsTheMessage(t *testing.T) {
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, mailing.MaxAttempts-1)}}
-	transport := &fakeTransport{replies: []error{throttled()}}
+	transport := &fakeTransport{replies: []error{deferred()}}
 
 	if err := dispatcher(store, transport, &fakeCounters{}).Drain(t.Context()); err != nil {
 		t.Fatalf("Drain() = %v", err)
@@ -171,44 +184,69 @@ func TestTheLastTemporaryFailureAbandonsTheMessage(t *testing.T) {
 	}
 }
 
-func TestATemporaryFailurePastTheMaximumAgeAbandonsTheMessage(t *testing.T) {
-	store := &fakeStore{pending: []mailing.Queued{queued(1, now.Add(-mailing.MaxAge), 1)}}
-	transport := &fakeTransport{replies: []error{throttled()}}
+func TestATemporaryFailureNearTheMaximumAgeAbandonsTheMessage(t *testing.T) {
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now.Add(-mailing.MaxAge+time.Second), 1)}}
+	transport := &fakeTransport{replies: []error{deferred()}}
 
 	if err := dispatcher(store, transport, &fakeCounters{}).Drain(t.Context()); err != nil {
 		t.Fatalf("Drain() = %v", err)
 	}
 	if len(store.abandoned) != 1 || len(store.retried) != 0 {
-		t.Fatalf("a message %s old failed: abandoned %+v, retried %+v; want it abandoned",
+		t.Fatalf("a message whose retry would land past %s: abandoned %+v, retried %+v; want it abandoned",
 			mailing.MaxAge, store.abandoned, store.retried)
 	}
 }
 
-// A mistyped SMTP_HOST fails every attempt as temporary (the name does not
-// resolve). Re-offering the message until it stops proves the cap is finite.
-func TestARelayThatAlwaysFailsTemporarilyIsGivenUpOn(t *testing.T) {
-	store := &fakeStore{}
-	dnsFailure := fmt.Errorf("%w: dial tcp: lookup smtp.offfice365.com: no such host", mail.ErrTemporary)
+// A body may hold a one-time password, and MaxAge bounds how long it is kept:
+// a message that old is never sent, however the relay is doing.
+func TestAMessagePastTheMaximumAgeIsAbandonedAtClaimWithoutBeingSent(t *testing.T) {
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now.Add(-mailing.MaxAge), 0), queued(2, now, 0)}}
 	transport := &fakeTransport{}
-	d := dispatcher(store, transport, &fakeCounters{})
+	counters := &fakeCounters{}
 
-	message := queued(1, now, 0)
-	for runs := 1; ; runs++ {
-		if runs > 100 {
-			t.Fatal("still retrying after 100 runs")
-		}
-		store.pending = []mailing.Queued{message}
-		transport.replies = []error{dnsFailure}
-		if err := d.Drain(t.Context()); err != nil {
-			t.Fatalf("Drain() = %v", err)
-		}
-		if len(store.abandoned) == 1 {
-			if runs != mailing.MaxAttempts {
-				t.Errorf("abandoned after %d attempts, want %d", runs, mailing.MaxAttempts)
-			}
-			return
-		}
-		message.Attempts++
+	if err := dispatcher(store, transport, counters).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != 1 || store.abandoned[0].id != 1 || !strings.Contains(store.abandoned[0].lastError, "24h") {
+		t.Fatalf("abandoned %+v, want message 1 with its age as the reason", store.abandoned)
+	}
+	if len(transport.sent) != 1 || fmt.Sprint(store.sent) != "[2]" {
+		t.Errorf("sent %v, want only the fresh message", store.sent)
+	}
+	if counters.counted["sign_in_details/abandoned"] != 1 {
+		t.Errorf("counted %v, want one abandoned", counters.counted)
+	}
+}
+
+// Every run first gives up the messages past the maximum age that nobody is
+// sending, paused or not, so a body never outlives it by more than a tick.
+func TestEveryRunExpiresMessagesPastTheMaximumAge(t *testing.T) {
+	store := &fakeStore{expired: map[mailing.Kind]int{mailing.KindSignInDetails: 3}}
+	counters := &fakeCounters{}
+	d := dispatcher(store, &fakeTransport{replies: []error{badPassword()}}, counters)
+
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.expiredAsked) != 1 || store.expiredAsked[0].maxAge != mailing.MaxAge ||
+		store.expiredAsked[0].lease != mailing.ClaimLease || store.expiredAsked[0].reason == "" {
+		t.Fatalf("Expire was asked %+v, want MaxAge, ClaimLease and a reason", store.expiredAsked)
+	}
+	if counters.counted["sign_in_details/abandoned"] != 3 {
+		t.Errorf("counted %v, want the three expired messages as abandoned", counters.counted)
+	}
+
+	// The relay fails, and the run after that is paused: it still expires.
+	store.pending = []mailing.Queued{queued(1, now, 0)}
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.expiredAsked) != 3 || len(store.claimedPerMinute) != 2 {
+		t.Errorf("three runs, the last paused: Expire ran %d times and Claim %d, want 3 and 2",
+			len(store.expiredAsked), len(store.claimedPerMinute))
 	}
 }
 
@@ -237,22 +275,27 @@ func TestTheRecordedErrorIsBoundedPrintableAndNeverCarriesTheBody(t *testing.T) 
 	m := aMessage()
 	for name, tc := range map[string]struct {
 		reply  error
+		keep   string
 		reject string
 	}{
 		"echoes the password": {
-			reply:  fmt.Errorf("%w: 550 rejected content Zx8-q2LmT0pa4RwK", mail.ErrPermanent),
+			reply:  fmt.Errorf("%w: 550 5.7.1 rejected content Zx8-q2LmT0pa4RwK", mail.ErrPermanent),
+			keep:   "550 5.7.1 rejected content [redacted]",
 			reject: "Zx8-q2LmT0pa4RwK",
 		},
 		"echoes the whole body": {
-			reply:  fmt.Errorf("%w: 550 %s", mail.ErrPermanent, m.Body),
-			reject: "Parola:",
+			reply:  fmt.Errorf("%w: 550 5.6.0 %s", mail.ErrPermanent, m.Body),
+			keep:   "550 5.6.0",
+			reject: "Zx8-q2LmT0pa4RwK",
 		},
 		"control characters": {
 			reply:  fmt.Errorf("%w: 550 line\r\nBcc: x@y\x1b[31m", mail.ErrPermanent),
+			keep:   "550 line",
 			reject: "\n",
 		},
 		"too long": {
 			reply:  fmt.Errorf("%w: 550 %s", mail.ErrPermanent, strings.Repeat("я", mailing.MaxLastErrorBytes)),
+			keep:   "550",
 			reject: strings.Repeat("я", mailing.MaxLastErrorBytes/2),
 		},
 	} {
@@ -265,20 +308,46 @@ func TestTheRecordedErrorIsBoundedPrintableAndNeverCarriesTheBody(t *testing.T) 
 			if len(store.abandoned) != 1 {
 				t.Fatalf("abandoned %+v", store.abandoned)
 			}
-			got := store.abandoned[0].lastError
-			if got == "" || strings.Contains(got, tc.reject) {
-				t.Errorf("last error %q, want it non-empty and without %q", got, tc.reject)
-			}
-			if len(got) > mailing.MaxLastErrorBytes || !utf8.ValidString(got) {
-				t.Errorf("last error is %d bytes (valid UTF-8: %v), want at most %d",
-					len(got), utf8.ValidString(got), mailing.MaxLastErrorBytes)
-			}
-			for _, r := range got {
-				if r < 0x20 || r == 0x7f {
-					t.Errorf("last error %q carries the control character %U", got, r)
-				}
-			}
+			assertRecordedError(t, store.abandoned[0].lastError, tc.keep, tc.reject)
 		})
+	}
+}
+
+// Microsoft 365 quotes the recipient in a 5.1.x refusal, and a sign-in body
+// names the address too: the address is redacted, the code the runbook asks
+// for is kept.
+func TestARefusalQuotingTheRecipientKeepsItsCode(t *testing.T) {
+	q := queued(1, now, 0)
+	q.To = "ana.popescu@usm.md"
+	q.Body = "Login: ana.popescu\nEmail: ana.popescu@usm.md\nParola: Zx8-q2LmT0pa4RwK\n"
+	store := &fakeStore{pending: []mailing.Queued{q}}
+	transport := &fakeTransport{replies: []error{fmt.Errorf(
+		"%w: 550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient ana.popescu@usm.md not found by SMTP address lookup",
+		mail.ErrPermanent)}}
+
+	if err := dispatcher(store, transport, &fakeCounters{}).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != 1 {
+		t.Fatalf("abandoned %+v", store.abandoned)
+	}
+	assertRecordedError(t, store.abandoned[0].lastError,
+		"550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient [redacted] not found", "ana.popescu@usm.md")
+}
+
+func assertRecordedError(t *testing.T, got, keep, reject string) {
+	t.Helper()
+	if !strings.Contains(got, keep) || strings.Contains(got, reject) {
+		t.Errorf("last error %q, want it to keep %q and drop %q", got, keep, reject)
+	}
+	if len(got) > mailing.MaxLastErrorBytes || !utf8.ValidString(got) {
+		t.Errorf("last error is %d bytes (valid UTF-8: %v), want at most %d",
+			len(got), utf8.ValidString(got), mailing.MaxLastErrorBytes)
+	}
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Errorf("last error %q carries the control character %U", got, r)
+		}
 	}
 }
 
@@ -301,8 +370,8 @@ func TestADeliveryIsRecordedEvenWhenTheRunIsCancelledDuringTheSend(t *testing.T)
 	}
 }
 
-// Shutdown interrupts a send: that is not the relay's failure, so the message
-// is due again at once and counts no retry.
+// Shutdown interrupts a send: that is nobody's failure, so the message is due
+// again at once, its attempt refunded, and nothing is counted.
 func TestASendCutByShutdownIsDueAgainAtOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0)}}
@@ -314,11 +383,14 @@ func TestASendCutByShutdownIsDueAgainAtOnce(t *testing.T) {
 
 	_ = dispatcher(store, transport, counters).Drain(ctx)
 
-	if len(store.retried) != 1 || store.retried[0].after != 0 {
-		t.Fatalf("retried %+v, want the message due again at once", store.retried)
+	if len(store.released) != 1 || store.released[0].after != 0 || len(store.retried) != 0 {
+		t.Fatalf("released %+v, retried %+v; want the message released, due at once", store.released, store.retried)
 	}
-	if len(counters.counted) != 0 {
-		t.Errorf("counted %v for a send cut by shutdown", counters.counted)
+	if store.pending[0].Attempts != 0 {
+		t.Errorf("the message has %d attempts after a send cut by shutdown, want 0", store.pending[0].Attempts)
+	}
+	if len(counters.counted) != 0 || counters.relayFailures != 0 {
+		t.Errorf("counted %v and %d relay failures for a send cut by shutdown", counters.counted, counters.relayFailures)
 	}
 	if store.recordCtxErr[0] != nil {
 		t.Errorf("the release ran on a cancelled context: %v", store.recordCtxErr[0])
@@ -336,8 +408,8 @@ func TestAStoreFailureEndsTheRunAndIsReturned(t *testing.T) {
 
 func TestNothingLogsTheSubjectOrTheBody(t *testing.T) {
 	var logs bytes.Buffer
-	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0)}}
-	transport := &fakeTransport{replies: []error{nil, refused(), throttled()}}
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0), queued(4, now, 0)}}
+	transport := &fakeTransport{replies: []error{nil, refused(), deferred(), badPassword()}}
 	d := mailing.NewDispatcher(mailing.DispatcherConfig{
 		Store: store, Transport: transport, PerMinute: 25, Counters: &fakeCounters{},
 		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -356,4 +428,179 @@ func TestNothingLogsTheSubjectOrTheBody(t *testing.T) {
 			t.Errorf("the log carries %q:\n%s", secret, logs.String())
 		}
 	}
+}
+
+// A wrong relay password, or SMTP AUTH turned off for the mailbox, refuses
+// every message alike: none is charged an attempt or given up, and the
+// dispatcher stops asking until its pause ends.
+func TestARelayFailureChargesNoMessageAndPausesTheDispatcher(t *testing.T) {
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0)}}
+	transport := &fakeTransport{replies: []error{badPassword(), badPassword()}}
+	counters := &fakeCounters{}
+	clock := now
+	d := dispatcherAt(store, transport, counters, func() time.Time { return clock })
+
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(transport.sent) != 1 {
+		t.Fatalf("tried %d messages against a relay refusing the account, want 1", len(transport.sent))
+	}
+	if len(store.abandoned) != 0 || len(store.retried) != 0 || len(store.sent) != 0 {
+		t.Fatalf("abandoned %+v, retried %+v, sent %v; want every message left pending",
+			store.abandoned, store.retried, store.sent)
+	}
+	if len(store.released) != 1 || store.released[0].after != 30*time.Second ||
+		!strings.Contains(store.released[0].lastError, "535 5.7.139") {
+		t.Fatalf("released %+v, want message 1 released for 30s with the relay's reply", store.released)
+	}
+	if len(store.pending) != 3 {
+		t.Fatalf("%d messages pending, want all 3", len(store.pending))
+	}
+	for _, q := range store.pending {
+		if q.Attempts != 0 {
+			t.Errorf("message %d has %d attempts charged for the relay's failure", q.ID, q.Attempts)
+		}
+	}
+	if counters.relayFailures != 1 || !counters.relayFailing || len(counters.counted) != 0 {
+		t.Errorf("relay failures %d, failing %v, outcomes %v; want one relay failure and no message outcome",
+			counters.relayFailures, counters.relayFailing, counters.counted)
+	}
+
+	// Paused: no claim until the pause ends.
+	claims := len(store.claimedPerMinute)
+	clock = now.Add(29 * time.Second)
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.claimedPerMinute) != claims {
+		t.Fatal("a paused dispatcher claimed a message")
+	}
+
+	// The pause ends; the relay still refuses, and the next pause is longer.
+	clock = now.Add(30 * time.Second)
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.released) != 2 || store.released[1].after != time.Minute {
+		t.Fatalf("released %+v, want a second release for a minute", store.released)
+	}
+
+	// Fixed: everything goes, and the relay is no longer failing.
+	clock = clock.Add(time.Minute)
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.sent) != 3 || counters.relayFailing {
+		t.Fatalf("sent %v, relay failing %v; want all three sent and the relay recovered", store.sent, counters.relayFailing)
+	}
+
+	// The pause starts again from 30 seconds.
+	store.pending = []mailing.Queued{queued(4, clock, 0)}
+	transport.replies = []error{badPassword()}
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if last := store.released[len(store.released)-1]; last.after != 30*time.Second {
+		t.Errorf("after a success the next pause is %s, want 30s", last.after)
+	}
+}
+
+func TestThePauseDoublesUpToFifteenMinutes(t *testing.T) {
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0)}}
+	transport := &fakeTransport{}
+	clock := now
+	d := dispatcherAt(store, transport, &fakeCounters{}, func() time.Time { return clock })
+
+	want := []time.Duration{
+		30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute,
+		8 * time.Minute, 15 * time.Minute, 15 * time.Minute,
+	}
+	for i, pause := range want {
+		transport.replies = []error{unreachable()}
+		if err := d.Drain(t.Context()); err != nil {
+			t.Fatalf("Drain() = %v", err)
+		}
+		if len(store.released) != i+1 || store.released[i].after != pause {
+			t.Fatalf("relay failure %d: released %+v, want a pause of %s", i+1, store.released, pause)
+		}
+		clock = clock.Add(pause)
+	}
+	if store.pending[0].Attempts != 0 || len(store.abandoned) != 0 {
+		t.Errorf("an unreachable relay charged %d attempts and abandoned %+v", store.pending[0].Attempts, store.abandoned)
+	}
+}
+
+// Through the real transport and an SMTP relay that refuses the password.
+func TestAWrongRelayPasswordLeavesEveryMessagePending(t *testing.T) {
+	relay := mailtest.NewServer(t, mailtest.Options{
+		StartTLS: true, AuthMechs: "PLAIN LOGIN", User: "noreply@usm.md", Password: "the-right-one",
+	})
+	transport := relaySender(t, relay, "a-wrong-one")
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0)}}
+	counters := &fakeCounters{}
+
+	if err := dispatcher(store, transport, counters).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+
+	if len(store.abandoned) != 0 || len(store.retried) != 0 || len(store.released) != 1 {
+		t.Fatalf("abandoned %+v, retried %+v, released %+v; want one message released and none given up",
+			store.abandoned, store.retried, store.released)
+	}
+	if !strings.Contains(store.released[0].lastError, "535") {
+		t.Errorf("last error %q does not carry the 535", store.released[0].lastError)
+	}
+	if len(store.pending) != 3 {
+		t.Fatalf("%d messages pending, want all 3", len(store.pending))
+	}
+	for _, q := range store.pending {
+		if q.Attempts != 0 {
+			t.Errorf("message %d was charged %d attempts", q.ID, q.Attempts)
+		}
+	}
+	if !counters.relayFailing || len(relay.Messages()) != 0 {
+		t.Errorf("relay failing %v, delivered %d; want the dispatcher paused and nothing delivered",
+			counters.relayFailing, len(relay.Messages()))
+	}
+}
+
+// Through the real transport: a refused recipient is that message's problem.
+func TestARefusedRecipientAbandonsOnlyItsMessage(t *testing.T) {
+	relay := mailtest.NewServer(t, mailtest.Options{
+		StartTLS: true, AuthMechs: "PLAIN", User: "noreply@usm.md", Password: "the-right-one",
+		RefuseRecipients: map[string]string{"ion@usm.md": "550 5.1.1 no such user"},
+	})
+	transport := relaySender(t, relay, "the-right-one")
+	refusedOne := queued(2, now, 0)
+	refusedOne.To = "ion@usm.md"
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), refusedOne, queued(3, now, 0)}}
+	counters := &fakeCounters{}
+
+	if err := dispatcher(store, transport, counters).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+
+	if len(store.abandoned) != 1 || store.abandoned[0].id != 2 || !strings.Contains(store.abandoned[0].lastError, "5.1.1 no such user") {
+		t.Fatalf("abandoned %+v, want message 2 with the relay's 550", store.abandoned)
+	}
+	if fmt.Sprint(store.sent) != "[1 3]" || len(relay.Messages()) != 2 {
+		t.Errorf("sent %v, relay received %d; want messages 1 and 3 delivered", store.sent, len(relay.Messages()))
+	}
+	if counters.relayFailing || counters.relayFailures != 0 {
+		t.Error("a refused recipient was taken for a failing relay")
+	}
+}
+
+func relaySender(t *testing.T, relay *mailtest.Server, password string) *mail.Sender {
+	t.Helper()
+	sender, err := mail.New(mail.Config{
+		Host: relay.Host(), Port: relay.Port(), Username: "noreply@usm.md", Password: password,
+		From: "noreply@usm.md", TLS: mail.TLSStartTLS, RootCAs: relay.Roots,
+		DialTimeout: 2 * time.Second, SendTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("mail.New() = %v", err)
+	}
+	return sender
 }

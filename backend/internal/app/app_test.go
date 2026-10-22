@@ -62,8 +62,9 @@ func TestWithMailOffNothingIsQueuedAndNoSenderRuns(t *testing.T) {
 
 	outbox, jobs := newMailOutbox(quiet(), off, postgres.NewMailOutbox(nil), 25, metrics.Noop{})
 
-	if len(jobs) != 0 {
-		t.Errorf("mail is off and %d delivery jobs would run", len(jobs))
+	// Only the sweep that erases messages queued before mail was turned off.
+	if len(jobs) != 1 || jobs[0].name != "mail-expiry" {
+		t.Errorf("mail is off and the jobs are %v, want only mail-expiry", jobNames(jobs))
 	}
 	err = outbox.Enqueue(t.Context(), mailing.Message{
 		Kind: mailing.KindSignInDetails, To: "ana@usm.md", Subject: "Subject", Body: "Body",
@@ -83,8 +84,8 @@ func TestWithMailOnAnEnqueueWakesTheDeliveryJob(t *testing.T) {
 
 	outbox, jobs := newMailOutbox(quiet(), on, postgres.NewMailOutbox(nil), 25, metrics.Noop{})
 
-	if !outbox.Enabled() || len(jobs) != 1 {
-		t.Fatalf("enabled=%v jobs=%d, want an enabled outbox and one delivery job", outbox.Enabled(), len(jobs))
+	if !outbox.Enabled() || len(jobs) != 1 || jobs[0].name != "mail-outbox" {
+		t.Fatalf("enabled=%v jobs=%v, want an enabled outbox and the delivery job", outbox.Enabled(), jobNames(jobs))
 	}
 	outbox.Wake()
 	select {
@@ -92,4 +93,12 @@ func TestWithMailOnAnEnqueueWakesTheDeliveryJob(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("the delivery job does not listen to the outbox's wake channel")
 	}
+}
+
+func jobNames(jobs []task) []string {
+	var names []string
+	for _, job := range jobs {
+		names = append(names, job.name)
+	}
+	return names
 }

@@ -30,8 +30,8 @@ func (r *MailOutbox) querier(ctx context.Context) storage.Querier {
 }
 
 // mailOutboxLockKey is the advisory lock every replica's claim takes before
-// counting the last minute's claims. Advisory locks are scoped to a database,
-// so it cannot collide with gamedb's prepareLock.
+// counting the last minute's claims; the core database's single-key locks
+// are a sequence, and scheduleLockKey is the one before it.
 const mailOutboxLockKey = 8_531_204_477_119_003_3
 
 // Insert queues m, due at once, inside the transaction ctx carries.
@@ -121,6 +121,47 @@ func (r *MailOutbox) Retry(ctx context.Context, id int64, after time.Duration, l
 	return r.finish(ctx, id, `
 		UPDATE mail_outbox SET next_attempt_at = now() + $2::interval, last_error = $3
 		WHERE id = $1 AND sent_at IS NULL AND abandoned_at IS NULL`, after, lastError)
+}
+
+// Release makes the message due again after the given wait and refunds the
+// attempt its claim counted.
+func (r *MailOutbox) Release(ctx context.Context, id int64, after time.Duration, lastError string) error {
+	return r.finish(ctx, id, `
+		UPDATE mail_outbox
+		SET attempts = attempts - 1, next_attempt_at = now() + $2::interval, last_error = $3
+		WHERE id = $1 AND sent_at IS NULL AND abandoned_at IS NULL AND attempts > 0`, after, lastError)
+}
+
+// Expire abandons, with reason, every pending message queued more than
+// maxAge ago, except one claimed within lease, which a sender may still be
+// handing to the relay; its claim's own check abandons it instead.
+func (r *MailOutbox) Expire(ctx context.Context, maxAge, lease time.Duration, reason string) (map[mailing.Kind]int, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		WITH expired AS (
+			UPDATE mail_outbox SET abandoned_at = now(), body = NULL, last_error = $3
+			WHERE sent_at IS NULL AND abandoned_at IS NULL
+			  AND created_at < now() - $1::interval
+			  AND (last_attempt_at IS NULL OR last_attempt_at <= now() - $2::interval)
+			RETURNING kind
+		)
+		SELECT kind, count(*) FROM expired GROUP BY kind`, maxAge, lease, reason)
+	if err != nil {
+		return nil, fmt.Errorf("expire old messages: %w", err)
+	}
+	expired := map[mailing.Kind]int{}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("expire old messages: %w", err)
+		}
+		expired[mailing.Kind(kind)] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("expire old messages: %w", err)
+	}
+	return expired, nil
 }
 
 // finish runs one update of a pending message. Matching nothing means another

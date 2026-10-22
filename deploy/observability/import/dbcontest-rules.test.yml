@@ -55,6 +55,8 @@ tests:
         values: '0x30'
       - series: 'mail_messages_total{job="core-api", instance="api:9090", kind="sign_in_details", outcome="abandoned"}'
         values: '0x30'
+      - series: 'mail_relay_failing{job="core-api", instance="api:9090"}'
+        values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="ok", reason=""}'
         values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="error", reason="internal"}'
@@ -343,6 +345,39 @@ tests:
     promql_expr_test:
       - expr: ALERTS{alertstate="firing"}
         eval_time: 65m
+        exp_samples: []
+
+  # The relay refuses the account from 1m: after ten minutes of it, an alert.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'mail_relay_failing{job="core-api", instance="api:9090"}'
+        values: '0 1x19'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestMailRelayFailing", alertstate="firing"}
+        eval_time: 10m
+        exp_samples: []
+      - expr: ALERTS{alertname="DBContestMailRelayFailing", alertstate="firing"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestMailRelayFailing", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # A relay that fails for a few minutes and mends is not an alert.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x20'
+      - series: 'mail_relay_failing{job="core-api", instance="api:9090"}'
+        values: '0 1x8 0x11'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 15m
         exp_samples: []
 
   # Two internal errors a minute: someone is locked out.
