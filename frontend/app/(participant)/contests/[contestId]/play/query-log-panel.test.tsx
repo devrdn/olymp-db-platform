@@ -7,10 +7,10 @@ import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/ap
 import type { QueryLogEntry } from "@/lib/api/querylog";
 
 import { QueryLogPanel } from "./query-log-panel";
-import type { QueryLogRefreshResult } from "./actions";
+import type { QueryLogRefreshResult } from "./requests";
 
-const fetchQueryLogAction = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<QueryLogRefreshResult>>());
-vi.mock("./actions", () => ({ fetchQueryLogAction }));
+const fetchQueryLog = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<QueryLogRefreshResult>>());
+vi.mock("./requests", () => ({ fetchQueryLog }));
 
 function entry(sql: string, overrides: Partial<QueryLogEntry> = {}): QueryLogEntry {
   return {
@@ -40,14 +40,14 @@ function show(props: Partial<React.ComponentProps<typeof QueryLogPanel>> = {}) {
 
 describe("the query log panel", () => {
   beforeEach(() => {
-    fetchQueryLogAction.mockReset();
+    fetchQueryLog.mockReset();
   });
 
   test("renders the initial page without a client fetch", () => {
     show();
 
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
-    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+    expect(fetchQueryLog).not.toHaveBeenCalled();
   });
 
   test("says nothing has run yet when the log is empty", () => {
@@ -67,13 +67,13 @@ describe("the query log panel", () => {
   });
 
   test("retrying a failed empty log fetches the first page again", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
     show({ initial: { items: [], total: 0, failed: true } });
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.retry }));
 
     await waitFor(() => expect(screen.getByText("SELECT 1")).toBeInTheDocument());
-    expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
+    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
   });
 
   test("a row still running carries no duration or row count", () => {
@@ -113,18 +113,18 @@ describe("the query log panel", () => {
   });
 
   test("load more appends the next page rather than replacing the first", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2")], total: 2 });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2")], total: 2 });
     show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
 
     await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
-    expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 1);
+    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 1);
   });
 
   test("a failed load more leaves the existing rows on screen, with a way to retry", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
     show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
@@ -139,13 +139,13 @@ describe("the query log panel", () => {
   test("does not refetch on mount even when it starts active", () => {
     show({ active: true });
 
-    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+    expect(fetchQueryLog).not.toHaveBeenCalled();
   });
 
   test("refetches on the transition into being the active tab", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2"), entry("SELECT 1")], total: 2 });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2"), entry("SELECT 1")], total: 2 });
     const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
-    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+    expect(fetchQueryLog).not.toHaveBeenCalled();
 
     rerender(
       <QueryLogPanel
@@ -159,25 +159,25 @@ describe("the query log panel", () => {
 
     await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
     // At least a full page, even when fewer rows were loaded.
-    expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
+    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
   });
 
   test("does not refetch again while it stays the active tab", async () => {
     const { rerender } = show({ active: true });
-    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+    expect(fetchQueryLog).not.toHaveBeenCalled();
 
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
 
-    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+    expect(fetchQueryLog).not.toHaveBeenCalled();
   });
 
   test("a failed refresh on becoming active leaves the existing rows on screen", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
     const { rerender } = show({ active: false });
 
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
 
-    await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalled());
+    await waitFor(() => expect(fetchQueryLog).toHaveBeenCalled());
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed);
   });
@@ -185,17 +185,17 @@ describe("the query log panel", () => {
   // Toggling back within QUERY_LOG_REFRESH_MIN_INTERVAL_MS must not spend
   // another AdmitRead, the budget Run shares.
   test("does not refetch a second time when toggled back within the minimum refresh interval", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
     const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
 
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
-    await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchQueryLog).toHaveBeenCalledTimes(1));
 
     // Leave and come straight back, inside the interval.
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
     rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
 
-    expect(fetchQueryLogAction).toHaveBeenCalledTimes(1);
+    expect(fetchQueryLog).toHaveBeenCalledTimes(1);
   });
 
   // Overlapping refreshes: the newest request wins, not the last to resolve.
@@ -204,20 +204,20 @@ describe("the query log panel", () => {
     try {
       let resolveFirst!: (value: QueryLogRefreshResult) => void;
       let resolveSecond!: (value: QueryLogRefreshResult) => void;
-      fetchQueryLogAction
+      fetchQueryLog
         .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
         .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
 
       const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
-      await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(fetchQueryLog).toHaveBeenCalledTimes(1));
 
       // Past the interval, so a second transition refreshes while the first is
       // pending.
       await vi.advanceTimersByTimeAsync(QUERY_LOG_REFRESH_MIN_INTERVAL_MS + 1);
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
       rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
-      await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(fetchQueryLog).toHaveBeenCalledTimes(2));
 
       // The newer request settles first...
       resolveSecond({ kind: "ok", items: [entry("SELECT 2")], total: 1 });

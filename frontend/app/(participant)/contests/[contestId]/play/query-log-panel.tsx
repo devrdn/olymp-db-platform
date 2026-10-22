@@ -12,7 +12,7 @@ import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
 import { cn } from "@/lib/utils";
 
-import { fetchQueryLogAction } from "./actions";
+import { fetchQueryLog } from "./requests";
 
 /**
  * The "Query log" tab: every statement this participant has run in this
@@ -62,7 +62,7 @@ export function QueryLogPanel({
   const refresh = useCallback(async () => {
     const requestId = ++requestSeq.current;
     lastRefreshAt.current = Date.now();
-    const result = await fetchQueryLogAction(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
+    const result = await fetchQueryLog(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
     if (requestId !== requestSeq.current) return; // superseded by a newer refresh
     if (result.kind === "ok") {
       setItems(result.items);
@@ -87,7 +87,7 @@ export function QueryLogPanel({
 
   const loadMore = async () => {
     setLoadingMore(true);
-    const result = await fetchQueryLogAction(contestId, QUERY_LOG_PAGE_SIZE, items.length);
+    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, items.length);
     setLoadingMore(false);
     if (result.kind === "ok") {
       setItems((prev) => [...prev, ...result.items]);

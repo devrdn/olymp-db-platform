@@ -8,7 +8,7 @@ import type { WorkspaceTab } from "@/lib/api/workspace";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
-import { runQueryAction, type ConsoleState } from "./actions";
+import { runQuery, type ConsoleState } from "./requests";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
 
@@ -57,7 +57,7 @@ export function ConsoleEditor({
 }) {
   const t = dict.participant.console;
   const te = dict.participant.play.workspace.editor;
-  const [state, run, running] = useActionState<ConsoleState, FormData>(runQueryAction, {
+  const [state, run, running] = useActionState<ConsoleState, FormData>(runQuery, {
     kind: "idle",
   });
   /**
