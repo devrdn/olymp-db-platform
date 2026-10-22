@@ -224,10 +224,15 @@ queued before mail was turned off once it is a day old.
   sending for 30 seconds, then 1, 2, 4 and 8 minutes, then every 15, until
   the relay next answers for a message.
 - A refusal of the message itself (a 5xx reply to RCPT or DATA, such as an
-  unknown recipient) abandons it, and the job goes on to the next. A
-  deferral of the recipient (a 4xx reply to RCPT) is tried again after 1, 2,
-  4, 8, 16 and 32 minutes, then an hour; the eighth, or one whose retry would
-  come a day after the message was queued, abandons it.
+  unknown recipient) abandons it, and the job goes on to the next. Three
+  refusals in a row with nothing delivered between them are taken for the
+  relay refusing everyone (Exchange's `550 5.1.8` for a mailbox it has
+  restricted): the third message is put back like a relay failure, the job
+  pauses, and no more are given up until a message is delivered.
+- A deferral of the recipient (a 4xx reply to RCPT) is tried again after 1,
+  2, 4, 8, 16 and 32 minutes, then an hour, and the job leaves the other
+  messages for its next run; the eighth, or one whose retry would come a day
+  after the message was queued, abandons it.
 - A message is never sent, and its body is not kept, once it was queued 24
   hours ago (a claim's five-minute lease aside): each run first abandons
   those, whatever the relay is doing.

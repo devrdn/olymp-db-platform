@@ -218,13 +218,18 @@ groups:
         annotations:
           summary: The mail relay has been failing for ten minutes; no email is being sent.
           description: >-
-            Queued messages wait, uncharged, and are abandoned only a day after
-            they were queued. The API log has "the relay failed; no message is
-            sent until it is tried again" with the reply. 535 5.7.139 is SMTP
-            AUTH disabled for the mailbox in the Exchange admin center, or MFA;
-            another 535 is SMTP_USERNAME or SMTP_PASSWORD; "no such host" is
-            SMTP_HOST; a certificate or TLS error is the relay's TLS. Fix the
-            setting and restart the api service.
+            Queued messages wait, uncharged, and are abandoned only
+            a day after they were queued. The API log has "the relay
+            failed; no message is sent until it is tried again" with
+            the reply. An error starting "taken for the relay's
+            after 3 refusals in a row" is a relay refusing every
+            recipient, such as 550 5.1.8 for a mailbox Microsoft
+            restricted for sending spam (unblocked in the Defender
+            portal). 535 5.7.139 is SMTP AUTH disabled for the
+            mailbox in the Exchange admin center, or MFA; another
+            535 is SMTP_USERNAME or SMTP_PASSWORD; "no such host" is
+            SMTP_HOST; a certificate or TLS error is the relay's
+            TLS. Fix the setting and restart the api service.
 
   - name: dbcontest-queryrunner
     rules:
