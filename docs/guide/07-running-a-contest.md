@@ -42,6 +42,18 @@ not care.
 
 ### A week before
 
+**For the release that brings email (v0.5.0).** It is deployed by step 1,
+with its tag wherever step 1 names v0.4.0. Two things go with it:
+
+- Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_MAX_PER_MINUTE` and `PUBLIC_URL` in
+  `deploy/.env` before `make deploy` (step 6 has the values); step 1's
+  `diff` lists them until then. Without `SMTP_HOST` the release runs with
+  mail off.
+- Load `dbcontest-rules.yml` again (step 3). It adds two alerts,
+  `DBContestMailAbandoned` and `DBContestMailRelayFailing`, to a group the
+  file already had, so the rules page still lists four groups.
+
 **1. Back up, then deploy the release.** The release is v0.4.0. It carries
 the schema fix, the Query Runner's metrics, the scheduled backup and the
 feedback link, and its notes list the rest. Before it reaches the host, run
@@ -160,15 +172,61 @@ A set that was written is not yet a set that restores; this is the drill
 that proves it. Check `S` against the table in the README before the contest
 window multiplies it.
 
-**6. Create the participants' accounts.** On **Accounts** (`/users`), choose
-**Import a roster** and paste one line per person: login, full name and,
-optionally, email, separated by commas. Tick no role: a participant needs
-none. At most 500 lines a time; a line that cannot be used is reported with
-its reason and the rest go in. The one-time passwords are shown once: use
-**Copy all passwords** and hand each to its owner by a channel only they read.
-The first sign-in makes each participant choose their own password.
+**6. Set up email.** Skip it to hand every password over by hand, as before
+email.
 
-**7. Set up the contest.** In the contest's workspace:
+1. From the host, check that the relay can be reached. A timeout means
+   outbound port 587 is closed, which the university's network team opens:
+
+   ```bash
+   nc -vz smtp.office365.com 587
+   ```
+
+2. Set the relay in `deploy/.env`:
+   [The mail relay](../../backend/README.md#the-mail-relay) has USM's values
+   and Microsoft's conditions on the mailbox. `SMTP_PASSWORD` comes from the
+   university's administrators; `SMTP_MAX_PER_MINUTE` stays at 25, under
+   the 30 a minute Microsoft allows; `PUBLIC_URL` is
+   `https://olympdb.usm.md`. Set after step 1's deploy, they take effect with
+   `make deploy-api VERSION=<tag>`, the tag `make deployed` prints. The
+   API's log then says `mail relay configured`.
+3. On **Installation** (`/settings`), **Email** says it is on and the
+   address it sends as. Give your own account an email address on
+   **Accounts**, press **Send a test message**, and check that it arrived in
+   the inbox rather than in spam. A refusal shows the relay's reply beside
+   it; [Diagnosing](../../backend/README.md#diagnosing) says what Microsoft's
+   codes mean.
+4. In the same screen's form, choose the **Email language**, the one every
+   message is written in (Romanian until changed), and set the **Contact
+   email**, which every sign-in message gives as the address to write to
+   when something does not work.
+
+**7. Create the participants' accounts.** On **Accounts** (`/users`), choose
+**Import a roster** and paste one line per person: login, full name and,
+optionally, email, separated by commas; only an account with an address can be
+emailed. Tick no role: a participant needs none. At most 500 lines a time; a
+line that cannot be used is reported with its reason and the rest go in. Tick
+**Send sign-in details by email**: each account with an address is sent its
+login, its one-time password and the sign-in link. The one-time passwords are
+also shown once, emailed or not. The first sign-in makes each participant
+choose their own password.
+
+- The answer says how many messages were queued and how long sending them
+  takes: about ⌈N/25⌉ minutes for N accounts at the default rate, twenty
+  for five hundred.
+- An account without an address is listed as not emailed. Its password is
+  on the screen with the others (**Copy all passwords** takes them all):
+  hand it to its owner by a channel only they read.
+- Watch `DBContestMailAbandoned` and `DBContestMailRelayFailing` until the
+  queue has gone ([What to watch](#what-to-watch)).
+- To send someone their details again, reset their password with the option
+  ticked, on their account's page or for several at once from the list. The
+  new message replaces an older one that has not gone out yet, and the
+  older password stops working.
+- Tell participants to look in their spam folder for the message from
+  `noreply-olymp@usm.md`.
+
+**8. Set up the contest.** In the contest's workspace:
 
 | Tab | What to set for the beta |
 |---|---|
@@ -186,7 +244,7 @@ failed) and `staff_registered` (a participant's account administers every
 contest). Content freezes at the start; the window and the network stay
 editable while the contest runs.
 
-**8. Run the load test at the beta's size.** At a quiet time, never during
+**9. Run the load test at the beta's size.** At a quiet time, never during
 somebody else's contest. `consoleload -profile beta` drives forty synthetic
 participants through the real path for fifteen minutes and passes or fails the
 server on five thresholds. It runs on a workstation, reaching the API as
@@ -310,6 +368,8 @@ The alerts, by what each asks of you
 | `DBContestProcessRestarted` | warning | a process restarted; find out why in its log |
 | `DBContestAPISlow`, `DBContestQueriesTimingOut`, `DBContestAdmissionWaitHigh`, `DBContestAdmissionQueueDeep` | warning | the server is near its limits; look at the next break |
 | `DBContestReclaimFailing` | warning | the sweep that drops finished contests' databases failed; it matters after the contest, not during |
+| `DBContestMailAbandoned` | warning | somebody will not get an email. The API's log has the relay's reply; once the address or the relay is fixed, reset that password with the option ticked, or hand it over |
+| `DBContestMailRelayFailing` | warning | no email is leaving; [Diagnosing](../../backend/README.md#diagnosing) |
 
 Participants' own SQL errors and the checker's refusals never page.
 
@@ -587,5 +647,8 @@ The olympiad on 2 November follows the same timeline. What differs:
   exempt ([Enrollment and network
   restrictions](../../backend/README.md#enrollment-and-network-restrictions)).
 - The feedback link may be taken down before it.
+- Sign-in details by email need the release that brings it (v0.5.0) and
+  step 6 of the week before; the paragraph above step 1 lists what that
+  release adds.
 
 What the beta taught goes into this chapter before then.
