@@ -26,15 +26,24 @@ const (
 	EmailSkipNotActive = "not_active"
 )
 
-// Outbox queues email (mailing.Outbox).
+// Outbox queues email (mailing.Outbox). Both writes join the transaction in
+// ctx, so a message commits or rolls back with the password it carries.
 type Outbox interface {
 	Enabled() bool
-	// Enqueue joins the transaction in ctx, so the message commits or rolls
-	// back with the password it carries.
-	Enqueue(ctx context.Context, m mailing.Message) error
+	// EnqueueMany stores the messages without waking the sender.
+	EnqueueMany(ctx context.Context, ms []mailing.Message) error
+	// AbandonPending gives up the accounts' pending messages of kind and
+	// erases them, whether mail is on or not.
+	AbandonPending(ctx context.Context, kind mailing.Kind, users []uuid.UUID, reason string) error
 	// Wake tells the sender a committed message is waiting.
 	Wake()
 }
+
+// Why a pending sign-in message was given up, kept with it in the outbox.
+const (
+	withdrawnSuperseded = "superseded: a newer one-time password was issued"
+	withdrawnClosed     = "the account was blocked or deleted"
+)
 
 // SignInTexts writes the sign-in details message (mailing.Texts).
 type SignInTexts interface {
@@ -121,10 +130,13 @@ func (s *Service) letterheadFor(ctx context.Context, d Delivery) (*letterhead, e
 
 // signIn writes an account's sign-in details, or says why it gets none. It
 // returns a nil message when email was not asked for, or the account is not
-// active or has no address. An error means the message cannot be written for reasons that are
-// not the account's: its login, name and address were validated on the way
-// in, the installation's name is a required setting and the password is
-// ours.
+// active or has no address.
+//
+// An error is the installation's fault, never the account's: the login, name
+// and address were validated on the way in, the installation's name and the
+// mail language are validated settings, and the password is ours. So no
+// caller turns it into a skipped account; it changes nothing, and an import
+// stops at that row as for an outage (CLAUDE.md rule 8).
 func (l *letterhead) signIn(u User, password string) (*mailing.Message, EmailOutcome, error) {
 	if l == nil {
 		return nil, EmailOutcome{}, nil
@@ -158,14 +170,59 @@ func (l *letterhead) signIn(u User, password string) (*mailing.Message, EmailOut
 // queue puts the messages in the outbox and records each one. It runs inside
 // the unit of work that issues the passwords they carry.
 func (s *Service) queue(ctx context.Context, actorID uuid.UUID, messages []mailing.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	if err := s.mail.Outbox.EnqueueMany(ctx, messages); err != nil {
+		return fmt.Errorf("queue the sign-in details: %w", err)
+	}
 	entries := make([]audit.Entry, 0, len(messages))
 	for _, m := range messages {
-		if err := s.mail.Outbox.Enqueue(ctx, m); err != nil {
-			return fmt.Errorf("queue the sign-in details: %w", err)
-		}
 		entries = append(entries, s.entry(actorID, audit.ActionUserSignInDetailsEmailed, m.UserID, nil))
 	}
 	return s.audit.RecordMany(ctx, entries)
+}
+
+// withdraw gives up the accounts' pending sign-in messages inside the unit of
+// work that makes them wrong: a new password leaves the old one dead, and a
+// blocked or deleted account cannot sign in with it.
+func (s *Service) withdraw(ctx context.Context, ids []uuid.UUID, reason string) error {
+	if s.mail == nil {
+		return nil
+	}
+	return s.mail.Outbox.AbandonPending(ctx, mailing.KindSignInDetails, ids, reason)
+}
+
+// keepActive drops the messages of accounts that stopped being active since
+// they were first read, and names them. It runs in the unit of work after the
+// password write, whose row locks make a block that commits later wait for
+// this one, while a block committed earlier is read here.
+func (s *Service) keepActive(ctx context.Context, messages []mailing.Message) ([]mailing.Message, map[uuid.UUID]bool, error) {
+	if len(messages) == 0 {
+		return nil, nil, nil
+	}
+	ids := make([]uuid.UUID, len(messages))
+	for i, m := range messages {
+		ids[i] = m.UserID
+	}
+	current, err := s.repo.ByIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	active := make(map[uuid.UUID]bool, len(current))
+	for _, u := range current {
+		active[u.ID] = u.IsActive()
+	}
+	kept := make([]mailing.Message, 0, len(messages))
+	dropped := map[uuid.UUID]bool{}
+	for _, m := range messages {
+		if active[m.UserID] {
+			kept = append(kept, m)
+		} else {
+			dropped[m.UserID] = true
+		}
+	}
+	return kept, dropped, nil
 }
 
 // wake runs once the unit of work that queued a message has committed: until

@@ -45,6 +45,47 @@ func (r *MailOutbox) Insert(ctx context.Context, m mailing.Message) error {
 	return nil
 }
 
+// InsertMany queues the messages, due at once, in one statement inside the
+// transaction ctx carries. An account-less message stores a NULL user.
+func (r *MailOutbox) InsertMany(ctx context.Context, ms []mailing.Message) error {
+	kinds := make([]string, len(ms))
+	users := make([]string, len(ms))
+	recipients := make([]string, len(ms))
+	subjects := make([]string, len(ms))
+	bodies := make([]string, len(ms))
+	for i, m := range ms {
+		kinds[i], recipients[i], subjects[i], bodies[i] = string(m.Kind), m.To, m.Subject, m.Body
+		if m.UserID != uuid.Nil {
+			users[i] = m.UserID.String()
+		}
+	}
+	if _, err := r.querier(ctx).Exec(ctx, `
+		INSERT INTO mail_outbox (kind, user_id, recipient, subject, body)
+		SELECT kind, NULLIF(user_id, '')::uuid, recipient, subject, body
+		FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+		     AS m(kind, user_id, recipient, subject, body)`,
+		kinds, users, recipients, subjects, bodies); err != nil {
+		return fmt.Errorf("insert %d messages into the mail outbox: %w", len(ms), err)
+	}
+	return nil
+}
+
+// AbandonPending gives up the accounts' pending messages of kind with reason
+// and erases their bodies. A message whose claim's lease is still running is
+// left alone: a sender may be handing it to the relay, and would find it no
+// longer pending when it records the outcome.
+func (r *MailOutbox) AbandonPending(ctx context.Context, kind mailing.Kind, users []uuid.UUID, reason string) error {
+	if _, err := r.querier(ctx).Exec(ctx, `
+		UPDATE mail_outbox SET abandoned_at = now(), body = NULL, last_error = $3
+		WHERE user_id = ANY($2) AND kind = $1
+		  AND sent_at IS NULL AND abandoned_at IS NULL
+		  AND NOT (next_attempt_at > now() AND next_attempt_at = last_attempt_at + $4::interval)`,
+		string(kind), users, reason, mailing.ClaimLease); err != nil {
+		return fmt.Errorf("abandon pending messages: %w", err)
+	}
+	return nil
+}
+
 // Claim leases the oldest due message for lease and counts the attempt. The
 // count of the last minute's claims and the claim itself run under one
 // advisory lock, or two replicas could each see budget left and both spend

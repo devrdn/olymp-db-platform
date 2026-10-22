@@ -443,6 +443,101 @@ func TestMessagesPastTheMaximumAgeExpireUnlessASenderHoldsThem(t *testing.T) {
 	})
 }
 
+// outboxID finds the message queued to a recipient through ctx.
+func outboxID(t *testing.T, ctx context.Context, to string) int64 {
+	t.Helper()
+	var id int64
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`SELECT id FROM mail_outbox WHERE recipient = $1`, to).Scan(&id); err != nil {
+		t.Fatalf("find the message to %s: %v", to, err)
+	}
+	return id
+}
+
+func TestABatchOfMessagesIsStoredPendingWithEveryField(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		user := makeUser(t, ctx, "outbox-"+uuid.NewString()[:8])
+		batch := []mailing.Message{
+			outboxMessage("batch-one@usm.md", user.ID),
+			outboxMessage("batch-two@usm.md", uuid.Nil),
+		}
+
+		if err := NewMailOutbox(testPool).InsertMany(ctx, batch); err != nil {
+			t.Fatalf("InsertMany() = %v", err)
+		}
+
+		for _, m := range batch {
+			var kind, subject, body string
+			var userID *uuid.UUID
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+				SELECT kind, user_id, subject, body FROM mail_outbox
+				WHERE recipient = $1 AND sent_at IS NULL AND abandoned_at IS NULL
+				  AND next_attempt_at <= now()`, m.To).Scan(&kind, &userID, &subject, &body); err != nil {
+				t.Fatalf("read the message to %s: %v", m.To, err)
+			}
+			if kind != string(m.Kind) || subject != m.Subject || body != m.Body {
+				t.Errorf("stored %s %q %q, want the message as given", kind, subject, body)
+			}
+			if (m.UserID == uuid.Nil) != (userID == nil) || (userID != nil && *userID != m.UserID) {
+				t.Errorf("user_id = %v for %v", userID, m.UserID)
+			}
+		}
+	})
+}
+
+func TestAbandoningGivesUpOnlyTheAccountsMessagesNoSenderHolds(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewMailOutbox(testPool)
+		account := makeUser(t, ctx, "outbox-"+uuid.NewString()[:8])
+		other := makeUser(t, ctx, "outbox-"+uuid.NewString()[:8])
+		insert := func(to string, user uuid.UUID) {
+			if err := repo.Insert(ctx, outboxMessage(to, user)); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}
+
+		// Claims take the oldest due message, so each is queued before it
+		// is claimed.
+		insert("retried@usm.md", account.ID)
+		retried, _ := claimOne(t, ctx, 25)
+		if err := repo.Retry(ctx, retried.ID, 4*time.Minute, "mail: temporary: 421"); err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		insert("sent@usm.md", account.ID)
+		sent, _ := claimOne(t, ctx, 25)
+		if err := repo.MarkSent(ctx, sent.ID); err != nil {
+			t.Fatalf("mark sent: %v", err)
+		}
+		insert("held@usm.md", account.ID)
+		held, _ := claimOne(t, ctx, 25)
+		insert("fresh@usm.md", account.ID)
+		insert("theirs@usm.md", other.ID)
+
+		if err := repo.AbandonPending(ctx, mailing.KindSignInDetails, []uuid.UUID{account.ID},
+			"superseded: a newer password was issued"); err != nil {
+			t.Fatalf("AbandonPending() = %v", err)
+		}
+
+		for _, id := range []int64{retried.ID, outboxID(t, ctx, "fresh@usm.md")} {
+			row := readOutboxRow(t, ctx, id)
+			if !row.abandoned || row.body != nil || row.lastError == nil ||
+				*row.lastError != "superseded: a newer password was issued" {
+				t.Errorf("message %d: abandoned %v, body kept %v, reason %v; want it given up and erased",
+					id, row.abandoned, row.body != nil, row.lastError)
+			}
+		}
+		if row := readOutboxRow(t, ctx, sent.ID); !row.sent || row.abandoned {
+			t.Error("a sent message was marked abandoned")
+		}
+		if row := readOutboxRow(t, ctx, held.ID); row.abandoned || row.body == nil {
+			t.Error("a message a sender holds was abandoned under it")
+		}
+		if row := readOutboxRow(t, ctx, outboxID(t, ctx, "theirs@usm.md")); row.abandoned || row.body == nil {
+			t.Error("another account's message was abandoned")
+		}
+	})
+}
+
 // refusingSink stores the audit trail but refuses one action, so a test can
 // fail a unit of work after the outbox has taken its message.
 type refusingSink struct {
@@ -590,4 +685,47 @@ func TestAMessageIsRolledBackWithTheAccountItWasFor(t *testing.T) {
 	if accounts != 0 || messages != 0 {
 		t.Errorf("%d accounts and %d messages committed, want neither", accounts, messages)
 	}
+}
+
+func TestAnotherResetGivesUpTheFirstMessageAndBlockingGivesUpTheRest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		admin := makeUser(t, ctx, "outbox-admin-"+uuid.NewString()[:8])
+		account, err := repo.Create(ctx, users.User{Login: "outbox-reset", FullName: "Ana Rusu",
+			Email: "outbox-reset@usm.md", Status: users.StatusActive, PasswordHash: "x"})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+		service := emailingUsers(NewAuditSink(testPool))
+		byEmail := users.Delivery{ByEmail: true}
+
+		if _, err := service.ResetPassword(ctx, admin.ID, account.ID, byEmail); err != nil {
+			t.Fatalf("first ResetPassword() = %v", err)
+		}
+		second, err := service.ResetPassword(ctx, admin.ID, account.ID, byEmail)
+		if err != nil {
+			t.Fatalf("second ResetPassword() = %v", err)
+		}
+
+		queued := queuedFor(t, ctx, account.ID)
+		if len(queued) != 1 || !strings.Contains(queued[0].body, second.OneTimePassword) {
+			t.Fatalf("pending %d messages, want only the one with the newest password", len(queued))
+		}
+		var erased int
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+			SELECT count(*) FROM mail_outbox
+			WHERE user_id = $1 AND abandoned_at IS NOT NULL AND body IS NULL`, account.ID).Scan(&erased); err != nil {
+			t.Fatalf("count abandoned messages: %v", err)
+		}
+		if erased != 1 {
+			t.Errorf("%d messages given up and erased, want the first one", erased)
+		}
+
+		if err := service.Block(ctx, admin.ID, account.ID, "cheating"); err != nil {
+			t.Fatalf("Block() = %v", err)
+		}
+		if queued := queuedFor(t, ctx, account.ID); len(queued) != 0 {
+			t.Errorf("a blocked account still has %d messages waiting", len(queued))
+		}
+	})
 }

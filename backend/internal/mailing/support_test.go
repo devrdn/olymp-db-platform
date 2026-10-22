@@ -8,11 +8,21 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/google/uuid"
 )
 
 type fakeQueue struct {
 	inserted []mailing.Message
-	err      error
+	// batches counts InsertMany calls.
+	batches   int
+	abandoned []abandonCall
+	err       error
+}
+
+type abandonCall struct {
+	kind   mailing.Kind
+	users  []uuid.UUID
+	reason string
 }
 
 func (q *fakeQueue) Insert(_ context.Context, m mailing.Message) error {
@@ -20,6 +30,23 @@ func (q *fakeQueue) Insert(_ context.Context, m mailing.Message) error {
 		return q.err
 	}
 	q.inserted = append(q.inserted, m)
+	return nil
+}
+
+func (q *fakeQueue) InsertMany(_ context.Context, ms []mailing.Message) error {
+	if q.err != nil {
+		return q.err
+	}
+	q.batches++
+	q.inserted = append(q.inserted, ms...)
+	return nil
+}
+
+func (q *fakeQueue) AbandonPending(_ context.Context, kind mailing.Kind, users []uuid.UUID, reason string) error {
+	if q.err != nil {
+		return q.err
+	}
+	q.abandoned = append(q.abandoned, abandonCall{kind: kind, users: users, reason: reason})
 	return nil
 }
 

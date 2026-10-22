@@ -83,7 +83,7 @@ type mailStore interface {
 // and the only job erases what was queued before mail was turned off.
 func newMailOutbox(log *slog.Logger, sender *mail.Sender, store mailStore, perMinute int, recorder metrics.Recorder) (*mailing.Outbox, []task) {
 	if !sender.Enabled() {
-		return mailing.Disabled(), []task{expireMail(mailing.NewSweeper(store, log).Sweep)}
+		return mailing.Disabled(store), []task{expireMail(mailing.NewSweeper(store, log).Sweep)}
 	}
 	outbox := mailing.NewOutbox(store)
 	dispatcher := mailing.NewDispatcher(mailing.DispatcherConfig{
