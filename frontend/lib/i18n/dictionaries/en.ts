@@ -1506,6 +1506,15 @@ const en = {
         },
       },
     },
+    /**
+     * Why an issued password was not also emailed although email was asked
+     * for: the `email_skipped_reason` the four password-issuing routes answer
+     * with. A reason this list does not name is shown raw.
+     */
+    emailSkipped: {
+      no_address: "the account has no email address",
+      not_active: "the account is not active",
+    },
   },
   participant: {
     /** The beta testers' way to the organisers' form; shown only when set. */

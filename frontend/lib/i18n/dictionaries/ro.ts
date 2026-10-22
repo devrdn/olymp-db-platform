@@ -1365,6 +1365,10 @@ const ro = {
         },
       },
     },
+    emailSkipped: {
+      no_address: "contul nu are adresă de e-mail",
+      not_active: "contul nu este activ",
+    },
   },
   participant: {
     feedback: {

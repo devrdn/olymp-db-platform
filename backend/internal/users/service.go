@@ -155,7 +155,7 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letter
 	}
 	// Written before the hash and the transaction, so a message that cannot
 	// be written costs neither.
-	message, emailed, err := letters.signIn(User{Login: login, FullName: fullName, Email: email}, oneTime)
+	message, emailed, err := letters.signIn(User{Login: login, FullName: fullName, Email: email, Status: StatusActive}, oneTime)
 	if err != nil {
 		return CreateResult{}, err
 	}

@@ -228,10 +228,11 @@ the audit trail as `settings.mail_test` with its outcome and the reply's code.
 that has an address is queued the sign-in details message (its login, its
 one-time password and the sign-in link) in the transaction that issues the
 password, so the message and the password commit or roll back together; the
-trail records `user.sign_in_details_emailed`, never the password. The
-administrator is still handed every password, and each one in the answer
-says `emailed`, or `email_skipped_reason: "no_address"` for an account
-without an address. With mail off the option is refused with `mail_off`
+trail records `user.sign_in_details_emailed`, never the password. An account
+that is not active (a blocked one) is never emailed. The administrator is
+still handed every password, and each one in the answer says `emailed`, or
+`email_skipped_reason`: `not_active`, or `no_address` for an account without
+an address. With mail off the option is refused with `mail_off`
 before anything changes. A message that cannot be written is the
 installation's fault, not the account's, and changes nothing: an import
 stops at that row as it does for an outage.
