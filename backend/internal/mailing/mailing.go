@@ -1,9 +1,10 @@
-// Package mailing queues email and delivers it in the background: an outbox a
-// request writes a message to, inside its own transaction when it has one, and
-// a dispatcher the background job runs, which claims due messages, hands them
-// to the relay at a bounded rate, retries what a retry can help and abandons
-// the rest. It does not speak SMTP (internal/platform/mail does), write the
-// texts of messages, or decide who receives one.
+// Package mailing writes the installation's email and delivers it in the
+// background: the texts of its messages in each language it writes in, an
+// outbox a request writes a message to, inside its own transaction when it has
+// one, and a dispatcher the background job runs, which claims due messages,
+// hands them to the relay at a bounded rate, retries what a retry can help and
+// abandons the rest. It does not speak SMTP (internal/platform/mail does) or
+// decide who receives a message, or in which language.
 package mailing
 
 import (
