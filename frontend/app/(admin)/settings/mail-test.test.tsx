@@ -80,10 +80,15 @@ describe("MailTest, sending the test message", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.mail_no_address);
   });
 
-  test.each(["mail_off", "mail_no_address", "mail_relay_failed", "mail_refused", "mail_test_too_often"])(
-    "has its own sentence for %s",
-    (code) => {
-      expect((en.errors as Record<string, string>)[code]).toBeTruthy();
-    },
-  );
+  test("holds the button while the message is on its way", async () => {
+    sendTestMailAction.mockReturnValueOnce(new Promise(() => {}));
+    render(<MailTest mail={on} dict={en} />);
+
+    fireEvent.click(sendButton());
+
+    const pending = await screen.findByRole("button", { name: en.settings.mail.sending });
+    expect(pending).toBeDisabled();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
