@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 )
 
@@ -286,7 +288,24 @@ type Config struct {
 	// GameUploadDir it cannot be turned off; an unwritable directory fails
 	// startup.
 	CoverDir string
+	// SMTPHost is the mail relay; empty turns mail off and the other SMTP
+	// settings are then not read.
+	SMTPHost string
+	SMTPPort int
+	// SMTPUsername and SMTPPassword are both set, or both empty for a relay
+	// that takes no AUTH. The password is never logged.
+	SMTPUsername string
+	SMTPPassword string
+	// SMTPFrom is the sending address, optionally with a display name.
+	SMTPFrom string
+	SMTPTLS  mail.TLSMode
+	// PublicURL is the site's absolute address with no trailing slash, for
+	// links in messages. Required with mail; https outside development.
+	PublicURL string
 }
+
+// MailEnabled reports whether a mail relay is configured.
+func (c Config) MailEnabled() bool { return c.SMTPHost != "" }
 
 // DefaultCoverDir is the COVER_DIR default, the api service's mount point in
 // deploy/docker-compose.yml. cmd/gameorphans reads it too.
@@ -518,6 +537,10 @@ func Load() (Config, error) {
 
 	cfg.CoverDir = envOrDefault("COVER_DIR", DefaultCoverDir)
 
+	if err := loadMail(&cfg); err != nil {
+		return Config{}, err
+	}
+
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {
 		return Config{}, fmt.Errorf("DEFAULT_LOCALE: %q is not a language tag", cfg.DefaultLocale)
@@ -566,6 +589,74 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadMail reads the relay settings. Without SMTP_HOST mail is off and
+// nothing else is read; with it, every companion must be present and valid.
+func loadMail(cfg *Config) error {
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	if cfg.SMTPHost == "" {
+		return nil
+	}
+	if strings.ContainsAny(cfg.SMTPHost, ":/@ ") && net.ParseIP(cfg.SMTPHost) == nil {
+		return fmt.Errorf("SMTP_HOST: %q is not a host name; the port goes in SMTP_PORT", cfg.SMTPHost)
+	}
+	var err error
+	if cfg.SMTPPort, err = intEnv("SMTP_PORT", 587); err != nil {
+		return err
+	}
+	if cfg.SMTPPort < 1 || cfg.SMTPPort > 65535 {
+		return fmt.Errorf("SMTP_PORT: %d is outside 1-65535", cfg.SMTPPort)
+	}
+
+	cfg.SMTPTLS = mail.TLSMode(envOrDefault("SMTP_TLS", string(mail.TLSStartTLS)))
+	if !slices.Contains(mail.Modes, cfg.SMTPTLS) {
+		return fmt.Errorf("SMTP_TLS: unknown mode %q, want one of %v", cfg.SMTPTLS, mail.Modes)
+	}
+	if cfg.SMTPTLS == mail.TLSNone && cfg.Env != "development" {
+		return errors.New("SMTP_TLS: none is allowed only with ENV=development")
+	}
+
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
+	switch {
+	case cfg.SMTPUsername != "" && cfg.SMTPPassword == "":
+		return errors.New("SMTP_PASSWORD: required when SMTP_USERNAME is set")
+	case cfg.SMTPUsername == "" && cfg.SMTPPassword != "":
+		return errors.New("SMTP_USERNAME: required when SMTP_PASSWORD is set")
+	case cfg.SMTPUsername != "" && cfg.SMTPTLS == mail.TLSNone:
+		return errors.New("SMTP_TLS: none never carries SMTP_USERNAME and SMTP_PASSWORD; use starttls or tls")
+	}
+	if err := RefusePlaceholder(cfg.Env, "SMTP_PASSWORD", cfg.SMTPPassword); err != nil {
+		return err
+	}
+
+	if cfg.SMTPFrom, err = requiredEnv("SMTP_FROM"); err != nil {
+		return err
+	}
+	if _, err := mail.ParseFrom(cfg.SMTPFrom); err != nil {
+		return fmt.Errorf("SMTP_FROM: %w", err)
+	}
+
+	cfg.PublicURL, err = publicURL(cfg.Env)
+	return err
+}
+
+// publicURL reads PUBLIC_URL: a scheme and host, optionally a path, nothing
+// a link should not repeat.
+func publicURL(env string) (string, error) {
+	raw, err := requiredEnv("PUBLIC_URL")
+	if err != nil {
+		return "", fmt.Errorf("%w (mail links point at it)", err)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("PUBLIC_URL: %q is not an absolute address like https://olympdb.usm.md", raw)
+	}
+	if parsed.Scheme != "https" && (env != "development" || parsed.Scheme != "http") {
+		return "", fmt.Errorf("PUBLIC_URL: %q must be https (http only with ENV=development)", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 // languageTag matches a BCP-47 tag loosely ("en", "ro", "ru-KZ"), enough to

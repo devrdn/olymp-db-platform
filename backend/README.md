@@ -39,8 +39,8 @@ backend/
 │   ├── health/          liveness, readiness, self-probe
 │   ├── postgres/        every core-database repository; all core SQL lives here
 │   └── platform/        infrastructure, imports no domain package: cache, config,
-│                        filestore, flight, httpx, i18n, logging, metrics, password,
-│                        sentineltest, server, storage
+│                        filestore, flight, httpx, i18n, logging, mail, metrics,
+│                        password, sentineltest, server, storage
 ├── proto/               the Core API to Query Runner contract (generated code in internal/rpc)
 └── migrations/          core schema, applied by cmd/migrate
 ```
@@ -154,6 +154,51 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `QUERY_RUNNER_TOKEN` | outside `development`, when `QUERY_RUNNER_ADDR` is set | — | secret presented on every call to the Query Runner (32-512 printable ASCII bytes); the runner requires the same value |
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
+
+### Email
+
+The API sends plain-text mail through one SMTP relay
+(`internal/platform/mail`). Mail is off while `SMTP_HOST` is empty, and
+nothing else changes: the service starts and runs without any of these
+variables. With `SMTP_HOST` set, a missing or invalid companion aborts the
+boot like any other setting.
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `SMTP_HOST` | no | — | the relay's host name, without a port; empty turns mail off |
+| `SMTP_PORT` | no | `587` | the relay's port (implicit TLS is usually `465`) |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | together, or neither | — | the relay account; both empty sends no AUTH. The password is refused outside `development` while it carries the `.env.example` placeholder |
+| `SMTP_FROM` | with mail | — | the sending address, optionally named: `Olimpiada USM <noreply-olymp@usm.md>` |
+| `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
+| `PUBLIC_URL` | with mail | — | the site's absolute `https://` address, for the links in messages (`http://` only in `development`) |
+
+USM's relay is Microsoft 365 (Exchange Online) SMTP AUTH client submission,
+through the mailbox `noreply-olymp@usm.md`; the mailbox's password comes from
+the university's administrators and never enters the repository:
+
+```sh
+SMTP_HOST=smtp.office365.com
+SMTP_PORT=587
+SMTP_TLS=starttls
+SMTP_USERNAME=noreply-olymp@usm.md
+# From the administrators.
+SMTP_PASSWORD=
+# The display name is the installation's choice.
+SMTP_FROM=Olimpiada USM <noreply-olymp@usm.md>
+PUBLIC_URL=https://olympdb.usm.md
+```
+
+- Microsoft 365 sends only as the mailbox that signed in: `SMTP_FROM`'s
+  address must be the `SMTP_USERNAME` mailbox, or one it has Send As rights
+  to. SPF and DKIM are the relay's domain's, so any other address is refused
+  or lands in spam.
+- Authenticated SMTP must be enabled for that mailbox in the Exchange admin
+  center, and the account must not require MFA.
+- Microsoft limits a mailbox to 30 messages a minute.
+- Microsoft keeps basic authentication for SMTP AUTH until the end of
+  December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
+  follow-up.
+- STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
 
 ## Running locally
 
