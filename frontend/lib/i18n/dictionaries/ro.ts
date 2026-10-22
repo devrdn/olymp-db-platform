@@ -1707,6 +1707,7 @@ const ro = {
       "contest.instance_reset": "Și-a readus propria bază la starea de început a olimpiadei",
       "contest.instance_reset_failed": "A cerut readucerea propriei baze, dar copierea a eșuat; următoarea sa acțiune creează una nouă",
       "settings.change": "A schimbat setările instalării",
+      "settings.mail_test": "Și-a trimis un e-mail de test",
     },
     failureReasons: {
       invalid_credentials: "Utilizator sau parolă greșită",

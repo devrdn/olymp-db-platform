@@ -56,6 +56,7 @@
     "contest.table_data_upload_abort",
     "contest.table_data_row_add",
     "contest.table_data_row_delete",
-    "settings.change"
+    "settings.change",
+    "settings.mail_test"
   ]
 }
