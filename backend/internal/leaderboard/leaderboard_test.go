@@ -130,3 +130,31 @@ func TestQuestionLetterNamesAQuestionByItsPosition(t *testing.T) {
 		}
 	}
 }
+
+// A login is a student card number or a username; a contest that shows names
+// never publishes it, not even for an account whose name is empty.
+func TestLabelNeverFallsBackToTheLoginUnderFullNames(t *testing.T) {
+	named := leaderboard.Row{Entry: leaderboard.Entry{Login: "s12345", FullName: "Ivanov Sergei"}}
+	unnamed := leaderboard.Row{Entry: leaderboard.Entry{Login: "s12345"}}
+	deleted := leaderboard.Row{Entry: leaderboard.Entry{Login: "s12345", FullName: "Ivanov Sergei", AccountDeleted: true}}
+
+	cases := []struct {
+		name  string
+		row   leaderboard.Row
+		names string
+		want  string
+	}{
+		{"login", named, contests.LeaderboardNamesLogin, "s12345"},
+		{"full name", named, contests.LeaderboardNamesFullName, "Ivanov Sergei"},
+		{"full name missing", unnamed, contests.LeaderboardNamesFullName, ""},
+		{"deleted under login", deleted, contests.LeaderboardNamesLogin, ""},
+		{"deleted under full name", deleted, contests.LeaderboardNamesFullName, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.row.Label(tc.names); got != tc.want {
+				t.Errorf("Label(%s) = %q, want %q", tc.names, got, tc.want)
+			}
+		})
+	}
+}
