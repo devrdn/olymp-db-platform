@@ -1241,7 +1241,7 @@ const en = {
     name: "Name",
     nameHelp: "Shown in the bar and on the sign-in screen.",
     contact: "Contact email",
-    contactHint: "Left empty, participants are offered no address.",
+    contactHint: "Shown to participants and in the email with their sign-in details. Left empty, no address is offered.",
     contactHelp: "Where a participant writes when something goes wrong.",
     feedback: "Feedback address",
     feedbackHint: "A full https address, such as a form. Left empty, no link is shown.",

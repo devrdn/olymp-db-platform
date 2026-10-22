@@ -1132,7 +1132,7 @@ const ro = {
     name: "Denumire",
     nameHelp: "Apare în bară și pe ecranul de autentificare.",
     contact: "E-mail de contact",
-    contactHint: "Lăsat gol, participantului nu i se oferă nicio adresă.",
+    contactHint: "Apare pentru participanți și în e-mailul cu datele de autentificare. Lăsat gol, nu se oferă nicio adresă.",
     contactHelp: "Unde scrie un participant când ceva nu merge.",
     feedback: "Adresa pentru feedback",
     feedbackHint: "O adresă https completă, de exemplu a unui formular. Lăsată goală, nu se afișează niciun link.",
