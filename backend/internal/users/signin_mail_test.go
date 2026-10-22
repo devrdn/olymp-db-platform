@@ -17,8 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// mailUnitOfWork stands in for a transaction: what the outbox takes while it
-// is open is committed when the function succeeds and dropped when it fails.
+// mailUnitOfWork stands in for a transaction: what the outbox takes or gives
+// up while it is open lands when the function succeeds and is dropped when it
+// fails.
 type mailUnitOfWork struct {
 	calls  int
 	open   bool
@@ -30,57 +31,122 @@ func (u *mailUnitOfWork) Do(ctx context.Context, fn func(context.Context) error)
 	u.open = true
 	err := fn(ctx)
 	u.open = false
-	if err != nil {
-		u.outbox.pending = nil
-		return err
-	}
-	u.outbox.queued = append(u.outbox.queued, u.outbox.pending...)
-	u.outbox.pending = nil
-	return nil
+	u.outbox.settle(err == nil)
+	return err
 }
 
-// memoryOutbox is mailing.Outbox's behaviour without a table. It notes a
-// message queued outside the transaction, and wakes that come before the
-// message they announce is committed.
+// outboxRow is one message in the memory outbox.
+type outboxRow struct {
+	mailing.Message
+	committed bool
+	abandoned string
+	// abandoning is a reason waiting for the transaction to commit.
+	abandoning string
+}
+
+// memoryOutbox behaves as mailing.Outbox does over its table: a batch
+// enqueue wakes nobody, and abandoning works with mail off too. It notes
+// writes made outside the transaction, and wakes made inside it.
 type memoryOutbox struct {
 	enabled bool
 	uow     *mailUnitOfWork
-	pending []mailing.Message
-	queued  []mailing.Message
-	// outside counts messages queued with no transaction open.
+	rows    []*outboxRow
+	// outside counts writes made with no transaction open.
 	outside int
 	wakes   int
-	// earlyWakes counts wakes while a message was still uncommitted.
+	// earlyWakes counts wakes while the transaction was still open.
 	earlyWakes int
 	err        error
 }
 
 func (o *memoryOutbox) Enabled() bool { return o.enabled }
 
-func (o *memoryOutbox) Enqueue(_ context.Context, m mailing.Message) error {
+func (o *memoryOutbox) EnqueueMany(_ context.Context, ms []mailing.Message) error {
 	if !o.enabled {
 		return mailing.ErrDisabled
 	}
 	if o.err != nil {
 		return o.err
 	}
-	if err := m.Validate(); err != nil {
-		return err
+	for _, m := range ms {
+		if err := m.Validate(); err != nil {
+			return err
+		}
 	}
 	if !o.uow.open {
 		o.outside++
-		o.queued = append(o.queued, m)
-		return nil
 	}
-	o.pending = append(o.pending, m)
+	for _, m := range ms {
+		o.rows = append(o.rows, &outboxRow{Message: m, committed: !o.uow.open})
+	}
+	return nil
+}
+
+func (o *memoryOutbox) AbandonPending(_ context.Context, kind mailing.Kind, users []uuid.UUID, reason string) error {
+	if o.err != nil {
+		return o.err
+	}
+	if !o.uow.open {
+		o.outside++
+	}
+	for _, row := range o.rows {
+		if row.Kind != kind || row.abandoned != "" || !slices.Contains(users, row.UserID) {
+			continue
+		}
+		if o.uow.open {
+			row.abandoning = reason
+		} else {
+			row.abandoned = reason
+		}
+	}
 	return nil
 }
 
 func (o *memoryOutbox) Wake() {
 	o.wakes++
-	if o.uow.open && len(o.pending) > 0 {
+	if o.uow.open {
 		o.earlyWakes++
 	}
+}
+
+func (o *memoryOutbox) settle(commit bool) {
+	kept := o.rows[:0]
+	for _, row := range o.rows {
+		switch {
+		case commit:
+			row.committed = true
+			if row.abandoning != "" {
+				row.abandoned = row.abandoning
+			}
+		case !row.committed:
+			continue
+		}
+		row.abandoning = ""
+		kept = append(kept, row)
+	}
+	o.rows = kept
+}
+
+// queued is every committed message still waiting to be sent.
+func (o *memoryOutbox) queued() []mailing.Message {
+	var out []mailing.Message
+	for _, row := range o.rows {
+		if row.committed && row.abandoned == "" {
+			out = append(out, row.Message)
+		}
+	}
+	return out
+}
+
+// abandonedFor lists why each of an account's messages was given up.
+func (o *memoryOutbox) abandonedFor(user uuid.UUID) []string {
+	var out []string
+	for _, row := range o.rows {
+		if row.UserID == user && row.abandoned != "" {
+			out = append(out, row.abandoned)
+		}
+	}
+	return out
 }
 
 type fixedSettings struct {
@@ -123,16 +189,19 @@ func newMailFixture(t *testing.T) *mailFixture {
 		settings.KeyContact:      "olimpiada@usm.md",
 		settings.KeyMailLanguage: string(mailing.Russian),
 	}}
-	service := users.NewService(repo, audit.New(sink), uow, passwordtest.NewHasher()).
+	f := &mailFixture{repo: repo, sink: sink, uow: uow, outbox: outbox, settings: values, actor: uuid.New()}
+	f.serve(repo)
+	return f
+}
+
+// serve builds the service over repo, which may wrap the fixture's own.
+func (f *mailFixture) serve(repo users.Repository) {
+	f.service = users.NewService(repo, audit.New(f.sink), f.uow, passwordtest.NewHasher()).
 		WithMail(users.Mail{
-			Outbox:   outbox,
+			Outbox:   f.outbox,
 			Texts:    mailing.NewTexts("https://olympdb.usm.md"),
-			Settings: values,
+			Settings: f.settings,
 		})
-	return &mailFixture{
-		service: service, repo: repo, sink: sink, uow: uow, outbox: outbox, settings: values,
-		actor: uuid.New(),
-	}
 }
 
 func (f *mailFixture) add(login, email string) users.User {
@@ -176,10 +245,10 @@ func TestCreateQueuesTheSignInDetailsInTheTransactionThatIssuesThePassword(t *te
 	if created.OneTimePassword == "" {
 		t.Error("the administrator was not handed the password as well")
 	}
-	if len(f.outbox.queued) != 1 {
-		t.Fatalf("queued %d messages, want 1", len(f.outbox.queued))
+	if len(f.outbox.queued()) != 1 {
+		t.Fatalf("queued %d messages, want 1", len(f.outbox.queued()))
 	}
-	m := f.outbox.queued[0]
+	m := f.outbox.queued()[0]
 	if m.Kind != mailing.KindSignInDetails || m.To != "ana@usm.md" || m.UserID != created.User.ID {
 		t.Errorf("message = kind %q to %q for %v, want the sign-in details to ana@usm.md for %v",
 			m.Kind, m.To, m.UserID, created.User.ID)
@@ -222,7 +291,7 @@ func TestTheSignInMessageIsWrittenInTheInstallationsLanguage(t *testing.T) {
 		t.Fatalf("Create() = %v", err)
 	}
 
-	if got := f.outbox.queued[0].Subject; got != "Your sign-in details for Olimpiada USM" {
+	if got := f.outbox.queued()[0].Subject; got != "Your sign-in details for Olimpiada USM" {
 		t.Errorf("subject = %q, want the English one", got)
 	}
 }
@@ -243,8 +312,8 @@ func TestAnAccountWithoutAnAddressIsReportedNotFailed(t *testing.T) {
 	if created.OneTimePassword == "" {
 		t.Error("the administrator was not handed the password")
 	}
-	if len(f.outbox.queued) != 0 || f.outbox.wakes != 0 {
-		t.Errorf("queued %d and woke %d times for an account with no address", len(f.outbox.queued), f.outbox.wakes)
+	if len(f.outbox.queued()) != 0 || f.outbox.wakes != 0 {
+		t.Errorf("queued %d and woke %d times for an account with no address", len(f.outbox.queued()), f.outbox.wakes)
 	}
 	if slices.Contains(f.sink.actions(), audit.ActionUserSignInDetailsEmailed) {
 		t.Error("the trail says sign-in details were emailed to an account with no address")
@@ -264,9 +333,9 @@ func TestWithoutTheOptionNothingIsQueuedAndNothingIsRead(t *testing.T) {
 	if created.Email != (users.EmailOutcome{}) {
 		t.Errorf("Email = %+v, want nothing said when email was not asked for", created.Email)
 	}
-	if len(f.outbox.queued) != 0 || f.settings.reads != 0 {
+	if len(f.outbox.queued()) != 0 || f.settings.reads != 0 {
 		t.Errorf("queued %d messages and read the settings %d times; email was not asked for",
-			len(f.outbox.queued), f.settings.reads)
+			len(f.outbox.queued()), f.settings.reads)
 	}
 }
 
@@ -347,7 +416,7 @@ func TestTheMessageIsDroppedWithTheAccountWhenTheTransactionFails(t *testing.T) 
 	if err == nil {
 		t.Fatal("Create() succeeded although the audit write failed")
 	}
-	if len(f.outbox.queued) != 0 {
+	if len(f.outbox.queued()) != 0 {
 		t.Error("a message survived the transaction that failed")
 	}
 	if f.outbox.wakes != 0 {
@@ -405,10 +474,10 @@ func TestImportEmailsEveryCreatedAccountThatHasAnAddress(t *testing.T) {
 	if len(result.Skipped) != 1 || result.Skipped[0].Login != "taken" {
 		t.Errorf("skipped = %+v, want the taken login alone", result.Skipped)
 	}
-	if len(f.outbox.queued) != 2 {
-		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued))
+	if len(f.outbox.queued()) != 2 {
+		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued()))
 	}
-	for _, m := range f.outbox.queued {
+	for _, m := range f.outbox.queued() {
 		login := map[string]string{"sergiu@usm.md": "s.popescu", "ana@usm.md": "a.rusu"}[m.To]
 		if login == "" {
 			t.Errorf("a message went to %q, which no created row gave", m.To)
@@ -440,10 +509,10 @@ func TestResetPasswordEmailsTheNewPassword(t *testing.T) {
 	if !issued.Email.Emailed || issued.ID != target.ID || issued.Login != "a.rusu" {
 		t.Errorf("issued = %+v, want the account's emailed reset", issued)
 	}
-	if len(f.outbox.queued) != 1 || f.outbox.queued[0].UserID != target.ID {
-		t.Fatalf("queued %+v, want one message for the account", f.outbox.queued)
+	if len(f.outbox.queued()) != 1 || f.outbox.queued()[0].UserID != target.ID {
+		t.Fatalf("queued %+v, want one message for the account", f.outbox.queued())
 	}
-	f.assertPasswordOnlyInBody(t, f.outbox.queued[0], issued.OneTimePassword)
+	f.assertPasswordOnlyInBody(t, f.outbox.queued()[0], issued.OneTimePassword)
 	want := []string{audit.ActionUserPasswordReset, audit.ActionUserSignInDetailsEmailed}
 	if got := f.sink.actions(); !slices.Equal(got, want) {
 		t.Errorf("audit actions = %v, want %v", got, want)
@@ -465,7 +534,7 @@ func TestResetPasswordOfAnAccountWithoutAnAddressStillIssuesIt(t *testing.T) {
 	if issued.OneTimePassword == "" || issued.Email != (users.EmailOutcome{SkipReason: users.EmailSkipNoAddress}) {
 		t.Errorf("issued = %+v, want a password and %q", issued, users.EmailSkipNoAddress)
 	}
-	if len(f.outbox.queued) != 0 {
+	if len(f.outbox.queued()) != 0 {
 		t.Error("a message was queued for an account with no address")
 	}
 }
@@ -497,10 +566,10 @@ func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) 
 	if byLogin["i.ivanov"].Email != (users.EmailOutcome{SkipReason: users.EmailSkipNoAddress}) {
 		t.Errorf("the account without an address reads %+v", byLogin["i.ivanov"].Email)
 	}
-	if len(f.outbox.queued) != 2 {
-		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued))
+	if len(f.outbox.queued()) != 2 {
+		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued()))
 	}
-	for _, m := range f.outbox.queued {
+	for _, m := range f.outbox.queued() {
 		var issued users.IssuedPassword
 		switch m.UserID {
 		case first.ID:
@@ -532,8 +601,6 @@ func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) 
 	}
 }
 
-// The installation's name is required by the settings, so a message that
-// cannot be written is a fault of the installation, not of a row.
 func TestAMessageThatCannotBeWrittenChangesNothing(t *testing.T) {
 	f := newMailFixture(t)
 	f.settings.values[settings.KeyName] = " "
@@ -551,8 +618,8 @@ func TestAMessageThatCannotBeWrittenChangesNothing(t *testing.T) {
 			if after.PasswordHash != target.PasswordHash {
 				t.Error("a password was reset without its message")
 			}
-			if f.uow.calls != 0 || len(f.outbox.queued) != 0 {
-				t.Errorf("%d units of work and %d messages, want none", f.uow.calls, len(f.outbox.queued))
+			if f.uow.calls != 0 || len(f.outbox.queued()) != 0 {
+				t.Errorf("%d units of work and %d messages, want none", f.uow.calls, len(f.outbox.queued()))
 			}
 		})
 	}
@@ -654,13 +721,13 @@ func TestBulkResetEmailsNoAccountThatIsNotActive(t *testing.T) {
 	if !passwordtest.Matches(t, after.PasswordHash, res.Issued[1].OneTimePassword) {
 		t.Error("the blocked account's password was not reset")
 	}
-	for _, m := range f.outbox.queued {
+	for _, m := range f.outbox.queued() {
 		if m.UserID == blocked.ID {
 			t.Error("a message was queued to the blocked account")
 		}
 	}
-	if len(f.outbox.queued) != 2 {
-		t.Errorf("queued %d messages, want 2", len(f.outbox.queued))
+	if len(f.outbox.queued()) != 2 {
+		t.Errorf("queued %d messages, want 2", len(f.outbox.queued()))
 	}
 }
 
@@ -680,7 +747,250 @@ func TestResetPasswordOfABlockedAccountStillIssuesItWithoutEmail(t *testing.T) {
 	if issued.OneTimePassword == "" || issued.Email != (users.EmailOutcome{SkipReason: users.EmailSkipNotActive}) {
 		t.Errorf("issued = %+v, want a password and %q", issued, users.EmailSkipNotActive)
 	}
-	if len(f.outbox.queued) != 0 || slices.Contains(f.sink.actions(), audit.ActionUserSignInDetailsEmailed) {
+	if len(f.outbox.queued()) != 0 || slices.Contains(f.sink.actions(), audit.ActionUserSignInDetailsEmailed) {
 		t.Error("a blocked account was emailed its sign-in details")
 	}
+}
+
+func (f *mailFixture) block(t *testing.T, id uuid.UUID) {
+	t.Helper()
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{id}, users.StatusBlocked,
+		users.StatusChange{Reason: "cheating", By: f.actor}); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+}
+
+func TestResettingTwiceLeavesOnlyTheNewestMessagePending(t *testing.T) {
+	f := newMailFixture(t)
+	target := f.add("a.rusu", "ana@usm.md")
+	ctx := context.Background()
+
+	if _, err := f.service.ResetPassword(ctx, f.actor, target.ID, byEmail); err != nil {
+		t.Fatalf("first ResetPassword() = %v", err)
+	}
+	second, err := f.service.ResetPassword(ctx, f.actor, target.ID, byEmail)
+	if err != nil {
+		t.Fatalf("second ResetPassword() = %v", err)
+	}
+
+	queued := f.outbox.queued()
+	if len(queued) != 1 || !strings.Contains(queued[0].Body, second.OneTimePassword) {
+		t.Fatalf("pending %d messages, want only the one with the newest password", len(queued))
+	}
+	if got := f.outbox.abandonedFor(target.ID); len(got) != 1 || !strings.Contains(got[0], "superseded") {
+		t.Errorf("given up %v, want the first message superseded", got)
+	}
+	if f.outbox.outside != 0 {
+		t.Error("a message was given up outside the transaction that reset the password")
+	}
+}
+
+func TestAnyNewPasswordGivesUpTheEarlierMessage(t *testing.T) {
+	for name, issue := range map[string]func(f *mailFixture, id uuid.UUID) error{
+		"reset without email": func(f *mailFixture, id uuid.UUID) error {
+			_, err := f.service.ResetPassword(context.Background(), f.actor, id, users.Delivery{})
+			return err
+		},
+		"reset with mail off since": func(f *mailFixture, id uuid.UUID) error {
+			f.outbox.enabled = false
+			_, err := f.service.ResetPassword(context.Background(), f.actor, id, users.Delivery{})
+			return err
+		},
+		"bulk reset": func(f *mailFixture, id uuid.UUID) error {
+			_, err := f.service.BulkResetPassword(context.Background(), f.actor, []uuid.UUID{id}, users.Delivery{})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMailFixture(t)
+			target := f.add("a.rusu", "ana@usm.md")
+			if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
+				t.Fatalf("ResetPassword() = %v", err)
+			}
+
+			if err := issue(f, target.ID); err != nil {
+				t.Fatalf("issuing again = %v", err)
+			}
+
+			if len(f.outbox.queued()) != 0 {
+				t.Error("the message with the dead password is still waiting to be sent")
+			}
+		})
+	}
+}
+
+func TestABulkResetGivesUpOnlyTheEarlierMessagesOfItsAccounts(t *testing.T) {
+	f := newMailFixture(t)
+	first := f.add("s.popescu", "sergiu@usm.md")
+	second := f.add("a.rusu", "ana@usm.md")
+	untouched := f.add("i.ivanov", "ivan@usm.md")
+	ctx := context.Background()
+	if _, err := f.service.BulkResetPassword(ctx, f.actor, []uuid.UUID{first.ID, second.ID, untouched.ID}, byEmail); err != nil {
+		t.Fatalf("first BulkResetPassword() = %v", err)
+	}
+
+	again, err := f.service.BulkResetPassword(ctx, f.actor, []uuid.UUID{first.ID, second.ID}, byEmail)
+	if err != nil {
+		t.Fatalf("second BulkResetPassword() = %v", err)
+	}
+
+	newest := map[uuid.UUID]string{}
+	for _, one := range again.Issued {
+		newest[one.ID] = one.OneTimePassword
+	}
+	queued := f.outbox.queued()
+	if len(queued) != 3 {
+		t.Fatalf("pending %d messages, want 3: the two new ones and the untouched account's", len(queued))
+	}
+	for _, m := range queued {
+		if password, ok := newest[m.UserID]; ok && !strings.Contains(m.Body, password) {
+			t.Errorf("the message pending for %v does not carry its newest password", m.UserID)
+		}
+	}
+	if len(f.outbox.abandonedFor(untouched.ID)) != 0 {
+		t.Error("an account outside the selection lost its message")
+	}
+}
+
+func TestAFailedResetKeepsTheEarlierMessage(t *testing.T) {
+	f := newMailFixture(t)
+	target := f.add("a.rusu", "ana@usm.md")
+	if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
+		t.Fatalf("ResetPassword() = %v", err)
+	}
+	f.sink.err = context.DeadlineExceeded
+
+	if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err == nil {
+		t.Fatal("the second reset succeeded although its audit write failed")
+	}
+
+	if len(f.outbox.queued()) != 1 || len(f.outbox.abandonedFor(target.ID)) != 0 {
+		t.Error("a reset that rolled back still gave up the message whose password stands")
+	}
+}
+
+func TestBlockingOrDeletingGivesUpThePendingMessage(t *testing.T) {
+	for name, close := range map[string]func(f *mailFixture, id uuid.UUID) error{
+		"block": func(f *mailFixture, id uuid.UUID) error {
+			return f.service.Block(context.Background(), f.actor, id, "cheating")
+		},
+		"delete": func(f *mailFixture, id uuid.UUID) error {
+			return f.service.Delete(context.Background(), f.actor, id, "left the university")
+		},
+		"bulk block": func(f *mailFixture, id uuid.UUID) error {
+			_, err := f.service.BulkSetStatus(context.Background(), f.actor, []uuid.UUID{id}, users.StatusBlocked, "cheating")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMailFixture(t)
+			target := f.add("a.rusu", "ana@usm.md")
+			if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
+				t.Fatalf("ResetPassword() = %v", err)
+			}
+
+			if err := close(f, target.ID); err != nil {
+				t.Fatalf("closing the account = %v", err)
+			}
+
+			if len(f.outbox.queued()) != 0 {
+				t.Error("the closed account's sign-in details are still waiting to be sent")
+			}
+			if got := f.outbox.abandonedFor(target.ID); len(got) != 1 || !strings.Contains(got[0], "blocked or deleted") {
+				t.Errorf("given up %v, want the message withdrawn for the closed account", got)
+			}
+			if f.outbox.outside != 0 {
+				t.Error("the message was given up outside the status change's transaction")
+			}
+		})
+	}
+}
+
+func TestUnblockingGivesUpNothing(t *testing.T) {
+	f := newMailFixture(t)
+	target := f.add("a.rusu", "ana@usm.md")
+	f.block(t, target.ID)
+	other := f.add("i.ivanov", "ivan@usm.md")
+	if _, err := f.service.ResetPassword(context.Background(), f.actor, other.ID, byEmail); err != nil {
+		t.Fatalf("ResetPassword() = %v", err)
+	}
+
+	if err := f.service.Unblock(context.Background(), f.actor, target.ID); err != nil {
+		t.Fatalf("Unblock() = %v", err)
+	}
+
+	if len(f.outbox.queued()) != 1 {
+		t.Error("unblocking an account gave up a message")
+	}
+}
+
+// blockedDuringWrite blocks one account as the password write runs, as an
+// administrator's block committing between the first read and the write.
+type blockedDuringWrite struct {
+	*userstest.Repository
+	t      *testing.T
+	f      *mailFixture
+	target uuid.UUID
+}
+
+func (r blockedDuringWrite) SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error {
+	r.f.block(r.t, r.target)
+	return r.Repository.SetPassword(ctx, id, hash, mustChange)
+}
+
+func (r blockedDuringWrite) SetPasswordMany(ctx context.Context, creds []users.Credential) error {
+	r.f.block(r.t, r.target)
+	return r.Repository.SetPasswordMany(ctx, creds)
+}
+
+func TestAnAccountBlockedDuringAResetIsNotEmailed(t *testing.T) {
+	t.Run("bulk", func(t *testing.T) {
+		f := newMailFixture(t)
+		active := f.add("s.popescu", "sergiu@usm.md")
+		target := f.add("a.rusu", "ana@usm.md")
+		f.serve(blockedDuringWrite{Repository: f.repo, t: t, f: f, target: target.ID})
+
+		res, err := f.service.BulkResetPassword(context.Background(), f.actor, []uuid.UUID{active.ID, target.ID}, byEmail)
+		if err != nil {
+			t.Fatalf("BulkResetPassword() = %v", err)
+		}
+
+		for _, one := range res.Issued {
+			want := users.EmailOutcome{Emailed: true}
+			if one.ID == target.ID {
+				want = users.EmailOutcome{SkipReason: users.EmailSkipNotActive}
+			}
+			if one.Email != want || one.OneTimePassword == "" {
+				t.Errorf("%s reads %+v (password %v), want %+v with a password", one.Login, one.Email,
+					one.OneTimePassword != "", want)
+			}
+		}
+		queued := f.outbox.queued()
+		if len(queued) != 1 || queued[0].UserID != active.ID {
+			t.Errorf("pending %+v, want only the active account's message", queued)
+		}
+		if n := len(f.sink.entries); f.sink.entries[n-1].EntityID != active.ID.String() {
+			t.Error("the trail says the blocked account was emailed")
+		}
+	})
+	t.Run("single", func(t *testing.T) {
+		f := newMailFixture(t)
+		target := f.add("a.rusu", "ana@usm.md")
+		f.serve(blockedDuringWrite{Repository: f.repo, t: t, f: f, target: target.ID})
+
+		issued, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail)
+		if err != nil {
+			t.Fatalf("ResetPassword() = %v", err)
+		}
+
+		if issued.Email != (users.EmailOutcome{SkipReason: users.EmailSkipNotActive}) || issued.OneTimePassword == "" {
+			t.Errorf("issued %+v, want a password and not_active", issued)
+		}
+		if len(f.outbox.queued()) != 0 || f.outbox.wakes != 0 {
+			t.Errorf("pending %d messages and %d wakes, want none", len(f.outbox.queued()), f.outbox.wakes)
+		}
+		if slices.Contains(f.sink.actions(), audit.ActionUserSignInDetailsEmailed) {
+			t.Error("the trail says the blocked account was emailed")
+		}
+	})
 }

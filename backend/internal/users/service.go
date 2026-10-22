@@ -364,10 +364,20 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID, 
 		if err := s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil); err != nil {
 			return err
 		}
+		if err := s.withdraw(ctx, []uuid.UUID{userID}, withdrawnSuperseded); err != nil {
+			return err
+		}
 		if message == nil {
 			return nil
 		}
-		return s.queue(ctx, actorID, []mailing.Message{*message})
+		kept, dropped, err := s.keepActive(ctx, []mailing.Message{*message})
+		if err != nil {
+			return err
+		}
+		if dropped[userID] {
+			message, emailed = nil, EmailOutcome{SkipReason: EmailSkipNotActive}
+		}
+		return s.queue(ctx, actorID, kept)
 	})
 	if err != nil {
 		return IssuedPassword{}, err
@@ -661,9 +671,7 @@ type SkippedRow struct {
 
 // Import creates an account for every row it can use, each in its own unit
 // of work, so one bad row rolls back only itself. A row's message is queued
-// in its row's unit of work; one that cannot be written is the
-// installation's fault, not the row's, so it stops the import like an outage
-// (CLAUDE.md rule 8).
+// in its row's unit of work.
 func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
 	if err := s.refuseMailOff(cmd.Delivery); err != nil {
 		return ImportResult{}, err

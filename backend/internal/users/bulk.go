@@ -224,9 +224,13 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		if err := s.repo.SetStatus(ctx, changed, status, change); err != nil {
 			return err
 		}
-		// Blocking or deleting ends open sessions.
+		// Blocking or deleting ends open sessions, and the sign-in details
+		// still waiting to be sent.
 		if status != StatusActive {
 			if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
+				return err
+			}
+			if err := s.withdraw(ctx, changed, withdrawnClosed); err != nil {
 				return err
 			}
 		}
@@ -400,6 +404,19 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 		if err := s.audit.RecordMany(ctx, entries); err != nil {
 			return err
 		}
+		if err := s.withdraw(ctx, changed, withdrawnSuperseded); err != nil {
+			return err
+		}
+		kept, dropped, err := s.keepActive(ctx, messages)
+		if err != nil {
+			return err
+		}
+		for i := range issued {
+			if dropped[issued[i].ID] {
+				issued[i].Email = EmailOutcome{SkipReason: EmailSkipNotActive}
+			}
+		}
+		messages = kept
 		return s.queue(ctx, actorID, messages)
 	})
 	if err != nil {

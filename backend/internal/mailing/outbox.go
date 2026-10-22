@@ -3,35 +3,45 @@ package mailing
 import (
 	"context"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
-// Queue stores a message for the dispatcher. It joins the transaction ctx
-// carries (storage.QuerierFrom), so a message lands with the change it
-// reports or not at all.
+// Queue stores messages for the dispatcher. Every method joins the
+// transaction ctx carries (storage.QuerierFrom), so a message lands, or is
+// given up, with the change it reports or not at all.
 type Queue interface {
 	Insert(ctx context.Context, m Message) error
+	// InsertMany stores the messages in one statement.
+	InsertMany(ctx context.Context, ms []Message) error
+	// AbandonPending gives up, with reason, every pending message of kind
+	// for the accounts and erases its body, except one a sender is handing
+	// to the relay at this moment.
+	AbandonPending(ctx context.Context, kind Kind, users []uuid.UUID, reason string) error
 }
 
 // Outbox is where requests leave messages; the dispatcher delivers them.
 type Outbox struct {
-	// queue is nil while mail is off.
-	queue Queue
-	wake  chan struct{}
+	// queue is nil only for an outbox with no table behind it.
+	queue   Queue
+	enabled bool
+	wake    chan struct{}
 }
 
 // NewOutbox returns an outbox over queue.
 func NewOutbox(queue Queue) *Outbox {
-	return &Outbox{queue: queue, wake: make(chan struct{}, 1)}
+	return &Outbox{queue: queue, enabled: true, wake: make(chan struct{}, 1)}
 }
 
 // Disabled returns the outbox of an installation with mail off: every enqueue
-// is refused with ErrDisabled.
-func Disabled() *Outbox {
-	return &Outbox{wake: make(chan struct{}, 1)}
+// is refused with ErrDisabled. Messages queued before mail was turned off can
+// still be abandoned through queue, which may be nil.
+func Disabled(queue Queue) *Outbox {
+	return &Outbox{queue: queue, wake: make(chan struct{}, 1)}
 }
 
 // Enabled reports whether messages can be queued.
-func (o *Outbox) Enabled() bool { return o.queue != nil }
+func (o *Outbox) Enabled() bool { return o.enabled }
 
 // Enqueue validates and stores m, inside the transaction ctx carries when
 // there is one, and wakes the dispatcher. A message stored inside a
@@ -39,7 +49,7 @@ func (o *Outbox) Enabled() bool { return o.queue != nil }
 // a transaction calls Wake once it has committed; otherwise the message waits
 // for the dispatcher's next tick.
 func (o *Outbox) Enqueue(ctx context.Context, m Message) error {
-	if o.queue == nil {
+	if !o.enabled {
 		return ErrDisabled
 	}
 	if err := m.Validate(); err != nil {
@@ -49,6 +59,40 @@ func (o *Outbox) Enqueue(ctx context.Context, m Message) error {
 		return fmt.Errorf("queue a %s message: %w", m.Kind, err)
 	}
 	o.Wake()
+	return nil
+}
+
+// EnqueueMany validates and stores the messages in one statement, all or
+// none, and wakes nobody: it is for a caller inside a transaction, which calls
+// Wake once it has committed.
+func (o *Outbox) EnqueueMany(ctx context.Context, ms []Message) error {
+	if !o.enabled {
+		return ErrDisabled
+	}
+	if len(ms) == 0 {
+		return nil
+	}
+	for _, m := range ms {
+		if err := m.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := o.queue.InsertMany(ctx, ms); err != nil {
+		return fmt.Errorf("queue %d messages: %w", len(ms), err)
+	}
+	return nil
+}
+
+// AbandonPending gives up the accounts' pending messages of kind, inside the
+// transaction ctx carries, whether mail is on or not. Nothing was tried, so
+// it counts no delivery outcome.
+func (o *Outbox) AbandonPending(ctx context.Context, kind Kind, users []uuid.UUID, reason string) error {
+	if o.queue == nil || len(users) == 0 {
+		return nil
+	}
+	if err := o.queue.AbandonPending(ctx, kind, users, reason); err != nil {
+		return fmt.Errorf("abandon pending %s messages: %w", kind, err)
+	}
 	return nil
 }
 

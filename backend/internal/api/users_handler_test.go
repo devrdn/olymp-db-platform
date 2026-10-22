@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -775,6 +776,24 @@ func (q *memoryQueue) Insert(_ context.Context, m mailing.Message) error {
 	return nil
 }
 
+func (q *memoryQueue) InsertMany(_ context.Context, ms []mailing.Message) error {
+	q.messages = append(q.messages, ms...)
+	return nil
+}
+
+// AbandonPending drops the accounts' messages, as the table marks them given
+// up.
+func (q *memoryQueue) AbandonPending(_ context.Context, kind mailing.Kind, accounts []uuid.UUID, _ string) error {
+	kept := q.messages[:0]
+	for _, m := range q.messages {
+		if m.Kind != kind || !slices.Contains(accounts, m.UserID) {
+			kept = append(kept, m)
+		}
+	}
+	q.messages = kept
+	return nil
+}
+
 type fixedMailSettings settings.Values
 
 func (s fixedMailSettings) All(context.Context) (settings.Values, error) {
@@ -786,7 +805,7 @@ func (s fixedMailSettings) All(context.Context) (settings.Values, error) {
 func newEmailingFixture(t *testing.T, on bool) (*apiFixture, *memoryQueue) {
 	t.Helper()
 	queue := &memoryQueue{}
-	outbox := mailing.Disabled()
+	outbox := mailing.Disabled(queue)
 	if on {
 		outbox = mailing.NewOutbox(queue)
 	}
@@ -993,8 +1012,6 @@ func TestPasswordResetEndpointRefusesABodyItCannotRead(t *testing.T) {
 	}
 }
 
-// The installation's name is a required setting, so a message that cannot be
-// written is the server's fault.
 func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
 	queue := &memoryQueue{}
 	f := newAPIFixtureWithMail(t, &users.Mail{
@@ -1012,4 +1029,18 @@ func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
 	if _, err := f.repo.ByLogin(context.Background(), "a.rusu"); err == nil {
 		t.Error("the account was created without its message")
 	}
+}
+
+func TestResettingAgainLeavesOnlyTheNewestMessageQueued(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md"})
+	path := "/users/" + target.ID.String() + "/password-reset"
+
+	f.do(http.MethodPost, path, `{"send_by_email":true}`)
+	rec := f.do(http.MethodPost, path, `{"send_by_email":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	assertQueuedTo(t, queue, "petrov@usm.md", decodeJSON[emailed](t, rec).OneTimePassword)
 }
