@@ -562,7 +562,7 @@ or abandoned row is the record that the message went, or why it did not.
 **When the relay itself fails.** A failure that says nothing about the
 message pauses the job instead of charging the message: the relay could not
 be reached or secured, refused the account (`535`) or the sender (Exchange's
-`SendAsDenied`, even at the end of DATA), dropped the connection, or deferred
+`5.7.60` or `SendAsDenied`, even at DATA), dropped the connection, or deferred
 a message after accepting its recipient (Microsoft's throttling). The message
 is put back with its attempt refunded, and the job sends nothing for 30
 seconds, then 1, 2, 4 and 8 minutes, then every 15, until a message is
@@ -616,14 +616,18 @@ cause.
 | `550 5.1.10 RESOLVER.ADR.RecipientNotFound`, `550 5.1.1` | the recipient's address does not exist. Only a `usm.md` recipient meets this reply; any other bounces later (above) | correct the address on the account and reset its password again with the option |
 | no reply: `no such host`, a timeout, `connection refused` | `SMTP_HOST` is wrong, or outbound port 587 is closed | correct the host, or open the port (`nc` above) |
 | no reply: a certificate or TLS error | the relay's certificate is not trusted, or something on the network intercepts TLS | the host's network, not the settings |
+| `550 5.7.708 Access denied, traffic not accepted from this IP` | the relay's: Exchange refuses connections from the host's address | ask USM's administrators; the job pauses and tries again meanwhile |
+| `421 4.7.66 TLS 1.0 and 1.1 are not supported` | the relay's: it saw TLS below 1.2, which this service never offers, so something on the network intercepts TLS | the host's network; the job pauses and tries again meanwhile |
 
 **Where else the replies are.** The API log has every failure with the
 relay's reply, under "the relay failed; no message is sent until it is tried
 again", "taken for the relay refusing everyone", "the relay did not take a
 message; it will be tried again" and "a message was abandoned and will not be
-sent". `mail_outbox.last_error` keeps the last one per message; this lists
-what is still waiting, and what was given up in the last day, without the
-recipients or the bodies:
+sent". `mail_outbox.last_error` keeps the last one per message. Neither
+carries the list of recipients the mail library appends to a failure, though
+a reply that quotes the address itself, as Microsoft's `5.1.10` does, may
+still name it. This lists what is still waiting, and what was given up in
+the last day, without the recipients or the bodies:
 
 ```bash
 docker compose -f deploy/docker-compose.yml exec -T pg-core \
