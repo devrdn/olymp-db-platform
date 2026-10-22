@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 // Client components; the `"use client"` boundary lives in their files, so the
 // register stays server-rendered.
 import { AccountCreateControls } from "./account-create";
+import type { MailOffer } from "./email-delivery";
 import { RowCheckbox, SelectAllCheckbox } from "./selection";
 
 /**
@@ -43,7 +44,7 @@ export function AccountRegister({
   roles,
   dict,
   locale,
-  mailEnabled,
+  mail,
 }: {
   accounts: Account[];
   total: number;
@@ -56,7 +57,7 @@ export function AccountRegister({
   dict: Dictionary;
   locale: Locale;
   /** Whether the create forms offer emailing the sign-in details. */
-  mailEnabled: boolean;
+  mail: MailOffer;
 }) {
   const t = dict.accounts;
   const nameOf = new Map(roles.map((role) => [role.code, role.name]));
@@ -69,7 +70,7 @@ export function AccountRegister({
           <span className="font-mono text-data text-ink-3">
             {total} {t.countLabel}
           </span>
-          <AccountCreateControls roles={roles} dict={dict} mailEnabled={mailEnabled} />
+          <AccountCreateControls roles={roles} dict={dict} locale={locale} mail={mail} />
         </div>
       </div>
 

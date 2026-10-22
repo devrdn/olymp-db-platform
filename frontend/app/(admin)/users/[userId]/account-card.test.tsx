@@ -15,6 +15,7 @@ vi.mock("./actions", async (importOriginal) => ({
 import type { Account, Role } from "@/lib/api/accounts";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
+import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
 
 let en: Dictionary;
@@ -57,7 +58,8 @@ describe("AccountCard, the block form's reason requirement", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
-        mailEnabled={false}
+        locale="en"
+        mail={{ status: "off" }}
       />,
     );
 
@@ -79,7 +81,8 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
-        mailEnabled={false}
+        locale="en"
+        mail={{ status: "off" }}
       />,
     );
 
@@ -101,7 +104,8 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel="2 Mar 2026"
-        mailEnabled={false}
+        locale="en"
+        mail={{ status: "off" }}
       />,
     );
 
@@ -127,7 +131,8 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
-        mailEnabled={false}
+        locale="en"
+        mail={{ status: "off" }}
       />,
     );
 
@@ -147,7 +152,8 @@ describe("AccountCard, the roles panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
-        mailEnabled={false}
+        locale="en"
+        mail={{ status: "off" }}
       />,
     );
 
@@ -168,7 +174,8 @@ describe("AccountCard, clearing a sign-in lockout", () => {
   const renderCard = () =>
     render(
       <AccountCard account={account()} roles={roles} viewerId={viewerId} dict={en} statusChangedAtLabel={null}
-        mailEnabled={false} />,
+        locale="en"
+        mail={{ status: "off" }} />,
     );
 
   test("asks for confirmation before anything is sent", () => {
@@ -214,21 +221,25 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     resetPasswordAction.mockReset();
   });
 
-  const renderCard = (mailEnabled: boolean, dict: Dictionary = en) =>
+  const on: MailOffer = { status: "on", perMinute: 25 };
+  const reachable = account({ email: "s@example.edu" });
+
+  const renderCard = (mail: MailOffer, subject: Account = reachable, dict: Dictionary = en) =>
     render(
       <AccountCard
-        account={account()}
+        account={subject}
         roles={roles}
         viewerId={viewerId}
         dict={dict}
         statusChangedAtLabel={null}
-        mailEnabled={mailEnabled}
+        locale={dict === en ? "en" : "ro"}
+        mail={mail}
       />,
     );
 
   test("offers no email option while mail is off, and sends none", async () => {
     resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: false });
-    renderCard(false);
+    renderCard({ status: "off" });
 
     expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
@@ -240,9 +251,9 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     expect(screen.queryByText(en.accounts.signInMail.notEmailed.replace("{n}", "1"))).not.toBeInTheDocument();
   });
 
-  test("ticks the option by default, sends it, and shows the password and the queued email", async () => {
+  test("ticks the option by default, sends it, and shows the password, the queued email and when it goes", async () => {
     resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: true });
-    renderCard(true);
+    renderCard(on);
 
     expect(screen.getByRole("checkbox", { name: en.accounts.signInMail.option })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
@@ -250,10 +261,34 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     expect(await screen.findByText("swordfish-1")).toBeInTheDocument();
     const submitted = resetPasswordAction.mock.calls[0][1] as FormData;
     expect(submitted.get("send_by_email")).toBe("on");
-    expect(submitted.get("userId")).toBe(account().id);
-    expect(screen.getByText(en.accounts.signInMail.queued.replace("{n}", "1"))).toBeInTheDocument();
+    expect(submitted.get("userId")).toBe(reachable.id);
+    expect(screen.getByText("1 sign-in email queued.")).toBeInTheDocument();
+    expect(screen.getByText(/It should go out within about 1 minute/)).toBeInTheDocument();
   });
 
+  test("offers no email option for an account that is not active", () => {
+    renderCard(on, account({ email: "s@example.edu", status: "blocked" }));
+
+    expect(screen.getByRole("button", { name: en.accounts.card.resetPassword })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+  });
+
+  test("offers no email option for an account without an address", () => {
+    renderCard(on, account({ email: undefined }));
+
+    expect(screen.getByRole("button", { name: en.accounts.card.resetPassword })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+  });
+
+  test("says it could not check whether email is on, instead of hiding the option", () => {
+    renderCard({ status: "unknown" });
+
+    expect(screen.getByText(en.accounts.signInMail.unknown)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+  });
+
+  // The address can be removed between the page and the reset; the server's
+  // answer is what counts.
   test("names why the password was not emailed, and still shows it", async () => {
     resetPasswordAction.mockResolvedValue({
       done: true,
@@ -261,7 +296,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
       emailed: false,
       emailSkippedReason: "no_address",
     });
-    renderCard(true);
+    renderCard(on);
 
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
 
@@ -276,7 +311,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
   test("reports mail turned off since the page loaded in the administrator's language", async () => {
     resetPasswordAction.mockResolvedValue({ code: "mail_off" });
     const ro = await getDictionary("ro");
-    renderCard(true, ro);
+    renderCard(on, reachable, ro);
 
     fireEvent.click(screen.getByRole("button", { name: ro.accounts.card.resetPassword }));
 

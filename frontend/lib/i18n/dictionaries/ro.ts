@@ -1372,8 +1372,18 @@ const ro = {
     signInMail: {
       option: "Trimiteți datele de autentificare prin e-mail",
       optionHint:
-        "Conturile cu adresă de e-mail primesc prin e-mail login-ul și parola de unică folosință. Parolele rămân afișate și aici.",
-      queued: "E-mailuri cu datele de autentificare puse în coadă: {n}. Pleacă în următoarele minute.",
+        "Conturile active cu adresă de e-mail primesc prin e-mail login-ul și parola de unică folosință; conturile blocate și cele fără adresă nu primesc e-mail. Toate parolele rămân afișate și aici.",
+      unknown: "Nu s-a putut verifica dacă e-mailul este activat. Reîncărcați pagina pentru a încerca din nou.",
+      queued: {
+        one: "{n} e-mail cu datele de autentificare a fost pus în coadă.",
+        few: "{n} e-mailuri cu datele de autentificare au fost puse în coadă.",
+        many: "{n} de e-mailuri cu datele de autentificare au fost puse în coadă.",
+        other: "{n} de e-mailuri cu datele de autentificare au fost puse în coadă.",
+      },
+      etaOne: "Ar trebui să plece în aproximativ {minutes}, mai târziu dacă alte e-mailuri așteaptă deja.",
+      etaMany: "Trimiterea lor durează aproximativ {minutes}, mai mult dacă alte e-mailuri așteaptă deja.",
+      minutes: { one: "{n} minut", few: "{n} minute", many: "{n} de minute", other: "{n} de minute" },
+      replaced: "O nouă resetare a parolei înlocuiește e-mailul care nu a plecat încă.",
       notEmailed: "Netrimise prin e-mail: {n}",
       group: "{n} — {reason}",
     },

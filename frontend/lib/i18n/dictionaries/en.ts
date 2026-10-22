@@ -1517,14 +1517,25 @@ const en = {
     },
     /**
      * The option to email sign-in details, offered beside every action that
-     * issues a one-time password while mail is on, and what it did. `group`
-     * heads the accounts one reason left unemailed.
+     * issues a one-time password while mail is on, and what it did. `queued`
+     * and `minutes` take a plural form (`lib/i18n/plural.ts`); `group` heads
+     * the accounts one reason left unemailed.
      */
     signInMail: {
       option: "Send sign-in details by email",
       optionHint:
-        "Accounts with an email address get their login and one-time password by email. The passwords are still shown here.",
-      queued: "Sign-in emails queued: {n}. They go out over the next few minutes.",
+        "Active accounts with an email address get their login and one-time password by email; blocked accounts and accounts without an address are not emailed. Every password is still shown here.",
+      unknown: "Could not check whether email is on. Reload the page to try again.",
+      queued: {
+        one: "{n} sign-in email queued.",
+        few: "{n} sign-in emails queued.",
+        many: "{n} sign-in emails queued.",
+        other: "{n} sign-in emails queued.",
+      },
+      etaOne: "It should go out within about {minutes}, later if other email is already waiting.",
+      etaMany: "Sending them takes about {minutes}, longer if other email is already waiting.",
+      minutes: { one: "{n} minute", few: "{n} minutes", many: "{n} minutes", other: "{n} minutes" },
+      replaced: "Resetting a password again replaces its email if that has not gone out yet.",
       notEmailed: "Not emailed: {n}",
       group: "{n} — {reason}",
     },

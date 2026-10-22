@@ -8,6 +8,7 @@ import {
   createdAccountSchema,
   importResultSchema,
   importSkippedRowSchema,
+  mailStatusSchema,
   passwordResetSchema,
   roleListSchema,
   skippedAccountSchema,
@@ -269,5 +270,18 @@ describe("bulkPasswordResetResultSchema", () => {
     expect(parsed.issued[0]).toMatchObject({ emailed: true, emailSkippedReason: undefined });
     expect(parsed.issued[1]).toMatchObject({ emailed: false, emailSkippedReason: "not_active" });
     expect(parsed.issued[2]).toMatchObject({ emailed: false, emailSkippedReason: undefined });
+  });
+});
+
+describe("mailStatusSchema", () => {
+  test("reads whether mail is on and how many messages leave a minute", () => {
+    expect(mailStatusSchema.parse({ enabled: true, per_minute: 25 })).toEqual({
+      enabled: true,
+      perMinute: 25,
+    });
+    expect(mailStatusSchema.parse({ enabled: false, per_minute: 0 })).toEqual({
+      enabled: false,
+      perMinute: 0,
+    });
   });
 });

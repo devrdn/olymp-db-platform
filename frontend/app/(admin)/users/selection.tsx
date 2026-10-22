@@ -24,6 +24,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import type { IssuedPassword, Role, SkippedAccount } from "@/lib/api/accounts";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
+import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
@@ -36,7 +37,7 @@ import {
   type BulkPasswordState,
   type BulkState,
 } from "./bulk-actions";
-import { EmailSummary, SendByEmailOption } from "./email-delivery";
+import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
 
 export type SelectedAccount = { id: string; display: string };
@@ -742,13 +743,15 @@ function RolesForm({
 function ResetPasswordForm({
   ids,
   dict,
-  mailEnabled,
+  locale,
+  mail,
   onClose,
   reportDismissible,
 }: {
   ids: readonly string[];
   dict: Dictionary;
-  mailEnabled: boolean;
+  locale: Locale;
+  mail: MailOffer;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -789,7 +792,9 @@ function ResetPasswordForm({
             emailed: row.emailed,
             reason: row.emailSkippedReason,
           }))}
+          perMinute={sendingRate(mail)}
           dict={dict}
+          locale={locale}
         />
 
         <SkippedList skipped={state.result.skipped} dict={dict} />
@@ -826,7 +831,7 @@ function ResetPasswordForm({
         <DialogDescription>{t.resetDialog.description}</DialogDescription>
       </DialogHeader>
 
-      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+      <SendByEmailOption mail={mail} dict={dict} />
 
       {failure ? (
         <p role="alert" className="text-small text-bad">
@@ -854,12 +859,14 @@ export function SelectionBar({
   dict,
   roles,
   pageIds,
-  mailEnabled,
+  locale,
+  mail,
 }: {
   dict: Dictionary;
   roles: Role[];
+  locale: Locale;
   /** Whether the password reset offers emailing the sign-in details. */
-  mailEnabled: boolean;
+  mail: MailOffer;
   /**
    * Ids on the current page, used only to report how much of the selection is
    * off screen; bulk actions always act on the whole selection.
@@ -986,7 +993,8 @@ export function SelectionBar({
             <ResetPasswordForm
               ids={ids}
               dict={dict}
-              mailEnabled={mailEnabled}
+              locale={locale}
+              mail={mail}
               onClose={close}
               reportDismissible={reportDismissible}
             />

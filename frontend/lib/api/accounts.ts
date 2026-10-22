@@ -71,6 +71,17 @@ export const roleListSchema = z.object({ items: z.array(roleSchema) });
 export type Role = z.infer<typeof roleSchema>;
 
 /**
+ * Whether the accounts screens may offer to email sign-in details, and how
+ * many messages the outbox sends a minute (0 while mail is off). Read under
+ * users.manage, the permission those screens already need.
+ */
+export const mailStatusSchema = z
+  .object({ enabled: z.boolean(), per_minute: z.number() })
+  .transform((raw) => ({ enabled: raw.enabled, perMinute: raw.per_minute }));
+
+export type MailStatus = z.infer<typeof mailStatusSchema>;
+
+/**
  * Whether an issued password was also emailed. `email_skipped_reason` is set
  * only when email was asked for and not queued; it is a bare string, so a
  * reason newer than this build still shows (raw).

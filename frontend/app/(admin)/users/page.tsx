@@ -7,7 +7,7 @@ import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { AccountRegister, ACCOUNTS_PAGE } from "./account-register";
-import { readMailEnabled } from "./delivery";
+import { readMailOffer } from "./delivery";
 import { AccountFilters } from "./filters";
 import { accountsHref } from "./search-href";
 import { SelectionBar } from "./selection";
@@ -23,8 +23,9 @@ export async function generateMetadata() {
  * fetched, not baked in, since roles are data.
  */
 export default async function UsersPage(props: PageProps<"/users">) {
-  // Never rejects, so it can start before the reads below and be awaited last.
-  const mailEnabledRead = readMailEnabled();
+  // Rejects only with Next's own control flow, so it can start before the reads
+  // below and be awaited last.
+  const mailRead = readMailOffer();
   const [params, locale, dict] = await Promise.all([
     props.searchParams,
     activeLocale(),
@@ -58,7 +59,7 @@ export default async function UsersPage(props: PageProps<"/users">) {
   const { items: roles } = roleListSchema.parse(rolesPayload);
 
   const pageHref = (next: number) => accountsHref({ query, status, offset: next });
-  const mailEnabled = await mailEnabledRead;
+  const mail = await mailRead;
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">
@@ -70,7 +71,8 @@ export default async function UsersPage(props: PageProps<"/users">) {
         dict={dict}
         roles={roles}
         pageIds={items.map((account) => account.id)}
-        mailEnabled={mailEnabled}
+        locale={locale}
+        mail={mail}
       />
 
       <AccountRegister
@@ -82,7 +84,7 @@ export default async function UsersPage(props: PageProps<"/users">) {
         roles={roles}
         dict={dict}
         locale={locale}
-        mailEnabled={mailEnabled}
+        mail={mail}
       />
     </Band>
   );

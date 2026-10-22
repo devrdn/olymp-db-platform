@@ -6,6 +6,9 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
 import type { Role } from "@/lib/api/accounts";
+import { plural } from "@/lib/i18n/plural";
+
+import type { MailOffer } from "./email-delivery";
 
 // The real Server Actions module would pull in Next's server runtime. Typed as
 // `(previous, form) => Promise<...>` so `.mock.calls[0][1]` is a `FormData`.
@@ -69,11 +72,11 @@ async function renderBar({
   selected = [],
   roles = [],
   pageIds,
-  mailEnabled = false,
+  mail = { status: "off" },
 }: {
   selected?: string[];
   roles?: Role[];
-  mailEnabled?: boolean;
+  mail?: MailOffer;
   /** Ids on the current page; defaults to `selected`. */
   pageIds?: string[];
 } = {}) {
@@ -82,7 +85,7 @@ async function renderBar({
       {selected.map((id) => (
         <RowCheckbox key={id} id={id} label={id} />
       ))}
-      <SelectionBar dict={ru} roles={roles} pageIds={pageIds ?? selected} mailEnabled={mailEnabled} />
+      <SelectionBar dict={ru} roles={roles} pageIds={pageIds ?? selected} locale="ru" mail={mail} />
     </SelectionProvider>,
   );
 
@@ -200,7 +203,7 @@ describe("SelectionBar", () => {
   test("stays out of the page while nothing is picked", () => {
     render(
       <SelectionProvider>
-        <SelectionBar dict={en} roles={[]} pageIds={[]} mailEnabled={false} />
+        <SelectionBar dict={en} roles={[]} pageIds={[]} locale="en" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
 
@@ -212,7 +215,7 @@ describe("SelectionBar", () => {
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
         <RowCheckbox id="b" label="b" />
-        <SelectionBar dict={en} roles={[]} pageIds={["a", "b"]} mailEnabled={false} />
+        <SelectionBar dict={en} roles={[]} pageIds={["a", "b"]} locale="en" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
 
@@ -233,7 +236,7 @@ describe("SelectionBar", () => {
     render(
       <SelectionProvider>
         <SelectAllCheckbox ids={many} label="page" />
-        <SelectionBar dict={ru} roles={[]} pageIds={many} mailEnabled={false} />
+        <SelectionBar dict={ru} roles={[]} pageIds={many} locale="ru" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
 
@@ -567,7 +570,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} locale="ru" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -588,7 +591,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} locale="ru" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -624,7 +627,7 @@ describe("SelectionBar: honest about a selection that spans more than the curren
       <SelectionProvider>
         <RowCheckbox id="a" label="a" display="ivanov" />
         <RowCheckbox id="b" label="b" display="petrov" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} locale="ru" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
 
@@ -651,7 +654,7 @@ describe("SelectionBar: seeing exactly who is selected", () => {
       <SelectionProvider>
         <RowCheckbox id="a" label="a" display="ivanov" />
         <RowCheckbox id="b" label="b" display="petrov" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} locale="ru" mail={{ status: "off" }} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -820,7 +823,7 @@ describe("bulk password reset: sign-in details by email", () => {
         skipped: [],
       },
     });
-    await renderBar({ selected: ["a", "b", "c"], mailEnabled: true });
+    await renderBar({ selected: ["a", "b", "c"], mail: { status: "on", perMinute: 25 } });
 
     await openReset();
     expect(screen.getByRole("checkbox", { name: ru.accounts.signInMail.option })).toBeChecked();
@@ -836,7 +839,8 @@ describe("bulk password reset: sign-in details by email", () => {
       expect(await screen.findByText(password)).toBeVisible();
     }
     const t = ru.accounts.signInMail;
-    expect(screen.getByText(t.queued.replace("{n}", "1"))).toBeVisible();
+    expect(screen.getByText(plural(t.queued, 1, "ru"))).toBeVisible();
+    expect(screen.getByText(/^Оно уйдёт в течение 1 минуты/)).toBeVisible();
     expect(screen.getByText(t.notEmailed.replace("{n}", "2"))).toBeVisible();
     expect(
       screen.getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.not_active)),
@@ -848,7 +852,7 @@ describe("bulk password reset: sign-in details by email", () => {
 
   test("reports mail turned off since the page loaded in the administrator's language", async () => {
     bulkResetPasswordAction.mockResolvedValueOnce({ code: "mail_off" });
-    await renderBar({ selected: ["a"], mailEnabled: true });
+    await renderBar({ selected: ["a"], mail: { status: "on", perMinute: 25 } });
 
     await openReset();
     await userEvent.click(
@@ -856,5 +860,15 @@ describe("bulk password reset: sign-in details by email", () => {
     );
 
     expect(await screen.findByText(ru.errors.mail_off)).toBeVisible();
+  });
+
+  test("says it could not check whether email is on, instead of hiding the option", async () => {
+    await renderBar({ selected: ["a"], mail: { status: "unknown" } });
+
+    await openReset();
+    expect(screen.getByText(ru.accounts.signInMail.unknown)).toBeVisible();
+    expect(
+      screen.queryByRole("checkbox", { name: ru.accounts.signInMail.option }),
+    ).not.toBeInTheDocument();
   });
 });

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Account, Role } from "@/lib/api/accounts";
+import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import {
@@ -30,7 +31,7 @@ import {
   type AccountState,
   type ResetState,
 } from "./actions";
-import { EmailSummary, SendByEmailOption } from "../email-delivery";
+import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "../email-delivery";
 import { offeredActions } from "./offered";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -186,7 +187,8 @@ export function AccountCard({
   dict,
   /** Already formatted for the locale. */
   statusChangedAtLabel,
-  mailEnabled,
+  locale,
+  mail,
 }: {
   account: Account;
   roles: Role[];
@@ -194,8 +196,9 @@ export function AccountCard({
   viewerId: string;
   dict: Dictionary;
   statusChangedAtLabel: string | null;
+  locale: Locale;
   /** Whether the password reset offers emailing the sign-in details. */
-  mailEnabled: boolean;
+  mail: MailOffer;
 }) {
   const t = dict.accounts.card;
   const offered = offeredActions(account, viewerId);
@@ -414,7 +417,11 @@ export function AccountCard({
               <form action={resetPassword} className="flex flex-col gap-2.5">
                 <input type="hidden" name="userId" value={account.id} />
                 <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
-                {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+                {/* Only an active account with an address can be emailed; the
+                   server would skip any other. */}
+                {account.status === "active" && account.email ? (
+                  <SendByEmailOption mail={mail} dict={dict} />
+                ) : null}
                 <div className="flex flex-wrap items-center gap-4">
                   <Button type="submit" variant="secondary" disabled={resetting}>
                     {resetting ? t.saving : t.resetPassword}
@@ -439,7 +446,9 @@ export function AccountCard({
                           reason: reset.emailSkippedReason,
                         },
                       ]}
+                      perMinute={sendingRate(mail)}
                       dict={dict}
+                      locale={locale}
                     />
                   </div>
                 ) : null}
