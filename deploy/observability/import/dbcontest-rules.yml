@@ -107,8 +107,9 @@ groups:
           description: >-
             Participants cannot sign in, read questions or run queries. On the host,
             read docker compose -f deploy/docker-compose.yml logs --tail 200 api,
-            then start it again with docker compose -f deploy/docker-compose.yml
-            up -d --no-deps api (not make deploy-api, which runs the migration job).
+            then start it again with VERSION=<the running tag, from make deployed>
+            docker compose -f deploy/docker-compose.yml up -d --no-deps api (not
+            make deploy-api, which runs the migration job).
 
       - alert: DBContestQueryRunnerDown
         # Two minutes tolerates one missed scrape at a 60s interval and is still short against a contest.
@@ -121,8 +122,9 @@ groups:
           description: >-
             Participants cannot run queries; the rest of the contest still works.
             On the host, read docker compose -f deploy/docker-compose.yml logs
-            --tail 200 queryrunner, then start it again with docker compose -f
-            deploy/docker-compose.yml up -d queryrunner.
+            --tail 200 queryrunner, then start it again with VERSION=<the running
+            tag, from make deployed> docker compose -f deploy/docker-compose.yml
+            up -d --no-deps queryrunner.
 
       - alert: DBContestProcessRestarted
         # Any restart mid-contest drops every live channel and running query, so one is worth knowing about.
@@ -229,12 +231,16 @@ groups:
             550 5.1.8 for a mailbox Microsoft restricted for sending
             spam (unblocked in the Defender portal). 535 5.7.139 is
             SMTP AUTH disabled for the mailbox in the Exchange admin
-            center, or MFA; another 535 is SMTP_USERNAME or
+            center, MFA, or wrong credentials, as the rest of the
+            reply says; another 535 is SMTP_USERNAME or
             SMTP_PASSWORD; "no such host" is SMTP_HOST; a
             certificate or TLS error is the relay's TLS. A fix on
             the mailbox's side is picked up at the next try, within
-            fifteen minutes; a changed deploy/.env reaches the API
-            with make deploy-api VERSION=<the running tag>.
+            fifteen minutes. A changed deploy/.env reaches the API,
+            at the next break, with VERSION=<the running tag, from
+            make deployed> docker compose -f deploy/docker-compose.yml
+            up -d --no-deps api (not make deploy-api, which runs the
+            migration job).
 
   - name: dbcontest-queryrunner
     rules:
@@ -281,7 +287,9 @@ groups:
             Participants are told the console is busy. Check active queries and the
             game cluster's CPU: one heavy question can hold every slot for the whole
             deadline. Raising QUERY_CONCURRENT needs game-cluster memory
-            (deploy/docker-compose.yml) and a queryrunner restart.
+            (deploy/docker-compose.yml) and the queryrunner recreated with
+            VERSION=<the running tag, from make deployed> docker compose -f
+            deploy/docker-compose.yml up -d --no-deps queryrunner.
 
       - alert: DBContestAdmissionWaitHigh
         # A third of QUERY_QUEUE_WAIT (15s): past it a growing share of a round's queries is close to timing out in the queue.

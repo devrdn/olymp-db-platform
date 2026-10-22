@@ -111,8 +111,9 @@ tests:
               description: >-
                 Participants cannot sign in, read questions or run queries. On the host,
                 read docker compose -f deploy/docker-compose.yml logs --tail 200 api,
-                then start it again with docker compose -f deploy/docker-compose.yml
-                up -d --no-deps api (not make deploy-api, which runs the migration job).
+                then start it again with VERSION=<the running tag, from make deployed>
+                docker compose -f deploy/docker-compose.yml up -d --no-deps api (not
+                make deploy-api, which runs the migration job).
 
   # The Query Runner stops answering at 2m.
   - interval: 1m
@@ -365,6 +366,29 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="DBContestMailRelayFailing", alertstate="firing", severity="warning"}'
             value: 1
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DBContestMailRelayFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: The mail relay has been failing for ten minutes; no email is being sent.
+              description: >-
+                Queued messages wait and are abandoned only at their eighth attempt or a
+                day after they were queued. The API log has the reply under "the relay
+                failed; no message is sent until it is tried again", or, when three
+                different messages were refused in a row with none delivered, under
+                "taken for the relay refusing everyone": such as 550 5.1.8 for a mailbox
+                Microsoft restricted for sending spam (unblocked in the Defender portal).
+                535 5.7.139 is SMTP AUTH disabled for the mailbox in the Exchange admin
+                center, MFA, or wrong credentials, as the rest of the reply says; another
+                535 is SMTP_USERNAME or SMTP_PASSWORD; "no such host" is SMTP_HOST; a
+                certificate or TLS error is the relay's TLS. A fix on the mailbox's side
+                is picked up at the next try, within fifteen minutes. A changed
+                deploy/.env reaches the API, at the next break, with VERSION=<the running
+                tag, from make deployed> docker compose -f deploy/docker-compose.yml up -d
+                --no-deps api (not make deploy-api, which runs the migration job).
 
   # A relay that fails for a few minutes and mends is not an alert.
   - interval: 1m
