@@ -1,0 +1,2 @@
+# The mail templates are split on an empty line; keep them LF on every checkout.
+backend/internal/mailing/texts/** text eol=lf

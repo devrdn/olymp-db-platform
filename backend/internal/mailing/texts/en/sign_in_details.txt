@@ -14,4 +14,4 @@ The first time you sign in, you will be asked to choose a new password. Do not s
 If something does not work, write to {{.Contact}}.
 {{- end}}
 
-This message was sent automatically. Replies to it are not read.
+This is an automated message; please do not reply.
