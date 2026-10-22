@@ -2,12 +2,16 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // writeTrail writes one actor's two entries and one system entry, and returns
@@ -434,6 +438,49 @@ func TestAnEntityIdThatIsNotAnIdentifierDoesNotBreakTheQuery(t *testing.T) {
 
 		if len(found) != 1 || found[0].EntityLabel != "" {
 			t.Errorf("found %+v, want the entry with no label", found)
+		}
+	})
+}
+
+// TestTheTrailRefusesRewritingHistory: the trail is append-only in the
+// database (migration 000043), not only by convention, so a statement that
+// updates or deletes an entry is refused while appending still works.
+func TestTheTrailRefusesRewritingHistory(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-rewrite")
+		contestID := writeTrail(t, ctx, actor.ID)
+		q := storage.QuerierFrom(ctx, testPool)
+
+		for _, attempt := range []struct {
+			name, sql string
+			args      []any
+		}{
+			{"update", `UPDATE audit_log SET action = 'contest.delete' WHERE entity_id = $1`, []any{contestID}},
+			{"delete", `DELETE FROM audit_log WHERE entity_id = $1`, []any{contestID}},
+			{"truncate", `TRUNCATE audit_log`, nil},
+		} {
+			// A refused statement aborts the transaction, so each attempt is
+			// its own savepoint.
+			if _, err := q.Exec(ctx, `SAVEPOINT rewrite`); err != nil {
+				t.Fatal(err)
+			}
+			_, err := q.Exec(ctx, attempt.sql, attempt.args...)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || !strings.Contains(pgErr.Message, "append-only") {
+				t.Errorf("%s = %v, want the trail's refusal", attempt.name, err)
+			}
+			if _, err := q.Exec(ctx, `ROLLBACK TO SAVEPOINT rewrite`); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		found, total, err := NewAuditTrail(testPool).List(ctx,
+			audit.Filter{Entity: "contest", EntityID: contestID, Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+		if total != 1 || len(found) != 1 || found[0].Action != "contest.status_change" {
+			t.Errorf("found %d of %d entries %+v, want the one appended, untouched", len(found), total, found)
 		}
 	})
 }
