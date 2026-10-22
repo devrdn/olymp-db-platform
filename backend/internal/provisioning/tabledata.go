@@ -1,6 +1,7 @@
 package provisioning
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1070,10 +1071,20 @@ func (c *tableDataCopyReader) advance() {
 		if _, deleted := c.deleted[c.row]; deleted {
 			continue
 		}
+		if bytes.Equal(line, copyEndOfData) {
+			// CSV COPY still reads a bare `\.` line as the end of the data,
+			// so a one-column text table holding that value would be cut
+			// short in silence. Quoted, it is the value.
+			line = []byte(`"\."`)
+		}
 		c.pending = append(line, '\n')
 		return
 	}
 }
+
+// copyEndOfData is the line COPY FROM STDIN takes as "no more rows", in CSV
+// format as well as text.
+var copyEndOfData = []byte(`\.`)
 
 // sweepAbandonedTableData aborts table-data uploads still 'receiving' past
 // olderThan, in batches of abandonedUploadBatchLimit.
