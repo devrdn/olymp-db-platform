@@ -33,7 +33,6 @@ export const settingsSchema = z
 
 export type Settings = z.infer<typeof settingsSchema>;
 
-
 /**
  * Whether the installation sends email, and the address it sends as. Only the
  * administrator's read (`/settings/all`) carries it; absent reads as off.
