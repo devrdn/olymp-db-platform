@@ -209,6 +209,10 @@ groups:
             DBContestMailRelayFailing).
             Sign-in details in an abandoned message never arrived: hand them over
             or reset the password again once the cause is fixed.
+            Microsoft 365 checks a recipient only in the tenant's own domains:
+            a wrong address elsewhere is counted as sent, never fires this
+            alert, and bounces later as a non-delivery report to the sending
+            mailbox (SMTP_FROM), which is read after a bulk send.
 
       - alert: DBContestMailRelayFailing
         # The dispatcher stops at the relay's first failure, or at three different messages refused in a row, and tries again after 30 s, doubling; ten minutes is five failed tries, not a passing fault.
