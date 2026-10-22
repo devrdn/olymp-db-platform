@@ -102,14 +102,17 @@ func New(loader ContestRoleLoader) *Authorizer {
 }
 
 // Authorize reports whether the identity may exercise the permission. Pass
-// uuid.Nil as contestID for installation-wide actions.
+// uuid.Nil as contestID for installation-wide actions. A permission a contest
+// role grants is never installation-wide: asked with uuid.Nil it is refused,
+// whatever the identity holds globally, since there is no contest to hold a
+// role in.
 //
 // It returns ErrForbidden on denial, and a wrapped error when the decision
 // could not be made; a caller must treat the latter as a failure, never as
 // permission.
 func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission string, contestID uuid.UUID) error {
 	if contestID == uuid.Nil {
-		if id.Has(permission) {
+		if id.Has(permission) && !contestScoped(permission) {
 			return nil
 		}
 		return fmt.Errorf("%w: %s", ErrForbidden, permission)
@@ -131,6 +134,13 @@ func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission stri
 		return nil
 	}
 	return fmt.Errorf("%w: %s", ErrForbidden, permission)
+}
+
+// contestScoped reports whether a contest role can grant the permission.
+func contestScoped(permission string) bool {
+	_, manager := managerPermissions[permission]
+	_, owner := ownerOnlyPermissions[permission]
+	return manager || owner
 }
 
 func grantsContestPermission(role ContestRole, permission string) bool {

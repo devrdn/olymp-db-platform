@@ -272,6 +272,20 @@ func TestContestPermissionRejectsAMalformedContestID(t *testing.T) {
 	}
 }
 
+// The nil UUID parses, and the authorizer reads it as "no contest, global
+// permission only": a holder of the global permission with no role anywhere
+// would pass. It is refused like an unparseable one.
+func TestContestPermissionRejectsTheNilContestID(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{role: rbac.RoleNone}, rbac.PermissionContestEdit)
+	rec := httptest.NewRecorder()
+
+	contestRouter(f, rbac.PermissionContestEdit).ServeHTTP(rec, contestRequest(f.token, uuid.Nil.String()))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSystemAdministratorPassesTheContestScope(t *testing.T) {
 	f := newMiddlewareFixture(t, staticRoles{role: rbac.RoleNone}, rbac.PermissionContestAdminAll)
 	rec := httptest.NewRecorder()
