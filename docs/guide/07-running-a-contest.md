@@ -208,6 +208,20 @@ window multiplies it.
    message is written in (Romanian until changed), and set the **Contact
    email**, which every sign-in message gives as the address to write to
    when something does not work.
+5. Before resetting the passwords of accounts that already exist, list the
+   stored addresses that are not one bare address, which the message check
+   refuses. One such address fails the whole bulk reset with a 500, so
+   correct each on **Accounts** first. On the host, with the names from
+   `deploy/.env`:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml exec -T pg-core \
+     psql --username=<CORE_DB_USER> --dbname=<CORE_DB_NAME> -c "
+       SELECT login, email FROM users
+       WHERE email <> '' AND NOT (email ~ '^[^[:space:]<>@]+@[^[:space:]<>@]+$')"
+   ```
+
+   It should list no rows.
 
 **7. Create the participants' accounts.** On **Accounts** (`/users`), choose
 **Import a roster** and paste one line per person: login, full name and,
