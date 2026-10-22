@@ -193,8 +193,8 @@ type emailOutcome struct {
 	// with the password; the message leaves after the answer.
 	Emailed bool `json:"emailed"`
 	// EmailSkippedReason is why they were not although asked for, from a
-	// closed set (users.EmailSkipNoAddress) the client translates; absent
-	// when email was not asked for or was queued.
+	// closed set (users.EmailSkipNotActive, users.EmailSkipNoAddress) the
+	// client translates; absent when email was not asked for or was queued.
 	EmailSkippedReason string `json:"email_skipped_reason,omitempty"`
 }
 

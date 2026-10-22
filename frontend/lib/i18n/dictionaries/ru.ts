@@ -1363,6 +1363,10 @@ const ru = {
         },
       },
     },
+    emailSkipped: {
+      no_address: "у учётной записи нет адреса электронной почты",
+      not_active: "учётная запись не активна",
+    },
   },
   participant: {
     feedback: {

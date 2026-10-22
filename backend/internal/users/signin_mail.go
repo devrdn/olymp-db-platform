@@ -16,9 +16,15 @@ import (
 // password is issued that its owner would never receive.
 var ErrMailOff = errors.New("email is off, so sign-in details cannot be emailed")
 
-// EmailSkipNoAddress is why an account's sign-in details were not emailed
-// although they were asked for: it has no email address.
-const EmailSkipNoAddress = "no_address"
+// Why an account's sign-in details were not emailed although they were
+// asked for. A closed vocabulary the client translates; the password is
+// issued either way.
+const (
+	EmailSkipNoAddress = "no_address"
+	// EmailSkipNotActive keeps sign-in details from an account that cannot
+	// sign in with them, such as a blocked one.
+	EmailSkipNotActive = "not_active"
+)
 
 // Outbox queues email (mailing.Outbox).
 type Outbox interface {
@@ -73,8 +79,8 @@ type EmailOutcome struct {
 	// Emailed means the sign-in details were queued in the transaction that
 	// issued the password; delivery happens after it commits.
 	Emailed bool
-	// SkipReason is why they were not although asked for:
-	// EmailSkipNoAddress.
+	// SkipReason is why they were not although asked for: EmailSkipNotActive
+	// or EmailSkipNoAddress.
 	SkipReason string
 }
 
@@ -114,14 +120,17 @@ func (s *Service) letterheadFor(ctx context.Context, d Delivery) (*letterhead, e
 }
 
 // signIn writes an account's sign-in details, or says why it gets none. It
-// returns a nil message when email was not asked for or the account has no
-// address. An error means the message cannot be written for reasons that are
+// returns a nil message when email was not asked for, or the account is not
+// active or has no address. An error means the message cannot be written for reasons that are
 // not the account's: its login, name and address were validated on the way
 // in, the installation's name is a required setting and the password is
 // ours.
 func (l *letterhead) signIn(u User, password string) (*mailing.Message, EmailOutcome, error) {
 	if l == nil {
 		return nil, EmailOutcome{}, nil
+	}
+	if !u.IsActive() {
+		return nil, EmailOutcome{SkipReason: EmailSkipNotActive}, nil
 	}
 	if u.Email == "" {
 		return nil, EmailOutcome{SkipReason: EmailSkipNoAddress}, nil

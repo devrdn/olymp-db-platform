@@ -618,3 +618,69 @@ func TestWithMailRefusesAMissingPart(t *testing.T) {
 		})
 	}
 }
+
+func TestBulkResetEmailsNoAccountThatIsNotActive(t *testing.T) {
+	f := newMailFixture(t)
+	first := f.add("s.popescu", "sergiu@usm.md")
+	blocked := f.add("blocked", "blocked@usm.md")
+	second := f.add("a.rusu", "ana@usm.md")
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{blocked.ID}, users.StatusBlocked,
+		users.StatusChange{Reason: "cheating", By: f.actor}); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+
+	res, err := f.service.BulkResetPassword(context.Background(), f.actor,
+		[]uuid.UUID{first.ID, blocked.ID, second.ID}, byEmail)
+	if err != nil {
+		t.Fatalf("BulkResetPassword() = %v", err)
+	}
+
+	if len(res.Issued) != 3 {
+		t.Fatalf("issued %d passwords, want 3: a blocked account's password is still reset", len(res.Issued))
+	}
+	for _, one := range res.Issued {
+		want := users.EmailOutcome{Emailed: true}
+		if one.ID == blocked.ID {
+			want = users.EmailOutcome{SkipReason: users.EmailSkipNotActive}
+		}
+		if one.Email != want {
+			t.Errorf("%s reads %+v, want %+v", one.Login, one.Email, want)
+		}
+		if one.OneTimePassword == "" {
+			t.Errorf("%s was handed no password", one.Login)
+		}
+	}
+	after, _ := f.repo.Get(blocked.ID)
+	if !passwordtest.Matches(t, after.PasswordHash, res.Issued[1].OneTimePassword) {
+		t.Error("the blocked account's password was not reset")
+	}
+	for _, m := range f.outbox.queued {
+		if m.UserID == blocked.ID {
+			t.Error("a message was queued to the blocked account")
+		}
+	}
+	if len(f.outbox.queued) != 2 {
+		t.Errorf("queued %d messages, want 2", len(f.outbox.queued))
+	}
+}
+
+func TestResetPasswordOfABlockedAccountStillIssuesItWithoutEmail(t *testing.T) {
+	f := newMailFixture(t)
+	target := f.add("blocked", "blocked@usm.md")
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{target.ID}, users.StatusBlocked,
+		users.StatusChange{Reason: "cheating", By: f.actor}); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+
+	issued, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail)
+	if err != nil {
+		t.Fatalf("ResetPassword() = %v", err)
+	}
+
+	if issued.OneTimePassword == "" || issued.Email != (users.EmailOutcome{SkipReason: users.EmailSkipNotActive}) {
+		t.Errorf("issued = %+v, want a password and %q", issued, users.EmailSkipNotActive)
+	}
+	if len(f.outbox.queued) != 0 || slices.Contains(f.sink.actions(), audit.ActionUserSignInDetailsEmailed) {
+		t.Error("a blocked account was emailed its sign-in details")
+	}
+}

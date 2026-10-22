@@ -213,3 +213,46 @@ func TestBulkPasswordResetEmailsEachAccountWithAnAddress(t *testing.T) {
 		t.Errorf("queued %d messages, want 1", len(queue.messages))
 	}
 }
+
+func TestBulkPasswordResetEmailsNoBlockedAccount(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+	active := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md"})
+	blocked := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivan", Email: "ivanov@usm.md",
+		Status: users.StatusBlocked})
+	other := f.repo.Add(users.User{Login: "rusu", FullName: "Ana", Email: "rusu@usm.md"})
+
+	rec := f.do(http.MethodPost, "/users/bulk/password-reset",
+		`{"ids":["`+active.ID.String()+`","`+blocked.ID.String()+`","`+other.ID.String()+`"],"send_by_email":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[struct {
+		Issued []emailed `json:"issued"`
+	}](t, rec)
+	if len(body.Issued) != 3 {
+		t.Fatalf("issued %d, want 3", len(body.Issued))
+	}
+	for _, one := range body.Issued {
+		if one.OneTimePassword == "" {
+			t.Errorf("%s was handed no password", one.Login)
+		}
+		if one.Login == "ivanov" {
+			if one.Emailed || one.SkippedReason == nil || *one.SkippedReason != "not_active" {
+				t.Errorf("ivanov reads emailed %v, reason %v; want not_active", one.Emailed, one.SkippedReason)
+			}
+			continue
+		}
+		if !one.Emailed || one.SkippedReason != nil {
+			t.Errorf("%s reads emailed %v, reason %v; want emailed", one.Login, one.Emailed, one.SkippedReason)
+		}
+	}
+	for _, m := range queue.messages {
+		if m.To == "ivanov@usm.md" {
+			t.Error("a message was queued to the blocked account")
+		}
+	}
+	if len(queue.messages) != 2 {
+		t.Errorf("queued %d messages, want 2", len(queue.messages))
+	}
+}
