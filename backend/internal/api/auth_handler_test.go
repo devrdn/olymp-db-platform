@@ -373,6 +373,8 @@ func TestPasswordChangeNamesWhyTheNewPasswordWasRefused(t *testing.T) {
 		name, body, code string
 	}{
 		{"too weak", `{"old_password":"` + testPassword + `","new_password":"y"}`, "weak_password"},
+		{"too long for the hasher", `{"old_password":"` + testPassword + `","new_password":"` +
+			strings.Repeat("p", password.MaxLength+1) + `"}`, "weak_password"},
 		{"unchanged", `{"old_password":"` + testPassword + `","new_password":"` + testPassword + `"}`, "same_password"},
 	}
 	for _, c := range cases {

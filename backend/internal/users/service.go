@@ -211,6 +211,9 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letter
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
+	if err := f.Validate(); err != nil {
+		return nil, 0, err
+	}
 	return s.repo.List(ctx, f.Normalize())
 }
 
@@ -548,11 +551,17 @@ func validateReason(reason string) (string, error) {
 	return reason, nil
 }
 
-func validatePassword(password string) error {
-	if len([]rune(password)) < MinPasswordLength {
+// validatePassword applies the policy. The maximum is the hasher's, in
+// bytes: argon2 hashes the whole input, and Hasher.Hash refuses a longer one
+// with an undeclared error, which would be answered as a server fault.
+func validatePassword(candidate string) error {
+	if len([]rune(candidate)) < MinPasswordLength {
 		return fmt.Errorf("%w: at least %d characters", ErrWeakPassword, MinPasswordLength)
 	}
-	if strings.TrimSpace(password) == "" {
+	if len(candidate) > password.MaxLength {
+		return fmt.Errorf("%w: at most %d bytes", ErrWeakPassword, password.MaxLength)
+	}
+	if strings.TrimSpace(candidate) == "" {
 		return fmt.Errorf("%w: must not be only whitespace", ErrWeakPassword)
 	}
 	return nil
