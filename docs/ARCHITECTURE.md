@@ -193,7 +193,8 @@ access of its own.
 | `audit` | The append-only record of what staff did |
 | `monitor` | Watching a participant: browser and server signals, the history of their notes and tabs, a fingerprint of each query; and the organiser's reads — a participant table with flags, a combined feed, queries, answers, workspace, CSV (section 9.4) |
 | `covers` | A contest's cover picture: what may be uploaded, how it is re-encoded and named, what a visitor may read (section 9.7) |
-| `settings` | The installation's name, contacts and images, changed from a screen (section 10.1) |
+| `settings` | The installation's name, contacts, images and mail language, changed from a screen (section 10.1) |
+| `mailing` | The installation's email: the texts in each language, the outbox and the job that delivers it, the test message (section 10.2) |
 | `showcase` | The front page's public reads: the installation's totals and the contests a visitor may see (section 9.6) |
 
 Beside the modules, `internal/queryrunner` is the Query Runner's own package
@@ -1948,10 +1949,10 @@ reset — share the same slots but wait up to thirty seconds within the
 request, because an import interrupted half way would have to start again. If
 a slot never frees, the import still answers 200 with what it managed: the
 accounts it created with their one-time passwords, which exist in no other
-copy; the logins of the rows it did not reach (`not_imported`); and the reason
-(`stopped: sign_in_busy`). The API container's memory limit and `GOMEMLIMIT`
-are computed from the slot count, and the arithmetic is written into
-`deploy/docker-compose.yml`.
+copy unless they were also queued by email; the logins of the rows it did not
+reach (`not_imported`); and the reason (`stopped: sign_in_busy`). The API
+container's memory limit and `GOMEMLIMIT` are computed from the slot count,
+and the arithmetic is written into `deploy/docker-compose.yml`.
 
 **What is exempt from the one-time password is listed by exact path.** It used
 to compare a suffix, which is not the same rule: it exempted any route whose
@@ -3636,6 +3637,125 @@ system's tokens, and "give the administrator a palette" turns a coherent
 system into a set of fields where nobody guarantees the contrast. The logo,
 the name and the contacts change; the rules of typography and colour do not.
 
+## 10.2 Email
+
+The requirement: an olympiad's participants receive their sign-in details
+without an organiser handing each one-time password over by hand, before
+the olympiad of 2 November 2026. The installation sends email through the
+university's Microsoft 365 relay, as one mailbox, in one language chosen for
+the whole installation. What is built: the SMTP transport, an outbox with
+its sender, the texts in English, Romanian and Russian, a test message for
+the administrator, and the sign-in details on the four routes that issue a
+one-time password (creating an account, importing a roster, a reset, the bulk
+reset). A reset by link and contest notifications are the next messages
+(section 15, items 50 and 51). How to configure and operate it is
+[backend/README.md, "Email"](../backend/README.md#email).
+
+**The boundary runs in three places.** `internal/platform/mail` speaks SMTP,
+through `github.com/wneessen/go-mail`: it sends one message, once, and
+decides what a failure means, but queues nothing, writes no text and imports
+no domain package. `internal/mailing` is the domain: the texts, the outbox,
+the dispatcher that delivers it and the tester behind the test message; it
+does not decide who receives a message or in which language, its callers do.
+`users` declares the four methods it needs (`users.Outbox`: whether mail is
+on, queue messages, give pending ones up, wake the sender) and never sees
+the transport; `postgres.MailOutbox` is the table, and `app` assembles the
+three. The split of configuration follows section 10.1's rule: the relay,
+its account and the site's public address are environment variables,
+because a wrong value means no mail at all and one of them is a secret; the
+mail language is a setting, because it is an organisation's decision.
+
+**A message is queued, not sent in the request.** The relay takes thirty
+messages a minute from one mailbox, so a roster of five hundred takes twenty
+minutes to leave, and no request can wait that long. A relay that is down
+would otherwise fail the creation of an account, or leave an import half
+done, for a reason that has nothing to do with the accounts. And a retry
+needs state that outlives the request and the process. So a request writes a
+row to `mail_outbox` and a background job delivers it, at
+`SMTP_MAX_PER_MINUTE` (25 by default, under Microsoft's 30) counted in the
+table across every replica. The test message is the one exception: its whole
+purpose is the relay's answer, so it is sent at once, to the caller's own
+address only, three a minute per administrator, which the margin under thirty
+leaves room for.
+
+**The message commits with the password it carries.** The outbox's writes
+join the transaction the context carries (`storage.QuerierFrom`, section
+3.2), so the row is written in the transaction that issues the password, as
+the audit entry is. A password whose promised message was lost, or a message
+whose password rolled back, cannot exist. The sender cannot see a row until
+it commits, so the caller wakes it after the commit, and the sender's
+ten-second tick covers a wake that came too early.
+
+**A password sits in a body only while it may still be sent.** Emailing a
+one-time password puts it in plain text in the core database and in the
+student's mailbox; the maintainer chose it with that caveat in view, and a
+reset by link is the later answer (item 50). What bounds it: the body is
+erased the moment the message is sent or abandoned, and the table refuses a
+finished row that keeps one; a message queued 24 hours ago is never sent and
+its body is erased, whatever the relay is doing, and with mail off a sweep
+does the same; the stored reason of a failure has every long word of the
+body redacted, in case the relay quotes it back; bodies are never logged,
+and the audit trail records that details were emailed, never what they were.
+The first sign-in still forces a new password, so what reaches a mailbox
+stops working once used. What remains
+is a password readable in the core database, and in a backup taken in that
+window, for the minutes before it is sent.
+
+**A newer password supersedes the older message.** Issuing an account a new
+password, by any reset, emailed or not, and blocking or deleting the account,
+abandon its pending sign-in messages and erase their bodies in the same
+transaction. Without that, a student whose password was reset twice would
+receive two messages, possibly the older one last, and sign in with a
+password that no longer works; a blocked student would still receive one. A
+superseded message is not a delivery outcome, so it is not counted in
+`mail_messages_total`, and `DBContestMailAbandoned` stays a signal that
+somebody will not get their email. Creating and importing need no such step:
+the account is born in that transaction, so no message for it can exist.
+
+**A failure is the relay's or the message's, and only the message's is charged
+to it.** The transport tells them apart by how far the SMTP session got.
+Everything before RCPT (connecting, TLS, the greeting, AUTH, MAIL FROM)
+happens before the recipient is known, so its failure is the relay's; so is a
+deferral after RCPT (Microsoft's throttling), and Exchange's refusal of the
+sending mailbox at the end of DATA (`STOREDRV.Submission`, Send As denied). A
+failure of the relay charges no message: it is put back with its attempt
+refunded and the dispatcher pauses: thirty seconds, then twice as long after
+each further failure up to fifteen minutes, until a delivery resets it. A
+refusal whose RFC 3463 code names the recipient (an unknown, moved, disabled
+or full mailbox) abandons that message alone. Every other refusal is
+ambiguous: Exchange answers `550 5.1.8` to every message of a mailbox it has
+restricted for spam, and one such reply cannot be told from a refusal of that
+message alone. So such a message is retried on its own backoff, abandoned only
+at its eighth attempt or after a day, and three different messages refused in
+a row with no delivery between them trip a breaker that pauses the dispatcher
+as a relay failure does. The goal is that sign-in details arrive: a rule that
+abandoned on a first refusal would erase a whole roster's passwords at full
+rate within minutes of a mailbox being restricted. What it costs is a
+genuinely bad message being retried up to its cap instead of dropped at once.
+
+**Known limits.**
+
+- The pause and the breaker are kept per process. Each replica learns of a
+  failing relay on its own attempt, and `mail_relay_failing` is per process;
+  the deployment runs one API replica.
+- With fewer than three messages queued, a relay that refuses everyone never
+  trips the breaker: those messages are retried until their eighth attempt,
+  about two hours, and only `DBContestMailAbandoned` then fires.
+- A message already claimed by the sender when its password is superseded
+  still goes out; if the relay defers it, it is retried with the dead
+  password.
+- A self-service password change does not withdraw a pending sign-in
+  message: a student who changed a password handed over on paper may still
+  receive the dead one by email.
+- Test messages refused by their rate limit are not recorded in the audit
+  trail; every attempt within the limit is.
+- An address stored before addresses were validated, which the outbox's
+  check refuses, fails a whole bulk reset with a 500 rather than skipping
+  that account.
+- Rows of `mail_outbox` are never deleted. A sent or abandoned row has no
+  body, but keeps the recipient's address, with no retention period of the
+  kind item 39 sets for the query log and the audit trail.
+
 ## 11. Security in summary, and the audit plan
 
 Student SQL is section 5, database isolation section 4, authentication
@@ -4247,15 +4367,19 @@ an item of the list below.
    have none, the grace extension first (31); the readiness event (32); `Esc`
    aborting a query (33); the audit form's filters (8); participants from a
    file and the contest import (12); a hidden question marked as staff-only
-   (47). They cost an organiser time, or a
+   (47); a password reset by link (50) and contest notifications (51), both
+   built on the outbox of section 10.2. They cost an organiser time, or a
    participant some comfort, and each has a workaround today: the standings
    screen and monitoring's CSV, a typed address, the API called by hand, a
    first query that waits for the copy, waiting for the query's deadline, a
-   pasted column of logins, a contest built again by hand. The start's wait,
-   `reports.view` and the hidden question need none: stale copies are remade
-   on first use, the permission guards nothing, and the hidden question only
-   needs saying.
-2. **Running the installation:** off-host backups (35: scheduled and
+   pasted column of logins, a contest built again by hand, a reset that
+   emails new sign-in details, an announcement sent by other means. The
+   start's wait, `reports.view` and the hidden question need none: stale
+   copies are remade on first use, the permission guards nothing, and the
+   hidden question only needs saying.
+2. **Running the installation:** OAuth for the mail relay (52), which has a
+   date: Microsoft turns basic authentication for SMTP AUTH off by default
+   at the end of December 2026; off-host backups (35: scheduled and
    rotated now; the off-host design, encryption and WAL archiving remain),
    restore drills (36), the participant and provisioning metrics (37), CI
    and the supply chain (38),
@@ -4615,6 +4739,32 @@ Product decisions the items below are built on.
   theme, density and language switches, from the product's own components;
   until it exists, CI's lint, contrast and error-code checks hold the design
   system on their own.
+- [ ] **50. A password reset by link** (section 10.2). A participant who
+  forgot their password asks an administrator, who resets it and may email
+  the new one. A link to a short-lived, single-use token, stored only as a
+  hash, would let them choose a password themselves and keep every password
+  out of the outbox and out of mailboxes. It is a new message kind and its
+  texts on the outbox as built, plus a public request route that answers the
+  same whether or not the account exists, throttled by address before
+  account (CLAUDE.md, rules 4 and 5), and the screen that takes the new
+  password.
+- [ ] **51. Contest notifications** (section 10.2). Nothing tells a
+  participant that a contest they are registered for was published, moved,
+  is about to start, or has revealed its results. Each notice is a message
+  kind on the same outbox; the `contests` package decides who receives it
+  and when. A roster leaves at the relay's pace, twenty minutes for five
+  hundred at the default rate, so a notice before the start is queued that
+  much earlier, and a notice whose moment has passed is withdrawn as a
+  superseded sign-in message is.
+- [ ] **52. OAuth (XOAUTH2) for the Microsoft 365 relay** (section 10.2).
+  The transport signs in to the relay with the mailbox's password (SMTP
+  AUTH with basic authentication), which Microsoft turns off by default at
+  the end of December 2026; unless the university turns it back on for the
+  mailbox, the relay then refuses the account with `535 5.7.139` and no
+  email leaves. go-mail speaks XOAUTH2; what is missing
+  is an Entra ID application allowed to send as the mailbox, obtaining and
+  renewing its token in `internal/platform/mail`, and the configuration
+  that names it in place of `SMTP_PASSWORD`. It is due before that date.
 
 ### Done
 
