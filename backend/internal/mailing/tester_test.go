@@ -373,3 +373,33 @@ func TestTheAttemptIsRecordedWhenTheCallerHasGone(t *testing.T) {
 		t.Errorf("payload = %v, want outcome sent", payload)
 	}
 }
+
+// A field left out is a wiring fault, found at boot rather than at the first
+// administrator's click.
+func TestNewTesterRefusesAMissingField(t *testing.T) {
+	full := mailing.TesterConfig{
+		Transport: disabledSender(t),
+		Texts:     mailing.NewTexts("https://olympdb.usm.md"),
+		Limiter:   &fakeLimiter{},
+		Audit:     audit.New(&auditSink{}),
+		Logger:    slog.New(slog.DiscardHandler),
+	}
+	for name, without := range map[string]func(*mailing.TesterConfig){
+		"transport": func(c *mailing.TesterConfig) { c.Transport = nil },
+		"texts":     func(c *mailing.TesterConfig) { c.Texts = nil },
+		"limiter":   func(c *mailing.TesterConfig) { c.Limiter = nil },
+		"audit":     func(c *mailing.TesterConfig) { c.Audit = nil },
+		"logger":    func(c *mailing.TesterConfig) { c.Logger = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := full
+			without(&cfg)
+			defer func() {
+				if recover() == nil {
+					t.Error("NewTester() took a configuration without its " + name)
+				}
+			}()
+			mailing.NewTester(cfg)
+		})
+	}
+}

@@ -238,11 +238,13 @@ func ReplyOf(err error) (Reply, bool) {
 // go-mail keeps it: the code and the text as net/textproto quotes it, among
 // the stage before and the recipients and message ID after.
 func replyText(s string, code int) string {
-	at := strings.Index(s, strconv.Itoa(code)+` "`)
+	prefix := strconv.Itoa(code) + ` "`
+	at := strings.Index(s, prefix)
 	if at < 0 {
 		return ""
 	}
-	quoted, err := strconv.QuotedPrefix(s[at+4:])
+	// The quoted string starts at the prefix's own quotation mark.
+	quoted, err := strconv.QuotedPrefix(s[at+len(prefix)-1:])
 	if err != nil {
 		return ""
 	}
