@@ -63,7 +63,7 @@ flowchart TB
     chk["internal/sqlpolicy/checker (cgo parser)"]
   end
 
-  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight)"]
+  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight, mail)"]
 
   cmdapi --> app
   app --> api

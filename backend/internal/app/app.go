@@ -28,6 +28,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
@@ -56,6 +57,18 @@ type App struct {
 
 	// closers run in reverse assembly order on shutdown.
 	closers []func()
+}
+
+// newMailSender builds the relay client; without SMTP_HOST it is disabled.
+func newMailSender(cfg config.Config) (*mail.Sender, error) {
+	return mail.New(mail.Config{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+		TLS:      cfg.SMTPTLS,
+	})
 }
 
 // New builds the service, failing fast on any unusable dependency or setting
@@ -95,6 +108,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		stop := make(chan struct{})
 		a.closers = append(a.closers, func() { close(stop) })
 		go runner.Run(stop)
+	}
+
+	sender, err := newMailSender(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configure mail: %w", err)
+	}
+	if sender.Enabled() {
+		log.Info("mail relay configured", "host", cfg.SMTPHost, "port", cfg.SMTPPort, "tls", cfg.SMTPTLS,
+			"from", sender.From())
+	} else {
+		log.Info("mail is off: SMTP_HOST is not set")
 	}
 
 	// Forwarded headers are believed only from configured proxies (CLAUDE.md

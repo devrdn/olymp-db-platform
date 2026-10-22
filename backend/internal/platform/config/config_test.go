@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 )
 
 func setRequired(t *testing.T) {
@@ -1618,12 +1620,16 @@ func TestAPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 		"REDIS_ADDR":           "redis://:Change-Me-Before-First-Run@redis:6379/0",
 		"GAME_PROVISIONER_DSN": "postgres://game:change-me-before-first-run@pg-game:5432/game",
 		"GAME_AUTHOR_PASSWORD": "change-me-before-first-run",
+		"SMTP_PASSWORD":        "change-me-to-the-relay-password",
 	} {
 		t.Run(name, func(t *testing.T) {
 			production(t)
 			if name == "GAME_AUTHOR_PASSWORD" || name == "GAME_PROVISIONER_DSN" {
 				t.Setenv("GAME_PROVISIONER_DSN", "postgres://game:real@pg-game:5432/game")
 				t.Setenv("GAME_AUTHOR_PASSWORD", "a-real-author-password")
+			}
+			if name == "SMTP_PASSWORD" {
+				productionMail(t)
 			}
 			if _, err := Load(); err != nil {
 				t.Fatalf("the baseline production configuration was refused: %v", err)
@@ -1644,5 +1650,157 @@ func TestAPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
 				t.Fatalf("development refused a placeholder %s: %v", name, err)
 			}
 		})
+	}
+}
+
+// productionMail is a production configuration with mail on, every SMTP
+// variable set so none is inherited from the shell.
+func productionMail(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENV", "production")
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+	t.Setenv("SMTP_HOST", "smtp.usm.md")
+	t.Setenv("SMTP_PORT", "")
+	t.Setenv("SMTP_USERNAME", "olympiad@usm.md")
+	t.Setenv("SMTP_PASSWORD", "a-real-relay-password")
+	t.Setenv("SMTP_FROM", "Olimpiada USM <olympiad@usm.md>")
+	t.Setenv("SMTP_TLS", "")
+	t.Setenv("PUBLIC_URL", "https://olympdb.usm.md")
+}
+
+func TestMailIsOffWithoutAnSMTPHost(t *testing.T) {
+	productionMail(t)
+	for _, name := range []string{"SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM", "PUBLIC_URL"} {
+		t.Setenv(name, "")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without any SMTP variable = %v, want mail off", err)
+	}
+	if cfg.MailEnabled() {
+		t.Error("MailEnabled() = true without SMTP_HOST")
+	}
+}
+
+func TestMailSettingsAreReadWithTheirDefaults(t *testing.T) {
+	productionMail(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if !cfg.MailEnabled() {
+		t.Error("MailEnabled() = false with SMTP_HOST set")
+	}
+	if cfg.SMTPHost != "smtp.usm.md" || cfg.SMTPUsername != "olympiad@usm.md" ||
+		cfg.SMTPPassword != "a-real-relay-password" || cfg.SMTPFrom != "Olimpiada USM <olympiad@usm.md>" {
+		t.Errorf("SMTP settings = %q %q %q, not the configured values", cfg.SMTPHost, cfg.SMTPUsername, cfg.SMTPFrom)
+	}
+	if cfg.SMTPPort != 587 {
+		t.Errorf("SMTPPort = %d, want the default 587", cfg.SMTPPort)
+	}
+	if cfg.SMTPTLS != mail.TLSStartTLS {
+		t.Errorf("SMTPTLS = %q, want the default starttls", cfg.SMTPTLS)
+	}
+	if cfg.PublicURL != "https://olympdb.usm.md" {
+		t.Errorf("PublicURL = %q", cfg.PublicURL)
+	}
+
+	t.Setenv("SMTP_PORT", "465")
+	t.Setenv("SMTP_TLS", "tls")
+	t.Setenv("PUBLIC_URL", "https://olympdb.usm.md/")
+	if cfg, err = Load(); err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.SMTPPort != 465 || cfg.SMTPTLS != mail.TLSImplicit {
+		t.Errorf("SMTPPort, SMTPTLS = %d, %q, want 465, tls", cfg.SMTPPort, cfg.SMTPTLS)
+	}
+	if cfg.PublicURL != "https://olympdb.usm.md" {
+		t.Errorf("PublicURL = %q, want it without the trailing slash", cfg.PublicURL)
+	}
+}
+
+func TestARelayWithoutCredentialsIsAccepted(t *testing.T) {
+	productionMail(t)
+	t.Setenv("SMTP_USERNAME", "")
+	t.Setenv("SMTP_PASSWORD", "")
+
+	if _, err := Load(); err != nil {
+		t.Errorf("Load() for a relay that takes no AUTH = %v", err)
+	}
+}
+
+func TestMailWithAMissingOrInvalidCompanionIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, value, named string }{
+		{"SMTP_FROM", "", "SMTP_FROM"},
+		{"SMTP_FROM", "olympiad", "SMTP_FROM"},
+		{"SMTP_FROM", "a@usm.md, b@usm.md", "SMTP_FROM"},
+		{"SMTP_FROM", "=?utf-8?q?USM=0D=0ABcc=3A_x=40y=2Emd?= <olympiad@usm.md>", "SMTP_FROM"},
+		{"PUBLIC_URL", "", "PUBLIC_URL"},
+		{"PUBLIC_URL", "olympdb.usm.md", "PUBLIC_URL"},
+		{"PUBLIC_URL", "http://olympdb.usm.md", "PUBLIC_URL"},
+		{"PUBLIC_URL", "https://olympdb.usm.md/?next=1", "PUBLIC_URL"},
+		{"PUBLIC_URL", "https://olympdb.usm.md/#top", "PUBLIC_URL"},
+		{"PUBLIC_URL", "https://admin@olympdb.usm.md", "PUBLIC_URL"},
+		{"SMTP_PASSWORD", "", "SMTP_PASSWORD"},
+		{"SMTP_USERNAME", "", "SMTP_USERNAME"},
+		{"SMTP_PORT", "smtp", "SMTP_PORT"},
+		{"SMTP_PORT", "0", "SMTP_PORT"},
+		{"SMTP_PORT", "65536", "SMTP_PORT"},
+		{"SMTP_TLS", "ssl", "SMTP_TLS"},
+		{"SMTP_HOST", "smtp.usm.md:587", "SMTP_HOST"},
+		{"SMTP_HOST", "smtp://smtp.usm.md", "SMTP_HOST"},
+	} {
+		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
+			productionMail(t)
+			t.Setenv(tc.name, tc.value)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tc.named) {
+				t.Fatalf("Load() = %v, want an error naming %s", err, tc.named)
+			}
+			if strings.Contains(err.Error(), "a-real-relay-password") {
+				t.Errorf("the refusal repeats the password: %q", err)
+			}
+		})
+	}
+}
+
+func TestAPlainRelayIsRefusedOutsideDevelopment(t *testing.T) {
+	productionMail(t)
+	t.Setenv("SMTP_USERNAME", "")
+	t.Setenv("SMTP_PASSWORD", "")
+	t.Setenv("SMTP_TLS", "none")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SMTP_TLS") {
+		t.Errorf("Load() with SMTP_TLS=none in production = %v, want an error naming SMTP_TLS", err)
+	}
+}
+
+func TestADevelopmentRelayMayBePlainAndLocal(t *testing.T) {
+	productionMail(t)
+	t.Setenv("ENV", "development")
+	t.Setenv("SMTP_HOST", "localhost")
+	t.Setenv("SMTP_PORT", "1025")
+	t.Setenv("SMTP_TLS", "none")
+	t.Setenv("SMTP_USERNAME", "")
+	t.Setenv("SMTP_PASSWORD", "")
+	t.Setenv("PUBLIC_URL", "http://localhost:3000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() for a development relay = %v", err)
+	}
+	if cfg.SMTPTLS != mail.TLSNone || cfg.PublicURL != "http://localhost:3000" {
+		t.Errorf("SMTPTLS, PublicURL = %q, %q", cfg.SMTPTLS, cfg.PublicURL)
+	}
+
+	// Credentials still never cross a plain connection.
+	t.Setenv("SMTP_USERNAME", "dev")
+	t.Setenv("SMTP_PASSWORD", "dev")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SMTP_TLS") {
+		t.Errorf("Load() with credentials and SMTP_TLS=none = %v, want an error naming SMTP_TLS", err)
 	}
 }

@@ -481,6 +481,16 @@ services:
       # chunk upload, with nothing in the log to say why (.env.example has
       # documented it since the guard was written).
       PUBLIC_ORIGINS: ${PUBLIC_ORIGINS:-}
+      # The mail relay. Empty SMTP_HOST is mail off, which needs none of the
+      # others; with it set the API refuses to start without SMTP_FROM and
+      # PUBLIC_URL. Empty SMTP_PORT and SMTP_TLS are 587 and starttls.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       # Counts successful sign-ins too, so it bounds people rather than only
       # guesses. Raise it where a whole cohort shares one NAT address; the
       # limit of ten per account and address is what stops guessing.
