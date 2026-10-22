@@ -244,3 +244,70 @@ func TestTheFeedbackAddressIsAnAbsoluteHTTPSAddressOrNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestTheMailLanguageIsRomanianUntilSomebodyChoosesOne(t *testing.T) {
+	f := newFixture()
+
+	all, err := f.service.All(context.Background())
+	if err != nil {
+		t.Fatalf("All() = %v", err)
+	}
+
+	if all[settings.KeyMailLanguage] != "ro" {
+		t.Errorf("mail language = %q, want ro", all[settings.KeyMailLanguage])
+	}
+}
+
+func TestTheMailLanguageIsOneTheMessagesAreWrittenIn(t *testing.T) {
+	for _, value := range []string{"en", "ro", "ru"} {
+		t.Run("accepts "+value, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFixture()
+
+			if err := f.service.Save(ctx, uuid.New(), settings.Values{settings.KeyMailLanguage: value}); err != nil {
+				t.Fatalf("Save(%q) = %v, want it accepted", value, err)
+			}
+
+			all, _ := f.service.All(ctx)
+			if all[settings.KeyMailLanguage] != value {
+				t.Errorf("mail language = %q, want %q", all[settings.KeyMailLanguage], value)
+			}
+		})
+	}
+
+	for _, value := range []string{"", "de", "RO", " ro", "ro-MD", strings.Repeat("r", 1<<20)} {
+		t.Run("refuses "+value[:min(len(value), 8)], func(t *testing.T) {
+			f := newFixture()
+
+			err := f.service.Save(context.Background(), uuid.New(), settings.Values{settings.KeyMailLanguage: value})
+
+			if !errors.Is(err, settings.ErrInvalid) {
+				t.Fatalf("Save(%q) = %v, want ErrInvalid", value[:min(len(value), 8)], err)
+			}
+			// The refusal is what an API client reads, so it names what is taken.
+			if !strings.Contains(err.Error(), "en, ro, ru") {
+				t.Errorf("error = %q, want it to name the languages it takes", err)
+			}
+			if len(err.Error()) > 200 {
+				t.Errorf("error is %d bytes, want the value left out of it", len(err.Error()))
+			}
+			if len(f.repo.values) != 0 {
+				t.Errorf("stored %v, want nothing written", f.repo.values)
+			}
+		})
+	}
+}
+
+// Nothing a participant sees depends on it, and the allow-list stays short.
+func TestTheMailLanguageStaysOffThePublicRead(t *testing.T) {
+	f := newFixture()
+
+	public, err := f.service.Public(context.Background())
+	if err != nil {
+		t.Fatalf("Public() = %v", err)
+	}
+
+	if _, published := public[settings.KeyMailLanguage]; published {
+		t.Errorf("the mail language was published: %v", public)
+	}
+}

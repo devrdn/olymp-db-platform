@@ -5,6 +5,7 @@ import { SETTING_KEYS, type ImageKind } from "./settings-terms";
 export {
   FEEDBACK_URL_MAX,
   IMAGE_KINDS,
+  MAIL_LANGUAGES,
   SETTING_KEYS,
   feedbackHref,
   imageHref,
@@ -12,7 +13,7 @@ export {
 } from "./settings-terms";
 
 /**
- * The installation's name, contact, feedback address and images. Settings
+ * The installation's name, contact, feedback address, mail language and images. Settings
  * are rows keyed by dotted strings, so adding one is data rather than a
  * release.
  */
@@ -26,6 +27,7 @@ export const settingsSchema = z
     name: values[SETTING_KEYS.name] ?? "",
     contact: values[SETTING_KEYS.contact] ?? "",
     feedback: values[SETTING_KEYS.feedback] ?? "",
+    mailLanguage: values[SETTING_KEYS.mailLanguage] ?? "",
     images: images as Partial<Record<ImageKind, string>>,
   }));
 

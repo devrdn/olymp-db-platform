@@ -13,5 +13,5 @@ import { settingsSchema, type Settings } from "./settings";
 export const branding = cache(async (): Promise<Settings> => {
   return serverRequest("/settings")
     .then((payload) => settingsSchema.parse(payload))
-    .catch(() => ({ name: "", contact: "", feedback: "", images: {} }));
+    .catch(() => ({ name: "", contact: "", feedback: "", mailLanguage: "", images: {} }));
 });

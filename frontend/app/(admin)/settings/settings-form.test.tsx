@@ -23,6 +23,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   name: "USM",
   contact: "",
   feedback: "",
+  mailLanguage: "ro",
   images: {},
   ...over,
 });
@@ -85,5 +86,30 @@ describe("SettingsForm, the API's refusal of the feedback address", () => {
     expect(alert).toHaveAttribute("id", "feedback-message");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(feedbackField()).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("SettingsForm, the mail language", () => {
+  function languageField() {
+    return screen.getByRole("combobox", { name: en.settings.mailLanguage }) as HTMLSelectElement;
+  }
+
+  test("shows the saved language among the ones the messages are written in", () => {
+    render(<SettingsForm settings={settings({ mailLanguage: "ru" })} dict={en} />);
+
+    expect(languageField()).toHaveValue("ru");
+    expect(Array.from(languageField().options, (option) => option.value)).toEqual(["en", "ro", "ru"]);
+    expect(languageField()).toHaveAccessibleDescription(en.settings.mailLanguageHint);
+  });
+
+  test("sends the language chosen", async () => {
+    render(<SettingsForm settings={settings()} dict={en} />);
+
+    fireEvent.change(languageField(), { target: { value: "en" } });
+    fireEvent.click(screen.getByRole("button", { name: en.settings.save }));
+
+    await waitFor(() => expect(saveSettingsAction).toHaveBeenCalledTimes(1));
+    const sent = (saveSettingsAction.mock.calls[0] as unknown[])[1] as FormData;
+    expect(sent.get("mailLanguage")).toBe("en");
   });
 });
