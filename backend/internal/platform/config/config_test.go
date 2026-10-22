@@ -1666,6 +1666,7 @@ func productionMail(t *testing.T) {
 	t.Setenv("SMTP_PASSWORD", "a-real-relay-password")
 	t.Setenv("SMTP_FROM", "Olimpiada USM <olympiad@usm.md>")
 	t.Setenv("SMTP_TLS", "")
+	t.Setenv("SMTP_MAX_PER_MINUTE", "")
 	t.Setenv("PUBLIC_URL", "https://olympdb.usm.md")
 }
 
@@ -1707,15 +1708,22 @@ func TestMailSettingsAreReadWithTheirDefaults(t *testing.T) {
 	if cfg.PublicURL != "https://olympdb.usm.md" {
 		t.Errorf("PublicURL = %q", cfg.PublicURL)
 	}
+	if cfg.SMTPMaxPerMinute != 25 {
+		t.Errorf("SMTPMaxPerMinute = %d, want the default 25, under Microsoft 365's 30 a minute", cfg.SMTPMaxPerMinute)
+	}
 
 	t.Setenv("SMTP_PORT", "465")
 	t.Setenv("SMTP_TLS", "tls")
+	t.Setenv("SMTP_MAX_PER_MINUTE", "100")
 	t.Setenv("PUBLIC_URL", "https://olympdb.usm.md/")
 	if cfg, err = Load(); err != nil {
 		t.Fatalf("Load() = %v", err)
 	}
 	if cfg.SMTPPort != 465 || cfg.SMTPTLS != mail.TLSImplicit {
 		t.Errorf("SMTPPort, SMTPTLS = %d, %q, want 465, tls", cfg.SMTPPort, cfg.SMTPTLS)
+	}
+	if cfg.SMTPMaxPerMinute != 100 {
+		t.Errorf("SMTPMaxPerMinute = %d, want 100", cfg.SMTPMaxPerMinute)
 	}
 	if cfg.PublicURL != "https://olympdb.usm.md" {
 		t.Errorf("PublicURL = %q, want it without the trailing slash", cfg.PublicURL)
@@ -1752,6 +1760,9 @@ func TestMailWithAMissingOrInvalidCompanionIsRefused(t *testing.T) {
 		{"SMTP_TLS", "ssl", "SMTP_TLS"},
 		{"SMTP_HOST", "smtp.usm.md:587", "SMTP_HOST"},
 		{"SMTP_HOST", "smtp://smtp.usm.md", "SMTP_HOST"},
+		{"SMTP_MAX_PER_MINUTE", "many", "SMTP_MAX_PER_MINUTE"},
+		{"SMTP_MAX_PER_MINUTE", "0", "SMTP_MAX_PER_MINUTE"},
+		{"SMTP_MAX_PER_MINUTE", "601", "SMTP_MAX_PER_MINUTE"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			productionMail(t)

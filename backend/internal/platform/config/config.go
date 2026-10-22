@@ -299,6 +299,9 @@ type Config struct {
 	// SMTPFrom is the sending address, optionally with a display name.
 	SMTPFrom string
 	SMTPTLS  mail.TLSMode
+	// SMTPMaxPerMinute is how many messages the outbox hands the relay in
+	// any minute, across every replica.
+	SMTPMaxPerMinute int
 	// PublicURL is the site's absolute address with no trailing slash, for
 	// links in messages. Required with mail; https outside development.
 	PublicURL string
@@ -591,6 +594,13 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// Microsoft 365 allows a mailbox 30 messages a minute; the default leaves a
+// margin for messages sent from the mailbox by other means.
+const (
+	defaultSMTPMaxPerMinute = 25
+	maxSMTPMaxPerMinute     = 600
+)
+
 // loadMail reads the relay settings. Without SMTP_HOST mail is off and
 // nothing else is read; with it, every companion must be present and valid.
 func loadMail(cfg *Config) error {
@@ -636,6 +646,13 @@ func loadMail(cfg *Config) error {
 	}
 	if _, err := mail.ParseFrom(cfg.SMTPFrom); err != nil {
 		return fmt.Errorf("SMTP_FROM: %w", err)
+	}
+
+	if cfg.SMTPMaxPerMinute, err = intEnv("SMTP_MAX_PER_MINUTE", defaultSMTPMaxPerMinute); err != nil {
+		return err
+	}
+	if cfg.SMTPMaxPerMinute < 1 || cfg.SMTPMaxPerMinute > maxSMTPMaxPerMinute {
+		return fmt.Errorf("SMTP_MAX_PER_MINUTE: %d is outside 1-%d", cfg.SMTPMaxPerMinute, maxSMTPMaxPerMinute)
 	}
 
 	cfg.PublicURL, err = publicURL(cfg.Env)
