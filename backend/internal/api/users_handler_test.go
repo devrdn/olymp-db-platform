@@ -193,6 +193,17 @@ func TestListEndpointPagesTheAccounts(t *testing.T) {
 	}
 }
 
+// CLAUDE.md rule 2: the query runs through trigram ILIKEs on every listing.
+func TestListEndpointRefusesAnOverlongQuery(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodGet, "/users?q="+strings.Repeat("a", users.MaxQueryLength+1), "")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestBlockEndpointBlocksTheAccount(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})

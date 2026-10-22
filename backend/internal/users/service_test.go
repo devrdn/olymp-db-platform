@@ -435,6 +435,31 @@ func TestChangePasswordRejectsAShortPassword(t *testing.T) {
 	}
 }
 
+// Over password.MaxLength the hasher refuses with an undeclared error, which
+// the HTTP layer would answer as a server fault; the policy refuses it first.
+func TestChangePasswordRejectsAPasswordLongerThanTheHasherTakes(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "old password")
+
+	err := f.service.ChangePassword(context.Background(), users.ChangePasswordCommand{
+		UserID: user.ID, OldPassword: "old password", NewPassword: strings.Repeat("p", password.MaxLength+1),
+	})
+
+	if !errors.Is(err, users.ErrWeakPassword) {
+		t.Errorf("err = %v, want ErrWeakPassword", err)
+	}
+}
+
+func TestListRefusesAnOverlongQuery(t *testing.T) {
+	f := newFixture(t)
+
+	_, _, err := f.service.List(context.Background(), users.Filter{Query: strings.Repeat("a", users.MaxQueryLength+1)})
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("List() = %v, want ErrInvalidAccount", err)
+	}
+}
+
 func TestChangePasswordRejectsReusingTheCurrentOne(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "old password long enough")
