@@ -80,6 +80,8 @@ services:
       - max_parallel_workers=4
       - -c
       - autovacuum_max_workers=2
+      - -c
+      - shared_buffers=1GB
     # RLIMIT_DATA per process, the same 256 MiB pg-game runs with: a backend
     # that tries to build more than this gets a NULL from malloc and raises
     # PostgreSQL's own "out of memory" ERROR, rather than the container's cgroup
