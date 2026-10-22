@@ -30,8 +30,8 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 	if cfg.ListenAddr != "127.0.0.1:9100" {
 		t.Fatalf("listen address = %q, want 127.0.0.1:9100", cfg.ListenAddr)
 	}
-	if cfg.Concurrent+cfg.QueueDepth < 40 {
-		t.Fatalf("admission = %d running + %d waiting, fewer than the forty participants the olympiad expects",
+	if cfg.Concurrent+cfg.QueueDepth < 300 {
+		t.Fatalf("admission = %d running + %d waiting, fewer than the three hundred participants an olympiad brings",
 			cfg.Concurrent, cfg.QueueDepth)
 	}
 }

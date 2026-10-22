@@ -105,6 +105,13 @@ services:
       # memory is a small, countable part of the reserve.
       - -c
       - autovacuum_max_workers=2
+      # The image's default is 128 MB, which three hundred participant copies
+      # of one template compete for; the memory arithmetic below already
+      # reserves ~2 GiB for this and the other shared segments, so 1 GB of it
+      # goes to the page cache PostgreSQL manages itself. Shared memory is
+      # mapped shared and does not count against the per-process cap.
+      - -c
+      - shared_buffers=1GB
     volumes:
       - pg-game-data:/var/lib/postgresql/data
     # PostgreSQL puts the shared memory of a parallel query in /dev/shm, and
@@ -287,7 +294,7 @@ services:
       # queue is sized from the roster instead: the two together at or above
       # the number of participants (see deploy/.env.example).
       QUERY_CONCURRENT: ${QUERY_CONCURRENT:-8}
-      QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-32}
+      QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-512}
       # How long a queued query waits for a slot before it is answered as
       # timed out.
       QUERY_QUEUE_WAIT: ${QUERY_QUEUE_WAIT:-15s}
@@ -529,7 +536,9 @@ services:
       #   hashing:  PASSWORD_HASH_CONCURRENCY × 64 MiB = 4 × 64 MiB =  256 MiB
       #   base:     runtime, connection pools, the in-process session and
       #             rate-limit cache, console results relayed from the Query
-      #             Runner (QUERY_CONCURRENT + QUERY_QUEUE_DEPTH = 40 of up to
+      #             Runner (a queued query holds no result yet, so this is
+      #             bounded by QUERY_CONCURRENT plus the results still being
+      #             written to slow clients: estimated at 40 of up to
       #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
       #             8 MiB upload chunks                               = 1024 MiB
       #   GOMEMLIMIT                                                   = 1280 MiB
