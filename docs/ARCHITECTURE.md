@@ -3718,7 +3718,7 @@ to it.** The transport tells them apart by how far the SMTP session got.
 Everything before RCPT (connecting, TLS, the greeting, AUTH, MAIL FROM)
 happens before the recipient is known, so its failure is the relay's; so is a
 deferral after RCPT (Microsoft's throttling), and Exchange's refusal of the
-sending mailbox at the end of DATA (`STOREDRV.Submission`, Send As denied). A
+sending mailbox at DATA (`STOREDRV.Submission` or `5.7.60`, Send As denied). A
 failure of the relay charges no message: it is put back with its attempt
 refunded and the dispatcher pauses: thirty seconds, then twice as long after
 each further failure up to fifteen minutes, until a delivery resets it. A
@@ -3739,6 +3739,9 @@ genuinely bad message being retried up to its cap instead of dropped at once.
 - The pause and the breaker are kept per process. Each replica learns of a
   failing relay on its own attempt, and `mail_relay_failing` is per process;
   the deployment runs one API replica.
+- Both also reset when the API restarts: the first run after it tries the
+  relay at once, and `DBContestMailRelayFailing` counts its ten minutes
+  afresh.
 - With fewer than three messages queued, a relay that refuses everyone never
   trips the breaker: those messages are retried until their eighth attempt,
   about two hours, and only `DBContestMailAbandoned` then fires.
