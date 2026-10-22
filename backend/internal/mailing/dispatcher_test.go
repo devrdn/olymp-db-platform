@@ -94,8 +94,9 @@ func TestEveryClaimCarriesTheRateAndALeaseLongerThanASend(t *testing.T) {
 	}
 }
 
-// A deferral of one recipient says nothing about the next message.
-func TestAMessageDeferredByTheRelayIsRetriedLaterAndTheRunGoesOn(t *testing.T) {
+// A deferral may be the relay's for every recipient (a busy relay answers
+// each RCPT with a 4xx), so the run stops rather than charge the whole queue.
+func TestAMessageDeferredByTheRelayIsRetriedLaterAndEndsTheRun(t *testing.T) {
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0)}}
 	transport := &fakeTransport{replies: []error{deferred()}}
 	counters := &fakeCounters{}
@@ -110,8 +111,8 @@ func TestAMessageDeferredByTheRelayIsRetriedLaterAndTheRunGoesOn(t *testing.T) {
 	if !strings.Contains(store.retried[0].lastError, "452 4.2.2") {
 		t.Errorf("last error %q does not carry the relay's reply", store.retried[0].lastError)
 	}
-	if fmt.Sprint(store.sent) != "[2]" {
-		t.Errorf("sent %v, want the next message sent in the same run", store.sent)
+	if len(transport.sent) != 1 || len(store.pending) != 1 || store.pending[0].Attempts != 0 {
+		t.Errorf("tried %d messages, %v left; want the run to stop after the deferral", len(transport.sent), store.pending)
 	}
 	if counters.counted["sign_in_details/retry"] != 1 {
 		t.Errorf("counted %v, want one retry", counters.counted)
@@ -409,13 +410,19 @@ func TestAStoreFailureEndsTheRunAndIsReturned(t *testing.T) {
 func TestNothingLogsTheSubjectOrTheBody(t *testing.T) {
 	var logs bytes.Buffer
 	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0), queued(4, now, 0)}}
-	transport := &fakeTransport{replies: []error{nil, refused(), deferred(), badPassword()}}
+	transport := &fakeTransport{replies: []error{nil, refused(), badPassword(), deferred()}}
+	clock := now
 	d := mailing.NewDispatcher(mailing.DispatcherConfig{
 		Store: store, Transport: transport, PerMinute: 25, Counters: &fakeCounters{},
 		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Now:    func() time.Time { return now },
+		Now:    func() time.Time { return clock },
 	})
 
+	// Sent, refused, relay failure; then, after the pause, a deferral.
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	clock = clock.Add(time.Hour)
 	if err := d.Drain(t.Context()); err != nil {
 		t.Fatalf("Drain() = %v", err)
 	}
@@ -603,4 +610,126 @@ func relaySender(t *testing.T, relay *mailtest.Server, password string) *mail.Se
 		t.Fatalf("mail.New() = %v", err)
 	}
 	return sender
+}
+
+// Exchange refuses every recipient of a mailbox it has restricted for spam
+// (550 5.1.8) with a reply that reads as the message's. Refusals in a row
+// with nothing sent between are taken for the relay's after the breaker's
+// count: the rest of the queue is kept, not given up.
+func TestRefusalsInARowAreTakenForTheRelaysAndKeepTheRestOfTheQueue(t *testing.T) {
+	relay := mailtest.NewServer(t, mailtest.Options{
+		StartTLS: true, AuthMechs: "PLAIN", User: "noreply@usm.md", Password: "the-right-one",
+		Replies: map[string]string{"RCPT": "550 5.1.8 Access denied, bad outbound sender"},
+	})
+	store := &fakeStore{}
+	for id := int64(1); id <= 6; id++ {
+		store.pending = append(store.pending, queued(id, now, 0))
+	}
+	counters := &fakeCounters{}
+	clock := now
+	d := dispatcherAt(store, relaySender(t, relay, "the-right-one"), counters, func() time.Time { return clock })
+
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != mailing.RefusalsBeforeBreaking-1 {
+		t.Fatalf("abandoned %d messages, want at most %d before the breaker", len(store.abandoned), mailing.RefusalsBeforeBreaking-1)
+	}
+	if len(store.released) != 1 || !strings.Contains(store.released[0].lastError, "5.1.8") {
+		t.Fatalf("released %+v, want the message that tripped the breaker, with the reply", store.released)
+	}
+	if !counters.relayFailing || counters.relayFailures != 1 {
+		t.Errorf("relay failing %v, failures %d; want the breaker counted as a relay failure",
+			counters.relayFailing, counters.relayFailures)
+	}
+	for _, q := range store.pending {
+		if q.Attempts != 0 {
+			t.Errorf("message %d kept %d attempts", q.ID, q.Attempts)
+		}
+	}
+	if len(store.pending) != 6-(mailing.RefusalsBeforeBreaking-1) {
+		t.Errorf("%d messages pending, want every one not abandoned", len(store.pending))
+	}
+
+	// Still refused after the pause: nothing more is given up, and the pause grows.
+	clock = clock.Add(time.Hour)
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != mailing.RefusalsBeforeBreaking-1 || len(store.released) != 2 ||
+		store.released[1].after <= store.released[0].after {
+		t.Errorf("after the pause: abandoned %d, released %+v; want no new abandon and a longer pause",
+			len(store.abandoned), store.released)
+	}
+}
+
+// Refused recipients among accepted ones are each the message's own: a
+// delivery between them resets the count.
+func TestRefusalsBetweenDeliveriesAreEachAbandoned(t *testing.T) {
+	store := &fakeStore{}
+	var replies []error
+	for id := int64(1); id <= 8; id++ {
+		store.pending = append(store.pending, queued(id, now, 0))
+		if id%2 == 0 {
+			replies = append(replies, nil)
+		} else {
+			replies = append(replies, refused())
+		}
+	}
+	counters := &fakeCounters{}
+
+	if err := dispatcher(store, &fakeTransport{replies: replies}, counters).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.abandoned) != 4 || len(store.sent) != 4 || len(store.released) != 0 || counters.relayFailing {
+		t.Errorf("abandoned %d, sent %d, released %d, relay failing %v; want four of each and no breaker",
+			len(store.abandoned), len(store.sent), len(store.released), counters.relayFailing)
+	}
+}
+
+// Through the real transport: a relay answering every RCPT with a 4xx
+// charges one message per run, not the whole queue.
+func TestARelayDeferringEveryRecipientChargesOneMessageARun(t *testing.T) {
+	relay := mailtest.NewServer(t, mailtest.Options{
+		StartTLS: true, AuthMechs: "PLAIN", User: "noreply@usm.md", Password: "the-right-one",
+		Replies: map[string]string{"RCPT": "451 4.7.500 Server busy. Please try again later"},
+	})
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0), queued(2, now, 0), queued(3, now, 0)}}
+
+	if err := dispatcher(store, relaySender(t, relay, "the-right-one"), &fakeCounters{}).Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	if len(store.retried) != 1 || len(store.pending) != 2 {
+		t.Errorf("retried %+v with %d left untouched; want one message charged", store.retried, len(store.pending))
+	}
+}
+
+// A message the transport refuses before connecting says nothing about the
+// relay, so it neither clears a failing relay nor resets the pause.
+func TestAMessageRefusedBeforeConnectingLeavesTheRelayState(t *testing.T) {
+	store := &fakeStore{pending: []mailing.Queued{queued(1, now, 0)}}
+	transport := &fakeTransport{replies: []error{badPassword()}}
+	counters := &fakeCounters{}
+	clock := now
+	d := dispatcherAt(store, transport, counters, func() time.Time { return clock })
+
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+	clock = clock.Add(30 * time.Second)
+	transport.replies = []error{fmt.Errorf("%w: the body is longer than 65536 bytes", mail.ErrInvalidMessage), badPassword()}
+	store.pending = append(store.pending, queued(2, now, 0))
+	if err := d.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() = %v", err)
+	}
+
+	if len(store.abandoned) != 1 {
+		t.Fatalf("abandoned %+v, want the invalid message", store.abandoned)
+	}
+	if !counters.relayFailing {
+		t.Error("an invalid message cleared the failing relay")
+	}
+	if last := store.released[len(store.released)-1]; last.after != time.Minute {
+		t.Errorf("the next relay failure paused for %s, want 1m: an invalid message reset the backoff", last.after)
+	}
 }
