@@ -184,13 +184,16 @@ type Row struct {
 }
 
 // Label is how the row is named under the contest's choice. A deleted
-// account has no label, since its login may now belong to somebody else. A
-// missing full name falls back to the login.
+// account has no label, since its login may now belong to somebody else.
+//
+// Under full names a missing name is an empty label, never the login: the
+// public table is read without a session, and a login is a student card
+// number or a username, which a contest showing names chose not to publish.
 func (r Row) Label(names string) string {
 	switch {
 	case r.AccountDeleted:
 		return ""
-	case names == contests.LeaderboardNamesFullName && r.FullName != "":
+	case names == contests.LeaderboardNamesFullName:
 		return r.FullName
 	default:
 		return r.Login

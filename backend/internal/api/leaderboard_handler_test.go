@@ -253,6 +253,31 @@ func TestThePublicTableNeedsNoSessionAndCarriesNoIdentifiers(t *testing.T) {
 	}
 }
 
+// A contest showing full names publishes no login, not even for an account
+// whose name is empty: the public table is read without a session.
+func TestThePublicTableUnderFullNamesCarriesNoLoginForAnUnnamedAccount(t *testing.T) {
+	f := newBoardFixture(t)
+	c, me := f.contest(t, contests.StatusRunning, nil)
+	c.LeaderboardNames = contests.LeaderboardNamesFullName
+	f.stores.Contests.Put(c)
+	f.standings.entries = []leaderboard.Entry{{
+		Registration: me.ID, Login: "student", FullName: "",
+		Points: 12, Solved: 2, LastScoredAt: scoredAt(f.now.Add(-time.Minute)),
+	}}
+
+	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "student") {
+		t.Errorf("the public table under full names carries the login: %s", body)
+	}
+	if !strings.Contains(body, `"label":""`) {
+		t.Errorf("body = %s, want an empty label for the unnamed account", body)
+	}
+}
+
 // The table must not be a way to learn which contests exist.
 func TestThePublicTableAnswersTheSameForADraftAMissingContestAndNonsense(t *testing.T) {
 	f := newBoardFixture(t)
