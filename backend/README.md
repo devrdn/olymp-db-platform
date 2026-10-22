@@ -156,19 +156,22 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
 
-### Email
+### The mail relay
 
 The API sends plain-text mail through one SMTP relay
-(`internal/platform/mail`). Mail is off while `SMTP_HOST` is empty, and
-nothing else changes: the service starts and runs without any of these
+(`internal/platform/mail`); what it sends, and how to find out why a message
+did not arrive, is [Email](#email). Mail is off while `SMTP_HOST` is empty,
+and nothing else changes: the service starts and runs without any of these
 variables. With `SMTP_HOST` set, a missing or invalid companion aborts the
-boot like any other setting.
+boot like any other setting. A changed value reaches the API when its
+container is recreated: `make deploy-api VERSION=<tag>`, with the tag
+`make deployed` prints.
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `SMTP_HOST` | no | — | the relay's host name, without a port; empty turns mail off |
 | `SMTP_PORT` | no | `587` | the relay's port (implicit TLS is usually `465`) |
-| `SMTP_USERNAME`, `SMTP_PASSWORD` | together, or neither | — | the relay account; both empty sends no AUTH. The password is refused outside `development` while it carries the `.env.example` placeholder |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | together, or neither | — | the relay account; both empty sends no AUTH. Outside `development` a password containing `change-me` is refused, as for every secret |
 | `SMTP_FROM` | with mail | — | the sending address, optionally named: `Olimpiada USM <noreply-olymp@usm.md>` |
 | `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
 | `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
@@ -200,105 +203,12 @@ PUBLIC_URL=https://olympdb.usm.md
   stays under it by default.
 - Microsoft keeps basic authentication for SMTP AUTH until the end of
   December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
-  follow-up.
+  follow-up ([ARCHITECTURE.md, section 15, item 52](../docs/ARCHITECTURE.md#remaining)).
 - STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
-
-**The texts.** Every message is written in English, Romanian and Russian
-(`internal/mailing/texts`, one plain-text template per message and language),
-and the installation sends all of its email in the one chosen on the
-Installation settings screen (`installation.mail_language`, Romanian until
-somebody changes it). A message's sign-in link is `PUBLIC_URL` followed by
-`/login`.
-
-**The test message.** An administrator checks the relay from the
-Installation settings screen: `POST /settings/mail-test` (`settings.manage`)
-sends the test message at once, not through the outbox, to the address on the
-caller's own account and never another, and answers with the relay's reply:
-`mail_relay_failed` when the relay could not be reached or refused the sending
-account, `mail_refused` when it refused the message, each with the SMTP code,
-the enhanced code and at most 200 bytes of the reply's text. An administrator
-may send three a minute, refusals included, and every attempt is recorded in
-the audit trail as `settings.mail_test` with its outcome and the reply's code.
-`GET /settings/all` says whether mail is on and the address it is sent as.
-
-**Sign-in details.** Creating an account (`POST /users`), importing a roster
-(`POST /users/import`), resetting a password (`POST
-/users/{userID}/password-reset`) and the bulk reset (`POST
-/users/bulk/password-reset`) take `send_by_email`. With it set, each account
-that has an address is queued the sign-in details message (its login, its
-one-time password and the sign-in link) in the transaction that issues the
-password, so the message and the password commit or roll back together; the
-trail records `user.sign_in_details_emailed`, never the password.
-
-- An account that is not active (a blocked one) is never emailed, judged
-  again inside the transaction.
-- The administrator is still handed every password, and each one in the
-  answer says `emailed`, or `email_skipped_reason`: `not_active`, or
-  `no_address` for an account without an address.
-- With mail off the option is refused with `mail_off` before anything
-  changes.
-- A message that cannot be written changes nothing; an import stops at that
-  row.
-- A new password, emailed or not, gives up the account's sign-in messages
-  still waiting, and so does blocking or deleting it: they are marked
-  abandoned and their bodies erased in the same transaction. One a sender is
-  handing to the relay at that moment is left to finish. These are not
-  delivery outcomes, so `mail_messages_total` does not count them and
-  `DBContestMailAbandoned` does not fire for them.
-- `GET /users/mail-status` (`users.manage`) tells the accounts screen whether
-  mail is on and how many messages leave a minute.
-
-**The outbox.** Every other message is queued: a request never waits on the
-relay. It queues the message in
-the `mail_outbox` table, inside its own transaction, and the API's background
-job `mail-outbox` (`internal/mailing`) sends it within seconds: a queued
-message wakes the job, which also runs every ten seconds. It sends one
-message at a time, at most `SMTP_MAX_PER_MINUTE` in any minute across every
-replica (the claims of the last minute are counted in the table, under an
-advisory lock), so five hundred messages leave over twenty minutes. Each
-replica claims a message with `FOR UPDATE SKIP LOCKED` and a five-minute
-lease, so no two send the same one. With mail off nothing is queued and the
-job does not run; a sweep every ten minutes abandons, and erases, what was
-queued before mail was turned off once it is a day old.
-
-- A failure of the relay itself says nothing about the message: it could not
-  be reached or secured, refused the account (`535`, for instance SMTP AUTH
-  disabled for the mailbox) or the sender (Exchange's `SendAsDenied`, even at
-  the end of DATA), dropped the connection, or deferred a message after
-  accepting its recipient (Microsoft's throttling).
-  The message is put back with its attempt refunded, and the job stops
-  sending for 30 seconds, then 1, 2, 4 and 8 minutes, then every 15, until
-  the relay next answers for a message.
-- A refusal naming the recipient (RFC 3463 X.1.1, X.1.2, X.1.3, X.1.6,
-  X.1.10, X.2.1 or X.2.2, such as Microsoft's `550 5.1.10` for an unknown
-  address, or a 5xx to RCPT without an enhanced code) abandons that message
-  alone, and the job goes on to the next.
-- Any other refusal of the message (a 5xx to DATA, `5.1.8` naming the
-  sender, a `5.7.x` policy refusal) may be the relay refusing everyone, so
-  the message is not given up: it is tried again on its own backoff, below,
-  and abandoned only at the eighth attempt or a day after it was queued.
-  Three different messages refused this way in a row, with nothing
-  delivered between them, pause the job as a relay failure does (Exchange's
-  `550 5.1.8` for a mailbox it has restricted); after the pause the next
-  messages are judged afresh, and only a delivery shortens the pause again.
-- A deferral of the recipient (a 4xx reply to RCPT) is tried again after 1,
-  2, 4, 8, 16 and 32 minutes, then an hour, and the job leaves the other
-  messages for its next run; the eighth attempt, or one whose retry would
-  come a day after the message was queued, abandons it.
-- A message is never sent, and its body is not kept, once it was queued 24
-  hours ago (a claim's five-minute lease aside): each run first abandons
-  those, whatever the relay is doing.
-- The body, which can hold a one-time password, is erased when the message
-  is sent or abandoned; the table refuses a finished row that keeps one. The
-  last error is kept, at most 500 bytes, with any long word of the body (the
-  password, the address) replaced by `[redacted]`.
-- `mail_messages_total{kind,outcome}` counts attempts as `sent`, `retry` or
-  `abandoned`; `mail_relay_failures_total` counts the relay's own failures and
-  `mail_relay_failing` is 1 while sending is paused for one;
-  `mail_outbox_due` is how many messages were due at the job's last run, the
-  same on every replica (read it with `max()`). `DBContestMailAbandoned` fires
-  on any abandoned message and `DBContestMailRelayFailing` on ten minutes of
-  a failing relay.
+- Compose expands `$` in an unquoted or double-quoted value of
+  `deploy/.env`, so a password containing one goes in single quotes:
+  `SMTP_PASSWORD='…'`. Unquoted, it reaches the relay altered, and the
+  relay answers 535.
 
 ## Running locally
 
@@ -517,6 +427,218 @@ naming who created them. Request origin (IP, user agent) travels in the context
 and is stamped onto every entry automatically. Payloads
 are redacted at any depth: `password`, `token`, `secret` and friends never reach
 a table kept for a year.
+
+## Email
+
+The API writes two messages today: an account's sign-in details, and the test
+message an administrator sends themselves. The test message goes to the relay
+at once, so the administrator reads the relay's answer on the screen; every
+other message is queued in the outbox and leaves in the background, at the
+pace the relay allows. The relay is set up in
+[The mail relay](#the-mail-relay); why the design is what it is, and its known
+limits, are in
+[ARCHITECTURE.md, section 10.2](../docs/ARCHITECTURE.md#102-email).
+
+Every message is plain text, written in English, Romanian and Russian
+(`internal/mailing/texts`, one template per message and language), and the
+installation sends all of its email in the one language chosen on the
+Installation screen (`installation.mail_language`, Romanian until somebody
+changes it). The sign-in link in a message is `PUBLIC_URL` followed by
+`/login`.
+
+### What an administrator sees
+
+- **Installation** (`/settings`): the **Email** block says whether mail is on
+  and the address it is sent as, or that it is off because SMTP is not
+  configured. While it is on, **Send a test message** sends the test message
+  to the address on the administrator's own account. **Email language** in
+  the form above it is the installation's mail language; the contact address
+  set there is printed in every sign-in message.
+- **Accounts** (`/users`): creating an account, importing a roster, resetting
+  one account's password and the bulk reset each offer **Send sign-in details
+  by email** while mail is on, and nothing while it is off. One account's
+  page offers it only for an active account with an address. Every password
+  is still shown on the screen, emailed or not. The answer says how many
+  messages were queued and how long sending them takes, about
+  ⌈N / `SMTP_MAX_PER_MINUTE`⌉ minutes for N messages (longer when other
+  email is already waiting), and lists the accounts that were not emailed with
+  the reason.
+- **Audit** (`/audit`): `user.sign_in_details_emailed` for every account
+  whose sign-in details were queued, never with the password; and
+  `settings.mail_test` for every test message, with its outcome and the
+  relay's reply code, but not the reply's text, which can quote the address.
+- **The recipient** gets the message from `SMTP_FROM`: their login, their
+  one-time password, the sign-in link and, when one is set, the
+  installation's contact address. The first sign-in asks them to choose
+  their own password, as with a password handed over in person.
+
+### The test message
+
+`POST /settings/mail-test` (`settings.manage`) sends the test message at
+once, not through the outbox, to the address on the caller's own account and
+never another, and answers with how the relay took it: the address it went
+to, or a 422 carrying the relay's reply as `subject` (its SMTP code, its
+enhanced code and at most 200 bytes of its text):
+
+- `mail_relay_failed`: the relay could not be reached or secured, or refused
+  the sending account or its sender address. The fault is in the SMTP
+  settings or the mailbox.
+- `mail_refused`: the relay took the account and refused this message, most
+  often for its recipient.
+- `mail_no_address` (409): the caller's account has no address to send to.
+- `mail_off` (409) while mail is off, and `mail_test_too_often` (429) past
+  three a minute for one administrator, relay refusals included.
+
+The relay's answers are a 422, not a 5xx: the API worked, and a relay that
+refuses an administrator's test must not page as an API outage
+(`DBContestAPIErrors`). A test message is not counted in the mail metrics
+either, which describe the outbox. `GET /settings/all` says whether mail is on
+and the address it is sent as.
+
+### Sign-in details
+
+`POST /users`, `POST /users/import`, `POST /users/{userID}/password-reset`
+and `POST /users/bulk/password-reset` take `send_by_email`. With it set, each
+account that has an address is queued the sign-in details message in the
+transaction that issues its password, so the message and the password commit
+or roll back together.
+
+- An account that is not active (a blocked one) is never emailed, judged
+  again inside the transaction.
+- Each password in the answer says `emailed`, or `email_skipped_reason`:
+  `not_active`, or `no_address` for an account without an address.
+- With mail off the option is refused with `mail_off` (409) before anything
+  changes: no account is created and no password is reset.
+- A message that cannot be written changes nothing; an import stops at that
+  row.
+- `GET /users/mail-status` (`users.manage`) tells the accounts screens
+  whether mail is on and how many messages leave a minute, and nothing about
+  the relay.
+
+**A new password supersedes the old message.** Issuing an account a new
+password, emailed or not, by a reset or the bulk reset, gives up that
+account's sign-in messages still waiting, and so does blocking or deleting
+the account: in the same transaction they are marked abandoned and their
+bodies erased. Re-sending sign-in details is therefore a reset with the
+option ticked, and a student is not sent a password that no longer works. A
+message a sender is handing to the relay at that moment is left to finish.
+
+### The outbox
+
+A queued message is a row in `mail_outbox`. The API's background job
+`mail-outbox` (`internal/mailing`) sends it within seconds: a queued message
+wakes the job, which also runs every ten seconds and at startup. It sends one
+message at a time, at most `SMTP_MAX_PER_MINUTE` in any minute across every
+replica (the last minute's claims are counted in the table, under an
+advisory lock), so five hundred messages leave over twenty minutes at the
+default 25. Each replica claims a message with `FOR UPDATE SKIP LOCKED` and a
+five-minute lease, so no two send the same one, and a process that dies
+mid-send leaves the message due again when the lease ends.
+
+What can become of a message:
+
+| It is | When | Its body |
+|---|---|---|
+| queued | a request has committed it | kept |
+| sent | the relay accepted it | erased |
+| retried | the relay deferred it, or refused it without naming the recipient: tried again after 1, 2, 4, 8, 16 and 32 minutes, then an hour | kept |
+| abandoned | the relay refused its recipient; or its eighth attempt failed; or its next retry would come a day after it was queued | erased |
+| superseded (marked abandoned) | a new password was issued for the account, or the account was blocked or deleted ([above](#sign-in-details)) | erased |
+| expired (marked abandoned) | it was queued 24 hours ago and is still unsent: each run first abandons those, whatever the relay is doing, and with mail off a sweep every ten minutes does | erased |
+
+The body, which holds a one-time password, is kept only while the message may
+still be sent; the table refuses a finished row that keeps one. The last
+error is kept, at most 500 bytes, with every long word of the body (the
+password, the address) replaced by `[redacted]`. Rows are not deleted: a sent
+or abandoned row is the record that the message went, or why it did not.
+
+**When the relay itself fails.** A failure that says nothing about the
+message pauses the job instead of charging the message: the relay could not
+be reached or secured, refused the account (`535`) or the sender (Exchange's
+`SendAsDenied`, even at the end of DATA), dropped the connection, or deferred
+a message after accepting its recipient (Microsoft's throttling). The message
+is put back with its attempt refunded, and the job sends nothing for 30
+seconds, then 1, 2, 4 and 8 minutes, then every 15, until a message is
+delivered.
+
+**When the relay refuses everyone.** A refusal naming the recipient (RFC 3463
+X.1.1, X.1.2, X.1.3, X.1.6, X.1.10, X.2.1 or X.2.2, such as Microsoft's
+`550 5.1.10` for an unknown address, or a 5xx to RCPT without an enhanced
+code) abandons that message alone, and the job goes on to the next. Any other
+refusal (a 5xx to DATA, `5.1.8` for the sender, a `5.7.x` policy refusal) may
+be the relay refusing every message, so the message is retried rather than
+given up. Three different messages refused that way in a row, with nothing
+delivered between them, trip a breaker: the job pauses as for a relay
+failure, then judges the next messages afresh, and only a delivery shortens
+the pause again. A refused recipient neither counts toward the breaker nor
+resets it, so a roster's bad addresses never pause the queue.
+
+### Diagnosing
+
+**Start with the test message.** It crosses the same relay with the same
+settings, at once, and the screen shows the relay's own words. A test message
+that arrives proves the settings, the mailbox and the network; one that lands
+in spam is a matter for the mailbox's domain (SPF, DKIM), not for this
+service. Check the network from the host first when nothing answers at all:
+
+```bash
+nc -vz smtp.office365.com 587    # "succeeded" or "open"; a timeout is a firewall
+```
+
+**What Microsoft 365 commonly answers.** The enhanced code (the second
+number) says more than the first, and the text after it usually names the
+cause.
+
+| Reply | What it means | What to do |
+|---|---|---|
+| `535 5.7.139 Authentication unsuccessful…` | the account was refused: SMTP AUTH is disabled for the mailbox or the tenant, security defaults or a policy demands MFA, or the password is wrong; the rest of the text says which | ask the university's administrators to enable Authenticated SMTP for the mailbox and exempt it from MFA, or correct `SMTP_PASSWORD` |
+| `530 5.7.57 Client not authenticated…` | nothing signed in, most often because `SMTP_USERNAME` and `SMTP_PASSWORD` are empty | set both |
+| `550 5.7.60 Client does not have permissions to send as this sender`, or `SendAsDenied` (`554 5.2.0 STOREDRV.Submission.Exception:SendAsDeniedException…`) | `SMTP_FROM`'s address is not the signed-in mailbox | make it the `SMTP_USERNAME` mailbox, or have the administrators grant Send As |
+| `550 5.1.8 Access denied, bad outbound sender` | Microsoft has restricted the mailbox for sending spam, usually because the account was compromised | the administrators release it in the Microsoft Defender portal (Restricted entities) and change its password; then update `SMTP_PASSWORD` |
+| a 4xx, such as `432 4.3.2 STOREDRV.ClientSubmit; sender thread limit exceeded` | throttling: the relay will take the message later | nothing; the job waits and tries again. If it persists, lower `SMTP_MAX_PER_MINUTE` |
+| `550 5.1.10 RESOLVER.ADR.RecipientNotFound`, `550 5.1.1` | the recipient's address does not exist | correct the address on the account and reset its password again with the option |
+| no reply: `no such host`, a timeout, `connection refused` | `SMTP_HOST` is wrong, or outbound port 587 is closed | correct the host, or open the port (`nc` above) |
+| no reply: a certificate or TLS error | the relay's certificate is not trusted, or something on the network intercepts TLS | the host's network, not the settings |
+
+**Where else the replies are.** The API log has every failure with the
+relay's reply, under "the relay failed; no message is sent until it is tried
+again", "taken for the relay refusing everyone", "the relay did not take a
+message; it will be tried again" and "a message was abandoned and will not be
+sent". `mail_outbox.last_error` keeps the last one per message; this lists
+what is still waiting, and what was given up in the last day, without the
+recipients or the bodies:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec -T pg-core \
+  psql --username=<CORE_DB_USER> --dbname=<CORE_DB_NAME> -c "
+    SELECT id, kind, attempts, created_at, next_attempt_at, abandoned_at, last_error
+    FROM mail_outbox
+    WHERE sent_at IS NULL AND (abandoned_at IS NULL OR abandoned_at > now() - interval '1 day')
+    ORDER BY id"
+```
+
+A superseded message's `last_error` reads "superseded: a newer one-time
+password was issued" or "the account was blocked or deleted"; an expired
+one's, "abandoned unsent: queued more than 24h0m0s ago".
+
+**The metrics,** on the internal listener while mail is on:
+
+| Metric | Type | What it says |
+|---|---|---|
+| `mail_messages_total` (`kind`, `outcome`) | counter | delivery attempts by how they ended: `sent`, `retry` or `abandoned`; superseded messages are not delivery outcomes and are not counted |
+| `mail_relay_failures_total` | counter | attempts that failed at the relay, and breaker trips |
+| `mail_relay_failing` | gauge | 1 while this process has paused sending for the relay, 0 once the relay next answers for a message |
+| `mail_outbox_due` | gauge | messages due and not claimed at the job's last run; a count of the shared table, so read it with `max()` |
+
+`max(mail_outbox_due)` falling by about `SMTP_MAX_PER_MINUTE` a minute is a
+bulk send going out. The dashboard has no email panel; ask Grafana's Explore.
+
+**The alerts** ([the table](#alerts-and-the-dashboard)) are both warnings:
+`DBContestMailAbandoned` fires on any message abandoned in the last hour,
+each one a person who will not get it, and `DBContestMailRelayFailing` on ten
+minutes of a paused relay. Their descriptions repeat where to look. Once the
+cause is fixed, sign-in details that were abandoned are sent again by
+resetting those passwords with the option ticked.
 
 ## Optional dependencies
 
@@ -792,7 +914,7 @@ changed setting means changing the number in the rules too.
 | `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
 | `DBContestMailAbandoned` | warning | an email message was abandoned in the last hour |
-| `DBContestMailRelayFailing` | warning | the mail relay itself (connection, TLS, the account) has failed for 10 minutes, so no email is sent |
+| `DBContestMailRelayFailing` | warning | sending email has been paused for 10 minutes: the relay itself failed (connection, TLS, the account, the sender), or refused three messages in a row ([Diagnosing](#diagnosing)) |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |
 | `DBContestQueriesTimingOut` | warning | over 20% of admitted queries hit the deadline, at least 10 in 5 minutes, for 10 minutes |
 | `DBContestQueryRunnerFull` | critical | 5 or more `busy` refusals and queue timeouts in 5 minutes, for 2 minutes |
