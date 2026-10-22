@@ -19,7 +19,10 @@ export type RequestOptions = {
   origin?: string;
   /** Forwarded verbatim; the server wrapper uses this to pass the session on. */
   headers?: Record<string, string>;
-  /** Browser-side only, e.g. an upload's Cancel button. */
+  /**
+   * An upload's Cancel button, or a deadline; a signal that times out
+   * surfaces as the `unreachable` ApiError, a caller's own abort as itself.
+   */
   signal?: AbortSignal;
   /** Lets the request outlive the page, as the autosave's last save on tab close needs. */
   keepalive?: boolean;
@@ -97,6 +100,15 @@ export function isAbortError(error: unknown): boolean {
   );
 }
 
+/** Whether a thrown value is a fetch cut short by `AbortSignal.timeout`. */
+function isTimeoutError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "TimeoutError"
+  );
+}
+
 type ErrorEnvelope = {
   error: { code: string; message: string; request_id?: string };
   // Beside the error object, not inside it.
@@ -118,7 +130,16 @@ export async function request(path: string, options: RequestOptions = {}): Promi
     init.body = rawBody;
   }
 
-  const response = await fetchImpl(`${origin}${API_PREFIX}${path}`, init);
+  const response = await fetchImpl(`${origin}${API_PREFIX}${path}`, init).catch((error: unknown) => {
+    // A signal that ran out is the API not answering in time, which callers
+    // branch on as `unreachable` like any other transport failure. A
+    // caller's own abort (`AbortError`) is its cancellation, not a failure,
+    // and passes through for `isAbortError`.
+    if (isTimeoutError(error)) {
+      throw new ApiError(CLIENT_ERROR_CODES.unreachable, 504, `No answer in time from ${origin}${API_PREFIX}${path}`);
+    }
+    throw error;
+  });
 
   if (!response.ok) {
     throw await toApiError(response);
