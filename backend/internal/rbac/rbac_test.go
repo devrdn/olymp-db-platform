@@ -88,6 +88,25 @@ func TestGlobalPermissionDoesNotByItselfUnlockEveryContest(t *testing.T) {
 	}
 }
 
+// With no contest there is no role to hold, so the global grant alone must
+// not answer; the question is malformed, and the answer to a malformed
+// question is no.
+func TestAContestScopedPermissionIsRefusedWithoutAContest(t *testing.T) {
+	roles := &fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: RoleOwner}}
+	auth := New(roles)
+
+	for _, permission := range []string{PermissionContestEdit, PermissionContestManage, PermissionContestMonitor} {
+		err := auth.Authorize(context.Background(), identity(permission, PermissionContestAdminAll), permission, uuid.Nil)
+
+		if !errors.Is(err, ErrForbidden) {
+			t.Errorf("Authorize(%s, uuid.Nil) = %v, want ErrForbidden even with the global grant and admin_all", permission, err)
+		}
+	}
+	if roles.calls != 0 {
+		t.Error("a contest-role lookup was made for no contest")
+	}
+}
+
 func TestSystemAdministratorPassesEveryContestScopedCheck(t *testing.T) {
 	roles := &fakeRoles{}
 	auth := New(roles)

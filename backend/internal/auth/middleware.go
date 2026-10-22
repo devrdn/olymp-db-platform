@@ -217,11 +217,23 @@ func (m *Middleware) RequirePermission(permission string) func(http.Handler) htt
 	return m.require(permission, func(*http.Request) (uuid.UUID, error) { return uuid.Nil, nil })
 }
 
+// errNilContestID refuses the all-zero identifier, which parses but names no
+// contest; the authorizer reads uuid.Nil as "installation-wide", so letting it
+// through would gate the route on the global permission alone.
+var errNilContestID = errors.New("contest identifier is nil")
+
 // RequireContestPermission enforces a permission on the URL's {contestID};
 // mount it only under a route that carries one.
 func (m *Middleware) RequireContestPermission(permission string) func(http.Handler) http.Handler {
 	return m.require(permission, func(r *http.Request) (uuid.UUID, error) {
-		return uuid.Parse(chi.URLParam(r, contestIDParam))
+		id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if id == uuid.Nil {
+			return uuid.Nil, errNilContestID
+		}
+		return id, nil
 	})
 }
 
