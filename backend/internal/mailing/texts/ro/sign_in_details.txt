@@ -14,4 +14,4 @@ La prima autentificare vi se va cere să alegeți o parolă nouă. Nu transmite�
 Dacă întâmpinați probleme, scrieți la {{.Contact}}.
 {{- end}}
 
-Acest mesaj a fost trimis automat, iar răspunsurile la el nu sunt citite.
+Acesta este un mesaj automat; vă rugăm să nu răspundeți.

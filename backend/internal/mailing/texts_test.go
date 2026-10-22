@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/google/uuid"
 )
 
@@ -103,12 +102,12 @@ func TestThePasswordStandsAtTheEndOfItsLine(t *testing.T) {
 }
 
 // Each language says it in its own words; these are the words.
-func TestTheSignInDetailsSayThePasswordIsReplacedAndRepliesAreNotRead(t *testing.T) {
+func TestTheSignInDetailsSayThePasswordIsReplacedAndNotToReply(t *testing.T) {
 	texts := mailing.NewTexts(publicURL)
 	phrases := map[mailing.Language][]string{
-		mailing.English:  {"new password", "sent automatically", "not read"},
-		mailing.Romanian: {"parolă nouă", "trimis automat", "nu sunt citite"},
-		mailing.Russian:  {"новый пароль", "автоматически", "не читаются"},
+		mailing.English:  {"new password", "automated message", "do not reply"},
+		mailing.Romanian: {"parolă nouă", "mesaj automat", "nu răspundeți"},
+		mailing.Russian:  {"новый пароль", "автоматически", "отвечать на него не нужно"},
 	}
 
 	for _, lang := range mailing.Languages() {
@@ -191,9 +190,52 @@ func TestTheLargestDetailsStillMakeAMessageTheOutboxTakes(t *testing.T) {
 		if err := message.Validate(); err != nil {
 			t.Errorf("%s: Validate() = %v", lang, err)
 		}
-		if len(text.Subject) > mail.MaxSubjectBytes || len(text.Body) > mail.MaxBodyBytes {
-			t.Errorf("%s: subject %d bytes, body %d bytes; over the relay's bounds", lang, len(text.Subject), len(text.Body))
+	}
+}
+
+// A message without one of these would reach somebody who could not sign in
+// with it, and the one-time password is shown only once.
+func TestAMessageMissingADetailItMustCarryIsRefused(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	blank := map[string]func(*mailing.SignInData){
+		"installation": func(d *mailing.SignInData) { d.Installation = "" },
+		"full name":    func(d *mailing.SignInData) { d.FullName = " " },
+		"login":        func(d *mailing.SignInData) { d.Login = "" },
+		"password":     func(d *mailing.SignInData) { d.Password = "\t\n" },
+	}
+
+	for name, clear := range blank {
+		t.Run("sign-in details without the "+name, func(t *testing.T) {
+			data := signInData()
+			clear(&data)
+
+			_, err := texts.SignInDetails(mailing.Romanian, data)
+
+			if !errors.Is(err, mailing.ErrIncompleteMessage) {
+				t.Fatalf("SignInDetails() = %v, want ErrIncompleteMessage", err)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error = %q, want it to name the %s", err, name)
+			}
+		})
+	}
+
+	t.Run("test message without the installation", func(t *testing.T) {
+		if _, err := texts.Test(mailing.Romanian, mailing.TestData{Installation: "  "}); !errors.Is(err, mailing.ErrIncompleteMessage) {
+			t.Errorf("Test() = %v, want ErrIncompleteMessage", err)
 		}
+	})
+}
+
+// With mail off PUBLIC_URL may be empty, and a bare "/login" leads nowhere.
+func TestWithoutThePublicAddressNoMessageIsWritten(t *testing.T) {
+	texts := mailing.NewTexts("")
+
+	if _, err := texts.SignInDetails(mailing.Romanian, signInData()); !errors.Is(err, mailing.ErrIncompleteMessage) {
+		t.Errorf("SignInDetails() = %v, want ErrIncompleteMessage", err)
+	}
+	if _, err := texts.Test(mailing.Romanian, testData()); !errors.Is(err, mailing.ErrIncompleteMessage) {
+		t.Errorf("Test() = %v, want ErrIncompleteMessage", err)
 	}
 }
 

@@ -6,4 +6,4 @@ Acesta este un mesaj de test de la {{.Installation}}. Dacă îl citiți, platfor
 
 Pagina de autentificare: {{.SignInURL}}
 
-Acest mesaj a fost trimis automat, iar răspunsurile la el nu sunt citite.
+Acesta este un mesaj automat; vă rugăm să nu răspundeți.
