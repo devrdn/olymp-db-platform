@@ -9,7 +9,7 @@ vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
 import { ApiError } from "@/lib/api/client";
 
-import { saveSettingsAction } from "./actions";
+import { saveSettingsAction, sendTestMailAction } from "./actions";
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();
@@ -66,5 +66,47 @@ describe("saveSettingsAction", () => {
     const state = await saveSettingsAction({}, form({ name: "USM", contact: "", feedback: "https://forms.gle/beta" }));
 
     expect(state).toEqual({ code: "invalid_feedback_url" });
+  });
+});
+
+describe("sendTestMailAction", () => {
+  test("asks the API to send the test message and says to whom it went", async () => {
+    serverRequest.mockResolvedValueOnce({ to: "root@usm.md" });
+
+    const state = await sendTestMailAction();
+
+    expect(serverRequest).toHaveBeenCalledWith("/settings/mail-test", { method: "POST" });
+    expect(state).toEqual({ sentTo: "root@usm.md" });
+  });
+
+  test("passes a refusal through by its code, with the relay's reply", async () => {
+    serverRequest.mockRejectedValueOnce(
+      new ApiError("mail_relay_failed", 502, "no", "req-1", "535 5.7.139 Authentication unsuccessful"),
+    );
+
+    const state = await sendTestMailAction();
+
+    expect(state).toEqual({ code: "mail_relay_failed", subject: "535 5.7.139 Authentication unsuccessful" });
+  });
+
+  test("passes a refusal with no reply through by its code alone", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("mail_off", 409, "no"));
+
+    expect(await sendTestMailAction()).toEqual({ code: "mail_off" });
+  });
+
+  test("reads a server it could not reach as unreachable", async () => {
+    serverRequest.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    expect(await sendTestMailAction()).toEqual({ code: "unreachable" });
+  });
+
+  // A changed address shows on the next read; nothing else on the screen moves.
+  test("revalidates nothing", async () => {
+    serverRequest.mockResolvedValueOnce({ to: "root@usm.md" });
+
+    await sendTestMailAction();
+
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

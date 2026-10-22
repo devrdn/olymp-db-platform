@@ -2,11 +2,12 @@ import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { serverRequest } from "@/lib/api/server";
-import { settingsSchema } from "@/lib/api/settings";
+import { mailStatusSchema, settingsSchema } from "@/lib/api/settings";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { ImageSlots } from "./image-slots";
+import { MailTest } from "./mail-test";
 import { SettingsForm } from "./settings-form";
 
 export async function generateMetadata() {
@@ -28,6 +29,7 @@ export default async function SettingsPage() {
   });
 
   const settings = settingsSchema.parse(payload);
+  const mail = mailStatusSchema.parse(payload);
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">
@@ -37,6 +39,8 @@ export default async function SettingsPage() {
       </div>
 
       <SettingsForm settings={settings} dict={dict} />
+
+      <MailTest mail={mail} dict={dict} />
 
       <ImageSlots images={settings.images} dict={dict} />
     </Band>

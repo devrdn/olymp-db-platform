@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { FEEDBACK_URL_MAX, MAIL_LANGUAGES, SETTING_KEYS, feedbackHref, settingsSchema } from "./settings";
+import {
+  FEEDBACK_URL_MAX,
+  MAIL_LANGUAGES,
+  SETTING_KEYS,
+  feedbackHref,
+  mailStatusSchema,
+  settingsSchema,
+} from "./settings";
 
 describe("the settings payload", () => {
   test("carries the feedback address under its own name", () => {
@@ -27,6 +34,19 @@ describe("the settings payload", () => {
   // The public read leaves it out; only the administrator's carries it.
   test("reads an absent mail language as empty", () => {
     expect(settingsSchema.parse({ values: {} }).mailLanguage).toBe("");
+  });
+});
+
+describe("the mail status", () => {
+  test("says whether mail is on and the address it is sent as", () => {
+    const mail = mailStatusSchema.parse({ values: {}, mail: { enabled: true, from: "noreply@usm.md" } });
+
+    expect(mail).toEqual({ enabled: true, from: "noreply@usm.md" });
+  });
+
+  // Only the administrator's read carries it.
+  test("reads an absent status as off", () => {
+    expect(mailStatusSchema.parse({ values: {} })).toEqual({ enabled: false, from: "" });
   });
 });
 
