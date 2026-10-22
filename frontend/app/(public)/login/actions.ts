@@ -8,7 +8,7 @@ import { cookieSecure } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
-import { fetchIdentity } from "@/lib/auth/session";
+import { fetchIdentity, SESSION_COOKIE } from "@/lib/auth/session";
 export type SignInState = { code?: string };
 
 /**
@@ -39,6 +39,9 @@ export async function signInAction(
       headers: await callerHeaders(),
       // The device token, forwarded for the same reason.
       deviceToken: jar.get(DEVICE_COOKIE)?.value,
+      // The session this browser still holds, so the API ends it rather than
+      // leaving it valid beside the new one.
+      sessionToken: jar.get(SESSION_COOKIE)?.value,
       setCookie: (cookie) =>
         jar.set(cookie.name, cookie.value, {
           path: cookie.path ?? "/",
