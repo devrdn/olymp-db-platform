@@ -3123,10 +3123,11 @@ does not count as a view. A CSV export is always written, as
 **The CSV is a stream with boundaries.** Its columns are
 `at, kind, login, full_name, registration_id, data` (JSON). The file is
 assembled by a k-way merge over the sources (`monitor.StreamFeed`): in a
-contest export the sources that split by registration — sign-ins, queries,
-answers — are one stream per registration in pages of fifty, so each journal
-row is read about once (a test counts the rows read through
-`pg_stat_xact_user_tables`: 1.00× over `query_log`), and the common end of
+contest export the queries and answers are read contest-wide, a page at a
+time over their `(contest_id, time, id)` indexes, and only the sign-ins —
+whose index is per actor — are one stream per registration in pages of
+fifty, so each journal row is read about once (a test counts the rows read
+through `pg_stat_xact_user_tables`: 1.10× over `query_log`), and the common end of
 every source is fixed once at the beginning, two seconds before "now". The
 limits: 200,000 rows and 64 MiB, beyond which a `truncated` row; a minute for
 the export, and a read failure or an expired deadline gives an `incomplete`
