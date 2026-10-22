@@ -81,7 +81,7 @@ describe("sendTestMailAction", () => {
 
   test("passes a refusal through by its code, with the relay's reply", async () => {
     serverRequest.mockRejectedValueOnce(
-      new ApiError("mail_relay_failed", 502, "no", "req-1", "535 5.7.139 Authentication unsuccessful"),
+      new ApiError("mail_relay_failed", 422, "no", "req-1", "535 5.7.139 Authentication unsuccessful"),
     );
 
     const state = await sendTestMailAction();

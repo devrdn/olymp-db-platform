@@ -262,9 +262,10 @@ func (h *SettingsHandler) save(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values})
 }
 
-// sendTestMail sends the caller the test message, to the address on their own
-// account and in the installation's mail language, and answers with how the
-// relay took it. The request body is ignored: no address comes from it.
+// sendTestMail sends the caller the test message in the installation's mail
+// language and answers with how the relay took it. It goes only to the address
+// on the caller's own account, never one the request names, so the route
+// cannot mail a stranger; the body is not read.
 func (h *SettingsHandler) sendTestMail(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
@@ -311,14 +312,15 @@ func (h *SettingsHandler) sendTestMail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// relayAnswer is a 502 carrying the relay's reply, when it gave one, as the
-// subject. The wire message is fixed: the transport's own text names the
-// relay's address.
+// relayAnswer is a 422 carrying the relay's reply, when it gave one, as the
+// subject. Not a 5xx: the API worked and reports the relay's answer, which
+// DBContestMailRelayFailing covers, and must not page as an API outage. The
+// wire message is fixed: the transport's own text names the relay's address.
 func (h *SettingsHandler) relayAnswer(w http.ResponseWriter, r *http.Request, code httpx.Code, message string, err error) {
 	reply, ok := mail.ReplyOf(err)
 	if !ok {
-		httpx.Error(w, r, http.StatusBadGateway, code, message)
+		httpx.Error(w, r, http.StatusUnprocessableEntity, code, message)
 		return
 	}
-	httpx.ErrorWithDetails(w, r, http.StatusBadGateway, code, message, map[string]any{"subject": reply.String()})
+	httpx.ErrorWithDetails(w, r, http.StatusUnprocessableEntity, code, message, map[string]any{"subject": reply.String()})
 }
