@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 )
@@ -36,8 +37,8 @@ var (
 // services themselves.
 var scrapeLabels = map[string]bool{"job": true, "instance": true}
 
-// closedLabels take only values the Query Runner declares and exports at zero
-// from the start, so an equality matcher on one can be held to the code.
+// closedLabels take only values the code declares and exports at zero from the
+// start, so an equality matcher on one can be held to the code.
 // route, status and method take whatever the traffic brings.
 var closedLabels = map[string]bool{"outcome": true, "reason": true, "limit": true}
 
@@ -66,6 +67,7 @@ func registeredSeries(t *testing.T) map[string]exportedSeries {
 	api.ObserveRequest("GET", "/api/v1/contests", 200, time.Millisecond, false)
 	api.ObserveRequest("GET", "/api/v1/contests/{contestID}/events", 200, time.Minute, true)
 	metrics.NewGameReclaimCounters(api)
+	metrics.NewMailCounters(api, mailing.KindNames(), mailing.Outcomes())
 
 	runner := metrics.NewPrometheus()
 	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs())
