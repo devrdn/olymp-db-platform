@@ -1,0 +1,9 @@
+Subject: Mesaj de test de la {{.Installation}}
+
+Bună ziua,
+
+Acesta este un mesaj de test de la {{.Installation}}. Dacă îl citiți, platforma poate trimite e-mailuri.
+
+Pagina de autentificare: {{.SignInURL}}
+
+Acest mesaj a fost trimis automat, iar răspunsurile la el nu sunt citite.

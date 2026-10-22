@@ -1,0 +1,17 @@
+Subject: Datele de autentificare pentru {{.Installation}}
+
+Bună ziua, {{.FullName}},
+
+Vă transmitem datele de autentificare pentru {{.Installation}}.
+
+Pagina de autentificare: {{.SignInURL}}
+Utilizator: {{.Login}}
+Parolă temporară: {{.Password}}
+
+La prima autentificare vi se va cere să alegeți o parolă nouă. Nu transmiteți aceste date nimănui.
+{{- if .Contact}}
+
+Dacă întâmpinați probleme, scrieți la {{.Contact}}.
+{{- end}}
+
+Acest mesaj a fost trimis automat, iar răspunsurile la el nu sunt citite.

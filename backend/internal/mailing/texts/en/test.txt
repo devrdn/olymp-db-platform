@@ -1,0 +1,9 @@
+Subject: Test message from {{.Installation}}
+
+Hello,
+
+This is a test message from {{.Installation}}. If you are reading it, the platform can send email.
+
+Sign-in page: {{.SignInURL}}
+
+This message was sent automatically. Replies to it are not read.
