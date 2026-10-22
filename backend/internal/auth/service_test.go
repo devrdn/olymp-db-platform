@@ -1330,6 +1330,120 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 	}
 }
 
+// A sign-in refused because its address's share of the hashing queue is full
+// was shed by the server, not caused by the caller, so it spends no address
+// budget: a lecture hall behind one address whose first rush was shed must
+// not find itself locked out for the window.
+func TestAnAttemptShedForAFullQueueSpendsNoAddressBudget(t *testing.T) {
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+
+	const wait = 20 * time.Second
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: wait})
+	waiting := waitingPerSlot * hasher.Concurrency()
+	// Exactly the queued attempts plus the one proving the point: a shed
+	// attempt that spent the budget would leave nothing for the last.
+	service := NewService(ServiceConfig{
+		Users:                 repo,
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(&collectingSink{}),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             hasher,
+		Devices:               testDevices(t),
+		MaxAttemptsPerAddress: waiting + 1,
+	})
+	ctx := context.Background()
+
+	slot, err := hasher.Hold(ctx)
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+
+	done := make(chan error, waiting)
+	for range waiting {
+		go func() {
+			_, err := service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"})
+			done <- err
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	if _, err := service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"}); !errors.Is(err, password.ErrBusy) {
+		t.Fatalf("one attempt past the address's waiting share = %v, want password.ErrBusy", err)
+	}
+
+	slot.Release()
+	for range waiting {
+		if err := <-done; !errors.Is(err, ErrInvalidCredentials) {
+			t.Errorf("a waiting attempt = %v, want ErrInvalidCredentials once it got a slot", err)
+		}
+	}
+
+	_, err = service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"})
+	if err != nil {
+		t.Errorf("the last attempt within the budget = %v, want a session: the shed attempt spent the budget", err)
+	}
+}
+
+// Past the address budget an attempt costs its sender nothing, so journalling
+// every one would let an anonymous flood write the audit trail full. The
+// attempts that spent the budget are each on record; the refusal is recorded
+// once per window.
+func TestARefusedAddressIsJournalledOncePerWindow(t *testing.T) {
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	sink := &collectingSink{}
+	const budget = 2
+	service := NewService(ServiceConfig{
+		Users:                 repo,
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(sink),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             passwordtest.NewHasher(),
+		Devices:               testDevices(t),
+		MaxAttemptsPerAddress: budget,
+	})
+	ctx := context.Background()
+
+	for range budget {
+		if _, err := service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"}); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("an attempt within the budget = %v, want ErrInvalidCredentials", err)
+		}
+	}
+	const flood = 50
+	for range flood {
+		if _, err := service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"}); !errors.Is(err, ErrTooManyAttempts) {
+			t.Fatalf("an attempt past the budget = %v, want ErrTooManyAttempts", err)
+		}
+	}
+
+	var refusals, failures int
+	for _, entry := range sink.entries {
+		if entry.Action != audit.ActionAuthLoginFailed {
+			continue
+		}
+		if entry.Payload["reason"] == ReasonTooManyAttempts {
+			refusals++
+		} else {
+			failures++
+		}
+	}
+	if failures != budget {
+		t.Errorf("%d failed attempts on record, want the %d that spent the budget", failures, budget)
+	}
+	if refusals != 1 {
+		t.Errorf("%d refusals on record after %d refused attempts, want one per window", refusals, flood)
+	}
+}
+
 func TestLoginEndsTheSessionTheBrowserAlreadyHad(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
