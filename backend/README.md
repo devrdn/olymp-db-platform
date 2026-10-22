@@ -164,8 +164,17 @@ did not arrive, is [Email](#email). Mail is off while `SMTP_HOST` is empty,
 and nothing else changes: the service starts and runs without any of these
 variables. With `SMTP_HOST` set, a missing or invalid companion aborts the
 boot like any other setting. A changed value reaches the API when its
-container is recreated: `make deploy-api VERSION=<tag>`, with the tag
-`make deployed` prints.
+container is recreated, with the tag of the running `api` image that
+`make deployed` prints:
+
+```bash
+VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d --no-deps api
+```
+
+`VERSION` is required, since `deploy/.env` does not set it, and `--no-deps`
+keeps the migration job from running; `make deploy-api` would run it. During
+a contest, do it at a break: recreating the API drops the live channels,
+which reconnect.
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
@@ -432,12 +441,11 @@ a table kept for a year.
 
 The API writes two messages today: an account's sign-in details, and the test
 message an administrator sends themselves. The test message goes to the relay
-at once, so the administrator reads the relay's answer on the screen; every
-other message is queued in the outbox and leaves in the background, at the
-pace the relay allows. The relay is set up in
-[The mail relay](#the-mail-relay); why the design is what it is, and its known
-limits, are in
-[ARCHITECTURE.md, section 10.2](../docs/ARCHITECTURE.md#102-email).
+at once and the screen shows the relay's answer; every other message is queued
+in the outbox and leaves in the background, at the pace the relay allows. The
+relay is set up in [The mail relay](#the-mail-relay); why the design is what
+it is, and its known limits, are in [ARCHITECTURE.md, section
+10.2](../docs/ARCHITECTURE.md#102-email).
 
 Every message is plain text, written in English, Romanian and Russian
 (`internal/mailing/texts`, one template per message and language), and the
@@ -519,9 +527,8 @@ or roll back together.
 password, emailed or not, by a reset or the bulk reset, gives up that
 account's sign-in messages still waiting, and so does blocking or deleting
 the account: in the same transaction they are marked abandoned and their
-bodies erased. Re-sending sign-in details is therefore a reset with the
-option ticked, and a student is not sent a password that no longer works. A
-message a sender is handing to the relay at that moment is left to finish.
+bodies erased. Re-sending sign-in details is a reset with the option ticked.
+A message a sender is handing to the relay at that moment is left to finish.
 
 ### The outbox
 
@@ -562,16 +569,15 @@ seconds, then 1, 2, 4 and 8 minutes, then every 15, until a message is
 delivered.
 
 **When the relay refuses everyone.** A refusal naming the recipient (RFC 3463
-X.1.1, X.1.2, X.1.3, X.1.6, X.1.10, X.2.1 or X.2.2, such as Microsoft's
-`550 5.1.10` for an unknown address, or a 5xx to RCPT without an enhanced
-code) abandons that message alone, and the job goes on to the next. Any other
-refusal (a 5xx to DATA, `5.1.8` for the sender, a `5.7.x` policy refusal) may
-be the relay refusing every message, so the message is retried rather than
-given up. Three different messages refused that way in a row, with nothing
-delivered between them, trip a breaker: the job pauses as for a relay
-failure, then judges the next messages afresh, and only a delivery shortens
-the pause again. A refused recipient neither counts toward the breaker nor
-resets it, so a roster's bad addresses never pause the queue.
+X.1.1, X.1.2, X.1.3, X.1.6, X.1.10, X.2.1 or X.2.2, such as Microsoft's `550
+5.1.10` for an unknown address, or a 5xx to RCPT without an enhanced code)
+abandons that message alone, and the job goes on to the next. Any other
+refusal (a 5xx to DATA, `5.1.8` for the sender, a `5.7.x` policy refusal) is
+retried rather than given up. Three different messages refused that way in a
+row, with nothing delivered between them, trip a breaker: the job pauses as
+for a relay failure, then judges the next messages afresh, and only a delivery
+shortens the pause again. A refused recipient neither counts toward the
+breaker nor resets it, so a roster's bad addresses never pause the queue.
 
 ### Diagnosing
 
@@ -592,6 +598,7 @@ cause.
 | Reply | What it means | What to do |
 |---|---|---|
 | `535 5.7.139 Authentication unsuccessful…` | the account was refused: SMTP AUTH is disabled for the mailbox or the tenant, security defaults or a policy demands MFA, or the password is wrong; the rest of the text says which | ask the university's administrators to enable Authenticated SMTP for the mailbox and exempt it from MFA, or correct `SMTP_PASSWORD` |
+| another `535`, such as `535 5.7.3 Authentication unsuccessful` | the relay refused `SMTP_USERNAME` or `SMTP_PASSWORD` | correct them |
 | `530 5.7.57 Client not authenticated…` | nothing signed in, most often because `SMTP_USERNAME` and `SMTP_PASSWORD` are empty | set both |
 | `550 5.7.60 Client does not have permissions to send as this sender`, or `SendAsDenied` (`554 5.2.0 STOREDRV.Submission.Exception:SendAsDeniedException…`) | `SMTP_FROM`'s address is not the signed-in mailbox | make it the `SMTP_USERNAME` mailbox, or have the administrators grant Send As |
 | `550 5.1.8 Access denied, bad outbound sender` | Microsoft has restricted the mailbox for sending spam, usually because the account was compromised | the administrators release it in the Microsoft Defender portal (Restricted entities) and change its password; then update `SMTP_PASSWORD` |
