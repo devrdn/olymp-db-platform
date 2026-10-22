@@ -25,11 +25,20 @@ func NewLimiter(c cache.Cache) *Limiter {
 // Allow records an attempt and reports whether it stays within the limit. A
 // cache failure is (false, err): without the counter, refusing is safe.
 func (l *Limiter) Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error) {
+	allowed, _, err := l.Spend(ctx, subject, limit, window)
+	return allowed, err
+}
+
+// Spend is Allow with one more fact: whether this attempt is the first one
+// the window refuses. A caller that journals refusals journals only that one,
+// so a flood past the limit cannot flood the journal too; the counter still
+// grows with every attempt.
+func (l *Limiter) Spend(ctx context.Context, subject string, limit int, window time.Duration) (allowed, firstRefused bool, err error) {
 	count, err := l.cache.Incr(ctx, limiterKeyPrefix+subject, window)
 	if err != nil {
-		return false, fmt.Errorf("rate limit %s: %w", subject, err)
+		return false, false, fmt.Errorf("rate limit %s: %w", subject, err)
 	}
-	return count <= int64(limit), nil
+	return count <= int64(limit), count == int64(limit)+1, nil
 }
 
 const generationKeyPrefix = "rlgen:"
