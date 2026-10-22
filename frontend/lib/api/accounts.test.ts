@@ -8,6 +8,7 @@ import {
   createdAccountSchema,
   importResultSchema,
   importSkippedRowSchema,
+  passwordResetSchema,
   roleListSchema,
   skippedAccountSchema,
 } from "./accounts";
@@ -158,6 +159,42 @@ describe("createdAccountSchema", () => {
     expect(parsed.user).toMatchObject({ login: "s.popescu", fullName: "Sergiu Popescu" });
     expect(parsed.one_time_password).toBe("Xk9-mQ2p");
   });
+
+  test("reads whether the sign-in details were emailed, and why not", () => {
+    const emailed = createdAccountSchema.parse({ user: wire, one_time_password: "Xk9", emailed: true });
+    const skipped = createdAccountSchema.parse({
+      user: wire,
+      one_time_password: "Xk9",
+      emailed: false,
+      email_skipped_reason: "no_address",
+    });
+
+    expect(emailed.emailed).toBe(true);
+    expect(emailed.email_skipped_reason).toBeUndefined();
+    expect(skipped).toMatchObject({ emailed: false, email_skipped_reason: "no_address" });
+  });
+
+  test("reads an older server's answer, which never says, as not emailed", () => {
+    const parsed = createdAccountSchema.parse({ user: wire, one_time_password: "Xk9" });
+
+    expect(parsed.emailed).toBe(false);
+  });
+});
+
+describe("passwordResetSchema", () => {
+  test("reads the password and whether it was emailed, and keeps an unknown reason", () => {
+    const parsed = passwordResetSchema.parse({
+      one_time_password: "Xk9",
+      emailed: false,
+      email_skipped_reason: "invented_later",
+    });
+
+    expect(parsed).toEqual({
+      one_time_password: "Xk9",
+      emailed: false,
+      email_skipped_reason: "invented_later",
+    });
+  });
 });
 
 describe("importSkippedRowSchema", () => {
@@ -211,5 +248,26 @@ describe("bulkPasswordResetResultSchema", () => {
 
     expect(parsed.issued[0]).toMatchObject({ login: "s.popescu", oneTimePassword: "Xk9-mQ2p" });
     expect(parsed.skipped[0].reason).toBe("deleted");
+  });
+
+  test("reads whether each password was emailed, in the interface's own casing", () => {
+    const parsed = bulkPasswordResetResultSchema.parse({
+      issued: [
+        { id: "a", login: "petrov", one_time_password: "p1", emailed: true },
+        {
+          id: "b",
+          login: "blocked1",
+          one_time_password: "p2",
+          emailed: false,
+          email_skipped_reason: "not_active",
+        },
+        { id: "c", login: "older", one_time_password: "p3" },
+      ],
+      skipped: [],
+    });
+
+    expect(parsed.issued[0]).toMatchObject({ emailed: true, emailSkippedReason: undefined });
+    expect(parsed.issued[1]).toMatchObject({ emailed: false, emailSkippedReason: "not_active" });
+    expect(parsed.issued[2]).toMatchObject({ emailed: false, emailSkippedReason: undefined });
   });
 });

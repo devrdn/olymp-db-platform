@@ -13,6 +13,8 @@ import {
 import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 
+import { sendByEmail } from "./delivery";
+
 /**
  * Server Actions on a selection of accounts (see `[userId]/actions.ts`). The
  * server validates everything again; this only catches what a form gets wrong
@@ -97,5 +99,5 @@ export async function bulkResetPasswordAction(
   const picked = ids(form);
   if (picked.length === 0) return { code: "invalid_request" };
 
-  return run(() => bulkResetPassword(picked));
+  return run(() => bulkResetPassword(picked, sendByEmail(form)));
 }

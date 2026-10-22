@@ -23,6 +23,7 @@ import {
   type CreateAccountState,
   type ImportAccountsState,
 } from "./create-actions";
+import { EmailSummary, SendByEmailOption } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
@@ -181,11 +182,13 @@ function NotImportedRows({ logins, title, why }: { logins: readonly string[]; ti
 function NewAccountForm({
   roles,
   dict,
+  mailEnabled,
   onClose,
   reportDismissible,
 }: {
   roles: Role[];
   dict: Dictionary;
+  mailEnabled: boolean;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -216,6 +219,17 @@ function NewAccountForm({
             copiedLabel={t.roster.copied}
           />
         </ul>
+
+        <EmailSummary
+          rows={[
+            {
+              login: state.result.user.login,
+              emailed: state.result.emailed,
+              reason: state.result.email_skipped_reason,
+            },
+          ]}
+          dict={dict}
+        />
 
         <DialogFooter>
           <Button type="button" onClick={onClose}>
@@ -250,6 +264,8 @@ function NewAccountForm({
 
       <RolesPicker roles={roles} label={t.one.rolesLabel} />
 
+      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+
       {failure ? (
         <p role="alert" className="text-small text-bad">
           {failure}
@@ -271,11 +287,13 @@ function NewAccountForm({
 function ImportRosterForm({
   roles,
   dict,
+  mailEnabled,
   onClose,
   reportDismissible,
 }: {
   roles: Role[];
   dict: Dictionary;
+  mailEnabled: boolean;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -348,6 +366,15 @@ function ImportRosterForm({
           </>
         ) : null}
 
+        <EmailSummary
+          rows={created.map((row) => ({
+            login: row.user.login,
+            emailed: row.emailed,
+            reason: row.email_skipped_reason,
+          }))}
+          dict={dict}
+        />
+
         <SkippedRows skipped={skipped} reasons={reasons} />
 
         {notImported.length > 0 ? (
@@ -400,6 +427,8 @@ function ImportRosterForm({
 
       <RolesPicker roles={roles} label={t.roster.rolesLabel} />
 
+      {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
+
       {failure ? (
         <p role="alert" className="text-small text-bad">
           {failure}
@@ -418,15 +447,32 @@ function ImportRosterForm({
   );
 }
 
-/** Triggers for one account and for a roster. `roles` is the server's catalogue. */
-export function AccountCreateControls({ roles, dict }: { roles: Role[]; dict: Dictionary }) {
+/**
+ * Triggers for one account and for a roster. `roles` is the server's
+ * catalogue; `mailEnabled` offers emailing the sign-in details.
+ */
+export function AccountCreateControls({
+  roles,
+  dict,
+  mailEnabled,
+}: {
+  roles: Role[];
+  dict: Dictionary;
+  mailEnabled: boolean;
+}) {
   const t = dict.accounts.create;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       <TriggerDialog triggerLabel={t.new} closeLabel={t.close}>
         {(close, reportDismissible) => (
-          <NewAccountForm roles={roles} dict={dict} onClose={close} reportDismissible={reportDismissible} />
+          <NewAccountForm
+            roles={roles}
+            dict={dict}
+            mailEnabled={mailEnabled}
+            onClose={close}
+            reportDismissible={reportDismissible}
+          />
         )}
       </TriggerDialog>
       <TriggerDialog triggerLabel={t.import} closeLabel={t.close}>
@@ -434,6 +480,7 @@ export function AccountCreateControls({ roles, dict }: { roles: Role[]; dict: Di
           <ImportRosterForm
             roles={roles}
             dict={dict}
+            mailEnabled={mailEnabled}
             onClose={close}
             reportDismissible={reportDismissible}
           />

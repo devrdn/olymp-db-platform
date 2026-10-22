@@ -69,9 +69,11 @@ async function renderBar({
   selected = [],
   roles = [],
   pageIds,
+  mailEnabled = false,
 }: {
   selected?: string[];
   roles?: Role[];
+  mailEnabled?: boolean;
   /** Ids on the current page; defaults to `selected`. */
   pageIds?: string[];
 } = {}) {
@@ -80,7 +82,7 @@ async function renderBar({
       {selected.map((id) => (
         <RowCheckbox key={id} id={id} label={id} />
       ))}
-      <SelectionBar dict={ru} roles={roles} pageIds={pageIds ?? selected} />
+      <SelectionBar dict={ru} roles={roles} pageIds={pageIds ?? selected} mailEnabled={mailEnabled} />
     </SelectionProvider>,
   );
 
@@ -198,7 +200,7 @@ describe("SelectionBar", () => {
   test("stays out of the page while nothing is picked", () => {
     render(
       <SelectionProvider>
-        <SelectionBar dict={en} roles={[]} pageIds={[]} />
+        <SelectionBar dict={en} roles={[]} pageIds={[]} mailEnabled={false} />
       </SelectionProvider>,
     );
 
@@ -210,7 +212,7 @@ describe("SelectionBar", () => {
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
         <RowCheckbox id="b" label="b" />
-        <SelectionBar dict={en} roles={[]} pageIds={["a", "b"]} />
+        <SelectionBar dict={en} roles={[]} pageIds={["a", "b"]} mailEnabled={false} />
       </SelectionProvider>,
     );
 
@@ -231,7 +233,7 @@ describe("SelectionBar", () => {
     render(
       <SelectionProvider>
         <SelectAllCheckbox ids={many} label="page" />
-        <SelectionBar dict={ru} roles={[]} pageIds={many} />
+        <SelectionBar dict={ru} roles={[]} pageIds={many} mailEnabled={false} />
       </SelectionProvider>,
     );
 
@@ -565,7 +567,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -586,7 +588,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -622,7 +624,7 @@ describe("SelectionBar: honest about a selection that spans more than the curren
       <SelectionProvider>
         <RowCheckbox id="a" label="a" display="ivanov" />
         <RowCheckbox id="b" label="b" display="petrov" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
       </SelectionProvider>,
     );
 
@@ -649,7 +651,7 @@ describe("SelectionBar: seeing exactly who is selected", () => {
       <SelectionProvider>
         <RowCheckbox id="a" label="a" display="ivanov" />
         <RowCheckbox id="b" label="b" display="petrov" />
-        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} mailEnabled={false} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -770,5 +772,89 @@ describe("useSelectedIds", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
 
     expect(screen.getByTestId("ids")).toHaveTextContent("a");
+  });
+});
+
+describe("bulk password reset: sign-in details by email", () => {
+  async function openReset() {
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetPassword }),
+    );
+  }
+
+  test("offers no email option while mail is off, and sends none", async () => {
+    await renderBar({ selected: ["a"] });
+
+    await openReset();
+    expect(
+      screen.queryByRole("checkbox", { name: ru.accounts.signInMail.option }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetDialog.submit }),
+    );
+
+    const form = bulkResetPasswordAction.mock.calls[0]![1] as FormData;
+    expect(form.has("send_by_email")).toBe(false);
+  });
+
+  test("ticks the option by default, sends it, and still shows every password beside the summary", async () => {
+    bulkResetPasswordAction.mockResolvedValueOnce({
+      result: {
+        issued: [
+          { id: "a", login: "petrov", oneTimePassword: "swordfish-1", emailed: true },
+          {
+            id: "b",
+            login: "blocked1",
+            oneTimePassword: "swordfish-2",
+            emailed: false,
+            emailSkippedReason: "not_active",
+          },
+          {
+            id: "c",
+            login: "ivanov",
+            oneTimePassword: "swordfish-3",
+            emailed: false,
+            emailSkippedReason: "no_address",
+          },
+        ],
+        skipped: [],
+      },
+    });
+    await renderBar({ selected: ["a", "b", "c"], mailEnabled: true });
+
+    await openReset();
+    expect(screen.getByRole("checkbox", { name: ru.accounts.signInMail.option })).toBeChecked();
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetDialog.submit }),
+    );
+
+    const form = bulkResetPasswordAction.mock.calls[0]![1] as FormData;
+    expect(form.get("send_by_email")).toBe("on");
+    expect(form.getAll("ids")).toEqual(["a", "b", "c"]);
+
+    for (const password of ["swordfish-1", "swordfish-2", "swordfish-3"]) {
+      expect(await screen.findByText(password)).toBeVisible();
+    }
+    const t = ru.accounts.signInMail;
+    expect(screen.getByText(t.queued.replace("{n}", "1"))).toBeVisible();
+    expect(screen.getByText(t.notEmailed.replace("{n}", "2"))).toBeVisible();
+    expect(
+      screen.getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.not_active)),
+    ).toBeVisible();
+    expect(
+      screen.getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.no_address)),
+    ).toBeVisible();
+  });
+
+  test("reports mail turned off since the page loaded in the administrator's language", async () => {
+    bulkResetPasswordAction.mockResolvedValueOnce({ code: "mail_off" });
+    await renderBar({ selected: ["a"], mailEnabled: true });
+
+    await openReset();
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetDialog.submit }),
+    );
+
+    expect(await screen.findByText(ru.errors.mail_off)).toBeVisible();
   });
 });

@@ -71,17 +71,30 @@ export const roleListSchema = z.object({ items: z.array(roleSchema) });
 export type Role = z.infer<typeof roleSchema>;
 
 /**
+ * Whether an issued password was also emailed. `email_skipped_reason` is set
+ * only when email was asked for and not queued; it is a bare string, so a
+ * reason newer than this build still shows (raw).
+ */
+const emailOutcome = {
+  emailed: z.boolean().default(false),
+  email_skipped_reason: z.string().optional(),
+};
+
+/**
  * A new account and its one-time password. The password arrives once and is
  * never retrievable, so show it until dismissed, not in a toast.
  */
 export const createdAccountSchema = z.object({
   user: accountSchema,
   one_time_password: z.string(),
+  ...emailOutcome,
 });
 
 export type CreatedAccount = z.infer<typeof createdAccountSchema>;
 
-export const passwordResetSchema = z.object({ one_time_password: z.string() });
+export const passwordResetSchema = z.object({ one_time_password: z.string(), ...emailOutcome });
+
+export type PasswordReset = z.infer<typeof passwordResetSchema>;
 
 /** A roster row an import declined. No `id`: it never became an account. */
 export const importSkippedRowSchema = z.object({ login: z.string(), reason: z.string() });
@@ -131,11 +144,14 @@ export const issuedPasswordSchema = z
     id: z.string(),
     login: z.string(),
     one_time_password: z.string(),
+    ...emailOutcome,
   })
   .transform((raw) => ({
     id: raw.id,
     login: raw.login,
     oneTimePassword: raw.one_time_password,
+    emailed: raw.emailed,
+    emailSkippedReason: raw.email_skipped_reason,
   }));
 
 export type IssuedPassword = z.infer<typeof issuedPasswordSchema>;
@@ -148,6 +164,15 @@ export const bulkPasswordResetResultSchema = z.object({
 export type BulkPasswordResetResult = z.infer<typeof bulkPasswordResetResultSchema>;
 
 /**
+ * The request's `send_by_email`, present only when asked: the server refuses
+ * it with `mail_off` when mail is off, so a request that does not ask carries
+ * nothing.
+ */
+function delivery(sendByEmail: boolean): { send_by_email?: true } {
+  return sendByEmail ? { send_by_email: true } : {};
+}
+
+/**
  * Registers one account. The server generates the password and returns it
  * only here; a lost one means a reset.
  */
@@ -156,10 +181,17 @@ export async function createAccount(cmd: {
   fullName: string;
   email: string;
   roles: string[];
+  sendByEmail: boolean;
 }): Promise<CreatedAccount> {
   const payload = await serverRequest("/users", {
     method: "POST",
-    body: { login: cmd.login, full_name: cmd.fullName, email: cmd.email, roles: cmd.roles },
+    body: {
+      login: cmd.login,
+      full_name: cmd.fullName,
+      email: cmd.email,
+      roles: cmd.roles,
+      ...delivery(cmd.sendByEmail),
+    },
   });
   return createdAccountSchema.parse(payload);
 }
@@ -171,15 +203,29 @@ export async function createAccount(cmd: {
 export async function importAccounts(
   rows: { login: string; fullName: string; email: string }[],
   roles: string[],
+  sendByEmail: boolean,
 ): Promise<ImportResult> {
   const payload = await serverRequest("/users/import", {
     method: "POST",
     body: {
       rows: rows.map((row) => ({ login: row.login, full_name: row.fullName, email: row.email })),
       roles,
+      ...delivery(sendByEmail),
     },
   });
   return importResultSchema.parse(payload);
+}
+
+/**
+ * Issues one account a new one-time password. Without the email option the
+ * request has no body, as it always had.
+ */
+export async function resetPassword(userId: string, sendByEmail: boolean): Promise<PasswordReset> {
+  const payload = await serverRequest(
+    `/users/${userId}/password-reset`,
+    sendByEmail ? { method: "POST", body: delivery(true) } : { method: "POST" },
+  );
+  return passwordResetSchema.parse(payload);
 }
 
 /**
@@ -216,10 +262,13 @@ export async function bulkReplaceRoles(ids: string[], roles: string[]): Promise<
   return bulkResultSchema.parse(payload);
 }
 
-export async function bulkResetPassword(ids: string[]): Promise<BulkPasswordResetResult> {
+export async function bulkResetPassword(
+  ids: string[],
+  sendByEmail: boolean,
+): Promise<BulkPasswordResetResult> {
   const payload = await serverRequest("/users/bulk/password-reset", {
     method: "POST",
-    body: { ids },
+    body: { ids, ...delivery(sendByEmail) },
   });
   return bulkPasswordResetResultSchema.parse(payload);
 }

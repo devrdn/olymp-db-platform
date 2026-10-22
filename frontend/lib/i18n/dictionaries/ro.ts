@@ -1369,6 +1369,14 @@ const ro = {
       no_address: "contul nu are adresă de e-mail",
       not_active: "contul nu este activ",
     },
+    signInMail: {
+      option: "Trimiteți datele de autentificare prin e-mail",
+      optionHint:
+        "Conturile cu adresă de e-mail primesc prin e-mail login-ul și parola de unică folosință. Parolele rămân afișate și aici.",
+      queued: "E-mailuri cu datele de autentificare puse în coadă: {n}. Pleacă în următoarele minute.",
+      notEmailed: "Netrimise prin e-mail: {n}",
+      group: "{n} — {reason}",
+    },
   },
   participant: {
     feedback: {

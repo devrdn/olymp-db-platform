@@ -1,11 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Only the unlock is mocked: it is the one action submitted here.
-const unlockSignInAction = vi.hoisted(() => vi.fn());
+// Only the unlock and the reset are mocked: they are the actions submitted here.
+const { unlockSignInAction, resetPasswordAction } = vi.hoisted(() => ({
+  unlockSignInAction: vi.fn(),
+  resetPasswordAction: vi.fn(),
+}));
 vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
   unlockSignInAction,
+  resetPasswordAction,
 }));
 
 import type { Account, Role } from "@/lib/api/accounts";
@@ -53,6 +57,7 @@ describe("AccountCard, the block form's reason requirement", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
+        mailEnabled={false}
       />,
     );
 
@@ -74,6 +79,7 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
+        mailEnabled={false}
       />,
     );
 
@@ -95,6 +101,7 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel="2 Mar 2026"
+        mailEnabled={false}
       />,
     );
 
@@ -120,6 +127,7 @@ describe("AccountCard, the status-explanation panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
+        mailEnabled={false}
       />,
     );
 
@@ -139,6 +147,7 @@ describe("AccountCard, the roles panel", () => {
         viewerId={viewerId}
         dict={en}
         statusChangedAtLabel={null}
+        mailEnabled={false}
       />,
     );
 
@@ -158,7 +167,8 @@ describe("AccountCard, clearing a sign-in lockout", () => {
 
   const renderCard = () =>
     render(
-      <AccountCard account={account()} roles={roles} viewerId={viewerId} dict={en} statusChangedAtLabel={null} />,
+      <AccountCard account={account()} roles={roles} viewerId={viewerId} dict={en} statusChangedAtLabel={null}
+        mailEnabled={false} />,
     );
 
   test("asks for confirmation before anything is sent", () => {
@@ -196,5 +206,80 @@ describe("AccountCard, clearing a sign-in lockout", () => {
     const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
     expect(submitted.get("userId")).toBe(account().id);
     expect(await screen.findByText(en.accounts.card.unlocked)).toBeInTheDocument();
+  });
+});
+
+describe("AccountCard, a password reset with the sign-in details by email", () => {
+  beforeEach(() => {
+    resetPasswordAction.mockReset();
+  });
+
+  const renderCard = (mailEnabled: boolean, dict: Dictionary = en) =>
+    render(
+      <AccountCard
+        account={account()}
+        roles={roles}
+        viewerId={viewerId}
+        dict={dict}
+        statusChangedAtLabel={null}
+        mailEnabled={mailEnabled}
+      />,
+    );
+
+  test("offers no email option while mail is off, and sends none", async () => {
+    resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: false });
+    renderCard(false);
+
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
+
+    expect(await screen.findByText("swordfish-1")).toBeInTheDocument();
+    const submitted = resetPasswordAction.mock.calls[0][1] as FormData;
+    expect(submitted.has("send_by_email")).toBe(false);
+    // Not asked, so nothing is said about email.
+    expect(screen.queryByText(en.accounts.signInMail.notEmailed.replace("{n}", "1"))).not.toBeInTheDocument();
+  });
+
+  test("ticks the option by default, sends it, and shows the password and the queued email", async () => {
+    resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: true });
+    renderCard(true);
+
+    expect(screen.getByRole("checkbox", { name: en.accounts.signInMail.option })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
+
+    expect(await screen.findByText("swordfish-1")).toBeInTheDocument();
+    const submitted = resetPasswordAction.mock.calls[0][1] as FormData;
+    expect(submitted.get("send_by_email")).toBe("on");
+    expect(submitted.get("userId")).toBe(account().id);
+    expect(screen.getByText(en.accounts.signInMail.queued.replace("{n}", "1"))).toBeInTheDocument();
+  });
+
+  test("names why the password was not emailed, and still shows it", async () => {
+    resetPasswordAction.mockResolvedValue({
+      done: true,
+      oneTimePassword: "swordfish-1",
+      emailed: false,
+      emailSkippedReason: "no_address",
+    });
+    renderCard(true);
+
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.resetPassword }));
+
+    expect(await screen.findByText("swordfish-1")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        en.accounts.signInMail.group.replace("{n}", "1").replace("{reason}", en.accounts.emailSkipped.no_address),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("reports mail turned off since the page loaded in the administrator's language", async () => {
+    resetPasswordAction.mockResolvedValue({ code: "mail_off" });
+    const ro = await getDictionary("ro");
+    renderCard(true, ro);
+
+    fireEvent.click(screen.getByRole("button", { name: ro.accounts.card.resetPassword }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.mail_off);
   });
 });

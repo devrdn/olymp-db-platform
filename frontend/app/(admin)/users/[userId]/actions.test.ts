@@ -10,7 +10,13 @@ vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
 import { ApiError } from "@/lib/api/client";
 
-import { blockAction, deleteAction, restoreAction, unlockSignInAction } from "./actions";
+import {
+  blockAction,
+  deleteAction,
+  resetPasswordAction,
+  restoreAction,
+  unlockSignInAction,
+} from "./actions";
 
 const userId = "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6";
 
@@ -131,5 +137,54 @@ describe("unlockSignInAction", () => {
     serverRequest.mockRejectedValueOnce(new ApiError("not_found", 404, "User not found"));
 
     expect(await unlockSignInAction({}, form({ userId }))).toEqual({ code: "not_found" });
+  });
+});
+
+describe("resetPasswordAction", () => {
+  test("posts with no body when the email box is not ticked, and returns the password", async () => {
+    serverRequest.mockResolvedValueOnce({ one_time_password: "swordfish-1", emailed: false });
+
+    const state = await resetPasswordAction({}, form({ userId }));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/password-reset`, { method: "POST" });
+    expect(state).toMatchObject({ done: true, oneTimePassword: "swordfish-1", emailed: false });
+    expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
+  });
+
+  test("asks for the sign-in details by email when the box is ticked, and says why it was not sent", async () => {
+    serverRequest.mockResolvedValueOnce({
+      one_time_password: "swordfish-1",
+      emailed: false,
+      email_skipped_reason: "no_address",
+    });
+
+    const state = await resetPasswordAction({}, form({ userId, send_by_email: "on" }));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/password-reset`, {
+      method: "POST",
+      body: { send_by_email: true },
+    });
+    expect(state).toEqual({
+      done: true,
+      oneTimePassword: "swordfish-1",
+      emailed: false,
+      emailSkippedReason: "no_address",
+    });
+  });
+
+  test("passes the mail-off refusal through by its own code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("mail_off", 409, "mail is off"));
+
+    const state = await resetPasswordAction({}, form({ userId, send_by_email: "on" }));
+
+    expect(state).toEqual({ code: "mail_off" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("refuses an identifier that is not one without calling the server", async () => {
+    const state = await resetPasswordAction({}, form({ userId: "../roles", send_by_email: "on" }));
+
+    expect(state).toEqual({ code: "invalid_user_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 });

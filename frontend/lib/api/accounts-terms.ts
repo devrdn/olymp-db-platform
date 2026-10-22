@@ -29,3 +29,11 @@ export type ImportSkipReason = (typeof IMPORT_SKIP_REASONS)[number];
 
 /** Mirrors `users.maxImportRows`. */
 export const MAX_IMPORT_ROWS = 500;
+
+/**
+ * Why an issued password was not also emailed although email was asked for
+ * (`users.EmailSkip*`), in the order a summary lists them. A reason not listed
+ * here is shown raw.
+ */
+export const EMAIL_SKIP_REASONS = ["no_address", "not_active"] as const;
+export type EmailSkipReason = (typeof EMAIL_SKIP_REASONS)[number];

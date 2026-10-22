@@ -2,10 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
-import { deleteAccount, passwordResetSchema, restoreAccount } from "@/lib/api/accounts";
+import { deleteAccount, resetPassword, restoreAccount } from "@/lib/api/accounts";
 import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
+
+import { sendByEmail } from "../delivery";
 
 /**
  * Server Actions on one account: they work without JavaScript, keep the API
@@ -125,12 +127,18 @@ export async function restoreAction(
   return attempt(() => restoreAccount(userId));
 }
 
-export type ResetState = AccountState & { oneTimePassword?: string };
+export type ResetState = AccountState & {
+  oneTimePassword?: string;
+  /** Whether the sign-in details were queued by email. */
+  emailed?: boolean;
+  /** Why they were not, when email was asked for (`users.EmailSkip*`). */
+  emailSkippedReason?: string;
+};
 
 /**
- * Issues a one-time password. It is returned once and shown until the
- * administrator leaves; never put in the address or logged, since URLs land in
- * history and access logs.
+ * Issues a one-time password, and emails it when the box is ticked. It is
+ * returned once and shown until the administrator leaves; never put in the
+ * address or logged, since URLs land in history and access logs.
  */
 export async function resetPasswordAction(
   _previous: ResetState,
@@ -139,8 +147,8 @@ export async function resetPasswordAction(
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  const outcome = await serverRequest(`/users/${userId}/password-reset`, { method: "POST" }).then(
-    (payload) => ({ ok: true as const, body: passwordResetSchema.parse(payload) }),
+  const outcome = await resetPassword(userId, sendByEmail(form)).then(
+    (body) => ({ ok: true as const, body }),
     (error: unknown) => ({ ok: false as const, error }),
   );
 
@@ -149,7 +157,12 @@ export async function resetPasswordAction(
   }
 
   revalidatePath("/users", "layout");
-  return { done: true, oneTimePassword: outcome.body.one_time_password };
+  return {
+    done: true,
+    oneTimePassword: outcome.body.one_time_password,
+    emailed: outcome.body.emailed,
+    emailSkippedReason: outcome.body.email_skipped_reason,
+  };
 }
 
 /**

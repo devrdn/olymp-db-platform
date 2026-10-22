@@ -30,6 +30,7 @@ import {
   type AccountState,
   type ResetState,
 } from "./actions";
+import { EmailSummary, SendByEmailOption } from "../email-delivery";
 import { offeredActions } from "./offered";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -185,6 +186,7 @@ export function AccountCard({
   dict,
   /** Already formatted for the locale. */
   statusChangedAtLabel,
+  mailEnabled,
 }: {
   account: Account;
   roles: Role[];
@@ -192,6 +194,8 @@ export function AccountCard({
   viewerId: string;
   dict: Dictionary;
   statusChangedAtLabel: string | null;
+  /** Whether the password reset offers emailing the sign-in details. */
+  mailEnabled: boolean;
 }) {
   const t = dict.accounts.card;
   const offered = offeredActions(account, viewerId);
@@ -410,6 +414,7 @@ export function AccountCard({
               <form action={resetPassword} className="flex flex-col gap-2.5">
                 <input type="hidden" name="userId" value={account.id} />
                 <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
+                {mailEnabled ? <SendByEmailOption dict={dict} /> : null}
                 <div className="flex flex-wrap items-center gap-4">
                   <Button type="submit" variant="secondary" disabled={resetting}>
                     {resetting ? t.saving : t.resetPassword}
@@ -419,11 +424,23 @@ export function AccountCard({
 
                 {/* Shown until the page is left: it arrives once and cannot be retrieved. */}
                 {reset.oneTimePassword ? (
-                  <div className="mt-2 flex max-w-body flex-col gap-2 border border-warn bg-warn-wash p-4">
-                    <p className="text-small text-ink-2">{t.handover}</p>
-                    <code className="font-mono text-row text-ink select-all">
-                      {reset.oneTimePassword}
-                    </code>
+                  <div className="mt-2 flex max-w-body flex-col gap-3">
+                    <div className="flex flex-col gap-2 border border-warn bg-warn-wash p-4">
+                      <p className="text-small text-ink-2">{t.handover}</p>
+                      <code className="font-mono text-row text-ink select-all">
+                        {reset.oneTimePassword}
+                      </code>
+                    </div>
+                    <EmailSummary
+                      rows={[
+                        {
+                          login: account.login,
+                          emailed: reset.emailed,
+                          reason: reset.emailSkippedReason,
+                        },
+                      ]}
+                      dict={dict}
+                    />
                   </div>
                 ) : null}
               </form>

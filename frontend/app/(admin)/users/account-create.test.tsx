@@ -46,7 +46,7 @@ describe("new account: the one-time password must survive the dialog", () => {
         one_time_password: "swordfish-1",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.one.login), "s.popescu");
@@ -64,7 +64,7 @@ describe("new account: the one-time password must survive the dialog", () => {
         one_time_password: "swordfish-1",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.one.login), "s.popescu");
@@ -84,7 +84,7 @@ describe("new account: the one-time password must survive the dialog", () => {
         one_time_password: "swordfish-1",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.one.login), "s.popescu");
@@ -106,7 +106,7 @@ describe("new account: the one-time password must survive the dialog", () => {
         one_time_password: "swordfish-1",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.one.login), "s.popescu");
@@ -124,7 +124,7 @@ describe("new account: the one-time password must survive the dialog", () => {
         one_time_password: "swordfish-1",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.one.login), "s.popescu");
@@ -139,7 +139,7 @@ describe("new account: the one-time password must survive the dialog", () => {
 
   test("a refusal from the server is reported in the administrator's language, not as a generic failure", async () => {
     createAccountAction.mockResolvedValueOnce({ code: "login_taken" });
-    render(<AccountCreateControls roles={roles} dict={ru} />);
+    render(<AccountCreateControls roles={roles} dict={ru} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.new }));
     await userEvent.type(screen.getByLabelText(ru.accounts.create.one.login), "s.popescu");
@@ -155,7 +155,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
     importAccountsAction.mockResolvedValueOnce({
       result: { created: [], skipped: [{ login: "i.ivanov", reason: "login_taken" }] },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.roster.rosterLabel), "i.ivanov, Ivan Ivanov");
@@ -169,7 +169,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
     importAccountsAction.mockResolvedValueOnce({
       result: { created: [], skipped: [{ login: "i.ivanov", reason: "invented_later" }] },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.roster.rosterLabel), "i.ivanov, Ivan Ivanov");
@@ -187,7 +187,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
         skipped: [],
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.roster.rosterLabel), "s.popescu, Sergiu Popescu");
@@ -208,7 +208,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
         stopped: "sign_in_busy",
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
     await userEvent.type(
@@ -233,7 +233,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
         skipped: [],
       },
     });
-    render(<AccountCreateControls roles={roles} dict={en} />);
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
     await userEvent.type(screen.getByLabelText(en.accounts.create.roster.rosterLabel), "s.popescu, Sergiu Popescu");
@@ -243,5 +243,127 @@ describe("import a roster: skipped rows are named, not hidden", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(screen.getByText("swordfish-1")).toBeVisible();
+  });
+});
+
+describe("sign-in details by email", () => {
+  async function openNew(dict: Dictionary) {
+    await userEvent.click(screen.getByRole("button", { name: dict.accounts.create.new }));
+    await userEvent.type(screen.getByLabelText(dict.accounts.create.one.login), "s.popescu");
+    await userEvent.type(screen.getByLabelText(dict.accounts.create.one.fullName), "Sergiu Popescu");
+  }
+
+  async function openImport(dict: Dictionary) {
+    await userEvent.click(screen.getByRole("button", { name: dict.accounts.create.import }));
+    await userEvent.type(
+      screen.getByLabelText(dict.accounts.create.roster.rosterLabel),
+      "s.popescu, Sergiu Popescu",
+    );
+  }
+
+  test("offers no email option on either form while mail is off", async () => {
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled={false} />);
+
+    await openNew(en);
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.cancel }));
+
+    await openImport(en);
+    expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.roster.submit }));
+
+    const form = importAccountsAction.mock.calls[0]![1] as FormData;
+    expect(form.has("send_by_email")).toBe(false);
+  });
+
+  test("a new account: the option is ticked by default and travels with the form", async () => {
+    createAccountAction.mockResolvedValueOnce({
+      result: {
+        user: { id: "a", login: "s.popescu", fullName: "Sergiu Popescu" },
+        one_time_password: "swordfish-1",
+        emailed: true,
+      },
+    });
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled />);
+
+    await openNew(en);
+    expect(screen.getByRole("checkbox", { name: en.accounts.signInMail.option })).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.one.submit }));
+
+    const form = createAccountAction.mock.calls[0]![1] as FormData;
+    expect(form.get("send_by_email")).toBe("on");
+    // The password is still handed over, beside what the email did.
+    expect(await screen.findByText("swordfish-1")).toBeVisible();
+    expect(screen.getByText(en.accounts.signInMail.queued.replace("{n}", "1"))).toBeVisible();
+  });
+
+  test("a new account: an unticked option is not sent", async () => {
+    render(<AccountCreateControls roles={roles} dict={en} mailEnabled />);
+
+    await openNew(en);
+    await userEvent.click(screen.getByRole("checkbox", { name: en.accounts.signInMail.option }));
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.one.submit }));
+
+    const form = createAccountAction.mock.calls[0]![1] as FormData;
+    expect(form.has("send_by_email")).toBe(false);
+  });
+
+  test("a new account: mail turned off since the page loaded is reported in the administrator's language", async () => {
+    createAccountAction.mockResolvedValueOnce({ code: "mail_off" });
+    render(<AccountCreateControls roles={roles} dict={ru} mailEnabled />);
+
+    await openNew(ru);
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.one.submit }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(ru.errors.mail_off);
+  });
+
+  test("a roster: every password is shown, with how many were queued and who was not emailed", async () => {
+    importAccountsAction.mockResolvedValueOnce({
+      result: {
+        created: [
+          {
+            user: { id: "a", login: "s.popescu", fullName: "Sergiu Popescu" },
+            one_time_password: "swordfish-1",
+            emailed: true,
+          },
+          {
+            user: { id: "b", login: "i.ivanov", fullName: "Ivan Ivanov" },
+            one_time_password: "swordfish-2",
+            emailed: false,
+            email_skipped_reason: "no_address",
+          },
+        ],
+        skipped: [],
+      },
+    });
+    render(<AccountCreateControls roles={roles} dict={ru} mailEnabled />);
+
+    await openImport(ru);
+    expect(screen.getByRole("checkbox", { name: ru.accounts.signInMail.option })).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.roster.submit }));
+
+    const form = importAccountsAction.mock.calls[0]![1] as FormData;
+    expect(form.get("send_by_email")).toBe("on");
+    expect(await screen.findByText("swordfish-1")).toBeVisible();
+    expect(screen.getByText("swordfish-2")).toBeVisible();
+    expect(screen.getByText(ru.accounts.signInMail.queued.replace("{n}", "1"))).toBeVisible();
+    expect(
+      screen.getByText(
+        ru.accounts.signInMail.group
+          .replace("{n}", "1")
+          .replace("{reason}", ru.accounts.emailSkipped.no_address),
+      ),
+    ).toBeVisible();
+  });
+
+  test("a roster: mail turned off since the page loaded is reported in the administrator's language", async () => {
+    importAccountsAction.mockResolvedValueOnce({ code: "mail_off" });
+    render(<AccountCreateControls roles={roles} dict={ru} mailEnabled />);
+
+    await openImport(ru);
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.roster.submit }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(ru.errors.mail_off);
   });
 });

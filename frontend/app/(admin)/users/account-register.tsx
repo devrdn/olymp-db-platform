@@ -43,6 +43,7 @@ export function AccountRegister({
   roles,
   dict,
   locale,
+  mailEnabled,
 }: {
   accounts: Account[];
   total: number;
@@ -54,6 +55,8 @@ export function AccountRegister({
   roles: Role[];
   dict: Dictionary;
   locale: Locale;
+  /** Whether the create forms offer emailing the sign-in details. */
+  mailEnabled: boolean;
 }) {
   const t = dict.accounts;
   const nameOf = new Map(roles.map((role) => [role.code, role.name]));
@@ -66,7 +69,7 @@ export function AccountRegister({
           <span className="font-mono text-data text-ink-3">
             {total} {t.countLabel}
           </span>
-          <AccountCreateControls roles={roles} dict={dict} />
+          <AccountCreateControls roles={roles} dict={dict} mailEnabled={mailEnabled} />
         </div>
       </div>
 
