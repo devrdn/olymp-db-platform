@@ -48,6 +48,8 @@ const (
 // dispatcher's reach. It outlasts the transport's dial and send timeouts by
 // minutes, so a slow send is never taken again by another replica; a process
 // that dies mid-send leaves the message due again once it ends.
+// AbandonPending recognises a claimed row by this exact offset from its last
+// attempt, so no backoff or pause may equal it.
 const ClaimLease = 5 * time.Minute
 
 // MaxLastErrorBytes bounds the reason stored with a failed attempt.
