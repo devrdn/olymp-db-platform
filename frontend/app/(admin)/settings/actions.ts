@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 
-import { failureCode } from "@/lib/api/client";
+import { ApiError, failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
 import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
 
@@ -85,4 +86,20 @@ export async function removeImageAction(
 
   revalidatePath("/", "layout");
   return { saved: true };
+}
+
+/** After a test message: the address it went to, or why it did not, with the relay's reply when there was one. */
+export type MailTestState = { sentTo?: string; code?: string; subject?: string };
+
+const mailTestResultSchema = z.object({ to: z.string() });
+
+/** Sends the caller the test message; the API picks the address, the caller's own. */
+export async function sendTestMailAction(): Promise<MailTestState> {
+  try {
+    const { to } = mailTestResultSchema.parse(await serverRequest("/settings/mail-test", { method: "POST" }));
+    return { sentTo: to };
+  } catch (error: unknown) {
+    const subject = error instanceof ApiError ? error.subject : undefined;
+    return subject ? { code: failureCode(error), subject } : { code: failureCode(error) };
+  }
 }
