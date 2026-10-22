@@ -3,7 +3,6 @@ package mailing
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -13,10 +12,11 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 )
 
-// The retry policy for a message the relay defers. It is tried again after a
-// wait that doubles from a minute up to an hour; the MaxAttempts-th deferral,
-// or one whose retry would come MaxAge after the message was queued, abandons
-// it. A failure of the relay itself charges no message (see relayFailed).
+// The retry policy for a message the relay defers, or refuses without naming
+// its recipient. It is tried again after a wait that doubles from a minute up
+// to an hour; the MaxAttempts-th attempt, or one whose retry would come
+// MaxAge after the message was queued, abandons it. A failure of the relay
+// itself charges no message (see relayFailed).
 const (
 	MaxAttempts = 8
 
@@ -24,10 +24,12 @@ const (
 	lastRetry  = time.Hour
 )
 
-// RefusalsBeforeBreaking is how many refusals of the message in a row, with
-// nothing delivered between them, are taken for the relay refusing everyone
-// (Exchange's 550 5.1.8 for a mailbox it has restricted): a roster seldom
-// holds three bad addresses in a row, and each refusal costs a message.
+// RefusalsBeforeBreaking is how many different messages refused in a row,
+// with nothing delivered between them, are taken for the relay refusing
+// everyone (Exchange's 550 5.1.8 for a mailbox it has restricted). A refusal naming
+// the recipient (mail.IsRecipientRefusal) is not counted: a roster's bad
+// addresses must not pause it. Three keeps a passing refusal from pausing
+// the queue while charging few messages before it does.
 const RefusalsBeforeBreaking = 3
 
 // MaxAge bounds how long a message, and the one-time password its body may
@@ -36,8 +38,7 @@ const RefusalsBeforeBreaking = 3
 const MaxAge = 24 * time.Hour
 
 // The dispatcher's pause after a failure of the relay: from thirty seconds,
-// doubling to fifteen minutes, back to thirty after the relay next answers
-// for a message.
+// doubling to fifteen minutes, back to thirty after a delivery.
 const (
 	firstPause = 30 * time.Second
 	lastPause  = 15 * time.Minute
@@ -130,10 +131,11 @@ type Dispatcher struct {
 	// replica learns of a failing relay on its own attempt.
 	pausedUntil time.Time
 	pauses      int
-	// refusals counts the messages refused since the last delivery; it is
-	// not reset by the breaker, so a relay still refusing after the pause
-	// trips it again at once rather than costing more messages.
-	refusals int
+	// refused holds the messages refused in a row in a way that may be the
+	// relay's (see RefusalsBeforeBreaking); a delivery or a trip clears it.
+	// Distinct messages, so one message refused at every retry does not
+	// trip the breaker alone.
+	refused map[int64]bool
 }
 
 // NewDispatcher needs every field of cfg but Now; it panics when PerMinute is
@@ -188,7 +190,8 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 }
 
 // attempt sends one claimed message and records how it ended. next is false
-// when the run should stop: the relay failed, or ctx ended.
+// when the run should stop: the relay failed, the relay deferred the message,
+// the breaker tripped, ctx ended, or recording the outcome failed (err).
 func (d *Dispatcher) attempt(ctx context.Context, q Queued) (next bool, err error) {
 	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
@@ -206,8 +209,7 @@ func (d *Dispatcher) attempt(ctx context.Context, q Queued) (next bool, err erro
 		if err := d.cfg.Store.MarkSent(record, q.ID); err != nil {
 			return false, err
 		}
-		d.refusals = 0
-		d.relayAnswered()
+		d.delivered()
 		d.cfg.Counters.Count(string(q.Kind), OutcomeSent)
 		d.cfg.Logger.DebugContext(ctx, "sent a message", "message", q.ID, "kind", q.Kind, "attempt", q.Attempts)
 		return ctx.Err() == nil, nil
@@ -221,51 +223,73 @@ func (d *Dispatcher) attempt(ctx context.Context, q Queued) (next bool, err erro
 	}
 
 	why := reason(sendErr, q.Body)
-	if errors.Is(sendErr, mail.ErrInvalidMessage) {
+	switch {
+	case errors.Is(sendErr, mail.ErrInvalidMessage):
 		// Refused before any connection: the relay said nothing.
 		return true, d.abandon(record, q, why)
-	}
 
-	if mail.IsTemporary(sendErr) {
+	case mail.IsRecipientRefusal(sendErr):
+		// That address's alone: it says nothing about the next message.
+		d.cfg.Counters.SetRelayFailing(false)
+		return true, d.abandon(record, q, why)
+
+	case mail.IsTemporary(sendErr):
 		// A deferral may be the relay's for every recipient, so the run
 		// stops rather than charge each due message in turn.
-		d.relayAnswered()
-		after := backoff(q.Attempts)
-		if q.Attempts >= MaxAttempts || d.cfg.Now().Add(after).Sub(q.CreatedAt) >= MaxAge {
-			return false, d.abandon(record, q, why)
-		}
-		if err := d.cfg.Store.Retry(record, q.ID, after, why); err != nil {
-			return false, err
-		}
-		d.cfg.Counters.Count(string(q.Kind), OutcomeRetry)
-		d.cfg.Logger.InfoContext(ctx, "the relay deferred a message; it will be tried again",
-			"message", q.ID, "kind", q.Kind, "attempt", q.Attempts, "retry_in", after.String(), "error", why)
-		return false, nil
+		d.cfg.Counters.SetRelayFailing(false)
+		return false, d.retryOrAbandon(ctx, record, q, why)
 	}
 
-	d.refusals++
-	if d.refusals >= RefusalsBeforeBreaking {
-		return false, d.relayFailed(ctx, record, q,
-			fmt.Errorf("taken for the relay's after %d refusals in a row with nothing sent: %w", d.refusals, sendErr))
+	// Any other refusal may be the relay refusing everyone (Exchange's
+	// 5.1.8 for a restricted mailbox), so it is retried rather than given up
+	// at once, and enough of them in a row pause the dispatcher.
+	if d.refused == nil {
+		d.refused = map[int64]bool{}
 	}
-	d.relayAnswered()
-	return true, d.abandon(record, q, why)
+	d.refused[q.ID] = true
+	tripped := len(d.refused) >= RefusalsBeforeBreaking
+	if tripped {
+		clear(d.refused)
+	}
+	if err := d.retryOrAbandon(ctx, record, q, why); err != nil {
+		return false, err
+	}
+	if !tripped {
+		return true, nil
+	}
+	pause := d.pause()
+	d.cfg.Logger.ErrorContext(ctx, "the relay refused several messages in a row with none delivered; "+
+		"taken for the relay refusing everyone, no message is sent until it is tried again",
+		"refusals", RefusalsBeforeBreaking, "retry_in", pause.String(), "error", why)
+	return false, nil
+}
+
+// retryOrAbandon schedules the message's next attempt on the per-message
+// backoff, or abandons it at the attempt cap or when the retry would come
+// MaxAge after it was queued.
+func (d *Dispatcher) retryOrAbandon(ctx, record context.Context, q Queued, why string) error {
+	after := backoff(q.Attempts)
+	if q.Attempts >= MaxAttempts || d.cfg.Now().Add(after).Sub(q.CreatedAt) >= MaxAge {
+		return d.abandon(record, q, why)
+	}
+	if err := d.cfg.Store.Retry(record, q.ID, after, why); err != nil {
+		return err
+	}
+	d.cfg.Counters.Count(string(q.Kind), OutcomeRetry)
+	d.cfg.Logger.InfoContext(ctx, "the relay did not take a message; it will be tried again",
+		"message", q.ID, "kind", q.Kind, "attempt", q.Attempts, "retry_in", after.String(), "error", why)
+	return nil
 }
 
 // relayFailed puts the message back uncharged and pauses the dispatcher. The
 // message waits out the pause too, so a message the transport misjudged as
 // the relay's fault does not stand first in line at every probe.
 func (d *Dispatcher) relayFailed(ctx, record context.Context, q Queued, sendErr error) error {
-	pause := min(firstPause<<min(d.pauses, 10), lastPause)
-	d.pauses++
-	d.pausedUntil = d.cfg.Now().Add(pause)
-
+	pause := d.pause()
 	why := reason(sendErr, q.Body)
 	if err := d.cfg.Store.Release(record, q.ID, pause, why); err != nil {
 		return err
 	}
-	d.cfg.Counters.RelayFailed()
-	d.cfg.Counters.SetRelayFailing(true)
 
 	level := slog.LevelWarn
 	if !mail.IsTemporary(sendErr) {
@@ -277,9 +301,21 @@ func (d *Dispatcher) relayFailed(ctx, record context.Context, q Queued, sendErr 
 	return nil
 }
 
-// relayAnswered ends the pause's backoff: the relay answered for a message.
-func (d *Dispatcher) relayAnswered() {
+// pause stops sending for the relay's backoff, from thirty seconds doubling
+// to fifteen minutes; only a delivery resets it.
+func (d *Dispatcher) pause() time.Duration {
+	pause := min(firstPause<<min(d.pauses, 10), lastPause)
+	d.pauses++
+	d.pausedUntil = d.cfg.Now().Add(pause)
+	d.cfg.Counters.RelayFailed()
+	d.cfg.Counters.SetRelayFailing(true)
+	return pause
+}
+
+// delivered ends the relay's backoff and the run of refusals.
+func (d *Dispatcher) delivered() {
 	d.pauses = 0
+	clear(d.refused)
 	d.cfg.Counters.SetRelayFailing(false)
 }
 

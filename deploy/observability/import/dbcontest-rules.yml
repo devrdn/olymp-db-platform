@@ -188,7 +188,7 @@ groups:
             game cluster still holds, and ARGS=-apply removes it.
 
       - alert: DBContestMailAbandoned
-        # A message is abandoned only for its own sake (a refused recipient, eight deferrals) or after a day unsent, so each one is a person who will not get it.
+        # A message is abandoned only for its own sake (a refused recipient, eight failed attempts) or after a day unsent, so each one is a person who will not get it.
         expr: |
           sum(increase(mail_messages_total{outcome="abandoned"}[1h])
             * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
@@ -201,13 +201,15 @@ groups:
           description: >-
             The API log has the warning "a message was abandoned and will not
             be sent" with the relay's reply, and mail_outbox.last_error keeps it.
-            A 5.1.x reply is the recipient's address; "queued more than 24h0m0s
-            ago" is a relay that failed for a day (see DBContestMailRelayFailing).
+            A 5.1.1, 5.1.10 or 5.2.x reply is the recipient's address or
+            mailbox; another reply after eight attempts, or "queued more than
+            24h0m0s ago", is a relay that kept refusing or failing (see
+            DBContestMailRelayFailing).
             Sign-in details in an abandoned message never arrived: hand them over
             or reset the password again once the cause is fixed.
 
       - alert: DBContestMailRelayFailing
-        # The dispatcher stops at the relay's first failure and tries again after 30 s, doubling; ten minutes is five failed tries in a row, not a passing fault.
+        # The dispatcher stops at the relay's first failure, or at three different messages refused in a row, and tries again after 30 s, doubling; ten minutes is five failed tries, not a passing fault.
         expr: |
           max(mail_relay_failing
             * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
@@ -218,18 +220,19 @@ groups:
         annotations:
           summary: The mail relay has been failing for ten minutes; no email is being sent.
           description: >-
-            Queued messages wait, uncharged, and are abandoned only
-            a day after they were queued. The API log has "the relay
-            failed; no message is sent until it is tried again" with
-            the reply. An error starting "taken for the relay's
-            after 3 refusals in a row" is a relay refusing every
-            recipient, such as 550 5.1.8 for a mailbox Microsoft
-            restricted for sending spam (unblocked in the Defender
-            portal). 535 5.7.139 is SMTP AUTH disabled for the
-            mailbox in the Exchange admin center, or MFA; another
-            535 is SMTP_USERNAME or SMTP_PASSWORD; "no such host" is
-            SMTP_HOST; a certificate or TLS error is the relay's
-            TLS. Fix the setting and restart the api service.
+            Queued messages wait and are abandoned only at their
+            eighth attempt or a day after they were queued. The API
+            log has the reply under "the relay failed; no message is
+            sent until it is tried again", or, when three different
+            messages were refused in a row with none delivered,
+            under "taken for the relay refusing everyone": such as
+            550 5.1.8 for a mailbox Microsoft restricted for sending
+            spam (unblocked in the Defender portal). 535 5.7.139 is
+            SMTP AUTH disabled for the mailbox in the Exchange admin
+            center, or MFA; another 535 is SMTP_USERNAME or
+            SMTP_PASSWORD; "no such host" is SMTP_HOST; a
+            certificate or TLS error is the relay's TLS. Fix the
+            setting and restart the api service.
 
   - name: dbcontest-queryrunner
     rules:

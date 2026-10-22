@@ -223,16 +223,22 @@ queued before mail was turned off once it is a day old.
   The message is put back with its attempt refunded, and the job stops
   sending for 30 seconds, then 1, 2, 4 and 8 minutes, then every 15, until
   the relay next answers for a message.
-- A refusal of the message itself (a 5xx reply to RCPT or DATA, such as an
-  unknown recipient) abandons it, and the job goes on to the next. Three
-  refusals in a row with nothing delivered between them are taken for the
-  relay refusing everyone (Exchange's `550 5.1.8` for a mailbox it has
-  restricted): the third message is put back like a relay failure, the job
-  pauses, and no more are given up until a message is delivered.
+- A refusal naming the recipient (RFC 3463 X.1.1, X.1.2, X.1.3, X.1.6,
+  X.1.10, X.2.1 or X.2.2, such as Microsoft's `550 5.1.10` for an unknown
+  address, or a 5xx to RCPT without an enhanced code) abandons that message
+  alone, and the job goes on to the next.
+- Any other refusal of the message (a 5xx to DATA, `5.1.8` naming the
+  sender, a `5.7.x` policy refusal) may be the relay refusing everyone, so
+  the message is not given up: it is tried again on its own backoff, below,
+  and abandoned only at the eighth attempt or a day after it was queued.
+  Three different messages refused this way in a row, with nothing
+  delivered between them, pause the job as a relay failure does (Exchange's
+  `550 5.1.8` for a mailbox it has restricted); after the pause the next
+  messages are judged afresh, and only a delivery shortens the pause again.
 - A deferral of the recipient (a 4xx reply to RCPT) is tried again after 1,
   2, 4, 8, 16 and 32 minutes, then an hour, and the job leaves the other
-  messages for its next run; the eighth, or one whose retry would come a day
-  after the message was queued, abandons it.
+  messages for its next run; the eighth attempt, or one whose retry would
+  come a day after the message was queued, abandons it.
 - A message is never sent, and its body is not kept, once it was queued 24
   hours ago (a claim's five-minute lease aside): each run first abandons
   those, whatever the relay is doing.
