@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // templateSizes caches each template's measured size per template version.
@@ -79,6 +80,67 @@ func (s *Service) templateBytes(ctx context.Context, contest Contest) (int64, er
 	return size, nil
 }
 
+// clusterBytesTTL is how long one measurement of the whole cluster serves
+// every caller. ClusterBytes stats every file of every database (hundreds at
+// contest start), and roomForOneCopy asks on every participant's own
+// pool-miss request, concurrently, exactly then. Ten seconds turns a burst of
+// latecomers into one scan while a drop or an outside writer is still seen
+// within the time a copy itself takes.
+const clusterBytesTTL = 10 * time.Second
+
+// clusterUsage is the cluster's measured size plus the copies this process
+// has made since, so the budget cannot be overshot between measurements by
+// the copies that were made in the meantime. Replicas do not see each
+// other's copies; the TTL bounds that error.
+type clusterUsage struct {
+	// mu is held across the measurement on purpose: concurrent callers wait
+	// for the one scan in flight rather than each starting their own, which
+	// is the burst this cache exists for.
+	mu         sync.Mutex
+	measured   int64
+	measuredAt time.Time
+	// added is the bytes of copies made since measuredAt.
+	added int64
+	valid bool
+}
+
+// clusterBytes is Cluster.ClusterBytes served from clusterUsage: measured at
+// most once per clusterBytesTTL, plus the copies made since. Callers in this
+// package use it instead of Cluster.ClusterBytes.
+func (s *Service) clusterBytes(ctx context.Context) (int64, error) {
+	s.usage.mu.Lock()
+	defer s.usage.mu.Unlock()
+	now := s.now()
+	if s.usage.valid && now.Sub(s.usage.measuredAt) < clusterBytesTTL {
+		return s.usage.measured + s.usage.added, nil
+	}
+	used, err := s.cluster.ClusterBytes(ctx)
+	if err != nil {
+		return 0, err
+	}
+	s.usage.measured, s.usage.measuredAt, s.usage.added, s.usage.valid = used, now, 0, true
+	return used, nil
+}
+
+// noteCopyMade adds one copy of the contest's template to the cached
+// measurement. Called after every copy that grows the cluster, never after a
+// rebuild, which dropped the old copy first. Without the template's size at
+// hand the measurement is discarded instead, so the next reader measures
+// again rather than undercount.
+func (s *Service) noteCopyMade(contest Contest) {
+	s.usage.mu.Lock()
+	defer s.usage.mu.Unlock()
+	if !s.usage.valid {
+		return
+	}
+	size, ok := s.sizes.get(contest.Template, contest.Version)
+	if !ok {
+		s.usage.valid = false
+		return
+	}
+	s.usage.added += size
+}
+
 // roomForOneCopy refuses when one more copy of this contest's template would
 // take the game cluster past the deployment's budget. It is copiesThatFit's
 // check applied where a participant gets a database, so late registrations
@@ -98,7 +160,7 @@ func (s *Service) roomForOneCopy(ctx context.Context, contest Contest) error {
 		return fmt.Errorf("check the game cluster's room for contest %s: the template %s measures %d bytes",
 			contest.ID, contest.Template, size)
 	}
-	used, err := s.cluster.ClusterBytes(ctx)
+	used, err := s.clusterBytes(ctx)
 	if err != nil {
 		return fmt.Errorf("check the game cluster's room for contest %s: %w", contest.ID, err)
 	}
