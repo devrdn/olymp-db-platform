@@ -231,8 +231,10 @@ groups:
             SMTP AUTH disabled for the mailbox in the Exchange admin
             center, or MFA; another 535 is SMTP_USERNAME or
             SMTP_PASSWORD; "no such host" is SMTP_HOST; a
-            certificate or TLS error is the relay's TLS. Fix the
-            setting and restart the api service.
+            certificate or TLS error is the relay's TLS. A fix on
+            the mailbox's side is picked up at the next try, within
+            fifteen minutes; a changed deploy/.env reaches the API
+            with make deploy-api VERSION=<the running tag>.
 
   - name: dbcontest-queryrunner
     rules:
