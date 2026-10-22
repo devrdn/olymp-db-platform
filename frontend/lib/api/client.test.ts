@@ -105,6 +105,28 @@ describe("request", () => {
 
     expect(seen?.signal).toBe(controller.signal);
   });
+
+  test("reports a signal that ran out as the API being unreachable", async () => {
+    const fetchImpl: typeof fetch = async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+
+    const failure = await request("/contests", { fetchImpl }).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).toMatchObject({ code: "unreachable", status: 504 });
+  });
+
+  test("passes a caller's own abort through, as it is a cancellation and not a failure", async () => {
+    const abort = new DOMException("The operation was aborted", "AbortError");
+    const fetchImpl: typeof fetch = async () => {
+      throw abort;
+    };
+
+    const failure = await request("/contests", { fetchImpl }).catch((e: unknown) => e);
+
+    expect(failure).toBe(abort);
+  });
 });
 
 describe("what an error is about", () => {
