@@ -404,9 +404,9 @@ func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
 }
 
 // This endpoint reaches every contest's staff, not only users.manage, so the
-// email widens what they can read about any account; the owner accepted that to
-// tell same-named candidates apart (see PersonResponse).
-func TestDirectorySearchPublishesTheEmailAddress(t *testing.T) {
+// whole address is published only to a query that matched it; a match on the
+// login or the name gets a masked one (see contests.Person).
+func TestDirectorySearchPublishesTheEmailAddressOnlyToAQueryThatMatchedIt(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	f.stores.Users.Add(users.User{
@@ -414,14 +414,16 @@ func TestDirectorySearchPublishesTheEmailAddress(t *testing.T) {
 		Status: users.StatusActive,
 	})
 
-	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=ivanov", "")
+	for q, want := range map[string]string{"ivanov": "s…@example.edu", "sergei@example": "sergei@example.edu"} {
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q="+q, "")
 
-	items, _ := decode(t, rec)["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("items = %v, want 1", items)
-	}
-	if got := items[0].(map[string]any)["email"]; got != "sergei@example.edu" {
-		t.Errorf("email = %v, want the account's own address", got)
+		items, _ := decode(t, rec)["items"].([]any)
+		if len(items) != 1 {
+			t.Fatalf("query %q: items = %v, want 1", q, items)
+		}
+		if got := items[0].(map[string]any)["email"]; got != want {
+			t.Errorf("query %q: email = %v, want %q", q, got, want)
+		}
 	}
 }
 
