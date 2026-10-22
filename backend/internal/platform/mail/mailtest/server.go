@@ -1,4 +1,9 @@
-package mail_test
+// Package mailtest is an in-process SMTP relay for tests of code that sends
+// mail through internal/platform/mail: STARTTLS or implicit TLS with a
+// certificate the test trusts, AUTH PLAIN and LOGIN, and a reply of the
+// test's choosing at any stage. Nothing it receives leaves the process. It is
+// not a mail server and accepts only what the transport sends.
+package mailtest
 
 import (
 	"crypto/ecdsa"
@@ -18,12 +23,10 @@ import (
 	"time"
 )
 
-// fakeSMTP is an in-process SMTP server speaking enough of the protocol for
-// the transport: EHLO, STARTTLS, AUTH PLAIN and LOGIN, MAIL, RCPT, DATA,
-// RSET, NOOP and QUIT. Nothing it receives leaves the process.
-type fakeSMTP struct {
-	t       *testing.T
-	opts    fakeOptions
+// Server speaks enough of SMTP for the transport: EHLO, STARTTLS, AUTH PLAIN
+// and LOGIN, MAIL, RCPT, DATA, RSET, NOOP and QUIT.
+type Server struct {
+	opts    Options
 	ln      net.Listener
 	tlsConf *tls.Config
 	// Roots trusts the server's certificate.
@@ -31,13 +34,13 @@ type fakeSMTP struct {
 	done  chan struct{}
 
 	mu       sync.Mutex
-	messages []received
+	messages []Received
 	auths    []string
 }
 
-// fakeOptions shapes the server. The zero value is a plain server that
-// offers neither TLS nor AUTH.
-type fakeOptions struct {
+// Options shapes the server. The zero value is a plain server that offers
+// neither TLS nor AUTH.
+type Options struct {
 	// ImplicitTLS speaks TLS from the first byte, as on port 465.
 	ImplicitTLS bool
 	// StartTLS advertises STARTTLS on a plain connection.
@@ -50,6 +53,9 @@ type fakeOptions struct {
 	// Replies overrides the answer to a stage: GREETING, EHLO, STARTTLS,
 	// AUTH, MAIL, RCPT, DATA, DOT (the end of the message text) or QUIT.
 	Replies map[string]string
+	// RefuseRecipients answers RCPT for these addresses with the given reply,
+	// so one message of several can be refused.
+	RefuseRecipients map[string]string
 	// DropAt closes the connection at that stage instead of answering.
 	DropAt string
 	// StallAt stops answering at that stage until the test ends.
@@ -58,18 +64,19 @@ type fakeOptions struct {
 	MaxTLSVersion uint16
 }
 
-type received struct {
+// Received is a message the server accepted.
+type Received struct {
 	From   string
 	To     []string
 	Data   string
 	Secure bool
 }
 
-func newFakeSMTP(t *testing.T, opts fakeOptions) *fakeSMTP {
+// NewServer listens on 127.0.0.1 until the test ends.
+func NewServer(t *testing.T, opts Options) *Server {
 	t.Helper()
 	cert, roots := testCertificate(t)
-	s := &fakeSMTP{
-		t:    t,
+	s := &Server{
 		opts: opts,
 		tlsConf: &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -112,18 +119,20 @@ func newFakeSMTP(t *testing.T, opts fakeOptions) *fakeSMTP {
 	return s
 }
 
-func (s *fakeSMTP) Host() string { return "127.0.0.1" }
+// Host and Port are where the server listens.
+func (s *Server) Host() string { return "127.0.0.1" }
 
-func (s *fakeSMTP) Port() int { return s.ln.Addr().(*net.TCPAddr).Port }
+func (s *Server) Port() int { return s.ln.Addr().(*net.TCPAddr).Port }
 
-func (s *fakeSMTP) Messages() []received {
+// Messages lists what the server accepted, in order.
+func (s *Server) Messages() []Received {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]received(nil), s.messages...)
+	return append([]Received(nil), s.messages...)
 }
 
 // Auths lists the users that authenticated successfully, with the mechanism.
-func (s *fakeSMTP) Auths() []string {
+func (s *Server) Auths() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.auths...)
@@ -131,7 +140,7 @@ func (s *fakeSMTP) Auths() []string {
 
 // misbehave applies a stage's fault, reporting whether the stage is answered
 // (replied) and whether the connection is over (stop).
-func (s *fakeSMTP) misbehave(stage string, tp *textproto.Conn) (replied, stop bool) {
+func (s *Server) misbehave(stage string, tp *textproto.Conn) (replied, stop bool) {
 	switch stage {
 	case s.opts.DropAt:
 		return false, true
@@ -147,7 +156,7 @@ func (s *fakeSMTP) misbehave(stage string, tp *textproto.Conn) (replied, stop bo
 	return false, false
 }
 
-func (s *fakeSMTP) serve(conn net.Conn) {
+func (s *Server) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	secure := s.opts.ImplicitTLS
@@ -158,7 +167,7 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 	}
 	_ = tp.PrintfLine("220 fake.test ESMTP")
 
-	var msg received
+	var msg Received
 	for {
 		line, err := tp.ReadLine()
 		if err != nil {
@@ -203,16 +212,21 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 				return
 			}
 			conn, tp, secure = tlsConn, textproto.NewConn(tlsConn), true
-			msg = received{}
+			msg = Received{}
 		case "AUTH":
 			if !s.authenticate(tp, arg) {
 				return
 			}
 		case "MAIL":
-			msg = received{From: addressIn(arg, "FROM:"), Secure: secure}
+			msg = Received{From: addressIn(arg, "FROM:"), Secure: secure}
 			_ = tp.PrintfLine("250 2.1.0 ok")
 		case "RCPT":
-			msg.To = append(msg.To, addressIn(arg, "TO:"))
+			to := addressIn(arg, "TO:")
+			if reply, refused := s.opts.RefuseRecipients[to]; refused {
+				_ = tp.PrintfLine("%s", reply)
+				continue
+			}
+			msg.To = append(msg.To, to)
 			_ = tp.PrintfLine("250 2.1.5 ok")
 		case "DATA":
 			_ = tp.PrintfLine("354 go ahead")
@@ -229,10 +243,10 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 			s.mu.Lock()
 			s.messages = append(s.messages, msg)
 			s.mu.Unlock()
-			msg = received{}
+			msg = Received{}
 			_ = tp.PrintfLine("250 2.0.0 queued")
 		case "RSET":
-			msg = received{}
+			msg = Received{}
 			_ = tp.PrintfLine("250 2.0.0 ok")
 		case "NOOP":
 			_ = tp.PrintfLine("250 2.0.0 ok")
@@ -247,7 +261,7 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 
 // authenticate runs one AUTH exchange and reports whether the connection
 // continues.
-func (s *fakeSMTP) authenticate(tp *textproto.Conn, arg string) bool {
+func (s *Server) authenticate(tp *textproto.Conn, arg string) bool {
 	mech, initial, _ := strings.Cut(arg, " ")
 	var user, pass string
 	switch strings.ToUpper(mech) {

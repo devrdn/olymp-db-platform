@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
+	"github.com/devrdn/db-contest/backend/internal/platform/mail/mailtest"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 )
 
 // relayConfig is the configuration of a sender pointed at the fake server.
-func relayConfig(s *fakeSMTP, mode mail.TLSMode) mail.Config {
+func relayConfig(s *mailtest.Server, mode mail.TLSMode) mail.Config {
 	return mail.Config{
 		Host:        s.Host(),
 		Port:        s.Port(),
@@ -51,7 +52,7 @@ func send(t *testing.T, sender *mail.Sender) error {
 }
 
 func TestAMessageArrivesWithItsHeadersAndBody(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN LOGIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN LOGIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	subject := "Данные для входа — олимпиада"
@@ -101,7 +102,7 @@ func TestAMessageArrivesWithItsHeadersAndBody(t *testing.T) {
 }
 
 func TestImplicitTLSDeliversWithLoginAuthentication(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{ImplicitTLS: true, AuthMechs: "LOGIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{ImplicitTLS: true, AuthMechs: "LOGIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSImplicit))
 
 	if err := send(t, sender); err != nil {
@@ -117,7 +118,7 @@ func TestImplicitTLSDeliversWithLoginAuthentication(t *testing.T) {
 }
 
 func TestAPlainRelayDeliversWithoutTLSOrCredentials(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{})
+	server := mailtest.NewServer(t, mailtest.Options{})
 	cfg := relayConfig(server, mail.TLSNone)
 	cfg.Username, cfg.Password = "", ""
 	sender := newSender(t, cfg)
@@ -131,7 +132,7 @@ func TestAPlainRelayDeliversWithoutTLSOrCredentials(t *testing.T) {
 }
 
 func TestStartTLSModeNeverSendsOverAPlainConnection(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{AuthMechs: "PLAIN LOGIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{AuthMechs: "PLAIN LOGIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	err := send(t, sender)
@@ -143,12 +144,14 @@ func TestStartTLSModeNeverSendsOverAPlainConnection(t *testing.T) {
 }
 
 func TestAnUntrustedCertificateIsPermanent(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
 	cfg := relayConfig(server, mail.TLSStartTLS)
 	cfg.RootCAs = nil
 	sender := newSender(t, cfg)
 
-	assertPermanent(t, send(t, sender))
+	err := send(t, sender)
+	assertPermanent(t, err)
+	assertRelay(t, err, true)
 	if len(server.Auths()) != 0 {
 		t.Error("credentials were sent to a server whose certificate was not trusted")
 	}
@@ -157,18 +160,20 @@ func TestAnUntrustedCertificateIsPermanent(t *testing.T) {
 func TestTLSOlderThanOnePointTwoIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		mode mail.TLSMode
-		opts fakeOptions
+		opts mailtest.Options
 	}{
-		{mail.TLSStartTLS, fakeOptions{StartTLS: true}},
-		{mail.TLSImplicit, fakeOptions{ImplicitTLS: true}},
+		{mail.TLSStartTLS, mailtest.Options{StartTLS: true}},
+		{mail.TLSImplicit, mailtest.Options{ImplicitTLS: true}},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			tc.opts.AuthMechs, tc.opts.User, tc.opts.Password = "PLAIN", testUser, testPassword
 			tc.opts.MaxTLSVersion = tls.VersionTLS11
-			server := newFakeSMTP(t, tc.opts)
+			server := mailtest.NewServer(t, tc.opts)
 			sender := newSender(t, relayConfig(server, tc.mode))
 
-			assertPermanent(t, send(t, sender))
+			err := send(t, sender)
+			assertPermanent(t, err)
+			assertRelay(t, err, true)
 			if len(server.Auths()) != 0 || len(server.Messages()) != 0 {
 				t.Error("credentials or a message crossed TLS 1.1")
 			}
@@ -177,19 +182,20 @@ func TestTLSOlderThanOnePointTwoIsRefused(t *testing.T) {
 }
 
 func TestImplicitTLSAgainstAPlainPortIsPermanent(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true})
 	sender := newSender(t, relayConfig(server, mail.TLSImplicit))
 
 	assertPermanent(t, send(t, sender))
 }
 
 func TestAnAuthenticationFailureIsPermanentAndDoesNotRepeatThePassword(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN LOGIN", User: testUser, Password: "another"})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN LOGIN", User: testUser, Password: "another"})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	err := send(t, sender)
 
 	assertPermanent(t, err)
+	assertRelay(t, err, true)
 	if strings.Contains(err.Error(), testPassword) {
 		t.Errorf("the error repeats the password: %q", err)
 	}
@@ -199,31 +205,43 @@ func TestAnAuthenticationFailureIsPermanentAndDoesNotRepeatThePassword(t *testin
 }
 
 func TestARelayWithoutAuthenticationRefusesCredentialsPermanently(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
-	assertPermanent(t, send(t, sender))
+	err := send(t, sender)
+	assertPermanent(t, err)
+	assertRelay(t, err, true)
 }
 
+// relay says whether the failure is the relay's, whatever the message: a
+// reply before RCPT, a deferral or a lost connection after it, or Exchange
+// refusing the sending mailbox at the end of DATA. Only a refusal of the
+// recipient or of the message itself is the message's.
 func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 	for _, tc := range []struct {
 		stage, reply string
 		temporary    bool
+		relay        bool
 	}{
-		{"GREETING", "554 5.3.2 no service", false},
-		{"GREETING", "421 4.3.2 try later", true},
-		{"STARTTLS", "454 4.7.0 TLS not available", true},
-		{"AUTH", "454 4.7.0 temporary authentication failure", true},
-		{"MAIL", "550 5.7.1 sender refused", false},
-		{"MAIL", "451 4.3.0 local error", true},
-		{"RCPT", "550 5.1.1 no such user", false},
-		{"RCPT", "452 4.2.2 mailbox full", true},
-		{"DATA", "554 5.6.0 no", false},
-		{"DOT", "552 5.3.4 message too big", false},
-		{"DOT", "451 4.7.1 greylisted", true},
+		{"GREETING", "554 5.3.2 no service", false, true},
+		{"GREETING", "421 4.3.2 try later", true, true},
+		{"STARTTLS", "454 4.7.0 TLS not available", true, true},
+		{"AUTH", "454 4.7.0 temporary authentication failure", true, true},
+		{"AUTH", "535 5.7.139 Authentication unsuccessful, SmtpClientAuthentication is disabled for the Mailbox", false, true},
+		{"MAIL", "550 5.7.1 sender refused", false, true},
+		{"MAIL", "451 4.3.0 local error", true, true},
+		{"RCPT", "550 5.1.1 no such user", false, false},
+		{"RCPT", "452 4.2.2 mailbox full", true, false},
+		{"RCPT", "421 4.7.0 closing", true, true},
+		{"DATA", "554 5.6.0 no", false, false},
+		{"DATA", "451 4.3.0 try later", true, true},
+		{"DOT", "552 5.3.4 message too big", false, false},
+		{"DOT", "451 4.7.1 greylisted", true, true},
+		{"DOT", "432 4.3.2 STOREDRV.ClientSubmit; sender thread limit exceeded", true, true},
+		{"DOT", "554 5.2.252 SendAsDenied; noreply@usm.md not allowed to send as other@usm.md; STOREDRV.Submission.Exception:SendAsDeniedException.MapiExceptionSendAsDenied", false, true},
 	} {
-		t.Run(tc.stage+" "+tc.reply[:3], func(t *testing.T) {
-			server := newFakeSMTP(t, fakeOptions{
+		t.Run(tc.stage+" "+tc.reply[:9], func(t *testing.T) {
+			server := mailtest.NewServer(t, mailtest.Options{
 				StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword,
 				Replies: map[string]string{tc.stage: tc.reply},
 			})
@@ -236,6 +254,7 @@ func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 			} else {
 				assertPermanent(t, err)
 			}
+			assertRelay(t, err, tc.relay)
 			if len(server.Messages()) != 0 {
 				t.Error("the server recorded a message it refused")
 			}
@@ -246,12 +265,14 @@ func TestARefusalReplyIsPermanentAndADeferralTemporary(t *testing.T) {
 func TestADroppedConnectionIsTemporary(t *testing.T) {
 	for _, stage := range []string{"GREETING", "EHLO", "AUTH", "MAIL", "RCPT", "DATA", "DOT"} {
 		t.Run(stage, func(t *testing.T) {
-			server := newFakeSMTP(t, fakeOptions{
+			server := mailtest.NewServer(t, mailtest.Options{
 				StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword, DropAt: stage,
 			})
 			sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
-			assertTemporary(t, send(t, sender))
+			err := send(t, sender)
+			assertTemporary(t, err)
+			assertRelay(t, err, true)
 		})
 	}
 }
@@ -269,11 +290,13 @@ func TestAnUnreachableRelayIsTemporary(t *testing.T) {
 		DialTimeout: time.Second, SendTimeout: 2 * time.Second,
 	})
 
-	assertTemporary(t, send(t, sender))
+	err = send(t, sender)
+	assertTemporary(t, err)
+	assertRelay(t, err, true)
 }
 
 func TestASilentRelayIsCutOffAtTheSendTimeout(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword, StallAt: "DOT"})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword, StallAt: "DOT"})
 	cfg := relayConfig(server, mail.TLSStartTLS)
 	cfg.DialTimeout = 5 * time.Second
 	cfg.SendTimeout = 300 * time.Millisecond
@@ -289,7 +312,7 @@ func TestASilentRelayIsCutOffAtTheSendTimeout(t *testing.T) {
 }
 
 func TestACancelledContextStopsTheSend(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword, StallAt: "MAIL"})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword, StallAt: "MAIL"})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -306,7 +329,7 @@ func TestACancelledContextStopsTheSend(t *testing.T) {
 // A failure after the relay accepted the message must not report the send as
 // failed: a caller would retry and deliver it twice.
 func TestAFailureAfterAcceptanceIsNotAFailedSend(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{
+	server := mailtest.NewServer(t, mailtest.Options{
 		StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword,
 		Replies: map[string]string{"QUIT": "554 5.0.0 goodbye anyway"},
 	})
@@ -321,7 +344,7 @@ func TestAFailureAfterAcceptanceIsNotAFailedSend(t *testing.T) {
 }
 
 func TestANewlineInTheSubjectCannotAddAHeader(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	subject := "Hello\r\nBcc: victim@example.md\r\nX-Injected: yes"
@@ -337,7 +360,7 @@ func TestANewlineInTheSubjectCannotAddAHeader(t *testing.T) {
 }
 
 func TestADisplayNameWithANewlineCannotAddAHeader(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
 
 	// A raw newline does not parse as an address at all.
 	cfg := relayConfig(server, mail.TLSStartTLS)
@@ -354,7 +377,7 @@ func TestADisplayNameWithANewlineCannotAddAHeader(t *testing.T) {
 }
 
 func TestOnlyABareValidRecipientIsAccepted(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	for _, to := range []string{
@@ -372,6 +395,9 @@ func TestOnlyABareValidRecipientIsAccepted(t *testing.T) {
 		if mail.IsTemporary(err) {
 			t.Errorf("Send(to=%q) reported a refused address as temporary", to)
 		}
+		if mail.IsRelayFailure(err) {
+			t.Errorf("Send(to=%q) blamed the relay for an invalid recipient", to)
+		}
 	}
 	if len(server.Messages()) != 0 {
 		t.Error("a message to an invalid recipient reached the relay")
@@ -379,7 +405,7 @@ func TestOnlyABareValidRecipientIsAccepted(t *testing.T) {
 }
 
 func TestTheSubjectAndBodyAreBounded(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
+	server := mailtest.NewServer(t, mailtest.Options{StartTLS: true, AuthMechs: "PLAIN", User: testUser, Password: testPassword})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 	ctx := context.Background()
 
@@ -413,7 +439,7 @@ func TestWithoutAHostMailIsOff(t *testing.T) {
 }
 
 func TestTheSenderReportsItsAddressAndNoSecret(t *testing.T) {
-	server := newFakeSMTP(t, fakeOptions{})
+	server := mailtest.NewServer(t, mailtest.Options{})
 	sender := newSender(t, relayConfig(server, mail.TLSStartTLS))
 
 	if !sender.Enabled() {
@@ -461,6 +487,13 @@ func assertTemporary(t *testing.T, err error) {
 	}
 	if !mail.IsTemporary(err) || !errors.Is(err, mail.ErrTemporary) || errors.Is(err, mail.ErrPermanent) {
 		t.Errorf("Send() = %v, want temporary and only temporary", err)
+	}
+}
+
+func assertRelay(t *testing.T, err error, want bool) {
+	t.Helper()
+	if got := mail.IsRelayFailure(err); got != want {
+		t.Errorf("IsRelayFailure(%v) = %v, want %v", err, got, want)
 	}
 }
 

@@ -7,7 +7,10 @@
 // ErrInvalidMessage, ErrTemporary or ErrPermanent, and IsTemporary reports
 // whether a retry may help: a 4xx reply, a network error or a timeout yes; a
 // 5xx reply, failed authentication, a refused address, an untrusted
-// certificate or a refused TLS handshake no. TLS is 1.2 or later. A Sender
+// certificate or a refused TLS handshake no. A temporary or permanent failure
+// also wraps ErrRelay when it is the relay's and not the message's
+// (IsRelayFailure): everything before RCPT, a lost connection, a deferral
+// after the recipient was accepted. TLS is 1.2 or later. A Sender
 // built without a host is disabled rather than missing, so a deployment
 // without a relay still starts.
 //
@@ -168,7 +171,7 @@ func (s *Sender) Send(ctx context.Context, to, subject, body string) error {
 	defer cancel()
 	client, err := gomail.NewClient(s.cfg.Host, s.options(ctx)...)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrPermanent, err)
+		return fmt.Errorf("%w: %w: %w", ErrPermanent, ErrRelay, err)
 	}
 	err = client.DialAndSendWithContext(ctx, msg)
 	if err == nil || msg.IsDelivered() {
