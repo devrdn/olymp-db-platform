@@ -922,7 +922,7 @@ service exports, so the file carries no UID to rewrite. Its uid,
 
 **What pages, and why.** Each rule carries its threshold's reasoning in a
 comment beside it. The Query Runner's thresholds assume its defaults
-(`QUERY_CONCURRENT=8`, `QUERY_QUEUE_DEPTH=32`, `QUERY_QUEUE_WAIT=15s`,
+(`QUERY_CONCURRENT=8`, `QUERY_QUEUE_DEPTH=512`, `QUERY_QUEUE_WAIT=15s`,
 `QUERY_DEADLINE=5s`): the runner does not export its configuration, so a
 changed setting means changing the number in the rules too.
 

@@ -557,11 +557,15 @@ changes nothing.
 
 The capacity itself is decided before the contest, not during it.
 `QUERY_CONCURRENT` plus `QUERY_QUEUE_DEPTH` should be at least the number of
-participants (8 + 32 = 40 by default, the beta's forty), `QUERY_CONCURRENT`
-also sizes the game cluster's memory (`deploy/.env.example` has the
-arithmetic), the alert thresholds assume the defaults ([Query Runner
+participants (8 + 512 by default: the queue costs nothing on the cluster, so
+it is sized for an olympiad, not the beta's forty), `QUERY_CONCURRENT` also
+sizes the game cluster's memory (`deploy/.env.example` has the arithmetic),
+the alert thresholds assume the defaults ([Query Runner
 metrics](../../backend/README.md#query-runner-metrics)), and the load test is
-what showed the hardware holds them.
+what showed the hardware holds them. Depth only decides who is told `busy`;
+how long a queue of three hundred takes to drain is throughput, eight slots
+at the mean query time, so a contest of slow queries still times out at
+`QUERY_QUEUE_WAIT` unless the cluster has more slots.
 
 #### The disk is filling
 
@@ -585,6 +589,10 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
 - **The game cluster.** `GAME_CLUSTER_MAX_BYTES` caps what all copies may
   take together; past it, a new copy is refused (`game_cluster_full`) and the
   provisioning tick logs both figures. **Databases** shows each copy's size.
+  Check before the day that (roster + `GAME_POOL_DEPTH`) × the template's
+  size fits the budget: the default 64 GiB holds 310 copies of a 210 MiB
+  template, and a 1 GB dump leaves most of a three-hundred roster refused on
+  their first query.
 - **One participant's copy.** The disk quota factor caps each copy; at it,
   that participant's writes answer `query_disk_full`, and they free space or
   reset.
