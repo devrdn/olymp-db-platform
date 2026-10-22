@@ -221,6 +221,21 @@ may send three a minute, refusals included, and every attempt is recorded in
 the audit trail as `settings.mail_test` with its outcome and the reply's code.
 `GET /settings/all` says whether mail is on and the address it is sent as.
 
+**Sign-in details.** Creating an account (`POST /users`), importing a roster
+(`POST /users/import`), resetting a password (`POST
+/users/{userID}/password-reset`) and the bulk reset (`POST
+/users/bulk/password-reset`) take `send_by_email`. With it set, each account
+that has an address is queued the sign-in details message (its login, its
+one-time password and the sign-in link) in the transaction that issues the
+password, so the message and the password commit or roll back together; the
+trail records `user.sign_in_details_emailed`, never the password. The
+administrator is still handed every password, and each one in the answer
+says `emailed`, or `email_skipped_reason: "no_address"` for an account
+without an address. With mail off the option is refused with `mail_off`
+before anything changes. A message that cannot be written is the
+installation's fault, not the account's, and changes nothing: an import
+stops at that row as it does for an outage.
+
 **The outbox.** Every other message is queued: a request never waits on the
 relay. It queues the message in
 the `mail_outbox` table, inside its own transaction, and the API's background

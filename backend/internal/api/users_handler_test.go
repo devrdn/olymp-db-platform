@@ -14,11 +14,13 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/go-chi/chi/v5"
@@ -37,6 +39,13 @@ type apiFixture struct {
 // newAPIFixture mounts the account endpoints behind a session for an account
 // holding the given permissions.
 func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
+	t.Helper()
+	return newAPIFixtureWithMail(t, nil, permissions...)
+}
+
+// newAPIFixtureWithMail is newAPIFixture with the service's mail wired, or
+// none when mail is nil.
+func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, permissions ...string) *apiFixture {
 	t.Helper()
 
 	c := cache.NewMemory(1000)
@@ -61,6 +70,9 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 	})
 	hasher := passwordtest.NewHasher()
 	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher)
+	if mail != nil {
+		service.WithMail(*mail)
+	}
 	unlocker := &recordingUnlocker{}
 
 	router := chi.NewRouter()
@@ -750,5 +762,254 @@ func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) 
 	}
 	if body.Stopped != "sign_in_busy" {
 		t.Errorf("stopped = %q, want sign_in_busy", body.Stopped)
+	}
+}
+
+// memoryQueue is the outbox's table.
+type memoryQueue struct {
+	messages []mailing.Message
+}
+
+func (q *memoryQueue) Insert(_ context.Context, m mailing.Message) error {
+	q.messages = append(q.messages, m)
+	return nil
+}
+
+type fixedMailSettings settings.Values
+
+func (s fixedMailSettings) All(context.Context) (settings.Values, error) {
+	return settings.Values(s), nil
+}
+
+// newEmailingFixture mounts the account endpoints with mail on, queueing into
+// the returned table, or with mail off when on is false.
+func newEmailingFixture(t *testing.T, on bool) (*apiFixture, *memoryQueue) {
+	t.Helper()
+	queue := &memoryQueue{}
+	outbox := mailing.Disabled()
+	if on {
+		outbox = mailing.NewOutbox(queue)
+	}
+	f := newAPIFixtureWithMail(t, &users.Mail{
+		Outbox: outbox,
+		Texts:  mailing.NewTexts("https://olympdb.usm.md"),
+		Settings: fixedMailSettings{
+			settings.KeyName:         "Olimpiada USM",
+			settings.KeyMailLanguage: string(mailing.Romanian),
+		},
+	}, rbac.PermissionUsersManage)
+	return f, queue
+}
+
+// emailed is the part of an issued password's answer that says whether it
+// was emailed.
+type emailed struct {
+	Login           string  `json:"login"`
+	User            UserRef `json:"user"`
+	OneTimePassword string  `json:"one_time_password"`
+	Emailed         bool    `json:"emailed"`
+	// SkippedReason is a pointer so a test can tell an absent key from "".
+	SkippedReason *string `json:"email_skipped_reason"`
+}
+
+func decodeJSON[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
+	t.Helper()
+	var body T
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	return body
+}
+
+// assertQueuedTo checks that exactly one message went to the address, carrying
+// the password the administrator was handed.
+func assertQueuedTo(t *testing.T, queue *memoryQueue, to, password string) {
+	t.Helper()
+	found := 0
+	for _, m := range queue.messages {
+		if m.To != to {
+			continue
+		}
+		found++
+		if !strings.Contains(m.Body, password) {
+			t.Errorf("the message to %s does not carry the password the answer gave", to)
+		}
+	}
+	if found != 1 {
+		t.Errorf("%d messages went to %s, want 1", found, to)
+	}
+}
+
+func TestCreateEndpointEmailsTheSignInDetailsWhenAsked(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+
+	rec := f.do(http.MethodPost, "/users",
+		`{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[emailed](t, rec)
+	if !body.Emailed || body.SkippedReason != nil {
+		t.Errorf("emailed = %v, reason = %v; want emailed with no reason", body.Emailed, body.SkippedReason)
+	}
+	if body.OneTimePassword == "" {
+		t.Error("the administrator was not handed the password")
+	}
+	assertQueuedTo(t, queue, "ana@usm.md", body.OneTimePassword)
+}
+
+func TestCreateEndpointNamesAnAccountWithNoAddress(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+
+	rec := f.do(http.MethodPost, "/users", `{"login":"a.rusu","full_name":"Ana Rusu","send_by_email":true}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[emailed](t, rec)
+	if body.Emailed || body.SkippedReason == nil || *body.SkippedReason != "no_address" {
+		t.Errorf("emailed = %v, reason = %v; want not emailed for no_address", body.Emailed, body.SkippedReason)
+	}
+	if body.OneTimePassword == "" {
+		t.Error("the administrator was not handed the password")
+	}
+	if len(queue.messages) != 0 {
+		t.Errorf("queued %d messages for an account with no address", len(queue.messages))
+	}
+}
+
+func TestCreateEndpointEmailsNothingUnlessAsked(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+
+	rec := f.do(http.MethodPost, "/users", `{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md"}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"emailed":false`) || strings.Contains(rec.Body.String(), "email_skipped_reason") {
+		t.Errorf("body = %s, want emailed false and no reason", rec.Body.String())
+	}
+	if len(queue.messages) != 0 {
+		t.Errorf("queued %d messages unasked", len(queue.messages))
+	}
+}
+
+func TestEveryRouteThatIssuesAPasswordRefusesEmailWhileMailIsOff(t *testing.T) {
+	f, _ := newEmailingFixture(t, false)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md",
+		PasswordHash: "unchanged"})
+
+	for _, route := range []struct{ name, path, body string }{
+		{"create", "/users", `{"login":"new","full_name":"New One","email":"new@usm.md","send_by_email":true}`},
+		{"import", "/users/import", `{"rows":[{"login":"new","full_name":"New One"}],"send_by_email":true}`},
+		{"reset", "/users/" + target.ID.String() + "/password-reset", `{"send_by_email":true}`},
+		{"bulk reset", "/users/bulk/password-reset", `{"ids":["` + target.ID.String() + `"],"send_by_email":true}`},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			rec := f.do(http.MethodPost, route.path, route.body)
+
+			if rec.Code != http.StatusConflict || errorCode(t, rec) != "mail_off" {
+				t.Fatalf("answer = %d %s, want 409 mail_off", rec.Code, rec.Body.String())
+			}
+			if _, err := f.repo.ByLogin(context.Background(), "new"); err == nil {
+				t.Error("an account was created although the request was refused")
+			}
+			if after, _ := f.repo.Get(target.ID); after.PasswordHash != "unchanged" {
+				t.Error("the password was reset although the request was refused")
+			}
+		})
+	}
+}
+
+func TestImportEndpointEmailsEachCreatedAccountWithAnAddress(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+
+	rec := f.do(http.MethodPost, "/users/import", `{
+		"send_by_email": true,
+		"rows": [
+			{"login": "s.popescu", "full_name": "Sergiu Popescu", "email": "sergiu@usm.md"},
+			{"login": "i.ivanov", "full_name": "Ivan Ivanov"}
+		]
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[struct {
+		Created []emailed `json:"created"`
+	}](t, rec)
+	if len(body.Created) != 2 {
+		t.Fatalf("created %d accounts, want 2", len(body.Created))
+	}
+	for _, c := range body.Created {
+		switch c.User.Login {
+		case "s.popescu":
+			if !c.Emailed || c.SkippedReason != nil {
+				t.Errorf("s.popescu reads emailed %v, reason %v", c.Emailed, c.SkippedReason)
+			}
+			assertQueuedTo(t, queue, "sergiu@usm.md", c.OneTimePassword)
+		case "i.ivanov":
+			if c.Emailed || c.SkippedReason == nil || *c.SkippedReason != "no_address" {
+				t.Errorf("i.ivanov reads emailed %v, reason %v; want no_address", c.Emailed, c.SkippedReason)
+			}
+		}
+	}
+	if len(queue.messages) != 1 {
+		t.Errorf("queued %d messages, want 1", len(queue.messages))
+	}
+}
+
+func TestPasswordResetEndpointEmailsTheNewPasswordWhenAsked(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md"})
+
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/password-reset", `{"send_by_email":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeJSON[emailed](t, rec)
+	if !body.Emailed || body.SkippedReason != nil {
+		t.Errorf("emailed = %v, reason = %v; want emailed", body.Emailed, body.SkippedReason)
+	}
+	assertQueuedTo(t, queue, "petrov@usm.md", body.OneTimePassword)
+}
+
+func TestPasswordResetEndpointRefusesABodyItCannotRead(t *testing.T) {
+	f, queue := newEmailingFixture(t, true)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Email: "petrov@usm.md",
+		PasswordHash: "unchanged"})
+
+	for _, body := range []string{`{"send_by_email":"yes"}`, `{"send_by_mail":true}`, `{`} {
+		rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/password-reset", body)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (%s)", body, rec.Code, rec.Body.String())
+		}
+	}
+	if after, _ := f.repo.Get(target.ID); after.PasswordHash != "unchanged" || len(queue.messages) != 0 {
+		t.Error("a refused body still reset the password or queued a message")
+	}
+}
+
+// The installation's name is a required setting, so a message that cannot be
+// written is the server's fault.
+func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
+	queue := &memoryQueue{}
+	f := newAPIFixtureWithMail(t, &users.Mail{
+		Outbox:   mailing.NewOutbox(queue),
+		Texts:    mailing.NewTexts("https://olympdb.usm.md"),
+		Settings: fixedMailSettings{settings.KeyMailLanguage: string(mailing.English)},
+	}, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodPost, "/users",
+		`{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (%s)", rec.Code, rec.Body.String())
+	}
+	if _, err := f.repo.ByLogin(context.Background(), "a.rusu"); err == nil {
+		t.Error("the account was created without its message")
 	}
 }

@@ -454,13 +454,13 @@ func TestResetPasswordIssuesANewOneTimePassword(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "forgotten password")
 
-	issued, err := f.service.ResetPassword(context.Background(), f.actor, user.ID)
+	issued, err := f.service.ResetPassword(context.Background(), f.actor, user.ID, users.Delivery{})
 	if err != nil {
 		t.Fatalf("ResetPassword() returned error: %v", err)
 	}
 
 	after, _ := f.repo.Get(user.ID)
-	if !passwordtest.Matches(t, after.PasswordHash, issued) {
+	if !passwordtest.Matches(t, after.PasswordHash, issued.OneTimePassword) {
 		t.Error("the issued password does not verify against the stored digest")
 	}
 	if !after.MustChangePassword {
@@ -475,7 +475,7 @@ func TestResetPasswordIsAudited(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "forgotten password")
 
-	_, _ = f.service.ResetPassword(context.Background(), f.actor, user.ID)
+	_, _ = f.service.ResetPassword(context.Background(), f.actor, user.ID, users.Delivery{})
 
 	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionUserPasswordReset {
 		t.Errorf("audit actions = %v, want one %q", got, audit.ActionUserPasswordReset)
@@ -601,7 +601,7 @@ func TestOperationsOnAMissingAccountReportNotFound(t *testing.T) {
 	if err := f.service.Block(ctx, f.actor, missing, "some reason"); !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("Block() = %v, want ErrNotFound", err)
 	}
-	if _, err := f.service.ResetPassword(ctx, f.actor, missing); !errors.Is(err, users.ErrNotFound) {
+	if _, err := f.service.ResetPassword(ctx, f.actor, missing, users.Delivery{}); !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("ResetPassword() = %v, want ErrNotFound", err)
 	}
 }
@@ -616,7 +616,7 @@ func TestOperationsOnADeletedAccountReportAccountDeleted(t *testing.T) {
 	if err := f.service.UpdateProfile(ctx, f.actor, deleted.ID, "New Name", ""); !errors.Is(err, users.ErrAccountDeleted) {
 		t.Errorf("UpdateProfile() = %v, want ErrAccountDeleted", err)
 	}
-	if _, err := f.service.ResetPassword(ctx, f.actor, deleted.ID); !errors.Is(err, users.ErrAccountDeleted) {
+	if _, err := f.service.ResetPassword(ctx, f.actor, deleted.ID, users.Delivery{}); !errors.Is(err, users.ErrAccountDeleted) {
 		t.Errorf("ResetPassword() = %v, want ErrAccountDeleted", err)
 	}
 	if err := f.service.ReplaceRoles(ctx, f.actor, deleted.ID, []string{"student"}); !errors.Is(err, users.ErrAccountDeleted) {
@@ -748,7 +748,7 @@ func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
 				UserID: user.ID, OldPassword: "some password", NewPassword: "a brand new password",
 			})
 		}},
-		{"ResetPassword", func() error { _, err := f.service.ResetPassword(ctx, f.actor, user.ID); return err }},
+		{"ResetPassword", func() error { _, err := f.service.ResetPassword(ctx, f.actor, user.ID, users.Delivery{}); return err }},
 	}
 
 	for _, operation := range operations {
@@ -1311,11 +1311,11 @@ func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
 			})
 		}},
 		{name: "ResetPassword", run: func(f *accessFixture, target, _ users.User) error {
-			_, err := f.service.ResetPassword(context.Background(), f.admin.ID, target.ID)
+			_, err := f.service.ResetPassword(context.Background(), f.admin.ID, target.ID, users.Delivery{})
 			return err
 		}},
 		{name: "BulkResetPassword", both: true, run: func(f *accessFixture, target, other users.User) error {
-			_, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{target.ID, other.ID})
+			_, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{target.ID, other.ID}, users.Delivery{})
 			return err
 		}},
 	}

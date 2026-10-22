@@ -14,6 +14,7 @@
     "user.password_reset",
     "user.password_change",
     "user.sign_in_unlock",
+    "user.sign_in_details_emailed",
     "contest.create",
     "contest.update",
     "contest.delete",

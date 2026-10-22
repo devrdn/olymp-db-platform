@@ -213,6 +213,10 @@ var usersErrors = errorTable{
 		message: "Choose a password different from the current one"},
 	{err: users.ErrWrongPassword, status: http.StatusBadRequest, code: codeWrongPassword,
 		message: "Current password is incorrect"},
+	// The deployment's to mend, as for the test message; refused before any
+	// account or password changed.
+	{err: users.ErrMailOff, status: http.StatusConflict, code: codeMailOff,
+		message: "Email is off on this installation, so sign-in details cannot be emailed"},
 }
 
 // monitorErrors answers every error in monitor.Errors() (walked by

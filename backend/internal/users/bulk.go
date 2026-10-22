@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
@@ -302,6 +303,7 @@ type IssuedPassword struct {
 	ID              uuid.UUID
 	Login           string
 	OneTimePassword string
+	Email           EmailOutcome
 }
 
 type BulkPasswordResult struct {
@@ -313,10 +315,14 @@ type BulkPasswordResult struct {
 // memory.
 const hashWorkers = 3
 
-// BulkResetPassword issues each selected account its own one-time password.
-// Hashing runs on bounded workers before the transaction; a hashing failure
-// aborts the whole operation rather than becoming a skip (CLAUDE.md rule 8).
-func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID) (BulkPasswordResult, error) {
+// BulkResetPassword issues each selected account its own one-time password,
+// and emails it too when delivery asks. Messages are written and hashing runs
+// on bounded workers before the transaction; a failure of either aborts the
+// whole operation rather than becoming a skip (CLAUDE.md rule 8).
+func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID, delivery Delivery) (BulkPasswordResult, error) {
+	if err := s.refuseMailOff(delivery); err != nil {
+		return BulkPasswordResult{}, err
+	}
 	if err := boundSelection(ids); err != nil {
 		return BulkPasswordResult{}, err
 	}
@@ -334,26 +340,42 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 		return BulkPasswordResult{Skipped: sel.skipped}, nil
 	}
 
+	letters, err := s.letterheadFor(ctx, delivery)
+	if err != nil {
+		return BulkPasswordResult{}, err
+	}
+
 	issued := make([]IssuedPassword, len(sel.accepted))
+	var messages []mailing.Message
+	for i, u := range sel.accepted {
+		oneTime, err := generatePassword()
+		if err != nil {
+			return BulkPasswordResult{}, err
+		}
+		message, emailed, err := letters.signIn(u, oneTime)
+		if err != nil {
+			return BulkPasswordResult{}, err
+		}
+		if message != nil {
+			messages = append(messages, *message)
+		}
+		issued[i] = IssuedPassword{ID: u.ID, Login: u.Login, OneTimePassword: oneTime, Email: emailed}
+	}
+
 	creds := make([]Credential, len(sel.accepted))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(hashWorkers)
-	for i, u := range sel.accepted {
+	for i, one := range issued {
 		group.Go(func() error {
 			if groupCtx.Err() != nil {
 				return groupCtx.Err()
 			}
-			oneTime, err := generatePassword()
-			if err != nil {
-				return err
-			}
-			hash, err := s.issuing.Hash(groupCtx, oneTime)
+			hash, err := s.issuing.Hash(groupCtx, one.OneTimePassword)
 			if err != nil {
 				return fmt.Errorf("hash password: %w", err)
 			}
 			// Each goroutine writes only its own index.
-			issued[i] = IssuedPassword{ID: u.ID, Login: u.Login, OneTimePassword: oneTime}
-			creds[i] = Credential{UserID: u.ID, Hash: hash}
+			creds[i] = Credential{UserID: one.ID, Hash: hash}
 			return nil
 		})
 	}
@@ -375,12 +397,18 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 		if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
 			return err
 		}
-		return s.audit.RecordMany(ctx, entries)
+		if err := s.audit.RecordMany(ctx, entries); err != nil {
+			return err
+		}
+		return s.queue(ctx, actorID, messages)
 	})
 	if err != nil {
 		return BulkPasswordResult{}, err
 	}
 	s.forget(ctx, changed...)
+	if len(messages) > 0 {
+		s.wake()
+	}
 	return BulkPasswordResult{Issued: issued, Skipped: sel.skipped}, nil
 }
 

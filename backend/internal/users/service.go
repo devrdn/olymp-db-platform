@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
@@ -44,6 +45,8 @@ type Service struct {
 	issuing *password.Hasher
 	// access is nil when nothing caches accounts.
 	access AccessCache
+	// mail is nil when the composition root wired none (WithMail).
+	mail *Mail
 }
 
 // AccessCache is auth's short-lived copy of accounts. Every operation that
@@ -99,27 +102,37 @@ type CreateCommand struct {
 	Email    string
 	FullName string
 	Roles    []string
+	Delivery Delivery
 }
 
 type CreateResult struct {
 	User User
 	// OneTimePassword is returned once and never stored in clear.
 	OneTimePassword string
+	Email           EmailOutcome
 }
 
 // Create registers an account with a generated one-time password, which the
 // user must replace at first login.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, error) {
+	if err := s.refuseMailOff(cmd.Delivery); err != nil {
+		return CreateResult{}, err
+	}
 	roles, err := s.checkRoles(ctx, cmd.Roles)
 	if err != nil {
 		return CreateResult{}, err
 	}
 	cmd.Roles = roles
-	return s.create(ctx, cmd)
+	letters, err := s.letterheadFor(ctx, cmd.Delivery)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	return s.create(ctx, cmd, letters)
 }
 
-// create is Create for roles checkRoles has already passed.
-func (s *Service) create(ctx context.Context, cmd CreateCommand) (CreateResult, error) {
+// create is Create for roles checkRoles has already passed, with the
+// letterhead read when email was asked for.
+func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letterhead) (CreateResult, error) {
 	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
 	if err := validateAccount(login, fullName, email); err != nil {
 		return CreateResult{}, err
@@ -140,12 +153,18 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 	if err != nil {
 		return CreateResult{}, err
 	}
+	// Written before the hash and the transaction, so a message that cannot
+	// be written costs neither.
+	message, emailed, err := letters.signIn(User{Login: login, FullName: fullName, Email: email}, oneTime)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	hash, err := s.issuing.Hash(ctx, oneTime)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	// One transaction: account, roles and audit entry together.
+	// One transaction: account, roles, message and audit entries together.
 	var created User
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -168,16 +187,26 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 			created.Roles = cmd.Roles
 		}
 
-		return s.record(ctx, cmd.ActorID, audit.ActionUserCreate, created.ID, map[string]any{
+		if err := s.record(ctx, cmd.ActorID, audit.ActionUserCreate, created.ID, map[string]any{
 			"login": created.Login,
 			"roles": cmd.Roles,
-		})
+		}); err != nil {
+			return err
+		}
+		if message == nil {
+			return nil
+		}
+		message.UserID = created.ID
+		return s.queue(ctx, cmd.ActorID, []mailing.Message{*message})
 	})
 	if err != nil {
 		return CreateResult{}, err
 	}
+	if message != nil {
+		s.wake()
+	}
 
-	return CreateResult{User: created, OneTimePassword: oneTime}, nil
+	return CreateResult{User: created, OneTimePassword: oneTime, Email: emailed}, nil
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
@@ -294,23 +323,34 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 }
 
 // ResetPassword issues a fresh one-time password for the administrator to
-// hand over.
-func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) (string, error) {
+// hand over, and emails it too when delivery asks.
+func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID, delivery Delivery) (IssuedPassword, error) {
+	if err := s.refuseMailOff(delivery); err != nil {
+		return IssuedPassword{}, err
+	}
 	user, err := s.repo.ByID(ctx, userID)
 	if err != nil {
-		return "", err
+		return IssuedPassword{}, err
 	}
 	if user.Status == StatusDeleted {
-		return "", ErrAccountDeleted
+		return IssuedPassword{}, ErrAccountDeleted
+	}
+	letters, err := s.letterheadFor(ctx, delivery)
+	if err != nil {
+		return IssuedPassword{}, err
 	}
 
 	oneTime, err := generatePassword()
 	if err != nil {
-		return "", err
+		return IssuedPassword{}, err
+	}
+	message, emailed, err := letters.signIn(user, oneTime)
+	if err != nil {
+		return IssuedPassword{}, err
 	}
 	hash, err := s.issuing.Hash(ctx, oneTime)
 	if err != nil {
-		return "", fmt.Errorf("hash password: %w", err)
+		return IssuedPassword{}, fmt.Errorf("hash password: %w", err)
 	}
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
@@ -320,13 +360,22 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) 
 		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil)
+		if err := s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil); err != nil {
+			return err
+		}
+		if message == nil {
+			return nil
+		}
+		return s.queue(ctx, actorID, []mailing.Message{*message})
 	})
 	if err != nil {
-		return "", err
+		return IssuedPassword{}, err
 	}
 	s.forget(ctx, userID)
-	return oneTime, nil
+	if message != nil {
+		s.wake()
+	}
+	return IssuedPassword{ID: user.ID, Login: user.Login, OneTimePassword: oneTime, Email: emailed}, nil
 }
 
 func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, fullName, email string) error {
@@ -583,7 +632,8 @@ type ImportCommand struct {
 	ActorID uuid.UUID
 	Rows    []ImportRow
 	// Roles every created account receives.
-	Roles []string
+	Roles    []string
+	Delivery Delivery
 }
 
 // ImportResult reports what an import did, row by row; one bad row does not
@@ -604,8 +654,14 @@ type SkippedRow struct {
 }
 
 // Import creates an account for every row it can use, each in its own unit
-// of work, so one bad row rolls back only itself.
+// of work, so one bad row rolls back only itself. A row's message is queued
+// in its row's unit of work; one that cannot be written is the
+// installation's fault, not the row's, so it stops the import like an outage
+// (CLAUDE.md rule 8).
 func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
+	if err := s.refuseMailOff(cmd.Delivery); err != nil {
+		return ImportResult{}, err
+	}
 	if len(cmd.Rows) > maxImportRows {
 		return ImportResult{}, fmt.Errorf("%w: %d rows, at most %d",
 			ErrRosterTooLarge, len(cmd.Rows), maxImportRows)
@@ -614,6 +670,10 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 	// Checked once for the whole roster: a bad role is the request's fault,
 	// not any row's.
 	roles, err := s.checkRoles(ctx, cmd.Roles)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	letters, err := s.letterheadFor(ctx, cmd.Delivery)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -626,7 +686,7 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 			Email:    row.Email,
 			FullName: row.FullName,
 			Roles:    roles,
-		})
+		}, letters)
 		switch {
 		case err == nil:
 			result.Created = append(result.Created, created)
