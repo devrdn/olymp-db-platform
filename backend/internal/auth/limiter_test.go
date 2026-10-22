@@ -172,3 +172,36 @@ func TestAGenerationOutlivesTheWindowItWasSetFor(t *testing.T) {
 		t.Error("the generation lapsed after one window")
 	}
 }
+
+func TestSpendNamesOnlyTheFirstRefusedAttempt(t *testing.T) {
+	limiter := newTestLimiter(t)
+	ctx := context.Background()
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		allowed, first, err := limiter.Spend(ctx, "login:ivanov", 2, time.Minute)
+		if err != nil {
+			t.Fatalf("attempt %d returned error: %v", attempt, err)
+		}
+		if !allowed || first {
+			t.Fatalf("attempt %d = allowed %v, first refused %v; want allowed and not a refusal", attempt, allowed, first)
+		}
+	}
+
+	allowed, first, err := limiter.Spend(ctx, "login:ivanov", 2, time.Minute)
+	if err != nil {
+		t.Fatalf("Spend() returned error: %v", err)
+	}
+	if allowed || !first {
+		t.Fatalf("the third attempt = allowed %v, first refused %v; want the first refusal", allowed, first)
+	}
+
+	for attempt := 4; attempt <= 6; attempt++ {
+		allowed, first, err := limiter.Spend(ctx, "login:ivanov", 2, time.Minute)
+		if err != nil {
+			t.Fatalf("attempt %d returned error: %v", attempt, err)
+		}
+		if allowed || first {
+			t.Fatalf("attempt %d = allowed %v, first refused %v; want a later refusal", attempt, allowed, first)
+		}
+	}
+}

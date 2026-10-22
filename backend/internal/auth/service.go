@@ -220,7 +220,31 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 		// being refused, so a copied cookie cannot lock the owner out.
 		trusted = !spent
 	}
+	// An untrusted attempt joins its address's share of the hashing queue
+	// before it spends anything: a refusal for a full share is load shedding
+	// by this server, and a lecture hall whose sign-ins were shed must not
+	// find its address budget spent by them (CLAUDE.md rule 13 counts
+	// refusals the caller caused, not ones the server did). The share is
+	// held across the lookups below; they are two cache or database reads,
+	// and only waiting is capped.
+	var leaveQueue func()
+	joinQueue := func() error {
+		leave, ok := s.joinQueue(cmd)
+		if !ok {
+			return errAddressQueueFull
+		}
+		leaveQueue = leave
+		return nil
+	}
+	defer func() {
+		if leaveQueue != nil {
+			leaveQueue()
+		}
+	}()
 	if !trusted {
+		if err := joinQueue(); err != nil {
+			return LoginResult{}, err
+		}
 		if err := s.checkAddress(ctx, cmd); err != nil {
 			return LoginResult{}, err
 		}
@@ -236,6 +260,9 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	// deleted, login reused) pays the ordinary limits it skipped.
 	if trusted && !(found && device.Vouches(user)) {
 		trusted = false
+		if err := joinQueue(); err != nil {
+			return LoginResult{}, err
+		}
 		if err := s.checkAddress(ctx, cmd); err != nil {
 			return LoginResult{}, err
 		}
@@ -252,11 +279,16 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 
 	// No slot: nothing was evaluated or recorded, and known and unknown
 	// logins reach this alike.
-	slot, err := s.holdSlot(ctx, cmd, trusted)
+	slot, err := s.passwords.Hold(ctx)
 	if err != nil {
 		return LoginResult{}, err
 	}
 	defer slot.Release()
+	// Holding a slot is no longer waiting for one.
+	if leaveQueue != nil {
+		leaveQueue()
+		leaveQueue = nil
+	}
 
 	if !trusted {
 		refused, err := s.spendAccount(ctx, cmd, gen)
@@ -449,12 +481,19 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 
 func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	if cmd.IP != "" {
-		allowed, err := s.limiter.Allow(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
+		allowed, first, err := s.limiter.Spend(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
 		if err != nil {
 			return err
 		}
 		if !allowed {
-			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
+			// Once per window, not once per attempt: past the budget an
+			// attempt costs the caller nothing, so every one of them
+			// journalled would let an anonymous flood write the audit
+			// trail full. The attempts that spent the budget are each on
+			// record already.
+			if first {
+				s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
+			}
 			return ErrTooManyAttempts
 		}
 	}
@@ -472,21 +511,16 @@ func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 // of the hashing queue. It wraps password.ErrBusy: nothing was evaluated.
 var errAddressQueueFull = fmt.Errorf("%w: this address already has its share of sign-ins waiting", password.ErrBusy)
 
-// holdSlot takes a hashing slot for the attempt. An untrusted attempt joins
-// its address's share of the queue and is refused past it. A trusted one
-// skips the share, so a rival flooding from the same hall cannot keep the
-// owner out; the trusted budgets bound those.
-func (s *Service) holdSlot(ctx context.Context, cmd LoginCommand, trusted bool) (*password.Slot, error) {
-	if trusted || cmd.IP == "" {
-		return s.passwords.Hold(ctx)
+// joinQueue admits an untrusted attempt to its address's share of the
+// hashing queue, or reports false past it. A trusted attempt never joins, so
+// a rival flooding from the same hall cannot keep the owner out; the trusted
+// budgets bound those. The caller calls leave once it holds a slot, or on
+// the way out; leave is safe to call twice.
+func (s *Service) joinQueue(cmd LoginCommand) (leave func(), ok bool) {
+	if cmd.IP == "" {
+		return func() {}, true
 	}
-	leave, ok := s.waiting.join(httpx.AddressSubject(cmd.IP))
-	if !ok {
-		return nil, errAddressQueueFull
-	}
-	// Only waiting is capped.
-	defer leave()
-	return s.passwords.Hold(ctx)
+	return s.waiting.join(httpx.AddressSubject(cmd.IP))
 }
 
 // spendAccount spends the guessing limit and then the ceiling under
