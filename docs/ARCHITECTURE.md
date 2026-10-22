@@ -3668,15 +3668,16 @@ mail language is a setting, because it is an organisation's decision.
 **A message is queued, not sent in the request.** The relay takes thirty
 messages a minute from one mailbox, so a roster of five hundred takes twenty
 minutes to leave, and no request can wait that long. A relay that is down
-would otherwise fail the creation of an account, or leave an import half
-done, for a reason that has nothing to do with the accounts. And a retry
-needs state that outlives the request and the process. So a request writes a
-row to `mail_outbox` and a background job delivers it, at
-`SMTP_MAX_PER_MINUTE` (25 by default, under Microsoft's 30) counted in the
-table across every replica. The test message is the one exception: its whole
-purpose is the relay's answer, so it is sent at once, to the caller's own
-address only, three a minute per administrator, which the margin under thirty
-leaves room for.
+would otherwise fail the creation of an account, or leave an import half done,
+for a reason that has nothing to do with the accounts. And a retry needs state
+that outlives the request and the process. So a request writes a row to
+`mail_outbox` and a background job delivers it, at `SMTP_MAX_PER_MINUTE` (25
+by default, under Microsoft's 30) counted in the table across every replica.
+The test message is the one exception: its whole purpose is the relay's
+answer, so it is sent at once, to the caller's own address only, three a
+minute per administrator. The margin under thirty leaves room for one
+administrator testing during a bulk send; with more, the relay defers, which
+the outbox absorbs as a relay failure.
 
 **The message commits with the password it carries.** The outbox's writes
 join the transaction the context carries (`storage.QuerierFrom`, section
@@ -3753,8 +3754,12 @@ genuinely bad message being retried up to its cap instead of dropped at once.
   check refuses, fails a whole bulk reset with a 500 rather than skipping
   that account.
 - Rows of `mail_outbox` are never deleted. A sent or abandoned row has no
-  body, but keeps the recipient's address, with no retention period of the
-  kind item 39 sets for the query log and the audit trail.
+  body, but keeps the recipient's address, with no retention period yet
+  (item 39).
+- The check that refuses a control character in a login or a full name also
+  runs when an administrator edits a profile, against the stored login. An
+  account created before the check whose login carries one cannot have its
+  name or address edited, and no route renames a login.
 
 ## 11. Security in summary, and the audit plan
 
@@ -4357,36 +4362,39 @@ says what is built.
 
 ### What comes next
 
-The order of the remaining work, in three tiers. A number in parentheses is
+The order of the remaining work, in four tiers. A number in parentheses is
 an item of the list below.
 
-1. **The organiser's workflow:** the start waiting until every copy is
+1. **Email, first by a date:** OAuth for the Microsoft 365 relay (52), which
+   must land before the end of December 2026, when Microsoft turns basic
+   authentication for SMTP AUTH off by default and the relay may stop taking
+   the mailbox's password; then a password reset by link (50) and contest
+   notifications (51), both built on the outbox of section 10.2. Until 50
+   and 51 exist, an administrator resets a password and emails the new one,
+   and a contest is announced by other means.
+2. **The organiser's workflow:** the start waiting until every copy is
    current (23); the staff reports and the results as a file (28), and
    `reports.view` removed (29); a contest list for a manager without
    `contest.create` (30); screens for the endpoints that
    have none, the grace extension first (31); the readiness event (32); `Esc`
    aborting a query (33); the audit form's filters (8); participants from a
    file and the contest import (12); a hidden question marked as staff-only
-   (47); a password reset by link (50) and contest notifications (51), both
-   built on the outbox of section 10.2. They cost an organiser time, or a
+   (47). They cost an organiser time, or a
    participant some comfort, and each has a workaround today: the standings
    screen and monitoring's CSV, a typed address, the API called by hand, a
    first query that waits for the copy, waiting for the query's deadline, a
-   pasted column of logins, a contest built again by hand, a reset that
-   emails new sign-in details, an announcement sent by other means. The
-   start's wait, `reports.view` and the hidden question need none: stale
-   copies are remade on first use, the permission guards nothing, and the
-   hidden question only needs saying.
-2. **Running the installation:** OAuth for the mail relay (52), which has a
-   date: Microsoft turns basic authentication for SMTP AUTH off by default
-   at the end of December 2026; off-host backups (35: scheduled and
+   pasted column of logins, a contest built again by hand. The start's wait,
+   `reports.view` and the hidden question need none: stale copies are remade
+   on first use, the permission guards nothing, and the hidden question only
+   needs saying.
+3. **Running the installation:** off-host backups (35: scheduled and
    rotated now; the off-host design, encryption and WAL archiving remain),
    restore drills (36), the participant and provisioning metrics (37), CI
    and the supply chain (38),
    query-log archival (39), the disk monitor (40), the nonce CSP (41),
    end-to-end tests (42) and the security audit plan (43). They protect the
    installation over months and years rather than any one contest.
-3. **Later:** the rest of the query-log panel (44), the ER diagram and "show
+4. **Later:** the rest of the query-log panel (44), the ER diagram and "show
    me the data" (45), the interface's side of account actions (9), the
    accent (11), the `/design` showcase (48), high availability (46), and the
    deferred items: team mode (10), a second visual language (14),
@@ -4679,7 +4687,10 @@ Product decisions the items below are built on.
   is retention without an archive file: a background task deletes a
   contest's `query_log` rows twelve months after the contest is archived,
   and `audit_log` rows older than eighteen months, in batches as reclamation
-  does. Section 9's retention text changes with it.
+  does. Section 9's retention text changes with it. `mail_outbox` needs the
+  same (section 10.2): no code deletes its rows, and a sent or abandoned
+  row, though its body is erased, keeps the recipient's address; its period
+  is still to be decided.
 - [ ] **40. No background disk monitor** (section 4.1). Of the disk quota's
   three levels the first exists: the Query Runner reads the database's size
   before every write and refuses one at the quota. The second does not:
