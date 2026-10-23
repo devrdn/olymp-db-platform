@@ -27,6 +27,18 @@ type RegistrationTarget struct {
 	RecordWork func(registration uuid.UUID)
 	// Now is the store's clock, which stamps CreatedAt.
 	Now func() time.Time
+	// Answer records one answer under the registration, to a question of its
+	// own in the contest, for RefreshScore to count.
+	Answer func(contest, registration uuid.UUID, a ScoredAnswer)
+}
+
+// ScoredAnswer is one answer RefreshScore counts: to a question worth Points,
+// a bonus or a regular one, right or wrong, that awarded Awarded.
+type ScoredAnswer struct {
+	Points  int
+	Bonus   bool
+	Correct bool
+	Awarded int
 }
 
 // RegistrationRepositoryContract is what every
@@ -346,30 +358,69 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 		})
 	})
 
-	t.Run("AddScore adds to the total of that registration only", func(t *testing.T) {
+	refresh := func(t *testing.T, ctx context.Context, target RegistrationTarget, registration uuid.UUID) {
+		t.Helper()
+		if err := target.Repo.RefreshScore(ctx, registration); err != nil {
+			t.Fatalf("RefreshScore() = %v", err)
+		}
+	}
+
+	// §6.1.1: regular points, plus solved bonuses up to the penalty points,
+	// each solved regular question's face value less what it awarded.
+	t.Run("RefreshScore sets the total from that registration's answers only", func(t *testing.T) {
 		each(t, func(ctx context.Context, target RegistrationTarget) {
 			contest := target.NewContest()
 			scoring := enrol(t, ctx, target, contest, "alice")
 			idle := enrol(t, ctx, target, contest, "bob")
-
-			for _, delta := range []int{3, 4} {
-				if err := target.Repo.AddScore(ctx, scoring.ID, delta); err != nil {
-					t.Fatalf("AddScore(%d) = %v", delta, err)
-				}
+			for _, a := range []ScoredAnswer{
+				{Points: 10, Correct: true, Awarded: 5},
+				{Points: 8, Correct: true, Awarded: 8},
+				{Points: 6},
+				{Points: 3, Bonus: true, Correct: true},
+				{Points: 7, Bonus: true},
+			} {
+				target.Answer(contest, scoring.ID, a)
 			}
 
-			if got := byUser(t, ctx, target, contest, scoring.UserID).TotalScore; got != 7 {
-				t.Errorf("TotalScore = %d, want 7 (3 + 4)", got)
+			refresh(t, ctx, target, scoring.ID)
+			refresh(t, ctx, target, idle.ID)
+
+			if got := byUser(t, ctx, target, contest, scoring.UserID).TotalScore; got != 16 {
+				t.Errorf("TotalScore = %d, want 16 (13 awarded + the 3-point bonus, under the 5 penalty points)", got)
 			}
 			if got := byUser(t, ctx, target, contest, idle.UserID).TotalScore; got != 0 {
 				t.Errorf("another participant's TotalScore = %d, want 0", got)
 			}
+
+			target.Answer(contest, scoring.ID, ScoredAnswer{Points: 4, Bonus: true, Correct: true})
+			refresh(t, ctx, target, scoring.ID)
+			if got := byUser(t, ctx, target, contest, scoring.UserID).TotalScore; got != 18 {
+				t.Errorf("TotalScore after a second bonus = %d, want 18 (the credit stops at the 5 penalty points)", got)
+			}
 		})
 	})
 
-	t.Run("AddScore reports a registration that is not there", func(t *testing.T) {
+	t.Run("RefreshScore spends bonus credit on a penalty that came after it", func(t *testing.T) {
 		each(t, func(ctx context.Context, target RegistrationTarget) {
-			notFound(t, target.Repo.AddScore(ctx, uuid.New(), 5), "AddScore():")
+			contest := target.NewContest()
+			p := enrol(t, ctx, target, contest, "alice")
+			target.Answer(contest, p.ID, ScoredAnswer{Points: 4, Bonus: true, Correct: true})
+			refresh(t, ctx, target, p.ID)
+			if got := byUser(t, ctx, target, contest, p.UserID).TotalScore; got != 0 {
+				t.Fatalf("TotalScore with nothing to remove = %d, want 0", got)
+			}
+
+			target.Answer(contest, p.ID, ScoredAnswer{Points: 10, Correct: true, Awarded: 0})
+			refresh(t, ctx, target, p.ID)
+			if got := byUser(t, ctx, target, contest, p.UserID).TotalScore; got != 4 {
+				t.Errorf("TotalScore = %d, want 4 (nothing awarded, 4 of the 10 penalty points removed)", got)
+			}
+		})
+	})
+
+	t.Run("RefreshScore reports a registration that is not there", func(t *testing.T) {
+		each(t, func(ctx context.Context, target RegistrationTarget) {
+			notFound(t, target.Repo.RefreshScore(ctx, uuid.New()), "RefreshScore():")
 		})
 	})
 

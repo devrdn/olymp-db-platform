@@ -143,7 +143,9 @@ type QuestionResponse struct {
 	PenaltyPct int `json:"penalty_pct"`
 	// IsVisible says whether participants see the question; a hidden question
 	// still scores (§6.1).
-	IsVisible bool                            `json:"is_visible"`
+	IsVisible bool `json:"is_visible"`
+	// IsBonus makes Points a bonus that removes penalty points (§6.1.1).
+	IsBonus   bool                            `json:"is_bonus"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`
 	// Answers are the reference answers, and appear only here.
@@ -174,6 +176,7 @@ func toQuestionResponse(q contests.Question) QuestionResponse {
 		MaxAttempts: q.MaxAttempts,
 		PenaltyPct:  q.PenaltyPct,
 		IsVisible:   q.IsVisible,
+		IsBonus:     q.IsBonus,
 		ChoiceIDs:   q.ChoiceIDs,
 		Texts:       make(map[string]QuestionTextResponse, len(q.Texts)),
 		Answers:     make([]AnswerResponse, 0, len(q.Answers)),
@@ -236,7 +239,9 @@ type questionRequest struct {
 	PenaltyPct *int `json:"penalty_pct"`
 	// IsVisible is a pointer so omitting it means visible: hiding is the
 	// deliberate choice.
-	IsVisible *bool                           `json:"is_visible"`
+	IsVisible *bool `json:"is_visible"`
+	// IsBonus is a pointer for the same reason as PenaltyPct.
+	IsBonus   *bool                           `json:"is_bonus"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`
 }
@@ -251,6 +256,7 @@ func (req questionRequest) command(contestID, questionID, actorID uuid.UUID) con
 		MaxAttempts: req.MaxAttempts,
 		PenaltyPct:  req.PenaltyPct,
 		IsVisible:   req.IsVisible,
+		IsBonus:     req.IsBonus,
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),
 	}
@@ -405,6 +411,7 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 		MaxAttempts: req.MaxAttempts,
 		PenaltyPct:  req.PenaltyPct,
 		IsVisible:   req.IsVisible,
+		IsBonus:     req.IsBonus,
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),
 		Answers:     answers,

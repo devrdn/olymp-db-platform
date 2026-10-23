@@ -338,17 +338,33 @@ func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now
 	}
 }
 
-// AddScore adds delta to the registration's total_score in one UPDATE, so
-// concurrent submissions serialise on the row instead of overwriting each
-// other's addition.
-func (r *Registrations) AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error {
-	tag, err := r.querier(ctx).Exec(ctx,
-		`UPDATE registrations SET total_score = total_score + $2 WHERE id = $1`, registrationID, delta)
+// RefreshScore sets total_score to scoreTotal over the registration's
+// submissions. The lock is a statement of its own: under READ COMMITTED the
+// recount then takes its snapshot after a concurrent answer's transaction has
+// committed, where folded into one UPDATE it would read the snapshot from
+// before the wait. A recount that changes nothing writes nothing.
+func (r *Registrations) RefreshScore(ctx context.Context, registrationID uuid.UUID) error {
+	if !storage.InTx(ctx) {
+		return errors.New("refreshing a score must run inside a transaction")
+	}
+	querier := r.querier(ctx)
+	tag, err := querier.Exec(ctx, `SELECT 1 FROM registrations WHERE id = $1 FOR NO KEY UPDATE`, registrationID)
 	if err != nil {
-		return fmt.Errorf("add to registration score: %w", err)
+		return fmt.Errorf("lock the registration to recount its score: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return contests.ErrParticipantNotFound
+	}
+	_, err = querier.Exec(ctx, `
+		UPDATE registrations r SET total_score = t.points
+		FROM (
+			SELECT (`+scoreTotal("")+`)::int AS points
+			FROM submissions s JOIN questions q ON q.id = s.question_id
+			WHERE s.registration_id = $1
+		) t
+		WHERE r.id = $1 AND r.total_score <> t.points`, registrationID)
+	if err != nil {
+		return fmt.Errorf("recount the registration's score: %w", err)
 	}
 	return nil
 }

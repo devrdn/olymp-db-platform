@@ -61,11 +61,14 @@ type StoryText interface {
 // carries Position and nothing else: its wording, choices and points are never
 // copied in, so no client can mistake a withheld title for an absent one.
 type ParticipantQuestion struct {
-	Position  int
-	Locked    bool
-	ID        uuid.UUID
-	Kind      string
-	Points    int
+	Position int
+	Locked   bool
+	ID       uuid.UUID
+	Kind     string
+	Points   int
+	// IsBonus says Points is a bonus (Question.IsBonus): up to that many
+	// penalty points removed when answered correctly, nothing else.
+	IsBonus   bool
 	ChoiceIDs []string
 	// Title is empty when the question has none in the resolved language.
 	Title  string
@@ -96,6 +99,7 @@ type VisibleQuestion struct {
 	ID          uuid.UUID
 	Kind        string
 	Points      int
+	IsBonus     bool
 	MaxAttempts *int
 	ChoiceIDs   []string
 	Title       string
@@ -149,6 +153,7 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 			ID:                q.ID,
 			Kind:              q.Kind,
 			Points:            q.Points,
+			IsBonus:           q.IsBonus,
 			ChoiceIDs:         q.ChoiceIDs,
 			Title:             q.Title,
 			BodyMD:            q.BodyMD,

@@ -53,7 +53,9 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 			}
 			return nil
 		}
-		run(context.Background(), RegistrationTarget{
+		questions, submissions := NewQuestions(), NewSubmissions()
+		repo.Scores = NewScores(questions, submissions)
+		run(inUnitOfWork(), RegistrationTarget{
 			Repo: repo,
 			NewUser: func(login, fullName string) uuid.UUID {
 				id := uuid.New()
@@ -68,6 +70,15 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 			GrantAdminAll: func(user uuid.UUID) { admins[user] = true },
 			RecordWork:    repo.PutWork,
 			Now:           repo.Clock,
+			Answer: func(contest, registration uuid.UUID, a ScoredAnswer) {
+				q := questions.Put(contests.Question{ContestID: contest, Kind: contests.KindText, Points: a.Points, IsBonus: a.Bonus})
+				if _, err := submissions.Insert(context.Background(), contests.SubmissionRequest{
+					RegistrationID: registration, QuestionID: q.ID, IsCorrect: a.Correct, Points: a.Awarded,
+					Deadline: time.Now().Add(time.Hour),
+				}); err != nil {
+					t.Fatalf("record an answer: %v", err)
+				}
+			},
 		})
 	})
 }

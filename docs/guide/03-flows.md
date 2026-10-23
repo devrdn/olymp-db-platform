@@ -750,8 +750,12 @@ sequenceDiagram
   with the same number collide on `UNIQUE (registration_id, question_id,
   attempt_no)`; `Submit` retries up to five times with jittered backoff.
 - Penalties: `penaltyAmount` is `points * penalty_pct / 100` per wrong
-  attempt, zero under `winner` and `icpc` scoring; `points_awarded` is floored
-  at zero.
+  attempt, zero under `winner` and `icpc` scoring and for a bonus question;
+  `points_awarded` is floored at zero.
+- A correct answer that can change the score recounts
+  `registrations.total_score` in the same transaction
+  (`Registrations.RefreshScore`, `postgres.scoreTotal`): regular points plus
+  the bonus credit, capped at the penalty points.
 
 Nothing pushes a leaderboard update. The table is computed on read by
 `leaderboard.Service` ([backend/internal/leaderboard/service.go](../../backend/internal/leaderboard/service.go))

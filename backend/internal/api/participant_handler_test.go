@@ -1077,6 +1077,41 @@ func TestALockedQuestionReachesItsParticipantAsANumberAlone(t *testing.T) {
 	}
 }
 
+func TestABonusQuestionReachesItsParticipantMarked(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	for i, bonus := range []bool{false, true} {
+		f.questions.Put(contests.Question{
+			ContestID: contestID, Ord: i + 1, Kind: contests.KindText, Points: 4, IsBonus: bonus, IsVisible: true,
+			Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who?"}},
+		})
+	}
+
+	items, _ := f.playItems(t, contestID)
+	if len(items) != 2 || items[0]["is_bonus"] != false || items[1]["is_bonus"] != true {
+		t.Errorf("items = %v, want is_bonus false then true, always present", items)
+	}
+}
+
+// That a bonus lies ahead is part of what the sequence withholds.
+func TestALockedBonusQuestionReachesItsParticipantAsANumberAlone(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID, staged, _ := f.sequentialPlay(t, 2)
+	staged[1].IsBonus = true
+	f.questions.Put(staged[1])
+
+	items, raw := f.playItems(t, contestID)
+	expectLockedItem(t, items[1], 2)
+	if strings.Count(raw, "is_bonus") != 1 {
+		t.Errorf("is_bonus appears %d times, want once, on the open question: %s", strings.Count(raw, "is_bonus"), raw)
+	}
+}
+
 // The next question opens once the current one closes, whichever way it
 // closes.
 func TestTheNextQuestionReachesItsParticipantOnceTheCurrentOneCloses(t *testing.T) {

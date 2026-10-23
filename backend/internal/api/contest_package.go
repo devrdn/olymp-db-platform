@@ -95,15 +95,18 @@ type PackagedSettings struct {
 type PackagedQuestion struct {
 	// Ord is carried as well as implied by order, so a file reordered by hand
 	// still says what was meant.
-	Ord         int                             `json:"ord"`
-	Kind        string                          `json:"kind"`
-	Points      int                             `json:"points"`
-	MaxAttempts *int                            `json:"max_attempts,omitempty"`
-	PenaltyPct  int                             `json:"penalty_pct"`
-	IsVisible   bool                            `json:"is_visible"`
-	ChoiceIDs   []string                        `json:"choice_ids"`
-	Texts       map[string]PackagedQuestionText `json:"texts"`
-	Answers     []PackagedAnswer                `json:"answers"`
+	Ord         int    `json:"ord"`
+	Kind        string `json:"kind"`
+	Points      int    `json:"points"`
+	MaxAttempts *int   `json:"max_attempts,omitempty"`
+	PenaltyPct  int    `json:"penalty_pct"`
+	IsVisible   bool   `json:"is_visible"`
+	// IsBonus is left out for a regular question, so a package without bonus
+	// questions reads as it did before they existed.
+	IsBonus   bool                            `json:"is_bonus,omitempty"`
+	ChoiceIDs []string                        `json:"choice_ids"`
+	Texts     map[string]PackagedQuestionText `json:"texts"`
+	Answers   []PackagedAnswer                `json:"answers"`
 }
 
 // PackagedQuestionText is a question as authored in one language.
@@ -247,6 +250,7 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 			MaxAttempts: q.MaxAttempts,
 			PenaltyPct:  q.PenaltyPct,
 			IsVisible:   q.IsVisible,
+			IsBonus:     q.IsBonus,
 			ChoiceIDs:   emptyIfNil(q.ChoiceIDs),
 			Texts:       make(map[string]PackagedQuestionText, len(q.Texts)),
 			Answers:     make([]PackagedAnswer, 0, len(q.Answers)),
