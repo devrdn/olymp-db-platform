@@ -337,11 +337,11 @@ func TestAWriteStartsNoClock(t *testing.T) {
 func TestAWorkspaceWriteSpendsNoReadBudget(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
-	f.access.admitReads, f.access.readsOf = 0, nil
+	f.access.admitReads = 0
 
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
-	if f.access.admitReads != 0 || len(f.access.readsOf) != 0 {
-		t.Fatalf("a write spent the read budget: AdmitRead %d times, AdmitReadOf for %v", f.access.admitReads, f.access.readsOf)
+	if f.access.admitReads != 0 {
+		t.Fatalf("a write spent the read budget: AdmitRead called %d times", f.access.admitReads)
 	}
 }
 

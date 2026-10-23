@@ -61,12 +61,13 @@ describe("refusalKind", () => {
 });
 
 describe("isReadRateLimit", () => {
-  test("is true for the read budget, and for the query budget an older API charged reads to", () => {
+  test("is true for the read budget", () => {
     expect(isReadRateLimit("play_read_too_often")).toBe(true);
-    expect(isReadRateLimit("query_too_often")).toBe(true);
   });
 
-  test("is false for every other self-lifting refusal", () => {
+  // The console's budget is not spent by a read, so it never takes the screen.
+  test("is false for every other self-lifting refusal, the query budget's included", () => {
+    expect(isReadRateLimit("query_too_often")).toBe(false);
     expect(isReadRateLimit("answer_too_often")).toBe(false);
     expect(isReadRateLimit("reset_too_often")).toBe(false);
     expect(isReadRateLimit("query_busy")).toBe(false);

@@ -2333,10 +2333,10 @@ disqualified in between, which `Start` does not move.
 
 **What it does not decide.** Rate limits stay outside it and the gate counts
 nothing: each resource keeps its own budget. The read budget every
-participant-facing request pays (`AdmitRead`, per account, then `AdmitReadOf`,
-per registration) is apart from the console's query rate, so reloading the
-page never refuses a query; like the query rate, its account half is charged
-before the gate is asked, so a refused request still spends it.
+participant-facing request pays (`AdmitRead`, per account) is apart from the
+console's query rate, so reloading the page never refuses a query; like the
+query rate, it is charged before the gate is asked, so a refused request still
+spends it.
 The participant leaderboard is not gated; it keeps its own visibility
 rule. The registration lookup is the caller's — a registration that is not
 found is `not_a_participant`, a store that fails is ours. And the core

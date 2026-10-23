@@ -717,7 +717,7 @@ sequenceDiagram
 
     B->>W: submit the answer
     W->>H: POST /contests/ID/questions/QID/answer with value
-    H->>H: AdmitRead, Access - the participation gate, then AdmitReadOf
+    H->>H: AdmitRead, then Access - the participation gate
     H->>L: answer budget per registration, before parsing
     H->>S: Submit(SubmitCommand)
     S->>S: participation gate again, at most 1000 characters, question in this contest
@@ -809,7 +809,7 @@ sequenceDiagram
 
     B->>M: EventSource GET /api/v1/contests/ID/events, via Caddy
     M->>E: Authenticate passed
-    E->>Q: AdmitRead, AccessForEvents - running, or published and waiting, then AdmitReadOf
+    E->>Q: AdmitRead, then AccessForEvents - running, or published and waiting
     E->>E: connection cap per registration, 4 by default
     E-->>B: retry 30 s, sync, contest_started if running
     loop every 30 seconds

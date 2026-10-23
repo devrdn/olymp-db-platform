@@ -48,9 +48,10 @@ var (
 	// rebuild the hidden catalogue by guessing names.
 	ErrDatabaseDeclined = errors.New("the database refused the query")
 	// ErrTooManyReads is a participant loading the play screen faster than
-	// the read budget (WithReadsPerMinute) allows. It is not queryrunner.ErrTooManyQueries: the two
-	// budgets are separate, and a participant told "too many queries" after
-	// reloading a page would wait for nothing.
+	// the read budget (WithReadsPerMinute) allows. It is not
+	// queryrunner.ErrTooManyQueries: the two budgets are separate, and a
+	// participant told "too many queries" after reloading a page would wait
+	// for nothing.
 	ErrTooManyReads = errors.New("too many page reads")
 )
 
@@ -168,8 +169,7 @@ type Service struct {
 	// rosters (CLAUDE.md rule 5).
 	resets *queryrunner.RateLimiter
 	// reads is the play screen's budget, apart from rate so that reloading a
-	// page never refuses the next query. Keyed like rate: the user ID before
-	// any lookup, the registration ID after it.
+	// page never refuses the next query. Keyed by user ID, before any lookup.
 	reads          *queryrunner.RateLimiter
 	readsPerMinute int
 	// perMinuteDefault is the rate for a contest left at zero and the ceiling
@@ -459,8 +459,8 @@ func (s *Service) admit(contest contests.Contest, participant contests.Participa
 // Access resolves who is asking and confirms they may currently interact with
 // contestID, for the read endpoints (story, questions). It is the same gate
 // Run asks, without Run's game lookup or provisioning. It starts no clock (see
-// StartOnRead) and charges no rate: AdmitRead before it and AdmitReadOf after
-// it are the read budget, which a workspace write must not spend.
+// StartOnRead) and charges no rate: AdmitRead before it is the read budget,
+// which a workspace write must not spend.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
@@ -553,17 +553,7 @@ func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UU
 // lookup: the contest ID is caller-chosen, the user ID is one key per account
 // (CLAUDE.md rule 5). Reads never spend the query budget, nor queries this.
 func (s *Service) AdmitRead(userID uuid.UUID) error {
-	return s.admitRead(userID)
-}
-
-// AdmitReadOf charges the same read to the registration Access resolved, once
-// it is known.
-func (s *Service) AdmitReadOf(registration uuid.UUID) error {
-	return s.admitRead(registration)
-}
-
-func (s *Service) admitRead(key uuid.UUID) error {
-	if err := s.reads.Admit(key.String(), s.readsPerMinute); err != nil {
+	if err := s.reads.Admit(userID.String(), s.readsPerMinute); err != nil {
 		return ErrTooManyReads
 	}
 	return nil
