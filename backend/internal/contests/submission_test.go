@@ -249,6 +249,26 @@ func TestSubmitRefusesAnUnopenedQuestionInASequentialContest(t *testing.T) {
 	}
 }
 
+// A locked question's refusal says only that it has not opened: checked
+// before the value is held against its choices, so a stray value cannot learn
+// the question's kind.
+func TestSubmitRefusesALockedChoiceQuestionBeforeReadingItsChoices(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := sequentialContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	f.Questions.Put(contests.Question{ContestID: c.ID, Ord: 1, Kind: contests.KindText, IsVisible: true})
+	locked := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 2, Kind: contests.KindChoice, IsVisible: true, ChoiceIDs: []string{"a", "b"},
+	})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: locked.ID, Value: "not-a-choice",
+	})
+	if !errors.Is(err, contests.ErrQuestionNotOpen) {
+		t.Fatalf("error = %v, want ErrQuestionNotOpen, never a refusal that names the question's kind", err)
+	}
+}
+
 // §6.1.1: closed also means every attempt spent.
 func TestSubmitOpensTheNextQuestionOnceAttemptsAreExhausted(t *testing.T) {
 	f := conteststest.NewFixture()
