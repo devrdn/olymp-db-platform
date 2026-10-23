@@ -196,6 +196,165 @@ func TestStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 	})
 }
 
+// scored adds a question worth points to the fixture's contest, a bonus or
+// not, for the points total (§6.1.1).
+func (f boardFixture) scored(t *testing.T, points int, bonus bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := storage.QuerierFrom(f.ctx, testPool).QueryRow(f.ctx, `
+		INSERT INTO questions (contest_id, ord, kind, points, is_bonus, is_visible)
+		VALUES ($1, (SELECT MAX(ord) + 1 FROM questions WHERE contest_id = $1), 'text', $2, $3, true)
+		RETURNING id`, f.contest, points, bonus).Scan(&id); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+	return id
+}
+
+func (f boardFixture) row(t *testing.T, login string, cutoff int) leaderboard.Entry {
+	t.Helper()
+	entries, err := NewLeaderboard(testPool).Standings(f.ctx, leaderboard.Query{
+		ContestID: f.contest, Cutoff: boardAt(cutoff), Scoring: contests.ScoringPoints, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Standings() = %v", err)
+	}
+	row, ok := byLogin(entries)[login]
+	if !ok {
+		t.Fatalf("%s is not on the table", login)
+	}
+	return row
+}
+
+func scoredAt(e leaderboard.Entry) string {
+	if e.LastScoredAt == nil {
+		return "never"
+	}
+	return fmt.Sprintf("minute %d", int(e.LastScoredAt.Sub(boardStart)/time.Minute))
+}
+
+func TestStandingsAddBonusCreditUpToThePenaltyPoints(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		penalised, clean := f.scored(t, 10, false), f.scored(t, 8, false)
+		small, large, missed := f.scored(t, 3, true), f.scored(t, 4, true), f.scored(t, 7, true)
+		alice := f.participant(t, "board-alice", 0)
+		f.answer(t, alice, penalised, 1, false, 0, 5)
+		f.answer(t, alice, penalised, 2, true, 5, 10)
+		f.answer(t, alice, clean, 1, true, 8, 12)
+		f.answer(t, alice, small, 1, true, 0, 20)
+		f.answer(t, alice, missed, 1, false, 0, 22)
+		if got := f.row(t, "board-alice", 60); got.Points != 16 {
+			t.Errorf("points with one bonus = %d, want 16 (13 awarded + 3 of the 5 penalty points)", got.Points)
+		}
+
+		f.answer(t, alice, large, 1, true, 0, 25)
+		got := f.row(t, "board-alice", 60)
+		if got.Points != 18 || got.Solved != 4 {
+			t.Errorf("points, solved = %d, %d, want 18 (13 + all 5 penalty points, not 7), 4", got.Points, got.Solved)
+		}
+	})
+}
+
+func TestStandingsSpendBonusCreditOnAPenaltyThatCameAfterIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		bonus, regular := f.scored(t, 4, true), f.scored(t, 10, false)
+		alice := f.participant(t, "board-alice", 0)
+		f.answer(t, alice, bonus, 1, true, 0, 5)
+		if got := f.row(t, "board-alice", 60); got.Points != 0 {
+			t.Fatalf("points with nothing to remove = %d, want 0", got.Points)
+		}
+
+		f.answer(t, alice, regular, 1, false, 0, 8)
+		f.answer(t, alice, regular, 2, true, 0, 10)
+		if got := f.row(t, "board-alice", 60); got.Points != 4 {
+			t.Errorf("points = %d, want 4 (nothing awarded, 4 of the 10 penalty points removed)", got.Points)
+		}
+	})
+}
+
+// A frozen table counts neither a bonus nor a penalty from after the cutoff.
+func TestStandingsCountBonusAndPenaltyOnlyBeforeTheCutoff(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		regular, bonus := f.scored(t, 10, false), f.scored(t, 3, true)
+		late := f.participant(t, "board-late-bonus", 0)
+		f.answer(t, late, regular, 1, false, 0, 5)
+		f.answer(t, late, regular, 2, true, 5, 10)
+		f.answer(t, late, bonus, 1, true, 0, 70)
+		early := f.participant(t, "board-late-penalty", 0)
+		f.answer(t, early, bonus, 1, true, 0, 10)
+		f.answer(t, early, regular, 1, false, 0, 65)
+		f.answer(t, early, regular, 2, true, 5, 70)
+
+		if got := f.row(t, "board-late-bonus", 60); got.Points != 5 || scoredAt(got) != "minute 10" {
+			t.Errorf("frozen row with a later bonus = %d points, scored %s; want 5 at minute 10", got.Points, scoredAt(got))
+		}
+		if got := f.row(t, "board-late-penalty", 60); got.Points != 0 || got.LastScoredAt != nil {
+			t.Errorf("frozen row with a later penalty = %d points, scored %s; want 0, never", got.Points, scoredAt(got))
+		}
+		if got := f.row(t, "board-late-bonus", 90); got.Points != 8 {
+			t.Errorf("live row = %d points, want 8", got.Points)
+		}
+		if got := f.row(t, "board-late-penalty", 90); got.Points != 8 {
+			t.Errorf("live row = %d points, want 8 (5 + the bonus covering 3 of the 5 penalty points)", got.Points)
+		}
+	})
+}
+
+// The tie-break is the last answer that raised the total, so a bonus counts
+// when it removed penalty points and not when it removed none.
+func TestStandingsTimeTheLastScoreByTheAnswerThatRaisedTheTotal(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		cases := []struct {
+			login   string
+			answers func(registration uuid.UUID)
+			points  int
+			scored  string
+		}{
+			{"board-bonus-pays", func(r uuid.UUID) {
+				q, b := f.scored(t, 10, false), f.scored(t, 3, true)
+				f.answer(t, r, q, 1, false, 0, 5)
+				f.answer(t, r, q, 2, true, 5, 10)
+				f.answer(t, r, b, 1, true, 0, 20)
+			}, 8, "minute 20"},
+			{"board-bonus-idle", func(r uuid.UUID) {
+				q, b := f.scored(t, 10, false), f.scored(t, 3, true)
+				f.answer(t, r, q, 1, true, 10, 10)
+				f.answer(t, r, b, 1, true, 0, 20)
+			}, 10, "minute 10"},
+			{"board-bonus-spent", func(r uuid.UUID) {
+				q, b, extra := f.scored(t, 10, false), f.scored(t, 5, true), f.scored(t, 3, true)
+				f.answer(t, r, q, 1, false, 0, 5)
+				f.answer(t, r, q, 2, true, 5, 10)
+				f.answer(t, r, b, 1, true, 0, 20)
+				f.answer(t, r, extra, 1, true, 0, 30)
+			}, 10, "minute 20"},
+			{"board-penalty-releases", func(r uuid.UUID) {
+				b, q := f.scored(t, 4, true), f.scored(t, 10, false)
+				f.answer(t, r, b, 1, true, 0, 10)
+				f.answer(t, r, q, 1, false, 0, 15)
+				f.answer(t, r, q, 2, true, 0, 20)
+			}, 4, "minute 20"},
+			{"board-bonus-alone", func(r uuid.UUID) {
+				b := f.scored(t, 4, true)
+				f.answer(t, r, b, 1, true, 0, 10)
+			}, 0, "never"},
+		}
+		for _, c := range cases {
+			c.answers(f.participant(t, c.login, 0))
+		}
+
+		for _, c := range cases {
+			got := f.row(t, c.login, 60)
+			if got.Points != c.points || scoredAt(got) != c.scored {
+				t.Errorf("%s: %d points, scored %s; want %d, %s", c.login, got.Points, scoredAt(got), c.points, c.scored)
+			}
+		}
+	})
+}
+
 // icpcFixture is a fixed-window ICPC contest that opened at boardStart with
 // three questions in this order: A, a hidden one, and B. The grid is A and B.
 type icpcFixture struct {

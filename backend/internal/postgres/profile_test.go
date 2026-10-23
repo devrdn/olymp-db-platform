@@ -260,6 +260,49 @@ func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T
 	})
 }
 
+// The bonus rule (§6.1.1) reaches the profile, the table and total_score
+// through one expression; this holds the three to the same number.
+func TestProfileEnrolmentsCarryTheBonusTotalTheTableAndTheRosterAgreeWith(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		contest, mine := f.contest(contests.StatusFinished, -24*time.Hour)
+		regular, bonus := f.question(contest, 1), f.question(contest, 2)
+		f.exec(`UPDATE questions SET points = 4, is_bonus = true WHERE id = $1`, bonus)
+		f.answer(mine, regular, 1, false, f.base)
+		f.exec(`
+			INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
+			VALUES ($1, $2, 2, 'v2', true, 7, $3), ($1, $4, 1, 'v1', true, 0, $5)`,
+			mine, regular, f.base.Add(10*time.Minute), bonus, f.base.Add(20*time.Minute))
+		if err := NewRegistrations(testPool).RefreshScore(ctx, mine); err != nil {
+			t.Fatalf("RefreshScore() = %v", err)
+		}
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		// 7 awarded, and the bonus removes 3 penalty points, all there are.
+		if got := rows[0].Result; got.Points != 10 || got.Solved != 2 {
+			t.Fatalf("result = %+v, want 10 points and 2 solved", got)
+		}
+		if got := rows[0].Participant.TotalScore; got != 10 {
+			t.Errorf("total_score = %d, want 10", got)
+		}
+
+		entries, err := NewLeaderboard(testPool).Standings(ctx, leaderboard.Query{
+			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringPoints, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("Standings() = %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Registration == mine && entry.Points != 10 {
+				t.Errorf("the table says %d points, the profile 10", entry.Points)
+			}
+		}
+	})
+}
+
 // A roster may be filled while the contest is still a draft, and the profile
 // must not reveal it before publication.
 func TestProfileReadsLeaveADraftContestOut(t *testing.T) {

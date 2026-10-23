@@ -372,6 +372,37 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		})
 	})
 
+	t.Run("Create, ByID, List and Update keep the bonus flag", func(t *testing.T) {
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			contest := target.NewContest()
+			bonus := textual(contest, 4)
+			bonus.IsBonus = true
+			created := create(t, ctx, target, bonus)
+			regular := create(t, ctx, target, textual(contest, 9))
+
+			if !created.IsBonus {
+				t.Error("Create() returned IsBonus = false, want true")
+			}
+			if !byID(t, ctx, target, created.ID).IsBonus {
+				t.Error("ByID() reads IsBonus = false, want true")
+			}
+			if got := list(t, ctx, target, contest); len(got) != 2 || !got[0].IsBonus || got[1].IsBonus {
+				t.Errorf("List() bonus flags = %v, want [true false]", bonusFlags(got))
+			}
+
+			regular.IsBonus = true
+			created.IsBonus = false
+			for _, q := range []contests.Question{regular, created} {
+				if err := target.Repo.Update(ctx, q); err != nil {
+					t.Fatalf("Update() = %v", err)
+				}
+			}
+			if got := list(t, ctx, target, contest); len(got) != 2 || got[0].IsBonus || !got[1].IsBonus {
+				t.Errorf("List() bonus flags after Update = %v, want [false true]", bonusFlags(got))
+			}
+		})
+	})
+
 	t.Run("Update can lift a limit and empty the options", func(t *testing.T) {
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
@@ -930,6 +961,24 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		})
 	})
 
+	t.Run("ForContest says which question is a bonus", func(t *testing.T) {
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			contest := target.NewContest()
+			bonus := textual(contest, 3)
+			bonus.IsBonus = true
+			for _, q := range []contests.Question{textual(contest, 8), bonus} {
+				created := create(t, ctx, target, q)
+				replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{"en": {BodyMD: "Who?"}})
+			}
+
+			got := forContest(t, ctx, target, contest, "en")
+
+			if len(got) != 2 || got[0].IsBonus || !got[1].IsBonus {
+				t.Fatalf("ForContest() = %+v, want the second question alone marked bonus", got)
+			}
+		})
+	})
+
 	t.Run("ForContest leaves out a hidden question", func(t *testing.T) {
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			contest := target.NewContest()
@@ -1057,4 +1106,13 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			}
 		})
 	})
+}
+
+// bonusFlags lists each question's IsBonus, for a failure message.
+func bonusFlags(questions []contests.Question) []bool {
+	flags := make([]bool, 0, len(questions))
+	for _, q := range questions {
+		flags = append(flags, q.IsBonus)
+	}
+	return flags
 }

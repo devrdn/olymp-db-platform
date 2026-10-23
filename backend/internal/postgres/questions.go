@@ -23,7 +23,7 @@ var (
 // questionColumns is the staff projection, reference answers included.
 // Participants are served by ForContest, which never reads the answers.
 const questionColumns = `
-	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.penalty_pct, q.is_visible, q.choice_ids,
+	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.penalty_pct, q.is_visible, q.is_bonus, q.choice_ids,
 	COALESCE((
 		SELECT json_object_agg(qt.lang, json_build_object('title', qt.title,
 		                                                  'body_md', qt.body_md,
@@ -70,7 +70,7 @@ func scanQuestion(row pgx.Row) (contests.Question, error) {
 		answers []byte
 	)
 	err := row.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts, &q.PenaltyPct,
-		&q.IsVisible, &q.ChoiceIDs, &texts, &answers)
+		&q.IsVisible, &q.IsBonus, &q.ChoiceIDs, &texts, &answers)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contests.Question{}, contests.ErrQuestionNotFound
 	}
@@ -135,7 +135,7 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 // than returned with an empty body, as Story answers ErrStoryNotFound.
 func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT q.id, q.kind, q.points, q.max_attempts, q.choice_ids,
+		SELECT q.id, q.kind, q.points, q.is_bonus, q.max_attempts, q.choice_ids,
 		       qt.title, qt.body_md, COALESCE(qt.choices, '{}'::jsonb)
 		FROM questions q
 		JOIN question_translations qt ON qt.question_id = q.id AND qt.lang = $2
@@ -152,7 +152,7 @@ func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang st
 			q       contests.VisibleQuestion
 			choices []byte
 		)
-		if err := rows.Scan(&q.ID, &q.Kind, &q.Points, &q.MaxAttempts, &q.ChoiceIDs, &q.Title, &q.BodyMD, &choices); err != nil {
+		if err := rows.Scan(&q.ID, &q.Kind, &q.Points, &q.IsBonus, &q.MaxAttempts, &q.ChoiceIDs, &q.Title, &q.BodyMD, &choices); err != nil {
 			return nil, fmt.Errorf("scan visible question: %w", err)
 		}
 		if err := json.Unmarshal(choices, &q.Choices); err != nil {
@@ -189,14 +189,14 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 
 	return scanQuestion(querier.QueryRow(ctx, `
 		WITH inserted AS (
-			INSERT INTO questions (contest_id, ord, kind, points, max_attempts, penalty_pct, is_visible, choice_ids)
+			INSERT INTO questions (contest_id, ord, kind, points, max_attempts, penalty_pct, is_visible, is_bonus, choice_ids)
 			VALUES ($1,
 			        (SELECT COALESCE(MAX(ord), 0) + 1 FROM questions WHERE contest_id = $1),
-			        $2, $3, $4, $5, $6, $7)
+			        $2, $3, $4, $5, $6, $7, $8)
 			RETURNING *
 		)
 		SELECT `+questionColumns+` FROM inserted q`,
-		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, stringList(q.ChoiceIDs)))
+		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, q.IsBonus, stringList(q.ChoiceIDs)))
 }
 
 // lockContest locks the contest row to serialise position allocation within
@@ -221,9 +221,9 @@ func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) er
 func (r *Questions) Update(ctx context.Context, q contests.Question) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE questions
-		SET kind = $2, points = $3, max_attempts = $4, penalty_pct = $5, is_visible = $6, choice_ids = $7
+		SET kind = $2, points = $3, max_attempts = $4, penalty_pct = $5, is_visible = $6, is_bonus = $7, choice_ids = $8
 		WHERE id = $1`,
-		q.ID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, stringList(q.ChoiceIDs))
+		q.ID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, q.IsBonus, stringList(q.ChoiceIDs))
 	if err != nil {
 		return fmt.Errorf("update question: %w", err)
 	}

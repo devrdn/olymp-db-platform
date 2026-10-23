@@ -75,6 +75,7 @@ func NewFixture() *Fixture {
 		PoolTrigger:   NewPoolTrigger(uow),
 	}
 	f.Sequence = NewSequentialProgress(f.Questions, f.Submissions)
+	f.Registrations.Scores = NewScores(f.Questions, f.Submissions)
 	// Participants and staff carry the login the real repositories join in.
 	accounts := func(ctx context.Context, id uuid.UUID) (string, string) {
 		user, err := f.Users.ByID(ctx, id)

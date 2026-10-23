@@ -49,9 +49,103 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 						VALUES ($1, 'kept', now())`, registration)
 				},
 				Now: func() time.Time { return now },
+				Answer: func(contest, registration uuid.UUID, a conteststest.ScoredAnswer) {
+					exec(t, ctx, `
+						WITH q AS (
+							INSERT INTO questions (contest_id, ord, kind, points, is_bonus, is_visible)
+							VALUES ($1, (SELECT COALESCE(MAX(ord), 0) + 1 FROM questions WHERE contest_id = $1),
+							        'text', $3, $4, true)
+							RETURNING id
+						)
+						INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+						SELECT $2, q.id, 1, 'an answer', $5, $6 FROM q`,
+						contest, registration, a.Points, a.Bonus, a.Correct, a.Awarded)
+				},
 			})
 		})
 	})
+}
+
+// A recount that starts while another answer's transaction is still open
+// must wait for it and count its answer. Without the lock the recount's
+// snapshot predates that commit, and its write would put back a total missing
+// the answer. (Answers by one registration already queue behind each other on
+// registration_activity; the lock does not rely on that trigger.)
+func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := t.Context()
+
+	author := makeUser(t, ctx, "author-"+uuid.NewString()[:8])
+	student := makeUser(t, ctx, "student-"+uuid.NewString()[:8])
+	contestID := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+	registrationID := makeRegistration(t, ctx, contestID, student.ID)
+	// A stale total, so the waiting recount has a write to make; one that
+	// matched the old snapshot would skip the row and never meet the lock.
+	if _, err := testPool.Exec(ctx, `UPDATE registrations SET total_score = 3 WHERE id = $1`, registrationID); err != nil {
+		t.Fatalf("stale the total: %v", err)
+	}
+	var question uuid.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO questions (contest_id, ord, kind, points, is_visible)
+		VALUES ($1, 1, 'text', 10, true) RETURNING id`, contestID).Scan(&question); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+
+	repo := NewRegistrations(testPool)
+	uow := storage.NewUnitOfWork(testPool)
+	answered := make(chan struct{})
+	recounted := make(chan error, 1)
+	go func() {
+		<-answered
+		recounted <- uow.Do(context.Background(), func(ctx context.Context) error {
+			return repo.RefreshScore(ctx, registrationID)
+		})
+	}()
+	err := uow.Do(context.Background(), func(ctx context.Context) error {
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+			INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+			VALUES ($1, $2, 1, 'right', true, 10)`, registrationID, question); err != nil {
+			return err
+		}
+		if err := repo.RefreshScore(ctx, registrationID); err != nil {
+			return err
+		}
+		close(answered)
+		// Time for the other recount to start; were it later, it would see
+		// this answer committed and pass for the wrong reason.
+		time.Sleep(200 * time.Millisecond)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if err := <-recounted; err != nil {
+		t.Fatalf("recount: %v", err)
+	}
+
+	final, err := repo.ByUser(ctx, contestID, student.ID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if final.TotalScore != 10 {
+		t.Errorf("TotalScore = %d, want 10: the recount must count the answer it waited for", final.TotalScore)
+	}
+}
+
+func TestRefreshScoreRefusesToRunOutsideATransaction(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	if err := NewRegistrations(testPool).RefreshScore(t.Context(), uuid.New()); err == nil {
+		t.Error("RefreshScore() outside a transaction = nil, want a refusal")
+	}
 }
 
 // Racers each use their own connection, outside a rolled-back transaction,
