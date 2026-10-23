@@ -181,6 +181,8 @@ type Row struct {
 	// winner mode, everyone but the winner).
 	Place  int
 	Winner bool
+	// Prize is the tier the row earns, 1 to 3, or 0 for none (AwardPrizes).
+	Prize int
 }
 
 // Label is how the row is named under the contest's choice. A deleted

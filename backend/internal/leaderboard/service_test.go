@@ -761,3 +761,56 @@ func TestTheCacheExpiryIsAnchoredToWhenTheViewWasGeneratedNotAFollowersOwnClock(
 			"the cache outlived the leader's own generation time", got)
 	}
 }
+
+func prizedEntries() []leaderboard.Entry {
+	cheat := entry("cheat", 90, at(1))
+	cheat.Disqualified = true
+	return []leaderboard.Entry{cheat, entry("a", 50, at(1)), entry("b", 40, at(1)), entry("c", 30, at(1))}
+}
+
+func TestThePublicTableCarriesTheContestsPrizes(t *testing.T) {
+	r := newRig(t)
+	c := contest(contests.StatusRunning, nil, nil)
+	c.PrizePlaces = contests.PrizePlaces{First: 1, Second: 1}
+	c = r.contests.Put(c)
+	r.standings.entries = prizedEntries()
+
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("Public() = %v", err)
+	}
+	samePrizes(t, view.Rows, map[string]int{"a": 1, "b": 2, "c": 0})
+}
+
+// The frozen table gives prizes by the places it shows, not the live ones.
+func TestAFrozenTableAwardsPrizesByItsFrozenPlaces(t *testing.T) {
+	r := newRig(t)
+	c := contest(contests.StatusRunning, minutes(30), nil)
+	c.PrizePlaces = contests.PrizePlaces{First: 1}
+	c = r.contests.Put(c)
+	r.standings.entries = prizedEntries()
+	r.now = end.Add(-10 * time.Minute)
+
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("Public() = %v", err)
+	}
+	if view.State != leaderboard.StateFrozen {
+		t.Fatalf("State = %s, want frozen", view.State)
+	}
+	samePrizes(t, view.Rows, map[string]int{"a": 1, "b": 0, "c": 0})
+}
+
+func TestTheStaffTableAwardsThePrizesEverybodySees(t *testing.T) {
+	r := newRig(t)
+	c := contest(contests.StatusRunning, nil, nil)
+	c.PrizePlaces = contests.PrizePlaces{First: 1, Second: 1}
+	c = r.contests.Put(c)
+	r.standings.entries = prizedEntries()
+
+	view, err := r.service.Live(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("Live() = %v", err)
+	}
+	samePrizes(t, view.Rows, map[string]int{"cheat": 0, "a": 1, "b": 2, "c": 0})
+}
