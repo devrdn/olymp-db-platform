@@ -1585,6 +1585,14 @@ const ro = {
           failed: "Nu s-a putut încărca jurnalul de interogări.",
           retry: "Încercați din nou",
           durationMs: "{n} ms",
+          show: "Afișați",
+          hide: "Ascundeți",
+          statement: "Interogarea întreagă",
+          loadingStatement: "Se încarcă interogarea întreagă…",
+          copy: "Copiați",
+          copied: "Copiat",
+          copyFailed: "Nu s-a putut copia",
+          shortened: "S-a păstrat doar începutul acestei interogări.",
           /** Toată sesiunea ca fișier, lângă pagina ei de pe ecran. */
           export: {
             heading: "Export",

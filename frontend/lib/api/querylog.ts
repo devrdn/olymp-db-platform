@@ -4,10 +4,12 @@ import { z } from "zod";
  * A row of the participant's own query log (`.../play/log`). `status` is a
  * plain string so an unknown status still renders, as its raw code. `sql` is
  * only the start of the statement when `sql_truncated` says so, since a page
- * is bounded in bytes; the CSV export has it whole.
+ * is bounded in bytes; the row read on its own (`.../play/log/{id}`) and the
+ * CSV export have it whole.
  */
 export const queryLogEntrySchema = z
   .object({
+    id: z.number(),
     sql: z.string(),
     sql_truncated: z.boolean().nullish(),
     status: z.string(),
@@ -17,6 +19,7 @@ export const queryLogEntrySchema = z
     executed_at: z.string(),
   })
   .transform((raw) => ({
+    id: raw.id,
     sql: raw.sql,
     // Omitted for a row the server did not cut.
     sqlTruncated: raw.sql_truncated ?? false,
