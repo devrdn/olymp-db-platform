@@ -413,6 +413,125 @@ describe("several documents in one editor", () => {
 });
 
 /**
+ * Text handed to the editor from outside (a click on a table's name): an edit
+ * like typing, so it is undoable and saved, placed where the caret is.
+ */
+describe("inserting text at the caret", () => {
+  const STATEMENT = "SELECT * FROM guests LIMIT 5;";
+
+  function Single({
+    initial,
+    handle,
+    onChange = () => {},
+  }: {
+    initial: string;
+    handle: React.Ref<CodeEditorHandle>;
+    onChange?: (text: string) => void;
+  }) {
+    return (
+      <CodeEditor ref={handle} ariaLabel="Your query" placeholder="" getInitialValue={() => initial} onChange={onChange} />
+    );
+  }
+
+  /** The document's lines, read from CodeMirror's own line elements. */
+  function lines(container: HTMLElement) {
+    return [...container.querySelectorAll(".cm-line")].map((line) => line.textContent);
+  }
+
+  test("goes where the caret is on an empty line, and leaves the caret after it", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Single initial="" handle={handle} />);
+    await waitForRealEditor(container);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+    act(() => handle.current?.insertAtCursor("SELECT * FROM rooms LIMIT 5;"));
+
+    // The second went after the first, on a line of its own.
+    expect(lines(container)).toEqual([STATEMENT, "SELECT * FROM rooms LIMIT 5;"]);
+  });
+
+  test("goes on a new line after the caret's line when that line holds text", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Single initial={"SELECT 1\nSELECT 2"} handle={handle} />);
+    await waitForRealEditor(container);
+
+    // The caret starts on the first line.
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(lines(container)).toEqual(["SELECT 1", STATEMENT, "SELECT 2"]);
+  });
+
+  test("is reported through onChange, so the owner saves it", async () => {
+    const onChange = vi.fn();
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Single initial="SELECT 1" handle={handle} onChange={onChange} />);
+    await waitForRealEditor(container);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(onChange).toHaveBeenLastCalledWith(`SELECT 1\n${STATEMENT}`);
+  });
+
+  test("is undone in one step, like a paste", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Single initial="SELECT 1" handle={handle} />);
+    await waitForRealEditor(container);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+    // The insertion leaves the caret in the editor.
+    expect(screen.getByRole("textbox")).toHaveFocus();
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(lines(container)).toEqual(["SELECT 1"]);
+  });
+
+  test("goes into the document showing, and no other", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const Documents = () => {
+      const [id, setId] = useState("a");
+      const texts = useRef(new Map([["a", "SELECT a"], ["b", ""]]));
+      return (
+        <>
+          <button type="button" onClick={() => setId((current) => (current === "a" ? "b" : "a"))}>
+            switch
+          </button>
+          <CodeEditor
+            ref={handle}
+            ariaLabel="Your query"
+            placeholder=""
+            documentId={id}
+            getDocumentValue={(key) => texts.current.get(key) ?? ""}
+            getInitialValue={() => texts.current.get("a") ?? ""}
+            onChange={() => {}}
+          />
+        </>
+      );
+    };
+    const { container } = render(<Documents />);
+    await waitForRealEditor(container);
+
+    await userEvent.click(screen.getByRole("button", { name: "switch" }));
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+    expect(lines(container)).toEqual([STATEMENT]);
+
+    await userEvent.click(screen.getByRole("button", { name: "switch" }));
+    expect(lines(container)).toEqual(["SELECT a"]);
+  });
+
+  // No `await` before inserting: CodeMirror has not arrived yet.
+  test("goes into the fallback field before CodeMirror has loaded, by the same rule", () => {
+    const onChange = vi.fn();
+    const handle = { current: null as CodeEditorHandle | null };
+    render(<Single initial="SELECT 1" handle={handle} onChange={onChange} />);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(screen.getByRole("textbox")).toHaveValue(`SELECT 1\n${STATEMENT}`);
+    expect(onChange).toHaveBeenLastCalledWith(`SELECT 1\n${STATEMENT}`);
+  });
+});
+
+/**
  * Keys the surrounding screen owns. CodeMirror sees a keydown first and would
  * type or pass on an unclaimed one, so the owner's keys go into the editor's
  * keymap, which also calls `preventDefault`.

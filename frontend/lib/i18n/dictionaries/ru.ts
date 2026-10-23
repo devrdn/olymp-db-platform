@@ -1447,6 +1447,7 @@ const ru = {
         foreignKeyCount: "внешних ключей: {n}",
         expand: "Раскрыть таблицу {table}",
         collapse: "Свернуть таблицу {table}",
+        query: "Вставить в редактор запрос к таблице {table}",
       },
       story: {
         heading: "История",

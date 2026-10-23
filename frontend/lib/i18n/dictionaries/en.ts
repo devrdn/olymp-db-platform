@@ -1605,6 +1605,8 @@ const en = {
         foreignKeyCount: "foreign keys: {n}",
         expand: "Expand table {table}",
         collapse: "Collapse table {table}",
+        /** A click on a table's name writes `SELECT * FROM <table> LIMIT 5;` into the open SQL tab, without running it. */
+        query: "Insert a query on {table} into the editor",
       },
       story: {
         heading: "The story",
