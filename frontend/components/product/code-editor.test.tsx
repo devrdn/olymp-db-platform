@@ -454,11 +454,59 @@ describe("inserting text at the caret", () => {
     const handle = { current: null as CodeEditorHandle | null };
     const { container } = render(<Single initial={"SELECT 1\nSELECT 2"} handle={handle} />);
     await waitForRealEditor(container);
+    // The participant puts the caret on the first line.
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("{Control>}{Home}{/Control}");
 
-    // The caret starts on the first line.
     act(() => handle.current?.insertAtCursor(STATEMENT));
 
     expect(lines(container)).toEqual(["SELECT 1", STATEMENT, "SELECT 2"]);
+  });
+
+  // A caret nobody placed sits at the start, inside whatever statement the
+  // document opens with; writing there would split it.
+  test("goes at the end, on a line of its own, in a document the participant has not touched", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Single initial={"SELECT *\nFROM x\nWHERE y"} handle={handle} />);
+    await waitForRealEditor(container);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(lines(container)).toEqual(["SELECT *", "FROM x", "WHERE y", STATEMENT]);
+  });
+
+  test("goes at the end of a document switched to but not yet touched", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const Documents = () => {
+      const [id, setId] = useState("a");
+      const texts = useRef(new Map([["a", ""], ["b", "SELECT b\nFROM t"]]));
+      return (
+        <>
+          <button type="button" onClick={() => setId("b")}>
+            switch
+          </button>
+          <CodeEditor
+            ref={handle}
+            ariaLabel="Your query"
+            placeholder=""
+            documentId={id}
+            getDocumentValue={(key) => texts.current.get(key) ?? ""}
+            getInitialValue={() => texts.current.get("a") ?? ""}
+            onChange={() => {}}
+          />
+        </>
+      );
+    };
+    const { container } = render(<Documents />);
+    await waitForRealEditor(container);
+    // Touching the first document says nothing about the second.
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("{Control>}{Home}{/Control}");
+    await userEvent.click(screen.getByRole("button", { name: "switch" }));
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(lines(container)).toEqual(["SELECT b", "FROM t", STATEMENT]);
   });
 
   test("is reported through onChange, so the owner saves it", async () => {
@@ -522,11 +570,53 @@ describe("inserting text at the caret", () => {
   test("goes into the fallback field before CodeMirror has loaded, by the same rule", () => {
     const onChange = vi.fn();
     const handle = { current: null as CodeEditorHandle | null };
-    render(<Single initial="SELECT 1" handle={handle} onChange={onChange} />);
+    render(<Single initial={"SELECT *\nFROM x"} handle={handle} onChange={onChange} />);
+    const field = screen.getByRole<HTMLTextAreaElement>("textbox");
+    // A caret at the start that nobody placed still means the end.
+    field.setSelectionRange(0, 0);
 
     act(() => handle.current?.insertAtCursor(STATEMENT));
 
-    expect(screen.getByRole("textbox")).toHaveValue(`SELECT 1\n${STATEMENT}`);
+    expect(field).toHaveValue(`SELECT *\nFROM x\n${STATEMENT}`);
+    expect(onChange).toHaveBeenLastCalledWith(`SELECT *\nFROM x\n${STATEMENT}`);
+  });
+
+  test("goes at the caret the participant placed in the fallback field", () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    render(<Single initial={"SELECT *\nFROM x"} handle={handle} />);
+    const field = screen.getByRole<HTMLTextAreaElement>("textbox");
+    act(() => field.focus());
+    field.setSelectionRange(0, 0);
+
+    act(() => handle.current?.insertAtCursor(STATEMENT));
+
+    expect(field).toHaveValue(`SELECT *\n${STATEMENT}\nFROM x`);
+  });
+
+  // `execCommand("insertText")` is the one way a script's insertion enters a
+  // field's native undo stack; jsdom has none, so it is stood in for here.
+  test("goes into the fallback field through the browser's own editing, so ⌘Z undoes it", () => {
+    const onChange = vi.fn();
+    const handle = { current: null as CodeEditorHandle | null };
+    render(<Single initial="SELECT 1" handle={handle} onChange={onChange} />);
+    const field = screen.getByRole<HTMLTextAreaElement>("textbox");
+    const exec = vi.fn((command: string, _ui: boolean, text: string) => {
+      if (command !== "insertText") return false;
+      field.setRangeText(text, field.selectionStart, field.selectionEnd, "end");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", { value: exec, configurable: true, writable: true });
+
+    try {
+      act(() => handle.current?.insertAtCursor(STATEMENT));
+    } finally {
+      Reflect.deleteProperty(document, "execCommand");
+    }
+
+    expect(exec).toHaveBeenCalledWith("insertText", false, `\n${STATEMENT}`);
+    expect(field).toHaveValue(`SELECT 1\n${STATEMENT}`);
+    expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenLastCalledWith(`SELECT 1\n${STATEMENT}`);
   });
 });

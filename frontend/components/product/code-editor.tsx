@@ -24,7 +24,8 @@ export type CodeEditorHandle = {
   /**
    * Inserts text at the caret of the showing document as an edit: undoable,
    * reported through `onChange`, the caret left after it. On a line that
-   * already holds text it goes on a new line after that one.
+   * already holds text it goes on a new line after that one; in a document
+   * whose caret the participant never placed, at the end.
    */
   insertAtCursor: (text: string) => void;
 };
@@ -128,6 +129,8 @@ export function CodeEditor({
   /** A showing document its owner dropped: the next swap discards it. */
   const droppedRef = useRef<string | undefined>(undefined);
   const getDocumentValueRef = useRef(getDocumentValue);
+  /** Whether the participant has been in the fallback field, so its caret is theirs rather than the default. */
+  const fallbackTouchedRef = useRef(false);
   /**
    * Set while this component writes into CodeMirror, so a swap or recovered
    * draft is not reported as typing (which would hand one tab's text to another
@@ -194,14 +197,26 @@ export function CodeEditor({
         }
         const field = fallbackRef.current;
         if (!field) return;
-        const { value, selectionStart: caret } = field;
+        const { value } = field;
+        const caret = fallbackTouchedRef.current ? field.selectionStart : value.length;
         const lineFrom = value.lastIndexOf("\n", caret - 1) + 1;
         const lineEnd = value.indexOf("\n", caret);
         const lineTo = lineEnd === -1 ? value.length : lineEnd;
         const { at, insert } = placeInsertion({ text: value.slice(lineFrom, lineTo), to: lineTo }, caret, text);
-        field.setRangeText(insert, at, at, "end");
         field.focus();
-        report(field.value);
+        field.setSelectionRange(at, at);
+        // The browser's own editing keeps the insertion on the field's undo
+        // stack and reports it through `input`; `setRangeText` does neither.
+        let edited = false;
+        try {
+          edited = typeof document.execCommand === "function" && document.execCommand("insertText", false, insert);
+        } catch {
+          edited = false;
+        }
+        if (!edited) {
+          field.setRangeText(insert, at, at, "end");
+          report(field.value);
+        }
       },
     }),
     [],
@@ -320,6 +335,8 @@ export function CodeEditor({
         anchor: Math.min(pending.anchor, docLength),
         head: Math.min(pending.head, docLength),
       },
+      // The caret the participant had in the fallback field.
+      userEvent: "select",
     });
   }, [ready]);
 
@@ -339,6 +356,9 @@ export function CodeEditor({
           aria-label={ariaLabel}
           placeholder={placeholderText}
           spellCheck={false}
+          onFocus={() => {
+            fallbackTouchedRef.current = true;
+          }}
           onInput={(event) => report(event.currentTarget.value)}
           className="absolute inset-0 h-full w-full resize-none border border-edge bg-sunk p-3 font-mono text-body text-ink outline-none"
         />
