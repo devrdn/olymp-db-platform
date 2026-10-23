@@ -84,7 +84,6 @@ describe("the standings", () => {
     expect(cell).not.toHaveAttribute("data-medal");
     expect(within(cell).getByText("—")).toHaveAttribute("aria-hidden");
     expect(within(cell).getByText(t.prizes.none)).toHaveClass("sr-only");
-    // The rank itself is not the badge any more.
     expect(cell).not.toHaveTextContent("4");
   });
 
@@ -181,21 +180,68 @@ describe("the standings", () => {
     );
   });
 
-  test("name the winner in winner mode, where nobody has a prize tier", () => {
+  test("give the winner in winner mode the first prize, and nobody else any", () => {
     show(
       standings({
         scoring: "winner",
         rows: [
-          row({ place: 1, label: "sherlock", winner: true }),
+          row({ place: 1, prize: 1, label: "sherlock", winner: true }),
           row({ place: null, label: "watson", points: 50 }),
         ],
       }),
     );
 
-    expect(within(rowOf("sherlock")).getByText(t.winner)).toBeInTheDocument();
-    for (const label of ["sherlock", "watson"]) {
-      expect(within(rowOf(label)).getByTestId("prize")).toHaveTextContent(t.prizes.none);
-    }
+    const sherlock = rowOf("sherlock");
+    expect(within(sherlock).getByText(t.winner)).toBeInTheDocument();
+    expect(within(sherlock).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
+    expect(within(sherlock).getByText(t.prizes.first)).toHaveClass("sr-only");
+    expect(within(rowOf("watson")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+  });
+
+  test("stand the winner on the podium in winner mode", () => {
+    show(
+      standings({
+        scoring: "winner",
+        rows: [
+          row({ place: 1, prize: 1, label: "sherlock", winner: true }),
+          row({ place: null, label: "watson", points: 50 }),
+        ],
+      }),
+      "page",
+    );
+
+    const podium = screen.getByTestId("podium");
+    expect(within(podium).getByText("I")).toBeInTheDocument();
+    expect(within(podium).getByText("sherlock")).toBeInTheDocument();
+    expect(within(podium).queryByText("watson")).not.toBeInTheDocument();
+  });
+
+  test("stand one step per tier on the podium, naming its first row and how many share it", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: 1, label: "alpha", points: 40 }),
+          row({ place: 2, prize: 1, label: "beta", points: 30 }),
+          row({ place: 3, prize: 1, label: "gamma", points: 20 }),
+          row({ place: 4, prize: null, label: "delta", points: 10 }),
+        ],
+      }),
+      "page",
+    );
+
+    const steps = within(screen.getByTestId("podium")).getAllByTestId("podium-step");
+    expect(steps.map((step) => step.dataset.tier ?? "")).toEqual(["", "1", ""]);
+    expect(within(steps[1]).getByText("alpha")).toBeInTheDocument();
+    expect(within(steps[1]).getByText(t.podiumMore.replace("{count}", "2"))).toBeInTheDocument();
+    expect(within(screen.getByTestId("podium")).queryByText("beta")).not.toBeInTheDocument();
+  });
+
+  test("stand a lone third prize on its own low step, not the tallest", () => {
+    show(standings({ rows: [row({ place: 1, prize: 3, label: "alpha", points: 40 })] }), "page");
+
+    const steps = within(screen.getByTestId("podium")).getAllByTestId("podium-step");
+    expect(steps.map((step) => step.dataset.tier ?? "")).toEqual(["", "", "3"]);
+    expect(within(steps[2]).getByText("III")).toBeInTheDocument();
   });
 
   test("never show a deleted account under a login", () => {

@@ -331,7 +331,7 @@ export function StandingsView({
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
         <>
-          {variant === "page" && (standings.scoring === "points" || icpc) ? (
+          {variant === "page" ? (
             <Podium rows={rows} dict={dict} scoring={standings.scoring} />
           ) : null}
           <div className="overflow-x-auto">
@@ -542,9 +542,18 @@ function Row({
   );
 }
 
+/** The podium's steps left to right: second, first, third (SPEC §15). */
+const PODIUM_STEPS: { prize: Prize; height: string }[] = [
+  { prize: 2, height: "h-20" },
+  { prize: 1, height: "h-28" },
+  { prize: 3, height: "h-14" },
+];
+
 /**
- * The top three prize winners, second-first-third at three heights (SPEC §15),
- * each on their tier's medal. Only rows with a prize that scored stand on it.
+ * One step per prize tier, each at its tier's height, so equal prizes never
+ * look ranked and a lone third prize stands on the low step. A step names the
+ * tier's first row and how many more share it; a tier nobody holds is an
+ * empty step.
  */
 function Podium({
   rows,
@@ -556,11 +565,8 @@ function Podium({
   scoring: Standings["scoring"];
 }) {
   const icpc = scoring === "icpc";
-  const top = rows.filter((r) => r.prize !== null && (icpc ? r.solved > 0 : r.points > 0)).slice(0, 3);
-  if (top.length === 0) return null;
-
-  const order = [top[1], top[0], top[2]];
-  const heights = ["h-20", "h-28", "h-14"];
+  const tiers = PODIUM_STEPS.map((step) => ({ ...step, holders: rows.filter((r) => r.prize === step.prize) }));
+  if (tiers.every((tier) => tier.holders.length === 0)) return null;
 
   return (
     <div
@@ -568,18 +574,19 @@ function Podium({
       aria-hidden
       className="grid grid-cols-3 items-end gap-3 pt-2 max-narrow:hidden"
     >
-      {order.map((row, i) => {
-        if (!row || row.prize === null) return <div key={i} />;
-        const medal = MEDALS[row.prize];
+      {tiers.map(({ prize, height, holders }) => {
+        const [row] = holders;
+        if (!row) return <div key={prize} data-testid="podium-step" />;
+        const medal = MEDALS[prize];
         return (
-          <div key={i} className="flex min-w-0 flex-col items-center gap-2">
+          <div key={prize} data-testid="podium-step" data-tier={prize} className="flex min-w-0 flex-col items-center gap-2">
             <span
               className={cn(
                 "grid size-14 place-items-center rounded-full font-mono text-h3 ring-4 ring-offset-2 ring-offset-bg",
                 MEDAL_CLASSES[medal].disc,
               )}
             >
-              {NUMERALS[row.prize]}
+              {NUMERALS[prize]}
             </span>
             <span className="max-w-full truncate text-body text-ink">
               {row.deleted ? dict.leaderboard.deleted : row.label}
@@ -587,13 +594,12 @@ function Podium({
             <span className="font-mono text-data text-ink-2 tabular-nums">
               {icpc ? `${row.solved} · ${row.penalty}` : row.points}
             </span>
-            <div
-              className={cn(
-                "w-full border-t-4",
-                heights[i],
-                MEDAL_CLASSES[medal].step,
-              )}
-            />
+            {holders.length > 1 ? (
+              <span className="text-small text-ink-3">
+                {dict.leaderboard.podiumMore.replace("{count}", String(holders.length - 1))}
+              </span>
+            ) : null}
+            <div className={cn("w-full border-t-4", height, MEDAL_CLASSES[medal].step)} />
           </div>
         );
       })}

@@ -528,9 +528,11 @@ export function PrizePanel({
     { name: "prizeThird", label: t.third, value: contest.prizePlaces.third },
   ];
 
-  // Keyed like the contest form, so a save shows the server's counts.
+  // Keyed on the counts, not updatedAt, which this save leaves alone: a save
+  // remounts the uncontrolled fields onto the server's values.
+  const { first, second, third } = contest.prizePlaces;
   return (
-    <form key={contest.updatedAt} action={formAction} className="contents">
+    <form key={`${first}-${second}-${third}`} action={formAction} className="contents">
       <Panel
         title={t.heading}
         help={t.help}
