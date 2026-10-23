@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { filterRows, flagCount, mergeRoster, sortRows } from "./roster";
+import { filterRows, flagCount, mergeRoster, sortRows, widestCells } from "./roster";
 import { NO_FLAGS, rosterRow as row } from "./test-fixtures";
 
 /**
@@ -96,5 +96,49 @@ describe("filtering the table", () => {
     expect(filterRows(rows, { flaggedOnly: false, status: "", search: "иван" }).map((r) => r.registrationId)).toEqual(["a"]);
     expect(filterRows(rows, { flaggedOnly: false, status: "", search: "PETR" }).map((r) => r.registrationId)).toEqual(["b"]);
     expect(filterRows(rows, { flaggedOnly: false, status: "", search: "  " })).toBe(rows);
+  });
+});
+
+/** A windowed table sizes its columns from these, not from the rows in view. */
+describe("the widest content of each column", () => {
+  test("takes the longest name and login, and each counter's largest value", () => {
+    const widest = widestCells([
+      row("a", { fullName: "Ana", login: "a-very-long-login", queries: 7, awayMs: 1_000 }),
+      row("b", { fullName: "Alexandru Constantinescu", login: "ac", queries: 1_204, awayMs: 3_700_000 }),
+    ]);
+
+    expect(widest.name).toBe("Alexandru Constantinescu");
+    expect(widest.login).toBe("a-very-long-login");
+    expect(widest.counters.queries).toBe(1_204);
+    expect(widest.counters.awayMs).toBe(3_700_000);
+  });
+
+  test("falls back to the login where a row has no name, as the cell does", () => {
+    expect(widestCells([row("a", { fullName: "", login: "nameless-but-long" })]).name).toBe("nameless-but-long");
+  });
+
+  test("keeps every distinct status and set of flags, in an order that does not depend on the rows'", () => {
+    const paste = { ...NO_FLAGS, largePaste: true };
+    const both = { ...NO_FLAGS, largePaste: true, multipleIps: true };
+    const rows = [
+      row("a", { status: "finished", flags: both }),
+      row("b", { status: "active", flags: paste }),
+      row("c", { status: "active", flags: paste }),
+      row("d", { status: "registered" }),
+    ];
+
+    const widest = widestCells(rows);
+    expect(widest.statuses).toEqual(["active", "finished", "registered"]);
+    expect(widest.flagSets).toEqual([paste, both]);
+    expect(widestCells([...rows].reverse())).toEqual(widest);
+  });
+
+  test("says whether anyone has activity and whether anyone has none", () => {
+    expect(widestCells([row("a"), row("b", { lastActivity: "2026-09-20T10:14:03.120Z" })])).toMatchObject({
+      activity: "2026-09-20T10:14:03.120Z",
+      inactive: true,
+    });
+    expect(widestCells([row("a", { lastActivity: "2026-09-20T10:14:03.120Z" })]).inactive).toBe(false);
+    expect(widestCells([])).toMatchObject({ activity: null, inactive: false, statuses: [], flagSets: [] });
   });
 });

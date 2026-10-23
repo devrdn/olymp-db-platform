@@ -1,4 +1,4 @@
-import { MONITOR_FLAGS, type RosterRow } from "@/lib/api/monitor";
+import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
 
 /** The participants table's data work: merging fresh reads, sorting and filtering. */
 
@@ -115,4 +115,68 @@ export function filterRows(rows: RosterRow[], filter: RosterFilter): RosterRow[]
         row.fullName.toLocaleLowerCase().includes(needle) ||
         row.login.toLocaleLowerCase().includes(needle)),
   );
+}
+
+/**
+ * What each column must be wide enough for across the whole list. A windowed
+ * table renders a few dozen rows, so without this its columns would resize as
+ * rows scroll in and out.
+ */
+export type WidestCells = {
+  /** The longest label and login by length; the name column caps them anyway. */
+  name: string;
+  login: string;
+  /** Distinct statuses, sorted. */
+  statuses: string[];
+  /** Distinct non-empty flag sets, ordered by which flags they raise. */
+  flagSets: MonitorFlags[];
+  counters: Record<CounterKey, number>;
+  /** The latest moment; every time of day formats to the same width. */
+  activity: string | null;
+  /** Someone has no activity yet, which the cell says in words. */
+  inactive: boolean;
+};
+
+function flagMask(flags: MonitorFlags): number {
+  let mask = 0;
+  MONITOR_FLAGS.forEach((flag, bit) => {
+    if (flags[flag]) mask |= 1 << bit;
+  });
+  return mask;
+}
+
+/** Ties go to the later string, so the result does not depend on the order of the rows. */
+function longer(a: string, b: string): string {
+  return b.length > a.length || (b.length === a.length && b > a) ? b : a;
+}
+
+export function widestCells(rows: readonly RosterRow[]): WidestCells {
+  let name = "";
+  let login = "";
+  const statuses = new Set<string>();
+  const flagSets = new Map<number, MonitorFlags>();
+  const counters = Object.fromEntries(COUNTER_KEYS.map((key) => [key, 0])) as Record<CounterKey, number>;
+  let latest = "";
+  let inactive = false;
+
+  for (const row of rows) {
+    name = longer(name, label(row));
+    login = longer(login, row.login);
+    statuses.add(row.status);
+    const mask = flagMask(row.flags);
+    if (mask !== 0 && !flagSets.has(mask)) flagSets.set(mask, row.flags);
+    for (const key of COUNTER_KEYS) if (row[key] > counters[key]) counters[key] = row[key];
+    if (!row.lastActivity) inactive = true;
+    else if (row.lastActivity > latest) latest = row.lastActivity;
+  }
+
+  return {
+    name,
+    login,
+    statuses: [...statuses].sort(),
+    flagSets: [...flagSets.entries()].sort(([a], [b]) => a - b).map(([, flags]) => flags),
+    counters,
+    activity: latest || null,
+    inactive,
+  };
 }

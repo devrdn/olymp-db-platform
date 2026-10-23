@@ -11,7 +11,8 @@ vi.mock("@/lib/api/monitor", async (importOriginal) => ({
   fetchFeed,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-// Each row formats its time once per render, so the calls count rendered rows.
+// Each row, and the row sizing the columns, formats its time once per render,
+// so the calls count rendered rows.
 const { readableDuration } = vi.hoisted(() => ({ readableDuration: vi.fn() }));
 vi.mock("@/lib/format/bytes", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/format/bytes")>();
@@ -81,7 +82,8 @@ describe("the monitoring screen", () => {
   /** A quiet poll must not re-render hundreds of rows. */
   test("renders no row again for a poll that brought nothing new", async () => {
     renderView();
-    expect(readableDuration).toHaveBeenCalledTimes(2);
+    // Two participants and the sizing row.
+    expect(readableDuration).toHaveBeenCalledTimes(3);
     readableDuration.mockClear();
 
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
