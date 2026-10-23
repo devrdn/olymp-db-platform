@@ -83,7 +83,7 @@ const exportDeadline = time.Minute
 
 // queryLogCSVExport streams one registration's query log to a response.
 type queryLogCSVExport struct {
-	history QueryHistory
+	history QueryLogExport
 	exports *ExportGate
 	slots   *ExportSlots
 	// fail is the handler's own error mapping, so this file's refusals go

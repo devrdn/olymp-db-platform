@@ -59,7 +59,7 @@ type ProfileLimiter interface {
 type ProfileHandler struct {
 	profile *profile.Service
 	watch   ProfileWatch
-	history QueryHistory
+	history QueryLogExport
 	limiter ProfileLimiter
 	mw      *auth.Middleware
 	log     *slog.Logger
@@ -75,7 +75,7 @@ type ProfileHandler struct {
 }
 
 // NewProfileHandler returns the handler.
-func NewProfileHandler(service *profile.Service, watch ProfileWatch, history QueryHistory,
+func NewProfileHandler(service *profile.Service, watch ProfileWatch, history QueryLogExport,
 	limiter ProfileLimiter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ProfileHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"

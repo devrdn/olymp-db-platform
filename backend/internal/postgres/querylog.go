@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/netip"
@@ -11,6 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -110,7 +112,7 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 	}
 
 	rows, err := querier.Query(ctx, `
-		SELECT left(sql_text, $4), char_length(sql_text) > $4,
+		SELECT id, left(sql_text, $4), char_length(sql_text) > $4,
 		       status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
 		WHERE registration_id = $1
@@ -128,7 +130,7 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 			entry  queryrunner.HistoryEntry
 			status string
 		)
-		if err := rows.Scan(&entry.SQL, &entry.SQLTruncated, &status, &entry.Error,
+		if err := rows.Scan(&entry.ID, &entry.SQL, &entry.SQLTruncated, &status, &entry.Error,
 			&entry.DurationMs, &entry.RowCount, &entry.ExecutedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan query history row: %w", err)
 		}
@@ -139,6 +141,32 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 		return nil, 0, fmt.Errorf("read query history for registration %s: %w", registrationID, err)
 	}
 	return found, total, nil
+}
+
+// HistoryEntry returns row id of registrationID's own log, its statement cut
+// only at queryrunner.MaxEntrySQLChars. found is false when id is not one of
+// this registration's rows, whoever's it is: the WHERE clause names the
+// registration as well as the primary key.
+func (l *QueryLog) HistoryEntry(ctx context.Context, registrationID uuid.UUID, id int64) (queryrunner.HistoryEntry, bool, error) {
+	var (
+		entry  queryrunner.HistoryEntry
+		status string
+	)
+	err := l.querier(ctx).QueryRow(ctx, `
+		SELECT id, left(sql_text, $3), char_length(sql_text) > $3,
+		       status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
+		FROM query_log
+		WHERE id = $1 AND registration_id = $2`,
+		id, registrationID, queryrunner.MaxEntrySQLChars).Scan(&entry.ID, &entry.SQL, &entry.SQLTruncated, &status,
+		&entry.Error, &entry.DurationMs, &entry.RowCount, &entry.ExecutedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return queryrunner.HistoryEntry{}, false, nil
+	}
+	if err != nil {
+		return queryrunner.HistoryEntry{}, false, fmt.Errorf("read query log row %d of registration %s: %w", id, registrationID, err)
+	}
+	entry.Status = queryrunner.Status(status)
+	return entry, true, nil
 }
 
 // exportCursor is the cursor ExportHistory reads from, and exportFetch is how
