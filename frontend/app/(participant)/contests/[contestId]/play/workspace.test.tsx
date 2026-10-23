@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
@@ -202,13 +203,6 @@ async function runQuery() {
   await userEvent.click(screen.getByRole("textbox"));
   await userEvent.keyboard("SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
-}
-
-/** The labels the editor's completion popup offers. */
-function completionLabels(): string[] {
-  return screen
-    .queryAllByRole("option")
-    .map((option) => option.querySelector(".cm-completionLabel")?.textContent ?? "");
 }
 
 describe("the play workspace", () => {
@@ -554,7 +548,25 @@ describe("the database reset", () => {
     await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
     await userEvent.keyboard("SELECT * FROM sus");
 
-    await waitFor(() => expect(completionLabels()).toContain("suspects"));
+    await waitForCompletion("suspects");
+  });
+
+  // The invariant is the server's; this checks the screen adds no way round it.
+  test("offers no table as a completion in a contest that hides its schema, even after a reset", async () => {
+    schemaReads.next = {
+      kind: "ok",
+      schema: { truncated: false, tables: [{ name: "selfies", columns: [] }] },
+    };
+    show(null, { sqlMode: "read_write" });
+    await reset();
+
+    await waitForRealEditor();
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard("SEL");
+    await waitForCompletion("SELECT");
+
+    expect(offeredCompletions()).not.toContain("selfies");
+    expect(schemaReads.count).toBe(0);
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {

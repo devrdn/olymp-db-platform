@@ -5,6 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
@@ -264,13 +265,6 @@ describe("⌘↵", () => {
   });
 });
 
-/** The popup lists options; their labels sit in `.cm-completionLabel`. */
-function offered(): string[] {
-  return screen
-    .queryAllByRole("option")
-    .map((option) => option.querySelector(".cm-completionLabel")?.textContent ?? "");
-}
-
 describe("completion in the console", () => {
   const SCHEMA: GameSchema = {
     tables: [{ name: "suspects", columns: [{ name: "motive", type: "text", nullable: true, references: "" }] }],
@@ -285,7 +279,7 @@ describe("completion in the console", () => {
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT * FROM sus");
 
-    await waitFor(() => expect(offered()).toContain("suspects"));
+    await waitForCompletion("suspects");
   });
 
   // The popup must not take the run shortcut for itself, nor have a choice
@@ -302,14 +296,13 @@ describe("completion in the console", () => {
     runQuery.mockClear();
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT * FROM sus");
-    await waitFor(() => expect(offered()).toContain("suspects"));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitForCompletion("suspects");
 
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
 
     await waitFor(() => expect(runQuery).toHaveBeenCalled());
     expect(submitted.current?.get("sql")).toBe("SELECT * FROM sus");
-    expect(offered()).toEqual([]);
+    expect(offeredCompletions()).toEqual([]);
   });
 });
 
