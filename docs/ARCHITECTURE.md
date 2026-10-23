@@ -1111,8 +1111,12 @@ Notes:
   or DELETE privilege on it. `query_log` is almost append-only — the one
   permitted update writes the result into the row created before execution
   (section 5, item 7). As it grows, monthly partitioning.
-- `total_score` is recomputed transactionally with every accepted answer, so
-  the leaderboard needs no aggregation at read time.
+- `total_score` is recounted from the registration's submissions inside the
+  transaction of every correct answer that can change it, under a lock on the
+  registration so concurrent answers cannot each miss the other. The
+  leaderboard computes the same total from `submissions` at read time, which
+  is what lets it apply a freeze cut-off; `total_score` serves the staff
+  roster.
 
 ## 6.1 How a contest asks its questions
 
@@ -1233,6 +1237,38 @@ decisions are worth taking in advance:
 
 In `winner` mode a penalty is meaningless and is ignored — not forbidden by
 the setting, simply not applied, because the mode can change.
+
+**A bonus question — `questions.is_bonus`, false by default, `points`
+scoring only.** A bonus question gives back penalty points rather than adding
+points of its own. Its `points` are X:
+
+- The **penalty points** P are, over the regular questions the participant
+  answered correctly, each one's face value less the points it awarded — what
+  its earlier wrong attempts cost.
+- The **bonus credit** B is the sum of X over the bonus questions answered
+  correctly.
+- The total is the points awarded on regular questions plus `min(B, P)`. A
+  bonus never takes the total past what the participant would have had with no
+  wrong attempts.
+
+A wrong answer to a bonus question costs nothing, whatever `penalty_pct` says
+(the percentage is kept, unapplied, as in `winner` mode); `max_attempts` still
+bounds its attempts. A correct bonus answer stores `points_awarded = 0`: the
+credit depends on penalties that may come later, so it is computed when the
+total is, never frozen into a row. A penalty that arrives after the bonus is
+covered too, up to B. The leaderboard (its freeze included), the profile and
+`registrations.total_score` all compute the total from one SQL expression
+(`postgres.scoreTotal`).
+
+The tie-break in `points` mode is the last answer that **raised the total**:
+a bonus counts when it removed penalty points, and does not when there were
+none left to remove; a regular answer that awarded nothing counts when the
+penalty points it added were what a solved bonus could remove. Without bonus
+questions this is exactly the last answer with `points_awarded > 0`.
+
+Marking a question as a bonus in a `winner` or `icpc` contest is refused
+(`bonus_needs_points`), and so is moving a contest that has one to either
+mode: neither has penalty points for a bonus to remove.
 
 **Progression — `contests.progression`: `free` (default) or `sequential`.**
 

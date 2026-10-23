@@ -74,6 +74,10 @@ type Question struct {
 	// it, but the participant's list leaves it out, identifier included
 	// (Reader, §6.1).
 	IsVisible bool
+	// IsBonus makes Points a bonus (§6.1.1): answered correctly, the question
+	// removes up to Points of the penalty the participant's wrong attempts
+	// have cost them, and is worth nothing else. Points scoring only.
+	IsBonus bool
 	// ChoiceIDs are the language-independent option identifiers a
 	// submission carries, never a label.
 	ChoiceIDs []string
@@ -285,6 +289,9 @@ type QuestionCommand struct {
 	PenaltyPct *int
 	// IsVisible is nil for visible: hiding a question must be stated.
 	IsVisible *bool
+	// IsBonus is nil to leave the stored flag alone on update, and not a
+	// bonus on create.
+	IsBonus   *bool
 	ChoiceIDs []string
 	// Texts, when given, replace the question's authored text.
 	Texts map[string]QuestionText
@@ -332,7 +339,13 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 	if cmd.PenaltyPct != nil {
 		q.PenaltyPct = *cmd.PenaltyPct
 	}
+	if cmd.IsBonus != nil {
+		q.IsBonus = *cmd.IsBonus
+	}
 	if err := q.Validate(); err != nil {
+		return Question{}, err
+	}
+	if err := checkBonus(c, q); err != nil {
 		return Question{}, err
 	}
 	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
@@ -364,7 +377,8 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 
 // UpdateQuestion replaces a question's own fields.
 func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Question, error) {
-	if _, err := s.editableContest(ctx, cmd.ContestID); err != nil {
+	c, err := s.editableContest(ctx, cmd.ContestID)
+	if err != nil {
 		return Question{}, err
 	}
 	current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
@@ -384,7 +398,13 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
 	}
+	if cmd.IsBonus != nil {
+		updated.IsBonus = *cmd.IsBonus
+	}
 	if err := updated.Validate(); err != nil {
+		return Question{}, err
+	}
+	if err := checkBonus(c, updated); err != nil {
 		return Question{}, err
 	}
 	// New options must still cover the stored answers.
@@ -416,9 +436,11 @@ type SaveQuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	// PenaltyPct is nil to leave the stored penalty alone.
+	// PenaltyPct is nil to leave the stored penalty alone, as IsBonus is
+	// for the bonus flag.
 	PenaltyPct *int
 	IsVisible  *bool
+	IsBonus    *bool
 	ChoiceIDs  []string
 	Texts      map[string]QuestionText
 	Answers    []Answer
@@ -429,7 +451,8 @@ type SaveQuestionCommand struct {
 // change that touches both, such as turning a text question into a choice
 // one, check the new answers against the new question.
 func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Question, error) {
-	if _, err := s.editableContest(ctx, cmd.ContestID); err != nil {
+	c, err := s.editableContest(ctx, cmd.ContestID)
+	if err != nil {
 		return Question{}, err
 	}
 	current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
@@ -448,8 +471,14 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
 	}
+	if cmd.IsBonus != nil {
+		updated.IsBonus = *cmd.IsBonus
+	}
 
 	if err := updated.Validate(); err != nil {
+		return Question{}, err
+	}
+	if err := checkBonus(c, updated); err != nil {
 		return Question{}, err
 	}
 	if err := validateAnswersFor(updated, cmd.Answers); err != nil {
@@ -662,6 +691,7 @@ func (q Question) auditFields() map[string]any {
 		"max_attempts": q.MaxAttempts,
 		"penalty_pct":  q.PenaltyPct,
 		"is_visible":   q.IsVisible,
+		"is_bonus":     q.IsBonus,
 		"choice_ids":   q.ChoiceIDs,
 	}
 }

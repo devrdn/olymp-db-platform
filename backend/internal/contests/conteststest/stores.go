@@ -614,7 +614,7 @@ func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang st
 			continue
 		}
 		found = append(found, contests.VisibleQuestion{
-			ID: q.ID, Kind: q.Kind, Points: q.Points, MaxAttempts: q.MaxAttempts,
+			ID: q.ID, Kind: q.Kind, Points: q.Points, IsBonus: q.IsBonus, MaxAttempts: q.MaxAttempts,
 			ChoiceIDs: q.ChoiceIDs, Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices,
 		})
 	}
@@ -834,6 +834,8 @@ type Registrations struct {
 	// StartCalls counts Start calls, written or not, so a test can show a
 	// participant already started costs no call at all.
 	StartCalls int
+	// Scores is what RefreshScore recounts from; the fixture wires it.
+	Scores *Scores
 }
 
 var _ contests.RegistrationRepository = (*Registrations)(nil)
@@ -1040,15 +1042,57 @@ func (r *Registrations) finishActive(contestID uuid.UUID, now time.Time, stamp b
 	return users
 }
 
-// AddScore mirrors the real repository's atomic increment.
-func (r *Registrations) AddScore(_ context.Context, registrationID uuid.UUID, delta int) error {
+// RefreshScore mirrors the real recount from the stores Scores reads. It
+// refuses outside a unit of work, where the real one could not hold its lock.
+func (r *Registrations) RefreshScore(ctx context.Context, registrationID uuid.UUID) error {
+	if !inTx(ctx) {
+		return errors.New("refreshing a score must run inside a transaction")
+	}
 	p, ok := r.byID[registrationID]
 	if !ok {
 		return contests.ErrParticipantNotFound
 	}
-	p.TotalScore += delta
+	if r.Scores == nil {
+		return errors.New("Registrations.Scores is not wired")
+	}
+	p.TotalScore = r.Scores.Total(registrationID)
 	r.byID[registrationID] = p
 	return nil
+}
+
+// Scores computes a registration's points total from the question and
+// submission stores, as postgres.scoreTotal does from the tables.
+type Scores struct {
+	questions   *Questions
+	submissions *Submissions
+}
+
+func NewScores(questions *Questions, submissions *Submissions) *Scores {
+	return &Scores{questions: questions, submissions: submissions}
+}
+
+// Total is the points awarded on regular questions, plus the bonus credit of
+// the solved bonus questions up to the penalty points: for each solved
+// regular question, its face value less what it awarded (§6.1.1).
+func (s *Scores) Total(registrationID uuid.UUID) int {
+	awarded, credit, penalty := 0, 0, 0
+	for key, recorded := range s.submissions.byKey {
+		if key.registrationID != registrationID {
+			continue
+		}
+		q := s.questions.byID[key.questionID]
+		for _, sub := range recorded {
+			awarded += sub.PointsAwarded
+			switch {
+			case !sub.IsCorrect:
+			case q.IsBonus:
+				credit += q.Points
+			default:
+				penalty += max(0, q.Points-sub.PointsAwarded)
+			}
+		}
+	}
+	return awarded + min(credit, penalty)
 }
 
 // Policies is an in-memory contests.PolicyStore.

@@ -246,6 +246,85 @@ func TestUpdatingAQuestionCanChangeThePenalty(t *testing.T) {
 	}
 }
 
+func TestAQuestionIsABonusOnlyWhenMarked(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	plain := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/questions", `{"kind": "text", "points": 4}`)
+	bonus := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/questions", `{"kind": "text", "points": 4, "is_bonus": true}`)
+
+	if plain.Code != http.StatusCreated || bonus.Code != http.StatusCreated {
+		t.Fatalf("status = %d, %d, want 201 (%s %s)", plain.Code, bonus.Code, plain.Body.String(), bonus.Body.String())
+	}
+	if got := decode(t, plain)["is_bonus"]; got != false {
+		t.Errorf("is_bonus = %v for an unmarked question, want false", got)
+	}
+	if got := decode(t, bonus)["is_bonus"]; got != true {
+		t.Errorf("is_bonus = %v, want true", got)
+	}
+}
+
+func TestSavingAQuestionWholeSetsAndKeepsTheBonusFlag(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+	save := func(flag string) map[string]any {
+		t.Helper()
+		rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(), `{
+			"kind": "text", "points": 5`+flag+`,
+			"texts": {"en": {"body_md": "Who did it?"}},
+			"answers": [{"match_kind": "exact_ci", "value": "the butler"}]
+		}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		return decode(t, rec)
+	}
+
+	if got := save(`, "is_bonus": true`)["is_bonus"]; got != true {
+		t.Errorf("is_bonus = %v, want true", got)
+	}
+	if got := save(``)["is_bonus"]; got != true {
+		t.Errorf("is_bonus = %v after a save that never mentioned it, want true", got)
+	}
+}
+
+func TestABonusQuestionInAWinnerContestIsA409(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	c.Scoring = contests.ScoringWinner
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/questions", `{"kind": "text", "points": 4, "is_bonus": true}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "bonus_needs_points" {
+		t.Errorf("code = %q, want bonus_needs_points", code)
+	}
+}
+
+func TestLeavingPointsScoringWithABonusQuestionIsA409(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 4, IsBonus: true, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"scoring": "icpc"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "bonus_needs_points" {
+		t.Errorf("code = %q, want bonus_needs_points", code)
+	}
+}
+
 func TestStaffSeeTheReferenceAnswers(t *testing.T) {
 	// They are the authors; the participant view is a separate projection.
 	f := newContestFixture(t)

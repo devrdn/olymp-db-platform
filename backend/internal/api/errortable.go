@@ -280,6 +280,8 @@ var contestsErrors = joined(errorTable{
 	{err: contests.ErrNotEditable, status: http.StatusConflict, code: codeNotEditable},
 	{err: contests.ErrFreezeAlreadyReached, status: http.StatusConflict, code: codeFreezeAlreadyReached},
 	{err: contests.ErrICPCStartLocked, status: http.StatusConflict, code: codeICPCStartLocked},
+	{err: contests.ErrBonusNeedsPoints, status: http.StatusConflict, code: codeBonusNeedsPoints,
+		message: "A bonus question needs points scoring"},
 	{err: contests.ErrOwnerImmutable, status: http.StatusConflict, code: codeOwnerImmutable},
 	{err: contests.ErrAlreadyEnrolled, status: http.StatusConflict, code: codeAlreadyEnrolled},
 	{err: contests.ErrEnrollmentClosed, status: http.StatusConflict, code: codeEnrollmentClosed},

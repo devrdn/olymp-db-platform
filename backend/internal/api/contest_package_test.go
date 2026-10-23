@@ -405,3 +405,29 @@ func TestTheContestPackageCarriesThePrizePlaces(t *testing.T) {
 		t.Errorf("prize_places = %v, want 1/2/3", contest["prize_places"])
 	}
 }
+
+// Additive to format 1, like the title: only a bonus question writes the key.
+func TestTheContestPackageMarksABonusQuestion(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+	c := seedPackagedContest(t, f)
+	f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 3, Kind: contests.KindText, Points: 4, IsBonus: true, IsVisible: true,
+		Texts:   map[string]contests.QuestionText{"en": {BodyMD: "Which book was moved?"}},
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the atlas"}},
+	})
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	questions, _ := decode(t, rec)["questions"].([]any)
+	if len(questions) != 3 {
+		t.Fatalf("questions = %v, want three", questions)
+	}
+	for i, want := range []any{nil, nil, true} {
+		q, _ := questions[i].(map[string]any)
+		if got := q["is_bonus"]; got != want {
+			t.Errorf("question %d is_bonus = %v, want %v", i+1, got, want)
+		}
+	}
+}

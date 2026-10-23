@@ -76,12 +76,13 @@ type Entry struct {
 	FullName       string
 	AccountDeleted bool
 	Disqualified   bool
-	// Points is the sum of points_awarded; Solved counts distinct questions
-	// answered correctly.
+	// Points is the points total: points_awarded summed, plus the bonus
+	// credit up to the penalty points (§6.1.1). Solved counts distinct
+	// questions answered correctly, bonus questions among them.
 	Points int
 	Solved int
-	// LastScoredAt is when the current score was reached: the tie-break
-	// between equal scores.
+	// LastScoredAt is when the current score was reached, the last answer
+	// that raised it: the tie-break between equal scores.
 	LastScoredAt *time.Time
 	// FinalAt is the first correct final answer, which decides winner mode.
 	FinalAt *time.Time
