@@ -1,6 +1,9 @@
 import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
 
-/** The participants table's data work: merging fresh reads, sorting and filtering. */
+/**
+ * The participants table's data work: merging fresh reads, sorting, filtering,
+ * and the widest content of each column for the windowed table.
+ */
 
 /** Counter columns that can be sorted, besides name, status, flags and last activity. */
 export const COUNTER_KEYS = [
