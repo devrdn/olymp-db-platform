@@ -1467,7 +1467,6 @@ const ro = {
           spent: "încercări epuizate",
           current: "curent",
           open: "fără răspuns",
-          after: "după {n}",
         },
         attemptsLeft: "{n} încercări rămase",
         noAttempts: "Nicio încercare rămasă",
@@ -1487,6 +1486,9 @@ const ro = {
         openLarger: "Deschide mărit",
         closeLarger: "Închide",
         refreshFailed: "Nu s-a putut verifica dacă s-a deschis o întrebare nouă. Reîncărcați pagina pentru starea curentă.",
+        lockedList: "Întrebări care nu s-au deschis încă",
+        lockedItem: "Întrebarea {n} — se deschide după întrebarea {m}",
+        lockedNotYet: "Întrebarea {n} — nu s-a deschis încă",
       },
       workspace: {
         tabs: {

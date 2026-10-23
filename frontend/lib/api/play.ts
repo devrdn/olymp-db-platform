@@ -20,8 +20,10 @@ export type PlayStory = z.infer<typeof playStorySchema>;
  * One question as its participant sees it, with no reference answer or
  * `max_attempts`. `attemptsRemaining` undefined means no cap, not zero left.
  */
-export const playQuestionSchema = z
+export const openPlayQuestionSchema = z
   .object({
+    /** Always false on this shape; absent reads the same. */
+    locked: z.literal(false).optional(),
     id: z.string(),
     kind: z.enum(QUESTION_KINDS),
     points: z.number(),
@@ -32,10 +34,7 @@ export const playQuestionSchema = z
     choices: z.record(z.string(), z.string()).optional(),
     attempts_remaining: z.number().nullish(),
     closed: z.boolean(),
-    /**
-     * False while not `closed` means a sequential contest has not reached this
-     * question yet. Decided by the server, never inferred from list position.
-     */
+    /** Decided by the server, never inferred from list position. */
     can_answer: z.boolean(),
     /**
      * Whether one of the participant's own attempts was right, and what it
@@ -45,6 +44,7 @@ export const playQuestionSchema = z
     points_awarded: z.number(),
   })
   .transform((raw) => ({
+    locked: false as const,
     id: raw.id,
     kind: raw.kind,
     points: raw.points,
@@ -58,6 +58,22 @@ export const playQuestionSchema = z
     correct: raw.correct,
     pointsAwarded: raw.points_awarded,
   }));
+
+export type OpenPlayQuestion = z.infer<typeof openPlayQuestionSchema>;
+
+/**
+ * A question a sequential contest has not reached yet: its 1-based number and
+ * nothing else. The server withholds the rest, so this is a shape without
+ * content rather than a question with empty fields, and any extra key is
+ * dropped here.
+ */
+export const lockedPlayQuestionSchema = z
+  .object({ locked: z.literal(true), position: z.number().int().positive() })
+  .transform((raw) => ({ locked: true as const, position: raw.position }));
+
+export type LockedPlayQuestion = z.infer<typeof lockedPlayQuestionSchema>;
+
+export const playQuestionSchema = z.union([lockedPlayQuestionSchema, openPlayQuestionSchema]);
 
 export type PlayQuestion = z.infer<typeof playQuestionSchema>;
 

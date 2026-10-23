@@ -1625,7 +1625,6 @@ const en = {
           spent: "attempts spent",
           current: "current",
           open: "unanswered",
-          after: "after {n}",
         },
         attemptsLeft: "{n} attempts left",
         noAttempts: "No attempts left",
@@ -1659,6 +1658,11 @@ const en = {
         // re-read to unlock; a refusal here previously vanished silently,
         // leaving that question locked with no way to tell why.
         refreshFailed: "Could not check whether a new question opened. Reload the page to see the latest state.",
+        // A sequential contest's questions not reached yet: the server sends
+        // their numbers alone, so their numbers are all the screen can show.
+        lockedList: "Questions not open yet",
+        lockedItem: "Question {n} — opens after question {m}",
+        lockedNotYet: "Question {n} — not open yet",
       },
       // The full-screen workspace's own vocabulary (Task 3): the two tab
       // groups beside the console, the download, and the query log's own
