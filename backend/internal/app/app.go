@@ -291,6 +291,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				gate,
 				auditRecorder, storage.NewUnitOfWork(pool),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).
+				WithReadsPerMinute(cfg.PlayReadPerMinute).
 				// Collapses Run's and Access's lookups into one round trip.
 				WithLookup(consoleRegistrations).
 				// The schema panel; a console-less Service answers
@@ -463,11 +464,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		modules = append(modules, gameHandler)
 	}
 
-	// The participant's reads of a running contest use only Access and
-	// AdmitRead, which never touch the game cluster, so they are mounted even
-	// without a console. With a console its Service is reused, so queries and
-	// reads spend one budget; without one, a Service is built with nils for
-	// the collaborators only Run uses.
+	// The participant's reads of a running contest use only Access and the
+	// read budget, which never touch the game cluster, so they are mounted
+	// even without a console. With a console its Service is reused; without
+	// one, a Service is built with nils for the collaborators only Run uses.
 	participantAccess := console
 	if participantAccess == nil {
 		registrations := postgres.NewRegistrations(pool)
@@ -477,6 +477,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			gate,
 			auditRecorder, storage.NewUnitOfWork(pool),
 		).WithPerMinuteDefault(cfg.QueryPerMinute).
+			WithReadsPerMinute(cfg.PlayReadPerMinute).
 			WithLookup(registrations)
 	}
 	reader := contests.NewReader(

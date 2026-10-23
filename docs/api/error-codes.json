@@ -470,6 +470,10 @@
       "meaning": "The account is still on a one-time password and must set its own before anything else."
     },
     {
+      "code": "play_read_too_often",
+      "meaning": "This participant is loading the play screen (story, questions, schema, query log, workspace, events channel) faster than the installation allows. A budget of its own, apart from `query_too_often`: the console still runs queries, and `Retry-After` says how long to wait at most."
+    },
+    {
       "code": "profile_contest_not_found",
       "meaning": "No finished contest of the caller's with that identifier. The same answer whether the contest does not exist, belongs to an olympiad they never took part in, or is still running for them: the profile shows a contest only once it has ended for this participant, and telling those cases apart would say which contests exist and who is on their rosters."
     },

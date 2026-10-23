@@ -313,7 +313,7 @@ describe("useContestEvents", () => {
     });
 
     test("a channel that was never refused as not open now does not report reopening on connect", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "query_too_often")));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "play_read_too_often")));
       const { result } = renderHook(() => useContestEvents("c1", "running"));
 
       act(() => FakeEventSource.instances[0].emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
@@ -333,7 +333,7 @@ describe("useContestEvents", () => {
     });
 
     // An admitted probe must still wait for the floor: every reconnect spends
-    // the query-rate budget shared with the SQL console.
+    // the play screen's read budget.
     test("a failure that a fresh probe is actually admitted still waits for the floor before reconnecting", async () => {
       vi.stubGlobal(
         "fetch",
@@ -428,14 +428,14 @@ describe("useContestEvents", () => {
     });
 
     test("a sync on the reconnected channel clears the error", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "query_too_often")));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "play_read_too_often")));
       const { result } = renderHook(() => useContestEvents("c1"));
 
       await act(async () => {
         FakeEventSource.instances[0].failPermanently();
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(result.current.channelError).toBe("query_too_often");
+      expect(result.current.channelError).toBe("play_read_too_often");
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);

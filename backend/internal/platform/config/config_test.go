@@ -1174,7 +1174,7 @@ func TestPasswordHashingOutsideItsBoundsIsRejected(t *testing.T) {
 	}
 }
 
-func TestTheAnswerRateDefaultsToSixAMinute(t *testing.T) {
+func TestTheParticipantsBudgetsDefaultToTheOlympiadsFigures(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
 	cfg, err := Load()
@@ -1182,21 +1182,53 @@ func TestTheAnswerRateDefaultsToSixAMinute(t *testing.T) {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.AnswerRatePerMinute != 6 {
-		t.Errorf("AnswerRatePerMinute = %d, want 6", cfg.AnswerRatePerMinute)
+	if cfg.QueryPerMinute != 60 {
+		t.Errorf("QueryPerMinute = %d, want 60", cfg.QueryPerMinute)
+	}
+	if cfg.PlayReadPerMinute != 120 {
+		t.Errorf("PlayReadPerMinute = %d, want 120", cfg.PlayReadPerMinute)
+	}
+	if cfg.AnswerRatePerMinute != 12 {
+		t.Errorf("AnswerRatePerMinute = %d, want 12", cfg.AnswerRatePerMinute)
+	}
+}
+
+func TestTheReadBudgetIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("PLAY_READ_PER_MINUTE", "300")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.PlayReadPerMinute != 300 {
+		t.Errorf("PlayReadPerMinute = %d, want 300", cfg.PlayReadPerMinute)
+	}
+
+	for _, value := range []string{"0", "601", "-1", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("PLAY_READ_PER_MINUTE", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted PLAY_READ_PER_MINUTE=%s, want error", value)
+			} else if !strings.Contains(err.Error(), "PLAY_READ_PER_MINUTE") {
+				t.Errorf("error %q does not name PLAY_READ_PER_MINUTE", err)
+			}
+		})
 	}
 }
 
 func TestTheAnswerRateIsConfigurableAndBounded(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
-	t.Setenv("ANSWER_RATE_PER_MINUTE", "12")
+	t.Setenv("ANSWER_RATE_PER_MINUTE", "20")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if cfg.AnswerRatePerMinute != 12 {
-		t.Errorf("AnswerRatePerMinute = %d, want 12", cfg.AnswerRatePerMinute)
+	if cfg.AnswerRatePerMinute != 20 {
+		t.Errorf("AnswerRatePerMinute = %d, want 20", cfg.AnswerRatePerMinute)
 	}
 
 	for _, value := range []string{"0", "61", "-1", "many"} {

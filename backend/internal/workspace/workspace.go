@@ -246,8 +246,8 @@ func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.U
 // ErrTooOften once this minute's budget is spent. The caller asks it before
 // any lookup or body read, so every attempt counts (CLAUDE.md rule 13).
 //
-// It is a budget separate from the read budget, which the SQL console shares,
-// so autosave cannot starve the participant's queries. It is keyed by the
+// It is a budget separate from the play screen's read budget, so autosave
+// cannot stop the participant reloading their page. It is keyed by the
 // account, known before the lookups and never named by the request (CLAUDE.md
 // rule 5).
 func (s *Service) AdmitWrite(ctx context.Context, account uuid.UUID) error {

@@ -21,7 +21,7 @@ var profiles = map[string]profile{
 	// The run is steady, not a burst, because people read between queries.
 	// A pause of 5 to 30 s (a query every 17 s on average) is busier than a
 	// class: it includes the quick re-run after a typo and stays under
-	// QUERY_PER_MINUTE's default of 30, so no refusal is the rate limit's.
+	// QUERY_PER_MINUTE's default of 60, so no refusal is the rate limit's.
 	// Cheap lookups and joins dominate as they do for people finding their
 	// way; a fifth are full-table aggregates, the slow mistake everybody
 	// makes; a tenth are writes, since the contest is read-write. Fifteen

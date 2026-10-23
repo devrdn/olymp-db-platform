@@ -507,7 +507,8 @@ screen treats each kind is in
 | `profile_contest_not_found` | 404 | A profile read of a contest that is not over for this participant | The report is not shown yet |
 
 Rate limits answer 429 with their own codes (`query_too_often`,
-`answer_too_often`, `workspace_too_often`, `signals_too_often`) and a
+`play_read_too_often`, `answer_too_often`, `workspace_too_often`,
+`signals_too_often`) and a
 `Retry-After` header. A new refusal follows CLAUDE.md, security rule 1: a
 sentinel, a row in the error table, a code in
 [`codes.go`](../../backend/internal/api/codes.go) and a sentence in every

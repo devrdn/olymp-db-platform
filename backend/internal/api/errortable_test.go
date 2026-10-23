@@ -88,6 +88,8 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			message: "This contest is read-only, so a participant's database has nothing to reset"},
 		queryproxy.ErrResetTooOften: {status: http.StatusTooManyRequests, code: "reset_too_often",
 			message: "This participant has reset their database as often as allowed for now", retryAfter: "600"},
+		queryproxy.ErrTooManyReads: {status: http.StatusTooManyRequests, code: "play_read_too_often",
+			message: "This participant is loading the contest faster than this installation allows", retryAfter: "60"},
 	}
 
 	declared := map[string]bool{}

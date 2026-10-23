@@ -853,3 +853,11 @@ func TestADeadlineIsReportedAsATimeoutThatRan(t *testing.T) {
 		t.Errorf("endings = %q, executed = %q; want timeout/deadline, timeout", endings, executed)
 	}
 }
+
+// The Core API's façade starts from the same figure (queryproxy.New), so the
+// two limiters agree when QUERY_PER_MINUTE is unset.
+func TestTheDefaultRateIsSixtyQueriesAMinute(t *testing.T) {
+	if got := queryrunner.DefaultLimits().PerMinute; got != 60 {
+		t.Fatalf("DefaultLimits().PerMinute = %d, want 60", got)
+	}
+}

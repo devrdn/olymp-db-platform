@@ -20,7 +20,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -183,7 +182,7 @@ func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
 
 func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	f := newEventsFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	req, cancel := f.request(uuid.New())
 	defer cancel()
@@ -193,8 +192,8 @@ func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "query_too_often" {
-		t.Fatalf("code = %q, want query_too_often", code)
+	if code := errorCode(t, rec); code != "play_read_too_often" {
+		t.Fatalf("code = %q, want play_read_too_often", code)
 	}
 	if f.access.accessCalled {
 		t.Fatal("Access was called after AdmitRead refused")
@@ -294,6 +293,56 @@ func TestEventsResyncsOnEveryTick(t *testing.T) {
 	waitForCount(t, rec, "event: sync", 3)
 	cancel()
 	waitDone(t, done)
+}
+
+// Opening the channel is one read of the registration; a resync is a push the
+// server chose and spends nothing.
+func TestEventsChargesTheRegistrationOnceOnOpenAndNotPerTick(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	rec, done := f.serve(req)
+	waitForCount(t, rec, "event: sync", 3)
+	cancel()
+	waitDone(t, done)
+
+	f.access.mu.Lock()
+	defer f.access.mu.Unlock()
+	if len(f.access.readsOf) != 1 || f.access.readsOf[0] != f.access.participant.ID {
+		t.Fatalf("AdmitReadOf charged %v, want the registration %s once", f.access.readsOf, f.access.participant.ID)
+	}
+}
+
+func TestEventsPastTheRegistrationsReadBudgetIsA429(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.access.admitReadOfErr = queryproxy.ErrTooManyReads
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	rec, done := f.serve(req)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("the channel was held open past the registration's read budget")
+	}
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.String())
+	}
+	if code := errorCode(t, rec.ResponseRecorder); code != "play_read_too_often" {
+		t.Fatalf("code = %q, want play_read_too_often", code)
+	}
 }
 
 // Each case is staged as the state that produces it and decided by the real

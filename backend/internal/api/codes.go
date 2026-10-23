@@ -232,6 +232,8 @@ var (
 		"This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots.")
 	codeQueryTooOften = httpx.NewCode("query_too_often",
 		"This participant is asking faster than the contest allows.")
+	codePlayReadTooOften = httpx.NewCode("play_read_too_often",
+		"This participant is loading the play screen (story, questions, schema, query log, workspace, events channel) faster than the installation allows. A budget of its own, apart from `query_too_often`: the console still runs queries, and `Retry-After` says how long to wait at most.")
 	codeQueryDiskFull = httpx.NewCode("query_disk_full",
 		"The write was refused because the participant's database is at its size limit. Only a write that would grow it: TRUNCATE and DROP are still admitted at the cap, so the way out the message points at is one the participant can actually take.")
 	codeQueryResultTooLarge = httpx.NewCode("query_result_too_large",
