@@ -113,3 +113,24 @@ describe("saveSettingsAction, an open shape", () => {
     expect(init.body).toMatchObject({ timing: "fixed", duration_min: null });
   });
 });
+
+describe("saveSettingsAction, the result download", () => {
+  test("offers the CSV file when the box is ticked", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ resultDownload: "on" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.result_download).toBe(true);
+  });
+
+  // A cleared checkbox submits nothing, so absence is the "off" answer.
+  test("withdraws it when the box is cleared", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({}));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.result_download).toBe(false);
+  });
+});

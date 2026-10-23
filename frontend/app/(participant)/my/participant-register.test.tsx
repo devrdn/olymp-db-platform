@@ -35,6 +35,7 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   coverHash: "",
   coverAttribution: "",
   sqlMode: "read_only",
+  resultDownload: true,
   ...over,
 });
 

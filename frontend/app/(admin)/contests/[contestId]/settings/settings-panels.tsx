@@ -202,6 +202,7 @@ export function ContestPanel({
   const scoringLegendId = useId();
   const freezeLegendId = useId();
   const namesLegendId = useId();
+  const resultDownloadHintId = useId();
   const freezeInitial = freezeForForm(contest.leaderboard.freezeMin);
   const [freezeMode, setFreezeMode] = useState<string>(freezeInitial.mode);
   const [names, setNames] = useState<string>(contest.leaderboard.names);
@@ -473,6 +474,28 @@ export function ContestPanel({
             className="max-w-40"
           />
         </Field>
+
+        <div className="flex flex-col gap-2">
+          <label
+            className={cn(
+              "flex items-center gap-3 text-control",
+              editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
+            )}
+          >
+            <input
+              type="checkbox"
+              name="resultDownload"
+              defaultChecked={contest.resultDownload}
+              disabled={!editable}
+              aria-describedby={resultDownloadHintId}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+            />
+            {t.access.resultDownload}
+          </label>
+          <p id={resultDownloadHintId} className="max-w-body text-small text-ink-3">
+            {t.access.resultDownloadHint}
+          </p>
+        </div>
 
         <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </Panel>

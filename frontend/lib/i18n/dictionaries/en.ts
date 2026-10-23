@@ -1136,6 +1136,8 @@ const en = {
         networkHint: "CIDR ranges, separated by commas. Empty means anywhere.",
         rate: "Queries per minute",
         rateHint: "SQL queries each participant may run per minute. 0 means the installation's limit; a value above that limit has no effect.",
+        resultDownload: "Participants may download a result as CSV",
+        resultDownloadHint: "On by default. A change reaches a page a participant already has open when they next reload it. Switching it off only hides the “Download CSV” button: the rows can still be selected and copied from the table.",
       },
       languages: {
         heading: "Languages",
