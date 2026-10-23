@@ -12,7 +12,7 @@ import { sqlCompletion } from "./sql-completion";
  * The options every source offers for `doc` with the caret at `|`, without a
  * view: the popup itself is tested through `CodeEditor`.
  */
-async function optionsAt(doc: string, schema: GameSchema | null): Promise<Completion[]> {
+async function resultsAt(doc: string, schema: GameSchema | null): Promise<CompletionResult[]> {
   const pos = doc.indexOf("|");
   const completion = sqlCompletion();
   completion.setSchema(schema);
@@ -27,7 +27,11 @@ async function optionsAt(doc: string, schema: GameSchema | null): Promise<Comple
       (source) => source(context),
     ),
   );
-  return results.flatMap((result) => result?.options ?? []);
+  return results.filter((result): result is CompletionResult => result !== null);
+}
+
+async function optionsAt(doc: string, schema: GameSchema | null): Promise<Completion[]> {
+  return (await resultsAt(doc, schema)).flatMap((result) => result.options);
 }
 
 async function labelsAt(doc: string, schema: GameSchema | null): Promise<string[]> {
@@ -99,10 +103,33 @@ describe("columns without a table in front", () => {
     expect(await labelsAt('SELECT S| FROM "CaseFiles"', SCHEMA)).toContain("Shelf");
   });
 
+  test("are offered quoted after an opening quote, replacing the closing one when it is there", async () => {
+    // An unclosed quote runs to the next one, so it is typed at the end here.
+    const before = 'SELECT * FROM "CaseFiles" WHERE ';
+    const open = await resultsAt(`${before}"Sh|`, SCHEMA);
+    const shelf = open.find((result) => result.options.some((option) => option.label === '"Shelf"'));
+    expect(shelf?.from).toBe(before.length);
+    expect(shelf?.to).toBeUndefined();
+
+    const closed = await resultsAt(`${before}"Sh|"`, SCHEMA);
+    const replacing = closed.find((result) => result.options.some((option) => option.label === '"Shelf"'));
+    expect(replacing).toMatchObject({ from: before.length, to: `${before}"Sh"`.length });
+  });
+
+  test("are not offered right after a closing quote", async () => {
+    expect(await labelsAt('SELECT * FROM "CaseFiles"| WHERE "Shelf" = 1', SCHEMA)).not.toContain('"Shelf"');
+  });
+
   test("ignore the statements around the one being written", async () => {
     const labels = await labelsAt("SELECT * FROM alibis;\nSELECT p| FROM suspects", SCHEMA);
 
     expect(labels).not.toContain("place");
+  });
+});
+
+describe("inside a string", () => {
+  test("offers nothing, neither keywords nor names", async () => {
+    expect(await labelsAt("SELECT * FROM suspects WHERE id = 'sus|", SCHEMA)).toEqual([]);
   });
 });
 
