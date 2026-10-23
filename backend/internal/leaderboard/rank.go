@@ -91,6 +91,29 @@ func RankICPC(entries []Entry, grid Grid) []Row {
 	return rows
 }
 
+// AwardPrizes sets each ranked row's prize tier from its place
+// (contests.PrizePlaces.Tier). Winner mode keeps its single winner and awards
+// none.
+//
+// A disqualified row takes no prize and holds no place for one: the tiers
+// follow places counted among the others, so the staff table, which lists the
+// disqualified, shows the prizes everybody else sees.
+func AwardPrizes(rows []Row, scoring string, places contests.PrizePlaces) {
+	previous, counted, prizePlace := 0, 0, 0
+	for i := range rows {
+		rows[i].Prize = 0
+		if scoring == contests.ScoringWinner || rows[i].Disqualified {
+			continue
+		}
+		counted++
+		if counted == 1 || rows[i].Place != previous {
+			prizePlace = counted
+		}
+		previous = rows[i].Place
+		rows[i].Prize = places.Tier(prizePlace)
+	}
+}
+
 func compareICPC(a, b Entry) int {
 	if a.Solved != b.Solved {
 		return b.Solved - a.Solved

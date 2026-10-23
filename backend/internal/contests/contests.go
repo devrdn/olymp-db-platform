@@ -168,6 +168,9 @@ type Contest struct {
 	// ResultDownload offers the participant a CSV file of a query result. A
 	// convenience, not a control: the rows are on their screen either way.
 	ResultDownload bool
+	// PrizePlaces is how many places earn each prize on the standings.
+	// Service.SetPrizePlaces is its one writer; Service.Update leaves it alone.
+	PrizePlaces PrizePlaces
 	// Languages has exactly one default.
 	Languages []ContestLanguage
 	// Translations hold the title and description per language code.
@@ -392,6 +395,10 @@ func (c Contest) Validate() error {
 			ErrInvalidContest, c.Settings.GracePeriodMin, maxGracePeriodMin)
 	}
 
+	if err := c.PrizePlaces.Validate(); err != nil {
+		return err
+	}
+
 	if !slices.Contains([]string{LeaderboardNamesLogin, LeaderboardNamesFullName}, c.LeaderboardNames) {
 		return fmt.Errorf("%w: unknown leaderboard label %q", ErrInvalidContest, c.LeaderboardNames)
 	}
@@ -525,5 +532,8 @@ func (c Contest) auditFields() map[string]any {
 		"leaderboard_names":        c.LeaderboardNames,
 		"icpc_penalty_min":         c.ICPCPenaltyMin,
 		"result_download":          c.ResultDownload,
+		"prize_first":              c.PrizePlaces.First,
+		"prize_second":             c.PrizePlaces.Second,
+		"prize_third":              c.PrizePlaces.Third,
 	}
 }

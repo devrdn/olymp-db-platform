@@ -117,6 +117,50 @@ func TestAContestStoredWithoutTheResultDownloadOffersIt(t *testing.T) {
 	})
 }
 
+// Every contest stored before the setting existed awards no prizes.
+func TestAContestStoredWithoutPrizePlacesHasNone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-prize-default")
+		var id uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author.ID).Scan(&id); err != nil {
+			t.Fatalf("insert = %v", err)
+		}
+
+		got, err := NewContests(testPool).ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if got.PrizePlaces != (contests.PrizePlaces{}) {
+			t.Errorf("PrizePlaces = %+v, want the column defaults, none", got.PrizePlaces)
+		}
+	})
+}
+
+// The CHECK bounds a row written past Contest.Validate, and is no tighter than
+// the domain's bound (maxPrizePlaces, prizes.go).
+func TestPrizePlacesAreBoundedAtTheDatabaseToo(t *testing.T) {
+	for _, column := range []string{"prize_first", "prize_second", "prize_third"} {
+		t.Run(column, func(t *testing.T) {
+			for value, accepted := range map[int]bool{-1: false, 0: true, 1000: true, 1001: false} {
+				withTx(t, func(ctx context.Context) {
+					author := makeUser(t, ctx, "author-prize-bound")
+					_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+						`INSERT INTO contests (created_by, `+column+`) VALUES ($1, $2)`, author.ID, value)
+
+					var pgErr *pgconn.PgError
+					switch {
+					case accepted && err != nil:
+						t.Errorf("%s = %d: %v, want it accepted", column, value, err)
+					case !accepted && (!errors.As(err, &pgErr) || pgErr.Code != checkViolation):
+						t.Errorf("%s = %d: err = %v, want a %s check violation", column, value, err, checkViolation)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)

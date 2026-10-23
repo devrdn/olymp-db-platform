@@ -87,6 +87,9 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				// archived contest: extending the grace period is the one
 				// exception SettingsEditable allows (§2.4).
 				r.Patch("/grace", h.extendGrace)
+				// Reachable on a finished contest too, refused once archived
+				// (contests.Service.SetPrizePlaces).
+				r.Put("/prize-places", h.setPrizePlaces)
 				r.Delete("/", h.delete)
 				r.Put("/languages", h.setLanguages)
 				r.Put("/translations", h.setTranslations)
@@ -154,6 +157,7 @@ type ContestResponse struct {
 	// even in other modes (§6.1.1).
 	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
 	ResultDownload bool                           `json:"result_download"`
+	PrizePlaces    PrizePlacesPayload             `json:"prize_places"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       SettingsResponse               `json:"settings"`
 	Leaderboard    LeaderboardSettingsResponse    `json:"leaderboard"`
@@ -197,6 +201,18 @@ func (req *leaderboardRequest) apply(cmd *contests.UpdateCommand) error {
 		cmd.LeaderboardFreezeMin = &minutes
 	}
 	return nil
+}
+
+// PrizePlacesPayload is how many places earn each prize, both ways on the
+// wire. A key left out of a request is zero: the request replaces all three.
+type PrizePlacesPayload struct {
+	First  int `json:"first"`
+	Second int `json:"second"`
+	Third  int `json:"third"`
+}
+
+func toPrizePlacesPayload(p contests.PrizePlaces) PrizePlacesPayload {
+	return PrizePlacesPayload{First: p.First, Second: p.Second, Third: p.Third}
 }
 
 // SettingsResponse mirrors contests.Settings on the wire.
@@ -266,6 +282,7 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		EndsAt:         formatTime(c.EndsAt),
 		ICPCPenaltyMin: c.ICPCPenaltyMin,
 		ResultDownload: c.ResultDownload,
+		PrizePlaces:    toPrizePlacesPayload(c.PrizePlaces),
 		AllowedCIDRs:   make([]string, 0, len(c.AllowedCIDRs)),
 		Settings: SettingsResponse{
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
@@ -612,6 +629,28 @@ func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	updated, err := h.service.ExtendGrace(r.Context(), identity.UserID, id, req.GracePeriodMin)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
+}
+
+func (h *ContestsHandler) setPrizePlaces(w http.ResponseWriter, r *http.Request) {
+	id, ok := contestIDFrom(w, r)
+	if !ok {
+		return
+	}
+
+	var req PrizePlacesPayload
+	if !decodeBody(w, r, &req) {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, contests.PrizePlaces{
+		First: req.First, Second: req.Second, Third: req.Third,
+	})
 	if err != nil {
 		h.fail(w, r, err)
 		return

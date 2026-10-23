@@ -1037,3 +1037,93 @@ func TestListingCarriesWhetherAContestOffersTheResultDownload(t *testing.T) {
 		t.Errorf("result_download = %v for a contest withholding it, want false", got)
 	}
 }
+
+func prizePlacesOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	places, ok := decode(t, rec)["prize_places"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no prize_places object: %s", rec.Body.String())
+	}
+	return places
+}
+
+func TestAContestShowsNoPrizePlacesUntilTheyAreSet(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	places := prizePlacesOf(t, rec)
+	if places["first"] != float64(0) || places["second"] != float64(0) || places["third"] != float64(0) {
+		t.Errorf("prize_places = %v, want 0/0/0", places)
+	}
+}
+
+// The counts change only what the table shows, so a finished contest still
+// takes them.
+func TestPrizePlacesAreSetOnAFinishedContest(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/prize-places", `{"first": 1, "second": 2, "third": 3}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	places := prizePlacesOf(t, rec)
+	if places["first"] != float64(1) || places["second"] != float64(2) || places["third"] != float64(3) {
+		t.Errorf("prize_places = %v, want 1/2/3", places)
+	}
+	if stored, _ := f.stores.Contests.ByID(t.Context(), c.ID); stored.PrizePlaces != (contests.PrizePlaces{First: 1, Second: 2, Third: 3}) {
+		t.Errorf("stored PrizePlaces = %+v, want 1/2/3", stored.PrizePlaces)
+	}
+}
+
+func TestPrizePlacesOfAnArchivedContestAreAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusArchived)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/prize-places", `{"first": 1}`)
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "not_editable" {
+		t.Errorf("status = %d (%s), want 409 not_editable", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrizePlacesPastTheBoundAreRefused(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/prize-places", `{"first": 1001}`)
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Errorf("status = %d (%s), want 400 invalid_request", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrizePlacesNeedTheRightToEditTheContest(t *testing.T) {
+	f := newContestFixtureDenying(t, rbac.PermissionContestEdit)
+	c := f.ownedContest(t, contests.StatusRunning)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/prize-places", `{"first": 1}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d (%s), want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// One door: the general update does not take them, so it cannot carry them
+// past its own freeze.
+func TestTheGeneralUpdateDoesNotTakePrizePlaces(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"prize_places": {"first": 1}}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d (%s), want 400", rec.Code, rec.Body.String())
+	}
+}
