@@ -1789,6 +1789,16 @@ const en = {
           failed: "Could not load the query log.",
           retry: "Try again",
           durationMs: "{n} ms",
+          // A row opens to its whole statement; a page carries only the start
+          // of a long one, so that is read from the server on opening.
+          show: "Show",
+          hide: "Hide",
+          statement: "The whole query",
+          loadingStatement: "Loading the whole query…",
+          copy: "Copy",
+          copied: "Copied",
+          copyFailed: "Could not copy",
+          shortened: "Only the beginning of this query was kept.",
           /** The whole session as a file, beside the page of it on screen. */
           export: {
             heading: "Export",

@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 import { tokenizeSql, type SqlTokenKind } from "./sql-tokens";
@@ -46,8 +47,9 @@ export const SqlBlock = memo(function SqlBlock({ sql, label }: { sql: string; la
 const COPIED_MS = 2_000;
 
 /**
- * Copies text and reports the result in a live region that is always rendered,
- * so the change is announced.
+ * Copies text, falling back where the async clipboard is missing (plain HTTP),
+ * and reports the result in a live region that is always rendered, so the
+ * change is announced.
  */
 export function CopyButton({
   text,
@@ -61,13 +63,7 @@ export function CopyButton({
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const copy = async () => {
-    let next: "copied" | "failed" = "copied";
-    try {
-      if (!navigator.clipboard) throw new Error("no clipboard");
-      await navigator.clipboard.writeText(text);
-    } catch {
-      next = "failed";
-    }
+    const next = (await copyText(text)) ? "copied" : "failed";
     setState(next);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setState("idle"), COPIED_MS);

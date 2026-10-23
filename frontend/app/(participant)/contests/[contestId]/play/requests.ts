@@ -4,7 +4,7 @@ import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
-import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
+import { queryLogEntrySchema, queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import type { Locale } from "@/lib/i18n/config";
 
@@ -151,6 +151,25 @@ export async function fetchQueryLog(
     const payload = await browserRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}`);
     const parsed = queryLogResponseSchema.parse(payload);
     return { kind: "ok", items: parsed.items, total: parsed.total };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+export type QueryLogEntryResult = { kind: "ok"; entry: QueryLogEntry } | { kind: "refused"; code: string };
+
+/**
+ * Reads one row of the participant's own log with its statement whole, which
+ * a page cuts. The server answers any row that is not the caller's as
+ * `not_found`, and so does this for an id no row can have.
+ */
+export async function fetchQueryLogEntry(contestId: string, id: number): Promise<QueryLogEntryResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (!Number.isSafeInteger(id) || id <= 0) return { kind: "refused", code: "not_found" };
+  try {
+    const payload = await browserRequest(`/contests/${contestId}/play/log/${id}`);
+    return { kind: "ok", entry: queryLogEntrySchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };
