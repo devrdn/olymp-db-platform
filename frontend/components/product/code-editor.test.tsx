@@ -754,6 +754,8 @@ describe("completion", () => {
         columns: [{ name: "OpenedAt", type: "timestamp", nullable: false, references: "" }],
       },
       { name: "selfies", columns: [] },
+      // A column named by a keyword ranks above the keyword itself.
+      { name: "events", columns: [{ name: "end", type: "timestamp", nullable: true, references: "" }] },
     ],
     truncated: false,
   };
@@ -861,6 +863,46 @@ describe("completion", () => {
     await userEvent.keyboard("{Enter}");
 
     expect(text).toBe("select\n");
+  });
+
+  // Typed in either case: in lower case the column matches exactly and ranks
+  // first, and its written form is the quoted `"end"`.
+  test.each(["END", "end"])(
+    "Enter breaks the line after %s, a keyword that is also a column's name, leaving it as typed",
+    async (keyword) => {
+      let text = "";
+      const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+      await typeInto(container, `SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}`);
+      await offers("end");
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(text).toBe(`SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}\n`);
+      expect(offered()).toEqual([]);
+    },
+  );
+
+  // Enter never rewrites a word typed whole; Tab is how to take the quoted form.
+  test("Enter breaks the line after a mixed-case table name typed whole, and Tab would quote it", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM CaseFiles");
+    await offers("CaseFiles");
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(text).toBe("SELECT * FROM CaseFiles\n");
+  });
+
+  test("Tab writes a mixed-case table name typed whole in its quoted form", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM CaseFiles");
+    await offers("CaseFiles");
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text).toBe('SELECT * FROM "CaseFiles"');
   });
 
   test("Escape closes the popup and leaves the text as typed", async () => {

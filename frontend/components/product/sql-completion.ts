@@ -108,10 +108,12 @@ function columnsInScope(schema: GameSchema): CompletionSource {
 const offerNothing: CompletionSource = () => null;
 
 /**
- * Enter on an option that would only write the word already typed (ignoring
- * case) closes the popup and breaks the line; otherwise every line ending in
- * a table name or a keyword would need Enter twice. Returns false either way,
- * so the completion keymap or the line break runs next.
+ * Enter on a word already typed whole closes the popup and breaks the line:
+ * the selected option's name or written form equals the word, ignoring case.
+ * Otherwise every line ending in a table name or a keyword would need Enter
+ * twice, and a keyword such as `end` would be rewritten as a quoted column
+ * named after it. Tab still takes the option's written form. Returns false
+ * either way, so the completion keymap or the line break runs next.
  */
 function breakLineOnTypedWord(view: EditorView): boolean {
   if (completionStatus(view.state) !== "active") return false;
@@ -119,9 +121,10 @@ function breakLineOnTypedWord(view: EditorView): boolean {
   if (!option) return false;
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
-  const typed = /[\w$]*$/.exec(line.text.slice(0, head - line.from))?.[0] ?? "";
-  const written = typeof option.apply === "string" ? option.apply : option.label;
-  if (typed !== "" && typed.toLowerCase() === written.toLowerCase()) closeCompletion(view);
+  const typed = (/[\w$]*$/.exec(line.text.slice(0, head - line.from))?.[0] ?? "").toLowerCase();
+  if (typed === "") return false;
+  const forms = [option.label, typeof option.apply === "string" ? option.apply : option.label];
+  if (forms.some((form) => form.toLowerCase() === typed)) closeCompletion(view);
   return false;
 }
 
