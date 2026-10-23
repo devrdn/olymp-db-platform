@@ -3,9 +3,8 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The switchers' Server Actions would pull in `next/headers`.
+// The language switcher's Server Action would pull in `next/headers`.
 vi.mock("@/components/layout/locale-actions", () => ({ chooseLocale: vi.fn() }));
-vi.mock("@/components/layout/theme-actions", () => ({ chooseTheme: vi.fn() }));
 
 import { SiteFooter } from "./site-footer";
 
