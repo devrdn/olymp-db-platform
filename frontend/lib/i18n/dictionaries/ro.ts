@@ -1043,8 +1043,8 @@ const ro = {
         first: "Premii I",
         second: "Premii II",
         third: "Premii III",
-        hint: "Între 0 și 1000 fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Cu toate trei la 0 nimeni nu primește premiu.",
-        winnerHint: "În modul câștigător tabelul îl numește pe singurul câștigător, iar aceste numere nu se aplică.",
+        hint: "Între 0 și 1000 fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Un participant care n-a punctat deloc nu primește premiu. Cu toate trei la 0 nimeni nu primește premiu.",
+        winnerHint: "În modul câștigător aceste numere nu se aplică: singurul câștigător primește premiul I.",
       },
       access: {
         heading: "Cine poate intra și de unde",
@@ -1832,6 +1832,7 @@ const ro = {
       third: "Premiul al III-lea",
       none: "Fără premiu",
     },
+    podiumMore: "și încă {count}",
     truncated: "Sunt afișate primele {count} rânduri.",
     updated: "Actualizat la {time}",
     failed: "Tabelul nu a putut fi reîmprospătat. Este afișată ultima copie.",

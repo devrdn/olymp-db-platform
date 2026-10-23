@@ -469,16 +469,11 @@ describe("PrizePanel", () => {
     expect(screen.getByText(dict.workspace.facts.frozen)).toBeInTheDocument();
   });
 
+  // The save leaves updatedAt alone, so the counts alone must remount the form.
   test("shows the counts the server now holds after a save", () => {
     const { rerender } = render(<PrizePanel contest={contest()} editable dict={dict} />);
 
-    rerender(
-      <PrizePanel
-        contest={contest({ prizePlaces: { first: 4, second: 0, third: 0 }, updatedAt: "2026-08-31T18:00:00Z" })}
-        editable
-        dict={dict}
-      />,
-    );
+    rerender(<PrizePanel contest={contest({ prizePlaces: { first: 4, second: 0, third: 0 } })} editable dict={dict} />);
 
     expect(screen.getByRole("spinbutton", { name: t().first })).toHaveValue(4);
   });
@@ -494,16 +489,17 @@ describe("PrizePanel", () => {
 
 describe.each(["en", "ro", "ru"] as const)("the prize places' rule in %s", (locale) => {
   const words = {
-    en: { tie: /tie/i, none: /0/, winner: /winner/i, archive: /archiv/i },
-    ro: { tie: /egalitate/i, none: /0/, winner: /câștigător/i, archive: /arhiv/i },
-    ru: { tie: /равн/i, none: /0/, winner: /победител/i, archive: /архив/i },
+    en: { tie: /tie/i, none: /all three at 0/i, unscored: /scored nothing/i, winner: /winner.*first prize/i, archive: /archiv/i },
+    ro: { tie: /egalitate/i, none: /toate trei la 0/i, unscored: /n-a punctat/i, winner: /câștigător.*premiul I/i, archive: /arhiv/i },
+    ru: { tie: /равн/i, none: /все три равны 0/i, unscored: /ничего не набрал/i, winner: /победител.*первую премию/i, archive: /архив/i },
   }[locale];
 
-  test("says ties share a place, 0 means none, winner mode ignores the counts, and the archive closes them", async () => {
+  test("says ties share a place, 0 means none, a zero score takes none, the winner holds the first prize, and the archive closes them", async () => {
     const t = (await getDictionary(locale)).workspace.settings.prizes;
 
     expect(t.hint).toMatch(words.tie);
     expect(t.hint).toMatch(words.none);
+    expect(t.hint).toMatch(words.unscored);
     expect(t.winnerHint).toMatch(words.winner);
     expect(t.help).toMatch(words.archive);
   });
