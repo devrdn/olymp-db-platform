@@ -11,9 +11,9 @@ import (
 )
 
 // The authored content of a contest: its story, table descriptions, questions
-// and reference answers. Every endpoint here is staff-only and carries the reference answers.
-// The participant view is a separate projection, not this payload with a field
-// removed: a filter can be forgotten.
+// and reference answers. Every endpoint here is staff-only and carries the
+// reference answers. The participant view is a separate projection, not this
+// payload with a field removed: a filter can be forgotten.
 
 // StoryResponse is the crime story in every language it was authored in.
 type StoryResponse struct {
