@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -183,7 +183,11 @@ function printOnlyContainer(container: HTMLElement): HTMLElement | null {
  * into the fallback.
  */
 async function waitForRealEditor(container: HTMLElement = document.body) {
-  await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+  await waitFor(() => {
+    expect(container.querySelector(".cm-editor")).toBeInTheDocument();
+    // React removes the fallback a commit later; until then the label names two fields.
+    expect(within(container).getAllByRole("textbox", { name: en.participant.console.label })).toHaveLength(1);
+  });
 }
 
 /** The name of a table in the schema panel, the button that writes a query on it. */
@@ -198,6 +202,13 @@ async function runQuery() {
   await userEvent.click(screen.getByRole("textbox"));
   await userEvent.keyboard("SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+}
+
+/** The labels the editor's completion popup offers. */
+function completionLabels(): string[] {
+  return screen
+    .queryAllByRole("option")
+    .map((option) => option.querySelector(".cm-completionLabel")?.textContent ?? "");
 }
 
 describe("the play workspace", () => {
@@ -528,6 +539,22 @@ describe("the database reset", () => {
 
     expect(await screen.findByRole("button", tableName("suspects"))).toBeInTheDocument();
     expect(screen.queryByRole("button", tableName("guests"))).not.toBeInTheDocument();
+  });
+
+  test("offers the tables of the schema read after the reset as completions", async () => {
+    schemaReads.next = {
+      kind: "ok",
+      schema: { truncated: false, tables: [{ name: "suspects", columns: [] }] },
+    };
+    show(A_SCHEMA, { sqlMode: "read_write" });
+    await reset();
+    await screen.findByRole("button", tableName("suspects"));
+
+    await waitForRealEditor();
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard("SELECT * FROM sus");
+
+    await waitFor(() => expect(completionLabels()).toContain("suspects"));
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {

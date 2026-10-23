@@ -466,7 +466,7 @@ budgets and surviving a closed tab.
 | `dictionary.ts` | `PlayDictionary`: the `participant`, `errors` and `leaderboard` sections only. |
 | `play-header.tsx` | Title, clock and panel toggles. The only place that opens the events channel. Rendered outside `<Suspense>` so it streams before the slow reads. |
 | `workspace.tsx` | The full-screen grid: schema panel, console, bottom panel (Result and Query log tabs), side panel. Here "workspace" names the screen's layout; the server-side *workspace* in the glossary is the participant's notes and SQL tabs. |
-| `console.tsx` | The SQL editor (`components/product/code-editor.tsx`, CodeMirror), the SQL tab strip and the Run button, bound to `runQuery`. |
+| `console.tsx` | The SQL editor (`components/product/code-editor.tsx`, CodeMirror), the SQL tab strip and the Run button, bound to `runQuery`. The editor completes PostgreSQL's keywords and functions and, unless the contest hides its schema, the game's tables and columns (`components/product/sql-completion.ts`). |
 | `sql-tabs.tsx`, `use-sql-tabs.ts` | The tab strip (draws only) and its state: which tabs exist, which is open, one autosave engine per tab. |
 | `result-panel.tsx`, `row-detail.tsx` | The last query's result or refusal; one row opened in full. |
 | `query-log-panel.tsx` | Every statement this participant ran, paged by `QUERY_LOG_PAGE_SIZE`; a row opens to its whole statement with a Copy button, read from the server when the page carried only its start. |
