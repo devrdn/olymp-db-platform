@@ -1,19 +1,23 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 
 import { QueryLogPanel } from "./query-log-panel";
-import type { QueryLogRefreshResult } from "./requests";
+import type { QueryLogEntryResult, QueryLogRefreshResult } from "./requests";
 
 const fetchQueryLog = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<QueryLogRefreshResult>>());
-vi.mock("./requests", () => ({ fetchQueryLog }));
+const fetchQueryLogEntry = vi.hoisted(() => vi.fn<(contestId: string, id: number) => Promise<QueryLogEntryResult>>());
+vi.mock("./requests", () => ({ fetchQueryLog, fetchQueryLogEntry }));
+
+let nextId = 1;
 
 function entry(sql: string, overrides: Partial<QueryLogEntry> = {}): QueryLogEntry {
   return {
+    id: nextId++,
     sql,
     sqlTruncated: false,
     status: "ok",
@@ -232,5 +236,146 @@ describe("the query log panel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * A row opens to its whole statement with a Copy button. A page cuts long
+ * statements, so a cut one is read whole from the server on opening.
+ */
+describe("opening one query whole", () => {
+  const t = en.participant.play.workspace.log;
+  /** Longer than a page carries, so the page holds only its start. */
+  const WHOLE = `SELECT '${"x".repeat(4000)}'`;
+  const CUT = WHOLE.slice(0, 1000);
+
+  beforeEach(() => {
+    fetchQueryLog.mockReset();
+    fetchQueryLogEntry.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The row a statement starts with, and its Show button. */
+  function rowOf(text: string) {
+    return screen.getAllByRole("row").find((row) => row.textContent?.includes(text)) as HTMLElement;
+  }
+
+  function toggle(text: string) {
+    return within(rowOf(text)).getByRole("button", { name: /^(Show|Hide)$/ });
+  }
+
+  function statement() {
+    return screen.getByRole("region", { name: t.statement });
+  }
+
+  test("a statement that arrived whole opens at once, asking the server nothing", async () => {
+    const user = userEvent.setup();
+    show({ initial: { items: [entry("SELECT name\nFROM guests")], total: 1, failed: false } });
+
+    const button = toggle("SELECT name");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await user.click(button);
+
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button).toHaveTextContent(t.hide);
+    expect(statement().querySelector("pre")?.textContent).toBe("SELECT name\nFROM guests");
+    expect(fetchQueryLogEntry).not.toHaveBeenCalled();
+  });
+
+  test("a statement cut short is read whole when opened, once", async () => {
+    const user = userEvent.setup();
+    let release: (result: QueryLogEntryResult) => void = () => {};
+    fetchQueryLogEntry.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    show({ initial: { items: [entry(CUT, { id: 7, sqlTruncated: true })], total: 1, failed: false } });
+
+    await user.click(toggle(CUT));
+    expect(within(statement()).getByText(t.loadingStatement)).toBeInTheDocument();
+    release({ kind: "ok", entry: entry(WHOLE, { id: 7 }) });
+
+    await waitFor(() => expect(statement().querySelector("pre")).toHaveTextContent(WHOLE));
+    expect(fetchQueryLogEntry).toHaveBeenCalledWith("c1", 7);
+
+    // Closed and opened again, it is not read a second time.
+    await user.click(toggle(CUT));
+    await user.click(toggle(CUT));
+    expect(statement().querySelector("pre")).toHaveTextContent(WHOLE);
+    expect(fetchQueryLogEntry).toHaveBeenCalledTimes(1);
+  });
+
+  test("Copy puts the whole statement on the clipboard, not the page's start of it", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    fetchQueryLogEntry.mockResolvedValueOnce({ kind: "ok", entry: entry(WHOLE, { id: 7 }) });
+    show({ initial: { items: [entry(CUT, { id: 7, sqlTruncated: true })], total: 1, failed: false } });
+
+    await user.click(toggle(CUT));
+    await user.click(await within(statement()).findByRole("button", { name: t.copy }));
+
+    expect(writeText).toHaveBeenCalledWith(WHOLE);
+    expect(within(statement()).getByText(t.copied)).toBeInTheDocument();
+  });
+
+  test("a failed read says why, and a retry reads it again", async () => {
+    const user = userEvent.setup();
+    fetchQueryLogEntry
+      .mockResolvedValueOnce({ kind: "refused", code: "play_read_too_often" })
+      .mockResolvedValueOnce({ kind: "ok", entry: entry(WHOLE, { id: 7 }) });
+    show({ initial: { items: [entry(CUT, { id: 7, sqlTruncated: true })], total: 1, failed: false } });
+
+    await user.click(toggle(CUT));
+    expect(await within(statement()).findByText(en.errors.play_read_too_often)).toBeInTheDocument();
+    expect(within(statement()).queryByRole("button", { name: t.copy })).not.toBeInTheDocument();
+
+    await user.click(within(statement()).getByRole("button", { name: t.retry }));
+
+    await waitFor(() => expect(statement().querySelector("pre")).toHaveTextContent(WHOLE));
+  });
+
+  test("says so when even the row read on its own is not the whole statement", async () => {
+    const user = userEvent.setup();
+    fetchQueryLogEntry.mockResolvedValueOnce({ kind: "ok", entry: entry(WHOLE, { id: 7, sqlTruncated: true }) });
+    show({ initial: { items: [entry(CUT, { id: 7, sqlTruncated: true })], total: 1, failed: false } });
+
+    await user.click(toggle(CUT));
+
+    expect(await within(statement()).findByText(t.shortened)).toBeInTheDocument();
+  });
+
+  test("opens and closes from the keyboard", async () => {
+    const user = userEvent.setup();
+    show({ initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
+
+    toggle("SELECT 1").focus();
+    await user.keyboard("{Enter}");
+    expect(toggle("SELECT 1")).toHaveAttribute("aria-expanded", "true");
+    expect(toggle("SELECT 1")).toHaveFocus();
+
+    await user.keyboard(" ");
+    expect(toggle("SELECT 1")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: t.statement })).not.toBeInTheDocument();
+  });
+
+  test("an empty statement opens to an empty block without failing", async () => {
+    const user = userEvent.setup();
+    show({ initial: { items: [entry("", { status: "rejected" })], total: 1, failed: false } });
+
+    await user.click(screen.getByRole("button", { name: t.show }));
+
+    expect(statement().querySelector("pre")).toHaveTextContent("");
+    expect(within(statement()).getByRole("button", { name: t.copy })).toBeInTheDocument();
+  });
+
+  test("each row opens on its own", async () => {
+    const user = userEvent.setup();
+    show({ initial: { items: [entry("SELECT 1"), entry("SELECT 2")], total: 2, failed: false } });
+
+    await user.click(toggle("SELECT 2"));
+
+    expect(toggle("SELECT 1")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByRole("region", { name: t.statement })).toHaveLength(1);
   });
 });
