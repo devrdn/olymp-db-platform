@@ -469,11 +469,11 @@ budgets and surviving a closed tab.
 | `console.tsx` | The SQL editor (`components/product/code-editor.tsx`, CodeMirror), the SQL tab strip and the Run button, bound to `runQuery`. |
 | `sql-tabs.tsx`, `use-sql-tabs.ts` | The tab strip (draws only) and its state: which tabs exist, which is open, one autosave engine per tab. |
 | `result-panel.tsx`, `row-detail.tsx` | The last query's result or refusal; one row opened in full. |
-| `query-log-panel.tsx` | Every statement this participant ran, paged by `QUERY_LOG_PAGE_SIZE`. |
+| `query-log-panel.tsx` | Every statement this participant ran, paged by `QUERY_LOG_PAGE_SIZE`; a row opens to its whole statement with a Copy button, read from the server when the page carried only its start. |
 | `side-panel.tsx` | Tabs for story, questions, notes and leaderboard; the story's Markdown and print exports. |
 | `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswer`. |
 | `notes-panel.tsx` | One self-saving notes field. |
-| `schema-panel.tsx` | Tables, columns, types and foreign keys. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
+| `schema-panel.tsx`, `table-query.ts` | Tables, columns, types and foreign keys; a click on a table's name writes `SELECT * FROM <table> LIMIT 5;`, quoted as PostgreSQL needs, into the open SQL tab, and the chevron opens the table. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
 | `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. |
 | `panel-toggles.tsx`, `pane-splitter.tsx` | Collapsible panels with keyboard shortcuts; draggable, remembered pane sizes. |
 | `use-autosave.ts` | The autosave engine for notes and SQL tabs. |
@@ -481,7 +481,7 @@ budgets and surviving a closed tab.
 | `use-signals.ts` | Page-left and paste signals reported to the organiser. |
 | `refusals.ts` | What each refusal code means for this screen. |
 | `content-loaded.tsx` | Tells the header, across the Suspense boundary, whether the workspace or a refusal rendered. |
-| `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log, read the standings, reset the database and re-read the schema. Not server actions; see below. |
+| `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log and read one row of it whole, read the standings, reset the database and re-read the schema. Not server actions; see below. |
 | `story.md/route.ts` | Route Handler: the story as a Markdown download. |
 | `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `reload-link.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton, rate-limit reload button. |
 

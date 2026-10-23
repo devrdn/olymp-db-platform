@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
@@ -13,7 +13,7 @@ import type { WorkspaceSnapshot } from "@/lib/api/workspace";
 import type { Locale } from "@/lib/i18n/config";
 
 import { refreshSchema, type ConsoleState } from "./requests";
-import { ConsoleEditor } from "./console";
+import { ConsoleEditor, type ConsoleHandle } from "./console";
 import { usePanelVisibility, useSchemaPanel } from "./panel-toggles";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResetDatabase } from "./reset-database";
@@ -21,6 +21,7 @@ import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
+import { tableQuery } from "./table-query";
 import { purgeForeignDrafts } from "./use-autosave";
 import { useSignals } from "./use-signals";
 
@@ -119,7 +120,6 @@ export function Workspace({
   const [resultFrom, setResultFrom] = useState<string | null>(null);
   // Controlled so a completed run can switch to "Result" by itself.
   const [bottomTab, setBottomTab] = useState("result");
-  const { containerRef, sizes: widths, commit } = usePaneWidths(contestId);
   // The console column's split is its own group: it is stored in percent,
   // the widths in rem.
   const { containerRef: columnRef, sizes: rows, commit: commitRows } = useConsoleRows(contestId);
@@ -132,6 +132,8 @@ export function Workspace({
   useSchemaPanel(schema !== null);
 
   const showSchema = schema !== null && !collapsed.schema;
+  // An open schema column narrows how far the side column may grow.
+  const { containerRef, sizes: widths, commit, sideBounds } = usePaneWidths(contestId, showSchema);
   const showSide = !collapsed.side;
   const showBottom = !collapsed.bottom;
 
@@ -176,6 +178,11 @@ export function Workspace({
       if (result.kind === "ok") setSchema(result.schema);
     });
   }, [contestId, schemaShown]);
+
+  // A click on a table's name writes a query on it into the open SQL tab,
+  // for the participant to change or run.
+  const consoleRef = useRef<ConsoleHandle>(null);
+  const queryTable = useCallback((table: string) => consoleRef.current?.insert(tableQuery(table)), []);
 
   /** Brings the schema panel back for ⌘K, which focuses its search field. */
   const revealSchema = useCallback(() => expand("schema"), [expand]);
@@ -247,6 +254,7 @@ export function Workspace({
                 schema={schema}
                 hidden={!showSchema}
                 onReveal={revealSchema}
+                onQueryTable={queryTable}
                 dict={dict}
               />
             </div>
@@ -279,6 +287,7 @@ export function Workspace({
               a block parent. */}
             <div className="flex min-h-0 flex-col max-narrow:min-h-80 max-narrow:border-b max-narrow:border-line">
               <ConsoleEditor
+                ref={consoleRef}
                 accountId={accountId}
                 contestId={contestId}
                 dict={dict}
@@ -396,7 +405,7 @@ export function Workspace({
               label={t.panes.side}
               property="--pane-side"
               value={widths.side}
-              bounds={WIDTH_BOUNDS}
+              bounds={sideBounds}
               direction={-1}
               containerRef={containerRef}
               onResize={(rem) => commit({ ...widths, side: rem })}

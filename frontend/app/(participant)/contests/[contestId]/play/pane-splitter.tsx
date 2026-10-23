@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -35,9 +35,26 @@ export const DEFAULT_SIDE_REM = 15.75;
 
 /**
  * Column width limits in rem. A hard floor: below it the schema shows no
- * column names and the questions wrap every other word.
+ * column names and the questions wrap every other word. The ceiling is the
+ * schema's; the side column's is `SIDE_WINDOW_SHARE` of the window.
  */
 export const WIDTH_BOUNDS: PaneBounds = { min: 8, max: 32 };
+
+/**
+ * The share of the window the side column may take. The story and the
+ * questions are read at length.
+ */
+export const SIDE_WINDOW_SHARE = 0.6;
+
+/**
+ * The console's least width in rem beside the side column (and the schema,
+ * where it is a column): the narrowest it was ever left when the side
+ * column's ceiling was 32rem.
+ */
+export const CONSOLE_MIN_REM = 16;
+
+/** From this window width in rem the schema is a column of its own (`--breakpoint-wide`). */
+const WIDE_REM = 64;
 
 /**
  * The editor's share of the console column, in percent. A share, not a
@@ -53,12 +70,20 @@ export const SHARE_BOUNDS: PaneBounds = { min: 20, max: 80 };
 
 type Sizes<K extends string> = Record<K, number>;
 
+/** One bound for every size of a group, or one per size. */
+type GroupBounds<K extends string> = PaneBounds | Record<K, PaneBounds>;
+
+function boundsOf<K extends string>(bounds: GroupBounds<K>, key: K): PaneBounds {
+  const shared = bounds as Partial<PaneBounds>;
+  return typeof shared.min === "number" ? (bounds as PaneBounds) : (bounds as Record<K, PaneBounds>)[key];
+}
+
 function clampTo(value: number, bounds: PaneBounds): number {
   return Math.min(bounds.max, Math.max(bounds.min, value));
 }
 
 /** One stored group, or the defaults when it cannot be read. */
-function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds: PaneBounds): Sizes<K> {
+function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds: GroupBounds<K>): Sizes<K> {
   const value = { ...defaults };
   if (!raw) return value;
   try {
@@ -66,7 +91,7 @@ function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds:
     for (const key of Object.keys(defaults) as K[]) {
       const stored = parsed[key];
       if (typeof stored === "number" && Number.isFinite(stored)) {
-        value[key] = clampTo(stored, bounds);
+        value[key] = clampTo(stored, boundsOf(bounds, key));
       }
     }
   } catch {
@@ -87,7 +112,7 @@ function snapshot<K extends string>(
   group: string,
   contestId: string,
   defaults: Sizes<K>,
-  bounds: PaneBounds,
+  bounds: GroupBounds<K>,
 ): Sizes<K> {
   let raw: string | null = null;
   try {
@@ -129,7 +154,7 @@ export function usePaneSizes<K extends string>(
   contestId: string,
   group: string,
   defaults: Sizes<K>,
-  bounds: PaneBounds,
+  bounds: GroupBounds<K>,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sizes = useSyncExternalStore(
@@ -161,9 +186,86 @@ const PANE_WIDTHS: Sizes<"schema" | "side"> = {
   side: DEFAULT_SIDE_REM,
 };
 
-/** The two column widths, in rem. The `panes` key predates the other groups. */
-export function usePaneWidths(contestId: string) {
-  return usePaneSizes(contestId, "panes", PANE_WIDTHS, WIDTH_BOUNDS);
+/**
+ * The side width is stored as it was set; the window it is drawn in decides
+ * how much of it fits (`useSideBounds`).
+ */
+const STORED_WIDTH_BOUNDS: Record<"schema" | "side", PaneBounds> = {
+  schema: WIDTH_BOUNDS,
+  side: { min: WIDTH_BOUNDS.min, max: Number.MAX_SAFE_INTEGER },
+};
+
+/**
+ * The window's width in whole rem, as an external store with one `resize`
+ * listener for every subscriber. Whole rem so a resize re-renders the console
+ * only when the width moves by one; measured on resize, never per render,
+ * since reading the root font size can flush style.
+ */
+let windowRem: number | null = null;
+const windowListeners = new Set<() => void>();
+
+function measureWindowRem(): number {
+  const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return Math.floor(window.innerWidth / rootPx);
+}
+
+function onWindowResize() {
+  const next = measureWindowRem();
+  if (next === windowRem) return;
+  windowRem = next;
+  for (const listener of windowListeners) listener();
+}
+
+function subscribeWindow(listener: () => void) {
+  if (windowListeners.size === 0) {
+    window.addEventListener("resize", onWindowResize);
+    // A resize while nobody listened left the stored width stale.
+    windowRem = measureWindowRem();
+  }
+  windowListeners.add(listener);
+  return () => {
+    windowListeners.delete(listener);
+    if (windowListeners.size === 0) window.removeEventListener("resize", onWindowResize);
+  };
+}
+
+function windowRemSnapshot(): number {
+  windowRem ??= measureWindowRem();
+  return windowRem;
+}
+
+/** What the server renders against: the wide breakpoint, so the defaults fit. */
+const SERVER_WINDOW_REM = WIDE_REM;
+
+/**
+ * The side column's limits in rem: the common floor, and `SIDE_WINDOW_SHARE`
+ * of the window, less whatever must fit beside it: `reservedRem` and the
+ * console's minimum.
+ */
+export function useSideBounds(reservedRem: number): PaneBounds {
+  const width = useSyncExternalStore(subscribeWindow, windowRemSnapshot, () => SERVER_WINDOW_REM);
+  const max = Math.max(
+    WIDTH_BOUNDS.min,
+    Math.min(Math.floor(width * SIDE_WINDOW_SHARE), Math.floor(width - reservedRem - CONSOLE_MIN_REM)),
+  );
+  return useMemo(() => ({ min: WIDTH_BOUNDS.min, max }), [max]);
+}
+
+/**
+ * The two column widths, in rem, with the side width drawn within the
+ * window's bound. `schemaShown` says whether the schema panel is open; it
+ * takes room beside the side column only from the wide breakpoint. The
+ * `panes` key predates the other groups.
+ */
+export function usePaneWidths(contestId: string, schemaShown: boolean) {
+  const { containerRef, sizes: stored, commit } = usePaneSizes(contestId, "panes", PANE_WIDTHS, STORED_WIDTH_BOUNDS);
+  const width = useSyncExternalStore(subscribeWindow, windowRemSnapshot, () => SERVER_WINDOW_REM);
+  const sideBounds = useSideBounds(schemaShown && width >= WIDE_REM ? stored.schema : 0);
+  const sizes = useMemo(
+    () => (stored.side > sideBounds.max ? { ...stored, side: sideBounds.max } : stored),
+    [stored, sideBounds.max],
+  );
+  return { containerRef, sizes, commit, sideBounds };
 }
 
 const CONSOLE_ROWS: Sizes<"editor"> = { editor: DEFAULT_EDITOR_PCT };

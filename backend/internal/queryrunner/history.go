@@ -2,14 +2,21 @@ package queryrunner
 
 import (
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
 
 // HistoryEntry is one row of a participant's own query log (query_log), read
 // back.
 type HistoryEntry struct {
+	// ID is the row's journal id, by which the participant reads one
+	// statement whole. Never set by the streamed export.
+	ID  int64
 	SQL string
-	// SQLTruncated says SQL was cut at MaxHistorySQLChars, so a shortened
-	// statement is never shown as whole. Never set by the streamed export.
+	// SQLTruncated says SQL was cut at the bound of the read that produced
+	// it (MaxHistorySQLChars for a page, MaxEntrySQLChars for one row), so a
+	// shortened statement is never shown as whole. Never set by the streamed
+	// export.
 	SQLTruncated bool
 	Status       Status
 	// Error is empty for a query that did not fail.
@@ -33,6 +40,11 @@ const (
 // 64 KiB (CLAUDE.md rule 2). It is applied in the SELECT, where the bytes
 // arrive (rule 12). The CSV export still carries every statement whole.
 const MaxHistorySQLChars = 1000
+
+// MaxEntrySQLChars bounds the statement one row read on its own carries: the
+// longest statement the console journals (sqlpolicy.MaxQueryBytes), so in
+// practice it is whole, and still bounded in the SELECT (CLAUDE.md rule 12).
+const MaxEntrySQLChars = sqlpolicy.MaxQueryBytes
 
 // MaxExportRows and MaxExportBytes bound one CSV download of a participant's
 // own log (CLAUDE.md rule 2). The export holds a core pool connection while it

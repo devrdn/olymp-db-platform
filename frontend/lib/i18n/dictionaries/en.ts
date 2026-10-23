@@ -1605,6 +1605,8 @@ const en = {
         foreignKeyCount: "foreign keys: {n}",
         expand: "Expand table {table}",
         collapse: "Collapse table {table}",
+        /** A click on a table's name writes `SELECT * FROM <table> LIMIT 5;` into the open SQL tab, without running it. */
+        query: "Insert a query on {table} into the editor",
       },
       story: {
         heading: "The story",
@@ -1663,6 +1665,15 @@ const en = {
           notes: "Notes",
         },
         download: "Download CSV",
+        // The first rows as tab-separated text with their header, so a paste
+        // lands in a spreadsheet's columns. `all` replaces `first` when the
+        // result is no longer than that.
+        copyRows: {
+          first: "Copy first 5 rows",
+          all: "Copy all rows",
+          copied: "Copied to the clipboard",
+          failed: "Could not copy. Select the rows and copy them yourself.",
+        },
         // The story tab's own two ways to take it away — the last export the
         // plan asks for. `export` names the Markdown file the same way
         // `log.export` names the query log's own; `print` is a button that
@@ -1778,6 +1789,16 @@ const en = {
           failed: "Could not load the query log.",
           retry: "Try again",
           durationMs: "{n} ms",
+          // A row opens to its whole statement; a page carries only the start
+          // of a long one, so that is read from the server on opening.
+          show: "Show",
+          hide: "Hide",
+          statement: "The whole query",
+          loadingStatement: "Loading the whole query…",
+          copy: "Copy",
+          copied: "Copied",
+          copyFailed: "Could not copy",
+          shortened: "Only the beginning of this query was kept.",
           /** The whole session as a file, beside the page of it on screen. */
           export: {
             heading: "Export",

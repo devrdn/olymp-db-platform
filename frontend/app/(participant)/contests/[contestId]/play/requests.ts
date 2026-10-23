@@ -4,7 +4,7 @@ import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
-import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
+import { queryLogEntrySchema, queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import type { Locale } from "@/lib/i18n/config";
 
@@ -139,18 +139,41 @@ export type QueryLogRefreshResult =
 /**
  * Re-reads one page of the participant's query log. The server scopes it to
  * the session's registration, never to a value in the request. Called by
- * QueryLogPanel when it is shown, on "load more" and on retry.
+ * QueryLogPanel when it is shown, on "load more" and on retry. `before`, a
+ * row id, asks for the rows older than that one: an offset would be shifted
+ * by a query run meanwhile.
  */
 export async function fetchQueryLog(
   contestId: string,
   limit: number,
   offset: number,
+  before?: number,
 ): Promise<QueryLogRefreshResult> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  const cursor = before !== undefined && Number.isSafeInteger(before) && before > 0 ? `&before=${before}` : "";
   try {
-    const payload = await browserRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}`);
+    const payload = await browserRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}${cursor}`);
     const parsed = queryLogResponseSchema.parse(payload);
     return { kind: "ok", items: parsed.items, total: parsed.total };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+export type QueryLogEntryResult = { kind: "ok"; entry: QueryLogEntry } | { kind: "refused"; code: string };
+
+/**
+ * Reads one row of the participant's own log with its statement whole, which
+ * a page cuts. The server answers any row that is not the caller's as
+ * `not_found`, and so does this for an id no row can have.
+ */
+export async function fetchQueryLogEntry(contestId: string, id: number): Promise<QueryLogEntryResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (!Number.isSafeInteger(id) || id <= 0) return { kind: "refused", code: "not_found" };
+  try {
+    const payload = await browserRequest(`/contests/${contestId}/play/log/${id}`);
+    return { kind: "ok", entry: queryLogEntrySchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };

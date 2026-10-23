@@ -3,7 +3,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { toCsv } from "@/lib/format/csv";
+import { copyText } from "@/lib/clipboard";
+import { toCsv, toTsv } from "@/lib/format/csv";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
@@ -111,6 +112,16 @@ function ResultBody({
           </span>
         ) : null}
         <div className="flex-1" />
+        {/* A bulk copy is a download by other means, so it follows the same
+            setting. */}
+        {resultDownload && result.rows.length > 0 ? (
+          <CopyRowsButton
+            columns={result.columns}
+            rows={result.rows}
+            truncated={result.truncated}
+            t={dict.participant.play.workspace.copyRows}
+          />
+        ) : null}
         {resultDownload ? (
           <DownloadButton columns={result.columns} rows={result.rows} label={dict.participant.play.workspace.download} />
         ) : null}
@@ -640,6 +651,53 @@ function ResultTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** How many rows "Copy first rows" takes: enough to show a result's shape in a message. */
+export const COPY_ROWS = 5;
+
+/**
+ * Copies the header and the first `COPY_ROWS` rows as tab-separated text. The
+ * line after it says how the copy went, rendered empty from the start so the
+ * change is announced, and cleared by a new answer.
+ */
+function CopyRowsButton({
+  columns,
+  rows,
+  truncated,
+  t,
+}: {
+  columns: readonly string[];
+  rows: readonly (string | null)[][];
+  /** The runner cut the result short, so the rows shown are not all of them. */
+  truncated: boolean;
+  t: PlayDictionary["participant"]["play"]["workspace"]["copyRows"];
+}) {
+  const [notice, setNotice] = useState<"copied" | "failed" | null>(null);
+  const [answer, setAnswer] = useState(rows);
+  if (answer !== rows) {
+    setAnswer(rows);
+    setNotice(null);
+  }
+
+  return (
+    <>
+      <span role="status" className={cn("normal-case", notice === "failed" ? "text-warn" : "text-ink-3")}>
+        {notice === null ? "" : notice === "copied" ? t.copied : t.failed}
+      </span>
+      <Button
+        type="button"
+        variant="quiet"
+        size="sm"
+        onClick={async () => {
+          setNotice((await copyText(toTsv(columns, rows.slice(0, COPY_ROWS)))) ? "copied" : "failed");
+        }}
+      >
+        {/* "All" only when it is: a truncated result holds fewer rows than the query produced. */}
+        {rows.length > COPY_ROWS || truncated ? t.first : t.all}
+      </Button>
+    </>
   );
 }
 

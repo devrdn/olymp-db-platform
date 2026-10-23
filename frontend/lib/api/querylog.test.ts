@@ -5,6 +5,7 @@ import { queryLogEntrySchema, queryLogResponseSchema } from "./querylog";
 describe("the query log wire shape", () => {
   it("carries whether a row's statement was cut short", () => {
     const cut = queryLogEntrySchema.parse({
+      id: 7,
       sql: "SELECT 'xxxx",
       sql_truncated: true,
       status: "ok",
@@ -18,6 +19,7 @@ describe("the query log wire shape", () => {
 
   it("reads a row with no flag as one that was not cut", () => {
     const whole = queryLogEntrySchema.parse({
+      id: 8,
       sql: "SELECT 1",
       status: "ok",
       executed_at: "2026-03-01T10:00:00Z",
@@ -27,10 +29,17 @@ describe("the query log wire shape", () => {
     expect(whole.sql).toBe("SELECT 1");
   });
 
+  // The id is what one row is read whole by.
+  it("names each row by its id", () => {
+    const row = queryLogEntrySchema.parse({ id: 42, sql: "SELECT 1", status: "ok", executed_at: "2026-03-01T10:00:00Z" });
+
+    expect(row.id).toBe(42);
+  });
+
   // `total` counts the whole log, not the page.
   it("keeps a total larger than the page it came with", () => {
     const page = queryLogResponseSchema.parse({
-      items: [{ sql: "SELECT 1", status: "ok", executed_at: "2026-03-01T10:00:00Z" }],
+      items: [{ id: 9, sql: "SELECT 1", status: "ok", executed_at: "2026-03-01T10:00:00Z" }],
       total: 900,
     });
 

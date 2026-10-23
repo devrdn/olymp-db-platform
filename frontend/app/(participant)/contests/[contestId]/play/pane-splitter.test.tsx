@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -17,8 +17,16 @@ vi.mock("./use-contest-events", () => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
+import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { Workspace } from "./workspace";
-import { DEFAULT_EDITOR_PCT, DEFAULT_SCHEMA_REM, DEFAULT_SIDE_REM } from "./pane-splitter";
+import {
+  CONSOLE_MIN_REM,
+  DEFAULT_EDITOR_PCT,
+  DEFAULT_SCHEMA_REM,
+  DEFAULT_SIDE_REM,
+  WIDTH_BOUNDS,
+  useSideBounds,
+} from "./pane-splitter";
 
 const A_SCHEMA = {
   truncated: false,
@@ -127,6 +135,173 @@ describe("the console's panes", () => {
     expect(screen.getByRole("separator", { name: t.schema })).toHaveAttribute(
       "aria-valuenow",
       String(Math.round(DEFAULT_SCHEMA_REM)),
+    );
+  });
+});
+
+/**
+ * The story and the questions are read at length, so their column may take
+ * most of the window; the schema keeps its fixed ceiling.
+ */
+describe("the side column's width", () => {
+  const t = en.participant.play.workspace.panes;
+  const defaultWidth = window.innerWidth;
+
+  /** A window this many pixels wide, at the root font size jsdom reports (16px). */
+  function resizeWindow(width: number) {
+    act(() => {
+      window.innerWidth = width;
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+
+  function sideWidth(container: HTMLElement) {
+    return container.querySelector<HTMLElement>("[style*='--pane-side']")?.style.getPropertyValue("--pane-side");
+  }
+
+  afterEach(() => {
+    resizeWindow(defaultWidth);
+  });
+
+  test("may grow to 60% of the window, well past the schema's ceiling", async () => {
+    resizeWindow(1600);
+    const user = userEvent.setup();
+    const { container } = show();
+
+    const handle = screen.getByRole("separator", { name: t.side });
+    // 60% of 1600px is 960px, 60rem.
+    expect(handle).toHaveAttribute("aria-valuemax", "60");
+    expect(handle).toHaveAttribute("aria-valuemin", String(WIDTH_BOUNDS.min));
+
+    handle.focus();
+    for (let i = 0; i < 12; i++) await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+
+    expect(handle).toHaveAttribute("aria-valuenow", "60");
+    expect(sideWidth(container)).toBe("60rem");
+    expect(screen.getByRole("separator", { name: t.schema })).toHaveAttribute(
+      "aria-valuemax",
+      String(WIDTH_BOUNDS.max),
+    );
+  });
+
+  test("goes no further at its bound, and comes back from it one step at a time", async () => {
+    resizeWindow(1600);
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ side: 60 }));
+    const user = userEvent.setup();
+    show();
+
+    const handle = screen.getByRole("separator", { name: t.side });
+    handle.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(handle).toHaveAttribute("aria-valuenow", "60");
+
+    await user.keyboard("{ArrowRight}");
+    expect(handle).toHaveAttribute("aria-valuenow", "59");
+  });
+
+  test("a stored width larger than the window allows is drawn at the bound", () => {
+    resizeWindow(1600);
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ side: 90 }));
+    const { container } = show();
+
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuenow", "60");
+    expect(sideWidth(container)).toBe("60rem");
+  });
+
+  test("a stored schema width larger than its ceiling is drawn at the ceiling", () => {
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ schema: 90 }));
+    show();
+
+    expect(screen.getByRole("separator", { name: t.schema })).toHaveAttribute(
+      "aria-valuenow",
+      String(WIDTH_BOUNDS.max),
+    );
+  });
+
+  // Beside the widest schema, 60% of the window would leave the console
+  // nothing: at 1280px, 80rem less 32 for the schema less the console's 16.
+  test("leaves the console its minimum beside a wide schema", () => {
+    resizeWindow(1280);
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ schema: 32, side: 60 }));
+    const { container } = show();
+
+    const handle = screen.getByRole("separator", { name: t.side });
+    expect(handle).toHaveAttribute("aria-valuemax", String(80 - 32 - CONSOLE_MIN_REM));
+    expect(sideWidth(container)).toBe(`${80 - 32 - CONSOLE_MIN_REM}rem`);
+  });
+
+  test("gives the room back when the schema panel is collapsed", async () => {
+    resizeWindow(1280);
+    window.localStorage.setItem("dbcontest.console.panes.c9", JSON.stringify({ schema: 32, side: 60 }));
+    render(
+      <PanelVisibilityProvider contestId="c9">
+        <PanelToggles dict={en} />
+        <Workspace
+          accountId="u1"
+          contestId="c9"
+          storyBody={null}
+          printView={null}
+          storyCover={null}
+          storyUnavailable={null}
+          questionEntries={[]}
+          schema={A_SCHEMA}
+          sqlMode="read_only"
+          resultDownload
+          initialLog={{ items: [], total: 0, failed: false }}
+          workspace={null}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuemax", "32");
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.panels.schema }));
+
+    // 60% of 80rem, now that only the console has to fit beside it.
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuemax", "48");
+  });
+
+  test("every component reading the bound follows a resize, not only the first", () => {
+    function Bound({ label }: { label: string }) {
+      return <output aria-label={label}>{useSideBounds(0).max}</output>;
+    }
+    resizeWindow(1600);
+    render(
+      <>
+        <Bound label="one" />
+        <Bound label="two" />
+      </>,
+    );
+
+    resizeWindow(1000);
+
+    expect(screen.getByLabelText("one")).toHaveTextContent("37");
+    expect(screen.getByLabelText("two")).toHaveTextContent("37");
+  });
+
+  test("follows the window when it narrows", () => {
+    resizeWindow(1600);
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ side: 50 }));
+    const { container } = show();
+    expect(sideWidth(container)).toBe("50rem");
+
+    // 60% of 1000px is 37.5rem; the bound is a whole rem.
+    resizeWindow(1000);
+
+    const handle = screen.getByRole("separator", { name: t.side });
+    expect(handle).toHaveAttribute("aria-valuemax", "37");
+    expect(handle).toHaveAttribute("aria-valuenow", "37");
+    expect(sideWidth(container)).toBe("37rem");
+  });
+
+  test("never has a bound below its minimum, on a window too small for one", () => {
+    resizeWindow(100);
+    show();
+
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute(
+      "aria-valuemax",
+      String(WIDTH_BOUNDS.min),
     );
   });
 });

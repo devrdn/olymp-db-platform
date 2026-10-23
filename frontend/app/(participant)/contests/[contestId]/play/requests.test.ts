@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   fetchQueryLog,
+  fetchQueryLogEntry,
   fetchStandings,
   refreshQuestions,
   refreshSchema,
@@ -233,10 +234,46 @@ describe("fetchQueryLog", () => {
     expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/log?limit=20&offset=40`);
   });
 
+  test("asks for the rows older than a given one", async () => {
+    answer(200, { items: [], total: 0 });
+
+    await fetchQueryLog(contestId, 50, 0, 42);
+
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/log?limit=50&offset=0&before=42`);
+  });
+
   test("passes a refusal on as its code", async () => {
     answer(429, refusal("play_read_too_often"));
 
     expect(await fetchQueryLog(contestId, 20, 0)).toEqual({ kind: "refused", code: "play_read_too_often" });
+  });
+});
+
+describe("fetchQueryLogEntry", () => {
+  test.each(hostile)("sends no request for the contest id %j", async (id) => {
+    expect(await fetchQueryLogEntry(id, 42)).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(calls).toHaveLength(0);
+  });
+
+  // Never one of the caller's rows, so the server's own answer for it.
+  test.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2])("sends no request for the row id %d", async (id) => {
+    expect(await fetchQueryLogEntry(contestId, id)).toEqual({ kind: "refused", code: "not_found" });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("asks for one row of the contest's own log, and reads it whole", async () => {
+    answer(200, { id: 42, sql: "SELECT 'whole'", status: "ok", executed_at: "2026-03-01T10:00:00Z" });
+
+    const result = await fetchQueryLogEntry(contestId, 42);
+
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/log/42`);
+    expect(result).toMatchObject({ kind: "ok", entry: { id: 42, sql: "SELECT 'whole'", sqlTruncated: false } });
+  });
+
+  test("passes a refusal on as its code", async () => {
+    answer(404, refusal("not_found"));
+
+    expect(await fetchQueryLogEntry(contestId, 42)).toEqual({ kind: "refused", code: "not_found" });
   });
 });
 

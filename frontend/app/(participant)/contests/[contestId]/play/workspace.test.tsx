@@ -186,6 +186,11 @@ async function waitForRealEditor(container: HTMLElement = document.body) {
   await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
 }
 
+/** The name of a table in the schema panel, the button that writes a query on it. */
+function tableName(table: string) {
+  return { name: en.participant.play.schema.query.replace("{table}", table) };
+}
+
 async function runQuery() {
   await waitForRealEditor();
   // `userEvent.type` cannot drive CodeMirror's contentEditable; click then
@@ -402,7 +407,7 @@ describe("the schema column", () => {
     show(A_SCHEMA);
 
     expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", tableName("guests"))).toBeInTheDocument();
   });
 
   test("is absent entirely in a contest that hides it", () => {
@@ -411,6 +416,76 @@ describe("the schema column", () => {
     expect(
       screen.queryByRole("region", { name: en.participant.play.schema.heading }),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A click on a table's name writes a query on it into the SQL tab being
+ * edited, for the participant to change or run.
+ */
+describe("a click on a table's name", () => {
+  const TWO_TABS = {
+    notes: A_WORKSPACE.notes,
+    tabs: [
+      { id: "t1", title: "Query 1", body: "SELECT 1", position: 0, updatedAt: "2026-09-17T10:00:00Z" },
+      { id: "t2", title: "Query 2", body: "", position: 1, updatedAt: "2026-09-17T10:00:00Z" },
+    ],
+  };
+
+  function lines(container: HTMLElement) {
+    return [...container.querySelectorAll(".cm-line")].map((line) => line.textContent);
+  }
+
+  test("writes the query into the editor and the field a run sends, without running it", async () => {
+    runResult.current = { kind: "refused", code: "query_too_often" };
+    const { container } = show(A_SCHEMA, { workspace: TWO_TABS });
+    await waitForRealEditor(container);
+
+    await userEvent.click(screen.getByRole("button", tableName("guests")));
+
+    expect(lines(container)).toEqual(["SELECT 1", "SELECT * FROM guests LIMIT 5;"]);
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[name="sql"]')?.value).toBe(
+      "SELECT 1\nSELECT * FROM guests LIMIT 5;",
+    );
+    expect(screen.getByText(en.participant.play.workspace.resultEmpty)).toBeInTheDocument();
+    expect(screen.queryByText(en.errors.query_too_often)).not.toBeInTheDocument();
+  });
+
+  test("writes into the tab that is open, and no other", async () => {
+    const { container } = show(A_SCHEMA, { workspace: TWO_TABS });
+    await waitForRealEditor(container);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Query 2" }));
+    await userEvent.click(screen.getByRole("button", tableName("guests")));
+    expect(lines(container)).toEqual(["SELECT * FROM guests LIMIT 5;"]);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Query 1" }));
+    expect(lines(container)).toEqual(["SELECT 1"]);
+  });
+
+  test("quotes a table name the database would otherwise misread", async () => {
+    const { container } = show(
+      { truncated: false, tables: [{ name: "Order", columns: [] }] },
+      { workspace: TWO_TABS },
+    );
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("tab", { name: "Query 2" }));
+
+    await userEvent.click(screen.getByRole("button", tableName("Order")));
+
+    expect(lines(container)).toEqual(['SELECT * FROM "Order" LIMIT 5;']);
+  });
+
+  test("works from the keyboard, and leaves the caret in the editor", async () => {
+    const { container } = show(A_SCHEMA, { workspace: TWO_TABS });
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("tab", { name: "Query 2" }));
+
+    screen.getByRole("button", tableName("guests")).focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(lines(container)).toEqual(["SELECT * FROM guests LIMIT 5;"]);
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toHaveFocus();
   });
 });
 
@@ -451,8 +526,8 @@ describe("the database reset", () => {
 
     await reset();
 
-    expect(await screen.findByRole("button", { name: /suspects/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /guests/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", tableName("suspects"))).toBeInTheDocument();
+    expect(screen.queryByRole("button", tableName("guests"))).not.toBeInTheDocument();
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {
@@ -462,7 +537,7 @@ describe("the database reset", () => {
     await reset();
 
     await waitFor(() => expect(schemaReads.count).toBe(1));
-    expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", tableName("guests"))).toBeInTheDocument();
   });
 
   test("clears the last result, whose rows came from the database before it", async () => {

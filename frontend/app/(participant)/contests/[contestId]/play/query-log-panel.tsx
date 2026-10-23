@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { ExportMenu } from "@/components/product/export-menu";
+import { CopyButton, SqlBlock } from "@/components/product/sql-block";
 import { buttonVariants } from "@/components/ui/button";
 import { API_PREFIX } from "@/lib/api/client";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
@@ -10,9 +11,10 @@ import type { QueryLogEntry } from "@/lib/api/querylog";
 import { formatMoment } from "@/lib/format/datetime";
 import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
+import { messageForCode } from "@/lib/i18n/errors";
 import { cn } from "@/lib/utils";
 
-import { fetchQueryLog } from "./requests";
+import { fetchQueryLog, fetchQueryLogEntry } from "./requests";
 
 /**
  * The "Query log" tab: every statement this participant has run in this
@@ -26,7 +28,8 @@ import { fetchQueryLog } from "./requests";
  * run: its reads (`AdmitRead`) spend the play screen's per-minute budget.
  *
  * It loads `QUERY_LOG_PAGE_SIZE` rows at a time (querylog-terms.ts), so a
- * long log is not hundreds of rows re-rendered per page.
+ * long log is not hundreds of rows re-rendered per page. Each row opens to
+ * its whole statement (`LogRow`).
  */
 export function QueryLogPanel({
   contestId,
@@ -87,10 +90,15 @@ export function QueryLogPanel({
 
   const loadMore = async () => {
     setLoadingMore(true);
-    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, items.length);
+    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, 0, items.at(-1)?.id);
     setLoadingMore(false);
     if (result.kind === "ok") {
-      setItems((prev) => [...prev, ...result.items]);
+      // Rows are keyed by id, so a row the list already holds is not added
+      // twice, should a refresh have raced this page.
+      setItems((prev) => {
+        const held = new Set(prev.map((entry) => entry.id));
+        return [...prev, ...result.items.filter((entry) => !held.has(entry.id))];
+      });
       setTotal(result.total);
       setFailed(false);
     } else {
@@ -153,30 +161,8 @@ export function QueryLogPanel({
             </tr>
           </thead>
           <tbody>
-            {items.map((entry, i) => (
-              <tr key={i} className="border-b border-edge last:border-b-0">
-                {/* A page is bounded in bytes too, so a long statement arrives
-                    truncated (`sqlTruncated`); the ellipsis says so, in the tooltip
-                    as well. The full text is in the CSV. */}
-                <td
-                  className="max-w-80 truncate p-2 font-mono text-ink"
-                  title={entry.sqlTruncated ? `${entry.sql}…` : entry.sql}
-                >
-                  {entry.sqlTruncated ? `${entry.sql}…` : entry.sql}
-                </td>
-                <td className="p-2">
-                  <StatusBadge status={entry.status} labels={t.status} />
-                </td>
-                <td className="p-2 font-mono text-ink-2 tabular-nums">
-                  {entry.durationMs !== undefined ? t.durationMs.replace("{n}", String(entry.durationMs)) : ""}
-                </td>
-                <td className="p-2 font-mono text-ink-2 tabular-nums">
-                  {entry.rowCount !== undefined ? entry.rowCount : ""}
-                </td>
-                <td className="p-2 text-small text-ink-2 whitespace-nowrap">
-                  {formatMoment(entry.executedAt, { locale })}
-                </td>
-              </tr>
+            {items.map((entry) => (
+              <LogRow key={entry.id} contestId={contestId} entry={entry} locale={locale} dict={dict} />
             ))}
           </tbody>
         </table>
@@ -209,6 +195,121 @@ export function QueryLogPanel({
         </button>
       ) : null}
     </div>
+  );
+}
+
+/** The statement read whole from the server, for a row whose page carried only its start. */
+type Whole =
+  | { kind: "loading" }
+  | { kind: "ok"; sql: string; truncated: boolean }
+  | { kind: "refused"; code: string };
+
+/**
+ * One query, and under it, once opened, its whole statement with a Copy
+ * button. A page is bounded in bytes, so a long statement arrives cut
+ * (`sqlTruncated`, shown with an ellipsis); opening that row reads it whole,
+ * once, from the server, which spends the play read budget like a page.
+ */
+function LogRow({
+  contestId,
+  entry,
+  locale,
+  dict,
+}: {
+  contestId: string;
+  entry: QueryLogEntry;
+  locale: Locale;
+  dict: PlayDictionary;
+}) {
+  const t = dict.participant.play.workspace.log;
+  const [open, setOpen] = useState(false);
+  const [whole, setWhole] = useState<Whole | null>(null);
+  const bodyId = useId();
+
+  const read = async () => {
+    setWhole({ kind: "loading" });
+    const result = await fetchQueryLogEntry(contestId, entry.id);
+    setWhole(
+      result.kind === "ok" ? { kind: "ok", sql: result.entry.sql, truncated: result.entry.sqlTruncated } : result,
+    );
+  };
+
+  const toggle = () => {
+    setOpen(!open);
+    if (!open && entry.sqlTruncated && whole === null) void read();
+  };
+
+  const shown: Whole = entry.sqlTruncated
+    ? (whole ?? { kind: "loading" })
+    : { kind: "ok", sql: entry.sql, truncated: false };
+  const start = entry.sqlTruncated ? `${entry.sql}…` : entry.sql;
+
+  return (
+    <>
+      <tr className={cn("border-b border-edge", open ? null : "last:border-b-0")}>
+        <td className="p-2">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span className="max-w-80 min-w-0 truncate font-mono text-ink" title={start}>
+              {start}
+            </span>
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={open ? bodyId : undefined}
+              onClick={toggle}
+              className="ml-auto shrink-0 text-small text-ink-2 underline-offset-4 hover:text-ink hover:underline"
+            >
+              {open ? t.hide : t.show}
+            </button>
+          </div>
+        </td>
+        <td className="p-2">
+          <StatusBadge status={entry.status} labels={t.status} />
+        </td>
+        <td className="p-2 font-mono text-ink-2 tabular-nums">
+          {entry.durationMs !== undefined ? t.durationMs.replace("{n}", String(entry.durationMs)) : ""}
+        </td>
+        <td className="p-2 font-mono text-ink-2 tabular-nums">{entry.rowCount !== undefined ? entry.rowCount : ""}</td>
+        <td className="p-2 text-small text-ink-2 whitespace-nowrap">{formatMoment(entry.executedAt, { locale })}</td>
+      </tr>
+      {open ? (
+        <tr id={bodyId} className="border-b border-edge last:border-b-0">
+          <td colSpan={5} className="px-2 pb-2">
+            {/* `w-0 min-w-full`: the cell takes the table's width without the
+                statement's longest line widening the table, so the block
+                scrolls inside itself. */}
+            <div role="region" aria-label={t.statement} className="flex w-0 min-w-full flex-col gap-2">
+              {shown.kind === "loading" ? (
+                <p role="status" className="text-small text-ink-2">
+                  {t.loadingStatement}
+                </p>
+              ) : shown.kind === "refused" ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p role="alert" className="text-small text-bad">
+                    {messageForCode(shown.code, dict.errors)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={read}
+                    className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
+                  >
+                    {t.retry}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <SqlBlock sql={shown.sql} />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <CopyButton text={shown.sql} labels={t} />
+                    {shown.truncated ? <p className="text-small text-warn">{t.shortened}</p> : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 

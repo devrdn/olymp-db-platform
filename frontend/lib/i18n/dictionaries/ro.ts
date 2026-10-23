@@ -1449,6 +1449,7 @@ const ro = {
         foreignKeyCount: "chei externe: {n}",
         expand: "Extinde tabelul {table}",
         collapse: "Restrânge tabelul {table}",
+        query: "Inserează în editor o interogare pe tabelul {table}",
       },
       story: {
         heading: "Povestea",
@@ -1489,6 +1490,12 @@ const ro = {
           notes: "Notițe",
         },
         download: "Descărcați CSV",
+        copyRows: {
+          first: "Copiați primele 5 rânduri",
+          all: "Copiați toate rândurile",
+          copied: "Copiat în clipboard",
+          failed: "Nu s-a putut copia. Selectați rândurile și copiați-le manual.",
+        },
         story: {
           export: {
             heading: "Export",
@@ -1578,6 +1585,14 @@ const ro = {
           failed: "Nu s-a putut încărca jurnalul de interogări.",
           retry: "Încercați din nou",
           durationMs: "{n} ms",
+          show: "Afișați",
+          hide: "Ascundeți",
+          statement: "Interogarea întreagă",
+          loadingStatement: "Se încarcă interogarea întreagă…",
+          copy: "Copiați",
+          copied: "Copiat",
+          copyFailed: "Nu s-a putut copia",
+          shortened: "S-a păstrat doar începutul acestei interogări.",
           /** Toată sesiunea ca fișier, lângă pagina ei de pe ecran. */
           export: {
             heading: "Export",

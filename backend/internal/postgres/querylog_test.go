@@ -243,7 +243,7 @@ func TestHistoryReturnsOnlyThisRegistrationsOwnRows(t *testing.T) {
 		completeRow(t, ctx, log, mine, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
 		completeRow(t, ctx, log, someoneElses, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 10)
 
-		found, total, err := log.History(ctx, mine, 0, 0)
+		found, total, err := log.History(ctx, mine, 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -270,7 +270,7 @@ func TestHistoryOrdersNewestFirstAndCarriesTheRecordedOutcome(t *testing.T) {
 		}
 		completeRow(t, ctx, log, registration, "SELECT 2", queryrunner.StatusRejected, 0, 0)
 
-		found, total, err := log.History(ctx, registration, 0, 0)
+		found, total, err := log.History(ctx, registration, 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -297,7 +297,7 @@ func TestHistoryCarriesARowStillRunningWithNoDurationOrRowCount(t *testing.T) {
 			t.Fatalf("begin: %v", err)
 		}
 
-		found, _, err := log.History(ctx, registration, 0, 0)
+		found, _, err := log.History(ctx, registration, 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -328,7 +328,7 @@ func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 			}
 		}
 
-		first, total, err := log.History(ctx, registration, 2, 0)
+		first, total, err := log.History(ctx, registration, 2, 0, 0)
 		if err != nil {
 			t.Fatalf("History (page 1): %v", err)
 		}
@@ -339,12 +339,103 @@ func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 			t.Fatalf("page 1 order = [%q, %q]", first[0].SQL, first[1].SQL)
 		}
 
-		second, _, err := log.History(ctx, registration, 2, 2)
+		second, _, err := log.History(ctx, registration, 2, 2, 0)
 		if err != nil {
 			t.Fatalf("History (page 2): %v", err)
 		}
 		if len(second) != 1 || second[0].SQL != "SELECT 1" {
 			t.Fatalf("page 2 = %+v, want exactly the oldest row", second)
+		}
+	})
+}
+
+// "Load older" names the last row it has, so a query journalled meanwhile
+// cannot shift the page and hand a row back twice, as an offset would.
+func TestHistoryPagesOlderThanTheRowItIsGiven(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		var ids []int64
+		for i, sql := range []string{"SELECT 1", "SELECT 2", "SELECT 3"} {
+			ids = append(ids, completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1))
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE query_log SET executed_at = executed_at - ($2 * interval '1 minute') WHERE id = $1`,
+				ids[i], 3-i); err != nil {
+				t.Fatalf("spacing out row %d: %v", i, err)
+			}
+		}
+
+		older, total, err := log.History(ctx, registration, 50, 0, ids[2])
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if total != 3 || len(older) != 2 || older[0].ID != ids[1] || older[1].ID != ids[0] {
+			t.Fatalf("older than %d = %+v (total %d), want rows %d and %d, newest first", ids[2], older, total, ids[1], ids[0])
+		}
+
+		// A row journalled meanwhile changes nothing about what is older.
+		completeRow(t, ctx, log, registration, "SELECT 4", queryrunner.StatusOK, 1, 1)
+		older, _, err = log.History(ctx, registration, 50, 0, ids[1])
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(older) != 1 || older[0].ID != ids[0] {
+			t.Fatalf("older than %d = %+v, want only row %d", ids[1], older, ids[0])
+		}
+	})
+}
+
+// Another registration's row is no cursor: it names nothing of this log.
+func TestHistoryOlderThanAnotherRegistrationsRowIsEmpty(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		completeRow(t, ctx, log, mine, "SELECT 1", queryrunner.StatusOK, 1, 1)
+		theirs := completeRow(t, ctx, log, someRegistration(t, ctx), "SELECT 2", queryrunner.StatusOK, 1, 1)
+
+		found, total, err := log.History(ctx, mine, 50, 0, theirs)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 0 || total != 1 {
+			t.Fatalf("found = %+v, total %d; want no rows and the registration's own total", found, total)
+		}
+	})
+}
+
+// The older page is a range of query_log_registration_executed_idx read in
+// order, with the cursor in the index condition: no sort, no scan of the rest
+// of the registration's history (CLAUDE.md rule 7).
+func TestHistoryOlderPageIsAnOrderedIndexRange(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		loadOlympiad(t, f, 1, 40)
+		analyzeForPlans(t, ctx)
+		var registration uuid.UUID
+		var middle int64
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+			SELECT q.registration_id, q.id FROM query_log q
+			JOIN registrations r ON r.id = q.registration_id
+			WHERE r.contest_id = $1 ORDER BY q.registration_id, q.executed_at OFFSET 150 LIMIT 1`,
+			f.contest).Scan(&registration, &middle); err != nil {
+			t.Fatal(err)
+		}
+
+		var scans []string
+		ordered := true
+		log := NewQueryLog(testPool)
+		log.wrap = func(inner storage.Querier) storage.Querier {
+			return explainingQuerier{Querier: inner, t: t, scans: &scans, ordered: &ordered}
+		}
+		found, _, err := log.History(ctx, registration, queryrunner.DefaultHistoryLimit, 0, middle)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != queryrunner.DefaultHistoryLimit {
+			t.Fatalf("read %d rows, want a full page", len(found))
+		}
+		for _, scan := range scans {
+			t.Error(scan)
 		}
 	})
 }
@@ -357,7 +448,7 @@ func TestHistoryCutsAStatementTooLongForOnePageAndSaysSo(t *testing.T) {
 		long := "SELECT '" + strings.Repeat("x", queryrunner.MaxHistorySQLChars) + "'"
 		completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 1, 1)
 
-		found, _, err := log.History(ctx, registration, 0, 0)
+		found, _, err := log.History(ctx, registration, 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -386,7 +477,7 @@ func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
 		exact := strings.Repeat("y", queryrunner.MaxHistorySQLChars)
 		completeRow(t, ctx, log, registration, exact, queryrunner.StatusOK, 1, 1)
 
-		found, _, err := log.History(ctx, registration, 0, 0)
+		found, _, err := log.History(ctx, registration, 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -399,6 +490,68 @@ func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
 		}
 		if found[0].SQLTruncated {
 			t.Fatal("a statement that fits was reported as truncated")
+		}
+	})
+}
+
+func TestHistoryNamesEachRowByItsJournalID(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		id := completeRow(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 1, 1)
+
+		found, _, err := log.History(ctx, registration, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 || found[0].ID != id {
+			t.Fatalf("found = %+v, want the one row named %d", found, id)
+		}
+	})
+}
+
+// The page cuts a long statement; one row read on its own carries it whole.
+func TestHistoryEntryReadsOneOwnRowWithItsStatementWhole(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		long := "SELECT '" + strings.Repeat("x", 5*queryrunner.MaxHistorySQLChars) + "'"
+		id := completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 7, 12)
+
+		entry, found, err := log.HistoryEntry(ctx, registration, id)
+		if err != nil {
+			t.Fatalf("HistoryEntry: %v", err)
+		}
+		if !found {
+			t.Fatal("the registration's own row was not found")
+		}
+		if entry.ID != id || entry.SQL != long || entry.SQLTruncated {
+			t.Fatalf("row %d carried %d characters (truncated %v), want row %d whole",
+				entry.ID, utf8.RuneCountInString(entry.SQL), entry.SQLTruncated, id)
+		}
+		if entry.Status != queryrunner.StatusOK || entry.RowCount == nil || *entry.RowCount != 7 ||
+			entry.DurationMs == nil || *entry.DurationMs != 12 || entry.ExecutedAt.IsZero() {
+			t.Fatalf("row = %+v, want the outcome Complete recorded for it", entry)
+		}
+	})
+}
+
+// Another registration's row reads exactly as a missing one, so an id tells a
+// participant nothing about anyone else's log.
+func TestHistoryEntryOfAnotherRegistrationsRowIsNotFound(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		theirs := completeRow(t, ctx, log, someRegistration(t, ctx), "SELECT * FROM secrets", queryrunner.StatusOK, 1, 1)
+
+		for _, id := range []int64{theirs, theirs + 1_000_000} {
+			entry, found, err := log.HistoryEntry(ctx, mine, id)
+			if err != nil {
+				t.Fatalf("HistoryEntry(%d): %v", id, err)
+			}
+			if found || entry.SQL != "" {
+				t.Fatalf("HistoryEntry(%d) = %+v, found %v; want nothing", id, entry, found)
+			}
 		}
 	})
 }
@@ -441,7 +594,7 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 			completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
 		}
 
-		found, total, err := log.History(ctx, registration, 2, 10)
+		found, total, err := log.History(ctx, registration, 2, 10, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -457,7 +610,7 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 // Such a registration has no registration_activity row yet.
 func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
-		found, total, err := NewQueryLog(testPool).History(ctx, someRegistration(t, ctx), 0, 0)
+		found, total, err := NewQueryLog(testPool).History(ctx, someRegistration(t, ctx), 0, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
@@ -468,7 +621,8 @@ func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 }
 
 // completeRow opens and closes one row.
-func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
+// completeRow journals one finished query and returns its row's id.
+func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) int64 {
 	t.Helper()
 
 	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: uuid.New(), SQL: sql})
@@ -480,6 +634,7 @@ func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration 
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
+	return id
 }
 
 func someRegistration(t *testing.T, ctx context.Context) uuid.UUID {

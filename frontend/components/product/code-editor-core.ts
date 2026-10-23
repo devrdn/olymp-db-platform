@@ -17,6 +17,8 @@ import {
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
+import { placeInsertion } from "./code-insertion";
+
 /**
  * SQL highlighting. Colours are `var()` references into `styles/tokens.css`,
  * never literals, so the palette lives in one place.
@@ -116,6 +118,17 @@ const errorField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/**
+ * Whether the participant has placed the caret in this document: clicked,
+ * moved it or edited. A document's state carries it, so each SQL tab has its
+ * own. Until then the caret sits at the start only because nobody moved it.
+ */
+const caretPlacedField = StateField.define<boolean>({
+  create: () => false,
+  update: (placed, tr) =>
+    placed || ["select", "input", "delete", "move", "undo", "redo"].some((event) => tr.isUserEvent(event)),
+});
+
 export type { EditorState, EditorView };
 
 /**
@@ -175,6 +188,7 @@ export function mountEditor(
     syntaxHighlighting(highlightStyle),
     bracketMatching(),
     errorField,
+    caretPlacedField,
     editorTheme,
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ "aria-label": opts.ariaLabel, spellcheck: "false" }),
@@ -210,6 +224,24 @@ export function swapDocument(view: EditorView, next: EditorState): EditorState {
 /** Replaces the showing document's text with a recovered draft. */
 export function setDocumentText(view: EditorView, text: string): void {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
+/**
+ * Inserts text into the showing document as one edit (undoable, and reported
+ * like typing), puts the caret after it and gives the editor the focus. In a
+ * document whose caret nobody placed it goes at the end, so it never splits
+ * the statement the document opens with.
+ */
+export function insertAtCursor(view: EditorView, text: string): void {
+  const caret = view.state.field(caretPlacedField, false) ? view.state.selection.main.head : view.state.doc.length;
+  const { at, insert } = placeInsertion(view.state.doc.lineAt(caret), caret, text);
+  view.dispatch({
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  });
+  view.focus();
 }
 
 /**
