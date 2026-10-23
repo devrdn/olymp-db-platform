@@ -76,7 +76,7 @@ export function ParticipantsTable({
   truncated: boolean;
   /** Participants with a fresh feed item; their rows are lit. */
   fresh: ReadonlySet<string>;
-  dict: Dictionary;
+  dict: Pick<Dictionary, "workspace">;
   locale: string;
 }) {
   const t = dict.workspace.monitor;

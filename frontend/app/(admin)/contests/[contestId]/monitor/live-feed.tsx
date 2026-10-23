@@ -71,7 +71,7 @@ export function LiveFeed({
   onToLatest: () => void;
   /** Off on one participant's own page. */
   showParticipant?: boolean;
-  dict: Dictionary;
+  dict: Pick<Dictionary, "workspace">;
   locale: string;
 }) {
   const t = dict.workspace.monitor;
