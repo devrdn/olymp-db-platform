@@ -91,6 +91,9 @@ export function SidePanel({
   const t = dict.participant.play.workspace.tabs;
   const storyT = dict.participant.play.workspace.story;
   const [tab, setTab] = useState("questions");
+  // A locale switch keeps this state but may take the Tables tab away; the
+  // story stands in so a panel and a tab stop remain.
+  const shown = tab === "tables" && schemaNotes === null ? "story" : tab;
   const tabListWrapRef = useRef<HTMLDivElement>(null);
 
   // Scroll the selected tab back into view when the selection changes; the
@@ -98,10 +101,10 @@ export function SidePanel({
   useEffect(() => {
     const selected = tabListWrapRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
     selected?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [tab]);
+  }, [shown]);
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="h-full min-h-0">
+    <Tabs value={shown} onValueChange={setTab} className="h-full min-h-0">
       {/* The labels can be wider than the panel at its narrower widths.
           `overflow-x-auto` keeps the overflow inside the strip, and `min-w-0`
           lifts the flex item's automatic min-content floor. */}
@@ -174,7 +177,7 @@ export function SidePanel({
         <NotesPanel accountId={accountId} contestId={contestId} initial={initialNotes} dict={dict} />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
-        <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />
+        <LeaderboardTab contestId={contestId} active={shown === "leaderboard"} dict={dict} locale={locale} />
       </TabsContent>
     </Tabs>
   );
