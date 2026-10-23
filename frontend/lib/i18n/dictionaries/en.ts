@@ -984,9 +984,14 @@ const en = {
       },
       texts: {
         heading: "What it asks",
-        help: "The question in every declared language, and a label for each option.",
+        help: "The question in every declared language — a short title, its wording — and a label for each option.",
         placeholder: "Who was in the greenhouse at midnight?",
         choiceLabel: "Label for option",
+        title: "Title",
+        titleHint: "Optional, one line. Participants see it first, with the wording folded under it.",
+        // The bound is 200, which takes the plural in every locale.
+        titleCounter: "{n} of {max} characters",
+        body: "Wording",
       },
       answers: {
         heading: "What counts as right",
@@ -1646,6 +1651,10 @@ const en = {
         // (finding 6) — a sighted participant already reads the number, so
         // this exists solely for the reader that cannot see it.
         numberLabel: "Question {n}",
+        // A titled question folds its wording under the title.
+        details: "Details",
+        openLarger: "Open larger",
+        closeLarger: "Close",
         // Finding 6: a sequential contest's next question depends on this
         // re-read to unlock; a refusal here previously vanished silently,
         // leaving that question locked with no way to tell why.

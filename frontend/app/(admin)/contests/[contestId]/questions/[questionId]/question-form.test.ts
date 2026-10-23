@@ -40,6 +40,38 @@ describe("questionFrom", () => {
     });
   });
 
+  test("reads a title per language beside its body, trimmed", () => {
+    const parsed = questionFrom(
+      form([
+        ...base,
+        ["title.en", "  The culprit  "],
+        ["body.en", "Who did it?"],
+        ["title.ro", ""],
+        ["body.ro", "Cine a făcut-o?"],
+      ]),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      body: {
+        texts: {
+          en: { title: "The culprit", body_md: "Who did it?" },
+          ro: { body_md: "Cine a făcut-o?" },
+        },
+      },
+    });
+    // No title is the absent field; the API stores it as none.
+    expect(parsed.ok && "title" in parsed.body.texts.ro).toBe(false);
+  });
+
+  // The API keeps a title only beside a body, and a body is what a language
+  // needs to be offered at all.
+  test("drops a title whose language has no body", () => {
+    const parsed = questionFrom(form([...base, ["title.ru", "Виновник"], ["body.ru", "  "]]));
+
+    expect(parsed).toMatchObject({ ok: true, body: { texts: {} } });
+  });
+
   // A blank penalty must mean "leave it alone": zero is a real setting, and
   // sending it would wipe a penalty set through the API.
   test("leaves the penalty alone when its box is untouched, never zeroing it", () => {

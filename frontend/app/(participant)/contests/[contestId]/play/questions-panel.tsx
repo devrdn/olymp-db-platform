@@ -1,9 +1,11 @@
 "use client";
 
-import { useActionState, useCallback, useEffect, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { ChevronRight, Maximize2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
@@ -159,6 +161,9 @@ function QuestionCard({
   const correct = state.kind === "answer" ? state.result.correct : question.correct;
   const pointsAwarded = state.kind === "answer" ? state.result.pointsAwarded : question.pointsAwarded;
   const locked = !closed && !question.canAnswer;
+  // A title of spaces is no title: the wording then shows unfolded.
+  const title = question.title.trim();
+  const titleId = useId();
 
   const onClosedRef = useRef(onClosed);
   useEffect(() => {
@@ -194,7 +199,13 @@ function QuestionCard({
             {index}.
           </span>
           <span className="sr-only">{t.numberLabel.replace("{n}", String(index))}</span>
-          <div className="min-w-0">{body}</div>
+          {title ? (
+            <h2 id={titleId} className="min-w-0 text-row text-ink [overflow-wrap:anywhere]">
+              {title}
+            </h2>
+          ) : (
+            <div className="min-w-0">{body}</div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <QuestionStatus
@@ -214,6 +225,8 @@ function QuestionCard({
           ) : null}
         </div>
       </div>
+
+      {title ? <FoldedBody title={title} titleId={titleId} body={body} dict={dict} /> : null}
 
       {closed ? (
         <div className="flex flex-col gap-1.5">
@@ -286,6 +299,78 @@ function QuestionCard({
           {state.kind === "refused" ? <Refusal state={state} dict={dict} /> : null}
         </form>
       )}
+    </div>
+  );
+}
+
+/**
+ * A titled question's wording, folded under the title: opened in place by a
+ * disclosure button, or read larger in a dialog. Both controls are described
+ * by the title, so a screen reader moving between questions hears which one
+ * each opens. The answer form sits outside, never folded away.
+ */
+function FoldedBody({
+  title,
+  titleId,
+  body,
+  dict,
+}: {
+  title: string;
+  titleId: string;
+  body: ReactNode;
+  dict: PlayDictionary;
+}) {
+  const t = dict.participant.play.questions;
+  const bodyId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [enlarged, setEnlarged] = useState(false);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="-ml-3 flex flex-wrap items-center gap-1">
+        <Button
+          type="button"
+          variant="quiet"
+          size="sm"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          aria-describedby={titleId}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={cn("transition-transform duration-(--t-input) ease-standard", expanded && "rotate-90")}
+          />
+          {t.details}
+        </Button>
+        <Button
+          type="button"
+          variant="quiet"
+          size="sm"
+          aria-haspopup="dialog"
+          aria-describedby={titleId}
+          onClick={() => setEnlarged(true)}
+        >
+          <Maximize2 aria-hidden="true" />
+          {t.openLarger}
+        </Button>
+      </div>
+
+      <div id={bodyId} hidden={!expanded} className="min-w-0">
+        {body}
+      </div>
+
+      <Dialog open={enlarged} onOpenChange={setEnlarged}>
+        <DialogContent
+          closeLabel={t.closeLarger}
+          className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-3xl overflow-y-auto"
+        >
+          <DialogHeader>
+            <DialogTitle className="[overflow-wrap:anywhere]">{title}</DialogTitle>
+          </DialogHeader>
+          <div className="min-w-0">{body}</div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
