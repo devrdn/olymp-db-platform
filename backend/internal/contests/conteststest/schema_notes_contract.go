@@ -148,6 +148,12 @@ func SchemaNotesRepositoryContract(t *testing.T, each func(t *testing.T, run fun
 				t.Errorf("Save() for an unknown contest error = %v, want ErrNotFound", err)
 			}
 		}},
+		{"emptying the descriptions of a contest that is not there is reported", func(t *testing.T, ctx context.Context, target SchemaNotesTarget) {
+			// No insert runs, so no foreign key can say the contest is gone.
+			if _, err := target.Repo.Save(ctx, uuid.New(), map[string]string{}); !errors.Is(err, contests.ErrNotFound) {
+				t.Errorf("Save() of no languages for an unknown contest error = %v, want ErrNotFound", err)
+			}
+		}},
 		{"the participant's read takes the first language that has a text", func(t *testing.T, ctx context.Context, target SchemaNotesTarget) {
 			contest := target.NewContest()
 			save(t, ctx, target, contest, map[string]string{"en": english, "ro": romanian})
