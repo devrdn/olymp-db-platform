@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -300,5 +300,83 @@ describe("QuestionEditor, the reference answers", () => {
     );
 
     expect(screen.getByText(dict.workspace.question.answers.regexHint)).toBeVisible();
+  });
+});
+
+// A title per language, bounded as the API bounds it (contests.QuestionText).
+describe("QuestionEditor, the title", () => {
+  const t = () => dict.workspace.question.texts;
+  const counter = (n: number) => t().titleCounter.replace("{n}", String(n)).replace("{max}", "200");
+
+  function renderTitled(editable = true) {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({
+          texts: {
+            en: { title: "The culprit", bodyMd: "Who did it?", choices: {} },
+            ro: { title: "", bodyMd: "Cine a făcut-o?", choices: {} },
+          },
+        })}
+        languages={["en", "ro"]}
+        editable={editable}
+        scoring="points"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+  }
+
+  test("offers a title field in each language, beside that language's question", () => {
+    renderTitled();
+
+    const english = within(screen.getByRole("group", { name: "en" }));
+    const romanian = within(screen.getByRole("group", { name: "ro" }));
+    expect(english.getByLabelText(t().title)).toHaveValue("The culprit");
+    expect(english.getByLabelText(t().body)).toHaveValue("Who did it?");
+    expect(romanian.getByLabelText(t().title)).toHaveValue("");
+  });
+
+  test("stops at the bound and counts towards it as the author types", async () => {
+    const user = userEvent.setup();
+    renderTitled();
+    const english = within(screen.getByRole("group", { name: "en" }));
+    const title = english.getByLabelText(t().title);
+
+    expect(title).toHaveAttribute("maxLength", "200");
+    expect(english.getByText(counter(11))).toBeInTheDocument();
+    expect(title).toHaveAccessibleDescription(expect.stringContaining(counter(11)));
+
+    await user.type(title, "!");
+
+    expect(english.getByText(counter(12))).toBeInTheDocument();
+  });
+
+  test("says the title is optional and what a participant sees", () => {
+    renderTitled();
+
+    const english = within(screen.getByRole("group", { name: "en" }));
+    expect(english.getByLabelText(t().title)).toHaveAccessibleDescription(expect.stringContaining(t().titleHint));
+  });
+
+  test("submits each language's title under its own name", async () => {
+    const user = userEvent.setup();
+    renderTitled();
+    const romanian = within(screen.getByRole("group", { name: "ro" }));
+
+    await user.type(romanian.getByLabelText(t().title), "Vinovatul");
+    await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+
+    const form = saveQuestionAction.mock.calls[0][1] as FormData;
+    expect(form.get("title.en")).toBe("The culprit");
+    expect(form.get("title.ro")).toBe("Vinovatul");
+    expect(form.get("body.ro")).toBe("Cine a făcut-o?");
+  });
+
+  test("is read-only when the question cannot be edited", () => {
+    renderTitled(false);
+
+    const english = within(screen.getByRole("group", { name: "en" }));
+    expect(english.getByLabelText(t().title)).toBeDisabled();
   });
 });

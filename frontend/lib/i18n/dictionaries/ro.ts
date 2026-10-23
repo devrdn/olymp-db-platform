@@ -878,9 +878,13 @@ const ro = {
       },
       texts: {
         heading: "Ce întreabă",
-        help: "Întrebarea în fiecare limbă declarată și o etichetă pentru fiecare variantă.",
+        help: "Întrebarea în fiecare limbă declarată — un titlu scurt și textul ei — și o etichetă pentru fiecare variantă.",
         placeholder: "Cine era în seră la miezul nopții?",
         choiceLabel: "Eticheta variantei",
+        title: "Titlu",
+        titleHint: "Opțional, pe un singur rând. Participanții îl văd primul, iar textul întrebării stă restrâns sub el.",
+        titleCounter: "{n} din {max} de caractere",
+        body: "Textul întrebării",
       },
       answers: {
         heading: "Ce se consideră corect",
@@ -1479,6 +1483,9 @@ const ro = {
         icpcPenalty: "+{n} min pentru o încercare greșită la o întrebare pe care o rezolvați apoi.",
         reference: "Dacă raportați acest lucru, menționați {id}.",
         numberLabel: "Întrebarea {n}",
+        details: "Detalii",
+        openLarger: "Deschide mărit",
+        closeLarger: "Închide",
         refreshFailed: "Nu s-a putut verifica dacă s-a deschis o întrebare nouă. Reîncărcați pagina pentru starea curentă.",
       },
       workspace: {

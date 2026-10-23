@@ -374,14 +374,19 @@ function TextsSection({
         ) : (
           <div className="grid gap-8 narrow:grid-cols-2">
             {languages.map((lang) => (
-              <div key={lang} className="flex flex-col gap-3">
-                <label
-                  htmlFor={`body-${lang}`}
-                  className="font-mono text-label text-ink uppercase"
-                >
-                  {lang}
-                </label>
+              <fieldset key={lang} className="flex min-w-0 flex-col gap-3">
+                <legend className="pb-2 font-mono text-label text-ink uppercase">{lang}</legend>
 
+                <TitleField
+                  lang={lang}
+                  initial={question.texts[lang]?.title ?? ""}
+                  editable={editable}
+                  dict={dict}
+                />
+
+                <label htmlFor={`body-${lang}`} className="text-small text-ink-2">
+                  {t.texts.body}
+                </label>
                 <Textarea
                   id={`body-${lang}`}
                   name={`body.${lang}`}
@@ -404,13 +409,67 @@ function TextsSection({
                     />
                   </div>
                 ))}
-              </div>
+              </fieldset>
             ))}
           </div>
         )}
 
       </Section>
     </>
+  );
+}
+
+/** contests.maxQuestionTitleRunes; the API refuses a longer title. */
+const MAX_TITLE_CHARS = 200;
+
+/**
+ * One language's title with a counter. `maxLength` counts UTF-16 code units,
+ * never fewer than the API's characters, so the field stops first.
+ */
+function TitleField({
+  lang,
+  initial,
+  editable,
+  dict,
+}: {
+  lang: string;
+  initial: string;
+  editable: boolean;
+  dict: Dictionary;
+}) {
+  const t = dict.workspace.question.texts;
+  const [count, setCount] = useState(initial.length);
+  const id = `title-${lang}`;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label htmlFor={id} className="text-small text-ink-2">
+        {t.title}
+      </label>
+      <Input
+        id={id}
+        name={`title.${lang}`}
+        defaultValue={initial}
+        maxLength={MAX_TITLE_CHARS}
+        disabled={!editable}
+        aria-describedby={`${id}-hint ${id}-counter`}
+        onChange={(event) => setCount(event.currentTarget.value.length)}
+      />
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p id={`${id}-hint`} className="text-small text-ink-3">
+          {t.titleHint}
+        </p>
+        <p
+          id={`${id}-counter`}
+          className={cn(
+            "shrink-0 text-small tabular-nums",
+            count >= MAX_TITLE_CHARS ? "text-bad" : "text-ink-3",
+          )}
+        >
+          {t.titleCounter.replace("{n}", String(count)).replace("{max}", String(MAX_TITLE_CHARS))}
+        </p>
+      </div>
+    </div>
   );
 }
 
