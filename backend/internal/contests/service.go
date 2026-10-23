@@ -390,8 +390,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 }
 
 // ExtendGrace lengthens how long a finished or archived contest's game
-// databases survive before the reclaim sweep drops them (§2.4). It is the
-// one write allowed on an ended contest, not a second door into Update.
+// databases survive before the reclaim sweep drops them (§2.4). It is one of
+// two writes allowed on an ended contest, SetPrizePlaces the other, and not a
+// second door into Update.
 //
 // graceMin must exceed the grace in force: the contest's own, or the
 // installation default when it set none, since the sweep falls back to that
