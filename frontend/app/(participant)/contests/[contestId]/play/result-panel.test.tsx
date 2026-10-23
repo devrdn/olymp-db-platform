@@ -198,6 +198,14 @@ describe("copying the first rows", () => {
     expect(writeText).toHaveBeenCalledWith("id\talibi\n1\t\n2\tthe library");
   });
 
+  // The runner cut the answer short, so the rows on screen are not all of it.
+  test("does not claim to copy all rows of a truncated result", () => {
+    show({ kind: "answer", result: { columns: ["id"], rows: [["1"], ["2"]], truncated: true, rows_affected: 0 } });
+
+    expect(screen.queryByRole("button", { name: t.all })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.first })).toBeInTheDocument();
+  });
+
   test("is reached and pressed from the keyboard", async () => {
     const user = userEvent.setup();
     const writeText = clipboardThatWorks();
