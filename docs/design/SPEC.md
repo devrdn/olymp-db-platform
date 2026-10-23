@@ -145,7 +145,10 @@ Rules that keep it a palette rather than decoration:
   second and third prize, and the badge shows the row's prize as a medal with
   its numeral (I, II, III), not the place; a row without a prize shows a dash.
   A shared place shares the prize, so a tie on a boundary takes the better
-  medal, and with no prize places set nobody has a medal. A medal has two
+  medal; with no prize places set nobody has a medal, and in winner mode only
+  the winner holds the gold. The podium has one step per prize, at that
+  prize's height, naming its first holder and how many more share it, so
+  equal prizes never look ranked. A medal has two
   colours on purpose: `--gold` is held to 4.5:1 as text on white, and a gold
   that dark reads as brown on a disc, so the disc takes `--gold-fill` and the
   numeral on it `--gold-on`.

@@ -1152,8 +1152,8 @@ const en = {
         first: "First prizes",
         second: "Second prizes",
         third: "Third prizes",
-        hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. With all three at 0 nobody gets a prize.",
-        winnerHint: "In winner mode the table names its one winner, and these counts do not apply.",
+        hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. A participant who scored nothing gets no prize. With all three at 0 nobody gets a prize.",
+        winnerHint: "In winner mode these counts do not apply: the one winner holds the first prize.",
       },
       access: {
         heading: "Who may enter, and from where",
@@ -2053,6 +2053,7 @@ const en = {
       third: "Third prize",
       none: "No prize",
     },
+    podiumMore: "and {count} more",
     truncated: "Showing the first {count} rows.",
     updated: "Updated {time}",
     failed: "The table could not be refreshed. Showing the last copy.",
