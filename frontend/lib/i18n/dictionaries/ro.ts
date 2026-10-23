@@ -1489,6 +1489,12 @@ const ro = {
           notes: "Notițe",
         },
         download: "Descărcați CSV",
+        copyRows: {
+          first: "Copiați primele 5 rânduri",
+          all: "Copiați toate rândurile",
+          copied: "Copiat în clipboard",
+          failed: "Nu s-a putut copia. Selectați rândurile și copiați-le manual.",
+        },
         story: {
           export: {
             heading: "Export",

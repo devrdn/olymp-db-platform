@@ -1,7 +1,8 @@
 /**
- * CSV export of a query result, for a spreadsheet or another tool. CSV has no
- * null, so `null` is written as an empty field, as `psql`'s `\copy ... csv`
- * does; the table on screen keeps the distinction.
+ * A query result as delimited text for a spreadsheet or another tool: CSV for
+ * a file, tab-separated for the clipboard. Neither has a null, so `null` is
+ * written as an empty field, as `psql`'s `\copy ... csv` does; the table on
+ * screen keeps the distinction.
  */
 
 /** RFC 4180 quoting: only fields containing a comma, quote or line break. */
@@ -47,4 +48,29 @@ export function toCsv(
     lines.push(row.map((cell) => quoteIfNeeded(neutralizeFormula(cell ?? ""))).join(","));
   }
   return lines.join("\r\n") + "\r\n";
+}
+
+/** Quoted like CSV, but only for a field holding the tab, a line break or a quote. */
+function quoteForTsv(value: string): string {
+  if (/[\t"\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Tab-separated text with a header row, the shape a spreadsheet takes from a
+ * paste. Formulas are neutralised as in `toCsv`: a pasted cell is evaluated
+ * like an opened one. No trailing line break, so a paste into a message adds
+ * no empty line.
+ */
+export function toTsv(
+  columns: readonly string[],
+  rows: readonly (readonly (string | null)[])[],
+): string {
+  const lines = [columns.map((column) => quoteForTsv(neutralizeFormula(column))).join("\t")];
+  for (const row of rows) {
+    lines.push(row.map((cell) => quoteForTsv(neutralizeFormula(cell ?? ""))).join("\t"));
+  }
+  return lines.join("\n");
 }

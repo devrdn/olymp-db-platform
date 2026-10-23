@@ -1663,6 +1663,15 @@ const en = {
           notes: "Notes",
         },
         download: "Download CSV",
+        // The first rows as tab-separated text with their header, so a paste
+        // lands in a spreadsheet's columns. `all` replaces `first` when the
+        // result is no longer than that.
+        copyRows: {
+          first: "Copy first 5 rows",
+          all: "Copy all rows",
+          copied: "Copied to the clipboard",
+          failed: "Could not copy. Select the rows and copy them yourself.",
+        },
         // The story tab's own two ways to take it away — the last export the
         // plan asks for. `export` names the Markdown file the same way
         // `log.export` names the query log's own; `print` is a button that

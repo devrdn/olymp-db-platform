@@ -152,6 +152,117 @@ describe("the result panel", () => {
   });
 });
 
+/**
+ * The first rows as tab-separated text with the header, for a spreadsheet or a
+ * message. A bulk copy, so it follows the contest's download setting.
+ */
+describe("copying the first rows", () => {
+  const t = en.participant.play.workspace.copyRows;
+  const SEVEN = Array.from({ length: 7 }, (_, i) => [String(i + 1), `note ${i + 1}`]);
+
+  function clipboardThatWorks() {
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    return writeText;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(document, "execCommand");
+  });
+
+  test("copies the header and the first five rows, tab-separated", async () => {
+    const user = userEvent.setup();
+    const writeText = clipboardThatWorks();
+    show({ kind: "answer", result: { columns: ["id", "note"], rows: SEVEN, truncated: false, rows_affected: 0 } });
+
+    await user.click(screen.getByRole("button", { name: t.first }));
+
+    expect(writeText).toHaveBeenCalledWith(
+      ["id\tnote", "1\tnote 1", "2\tnote 2", "3\tnote 3", "4\tnote 4", "5\tnote 5"].join("\n"),
+    );
+    expect(screen.getByText(t.copied)).toBeInTheDocument();
+  });
+
+  test("copies every row of a shorter result, and says it copies them all", async () => {
+    const user = userEvent.setup();
+    const writeText = clipboardThatWorks();
+    show({
+      kind: "answer",
+      result: { columns: ["id", "alibi"], rows: [["1", null], ["2", "the library"]], truncated: false, rows_affected: 0 },
+    });
+
+    expect(screen.queryByRole("button", { name: t.first })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t.all }));
+
+    expect(writeText).toHaveBeenCalledWith("id\talibi\n1\t\n2\tthe library");
+  });
+
+  test("is reached and pressed from the keyboard", async () => {
+    const user = userEvent.setup();
+    const writeText = clipboardThatWorks();
+    show({ kind: "answer", result: { columns: ["id", "note"], rows: SEVEN, truncated: false, rows_affected: 0 } });
+
+    screen.getByRole("button", { name: t.first }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
+  test("is not offered in a contest that withdrew the download", () => {
+    show(
+      { kind: "answer", result: { columns: ["id", "note"], rows: SEVEN, truncated: false, rows_affected: 0 } },
+      "c1",
+      false,
+    );
+
+    expect(screen.queryByRole("button", { name: t.first })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.all })).not.toBeInTheDocument();
+  });
+
+  test("is not offered for a result without rows", () => {
+    show({ kind: "answer", result: { columns: ["id"], rows: [], truncated: false, rows_affected: 0 } });
+
+    expect(screen.queryByRole("button", { name: t.all })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.first })).not.toBeInTheDocument();
+  });
+
+  // An on-premise olympiad is often plain HTTP, where the async clipboard is
+  // missing and the browser may refuse the fallback too.
+  test("says so when the browser refuses the copy", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    Object.defineProperty(document, "execCommand", { value: () => false, configurable: true, writable: true });
+    show({ kind: "answer", result: { columns: ["id", "note"], rows: SEVEN, truncated: false, rows_affected: 0 } });
+
+    await user.click(screen.getByRole("button", { name: t.first }));
+
+    expect(screen.getByText(t.failed)).toBeInTheDocument();
+  });
+
+  test("forgets what the last copy did when a new answer arrives", async () => {
+    const user = userEvent.setup();
+    clipboardThatWorks();
+    const { rerender } = show({
+      kind: "answer",
+      result: { columns: ["id", "note"], rows: SEVEN, truncated: false, rows_affected: 0 },
+    });
+    await user.click(screen.getByRole("button", { name: t.first }));
+    expect(screen.getByText(t.copied)).toBeInTheDocument();
+
+    rerender(
+      <ResultPanel
+        contestId="c1"
+        state={{ kind: "answer", result: { columns: ["id"], rows: [["9"]], truncated: false, rows_affected: 0 } }}
+        resultDownload
+        dict={en}
+      />,
+    );
+
+    expect(screen.queryByText(t.copied)).not.toBeInTheDocument();
+  });
+});
+
 /** The meter row and the column types around the table. */
 describe("what the table says about itself", () => {
   const t = en.participant.console;
