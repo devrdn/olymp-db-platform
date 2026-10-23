@@ -139,6 +139,25 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 	}
 }
 
+// Configuration, so it travels; checked turned off, since true is also what
+// an importer would assume for a missing key.
+func TestTheContestPackageCarriesWhetherTheResultDownloadIsOffered(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+	c := seedPackagedContest(t, f)
+	c.ResultDownload = false
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	contest, _ := decode(t, rec)["contest"].(map[string]any)
+	if got, present := contest["result_download"]; !present || got != false {
+		t.Errorf("result_download = %v (present: %v), want false", got, present)
+	}
+}
+
 func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
 	// The package is for authoring a contest again, not restoring one.
 	// Identifiers, status and the run window describe the old run and would

@@ -151,6 +151,7 @@ type ContestResponse struct {
 	// ICPCPenaltyMin is ICPC's per-attempt penalty in minutes, always present
 	// even in other modes (§6.1.1).
 	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
+	ResultDownload bool                           `json:"result_download"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       SettingsResponse               `json:"settings"`
 	Leaderboard    LeaderboardSettingsResponse    `json:"leaderboard"`
@@ -244,6 +245,9 @@ type ContestSummary struct {
 	// not read whole: the play screen offers the database reset only under
 	// read_write.
 	SQLMode string `json:"sql_mode"`
+	// ResultDownload says whether the play screen offers a query result as a
+	// CSV file.
+	ResultDownload bool `json:"result_download"`
 }
 
 func toContestResponse(c contests.Contest) ContestResponse {
@@ -259,6 +263,7 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		StartsAt:       formatTime(c.StartsAt),
 		EndsAt:         formatTime(c.EndsAt),
 		ICPCPenaltyMin: c.ICPCPenaltyMin,
+		ResultDownload: c.ResultDownload,
 		AllowedCIDRs:   make([]string, 0, len(c.AllowedCIDRs)),
 		Settings: SettingsResponse{
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
@@ -306,6 +311,7 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 		CoverHash:        c.CoverHash,
 		CoverAttribution: c.CoverAttribution,
 		SQLMode:          c.SQLMode,
+		ResultDownload:   c.ResultDownload,
 	}
 }
 
@@ -430,7 +436,9 @@ type contestRequest struct {
 	EndsAt      *string `json:"ends_at"`
 	// ICPCPenaltyMin: nil means "leave it" on update and
 	// contests.DefaultICPCPenaltyMin on create.
-	ICPCPenaltyMin *int                           `json:"icpc_penalty_min"`
+	ICPCPenaltyMin *int `json:"icpc_penalty_min"`
+	// ResultDownload: nil means "leave it" on update and true on create.
+	ResultDownload *bool                          `json:"result_download"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       *SettingsResponse              `json:"settings"`
 	Leaderboard    *leaderboardRequest            `json:"leaderboard"`
@@ -483,6 +491,7 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		StartsAt:             starts,
 		EndsAt:               ends,
 		ICPCPenaltyMin:       req.ICPCPenaltyMin,
+		ResultDownload:       req.ResultDownload,
 		AllowedCIDRs:         cidrs,
 		Settings:             settings,
 		Languages:            toDomainLanguages(req.Languages),
@@ -552,6 +561,7 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 		StartsAt:       starts,
 		EndsAt:         ends,
 		ICPCPenaltyMin: req.ICPCPenaltyMin,
+		ResultDownload: req.ResultDownload,
 		AllowedCIDRs:   cidrs,
 	}
 	if req.Settings != nil {

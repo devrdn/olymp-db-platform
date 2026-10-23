@@ -60,7 +60,8 @@ type PackagedContest struct {
 	AllowedCIDRs []string         `json:"allowed_cidrs"`
 	Settings     PackagedSettings `json:"settings"`
 	// ICPCPenaltyMin is carried whether or not the contest uses ICPC scoring.
-	ICPCPenaltyMin int `json:"icpc_penalty_min"`
+	ICPCPenaltyMin int  `json:"icpc_penalty_min"`
+	ResultDownload bool `json:"result_download"`
 	// Leaderboard is the freeze and labelling configuration; when results were
 	// revealed is about one run and stays behind.
 	Leaderboard PackagedLeaderboard `json:"leaderboard"`
@@ -194,6 +195,7 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 				GracePeriodMin:       c.Settings.GracePeriodMin,
 			},
 			ICPCPenaltyMin: c.ICPCPenaltyMin,
+			ResultDownload: c.ResultDownload,
 			Leaderboard: PackagedLeaderboard{
 				FreezeMin: c.LeaderboardFreezeMin,
 				Names:     c.LeaderboardNames,

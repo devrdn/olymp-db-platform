@@ -150,7 +150,11 @@ participant.
   editor highlights it); a validator refusal is shown as a readable reason
   ("the function X is not supported"). What came back can be downloaded as
   CSV, built from the rows already sent rather than from a second trip to the
-  database.
+  database. An organiser can turn the download off per contest
+  (`contests.result_download`, on by default, changeable while the contest
+  runs; the participant's listing carries it). It is a convenience, not a
+  control: the rows are on the participant's screen and can still be selected
+  or copied.
 - **The query history** holds the participant's own queries, from `query_log`,
   with their status and timing; clicking one restores it in the editor. It
   doubles as saved work: a way back to the query that worked after a run of
