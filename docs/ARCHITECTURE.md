@@ -1296,7 +1296,7 @@ base rows:
 ```
 contest_translations  (contest_id, lang) → title, description
 story_translations    (story_id,   lang) → body_md
-question_translations (question_id, lang) → body_md, choices
+question_translations (question_id, lang) → title, body_md, choices
 ```
 
 Why not `jsonb`: it would lose the foreign key on the language code, so a

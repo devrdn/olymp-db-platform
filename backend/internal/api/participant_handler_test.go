@@ -619,6 +619,45 @@ func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
 	}
 }
 
+func TestAQuestionTitleReachesItsParticipant(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {Title: "The culprit", BodyMD: "Who did it?"}},
+	})
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
+	})
+
+	rec := f.get("/contests/" + contestID.String() + "/play/questions")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Items) != 2 {
+		t.Fatalf("items = %v, want two", payload.Items)
+	}
+	if payload.Items[0]["title"] != "The culprit" || payload.Items[0]["body_md"] != "Who did it?" {
+		t.Errorf("first = %v, want its title and body", payload.Items[0])
+	}
+	// The server derives nothing from the body: no title is an empty one.
+	if title, present := payload.Items[1]["title"]; !present || title != "" {
+		t.Errorf("second title = %v (present %v), want an empty title", title, present)
+	}
+}
+
 func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()

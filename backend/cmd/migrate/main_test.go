@@ -182,3 +182,70 @@ func TestTheMigrationConnectionDoesNotCutAMigrationShort(t *testing.T) {
 		t.Errorf("lock_timeout = %q on the connection: it belongs to the migration that wants it", got)
 	}
 }
+
+// questionTitleColumn is how question_translations.title stands in a
+// database: absent, or present with its default and its bound.
+type questionTitleColumn struct {
+	exists, notNull, bounded bool
+	defaultExpr              string
+}
+
+func readQuestionTitleColumn(t *testing.T, dsn string) questionTitleColumn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	var c questionTitleColumn
+	err = conn.QueryRow(ctx, `
+		SELECT count(*) > 0,
+		       COALESCE(bool_and(is_nullable = 'NO'), false),
+		       COALESCE(max(column_default), ''),
+		       EXISTS (SELECT 1 FROM pg_constraint
+		               WHERE conrelid = 'question_translations'::regclass AND contype = 'c'
+		                 AND pg_get_constraintdef(oid) LIKE '%char_length(title) <= 200%')
+		FROM information_schema.columns
+		WHERE table_name = 'question_translations' AND column_name = 'title'`).
+		Scan(&c.exists, &c.notNull, &c.defaultExpr, &c.bounded)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	return c
+}
+
+// An existing question keeps working: its translations gain an empty title,
+// which the play screen reads as "no title".
+func TestTheQuestionTitleMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := m.Migrate(44); err != nil {
+		t.Fatalf("migrate to 44: %v", err)
+	}
+	if down := readQuestionTitleColumn(t, dsn); down.exists || down.bounded {
+		t.Fatalf("after rolling back 000045 the title is left: %+v", down)
+	}
+
+	if err := m.Migrate(45); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate to 45: %v", err)
+	}
+	up := readQuestionTitleColumn(t, dsn)
+	if !up.exists || !up.notNull || up.defaultExpr != "''::text" || !up.bounded {
+		t.Fatalf("after applying 000045 title = %+v, want NOT NULL DEFAULT '' bounded at 200 characters", up)
+	}
+}

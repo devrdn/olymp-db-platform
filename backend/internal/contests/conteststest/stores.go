@@ -535,7 +535,7 @@ func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang st
 		}
 		found = append(found, contests.VisibleQuestion{
 			ID: q.ID, Kind: q.Kind, Points: q.Points, MaxAttempts: q.MaxAttempts,
-			ChoiceIDs: q.ChoiceIDs, BodyMD: text.BodyMD, Choices: text.Choices,
+			ChoiceIDs: q.ChoiceIDs, Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices,
 		})
 	}
 	return found, nil
