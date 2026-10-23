@@ -16,8 +16,8 @@ function mailAddress(contact: string): string {
 
 /**
  * The front page footer: whose installation this is and how to reach them, plus
- * the bar's own language and theme controls (Server Action forms, so they work
- * without JavaScript). Everything is passed in, so it renders without an API.
+ * the bar's own language and theme controls. Everything is passed in, so it
+ * renders without an API.
  */
 export function SiteFooter({
   name,
