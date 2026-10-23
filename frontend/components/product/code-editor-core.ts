@@ -1,7 +1,8 @@
 /**
- * Everything that depends on CodeMirror (~140 KiB gzipped). Only
- * `code-editor.tsx` imports it, and only dynamically; a static import anywhere
- * would put CodeMirror on the play route's critical path.
+ * Everything that depends on CodeMirror (about 120 KiB minified and gzipped,
+ * completion included). Only `code-editor.tsx` imports it, and only
+ * dynamically; a static import anywhere would put CodeMirror on the play
+ * route's critical path.
  */
 import { acceptCompletion, closeCompletion } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -88,9 +89,10 @@ const editorTheme = EditorView.theme({
     textUnderlineOffset: "3px",
     backgroundColor: "var(--bad-wash)",
   },
-  // The completion popup, drawn like the product's other popups. These repeat
-  // the base theme's selectors so the product tokens win over its literals.
-  ".cm-tooltip": {
+  // The completion popup, drawn like the product's other popups. Each selector
+  // is more specific than the base theme's literal-coloured one, so the tokens
+  // win whatever order the style sheets are mounted in.
+  ".cm-tooltip.cm-tooltip-autocomplete": {
     backgroundColor: "var(--panel)",
     border: "1px solid var(--line-2)",
     color: "var(--ink)",
@@ -105,7 +107,7 @@ const editorTheme = EditorView.theme({
     padding: "0.125rem 0.75rem",
     lineHeight: "var(--text-body--line-height)",
   },
-  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
     background: "var(--select-bg)",
     color: "var(--select-fg)",
   },

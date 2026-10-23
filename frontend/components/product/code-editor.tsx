@@ -100,7 +100,7 @@ export type CodeEditorProps = {
  * SQL editor: CodeMirror 6 in the product theme, underlining the position of
  * a PostgreSQL syntax error.
  *
- * CodeMirror (`code-editor-core.ts`, about 140 KiB gzipped) is loaded with a
+ * CodeMirror (`code-editor-core.ts`, about 120 KiB gzipped) is loaded with a
  * dynamic `import()` to keep it off the play route's critical path. Until it
  * arrives, a server-rendered `<textarea>` stands in so keystrokes typed
  * before hydration are not lost; its text and selection carry over when the
