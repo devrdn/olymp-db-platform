@@ -6,10 +6,7 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 const { loadContest, loadContestResource, view } = vi.hoisted(() => ({
   loadContest: vi.fn(async (id: string) => ({ id })),
   loadContestResource: vi.fn(async () => null),
-  view: vi.fn((props: Record<string, unknown>) => {
-    void props;
-    return null;
-  }),
+  view: vi.fn(() => null),
 }));
 vi.mock("../contest", () => ({ loadContest, loadContestResource }));
 vi.mock("./monitor-view", () => ({ MonitorView: view }));

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -15,6 +16,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-theme-swap");
   document.cookie = `${THEME_COOKIE}=; path=/; max-age=0`;
   vi.restoreAllMocks();
 });
@@ -76,7 +78,14 @@ describe("the theme toggle", () => {
     expect(screen.getAllByRole("button", { name: labels.dark })).toHaveLength(2);
   });
 
-  test("starts from what the server rendered", () => {
+  test("renders on the server from the theme the server read", () => {
+    // The page says light here, so only the server snapshot can produce this.
+    stamped("light");
+    const html = renderToString(<ThemeToggle current="dark" labels={labels} />);
+    expect(html).toContain(`aria-label="${labels.system}"`);
+  });
+
+  test("follows the page once in the browser", () => {
     stamped("dark");
     render(<ThemeToggle current="dark" labels={labels} />);
     expect(screen.getByRole("button", { name: labels.system })).toBeInTheDocument();
