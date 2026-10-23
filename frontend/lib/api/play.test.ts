@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { answerResultSchema, playQuestionListSchema, playQuestionSchema, playStorySchema } from "./play";
+import {
+  answerResultSchema,
+  playQuestionListSchema,
+  playQuestionSchema,
+  playStorySchema,
+  type OpenPlayQuestion,
+} from "./play";
 
 describe("playStorySchema", () => {
   test("parses the negotiated language and the body", () => {
@@ -11,8 +17,16 @@ describe("playStorySchema", () => {
   });
 });
 
+/** Parses one item through the list's own schema and insists it is an open question. */
+function parseOpen(raw: unknown): OpenPlayQuestion {
+  const parsed = playQuestionSchema.parse(raw);
+  if (parsed.locked) throw new Error("parsed as a locked question");
+  return parsed;
+}
+
 describe("playQuestionSchema", () => {
   const base = {
+    locked: false,
     id: "5f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
     kind: "choice",
     points: 10,
@@ -27,7 +41,7 @@ describe("playQuestionSchema", () => {
   };
 
   test("carries the title beside the body", () => {
-    expect(playQuestionSchema.parse(base)).toMatchObject({
+    expect(parseOpen(base)).toMatchObject({
       title: "The greenhouse",
       bodyMd: "Who was in the greenhouse?",
     });
@@ -36,29 +50,29 @@ describe("playQuestionSchema", () => {
   test("reads an omitted title as none, and derives nothing from the body", () => {
     const untitled: Record<string, unknown> = { ...base };
     delete untitled.title;
-    expect(playQuestionSchema.parse(untitled).title).toBe("");
+    expect(parseOpen(untitled).title).toBe("");
   });
 
   test("reads an omitted attempt count as no limit, not as zero", () => {
-    expect(playQuestionSchema.parse(base).attemptsRemaining).toBeUndefined();
+    expect(parseOpen(base).attemptsRemaining).toBeUndefined();
   });
 
   test("keeps zero attempts left distinct from no limit", () => {
-    expect(playQuestionSchema.parse({ ...base, attempts_remaining: 0 }).attemptsRemaining).toBe(0);
+    expect(parseOpen({ ...base, attempts_remaining: 0 }).attemptsRemaining).toBe(0);
   });
 
   test("reads a null attempt count the same as an omitted one", () => {
-    expect(playQuestionSchema.parse({ ...base, attempts_remaining: null }).attemptsRemaining).toBeUndefined();
+    expect(parseOpen({ ...base, attempts_remaining: null }).attemptsRemaining).toBeUndefined();
   });
 
   test("carries can_answer and closed as the server sent them, not derived", () => {
-    const parsed = playQuestionSchema.parse({ ...base, closed: true, can_answer: false });
+    const parsed = parseOpen({ ...base, closed: true, can_answer: false });
     expect(parsed.closed).toBe(true);
     expect(parsed.canAnswer).toBe(false);
   });
 
   test("a text question with no choices reads as having none", () => {
-    const parsed = playQuestionSchema.parse({
+    const parsed = parseOpen({
       ...base,
       kind: "text",
       choice_ids: [],
@@ -72,7 +86,7 @@ describe("playQuestionSchema", () => {
   });
 
   test("carries correct and points_awarded as the server sent them", () => {
-    const parsed = playQuestionSchema.parse({
+    const parsed = parseOpen({
       ...base,
       closed: true,
       can_answer: false,
@@ -84,15 +98,69 @@ describe("playQuestionSchema", () => {
   });
 
   test("a question never answered correctly carries no points", () => {
-    const parsed = playQuestionSchema.parse(base);
+    const parsed = parseOpen(base);
     expect(parsed.correct).toBe(false);
     expect(parsed.pointsAwarded).toBe(0);
+  });
+
+  test("an open question says it is not locked", () => {
+    expect(parseOpen(base).locked).toBe(false);
+  });
+
+  test("reads an open question that omits the marker as open", () => {
+    const unmarked: Record<string, unknown> = { ...base };
+    delete unmarked.locked;
+    expect(parseOpen(unmarked)).toMatchObject({ locked: false, bodyMd: "Who was in the greenhouse?" });
+  });
+});
+
+describe("a locked question", () => {
+  test("parses as its number and the marker, a shape with no content at all", () => {
+    expect(playQuestionSchema.parse({ position: 3, locked: true })).toEqual({ locked: true, position: 3 });
+  });
+
+  // The server never sends more; if it ever did, nothing of it reaches the screen.
+  test("keeps nothing but its number, whatever else arrives beside it", () => {
+    const parsed = playQuestionSchema.parse({
+      position: 2,
+      locked: true,
+      id: "q2",
+      title: "The weapon",
+      body_md: "Which weapon?",
+      points: 20,
+    });
+    expect(parsed).toEqual({ locked: true, position: 2 });
+  });
+
+  test("refuses a locked entry without a usable number", () => {
+    expect(() => playQuestionSchema.parse({ locked: true })).toThrow();
+    expect(() => playQuestionSchema.parse({ locked: true, position: 0 })).toThrow();
+    expect(() => playQuestionSchema.parse({ locked: true, position: 1.5 })).toThrow();
   });
 });
 
 describe("playQuestionListSchema", () => {
   test("parses an empty list rather than requiring at least one question", () => {
     expect(playQuestionListSchema.parse({ lang: "en", items: [] })).toEqual({ lang: "en", items: [] });
+  });
+
+  test("parses open and locked questions side by side, in the order sent", () => {
+    const open = {
+      locked: false,
+      id: "q1",
+      kind: "text",
+      points: 10,
+      choice_ids: [],
+      title: "",
+      body_md: "Who?",
+      closed: false,
+      can_answer: true,
+      correct: false,
+      points_awarded: 0,
+    };
+    const items = playQuestionListSchema.parse({ lang: "en", items: [open, { position: 2, locked: true }] }).items;
+    expect(items.map((item) => item.locked)).toEqual([false, true]);
+    expect(items[1]).toEqual({ locked: true, position: 2 });
   });
 });
 

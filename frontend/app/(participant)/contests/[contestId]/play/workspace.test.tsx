@@ -982,6 +982,7 @@ describe("collapsing a panel", () => {
   test("a typed answer survives a collapse and an expand", async () => {
     const q = {
       id: "q1",
+      locked: false as const,
       kind: "text" as const,
       points: 10,
       choiceIds: [],

@@ -1,15 +1,15 @@
 "use client";
 
-import { useActionState, useCallback, useEffect, useId, useRef, useState } from "react";
+import { Suspense, lazy, useActionState, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Maximize2 } from "lucide-react";
+import { ChevronRight, Lock, Maximize2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
-import type { PlayQuestion } from "@/lib/api/play";
+import type { LockedPlayQuestion, OpenPlayQuestion, PlayQuestion } from "@/lib/api/play";
 import type { Scoring } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 import { cn } from "@/lib/utils";
@@ -22,9 +22,39 @@ import { refusalKind, showsReference } from "./refusals";
  * One question's data with its wording already rendered on the server.
  * `index` is its 1-based place in the list, rendered beside `body` rather
  * than prepended to the Markdown, which would break a question opening with
- * a heading, a list or a fenced block.
+ * a heading, a list or a fenced block. A locked question has no wording to
+ * render.
  */
-export type QuestionEntry = { question: PlayQuestion; index: number; body: ReactNode };
+export type QuestionEntry =
+  | { question: OpenPlayQuestion; index: number; body: ReactNode }
+  | { question: LockedPlayQuestion; index: number; body: null };
+
+type OpenEntry = Extract<QuestionEntry, { question: OpenPlayQuestion }>;
+
+// Fetched only once a question opens after the page loaded; every body the
+// page loads with was rendered on the server.
+const LazyQuestionBody = lazy(() => import("./question-body").then((m) => ({ default: m.QuestionBody })));
+
+/**
+ * The entries for a re-read list. A body already on screen is kept, so the
+ * Markdown is not parsed again; a question that has just opened gets one
+ * rendered here.
+ */
+function entriesFrom(items: PlayQuestion[], previous: QuestionEntry[]): QuestionEntry[] {
+  const bodies = new Map<string, ReactNode>();
+  for (const entry of previous) {
+    if (!entry.question.locked) bodies.set(entry.question.id, entry.body);
+  }
+  return items.map((question, i): QuestionEntry => {
+    if (question.locked) return { question, index: i + 1, body: null };
+    const body = bodies.has(question.id) ? bodies.get(question.id) : (
+      <Suspense fallback={<div aria-hidden="true" className="h-5 w-2/3 animate-pulse bg-sunk" />}>
+        <LazyQuestionBody markdown={question.bodyMd} />
+      </Suspense>
+    );
+    return { question, index: i + 1, body };
+  });
+}
 
 /**
  * The questions, and the one field each has for answering. `body` arrives
@@ -56,8 +86,7 @@ export function QuestionsPanel({
   const [refreshFailed, setRefreshFailed] = useState(false);
 
   // A closed question can open the next one in a sequential contest, and the
-  // events channel has no push for that, so the list is re-read once. Only
-  // the mutable fields are replaced; the wording never changes.
+  // events channel has no push for that, so the list is re-read once.
   const onClosed = useCallback(async () => {
     const result = await refreshQuestions(contestId, locale);
     if (result.kind !== "ok") {
@@ -65,20 +94,18 @@ export function QuestionsPanel({
       return;
     }
     setRefreshFailed(false);
-    const byId = new Map(result.items.map((q) => [q.id, q]));
-    setEntries((prev) => prev.map((entry) => {
-      const fresh = byId.get(entry.question.id);
-      return fresh ? { ...entry, question: fresh } : entry;
-    }));
+    setEntries((prev) => entriesFrom(result.items, prev));
   }, [contestId, locale]);
 
   if (entries.length === 0) {
     return <p className="text-body text-ink-2">{t.empty}</p>;
   }
 
+  const open = entries.filter((entry): entry is OpenEntry => !entry.question.locked);
+  const locked = entries.filter((entry) => entry.question.locked);
   // The first question still open to the participant; decided here because
   // "current" is a fact about the list.
-  const currentIndex = entries.find(({ question }) => !question.closed && question.canAnswer)?.index;
+  const currentIndex = open.find(({ question }) => !question.closed && question.canAnswer)?.index;
 
   return (
     <div className="flex flex-col gap-4">
@@ -89,33 +116,50 @@ export function QuestionsPanel({
       ) : null}
       {/* A ruled list rather than boxes: this design draws structure with
           dividers (Band's doc). */}
-      <div className="flex flex-col divide-y divide-line">
-        {entries.map(({ question, index, body }) => (
-          <div
-            key={question.id}
-            // The design's wash, also said to assistive technology.
-            aria-current={index === currentIndex ? "step" : undefined}
-            className={cn(
-              "px-3 py-5 first:pt-3 last:pb-3",
-              // A wash, not a border: a second kind of line would read as a nested
-              // box (SPEC.md §5).
-              index === currentIndex && "bg-accent-wash",
-            )}
-          >
-            <QuestionCard
-              contestId={contestId}
-              question={question}
-              index={index}
-              body={body}
-              current={index === currentIndex}
-              blockedBy={index === currentIndex ? undefined : blockedBy(entries, index)}
-              scoring={scoring}
-              dict={dict}
-              onClosed={onClosed}
-            />
-          </div>
-        ))}
-      </div>
+      {open.length > 0 ? (
+        <div className="flex flex-col divide-y divide-line">
+          {open.map(({ question, index, body }) => (
+            <div
+              key={question.id}
+              // The design's wash, also said to assistive technology.
+              aria-current={index === currentIndex ? "step" : undefined}
+              className={cn(
+                "px-3 py-5 first:pt-3 last:pb-3",
+                // A wash, not a border: a second kind of line would read as a nested
+                // box (SPEC.md §5).
+                index === currentIndex && "bg-accent-wash",
+              )}
+            >
+              <QuestionCard
+                contestId={contestId}
+                question={question}
+                index={index}
+                body={body}
+                current={index === currentIndex}
+                scoring={scoring}
+                dict={dict}
+                onClosed={onClosed}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {/* Numbers only: the server sent nothing else. Plain text, never a
+          control, so the keyboard passes them by while a screen reader reads
+          them; `role` is restated because Safari drops a list's role once its
+          bullets are styled away. */}
+      {locked.length > 0 ? (
+        <ul role="list" aria-label={t.lockedList} className="flex flex-col gap-1.5 px-3">
+          {locked.map(({ index }) => (
+            <li key={index} className="flex items-baseline gap-2 text-small text-ink-3">
+              <Lock aria-hidden="true" className="size-3.5 shrink-0 self-center" />
+              {index > 1
+                ? t.lockedItem.replace("{n}", String(index)).replace("{m}", String(index - 1))
+                : t.lockedNotYet.replace("{n}", String(index))}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {/* Once for the list: the penalty belongs to the contest
           (docs/ARCHITECTURE.md §6.1.1). */}
       {scoring === "icpc" ? (
@@ -131,19 +175,16 @@ function QuestionCard({
   index,
   body,
   current,
-  blockedBy,
   scoring,
   dict,
   onClosed,
 }: {
   contestId: string;
-  question: PlayQuestion;
+  question: OpenPlayQuestion;
   index: number;
   body: ReactNode;
   /** Whether this is the question the participant is working on. */
   current: boolean;
-  /** The question that has to close before this one opens, if any. */
-  blockedBy?: number;
   scoring: Scoring;
   dict: PlayDictionary;
   onClosed: () => void;
@@ -160,7 +201,9 @@ function QuestionCard({
   // of an earlier close can supply it.
   const correct = state.kind === "answer" ? state.result.correct : question.correct;
   const pointsAwarded = state.kind === "answer" ? state.result.pointsAwarded : question.pointsAwarded;
-  const locked = !closed && !question.canAnswer;
+  // Not expected from the server, which locks a question by withholding it,
+  // but a refusal it states is still shown rather than answered into.
+  const unanswerable = !closed && !question.canAnswer;
   // A title of spaces is no title: the wording then shows unfolded.
   const title = question.title.trim();
   const titleId = useId();
@@ -212,8 +255,6 @@ function QuestionCard({
             closed={closed}
             correct={correct}
             current={current}
-            locked={locked}
-            blockedBy={blockedBy}
             t={t}
           />
           {/* ICPC never awards points (docs/ARCHITECTURE.md §6.1.1), so none
@@ -241,7 +282,7 @@ function QuestionCard({
           <input type="hidden" name="questionId" value={question.id} />
 
           {question.kind === "choice" ? (
-            <fieldset className="flex flex-col gap-1.5" disabled={pending || locked}>
+            <fieldset className="flex flex-col gap-1.5" disabled={pending || unanswerable}>
               <legend className="sr-only">{t.answerLabel}</legend>
               {question.choiceIds.map((choiceId) => (
                 // `min-h-6`: the label is the click target and must reach 24px; the
@@ -256,7 +297,7 @@ function QuestionCard({
                     value={choiceId}
                     checked={value === choiceId}
                     onChange={() => setValue(choiceId)}
-                    disabled={pending || locked}
+                    disabled={pending || unanswerable}
                     className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
                   />
                   {question.choices[choiceId] ?? choiceId}
@@ -269,7 +310,7 @@ function QuestionCard({
               value={value}
               onChange={(event) => setValue(event.target.value)}
               placeholder={t.placeholder}
-              disabled={pending || locked}
+              disabled={pending || unanswerable}
               aria-label={t.answerLabel}
               autoComplete="off"
               // Pastes here are reported to the organiser (use-signals.ts).
@@ -278,11 +319,11 @@ function QuestionCard({
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" size="sm" disabled={pending || locked}>
+            <Button type="submit" size="sm" disabled={pending || unanswerable}>
               {pending ? t.submitting : t.submit}
             </Button>
 
-            {locked ? (
+            {unanswerable ? (
               <span className="text-small text-ink-3">{t.locked}</span>
             ) : attemptsRemaining !== undefined ? (
               <span className="text-small text-ink-2">
@@ -421,19 +462,6 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
 }
 
 /**
- * The nearest earlier question still open, which must close before `index`
- * opens. The server enforces sequential order (docs/ARCHITECTURE.md
- * §6.1.1); this only names the question it waits on, so the participant
- * reads "after 4", not "not yet".
- */
-function blockedBy(entries: QuestionEntry[], index: number): number | undefined {
-  for (let i = index - 2; i >= 0; i--) {
-    if (!entries[i].question.closed) return entries[i].index;
-  }
-  return undefined;
-}
-
-/**
  * A question's state in one word. A question closed without a correct answer
  * is "attempts spent", never "accepted".
  */
@@ -441,26 +469,15 @@ function QuestionStatus({
   closed,
   correct,
   current,
-  locked,
-  blockedBy,
   t,
 }: {
   closed: boolean;
   correct?: boolean;
   current: boolean;
-  locked: boolean;
-  blockedBy?: number;
   t: PlayDictionary["participant"]["play"]["questions"];
 }) {
   if (closed) {
     return correct ? <Tag tone="good">{t.status.accepted}</Tag> : <Tag tone="mute">{t.status.spent}</Tag>;
-  }
-  if (locked) {
-    return (
-      <Tag tone="mute">
-        {blockedBy !== undefined ? t.status.after.replace("{n}", String(blockedBy)) : t.status.open}
-      </Tag>
-    );
   }
   return current ? <Tag tone="ink">{t.status.current}</Tag> : <Tag tone="mute">{t.status.open}</Tag>;
 }
