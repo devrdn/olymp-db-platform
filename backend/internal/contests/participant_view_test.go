@@ -23,7 +23,16 @@ func newReader() (*contests.Reader, *conteststest.Stories, *conteststest.Questio
 	submissions.Clock = func() time.Time { return conteststest.FixtureNow }
 	attempts := conteststest.NewAttempts(submissions)
 	sequence := conteststest.NewSequentialProgress(questions, submissions)
-	return contests.NewReader(stories, questions, attempts, sequence), stories, questions, submissions
+	return contests.NewReader(stories, conteststest.NewSchemaNotes(), questions, attempts, sequence), stories, questions, submissions
+}
+
+// newNotesReader is a reader over a table-descriptions store it returns.
+func newNotesReader() (*contests.Reader, *conteststest.SchemaNotes) {
+	notes := conteststest.NewSchemaNotes()
+	submissions := conteststest.NewSubmissions()
+	questions := conteststest.NewQuestions()
+	return contests.NewReader(conteststest.NewStories(), notes, questions, conteststest.NewAttempts(submissions),
+		conteststest.NewSequentialProgress(questions, submissions)), notes
 }
 
 func submit(t *testing.T, submissions *conteststest.Submissions, registrationID uuid.UUID, q contests.Question, correct bool, penalty int) {
@@ -75,6 +84,64 @@ func TestStoryIsNotFoundWhenTheContestHasNone(t *testing.T) {
 
 	if _, err := reader.Story(t.Context(), uuid.New(), "en"); !errors.Is(err, contests.ErrStoryNotFound) {
 		t.Fatalf("error = %v, want ErrStoryNotFound", err)
+	}
+}
+
+// notesContest offers English and Romanian, with Romanian the default.
+func notesContest() contests.Contest {
+	return contests.Contest{
+		ID:        uuid.New(),
+		Languages: []contests.ContestLanguage{{Code: "en"}, {Code: "ro", IsDefault: true}},
+	}
+}
+
+func TestSchemaNotesAreReadInTheResolvedLanguage(t *testing.T) {
+	reader, notes := newNotesReader()
+	c := notesContest()
+	if _, err := notes.Save(t.Context(), c.ID, map[string]string{"en": "The tables.", "ro": "Tabelele."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	if body, err := reader.SchemaNotes(t.Context(), c, "en"); err != nil || body != "The tables." {
+		t.Fatalf("SchemaNotes(en) = %q, %v, want the English text", body, err)
+	}
+}
+
+// The document is optional per language, unlike the story: a language without
+// it reads the contest's default rather than losing the tab.
+func TestSchemaNotesFallBackToTheContestsDefaultLanguage(t *testing.T) {
+	reader, notes := newNotesReader()
+	c := notesContest()
+	if _, err := notes.Save(t.Context(), c.ID, map[string]string{"ro": "Tabelele."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	if body, err := reader.SchemaNotes(t.Context(), c, "en"); err != nil || body != "Tabelele." {
+		t.Fatalf("SchemaNotes(en) = %q, %v, want the default language's text", body, err)
+	}
+}
+
+func TestSchemaNotesAreEmptyWhenNeitherLanguageHasThem(t *testing.T) {
+	reader, notes := newNotesReader()
+	c := notesContest()
+	if _, err := notes.Save(t.Context(), c.ID, map[string]string{"ru": "Таблицы."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	if body, err := reader.SchemaNotes(t.Context(), c, "en"); err != nil || body != "" {
+		t.Fatalf("SchemaNotes(en) = %q, %v, want nothing: Russian is neither the reader's nor the default", body, err)
+	}
+	if body, err := reader.SchemaNotes(t.Context(), notesContest(), "ro"); err != nil || body != "" {
+		t.Fatalf("SchemaNotes() of a contest with none = %q, %v, want nothing", body, err)
+	}
+}
+
+func TestASchemaNotesReadFailureIsNotAnEmptyDocument(t *testing.T) {
+	reader, notes := newNotesReader()
+	notes.Err = errors.New("database away")
+
+	if _, err := reader.SchemaNotes(t.Context(), notesContest(), "en"); err == nil {
+		t.Fatal("SchemaNotes() = nil error, want the store's failure")
 	}
 }
 

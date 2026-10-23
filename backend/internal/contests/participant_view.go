@@ -6,30 +6,42 @@ import (
 	"github.com/google/uuid"
 )
 
-// Reader builds what a participant may see of a running contest: the story in
-// one language and the visible questions. It is a projection of its own, not
-// the staff view with fields stripped, so hidden questions and reference
-// answers are never read at all (§6.1).
+// Reader builds what a participant may see of a running contest: the story and
+// the table descriptions in one language, and the visible questions. It is a
+// projection of its own, not the staff view with fields stripped, so hidden
+// questions and reference answers are never read at all (§6.1).
 //
 // Whether the caller may ask is Gate.StandingOf's question, which the caller
 // answers first; Reader does not repeat it.
 type Reader struct {
-	stories   StoryText
-	questions VisibleQuestionRepository
-	attempts  AttemptStore
+	stories     StoryText
+	schemaNotes SchemaNotesText
+	questions   VisibleQuestionRepository
+	attempts    AttemptStore
 	// sequence is read only for a sequential contest; optional otherwise.
 	sequence SequentialGate
 }
 
 // NewReader assembles a participant-facing content reader.
-func NewReader(stories StoryText, questions VisibleQuestionRepository, attempts AttemptStore, sequence SequentialGate) *Reader {
-	return &Reader{stories: stories, questions: questions, attempts: attempts, sequence: sequence}
+func NewReader(stories StoryText, schemaNotes SchemaNotesText, questions VisibleQuestionRepository, attempts AttemptStore, sequence SequentialGate) *Reader {
+	return &Reader{stories: stories, schemaNotes: schemaNotes, questions: questions, attempts: attempts, sequence: sequence}
 }
 
 // Story returns the contest's story in lang, or ErrStoryNotFound, also when
 // the text in lang is missing. The caller resolves lang (§6.2).
 func (r *Reader) Story(ctx context.Context, contestID uuid.UUID, lang string) (string, error) {
 	return r.stories.BodyIn(ctx, contestID, lang)
+}
+
+// SchemaNotes returns the table descriptions in lang, or in the contest's
+// default language when lang has none, or "" when neither has any. The caller
+// resolves lang (§6.2) and has already admitted the participant.
+func (r *Reader) SchemaNotes(ctx context.Context, c Contest, lang string) (string, error) {
+	langs := []string{lang}
+	if fallback := c.DefaultLanguage(); fallback != "" && fallback != lang {
+		langs = append(langs, fallback)
+	}
+	return r.schemaNotes.FirstIn(ctx, c.ID, langs)
 }
 
 // StoryText is the participant's read of a story, in one language.

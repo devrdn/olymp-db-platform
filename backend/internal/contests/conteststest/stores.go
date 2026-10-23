@@ -453,6 +453,70 @@ func (r *Stories) Delete(_ context.Context, contestID uuid.UUID) error {
 	return nil
 }
 
+// SchemaNotes is an in-memory contests.SchemaNotesRepository.
+type SchemaNotes struct {
+	byContest map[uuid.UUID]contests.SchemaNotes
+	// Clock stands in for the database's now() in Save. Nil leaves UpdatedAt
+	// as it is.
+	Clock func() time.Time
+	// Err, when set, is what every read returns: a database away, which a
+	// caller must not mistake for no descriptions.
+	Err error
+	// ContestExists stands in for the foreign key on the contest. Nil accepts
+	// every contest.
+	ContestExists func(id uuid.UUID) bool
+}
+
+var (
+	_ contests.SchemaNotesRepository = (*SchemaNotes)(nil)
+	_ contests.SchemaNotesText       = (*SchemaNotes)(nil)
+)
+
+func NewSchemaNotes() *SchemaNotes {
+	return &SchemaNotes{byContest: map[uuid.UUID]contests.SchemaNotes{}}
+}
+
+func (r *SchemaNotes) ByContest(_ context.Context, contestID uuid.UUID) (contests.SchemaNotes, error) {
+	if r.Err != nil {
+		return contests.SchemaNotes{}, r.Err
+	}
+	notes, ok := r.byContest[contestID]
+	if !ok {
+		return contests.SchemaNotes{Bodies: map[string]string{}}, nil
+	}
+	notes.Bodies = maps(notes.Bodies)
+	return notes, nil
+}
+
+func (r *SchemaNotes) FirstIn(ctx context.Context, contestID uuid.UUID, langs []string) (string, error) {
+	notes, err := r.ByContest(ctx, contestID)
+	if err != nil {
+		return "", err
+	}
+	for _, lang := range langs {
+		if body, ok := notes.Bodies[lang]; ok {
+			return body, nil
+		}
+	}
+	return "", nil
+}
+
+func (r *SchemaNotes) Save(ctx context.Context, contestID uuid.UUID, bodies map[string]string) (contests.SchemaNotes, error) {
+	if r.ContestExists != nil && !r.ContestExists(contestID) {
+		return contests.SchemaNotes{}, contests.ErrNotFound
+	}
+	if len(bodies) == 0 {
+		delete(r.byContest, contestID)
+		return r.ByContest(ctx, contestID)
+	}
+	notes := contests.SchemaNotes{Bodies: maps(bodies)}
+	if r.Clock != nil {
+		notes.UpdatedAt = r.Clock()
+	}
+	r.byContest[contestID] = notes
+	return r.ByContest(ctx, contestID)
+}
+
 // Questions is an in-memory contests.QuestionRepository.
 type Questions struct {
 	byID map[uuid.UUID]contests.Question

@@ -1741,6 +1741,7 @@ const ro = {
       "contest.table_data_row_add": "A adăugat un rând într-un tabel de joc",
       "contest.table_data_row_delete": "A șters un rând dintr-un tabel de joc",
       "contest.story_change": "A modificat povestea",
+      "contest.schema_notes_change": "A modificat descrierea tabelelor",
       "contest.question_create": "A adăugat o întrebare",
       "contest.question_update": "A modificat o întrebare",
       "contest.question_delete": "A șters o întrebare",

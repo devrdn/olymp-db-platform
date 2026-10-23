@@ -1958,6 +1958,7 @@ const en = {
       "contest.table_data_row_add": "Added a row to a game table",
       "contest.table_data_row_delete": "Removed a row from a game table",
       "contest.story_change": "Changed the story",
+      "contest.schema_notes_change": "Changed the table descriptions",
       "contest.question_create": "Added a question",
       "contest.question_update": "Changed a question",
       "contest.question_delete": "Deleted a question",

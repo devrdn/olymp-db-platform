@@ -301,6 +301,7 @@ type participantFixture struct {
 	history        *fakeHistory
 	submitter      *fakeSubmitter
 	stories        *conteststest.Stories
+	schemaNotes    *conteststest.SchemaNotes
 	questions      *conteststest.Questions
 	submissions    *conteststest.Submissions
 	workspaceStore *failingWorkspace
@@ -357,10 +358,11 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	})
 
 	stories := conteststest.NewStories()
+	schemaNotes := conteststest.NewSchemaNotes()
 	questions := conteststest.NewQuestions()
 	submissions := conteststest.NewSubmissions()
 	submissions.Clock = func() time.Time { return conteststest.FixtureNow }
-	reader := contests.NewReader(stories, questions, conteststest.NewAttempts(submissions),
+	reader := contests.NewReader(stories, schemaNotes, questions, conteststest.NewAttempts(submissions),
 		conteststest.NewSequentialProgress(questions, submissions))
 	access := &fakeAccess{}
 	history := &fakeHistory{}
@@ -382,7 +384,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 
 	return &participantFixture{
 		router: router, access: access, history: history, submitter: submitter,
-		stories: stories, questions: questions, submissions: submissions,
+		stories: stories, schemaNotes: schemaNotes, questions: questions, submissions: submissions,
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
 		signalStore:    signals,
@@ -848,6 +850,144 @@ func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 	}
 }
 
+// storyPayload is /play/story's answer.
+type storyPayload struct {
+	Lang          string  `json:"lang"`
+	BodyMD        string  `json:"body_md"`
+	SchemaNotesMD *string `json:"schema_notes_md"`
+}
+
+func (f *participantFixture) readStory(t *testing.T, contestID uuid.UUID, lang string) storyPayload {
+	t.Helper()
+	rec := f.get("/contests/" + contestID.String() + "/play/story?lang=" + lang)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload storyPayload
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return payload
+}
+
+// notesPlay stages a running contest in English and Romanian, Romanian the
+// default, with the story in both.
+func (f *participantFixture) notesPlay(t *testing.T) uuid.UUID {
+	t.Helper()
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en"}, {Code: "ro", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	if _, err := f.stories.Save(t.Context(), contestID, map[string]string{
+		"en": "A body in the stacks.", "ro": "Un cadavru între rafturi.",
+	}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	return contestID
+}
+
+// The table descriptions travel with the story: the same read, so the same
+// read budget, admission and start, and no request of their own.
+func TestTheStoryCarriesTheSchemaNotesInTheParticipantsLanguage(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{
+		"en": "## suspects\nOne row per person.", "ro": "## suspects\nCâte un rând.",
+	}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	payload := f.readStory(t, contestID, "en")
+
+	if payload.SchemaNotesMD == nil || *payload.SchemaNotesMD != "## suspects\nOne row per person." {
+		t.Fatalf("schema_notes_md = %v, want the English text", payload.SchemaNotesMD)
+	}
+	if f.access.admitReads != 1 {
+		t.Errorf("AdmitRead charged %d times, want once: the descriptions ride on the story's read", f.access.admitReads)
+	}
+}
+
+func TestTheSchemaNotesFallBackToTheContestsDefaultLanguage(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{"ro": "Tabelele."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	payload := f.readStory(t, contestID, "en")
+
+	if payload.Lang != "en" || payload.BodyMD != "A body in the stacks." {
+		t.Fatalf("story = %+v, want the English story still", payload)
+	}
+	if payload.SchemaNotesMD == nil || *payload.SchemaNotesMD != "Tabelele." {
+		t.Fatalf("schema_notes_md = %v, want the default language's text", payload.SchemaNotesMD)
+	}
+}
+
+// Always present, so the client tells "none" from an older server by nothing.
+func TestAContestWithoutSchemaNotesSendsAnEmptyDocument(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+
+	payload := f.readStory(t, contestID, "en")
+
+	if payload.SchemaNotesMD == nil || *payload.SchemaNotesMD != "" {
+		t.Fatalf("schema_notes_md = %v, want an empty string", payload.SchemaNotesMD)
+	}
+}
+
+// The descriptions are the organiser's own content, not the catalogue: a
+// contest that closes its catalogue still shows them.
+func TestAContestThatHidesItsCatalogueStillShowsItsSchemaNotes(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+	f.access.schemaErr = queryproxy.ErrSchemaHidden
+	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{"en": "The tables."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	if rec := f.get("/contests/" + contestID.String() + "/play/schema"); rec.Code != http.StatusForbidden {
+		t.Fatalf("schema status = %d, want 403: the catalogue is closed", rec.Code)
+	}
+	payload := f.readStory(t, contestID, "en")
+
+	if payload.SchemaNotesMD == nil || *payload.SchemaNotesMD != "The tables." {
+		t.Fatalf("schema_notes_md = %v, want the descriptions despite the closed catalogue", payload.SchemaNotesMD)
+	}
+}
+
+func TestARefusedStoryReadSendsNoSchemaNotes(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{"en": "The tables."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	f.access.setErr(contests.ErrNotAParticipant)
+
+	rec := f.get("/contests/" + contestID.String() + "/play/story?lang=en")
+
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "The tables.") {
+		t.Fatalf("status = %d, body = %s: a refused caller read the descriptions", rec.Code, rec.Body.String())
+	}
+}
+
+func TestASchemaNotesReadFailureFailsTheStoryRead(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.notesPlay(t)
+	f.schemaNotes.Err = errors.New("database away")
+
+	rec := f.get("/contests/" + contestID.String() + "/play/story?lang=en")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 rather than a story that silently lost its descriptions", rec.Code)
+	}
+	if len(f.access.startedOnRead) != 0 {
+		t.Errorf("StartOnRead ran for %v, want no start on a failed read", f.access.startedOnRead)
+	}
+}
+
 // sequentialPlay stages a running sequential contest of three choice
 // questions, each with a title, a body, labelled choices and points, and
 // returns its identifier, the questions and the caller's registration.
@@ -1130,7 +1270,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
+	reader := contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	access := &fakeAccess{err: contests.ErrNotAParticipant}
 	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
@@ -1345,7 +1485,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	})
 
 	access := &fakeAccess{participant: p, contest: c}
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
+	reader := contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	router := chi.NewRouter()
 	// The real retry loop, not a fakeSubmitter.
 	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c2, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
@@ -1483,7 +1623,7 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	}
 	submitter := &fakeSubmitter{}
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
+	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewSchemaNotes(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
 		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingLimiter{}, PerMinute: 6}, mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",

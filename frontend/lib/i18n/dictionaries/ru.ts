@@ -1739,6 +1739,7 @@ const ru = {
       "contest.table_data_row_add": "Добавил строку в игровую таблицу",
       "contest.table_data_row_delete": "Удалил строку из игровой таблицы",
       "contest.story_change": "Изменил историю",
+      "contest.schema_notes_change": "Изменил описание таблиц",
       "contest.question_create": "Добавил вопрос",
       "contest.question_update": "Изменил вопрос",
       "contest.question_delete": "Удалил вопрос",
