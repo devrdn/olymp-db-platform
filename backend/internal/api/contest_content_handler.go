@@ -94,6 +94,8 @@ type QuestionResponse struct {
 
 // QuestionTextResponse is a question as authored in one language.
 type QuestionTextResponse struct {
+	// Title is always present; empty means the question has none.
+	Title   string            `json:"title"`
 	BodyMD  string            `json:"body_md"`
 	Choices map[string]string `json:"choices,omitempty"`
 }
@@ -120,7 +122,7 @@ func toQuestionResponse(q contests.Question) QuestionResponse {
 	}
 	out.ChoiceIDs = emptyIfNil(out.ChoiceIDs)
 	for lang, text := range q.Texts {
-		out.Texts[lang] = QuestionTextResponse{BodyMD: text.BodyMD, Choices: text.Choices}
+		out.Texts[lang] = QuestionTextResponse{Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices}
 	}
 	for _, a := range q.Answers {
 		out.Answers = append(out.Answers, AnswerResponse{
@@ -404,7 +406,7 @@ func toDomainTexts(in map[string]QuestionTextResponse) map[string]contests.Quest
 	}
 	out := make(map[string]contests.QuestionText, len(in))
 	for lang, text := range in {
-		out[lang] = contests.QuestionText{BodyMD: text.BodyMD, Choices: text.Choices}
+		out[lang] = contests.QuestionText{Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices}
 	}
 	return out
 }

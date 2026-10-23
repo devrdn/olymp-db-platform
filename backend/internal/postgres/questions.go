@@ -25,7 +25,8 @@ var (
 const questionColumns = `
 	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.penalty_pct, q.is_visible, q.choice_ids,
 	COALESCE((
-		SELECT json_object_agg(qt.lang, json_build_object('body_md', qt.body_md,
+		SELECT json_object_agg(qt.lang, json_build_object('title', qt.title,
+		                                                  'body_md', qt.body_md,
 		                                                  'choices', COALESCE(qt.choices, '{}'::jsonb)))
 		FROM question_translations qt WHERE qt.question_id = q.id
 	), '{}'::json),
@@ -51,6 +52,7 @@ func (r *Questions) querier(ctx context.Context) storage.Querier {
 
 // questionTextRow and answerRow are the JSON shapes questionColumns produces.
 type questionTextRow struct {
+	Title   string            `json:"title"`
 	BodyMD  string            `json:"body_md"`
 	Choices map[string]string `json:"choices"`
 }
@@ -85,7 +87,7 @@ func hydrateQuestion(q contests.Question, texts, answers []byte) (contests.Quest
 	}
 	q.Texts = make(map[string]contests.QuestionText, len(byLang))
 	for lang, text := range byLang {
-		q.Texts[lang] = contests.QuestionText{BodyMD: text.BodyMD, Choices: text.Choices}
+		q.Texts[lang] = contests.QuestionText{Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices}
 	}
 
 	var rows []answerRow
@@ -134,7 +136,7 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT q.id, q.kind, q.points, q.max_attempts, q.choice_ids,
-		       qt.body_md, COALESCE(qt.choices, '{}'::jsonb)
+		       qt.title, qt.body_md, COALESCE(qt.choices, '{}'::jsonb)
 		FROM questions q
 		JOIN question_translations qt ON qt.question_id = q.id AND qt.lang = $2
 		WHERE q.contest_id = $1 AND q.is_visible
@@ -150,7 +152,7 @@ func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang st
 			q       contests.VisibleQuestion
 			choices []byte
 		)
-		if err := rows.Scan(&q.ID, &q.Kind, &q.Points, &q.MaxAttempts, &q.ChoiceIDs, &q.BodyMD, &choices); err != nil {
+		if err := rows.Scan(&q.ID, &q.Kind, &q.Points, &q.MaxAttempts, &q.ChoiceIDs, &q.Title, &q.BodyMD, &choices); err != nil {
 			return nil, fmt.Errorf("scan visible question: %w", err)
 		}
 		if err := json.Unmarshal(choices, &q.Choices); err != nil {
@@ -300,6 +302,7 @@ func deferQuestionOrder(ctx context.Context, q storage.Querier) error {
 // ReplaceTexts sets the question's authored text to exactly these languages.
 func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, texts map[string]contests.QuestionText) error {
 	langs := make([]string, 0, len(texts))
+	titles := make([]string, 0, len(texts))
 	bodies := make([]string, 0, len(texts))
 	choices := make([][]byte, 0, len(texts))
 	for lang, text := range texts {
@@ -308,6 +311,7 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 			return fmt.Errorf("encode choice labels: %w", err)
 		}
 		langs = append(langs, lang)
+		titles = append(titles, text.Title)
 		bodies = append(bodies, text.BodyMD)
 		choices = append(choices, encoded)
 	}
@@ -328,12 +332,12 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 	}
 
 	_, err := r.querier(ctx).Exec(ctx, `
-		INSERT INTO question_translations (question_id, lang, body_md, choices)
-		SELECT $1, lang, body, choices::jsonb
-		FROM unnest($2::text[], $3::text[], $4::text[]) AS t(lang, body, choices)
+		INSERT INTO question_translations (question_id, lang, title, body_md, choices)
+		SELECT $1, lang, title, body, choices::jsonb
+		FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS t(lang, title, body, choices)
 		ON CONFLICT (question_id, lang) DO UPDATE
-		SET body_md = EXCLUDED.body_md, choices = EXCLUDED.choices, updated_at = now()`,
-		questionID, langs, bodies, choices)
+		SET title = EXCLUDED.title, body_md = EXCLUDED.body_md, choices = EXCLUDED.choices, updated_at = now()`,
+		questionID, langs, titles, bodies, choices)
 	if err != nil {
 		// A question deleted meanwhile trips the foreign key.
 		return fmt.Errorf("replace question translations: %w", missingParent(err, map[string]error{

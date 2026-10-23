@@ -134,8 +134,8 @@ func TestQuestionsResolvesTheWordingToTheRequestedLanguage(t *testing.T) {
 		ContestID: contestID, Ord: 1, Kind: contests.KindChoice, Points: 10, IsVisible: true,
 		ChoiceIDs: []string{"a", "b"},
 		Texts: map[string]contests.QuestionText{
-			"en": {BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
-			"ru": {BodyMD: "Кто это сделал?", Choices: map[string]string{"a": "Дворецкий", "b": "Садовник"}},
+			"en": {Title: "The culprit", BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
+			"ru": {Title: "Виновник", BodyMD: "Кто это сделал?", Choices: map[string]string{"a": "Дворецкий", "b": "Садовник"}},
 		},
 	})
 
@@ -143,7 +143,7 @@ func TestQuestionsResolvesTheWordingToTheRequestedLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
-	if len(found) != 1 || found[0].BodyMD != "Кто это сделал?" || found[0].Choices["a"] != "Дворецкий" {
+	if len(found) != 1 || found[0].Title != "Виновник" || found[0].BodyMD != "Кто это сделал?" || found[0].Choices["a"] != "Дворецкий" {
 		t.Fatalf("found = %+v", found)
 	}
 }

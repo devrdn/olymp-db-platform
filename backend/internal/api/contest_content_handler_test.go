@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -277,6 +279,63 @@ func TestSavingAQuestionWholeAnswersWithIt(t *testing.T) {
 	body := decode(t, rec)
 	if body["points"] != float64(8) {
 		t.Errorf("points = %v, want 8", body["points"])
+	}
+}
+
+func TestAQuestionTitleRoundTripsThroughTheEditor(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+	})
+	path := "/contests/" + c.ID.String() + "/questions/" + q.ID.String()
+
+	rec := f.do(http.MethodPut, path, `{
+		"kind": "text",
+		"points": 5,
+		"texts": {"en": {"title": "The culprit", "body_md": "Who did it?"}, "ro": {"body_md": "Cine?"}}
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec = f.do(http.MethodGet, path, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Texts map[string]map[string]any `json:"texts"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Texts["en"]["title"] != "The culprit" || got.Texts["en"]["body_md"] != "Who did it?" {
+		t.Errorf("en = %v, want its title and body", got.Texts["en"])
+	}
+	// Always present, so the editor need not tell absent from empty.
+	if title, present := got.Texts["ro"]["title"]; !present || title != "" {
+		t.Errorf("ro title = %v (present %v), want an empty title", title, present)
+	}
+}
+
+func TestAnOverlongQuestionTitleIsRefused(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(), `{
+		"kind": "text",
+		"points": 5,
+		"texts": {"en": {"title": "`+strings.Repeat("a", 201)+`", "body_md": "Who did it?"}}
+	}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "invalid_request" {
+		t.Errorf("code = %q, want invalid_request", code)
 	}
 }
 

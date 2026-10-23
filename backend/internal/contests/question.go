@@ -36,8 +36,9 @@ const maxChoices = 50
 
 // Bounds on a question's authored text (CLAUDE.md rule 2), in characters.
 const (
-	maxQuestionBodyRunes = 20_000
-	maxChoiceLabelRunes  = 1_000
+	maxQuestionTitleRunes = 200
+	maxQuestionBodyRunes  = 20_000
+	maxChoiceLabelRunes   = 1_000
 )
 
 // maxPenaltyPct bounds questions.penalty_pct, a percentage (CLAUDE.md rule 2).
@@ -84,6 +85,9 @@ type Question struct {
 
 // QuestionText is a question as authored in one language.
 type QuestionText struct {
+	// Title is one line of plain text; empty when the question has none, and
+	// then the body is what a participant reads first.
+	Title  string
 	BodyMD string
 	// Choices maps a choice identifier to its label in this language.
 	Choices map[string]string
@@ -152,6 +156,12 @@ func (q Question) validateChoices() error {
 
 // Validate checks the bounds on a question's wording in one language.
 func (t QuestionText) Validate() error {
+	if utf8.RuneCountInString(t.Title) > maxQuestionTitleRunes {
+		return fmt.Errorf("%w: a question title is at most %d characters", ErrInvalidQuestion, maxQuestionTitleRunes)
+	}
+	if strings.ContainsAny(t.Title, "\r\n") {
+		return fmt.Errorf("%w: a question title is one line", ErrInvalidQuestion)
+	}
 	if utf8.RuneCountInString(t.BodyMD) > maxQuestionBodyRunes {
 		return fmt.Errorf("%w: a question is at most %d characters", ErrInvalidQuestion, maxQuestionBodyRunes)
 	}
