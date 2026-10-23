@@ -54,6 +54,7 @@ export function Workspace({
   storyCover,
   printView,
   storyUnavailable,
+  schemaNotes = null,
   questionEntries,
   scoring = "points",
   icpcPenaltyMin = 20,
@@ -78,6 +79,8 @@ export function Workspace({
   /** The print-only copy of the story, rendered on the server. Null exactly when there is no story (mirrors `storyUnavailable`). */
   printView: React.ReactNode;
   storyUnavailable: string | null;
+  /** The table descriptions, rendered on the server; null offers no Tables tab. */
+  schemaNotes?: React.ReactNode;
   questionEntries: QuestionEntry[];
   /** The contest's scoring mode; ICPC changes the questions panel (`questions-panel.tsx`). */
   scoring?: Scoring;
@@ -428,6 +431,7 @@ export function Workspace({
               storyBody={storyBody}
               storyCover={storyCover}
               storyUnavailable={storyUnavailable}
+              schemaNotes={schemaNotes}
               accountId={accountId}
               contestId={contestId}
               questionEntries={questionEntries}

@@ -810,6 +810,19 @@ const ro = {
       saved: "Salvat.",
       noLanguages: "Olimpiada nu declară încă nicio limbă. Alegeți una în Setări.",
     },
+    // The table descriptions, edited on the story's page and shown to
+    // participants on a tab of their own.
+    schemaNotes: {
+      heading: "Descrierea tabelelor",
+      lede: "Opțională. Participanții o citesc într-o filă „Tabele” lângă poveste, în limba lor sau, dacă aceasta e goală, în limba implicită. Dacă toate câmpurile sunt goale, fila nu apare.",
+      catalogueHint: "Dezactivarea opțiunii „Pot citi catalogul de sistem” ascunde panoul cu schema, nu și acest document: este conținutul propriu al olimpiadei. Dacă descoperirea tabelelor face parte din enigmă, lăsați-l gol.",
+      placeholder: "`suspects` — câte un rând pentru fiecare suspect…",
+      unavailable: "Acest browser nu poate rula editorul formatat, așa că descrierea este afișată ca Markdown. Totul se salvează la fel; lipsește doar previzualizarea. Safari are nevoie de versiunea 16.4 sau mai nouă.",
+      save: "Salvați descrierea tabelelor",
+      saving: "Se salvează",
+      saved: "Salvat.",
+      empty: "Nimic scris în această limbă.",
+    },
     questions: {
       heading: "Întrebări",
       lede: "Ce este întrebat participantul, în ordinea în care le întâlnește.",
@@ -1497,6 +1510,7 @@ const ro = {
           story: "Povestea",
           questions: "Întrebări",
           notes: "Notițe",
+          tables: "Tabele",
         },
         download: "Descărcați CSV",
         copyRows: {
@@ -1741,6 +1755,7 @@ const ro = {
       "contest.table_data_row_add": "A adăugat un rând într-un tabel de joc",
       "contest.table_data_row_delete": "A șters un rând dintr-un tabel de joc",
       "contest.story_change": "A modificat povestea",
+      "contest.schema_notes_change": "A modificat descrierea tabelelor",
       "contest.question_create": "A adăugat o întrebare",
       "contest.question_update": "A modificat o întrebare",
       "contest.question_delete": "A șters o întrebare",

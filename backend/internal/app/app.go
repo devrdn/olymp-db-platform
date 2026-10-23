@@ -374,6 +374,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	contestService := contests.NewService(contests.ServiceConfig{
 		Contests:      postgres.NewContests(pool),
 		Stories:       postgres.NewStories(pool),
+		SchemaNotes:   postgres.NewSchemaNotes(pool),
 		Questions:     postgres.NewQuestions(pool),
 		Managers:      postgres.NewContestManagers(pool),
 		Registrations: postgres.NewRegistrations(pool),
@@ -481,7 +482,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			WithLookup(registrations)
 	}
 	reader := contests.NewReader(
-		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))
+		postgres.NewStories(pool), postgres.NewSchemaNotes(pool), postgres.NewQuestions(pool),
+		postgres.NewAttempts(pool), postgres.NewSequence(pool))
 	history := postgres.NewQueryLog(pool)
 	answers := api.AnswerRate{Limiter: limiter, PerMinute: cfg.AnswerRatePerMinute}
 	workspaces := workspace.NewService(postgres.NewWorkspace(pool), limiter)

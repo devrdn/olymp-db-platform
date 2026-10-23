@@ -352,7 +352,7 @@ func TestAnswerableLeftAgreesWithTheParticipantsOwnQuestionList(t *testing.T) {
 			}
 		}
 
-		reader := contests.NewReader(NewStories(testPool), questions, NewAttempts(testPool), NewSequence(testPool))
+		reader := contests.NewReader(NewStories(testPool), NewSchemaNotes(testPool), questions, NewAttempts(testPool), NewSequence(testPool))
 		repo := NewAnswerable(testPool)
 		submissions := NewSubmissions(testPool)
 

@@ -1311,6 +1311,7 @@ base rows:
 contest_translations  (contest_id, lang) → title, description
 story_translations    (story_id,   lang) → body_md
 question_translations (question_id, lang) → title, body_md, choices
+contest_schema_notes  (contest_id, lang) → body_md
 ```
 
 Why not `jsonb`: it would lose the foreign key on the language code, so a
@@ -1394,6 +1395,22 @@ and stands on both doors like the rest of the gate: on `published` and on
 `running`, including a scheduled start, where a refusal reaches the journal as
 `contest.start_blocked`. What it does not cover is a contest already `running`
 when this was deployed; those are checked once, with a query.
+
+### Table descriptions
+
+An organiser may write one more Markdown document per language: the table
+descriptions (`contest_schema_notes`), edited on the story's page and frozen
+with it at the start. Unlike the story it is optional, so the gate does not
+ask for it, and a language is either written or absent: a blank text is not
+stored. A participant reads it in their resolved language, or in the contest's
+default when that language has none; it travels on the `/play/story` answer
+(`schema_notes_md`) rather than a route of its own, so a page load pays the
+read budget and admission once. The play screen shows a "Tables" tab only when
+that text is non-empty, rendered by `StoryText` like the story.
+
+It is the organiser's own contest content, not the catalogue, so closing the
+catalogue (`allow_catalog` off, `schema_hidden`) does not hide it: an
+organiser who wants the shape to stay a puzzle leaves it unwritten.
 
 ## 6.3 The authoring screens
 

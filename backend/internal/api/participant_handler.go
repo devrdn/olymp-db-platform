@@ -20,11 +20,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// The endpoints a participant of a running contest uses: the story, the visible
-// questions, the schema, their own query log, answering a question, and
-// resetting their own database (participant_reset.go). A successful read of
-// the story, questions or schema records the participant's start, which under
-// individual timing starts their clock (queryproxy.Service.StartOnRead).
+// The endpoints a participant of a running contest uses: the story with the
+// table descriptions, the visible questions, the schema, their own query log,
+// answering a question, and resetting their own database
+// (participant_reset.go). A successful read of the story, questions or schema
+// records the participant's start, which under individual timing starts their
+// clock (queryproxy.Service.StartOnRead).
 //
 // Nothing here may ever reveal a reference answer, a hidden question, anything
 // about another participant, or anything about a contest the caller is not
@@ -265,10 +266,18 @@ func (h *ParticipantHandler) languageFor(r *http.Request, contest contests.Conte
 	return negotiateLang(r, contest.LanguageCodes(), contest.DefaultLanguage(), h.defaultLocale)
 }
 
-// storyResponse is the crime story in the participant's own language.
+// storyResponse is the crime story in the participant's own language, with the
+// table descriptions beside it.
+//
+// The descriptions ride on this read rather than a route of their own: the
+// play screen loads both at once, and a second route would charge the read
+// budget and run admission twice for every page load. SchemaNotesMD is
+// always present, empty when the contest has none in the participant's
+// language or its default.
 type storyResponse struct {
-	Lang   string `json:"lang"`
-	BodyMD string `json:"body_md"`
+	Lang          string `json:"lang"`
+	BodyMD        string `json:"body_md"`
+	SchemaNotesMD string `json:"schema_notes_md"`
 }
 
 func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
@@ -283,10 +292,15 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	notes, err := h.reader.SchemaNotes(r.Context(), contest, lang)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
 	if !h.startOnRead(w, r, contest, participant) {
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, storyResponse{Lang: lang, BodyMD: body})
+	httpx.JSON(w, r, http.StatusOK, storyResponse{Lang: lang, BodyMD: body, SchemaNotesMD: notes})
 }
 
 // participantQuestionResponse is one visible question as its participant sees

@@ -34,6 +34,7 @@
     "contest.answers_change",
     "contest.manager_grant",
     "contest.manager_revoke",
+    "contest.schema_notes_change",
     "contest.package_export",
     "contest.leaderboard_reveal",
     "contest.monitor_view",

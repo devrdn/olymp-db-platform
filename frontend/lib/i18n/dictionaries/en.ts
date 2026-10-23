@@ -910,6 +910,19 @@ const en = {
       saved: "Saved.",
       noLanguages: "This contest declares no language yet. Choose one in Settings first.",
     },
+    // The table descriptions, edited on the story's page and shown to
+    // participants on a tab of their own.
+    schemaNotes: {
+      heading: "Table descriptions",
+      lede: "Optional. Participants read it on a Tables tab beside the story, in their own language or, where that one is empty, in the default language. With every box empty, the tab is not shown.",
+      catalogueHint: "Turning off “May read the system catalog” hides the schema panel, not this document: it is your own contest content. If working out the tables is part of the puzzle, leave it empty.",
+      placeholder: "`suspects` — one row per person of interest…",
+      unavailable: "This browser cannot run the formatted editor, so the descriptions are shown as Markdown. Everything still saves; only the preview is missing. Safari needs version 16.4 or newer.",
+      save: "Save the table descriptions",
+      saving: "Saving",
+      saved: "Saved.",
+      empty: "Nothing written in this language.",
+    },
     questions: {
       heading: "Questions",
       lede: "What the participant is asked, in the order they meet it.",
@@ -1676,6 +1689,7 @@ const en = {
           story: "Story",
           questions: "Questions",
           notes: "Notes",
+          tables: "Tables",
         },
         download: "Download CSV",
         // The first rows as tab-separated text with their header, so a paste
@@ -1958,6 +1972,7 @@ const en = {
       "contest.table_data_row_add": "Added a row to a game table",
       "contest.table_data_row_delete": "Removed a row from a game table",
       "contest.story_change": "Changed the story",
+      "contest.schema_notes_change": "Changed the table descriptions",
       "contest.question_create": "Added a question",
       "contest.question_update": "Changed a question",
       "contest.question_delete": "Deleted a question",

@@ -161,6 +161,37 @@ func TestTheContestPackageCarriesWhetherTheResultDownloadIsOffered(t *testing.T)
 	}
 }
 
+// Additive to format 1: an older reader ignores the key, and a contest with
+// none writes the file it wrote before.
+func TestTheContestPackageCarriesTheSchemaNotes(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+	c := seedPackagedContest(t, f)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if _, present := decode(t, rec)["schema_notes"]; present {
+		t.Fatalf("a contest with no table descriptions exported the key: %s", rec.Body.String())
+	}
+
+	if _, err := f.stores.SchemaNotes.Save(t.Context(), c.ID, map[string]string{"en": "The `suspects` table."}); err != nil {
+		t.Fatalf("seed table descriptions: %v", err)
+	}
+	rec = f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	notes, _ := body["schema_notes"].(map[string]any)
+	if len(notes) != 1 || notes["en"] != "The `suspects` table." {
+		t.Errorf("schema_notes = %v, want the English text", body["schema_notes"])
+	}
+	if body["version"] != float64(1) {
+		t.Errorf("version = %v, want 1: the key is additive", body["version"])
+	}
+}
+
 func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
 	// The package is for authoring a contest again, not restoring one.
 	// Identifiers, status and the run window describe the old run and would
@@ -335,7 +366,7 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	access := &fakeAccess{}
 	access.err = contests.ErrNotAParticipant
-	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
+	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
 		&fakeHistory{}, &fakeSubmitter{}, answerRate(memory, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	contestID := uuid.New().String()
