@@ -27,6 +27,9 @@ import { quoteIdentifier } from "@/lib/sql/identifier";
 /** Nodes inside which nothing is offered, as `sql()` does for keywords. */
 const NOT_CODE = ["QuotedIdentifier", "String", "LineComment", "BlockComment", "."];
 
+/** The same, less quoted identifiers: a column's name may be typed after its opening quote. */
+const NOT_NAME = ["String", "LineComment", "BlockComment", "."];
+
 /**
  * Built-in functions a contest query reaches for that the dialect's word list
  * lacks (it already carries `count`, `sum`, `coalesce`, `lower` and the like).
@@ -77,23 +80,30 @@ function referencedName(text: string, quoted: boolean): string {
 function columnsInScope(schema: GameSchema): CompletionSource {
   const byTable = new Map(schema.tables.map((table) => [table.name, columnOptions(table)]));
   return (context: CompletionContext): CompletionResult | null => {
-    const word = context.matchBefore(/\w*$/);
+    const { state, pos } = context;
+    const at = syntaxTree(state).resolveInner(pos, -1);
+    // Inside a quoted name the word runs from its opening quote, and a closing
+    // quote already after the caret is replaced rather than doubled.
+    const quoted = at.name === "QuotedIdentifier";
+    if (quoted && pos === at.to && at.to - at.from > 1 && state.sliceDoc(at.to - 1, at.to) === '"') return null;
+    const word = quoted ? { from: at.from, to: pos } : context.matchBefore(/\w*$/);
     if (!word || (word.from === word.to && !context.explicit)) return null;
     // After `table.` lang-sql offers that table's columns alone.
-    if (context.state.sliceDoc(word.from - 1, word.from) === ".") return null;
-    let statement = syntaxTree(context.state).resolveInner(context.pos, -1);
+    if (state.sliceDoc(word.from - 1, word.from) === ".") return null;
+    const to = quoted && state.sliceDoc(pos, pos + 1) === '"' ? pos + 1 : undefined;
+    let statement = at;
     while (statement.parent && statement.name !== "Statement") statement = statement.parent;
     if (statement.name !== "Statement") return null;
 
     const options = new Map<string, Completion>();
-    syntaxTree(context.state).iterate({
+    syntaxTree(state).iterate({
       from: statement.from,
       to: statement.to,
       enter: (node) => {
         if (node.name !== "Identifier" && node.name !== "QuotedIdentifier") return;
         // The word being typed is not yet a reference to anything.
-        if (node.to === context.pos) return;
-        const text = context.state.sliceDoc(node.from, node.to);
+        if (node.from < pos && pos <= node.to) return;
+        const text = state.sliceDoc(node.from, node.to);
         const columns = byTable.get(referencedName(text, node.name === "QuotedIdentifier"));
         for (const column of columns ?? []) {
           if (!options.has(column.label)) options.set(column.label, column);
@@ -101,11 +111,22 @@ function columnsInScope(schema: GameSchema): CompletionSource {
       },
     });
     if (options.size === 0) return null;
-    return { from: word.from, options: [...options.values()], validFor: /^\w*$/ };
+    if (!quoted) return { from: word.from, options: [...options.values()], validFor: /^\w*$/ };
+    const inQuotes = [...options.values()].map((option) => {
+      const written = `"${option.label.replace(/"/g, '""')}"`;
+      return { ...option, label: written, apply: written };
+    });
+    return { from: word.from, to, options: inQuotes, validFor: /^"\w*"?$/ };
   };
 }
 
 const offerNothing: CompletionSource = () => null;
+
+/**
+ * How long after the popup opens a key that accepts is ignored, so a newline
+ * typed just as it appears is not taken for a choice (CodeMirror's default).
+ */
+export const INTERACTION_DELAY_MS = 75;
 
 /**
  * Enter on a word already typed whole closes the popup and breaks the line:
@@ -146,7 +167,7 @@ export function sqlCompletion(): {
       Prec.highest(keymap.of([{ key: "Enter", run: breakLineOnTypedWord }])),
       // Icons off: CodeMirror's are glyphs in no design system; a column shows
       // its type instead.
-      autocompletion({ icons: false }),
+      autocompletion({ icons: false, interactionDelay: INTERACTION_DELAY_MS }),
       PostgreSQL.language.data.of({ autocomplete: ifNotIn(NOT_CODE, completeFromList(FUNCTIONS)) }),
       PostgreSQL.language.data.of({ autocomplete: (context: CompletionContext) => tables(context) }),
       PostgreSQL.language.data.of({ autocomplete: (context: CompletionContext) => columns(context) }),
@@ -155,7 +176,7 @@ export function sqlCompletion(): {
       tables = schema
         ? schemaCompletionSource({ dialect: PostgreSQL, schema: namespaceOf(schema) })
         : offerNothing;
-      columns = schema ? ifNotIn(NOT_CODE, columnsInScope(schema)) : offerNothing;
+      columns = schema ? ifNotIn(NOT_NAME, columnsInScope(schema)) : offerNothing;
     },
   };
 }
