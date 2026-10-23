@@ -248,13 +248,16 @@ type Config struct {
 	// the password package.
 	PasswordHashConcurrency int
 	PasswordHashMaxWait     time.Duration
-	// QueryPerMinute is a participant's read budget when the contest sets
+	// QueryPerMinute is a participant's query budget when the contest sets
 	// none. It must equal the Query Runner's QUERY_PER_MINUTE (Runner.
-	// PerMinute), including what zero means: unset is 30 on both sides, an
-	// explicit 0 is no limit on both. The events channel and read endpoints
-	// spend the same budget (queryproxy.Service.AdmitRead), so raising it
-	// raises that ceiling too.
+	// PerMinute), including what zero means: unset is 60 on both sides, an
+	// explicit 0 is no limit on both.
 	QueryPerMinute int
+	// PlayReadPerMinute is the play screen's own budget per account and per
+	// registration (queryproxy.Service.AdmitRead), apart from QueryPerMinute so
+	// reloading a page never refuses a query. Bounded to 1-600, with no
+	// "unlimited".
+	PlayReadPerMinute int
 	// AnswerRatePerMinute is how many answers one registration may submit
 	// per minute, refused ones included. It is separate from QueryPerMinute
 	// because an answer is a guess. Bounded to 1-60, with no "unlimited".
@@ -427,9 +430,16 @@ func Load() (Config, error) {
 			cfg.PasswordHashMaxWait, maxPasswordHashWait)
 	}
 
-	// 30 unset, matching LoadRunner (see the field).
-	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
+	// Unset matches LoadRunner (see the field).
+	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", defaultQueryPerMinute); err != nil {
 		return Config{}, err
+	}
+	if cfg.PlayReadPerMinute, err = intEnv("PLAY_READ_PER_MINUTE", defaultPlayReadPerMinute); err != nil {
+		return Config{}, err
+	}
+	if cfg.PlayReadPerMinute < 1 || cfg.PlayReadPerMinute > maxPlayReadPerMinute {
+		return Config{}, fmt.Errorf("PLAY_READ_PER_MINUTE: %d is outside 1-%d",
+			cfg.PlayReadPerMinute, maxPlayReadPerMinute)
 	}
 	if cfg.AnswerRatePerMinute, err = intEnv("ANSWER_RATE_PER_MINUTE", defaultAnswerRatePerMinute); err != nil {
 		return Config{}, err
@@ -705,9 +715,15 @@ func requiredEnv(key string) (string, error) {
 	return v, nil
 }
 
+// defaultQueryPerMinute is QUERY_PER_MINUTE unset, read by both Load and
+// LoadRunner so the façade and the Query Runner cannot disagree.
+const defaultQueryPerMinute = 60
+
 const (
-	defaultAnswerRatePerMinute = 6
+	defaultAnswerRatePerMinute = 12
 	maxAnswerRatePerMinute     = 60
+	defaultPlayReadPerMinute   = 120
+	maxPlayReadPerMinute       = 600
 )
 
 // intEnv reads a non-negative whole number.

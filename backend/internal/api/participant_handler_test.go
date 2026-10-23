@@ -52,6 +52,10 @@ type fakeAccess struct {
 	accessCalled bool
 	// admitReads counts AdmitRead calls.
 	admitReads int
+	// admitReadOfErr is what AdmitReadOf answers; readsOf records the
+	// registrations it was charged for.
+	admitReadOfErr error
+	readsOf        []uuid.UUID
 	// delay, when set, is how long AccessForEvents waits before answering,
 	// standing for slow resync lookups.
 	delay time.Duration
@@ -98,6 +102,13 @@ func (a *fakeAccess) AdmitRead(uuid.UUID) error {
 	a.admitReads++
 	a.mu.Unlock()
 	return a.admitReadErr
+}
+
+func (a *fakeAccess) AdmitReadOf(registration uuid.UUID) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.readsOf = append(a.readsOf, registration)
+	return a.admitReadOfErr
 }
 
 func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
@@ -454,7 +465,7 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 		stage func(f *participantFixture)
 		want  int
 	}{
-		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryrunner.ErrTooManyQueries }, http.StatusTooManyRequests},
+		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryproxy.ErrTooManyReads }, http.StatusTooManyRequests},
 		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = contests.ErrAddressNotAllowed }, http.StatusForbidden},
 		"a story that does not exist": {"/play/story", func(f *participantFixture) {
 			_ = f.stories.Delete(context.Background(), f.access.contest.ID)
@@ -690,14 +701,14 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 	for _, path := range []string{"story", "questions", "log"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
-			f.access.admitReadErr = queryrunner.ErrTooManyQueries
+			f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 			rec := f.get("/contests/" + uuid.New().String() + "/play/" + path)
 			if rec.Code != http.StatusTooManyRequests {
 				t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
 			}
-			if code := errorCode(t, rec); code != "query_too_often" {
-				t.Fatalf("code = %q, want query_too_often", code)
+			if code := errorCode(t, rec); code != "play_read_too_often" {
+				t.Fatalf("code = %q, want play_read_too_often", code)
 			}
 			if f.access.accessCalled {
 				t.Fatal("Access was called after AdmitRead refused — the rate check must run first, before Access's own lookups")
@@ -726,6 +737,50 @@ func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
 	}
 	if !f.access.accessCalled {
 		t.Fatal("Access was never called for a caller within their rate budget")
+	}
+}
+
+// The read budget is charged per account before Access and per registration
+// after it, so the second check needs what Access resolved.
+func TestAReadIsChargedToTheRegistrationAccessResolved(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.contest = contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if len(f.access.readsOf) != 1 || f.access.readsOf[0] != f.access.participant.ID {
+		t.Fatalf("AdmitReadOf charged %v, want the registration %s once", f.access.readsOf, f.access.participant.ID)
+	}
+}
+
+func TestAReadPastTheRegistrationsBudgetIsA429AndStartsNothing(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.contest = contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.access.admitReadOfErr = queryproxy.ErrTooManyReads
+	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
+	expectStatus(t, rec, http.StatusTooManyRequests, "play_read_too_often")
+	if retry := rec.Header().Get("Retry-After"); retry != "60" {
+		t.Fatalf("Retry-After = %q, want 60", retry)
+	}
+	if len(f.access.startedOnRead) != 0 {
+		t.Fatalf("a refused read started the clock of %v", f.access.startedOnRead)
 	}
 }
 
@@ -1164,14 +1219,14 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 
 func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	rec := f.post("/contests/"+uuid.New().String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "query_too_often" {
-		t.Fatalf("code = %q, want query_too_often", code)
+	if code := errorCode(t, rec); code != "play_read_too_often" {
+		t.Fatalf("code = %q, want play_read_too_often", code)
 	}
 	if f.access.accessCalled || f.submitter.called {
 		t.Fatal("Access or Submit was reached after AdmitRead refused")
@@ -1537,11 +1592,11 @@ func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 13: the most expensive read here is charged like a query,
-// before any round trip.
-func TestTheQueryLogCSVSpendsTheSameRateBudgetAQueryDoes(t *testing.T) {
+// CLAUDE.md rule 13: the most expensive read here is charged before any round
+// trip.
+func TestTheQueryLogCSVSpendsTheReadBudgetFirst(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
 	if rec.Code != http.StatusTooManyRequests {

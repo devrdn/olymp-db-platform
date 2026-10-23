@@ -298,7 +298,7 @@ services:
       # How long a queued query waits for a slot before it is answered as
       # timed out.
       QUERY_QUEUE_WAIT: ${QUERY_QUEUE_WAIT:-15s}
-      QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
+      QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-60}
       # How long a read's connection is kept for the participant's next query
       # (0-5m, 0 = a connection per query), and how many are kept at once on
       # top of the running ones (unset = four per QUERY_CONCURRENT, 0 = none).
@@ -598,11 +598,15 @@ services:
       # participant asking too fast at the same rate the Query Runner would —
       # not the architecture's own default, which may not be what this
       # deployment actually runs with.
-      QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
+      QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-60}
       # Answers one registration may submit a minute, refused ones included
       # (1-60). Its own budget, far below QUERY_PER_MINUTE: an answer is a
       # guess, and a fast stream of guesses solves a question by elimination.
-      ANSWER_RATE_PER_MINUTE: ${ANSWER_RATE_PER_MINUTE:-6}
+      ANSWER_RATE_PER_MINUTE: ${ANSWER_RATE_PER_MINUTE:-12}
+      # The play screen's reads a minute per account and per registration
+      # (1-600), apart from QUERY_PER_MINUTE so reloading never stops the
+      # console.
+      PLAY_READ_PER_MINUTE: ${PLAY_READ_PER_MINUTE:-120}
       # The contest clock's own grace (docs/ARCHITECTURE.md §8) — not
       # QUERY_DEADLINE above, which is the Query Runner's unrelated per-query
       # execution timeout. This one is consumed here, by queryproxy.Service,

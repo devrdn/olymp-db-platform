@@ -447,6 +447,8 @@ ones you hear about, and what to do
 | `game_cluster_full` | "There is no room left on the game cluster…" | see [disk filling](#the-disk-is-filling) |
 | `query_service_down` | "The query service is not answering right now…" | the Query Runner is down |
 | `query_busy` | "The system is busy. Try again in a moment." | the Query Runner is full |
+| `query_too_often` | "You are sending queries too quickly. Wait a moment." | past `QUERY_PER_MINUTE` (60 by default) or the contest's lower **Queries per minute**; lifts within the minute |
+| `play_read_too_often` | "The contest page is being loaded too often…" | past `PLAY_READ_PER_MINUTE` (120 by default), about twenty reloads in a minute; lifts within the minute, and a console already on screen keeps running queries |
 | `query_disk_full` | "Your database is at its size limit…" | their own copy hit its quota; they free it or reset |
 
 ### Incidents
@@ -557,7 +559,7 @@ Do not deploy a new version mid-contest.
 depth: participants are told `busy` at once, and a query that waited past
 `QUERY_QUEUE_WAIT` times out. The per-participant rate, **Queries per minute** on
 **Settings**, can be lowered while the contest runs. Zero there means the
-installation's `QUERY_PER_MINUTE` (30 by default), and a value above it
+installation's `QUERY_PER_MINUTE` (60 by default), and a value above it
 changes nothing.
 
 The capacity itself is decided before the contest, not during it.

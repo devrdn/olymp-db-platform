@@ -669,7 +669,7 @@ sequenceDiagram
 - `Runner.Run` and `execute` in
   [backend/internal/queryrunner/runner.go](../../backend/internal/queryrunner/runner.go);
   the default `Limits` are a 5-second deadline, 1,000 rows, 5 MiB, 8
-  concurrent queries, a queue of 32 and 30 queries a minute.
+  concurrent queries, a queue of 32 and 60 queries a minute.
 - The parser: `Checker.Analyse` in
   [backend/internal/sqlpolicy/checker/check.go](../../backend/internal/sqlpolicy/checker/check.go)
   (`pg_query_go`), one statement only, checked against the contest's
@@ -717,7 +717,7 @@ sequenceDiagram
 
     B->>W: submit the answer
     W->>H: POST /contests/ID/questions/QID/answer with value
-    H->>H: AdmitRead, then Access - the participation gate
+    H->>H: AdmitRead, Access - the participation gate, then AdmitReadOf
     H->>L: answer budget per registration, before parsing
     H->>S: Submit(SubmitCommand)
     S->>S: participation gate again, at most 1000 characters, question in this contest
@@ -785,7 +785,8 @@ Rules that matter:
   [§8.1](../ARCHITECTURE.md#81-the-participation-gate)).
 - Past admission, a refused or malformed answer still spends the answer
   budget; a request the participation gate turns away has already spent the
-  read budget (`AdmitRead`). Every refusal is a declared sentinel with its own
+  play screen's read budget (`AdmitRead`), which is apart from the query
+  budget. Every refusal is a declared sentinel with its own
   code
   ([CLAUDE.md, security rules 1 and 13](../../CLAUDE.md#security-and-performance-rules);
   scoring in [ARCHITECTURE.md §6.1.1](../ARCHITECTURE.md#611-how-a-contest-decides-a-result)).
@@ -808,7 +809,7 @@ sequenceDiagram
 
     B->>M: EventSource GET /api/v1/contests/ID/events, via Caddy
     M->>E: Authenticate passed
-    E->>Q: AdmitRead, then AccessForEvents - running, or published and waiting
+    E->>Q: AdmitRead, AccessForEvents - running, or published and waiting, then AdmitReadOf
     E->>E: connection cap per registration, 4 by default
     E-->>B: retry 30 s, sync, contest_started if running
     loop every 30 seconds

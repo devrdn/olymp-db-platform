@@ -97,7 +97,7 @@ func DefaultLimits() Limits {
 		Concurrent: 8,
 		QueueDepth: 32,
 		QueueWait:  15 * time.Second,
-		PerMinute:  30,
+		PerMinute:  60,
 		// Spans reading one answer and editing the next query, and is short
 		// enough that the reclaim sweep's plain DROP DATABASE finds a
 		// finished contest's databases already released.

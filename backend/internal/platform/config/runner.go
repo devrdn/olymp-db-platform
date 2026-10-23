@@ -179,7 +179,7 @@ func LoadRunner() (Runner, error) {
 	if cfg.QueueWait, err = durationEnv("QUERY_QUEUE_WAIT", 15*time.Second); err != nil {
 		return Runner{}, err
 	}
-	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
+	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", defaultQueryPerMinute); err != nil {
 		return Runner{}, err
 	}
 	if cfg.IdleConnTimeout, err = durationEnv("QUERY_CONN_IDLE_TIMEOUT", DefaultIdleConnTimeout); err != nil {

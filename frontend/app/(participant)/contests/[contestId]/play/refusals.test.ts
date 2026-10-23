@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import { getDictionary } from "@/lib/i18n/dictionary";
 
-import { NAMED_CODES, isClosed, refusalKind, showsReference } from "./refusals";
+import { NAMED_CODES, isClosed, isReadRateLimit, refusalKind, showsReference } from "./refusals";
 
 /** The codes the API declares, read from the contract it generates. */
 function contractCodes(): Set<string> {
@@ -27,6 +27,7 @@ describe("refusalKind", () => {
     ["not_a_participant", "excluded"],
     ["address_not_allowed", "elsewhere"],
     ["query_too_often", "passing"],
+    ["play_read_too_often", "passing"],
     ["query_busy", "passing"],
     ["query_already_running", "passing"],
     ["no_game_yet", "passing"],
@@ -56,6 +57,19 @@ describe("refusalKind", () => {
       (code) => code !== "unreachable" && !declared.has(code),
     );
     expect(unknown).toEqual([]);
+  });
+});
+
+describe("isReadRateLimit", () => {
+  test("is true for the read budget, and for the query budget an older API charged reads to", () => {
+    expect(isReadRateLimit("play_read_too_often")).toBe(true);
+    expect(isReadRateLimit("query_too_often")).toBe(true);
+  });
+
+  test("is false for every other self-lifting refusal", () => {
+    expect(isReadRateLimit("answer_too_often")).toBe(false);
+    expect(isReadRateLimit("reset_too_often")).toBe(false);
+    expect(isReadRateLimit("query_busy")).toBe(false);
   });
 });
 

@@ -785,7 +785,7 @@ about the installation. The defence is layered:
    keeps it apart); outside `ENV=development` both processes refuse to start
    without a valid token rather than allowing a call without one.
 2. **Rate limiting and admission control.** A sliding window in the cache —
-   thirty queries a minute per participant, say — one concurrent query per
+   sixty queries a minute per participant by default — one concurrent query per
    participant, and the global semaphore over concurrent executions on the
    instance (section 4.3). Exceeding it is an HTTP 429 with a message a person
    can read.
@@ -1183,7 +1183,7 @@ so a contest already published with such a question will not begin until the
 limit exists.
 
 **Answers have a rate limit of their own, not a share of the SQL budget.**
-`ANSWER_RATE_PER_MINUTE` (six by default, separate from the console's budget)
+`ANSWER_RATE_PER_MINUTE` (twelve by default, separate from the console's budget)
 counts per registration, counts refused attempts too — so a deliberately wrong
 query cannot buy free guessing — and is checked before anything else in the
 answer handler, before the question is resolved and before the reference
@@ -1546,11 +1546,12 @@ would only get in the way.
 | A tab's text | `sqlpolicy.MaxQueryBytes` (64 KiB) — the same limit the console's query has (section 5) |
 | Write rate | 60 a minute per account, one counter shared by notes and tabs; refusals count too |
 
-**The write rate is a budget separate from the console's read budget, and it
-is checked first.** The `admit` the rest of `/play/*` goes through spends
-`AdmitRead` — the same budget as running a SQL query. If autosave spent it,
-continuous typing (up to forty writes a minute at a 1.5-second pause) would be
-taking a participant's own queries away from them. So a write goes through
+**The write rate is a budget separate from the play screen's read budget, and
+it is checked first.** The `admit` the rest of `/play/*` goes through spends
+`AdmitRead` (`PLAY_READ_PER_MINUTE`, 120 by default, itself apart from the
+query budget). If autosave spent it, continuous typing (up to forty writes a
+minute at a 1.5-second pause) would leave a participant unable to reload their
+own page. So a write goes through
 `workspace.Service.AdmitWrite` first — its own counter, keyed
 `workspace:user:<account>` — and only then looks up the participant and the
 contest. The order is mandatory: a counter bounded by a budget before the
@@ -2331,9 +2332,11 @@ another request's earlier start whose time is already up, or a registration
 disqualified in between, which `Start` does not move.
 
 **What it does not decide.** Rate limits stay outside it and the gate counts
-nothing: each resource keeps its own budget, and the read budget every
-participant-facing request pays (`AdmitRead`), like the console's query rate,
-is charged before the gate is asked, so a refused request still spends it.
+nothing: each resource keeps its own budget. The read budget every
+participant-facing request pays (`AdmitRead`, per account, then `AdmitReadOf`,
+per registration) is apart from the console's query rate, so reloading the
+page never refuses a query; like the query rate, its account half is charged
+before the gate is asked, so a refused request still spends it.
 The participant leaderboard is not gated; it keeps its own visibility
 rule. The registration lookup is the caller's — a registration that is not
 found is `not_a_participant`, a store that fails is ours. And the core
@@ -2438,16 +2441,16 @@ where somebody else's rows are downloaded.
 **Streaming does not mean unbounded**, and it used to mean exactly that.
 Three limits, each answering its own question. How much may be read:
 `queryrunner.MaxExportRows` (20,000 rows, as a `LIMIT` inside the cursor
-itself) and `MaxExportBytes` (32 MiB of query text) — at the usual thirty
-queries a minute that is eleven hours of unbroken typing, a limit a contest
+itself) and `MaxExportBytes` (32 MiB of query text) — at the default sixty
+queries a minute that is over five hours of unbroken typing, a limit a contest
 never reaches; and when it does fire, the file ends with a `truncated` row,
 because a record that stopped silently is worse than a short one. How long a
 connection may be held: `api.exportDeadline`, one minute — the read runs
 inside a transaction, a slow reader is not bounded by the data's size, and the
 core pool has 25 connections. And how many such downloads one account may have
 at once: one (`api.ExportGate`), because `AdmitRead` bounds how often they
-start and not how many run, and thirty starts a minute against a pool of 25
-is sign-in stopped for everybody else. A fourth limit is per service rather
+start and not how many run, and a hundred and twenty starts a minute against a
+pool of 25 is sign-in stopped for everybody else. A fourth limit is per service rather
 than per account: `api.ExportSlots` (`EXPORT_CONCURRENCY`, five by default, a
 fifth of the pool) caps how many exports run at once across **every** export
 route together, because "one per account" is not a bound at three hundred

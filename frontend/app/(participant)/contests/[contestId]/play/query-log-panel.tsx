@@ -23,7 +23,7 @@ import { fetchQueryLog } from "./requests";
  * the "no queries yet" an empty log shows.
  *
  * The panel stays mounted and refreshes on becoming `active`, not after each
- * run: its reads (`AdmitRead`) share the per-minute budget with `Run`.
+ * run: its reads (`AdmitRead`) spend the play screen's per-minute budget.
  *
  * It loads `QUERY_LOG_PAGE_SIZE` rows at a time (querylog-terms.ts), so a
  * long log is not hundreds of rows re-rendered per page.

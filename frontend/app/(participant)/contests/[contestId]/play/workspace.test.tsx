@@ -456,7 +456,7 @@ describe("the database reset", () => {
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {
-    schemaReads.next = { kind: "refused", code: "query_too_often" };
+    schemaReads.next = { kind: "refused", code: "play_read_too_often" };
     show(A_SCHEMA, { sqlMode: "read_write" });
 
     await reset();

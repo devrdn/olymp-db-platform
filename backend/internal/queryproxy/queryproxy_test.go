@@ -2186,56 +2186,141 @@ func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
 	}
 }
 
-// AdmitRead shares Run's limiter and keys, so alternating queries and reads
-// spends one budget, not two.
-func TestAdmitReadSharesRunsOwnPerAccountBudget(t *testing.T) {
-	service := queryproxy.New(
+// readsFixture is a Service whose query and read budgets are both small, so a
+// test can spend either one in a few calls.
+func readsFixture(queriesPerMinute, readsPerMinute int) *queryproxy.Service {
+	return queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 		fiveSecondGate,
 		quietTrail, quiet{},
-	).WithPerMinuteDefault(1)
+	).WithPerMinuteDefault(queriesPerMinute).WithReadsPerMinute(readsPerMinute)
+}
 
-	userID := uuid.New()
+// Reloading the play screen must never cost the console a query.
+func TestABurstOfReadsDoesNotRefuseTheNextQuery(t *testing.T) {
+	service := readsFixture(1, 5)
 	cmd := command()
-	cmd.UserID = userID
 
-	if _, err := service.Run(t.Context(), cmd); err != nil {
-		t.Fatalf("the first query from this account: %v", err)
+	for i := range 5 {
+		if err := service.AdmitRead(cmd.UserID); err != nil {
+			t.Fatalf("read %d of 5: %v", i+1, err)
+		}
 	}
-
-	if err := service.AdmitRead(userID); !errors.Is(err, queryrunner.ErrTooManyQueries) {
-		t.Fatalf("AdmitRead() right after this account's own query = %v, want ErrTooManyQueries — the budget must be shared with Run, not doubled", err)
+	if _, err := service.Run(t.Context(), cmd); err != nil {
+		t.Fatalf("the first query after a burst of reads: %v, want it run", err)
 	}
 }
 
-// The key is the account, so a fresh account has spent nothing however many
-// contests another account tried.
-func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
-	service := queryproxy.New(
-		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
-		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
-		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
-		fiveSecondGate,
-		quietTrail, quiet{},
-	).WithPerMinuteDefault(1)
-
-	spent := uuid.New()
+func TestASpentQueryBudgetDoesNotRefuseReads(t *testing.T) {
+	service := readsFixture(1, 5)
 	cmd := command()
-	cmd.UserID = spent
+
 	if _, err := service.Run(t.Context(), cmd); err != nil {
-		t.Fatalf("spending the first account's budget: %v", err)
+		t.Fatalf("the first query: %v", err)
 	}
-	if err := service.AdmitRead(spent); !errors.Is(err, queryrunner.ErrTooManyQueries) {
-		t.Fatalf("AdmitRead() for the spent account = %v, want ErrTooManyQueries", err)
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("the second query: %v, want ErrTooManyQueries", err)
+	}
+	if err := service.AdmitRead(cmd.UserID); err != nil {
+		t.Fatalf("a read once the query budget is spent: %v, want nil", err)
+	}
+}
+
+// A read refusal is its own sentinel, so the interface can tell a participant
+// their page reloads are too fast without saying their queries are.
+func TestAdmitReadRefusesPastItsOwnBudgetPerAccount(t *testing.T) {
+	service := readsFixture(0, 2)
+	spent := uuid.New()
+
+	for i := range 2 {
+		if err := service.AdmitRead(spent); err != nil {
+			t.Fatalf("read %d of 2: %v", i+1, err)
+		}
+	}
+	err := service.AdmitRead(spent)
+	if !errors.Is(err, queryproxy.ErrTooManyReads) {
+		t.Fatalf("the third read = %v, want ErrTooManyReads", err)
+	}
+	if errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatal("a read refusal reads as a query refusal")
 	}
 
 	if err := service.AdmitRead(uuid.New()); err != nil {
 		t.Fatalf("AdmitRead() for an account that made no request = %v, want nil", err)
 	}
+}
+
+func TestAdmitReadOfRefusesPastItsOwnBudgetPerRegistration(t *testing.T) {
+	service := readsFixture(0, 2)
+	spent := uuid.New()
+
+	for i := range 2 {
+		if err := service.AdmitReadOf(spent); err != nil {
+			t.Fatalf("read %d of 2: %v", i+1, err)
+		}
+	}
+	if err := service.AdmitReadOf(spent); !errors.Is(err, queryproxy.ErrTooManyReads) {
+		t.Fatalf("the third read of the registration = %v, want ErrTooManyReads", err)
+	}
+	if err := service.AdmitReadOf(uuid.New()); err != nil {
+		t.Fatalf("AdmitReadOf() for another registration = %v, want nil", err)
+	}
+}
+
+// A contest's query_rate_limit_per_min tightens SQL only.
+func TestAContestsOwnQueryRateDoesNotTightenReads(t *testing.T) {
+	registration := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
+	service := queryproxy.New(
+		people{participant: registration},
+		contestStore{contest: contests.Contest{
+			Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
+			Settings: contests.Settings{QueryRateLimitPerMin: 1},
+		}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		fiveSecondGate,
+		quietTrail, quiet{},
+	).WithPerMinuteDefault(10).WithReadsPerMinute(5)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("the contest's one query: %v", err)
+	}
+	for i := range 5 {
+		if err := service.AdmitReadOf(registration.ID); err != nil {
+			t.Fatalf("read %d of 5 in a contest allowing one query a minute: %v", i+1, err)
+		}
+	}
+}
+
+func TestTheReadBudgetDefaultsToAHundredAndTwentyAMinute(t *testing.T) {
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{}, games{}, &databases{}, &runner{},
+		fiveSecondGate,
+		quietTrail, quiet{},
+	)
+	userID := uuid.New()
+
+	for i := range 120 {
+		if err := service.AdmitRead(userID); err != nil {
+			t.Fatalf("read %d of 120: %v", i+1, err)
+		}
+	}
+	if err := service.AdmitRead(userID); !errors.Is(err, queryproxy.ErrTooManyReads) {
+		t.Fatalf("read 121 = %v, want ErrTooManyReads", err)
+	}
+}
+
+func TestANegativeReadBudgetPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithReadsPerMinute(-1) did not panic")
+		}
+	}()
+	readsFixture(1, -1)
 }
 
 func TestAParticipantWithNothingLeftToAnswerIsRefusedTheConsole(t *testing.T) {

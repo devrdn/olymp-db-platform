@@ -579,7 +579,7 @@ own reaction.
 | `dormant` | not open now, may open later | `contest_not_running` |
 | `excluded` | not taking part | `not_a_participant` |
 | `elsewhere` | outside the contest's network | `address_not_allowed` |
-| `passing` | lifts by itself shortly | `query_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict`, `reset_too_often` |
+| `passing` | lifts by itself shortly | `query_too_often`, `play_read_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict`, `reset_too_often` |
 | `fault` | our failure; with a code the dictionary has no sentence for, the only case that shows a request reference (`showsReference`) | `internal_error`, `query_service_down`, `game_cluster_full`, `unreachable` |
 | `refused` | every other code; the dictionary sentence says what to change | (unlisted) |
 

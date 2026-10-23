@@ -234,9 +234,9 @@ describe("fetchQueryLog", () => {
   });
 
   test("passes a refusal on as its code", async () => {
-    answer(429, refusal("query_too_often"));
+    answer(429, refusal("play_read_too_often"));
 
-    expect(await fetchQueryLog(contestId, 20, 0)).toEqual({ kind: "refused", code: "query_too_often" });
+    expect(await fetchQueryLog(contestId, 20, 0)).toEqual({ kind: "refused", code: "play_read_too_often" });
   });
 });
 

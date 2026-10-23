@@ -2240,6 +2240,8 @@ const en = {
       "One of your queries is still running. Wait for it to finish.",
     query_too_often:
       "You are sending queries too quickly. Wait a moment.",
+    play_read_too_often:
+      "The contest page is being loaded too often. Wait a minute, then reload it.",
     query_disk_full:
       "Your database is at its size limit. Free some space — TRUNCATE a table you filled, or DROP one of your own — and carry on.",
     query_result_too_large:

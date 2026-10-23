@@ -2029,6 +2029,8 @@ const ro = {
       "Una dintre interogările dumneavoastră încă rulează. Așteptați-o.",
     query_too_often:
       "Trimiteți interogări prea des. Așteptați puțin.",
+    play_read_too_often:
+      "Pagina olimpiadei se încarcă prea des. Așteptați un minut, apoi reîncărcați-o.",
     query_disk_full:
       "Baza dumneavoastră a atins limita de dimensiune. Eliberați spațiu — TRUNCATE pe un tabel pe care l-ați umplut sau DROP pe unul propriu — și continuați.",
     query_result_too_large:

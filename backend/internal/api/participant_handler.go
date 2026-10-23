@@ -36,12 +36,14 @@ import (
 // asks the participation gate again for itself.
 
 // ParticipantAccess is the slice of queryproxy.Service this handler needs:
-// admission, plus the same pre-lookup rate check Run pays (CLAUDE.md rule 13),
-// because a read that costs database round trips must not be free.
+// admission, plus the read budget (CLAUDE.md rule 13), because a read that
+// costs database round trips must not be free.
 type ParticipantAccess interface {
 	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
-	// AdmitRead charges the caller's rate budget before Access runs any lookup.
+	// AdmitRead charges the caller's account before Access runs any lookup.
 	AdmitRead(userID uuid.UUID) error
+	// AdmitReadOf charges the registration Access resolved.
+	AdmitReadOf(registration uuid.UUID) error
 	// StartOnRead records the participant's start on their first read of the
 	// content. The story and question endpoints call it after the read
 	// and before sending; addr is admitted by the same gate as the read.
@@ -78,8 +80,8 @@ type AnswerLimiter interface {
 // AnswerRate is the answer endpoint's own throttle: PerMinute answers per
 // registration.
 //
-// A separate budget from AdmitRead's, which is sized for queries and polling;
-// at that rate a candidate list could be guessed quickly. It is keyed by the
+// A separate budget from AdmitRead's, which is sized for page loads; at that
+// rate a candidate list could be guessed quickly. It is keyed by the
 // registration admission resolved, so the key space is bounded by the roster
 // (CLAUDE.md rule 5), and a non-participant never creates a counter here.
 type AnswerRate struct {
@@ -215,7 +217,8 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 //
 // AdmitRead runs before the URL is even parsed, as in Run: a caller must not
 // get Access's database round trip, or the Reader's on /play/questions, for
-// free by asking as fast as the network allows.
+// free by asking as fast as the network allows. AdmitReadOf follows Access,
+// before anything is read for the registration.
 func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (contests.Participant, contests.Contest, bool) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.access.AdmitRead(identity.UserID); err != nil {
@@ -230,6 +233,10 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 
 	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
 	if err != nil {
+		h.fail(w, r, err)
+		return contests.Participant{}, contests.Contest{}, false
+	}
+	if err := h.access.AdmitReadOf(participant.ID); err != nil {
 		h.fail(w, r, err)
 		return contests.Participant{}, contests.Contest{}, false
 	}
