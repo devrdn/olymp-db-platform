@@ -821,6 +821,7 @@ const ro = {
       save: "Salvați descrierea tabelelor",
       saving: "Se salvează",
       saved: "Salvat.",
+      empty: "Nimic scris în această limbă.",
     },
     questions: {
       heading: "Întrebări",
