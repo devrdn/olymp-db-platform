@@ -188,6 +188,21 @@ type fakeHistory struct {
 	// goroutines touch.
 	mu     sync.Mutex
 	inside int
+	// entry and entryFound answer HistoryEntry; gotEntryRegistration and
+	// gotEntryID record what it was asked.
+	entry                queryrunner.HistoryEntry
+	entryFound           bool
+	entryErr             error
+	entryCalled          bool
+	gotEntryRegistration uuid.UUID
+	gotEntryID           int64
+}
+
+func (h *fakeHistory) HistoryEntry(_ context.Context, registrationID uuid.UUID, id int64) (queryrunner.HistoryEntry, bool, error) {
+	h.entryCalled = true
+	h.gotEntryRegistration = registrationID
+	h.gotEntryID = id
+	return h.entry, h.entryFound, h.entryErr
 }
 
 func (h *fakeHistory) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
@@ -687,7 +702,7 @@ func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 // Refused before Access runs its lookups, with the sentinel the console maps to
 // 429.
 func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
-	for _, path := range []string{"story", "questions", "log"} {
+	for _, path := range []string{"story", "questions", "log", "log/42"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			f.access.admitReadErr = queryproxy.ErrTooManyReads
@@ -1418,6 +1433,132 @@ func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 	}
 	if payload.Items[1].Truncated == nil || !*payload.Items[1].Truncated {
 		t.Errorf("a cut statement was handed over as if it were whole: %+v", payload.Items[1])
+	}
+}
+
+// The list hands each row's id back, so one row can be read whole.
+func TestQueryLogNamesEachRowByItsID(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.items = []queryrunner.HistoryEntry{{ID: 42, SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now()}}
+	f.history.total = 1
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log")
+	var payload struct {
+		Items []struct {
+			ID int64 `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != 42 {
+		t.Fatalf("items = %+v, want the row named 42", payload.Items)
+	}
+}
+
+// One row whole, of the registration Access resolved, never one the request
+// names.
+func TestQueryLogEntryIsTheCallersOwnRowWithItsStatementWhole(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: registrationID}
+	whole := "SELECT " + strings.Repeat("x", 5000)
+	rows := 3
+	f.history.entry = queryrunner.HistoryEntry{ID: 42, SQL: whole, Status: queryrunner.StatusOK, RowCount: &rows, ExecutedAt: time.Now()}
+	f.history.entryFound = true
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/42")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.history.gotEntryRegistration != registrationID || f.history.gotEntryID != 42 {
+		t.Fatalf("asked for row %d of %s, want row 42 of %s", f.history.gotEntryID, f.history.gotEntryRegistration, registrationID)
+	}
+	var payload struct {
+		ID        int64  `json:"id"`
+		SQL       string `json:"sql"`
+		Truncated *bool  `json:"sql_truncated"`
+		Status    string `json:"status"`
+		RowCount  *int   `json:"row_count"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.ID != 42 || payload.SQL != whole || payload.Truncated != nil || payload.Status != "ok" ||
+		payload.RowCount == nil || *payload.RowCount != 3 {
+		t.Fatalf("payload = %+v, want row 42 with its statement whole", payload)
+	}
+}
+
+// Someone else's row and no row at all read the same, so an id says nothing
+// about anyone else's log.
+func TestQueryLogEntryThatIsNotTheCallersIsNotFound(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/42")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "not_found" {
+		t.Fatalf("code = %q, want not_found", code)
+	}
+}
+
+func TestQueryLogEntryWithAnIDThatCannotBeOneIsNotFoundAndReadsNothing(t *testing.T) {
+	for _, id := range []string{"abc", "0", "-1", "99999999999999999999"} {
+		t.Run(id, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := uuid.New()
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+			f.access.participant = contests.Participant{ID: uuid.New()}
+
+			rec := f.get("/contests/" + contestID.String() + "/play/log/" + id)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if f.history.entryCalled {
+				t.Fatal("the log was read for an id that cannot name a row")
+			}
+		})
+	}
+}
+
+// Admission comes first, as for every play read: a caller outside the contest
+// reads nothing.
+func TestQueryLogEntryOfACallerNotAdmittedReadsNothing(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.err = contests.ErrNotAParticipant
+
+	rec := f.get("/contests/" + uuid.New().String() + "/play/log/42")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.history.entryCalled {
+		t.Fatal("the log was read for a caller Access refused")
+	}
+	if f.access.admitReads != 1 {
+		t.Fatalf("AdmitRead called %d times, want the read budget spent once", f.access.admitReads)
+	}
+}
+
+func TestQueryLogEntryReadFailureIsA500(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.entryErr = errors.New("connection reset")
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/42")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
