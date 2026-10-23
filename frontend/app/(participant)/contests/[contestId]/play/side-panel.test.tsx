@@ -400,6 +400,32 @@ describe("the side panel's Tables tab", () => {
     expect(tab(en.leaderboard.tab)).toHaveFocus();
   });
 
+  // A locale switch revalidates the page and keeps this state: the new
+  // language may have no descriptions, and the tab chosen a moment ago goes.
+  test("falls back to the story when the chosen Tables tab goes away, keeping a tab stop", async () => {
+    const props = {
+      accountId: "u1",
+      storyBody: <p>A body in the stacks.</p>,
+      storyCover: null,
+      storyUnavailable: null,
+      contestId: "c1",
+      questionEntries: [],
+      initialNotes: { body: "", updatedAt: null },
+      dict: en,
+      locale: "en" as const,
+    };
+    const { rerender } = render(<SidePanel {...props} schemaNotes={<p>The suspects table.</p>} />);
+    await userEvent.click(tablesTab()!);
+
+    rerender(<SidePanel {...props} schemaNotes={null} />);
+
+    expect(tablesTab()).not.toBeInTheDocument();
+    const story = screen.getByRole("tab", { name: tabs.story });
+    expect(story).toHaveAttribute("aria-selected", "true");
+    expect(story).toHaveAttribute("tabindex", "0");
+    expect(screen.getByText("A body in the stacks.")).toBeVisible();
+  });
+
   test("scrolls a long document inside its own panel and loses none of it", async () => {
     const sections = Array.from(
       { length: 120 },
