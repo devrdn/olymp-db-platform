@@ -5,6 +5,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } fro
 import { cn } from "@/lib/utils";
 
 import type { EditorState, EditorView } from "./code-editor-core";
+import { placeInsertion } from "./code-insertion";
 
 type Core = typeof import("./code-editor-core");
 
@@ -20,6 +21,12 @@ export type CodeEditorHandle = {
    * points the editor elsewhere and the state left behind is discarded.
    */
   dropDocument: (id: string) => void;
+  /**
+   * Inserts text at the caret of the showing document as an edit: undoable,
+   * reported through `onChange`, the caret left after it. On a line that
+   * already holds text it goes on a new line after that one.
+   */
+  insertAtCursor: (text: string) => void;
 };
 
 export type EditorShortcut = { key: string; run: () => void };
@@ -177,6 +184,24 @@ export function CodeEditor({
         // owner's next swap discards it instead of storing it forever; the view
         // must keep showing it until then.
         if (id === openIdRef.current) droppedRef.current = id;
+      },
+      insertAtCursor: (text) => {
+        const core = coreRef.current;
+        const view = viewRef.current;
+        if (core && view) {
+          core.insertAtCursor(view, text);
+          return;
+        }
+        const field = fallbackRef.current;
+        if (!field) return;
+        const { value, selectionStart: caret } = field;
+        const lineFrom = value.lastIndexOf("\n", caret - 1) + 1;
+        const lineEnd = value.indexOf("\n", caret);
+        const lineTo = lineEnd === -1 ? value.length : lineEnd;
+        const { at, insert } = placeInsertion({ text: value.slice(lineFrom, lineTo), to: lineTo }, caret, text);
+        field.setRangeText(insert, at, at, "end");
+        field.focus();
+        report(field.value);
       },
     }),
     [],

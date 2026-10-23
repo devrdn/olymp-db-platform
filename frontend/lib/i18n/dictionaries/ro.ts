@@ -1449,6 +1449,7 @@ const ro = {
         foreignKeyCount: "chei externe: {n}",
         expand: "Extinde tabelul {table}",
         collapse: "Restrânge tabelul {table}",
+        query: "Inserează în editor o interogare pe tabelul {table}",
       },
       story: {
         heading: "Povestea",

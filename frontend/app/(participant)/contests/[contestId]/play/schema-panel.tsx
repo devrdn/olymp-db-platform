@@ -17,9 +17,12 @@ export function SchemaPanel({
   schema,
   hidden = false,
   onReveal,
+  onQueryTable,
   dict,
 }: {
   schema: GameSchema;
+  /** Called with a table's name when it is clicked, to write a query on it. Must be stable: the panel is memoised. */
+  onQueryTable: (table: string) => void;
   /**
    * Collapsed by the participant. Still mounted, so the search and the
    * open tables survive; only ⌘K has to reveal it first.
@@ -132,6 +135,7 @@ export function SchemaPanel({
                   key={table.name}
                   table={table}
                   open={open}
+                  onQuery={onQueryTable}
                   onToggle={() =>
                     setCollapsed((current) => {
                       const next = new Set(current);
@@ -151,42 +155,54 @@ export function SchemaPanel({
   );
 }
 
-/** One table and, when it is open, its columns. */
+/**
+ * One table and, when it is open, its columns. The name writes a query on the
+ * table, the chevron beside it opens and closes it: the name is the larger
+ * target, and a query is what a participant reaches for.
+ */
 function TableRow({
   table,
   open,
   onToggle,
+  onQuery,
   t,
 }: {
   table: MatchedTable;
   open: boolean;
   onToggle: () => void;
+  onQuery: (table: string) => void;
   t: PlayDictionary["participant"]["play"]["schema"];
 }) {
   const foreignKeys = table.columns.filter((column) => column.references !== "").length;
+  const query = t.query.replace("{table}", table.name);
 
   return (
     <li>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "flex w-full items-center gap-2 px-3 text-left text-ink",
-          "hover:bg-sunk",
-          open && "bg-accent-wash font-medium text-accent",
-        )}
-      >
-        <span aria-hidden="true" className="shrink-0 text-ink-3">
-          {open ? "▾" : "▸"}
-        </span>
-        <span className="truncate">{table.name}</span>
-        {foreignKeys > 0 ? (
-          <span className="ml-auto shrink-0 font-mono text-label text-ink-3 normal-case">
-            fk {foreignKeys}
-          </span>
-        ) : null}
-      </button>
+      <div className={cn("flex w-full items-center text-ink", open && "bg-accent-wash font-medium text-accent")}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={(open ? t.collapse : t.expand).replace("{table}", table.name)}
+          className="shrink-0 self-stretch pr-1 pl-3 text-ink-3 hover:bg-sunk hover:text-ink"
+        >
+          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onQuery(table.name)}
+          aria-label={query}
+          title={query}
+          className="flex min-w-0 flex-1 items-center gap-2 pr-3 text-left hover:bg-sunk"
+        >
+          <span className="truncate">{table.name}</span>
+          {foreignKeys > 0 ? (
+            <span className="ml-auto shrink-0 font-mono text-label text-ink-3 normal-case">
+              fk {foreignKeys}
+            </span>
+          ) : null}
+        </button>
+      </div>
 
       {open ? (
         <ul>
