@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { toCsv } from "./csv";
+import { toCsv, toTsv } from "./csv";
 
 describe("toCsv", () => {
   test("writes the header row from the columns, then one row per record", () => {
@@ -99,5 +99,35 @@ describe("toCsv", () => {
     const csv = toCsv(["note"], [["=A1, bloodied"]]);
 
     expect(csv).toBe('note\r\n"\'=A1, bloodied"\r\n');
+  });
+});
+
+/** Tab-separated text for the clipboard, so a paste into a spreadsheet lands in columns. */
+describe("toTsv", () => {
+  test("writes the header row, then one row per record, separated by tabs", () => {
+    expect(toTsv(["id", "note"], [["1", "a knife"], ["2", "a rope"]])).toBe("id\tnote\n1\ta knife\n2\ta rope");
+  });
+
+  test("writes a null as an empty field", () => {
+    expect(toTsv(["id", "alibi"], [["1", null]])).toBe("id\talibi\n1\t");
+  });
+
+  test("leaves a comma alone, since it is not the delimiter", () => {
+    expect(toTsv(["note"], [["a knife, bloodied"]])).toBe("note\na knife, bloodied");
+  });
+
+  test("quotes a field holding a tab, a line break or a quote, doubling the quote", () => {
+    expect(toTsv(["note"], [["a\tb"], ["line one\nline two"], ['the "butler"']])).toBe(
+      'note\n"a\tb"\n"line one\nline two"\n"the ""butler"""',
+    );
+  });
+
+  // A paste is evaluated by the spreadsheet exactly as an opened file is.
+  test("neutralises a cell or a column name a spreadsheet would run as a formula", () => {
+    expect(toTsv(["=total"], [["=HYPERLINK(\"x\")"], ["-12"]])).toBe('\'=total\n"\'=HYPERLINK(""x"")"\n-12');
+  });
+
+  test("writes just the header for no rows", () => {
+    expect(toTsv(["id"], [])).toBe("id");
   });
 });
