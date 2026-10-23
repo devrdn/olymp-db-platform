@@ -508,7 +508,7 @@ func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
 	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, "")
 	want := `{"state":"frozen","scoring":"winner","title":"The Library Murder","frozen_at":"2026-03-01T11:30:00Z",` +
 		`"ends_at":"2026-03-01T12:00:00Z","generated_at":"2026-03-01T11:40:00Z","truncated":false,"rows":[` +
-		`{"place":1,"prize":null,"label":"student","points":5,"solved":1,"last_scored_at":"2026-03-01T11:10:00Z","winner":true,"is_you":true},` +
+		`{"place":1,"prize":1,"label":"student","points":5,"solved":1,"last_scored_at":"2026-03-01T11:10:00Z","winner":true,"is_you":true},` +
 		`{"place":null,"prize":null,"label":"rival","points":20,"solved":0,"last_scored_at":"2026-03-01T11:00:00Z"}]}` + "\n"
 	if got := rec.Body.String(); got != want {
 		t.Errorf("participant body =\n%s\nwant\n%s", got, want)
@@ -757,8 +757,6 @@ func samePrizes(t *testing.T, audience string, got, want map[string]any) {
 	}
 }
 
-// All three audiences see the same tiers: the staff table lists the
-// disqualified, who take no prize and push nobody down.
 func TestEveryAudienceSeesThePrizeTiers(t *testing.T) {
 	f := newBoardFixture(t)
 	c, me := f.contest(t, contests.StatusRunning, nil)
@@ -814,7 +812,8 @@ func TestNoPrizePlacesShowNoTierAnywhere(t *testing.T) {
 		map[string]any{"leader": nil})
 }
 
-func TestAWinnerTableShowsNoPrizeTiers(t *testing.T) {
+// The counts do not apply in winner mode; its one winner holds the first prize.
+func TestAWinnerTableGivesOnlyTheWinnerTheFirstPrize(t *testing.T) {
 	f := newBoardFixture(t)
 	c, _ := f.contest(t, contests.StatusRunning, nil)
 	c.Scoring = contests.ScoringWinner
@@ -827,5 +826,5 @@ func TestAWinnerTableShowsNoPrizeTiers(t *testing.T) {
 	}
 
 	samePrizes(t, "winner", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"),
-		map[string]any{"winner": nil, "rich": nil})
+		map[string]any{"winner": float64(1), "rich": nil})
 }

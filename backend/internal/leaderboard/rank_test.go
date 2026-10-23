@@ -277,22 +277,75 @@ func TestPrizesFollowICPCPlaces(t *testing.T) {
 	samePrizes(t, rows, map[string]int{"fast": 1, "slow": 2, "tied": 2, "two": 0})
 }
 
-// Winner mode keeps its single winner; the counts do not apply.
-func TestWinnerModeAwardsNoPrizes(t *testing.T) {
+// Winner mode ignores the counts; its one winner holds the first prize.
+func TestWinnerModeGivesTheWinnerTheFirstPrizeAndNobodyElseAny(t *testing.T) {
 	final := entry("winner", 5, at(30))
 	final.FinalAt = at(30)
 	rows := leaderboard.Rank(contests.ScoringWinner, []leaderboard.Entry{final, entry("rich", 50, at(10))})
 
 	leaderboard.AwardPrizes(rows, contests.ScoringWinner, contests.PrizePlaces{First: 5, Second: 5, Third: 5})
 
-	samePrizes(t, rows, map[string]int{"winner": 0, "rich": 0})
+	samePrizes(t, rows, map[string]int{"winner": 1, "rich": 0})
 	if !rows[0].Winner || rows[0].Place != 1 {
 		t.Errorf("first row = %+v, want the winner still placed first", rows[0])
 	}
 }
 
-// The staff table lists the disqualified among everybody else. They take no
-// prize and hold no place for one, so staff see the prizes everybody sees.
+// The staff table can mark a disqualified row the winner; it still takes no
+// prize.
+func TestADisqualifiedWinnerTakesNoPrize(t *testing.T) {
+	cheat := entry("cheat", 5, at(10))
+	cheat.FinalAt, cheat.Disqualified = at(10), true
+	rows := leaderboard.Rank(contests.ScoringWinner, []leaderboard.Entry{cheat})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringWinner, contests.PrizePlaces{})
+
+	samePrizes(t, rows, map[string]int{"cheat": 0})
+}
+
+func TestWinnerModeWithoutAWinnerGivesNoPrize(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringWinner, []leaderboard.Entry{entry("rich", 50, at(10))})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringWinner, contests.PrizePlaces{First: 1})
+
+	samePrizes(t, rows, map[string]int{"rich": 0})
+}
+
+func TestAnAllZeroTableAwardsNothing(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 0, nil), entry("b", 0, nil), entry("c", 0, nil),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 1, Third: 1})
+
+	samePrizes(t, rows, map[string]int{"a": 0, "b": 0, "c": 0})
+}
+
+// Counts reaching past the last scorer stop at it: the zero scorers share the
+// next place, inside the third-prize count, and still take nothing.
+func TestZeroScorersInsideTheCountsTakeNoPrize(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 30, at(1)), entry("b", 20, at(1)), entry("idle-1", 0, nil), entry("idle-2", 0, nil),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 1, Third: 5})
+
+	samePrizes(t, rows, map[string]int{"a": 1, "b": 2, "idle-1": 0, "idle-2": 0})
+}
+
+func TestICPCRowsThatSolvedNothingTakeNoPrize(t *testing.T) {
+	solved := func(login string, n, penalty int) leaderboard.Entry {
+		return leaderboard.Entry{Registration: uuid.New(), Login: login, Solved: n, Penalty: penalty}
+	}
+	rows := leaderboard.RankICPC([]leaderboard.Entry{
+		solved("one", 1, 30), solved("none-a", 0, 0), solved("none-b", 0, 0),
+	}, leaderboard.Grid{})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringICPC, contests.PrizePlaces{First: 3})
+
+	samePrizes(t, rows, map[string]int{"one": 1, "none-a": 0, "none-b": 0})
+}
+
 func TestADisqualifiedRowTakesNoPrizeAndHoldsNoPlaceForOne(t *testing.T) {
 	cheat := entry("cheat", 90, at(1))
 	cheat.Disqualified = true
