@@ -208,6 +208,7 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		CreatedBy:        owner.ID,
 		LeaderboardNames: contests.LeaderboardNamesLogin,
 		ICPCPenaltyMin:   contests.DefaultICPCPenaltyMin,
+		ResultDownload:   true,
 	})
 	if err != nil {
 		return report, fmt.Errorf("create the contest: %w", err)

@@ -188,6 +188,8 @@ type CreateCommand struct {
 	LeaderboardNames     string
 	// ICPCPenaltyMin is nil for the default of DefaultICPCPenaltyMin minutes.
 	ICPCPenaltyMin *int
+	// ResultDownload is nil for the default, on.
+	ResultDownload *bool
 }
 
 // Create registers a contest and makes its author the owner.
@@ -209,7 +211,8 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 
 		LeaderboardFreezeMin: cmd.LeaderboardFreezeMin,
 		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesLogin),
-		ICPCPenaltyMin:       orDefaultInt(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
+		ICPCPenaltyMin:       orDefaultValue(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
+		ResultDownload:       orDefaultValue(cmd.ResultDownload, true),
 	}
 	if err := c.Validate(); err != nil {
 		return Contest{}, err
@@ -293,6 +296,8 @@ type UpdateCommand struct {
 	// ICPCPenaltyMin is the per-attempt penalty in minutes; nil leaves it
 	// alone, because zero (no penalty) is a real setting.
 	ICPCPenaltyMin *int
+	// ResultDownload is nil to leave it alone, since false is a real setting.
+	ResultDownload *bool
 }
 
 // Update changes a contest's settings.
@@ -347,6 +352,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 	if cmd.ICPCPenaltyMin != nil {
 		updated.ICPCPenaltyMin = *cmd.ICPCPenaltyMin
+	}
+	if cmd.ResultDownload != nil {
+		updated.ResultDownload = *cmd.ResultDownload
 	}
 
 	// A client cannot send "no duration", and a fixed contest with one does
@@ -728,9 +736,9 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// orDefaultInt is orDefault for a setting whose zero is meaningful, so nil
+// orDefaultValue is orDefault for a setting whose zero is meaningful, so nil
 // stands for "not sent".
-func orDefaultInt(value *int, fallback int) int {
+func orDefaultValue[T any](value *T, fallback T) T {
 	if value == nil {
 		return fallback
 	}

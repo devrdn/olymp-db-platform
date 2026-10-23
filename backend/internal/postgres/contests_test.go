@@ -96,6 +96,27 @@ func TestDurationMinAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
 	})
 }
 
+// Every contest stored before the setting existed, and any row written
+// without it, keeps offering the download it always had.
+func TestAContestStoredWithoutTheResultDownloadOffersIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-result-download")
+		var id uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author.ID).Scan(&id); err != nil {
+			t.Fatalf("insert = %v", err)
+		}
+
+		got, err := NewContests(testPool).ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if !got.ResultDownload {
+			t.Error("ResultDownload = false, want the column default, true")
+		}
+	})
+}
+
 func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)
