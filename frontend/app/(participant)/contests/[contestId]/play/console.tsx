@@ -4,6 +4,7 @@ import { useActionState, useEffect, useId, useImperativeHandle, useLayoutEffect,
 
 import { CodeEditor, type CodeEditorHandle, type EditorShortcut } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
+import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ export function ConsoleEditor({
   contestId,
   dict,
   tabs: initialTabs,
+  schema,
   onResult,
   actions,
   shortcuts,
@@ -46,6 +48,11 @@ export function ConsoleEditor({
    * works on one local tab and says nothing is saved.
    */
   tabs: WorkspaceTab[] | null;
+  /**
+   * The game's tables and columns, offered as completions; null where the
+   * contest hides its schema, which leaves PostgreSQL's keywords alone.
+   */
+  schema?: GameSchema | null;
   /** Controls the workspace puts at the right end of the toolbar. */
   actions?: React.ReactNode;
   /** Keys the workspace owns that the editor must not swallow (the panel toggles). */
@@ -229,6 +236,7 @@ export function ConsoleEditor({
           placeholder={t.placeholder}
           documentId={tabs.activeId}
           getDocumentValue={tabs.textOf}
+          schema={schema}
           getInitialValue={() => mirrorRef.current?.value ?? ""}
           onChange={(text) => {
             lastTyped.current = text;
