@@ -104,6 +104,9 @@ type PackagedQuestion struct {
 
 // PackagedQuestionText is a question as authored in one language.
 type PackagedQuestionText struct {
+	// Title is left out when empty, so a package of untitled questions reads
+	// as it did before titles existed.
+	Title   string            `json:"title,omitempty"`
 	BodyMD  string            `json:"body_md"`
 	Choices map[string]string `json:"choices,omitempty"`
 }
@@ -241,7 +244,7 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 			Answers:     make([]PackagedAnswer, 0, len(q.Answers)),
 		}
 		for lang, text := range q.Texts {
-			packaged.Texts[lang] = PackagedQuestionText{BodyMD: text.BodyMD, Choices: text.Choices}
+			packaged.Texts[lang] = PackagedQuestionText{Title: text.Title, BodyMD: text.BodyMD, Choices: text.Choices}
 		}
 		for _, a := range q.Answers {
 			packaged.Answers = append(packaged.Answers, PackagedAnswer{MatchKind: a.MatchKind, Value: a.Value})

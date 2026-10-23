@@ -610,7 +610,7 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			})
 
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{
-				"en": {BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
+				"en": {Title: "The culprit", BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
 				"ro": {BodyMD: "Cine a facut-o?", Choices: map[string]string{"a": "Majordomul", "b": "Gradinarul"}},
 			})
 
@@ -618,11 +618,11 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			if len(got) != 2 {
 				t.Fatalf("Texts has %d languages, want 2", len(got))
 			}
-			if got["en"].BodyMD != "Who did it?" || got["en"].Choices["a"] != "The butler" || got["en"].Choices["b"] != "The gardener" || len(got["en"].Choices) != 2 {
-				t.Errorf("en = %+v, want its body and two labels", got["en"])
+			if got["en"].Title != "The culprit" || got["en"].BodyMD != "Who did it?" || got["en"].Choices["a"] != "The butler" || got["en"].Choices["b"] != "The gardener" || len(got["en"].Choices) != 2 {
+				t.Errorf("en = %+v, want its title, its body and two labels", got["en"])
 			}
-			if got["ro"].BodyMD != "Cine a facut-o?" || got["ro"].Choices["b"] != "Gradinarul" || len(got["ro"].Choices) != 2 {
-				t.Errorf("ro = %+v, want its body and two labels", got["ro"])
+			if got["ro"].Title != "" || got["ro"].BodyMD != "Cine a facut-o?" || got["ro"].Choices["b"] != "Gradinarul" || len(got["ro"].Choices) != 2 {
+				t.Errorf("ro = %+v, want no title, its body and two labels", got["ro"])
 			}
 		})
 	})
@@ -633,17 +633,18 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			created := create(t, ctx, target, textual(target.NewContest(), 10))
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{
-				"en": {BodyMD: "Old English"},
+				"en": {Title: "Old title", BodyMD: "Old English"},
 				"ru": {BodyMD: "Old Russian"},
 			})
 
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{
 				"en": {BodyMD: "New English"},
-				"ro": {BodyMD: "New Romanian"},
+				"ro": {Title: "Titlu nou", BodyMD: "New Romanian"},
 			})
 
 			got := byID(t, ctx, target, created.ID).Texts
-			if len(got) != 2 || got["en"].BodyMD != "New English" || got["ro"].BodyMD != "New Romanian" {
+			if len(got) != 2 || got["en"].Title != "" || got["en"].BodyMD != "New English" ||
+				got["ro"].Title != "Titlu nou" || got["ro"].BodyMD != "New Romanian" {
 				t.Errorf("Texts = %+v, want only new English and new Romanian", got)
 			}
 		})
@@ -900,8 +901,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 				IsVisible: true, ChoiceIDs: []string{"b", "a"},
 			})
 			replaceTexts(t, ctx, target, created.ID, map[string]contests.QuestionText{
-				"en": {BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
-				"ro": {BodyMD: "Cine a facut-o?", Choices: map[string]string{"a": "Majordomul", "b": "Gradinarul"}},
+				"en": {Title: "The culprit", BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
+				"ro": {Title: "Vinovatul", BodyMD: "Cine a facut-o?", Choices: map[string]string{"a": "Majordomul", "b": "Gradinarul"}},
 			})
 			replaceAnswers(t, ctx, target, created.ID, []contests.Answer{{MatchKind: contests.MatchExact, Value: "a"}})
 
@@ -920,8 +921,8 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			if !slices.Equal(v.ChoiceIDs, []string{"b", "a"}) {
 				t.Errorf("ChoiceIDs = %v, want [b a]", v.ChoiceIDs)
 			}
-			if v.BodyMD != "Cine a facut-o?" {
-				t.Errorf("BodyMD = %q, want the Romanian wording", v.BodyMD)
+			if v.Title != "Vinovatul" || v.BodyMD != "Cine a facut-o?" {
+				t.Errorf("(title, body) = (%q, %q), want the Romanian wording", v.Title, v.BodyMD)
 			}
 			if len(v.Choices) != 2 || v.Choices["a"] != "Majordomul" || v.Choices["b"] != "Gradinarul" {
 				t.Errorf("Choices = %v, want the two Romanian labels", v.Choices)

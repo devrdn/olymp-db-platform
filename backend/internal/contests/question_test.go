@@ -124,6 +124,11 @@ func TestQuestionTextIsBounded(t *testing.T) {
 		{"label past the bound", contests.QuestionText{Choices: map[string]string{"a": strings.Repeat("ж", 1001)}}, false},
 		{"as many labels as options", contests.QuestionText{Choices: labels(50)}, true},
 		{"more labels than options", contests.QuestionText{Choices: labels(51)}, false},
+		{"no title", contests.QuestionText{BodyMD: "Who did it?"}, true},
+		{"title at the bound", contests.QuestionText{Title: strings.Repeat("ж", 200)}, true},
+		{"title past the bound", contests.QuestionText{Title: strings.Repeat("ж", 201)}, false},
+		{"title on two lines", contests.QuestionText{Title: "The weapon\nand the room"}, false},
+		{"title with a carriage return", contests.QuestionText{Title: "The weapon\r"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

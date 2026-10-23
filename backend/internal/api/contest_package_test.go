@@ -37,7 +37,7 @@ func seedPackagedContest(t *testing.T, f *contestFixture) contests.Contest {
 		ContestID: c.ID, Ord: 1, Kind: contests.KindChoice, Points: 5, IsVisible: true,
 		ChoiceIDs: []string{"a", "b"},
 		Texts: map[string]contests.QuestionText{
-			"en": {BodyMD: "Who came in?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
+			"en": {Title: "The visitor", BodyMD: "Who came in?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
 		},
 		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "a"}},
 	})
@@ -109,6 +109,9 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 	}
 	texts, _ := first["texts"].(map[string]any)
 	englishText, _ := texts["en"].(map[string]any)
+	if englishText["title"] != "The visitor" || englishText["body_md"] != "Who came in?" {
+		t.Errorf("the wording came back as %v, want its title and body", englishText)
+	}
 	choices, _ := englishText["choices"].(map[string]any)
 	if choices["a"] != "The butler" {
 		t.Errorf("the choice labels came back as %v", choices)

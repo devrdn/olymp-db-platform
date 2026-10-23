@@ -49,7 +49,9 @@ type ParticipantQuestion struct {
 	Kind      string
 	Points    int
 	ChoiceIDs []string
-	BodyMD    string
+	// Title is empty when the question has none in the resolved language.
+	Title  string
+	BodyMD string
 	// Choices maps a choice identifier to its label in the resolved language,
 	// nil for a question that is not KindChoice.
 	Choices map[string]string
@@ -78,6 +80,7 @@ type VisibleQuestion struct {
 	Points      int
 	MaxAttempts *int
 	ChoiceIDs   []string
+	Title       string
 	BodyMD      string
 	Choices     map[string]string
 }
@@ -126,6 +129,7 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 			Kind:              q.Kind,
 			Points:            q.Points,
 			ChoiceIDs:         q.ChoiceIDs,
+			Title:             q.Title,
 			BodyMD:            q.BodyMD,
 			Choices:           q.Choices,
 			AttemptsRemaining: attemptsRemaining(q.MaxAttempts, used.Attempts),
