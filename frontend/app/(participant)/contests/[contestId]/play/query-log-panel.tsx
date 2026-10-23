@@ -90,10 +90,15 @@ export function QueryLogPanel({
 
   const loadMore = async () => {
     setLoadingMore(true);
-    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, items.length);
+    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, 0, items.at(-1)?.id);
     setLoadingMore(false);
     if (result.kind === "ok") {
-      setItems((prev) => [...prev, ...result.items]);
+      // Rows are keyed by id, so a row the list already holds is not added
+      // twice, should a refresh have raced this page.
+      setItems((prev) => {
+        const held = new Set(prev.map((entry) => entry.id));
+        return [...prev, ...result.items.filter((entry) => !held.has(entry.id))];
+      });
       setTotal(result.total);
       setFailed(false);
     } else {
