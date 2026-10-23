@@ -603,9 +603,8 @@ services:
       # (1-60). Its own budget, far below QUERY_PER_MINUTE: an answer is a
       # guess, and a fast stream of guesses solves a question by elimination.
       ANSWER_RATE_PER_MINUTE: ${ANSWER_RATE_PER_MINUTE:-12}
-      # The play screen's reads a minute per account and per registration
-      # (1-600), apart from QUERY_PER_MINUTE so reloading never stops the
-      # console.
+      # The play screen's reads a minute per account (30-600), apart from
+      # QUERY_PER_MINUTE so reloading never stops the console.
       PLAY_READ_PER_MINUTE: ${PLAY_READ_PER_MINUTE:-120}
       # The contest clock's own grace (docs/ARCHITECTURE.md §8) — not
       # QUERY_DEADLINE above, which is the Query Runner's unrelated per-query

@@ -84,12 +84,10 @@ export function isClosed(code: string): code is ClosedCode {
 
 /**
  * Whether `code` is the rate limit the play screen's reads meet, which lifts
- * within the minute and so is answered with a reload. An API older than this
- * interface charges those reads to the console's budget and answers
- * `query_too_often`.
+ * within the minute and so is answered with a reload.
  */
 export function isReadRateLimit(code: string): boolean {
-  return code === "play_read_too_often" || code === "query_too_often";
+  return code === "play_read_too_often";
 }
 
 /**

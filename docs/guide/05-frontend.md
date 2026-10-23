@@ -562,9 +562,8 @@ A non-200 response closes an `EventSource` for good, which would freeze the
 clock silently. The hook then probes the same URL with `fetch` to learn the
 refusal code, shows it, and reconnects after a delay that doubles from 5 s to
 a 60 s ceiling, plus up to 50% random spread. It does not reconnect after a
-refusal that cannot clear on a timer (`excluded` or `elsewhere`). Every reconnect spends the request
-budget the channel shares with the SQL console, which is why the backoff
-never stays at its floor.
+refusal that cannot clear on a timer (`excluded` or `elsewhere`). Every reconnect spends the play
+screen's read budget, which is why the backoff never stays at its floor.
 
 ### Refusals
 

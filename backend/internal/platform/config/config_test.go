@@ -1205,7 +1205,8 @@ func TestTheReadBudgetIsConfigurableAndBounded(t *testing.T) {
 		t.Errorf("PlayReadPerMinute = %d, want 300", cfg.PlayReadPerMinute)
 	}
 
-	for _, value := range []string{"0", "601", "-1", "many"} {
+	// Under thirty a minute the play screen cannot finish loading twice.
+	for _, value := range []string{"0", "29", "601", "-1", "many"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 			t.Setenv("PLAY_READ_PER_MINUTE", value)

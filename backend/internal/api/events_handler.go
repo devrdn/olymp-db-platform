@@ -26,7 +26,6 @@ import (
 // without polling. Every read and answer still goes through Access.
 type EventsAccess interface {
 	AdmitRead(userID uuid.UUID) error
-	AdmitReadOf(registration uuid.UUID) error
 	// AccessForEvents also returns the participant's Standing, refused or not,
 	// so a refused resync can tell whether the contest is over for them.
 	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error)
@@ -184,10 +183,6 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	addr := clientAddress(r)
 	participant, contest, _, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
 	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	if err := h.access.AdmitReadOf(participant.ID); err != nil {
 		h.fail(w, r, err)
 		return
 	}

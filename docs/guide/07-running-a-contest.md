@@ -448,7 +448,7 @@ ones you hear about, and what to do
 | `query_service_down` | "The query service is not answering right now…" | the Query Runner is down |
 | `query_busy` | "The system is busy. Try again in a moment." | the Query Runner is full |
 | `query_too_often` | "You are sending queries too quickly. Wait a moment." | past `QUERY_PER_MINUTE` (60 by default) or the contest's lower **Queries per minute**; lifts within the minute |
-| `play_read_too_often` | "The contest page is being loaded too often…" | past `PLAY_READ_PER_MINUTE` (120 by default), about twenty reloads in a minute; lifts within the minute, and a console already on screen keeps running queries |
+| `play_read_too_often` | "Too many requests from this page. Wait a minute and try again." | past `PLAY_READ_PER_MINUTE` (120 by default), about twenty reloads in a minute; lifts within the minute, and a console already on screen keeps running queries |
 | `query_disk_full` | "Your database is at its size limit…" | their own copy hit its quota; they free it or reset |
 
 ### Incidents

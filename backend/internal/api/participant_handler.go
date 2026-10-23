@@ -42,8 +42,6 @@ type ParticipantAccess interface {
 	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
 	// AdmitRead charges the caller's account before Access runs any lookup.
 	AdmitRead(userID uuid.UUID) error
-	// AdmitReadOf charges the registration Access resolved.
-	AdmitReadOf(registration uuid.UUID) error
 	// StartOnRead records the participant's start on their first read of the
 	// content. The story and question endpoints call it after the read
 	// and before sending; addr is admitted by the same gate as the read.
@@ -217,8 +215,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 //
 // AdmitRead runs before the URL is even parsed, as in Run: a caller must not
 // get Access's database round trip, or the Reader's on /play/questions, for
-// free by asking as fast as the network allows. AdmitReadOf follows Access,
-// before anything is read for the registration.
+// free by asking as fast as the network allows.
 func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (contests.Participant, contests.Contest, bool) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.access.AdmitRead(identity.UserID); err != nil {
@@ -233,10 +230,6 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 
 	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
 	if err != nil {
-		h.fail(w, r, err)
-		return contests.Participant{}, contests.Contest{}, false
-	}
-	if err := h.access.AdmitReadOf(participant.ID); err != nil {
 		h.fail(w, r, err)
 		return contests.Participant{}, contests.Contest{}, false
 	}

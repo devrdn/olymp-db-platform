@@ -295,9 +295,9 @@ func TestEventsResyncsOnEveryTick(t *testing.T) {
 	waitDone(t, done)
 }
 
-// Opening the channel is one read of the registration; a resync is a push the
-// server chose and spends nothing.
-func TestEventsChargesTheRegistrationOnceOnOpenAndNotPerTick(t *testing.T) {
+// Opening the channel is one read; a resync is a push the server chose and
+// spends nothing.
+func TestEventsChargesOneReadOnOpenAndNonePerTick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
@@ -313,35 +313,8 @@ func TestEventsChargesTheRegistrationOnceOnOpenAndNotPerTick(t *testing.T) {
 
 	f.access.mu.Lock()
 	defer f.access.mu.Unlock()
-	if len(f.access.readsOf) != 1 || f.access.readsOf[0] != f.access.participant.ID {
-		t.Fatalf("AdmitReadOf charged %v, want the registration %s once", f.access.readsOf, f.access.participant.ID)
-	}
-}
-
-func TestEventsPastTheRegistrationsReadBudgetIsA429(t *testing.T) {
-	f := newEventsFixture(t)
-	contestID := uuid.New()
-	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.access.admitReadOfErr = queryproxy.ErrTooManyReads
-
-	req, cancel := f.request(contestID)
-	defer cancel()
-	rec, done := f.serve(req)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		cancel()
-		<-done
-		t.Fatal("the channel was held open past the registration's read budget")
-	}
-
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.String())
-	}
-	if code := errorCode(t, rec.ResponseRecorder); code != "play_read_too_often" {
-		t.Fatalf("code = %q, want play_read_too_often", code)
+	if f.access.admitReads != 1 {
+		t.Fatalf("AdmitRead called %d times across three syncs, want 1", f.access.admitReads)
 	}
 }
 

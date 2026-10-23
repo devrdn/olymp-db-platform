@@ -253,10 +253,11 @@ type Config struct {
 	// PerMinute), including what zero means: unset is 60 on both sides, an
 	// explicit 0 is no limit on both.
 	QueryPerMinute int
-	// PlayReadPerMinute is the play screen's own budget per account and per
-	// registration (queryproxy.Service.AdmitRead), apart from QueryPerMinute so
-	// reloading a page never refuses a query. Bounded to 1-600, with no
-	// "unlimited".
+	// PlayReadPerMinute is the play screen's own budget per account
+	// (queryproxy.Service.AdmitRead), apart from QueryPerMinute so reloading a
+	// page never refuses a query. Bounded to 30-600, with no "unlimited": one
+	// page load costs about six reads, and a lower budget would leave the
+	// screen unable to load.
 	PlayReadPerMinute int
 	// AnswerRatePerMinute is how many answers one registration may submit
 	// per minute, refused ones included. It is separate from QueryPerMinute
@@ -437,9 +438,9 @@ func Load() (Config, error) {
 	if cfg.PlayReadPerMinute, err = intEnv("PLAY_READ_PER_MINUTE", defaultPlayReadPerMinute); err != nil {
 		return Config{}, err
 	}
-	if cfg.PlayReadPerMinute < 1 || cfg.PlayReadPerMinute > maxPlayReadPerMinute {
-		return Config{}, fmt.Errorf("PLAY_READ_PER_MINUTE: %d is outside 1-%d",
-			cfg.PlayReadPerMinute, maxPlayReadPerMinute)
+	if cfg.PlayReadPerMinute < minPlayReadPerMinute || cfg.PlayReadPerMinute > maxPlayReadPerMinute {
+		return Config{}, fmt.Errorf("PLAY_READ_PER_MINUTE: %d is outside %d-%d",
+			cfg.PlayReadPerMinute, minPlayReadPerMinute, maxPlayReadPerMinute)
 	}
 	if cfg.AnswerRatePerMinute, err = intEnv("ANSWER_RATE_PER_MINUTE", defaultAnswerRatePerMinute); err != nil {
 		return Config{}, err
@@ -723,6 +724,7 @@ const (
 	defaultAnswerRatePerMinute = 12
 	maxAnswerRatePerMinute     = 60
 	defaultPlayReadPerMinute   = 120
+	minPlayReadPerMinute       = 30
 	maxPlayReadPerMinute       = 600
 )
 

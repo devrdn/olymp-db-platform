@@ -854,8 +854,9 @@ func TestADeadlineIsReportedAsATimeoutThatRan(t *testing.T) {
 	}
 }
 
-// The Core API's façade starts from the same figure (queryproxy.New), so the
-// two limiters agree when QUERY_PER_MINUTE is unset.
+// The figure a Runner built without configuration uses, and the one
+// queryproxy.New starts from; the deployed processes both take
+// QUERY_PER_MINUTE's default from config instead.
 func TestTheDefaultRateIsSixtyQueriesAMinute(t *testing.T) {
 	if got := queryrunner.DefaultLimits().PerMinute; got != 60 {
 		t.Fatalf("DefaultLimits().PerMinute = %d, want 60", got)

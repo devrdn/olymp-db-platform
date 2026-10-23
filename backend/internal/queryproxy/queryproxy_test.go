@@ -2253,23 +2253,6 @@ func TestAdmitReadRefusesPastItsOwnBudgetPerAccount(t *testing.T) {
 	}
 }
 
-func TestAdmitReadOfRefusesPastItsOwnBudgetPerRegistration(t *testing.T) {
-	service := readsFixture(0, 2)
-	spent := uuid.New()
-
-	for i := range 2 {
-		if err := service.AdmitReadOf(spent); err != nil {
-			t.Fatalf("read %d of 2: %v", i+1, err)
-		}
-	}
-	if err := service.AdmitReadOf(spent); !errors.Is(err, queryproxy.ErrTooManyReads) {
-		t.Fatalf("the third read of the registration = %v, want ErrTooManyReads", err)
-	}
-	if err := service.AdmitReadOf(uuid.New()); err != nil {
-		t.Fatalf("AdmitReadOf() for another registration = %v, want nil", err)
-	}
-}
-
 // A contest's query_rate_limit_per_min tightens SQL only.
 func TestAContestsOwnQueryRateDoesNotTightenReads(t *testing.T) {
 	registration := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
@@ -2285,13 +2268,17 @@ func TestAContestsOwnQueryRateDoesNotTightenReads(t *testing.T) {
 		quietTrail, quiet{},
 	).WithPerMinuteDefault(10).WithReadsPerMinute(5)
 
-	if _, err := service.Run(t.Context(), command()); err != nil {
+	cmd := command()
+	if _, err := service.Run(t.Context(), cmd); err != nil {
 		t.Fatalf("the contest's one query: %v", err)
 	}
 	for i := range 5 {
-		if err := service.AdmitReadOf(registration.ID); err != nil {
+		if err := service.AdmitRead(cmd.UserID); err != nil {
 			t.Fatalf("read %d of 5 in a contest allowing one query a minute: %v", i+1, err)
 		}
+	}
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("the contest's second query: %v, want ErrTooManyQueries", err)
 	}
 }
 

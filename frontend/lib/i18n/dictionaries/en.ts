@@ -2241,7 +2241,7 @@ const en = {
     query_too_often:
       "You are sending queries too quickly. Wait a moment.",
     play_read_too_often:
-      "The contest page is being loaded too often. Wait a minute, then reload it.",
+      "Too many requests from this page. Wait a minute and try again.",
     query_disk_full:
       "Your database is at its size limit. Free some space — TRUNCATE a table you filled, or DROP one of your own — and carry on.",
     query_result_too_large:

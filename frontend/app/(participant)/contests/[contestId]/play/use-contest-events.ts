@@ -27,8 +27,7 @@ const RECONNECT_MAX_DELAY_MS = 60_000;
 /**
  * Random spread added to a reconnect delay: a wait falls in
  * `[delay, delay * 1.5)`. Added, never subtracted, because every attempt
- * spends the query-rate budget this channel shares with the SQL console. A
- * deploy cuts every channel at once, and without jitter they would all return
+ * spends the play screen's read budget. A deploy cuts every channel at once, and without jitter they would all return
  * in the same instant against the per-participant connection cap.
  */
 const RECONNECT_JITTER = 0.5;

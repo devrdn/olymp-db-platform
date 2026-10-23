@@ -52,10 +52,6 @@ type fakeAccess struct {
 	accessCalled bool
 	// admitReads counts AdmitRead calls.
 	admitReads int
-	// admitReadOfErr is what AdmitReadOf answers; readsOf records the
-	// registrations it was charged for.
-	admitReadOfErr error
-	readsOf        []uuid.UUID
 	// delay, when set, is how long AccessForEvents waits before answering,
 	// standing for slow resync lookups.
 	delay time.Duration
@@ -102,13 +98,6 @@ func (a *fakeAccess) AdmitRead(uuid.UUID) error {
 	a.admitReads++
 	a.mu.Unlock()
 	return a.admitReadErr
-}
-
-func (a *fakeAccess) AdmitReadOf(registration uuid.UUID) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.readsOf = append(a.readsOf, registration)
-	return a.admitReadOfErr
 }
 
 func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
@@ -737,50 +726,6 @@ func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
 	}
 	if !f.access.accessCalled {
 		t.Fatal("Access was never called for a caller within their rate budget")
-	}
-}
-
-// The read budget is charged per account before Access and per registration
-// after it, so the second check needs what Access resolved.
-func TestAReadIsChargedToTheRegistrationAccessResolved(t *testing.T) {
-	f := newParticipantFixture(t)
-	f.access.contest = contests.Contest{
-		ID: uuid.New(), Status: contests.StatusRunning,
-		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
-		t.Fatalf("Save() = %v", err)
-	}
-
-	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if len(f.access.readsOf) != 1 || f.access.readsOf[0] != f.access.participant.ID {
-		t.Fatalf("AdmitReadOf charged %v, want the registration %s once", f.access.readsOf, f.access.participant.ID)
-	}
-}
-
-func TestAReadPastTheRegistrationsBudgetIsA429AndStartsNothing(t *testing.T) {
-	f := newParticipantFixture(t)
-	f.access.contest = contests.Contest{
-		ID: uuid.New(), Status: contests.StatusRunning,
-		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.access.admitReadOfErr = queryproxy.ErrTooManyReads
-	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
-		t.Fatalf("Save() = %v", err)
-	}
-
-	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
-	expectStatus(t, rec, http.StatusTooManyRequests, "play_read_too_often")
-	if retry := rec.Header().Get("Retry-After"); retry != "60" {
-		t.Fatalf("Retry-After = %q, want 60", retry)
-	}
-	if len(f.access.startedOnRead) != 0 {
-		t.Fatalf("a refused read started the clock of %v", f.access.startedOnRead)
 	}
 }
 
