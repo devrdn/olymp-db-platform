@@ -25,6 +25,7 @@ import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
+import { QuestionBody } from "./question-body";
 import { isReadRateLimit, refusalKind } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
@@ -274,13 +275,14 @@ async function PlayPanels({
   }
 
   // The questions, the story and its print copy are rendered here, on the
-  // server, so the browser never ships the Markdown parser (about 32 KiB
-  // gzipped) or parses the same text twice.
-  const questionEntries: QuestionEntry[] = questions.map((question, index) => ({
-    question,
-    index: index + 1,
-    body: <StoryText key={question.id} markdown={question.bodyMd} className="max-w-none font-sans text-body" />,
-  }));
+  // server, so the browser does not ship the Markdown parser (about 32 KiB
+  // gzipped) or parse the same text twice. Only a question that opens later
+  // in a sequential contest fetches it (questions-panel.tsx).
+  const questionEntries: QuestionEntry[] = questions.map((question, index) =>
+    question.locked
+      ? { question, index: index + 1, body: null }
+      : { question, index: index + 1, body: <QuestionBody markdown={question.bodyMd} /> },
+  );
 
   // The print copy's byline: who is printing, and when. `fetchIdentity` is
   // wrapped in React's `cache()`, so this shares `ParticipantLayout`'s

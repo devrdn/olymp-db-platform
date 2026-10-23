@@ -297,6 +297,9 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 // It has no ordinal either: items arrive in display order, and a number dense
 // across hidden questions would reveal how many are hidden and where.
 type participantQuestionResponse struct {
+	// Locked is always false here; it is what tells this shape from
+	// lockedQuestionResponse in the same list.
+	Locked    bool     `json:"locked"`
 	ID        string   `json:"id"`
 	Kind      string   `json:"kind"`
 	Points    int      `json:"points"`
@@ -310,15 +313,32 @@ type participantQuestionResponse struct {
 	// zero, because zero would read as "no attempts left".
 	AttemptsRemaining *int `json:"attempts_remaining,omitempty"`
 	Closed            bool `json:"closed"`
-	// CanAnswer says whether the participant may submit to this question now.
-	// It is true for every unclosed question except in a sequential contest,
-	// where only one is open at a time (§6.1.1).
+	// CanAnswer says whether the participant may submit to this question now:
+	// exactly when it is not closed. In a sequential contest the questions
+	// not yet reached come as lockedQuestionResponse instead (§6.1.1).
 	CanAnswer bool `json:"can_answer"`
 	// Correct and PointsAwarded let a reloaded screen tell "closed because
 	// solved" from "closed because attempts are spent". Never omitted, so a
 	// question never solved reads as exactly that.
 	Correct       bool `json:"correct"`
 	PointsAwarded int  `json:"points_awarded"`
+}
+
+// lockedQuestionResponse is a question a sequential contest has not reached
+// (§6.1.1): a type with no field for content, rather than a question with its
+// content blanked. Position counts only the listed questions.
+type lockedQuestionResponse struct {
+	Position int  `json:"position"`
+	Locked   bool `json:"locked"`
+}
+
+// toQuestionItem is one entry of the list: a lockedQuestionResponse or a
+// participantQuestionResponse.
+func toQuestionItem(q contests.ParticipantQuestion) any {
+	if q.Locked {
+		return lockedQuestionResponse{Position: q.Position, Locked: true}
+	}
+	return toParticipantQuestionResponse(q)
 }
 
 func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQuestionResponse {
@@ -341,8 +361,8 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 }
 
 type participantQuestionListResponse struct {
-	Lang  string                        `json:"lang"`
-	Items []participantQuestionResponse `json:"items"`
+	Lang  string `json:"lang"`
+	Items []any  `json:"items"`
 }
 
 func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
@@ -361,9 +381,9 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]participantQuestionResponse, 0, len(found))
+	items := make([]any, 0, len(found))
 	for _, q := range found {
-		items = append(items, toParticipantQuestionResponse(q))
+		items = append(items, toQuestionItem(q))
 	}
 	httpx.JSON(w, r, http.StatusOK, participantQuestionListResponse{Lang: lang, Items: items})
 }

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
-import type { PlayQuestion } from "@/lib/api/play";
+import type { OpenPlayQuestion } from "@/lib/api/play";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 import type { AnswerState, QuestionsRefreshResult } from "./requests";
@@ -25,8 +25,15 @@ vi.mock("./requests", () => ({
   },
 }));
 
-function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
+// The wording of a question that opens after the page loaded is rendered in
+// the browser; the stand-in marks which bodies took that path.
+vi.mock("./question-body", () => ({
+  QuestionBody: ({ markdown }: { markdown: string }) => <div data-testid="opened-body">{markdown}</div>,
+}));
+
+function question(overrides: Partial<OpenPlayQuestion> = {}): OpenPlayQuestion {
   return {
+    locked: false,
     id: "q1",
     kind: "text",
     points: 10,
@@ -44,9 +51,19 @@ function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
 }
 
 /** A question entry whose body is a plain span, standing in for the server render. */
-function entry(overrides: Partial<PlayQuestion> = {}, index = 1): QuestionEntry {
+function entry(overrides: Partial<OpenPlayQuestion> = {}, index = 1): QuestionEntry {
   const q = question(overrides);
   return { question: q, index, body: <span>{q.bodyMd}</span> };
+}
+
+/** A question the server withheld: a number, no content and no body. */
+function lockedEntry(position: number): QuestionEntry {
+  return { question: { locked: true, position }, index: position, body: null };
+}
+
+/** The list of questions not open yet, found by its accessible name. */
+function lockedList() {
+  return screen.getByRole("list", { name: en.participant.play.questions.lockedList });
 }
 
 async function submit(value = "the gardener") {
@@ -120,39 +137,60 @@ describe("the questions panel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Correct!");
   });
 
-  test("closing a question re-reads the list, so a locked one can open — without asking react-markdown to run again", async () => {
+  // Either way a question closes, the re-read brings the next one in full;
+  // the body already on screen is kept rather than rendered again.
+  test.each([
+    { how: "answered correctly", correct: true },
+    { how: "out of attempts", correct: false },
+  ])("closing a question ($how) re-reads the list and opens the next one in full", async ({ correct }) => {
     answer.current = {
       kind: "answer",
-      result: { correct: true, pointsAwarded: 10, attemptsRemaining: undefined, closed: true },
+      result: { correct, pointsAwarded: correct ? 10 : 0, attemptsRemaining: 0, closed: true },
     };
-    // q1 closed and q2 open, as a sequential contest moves on; each entry's
-    // rendered body must survive the re-read.
     refresh.current = {
       kind: "ok",
-      items: [question({ id: "q1", closed: true }), question({ id: "q2", canAnswer: true })],
+      items: [
+        question({ id: "q1", closed: true, canAnswer: false, correct }),
+        question({ id: "q2", title: "", bodyMd: "Name the hour." }),
+        { locked: true, position: 3 },
+      ],
     };
     refresh.calls = 0;
     render(
-      <QuestionsPanel
-        locale="en"
-        contestId="c1"
-        items={[entry({ id: "q1" }), entry({ id: "q2", canAnswer: false, bodyMd: "Name the hour." })]}
-        dict={en}
-      />,
+      <QuestionsPanel locale="en" contestId="c1" items={[entry({ id: "q1" }), lockedEntry(2), lockedEntry(3)]} dict={en} />,
     );
 
-    await userEvent.type(screen.getAllByRole("textbox")[0], "the gardener");
-    await userEvent.click(screen.getAllByRole("button", { name: en.participant.play.questions.submit })[0]);
+    await submit();
 
-    expect(await screen.findByText(en.participant.play.questions.closed)).toBeInTheDocument();
-    // Two settles: q1's submission, then the re-read an Effect starts after
-    // it commits. `findByText` above waits only for the first.
-    await waitFor(() => expect(screen.queryByText(en.participant.play.questions.locked)).not.toBeInTheDocument());
-    expect(screen.getByText(/Name the hour/)).toBeInTheDocument();
+    // Two settles: the submission, then the re-read an Effect starts after it
+    // commits.
+    expect(await screen.findByTestId("opened-body")).toHaveTextContent("Name the hour.");
+    expect(screen.getByText("Who was in the greenhouse?").tagName).toBe("SPAN");
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(within(lockedList()).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(lockedList()).getByRole("listitem")).toHaveTextContent(
+      en.participant.play.questions.lockedItem.replace("{n}", "3").replace("{m}", "2"),
+    );
     expect(refresh.calls).toBe(1);
   });
 
-  test("a question not yet open in sequence is shown but cannot be answered", () => {
+  test("the last question opening takes the list of locked ones away", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
+    refresh.current = {
+      kind: "ok",
+      items: [question({ id: "q1", closed: true, canAnswer: false, correct: true }), question({ id: "q2" })],
+    };
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ id: "q1" }), lockedEntry(2)]} dict={en} />);
+
+    await submit();
+
+    await screen.findByTestId("opened-body");
+    expect(screen.queryByRole("list", { name: en.participant.play.questions.lockedList })).not.toBeInTheDocument();
+  });
+
+  // The server may still say an open question cannot be answered; the form
+  // then stays visible and refuses input.
+  test("a question the server says cannot be answered yet keeps its field disabled", () => {
     render(
       <QuestionsPanel
         locale="en"
@@ -367,7 +405,7 @@ describe("a question's state", () => {
   const t = en.participant.play.questions.status;
 
   function threeQuestions(
-    ...overrides: [Partial<PlayQuestion>, Partial<PlayQuestion>, Partial<PlayQuestion>]
+    ...overrides: [Partial<OpenPlayQuestion>, Partial<OpenPlayQuestion>, Partial<OpenPlayQuestion>]
   ) {
     return overrides.map((o, i) => entry({ id: `q${i + 1}`, ...o }, i + 1));
   }
@@ -377,11 +415,11 @@ describe("a question's state", () => {
       <QuestionsPanel
         locale="en"
         contestId="c1"
-        items={threeQuestions(
-          { closed: true, correct: true },
-          { closed: false, canAnswer: true },
-          { closed: false, canAnswer: false },
-        )}
+        items={[
+          entry({ id: "q1", closed: true, correct: true }, 1),
+          entry({ id: "q2", closed: false, canAnswer: true }, 2),
+          lockedEntry(3),
+        ]}
         dict={en}
       />,
     );
@@ -411,24 +449,6 @@ describe("a question's state", () => {
     expect(screen.getByText(t.spent)).toBeInTheDocument();
   });
 
-  // The server enforces the order (docs/ARCHITECTURE.md §6.1.1); naming the
-  // blocking question beats "not yet".
-  test("names the question a locked one is waiting on", () => {
-    render(
-      <QuestionsPanel
-        locale="en"
-        contestId="c1"
-        items={threeQuestions(
-          { closed: true, correct: true },
-          { closed: false, canAnswer: true },
-          { closed: false, canAnswer: false },
-        )}
-        dict={en}
-      />,
-    );
-
-    expect(screen.getByText(t.after.replace("{n}", "2"))).toBeInTheDocument();
-  });
 
   // After the deadline or before opening, the server marks every question
   // unanswerable but open; "current" would point at impossible work.
@@ -447,8 +467,7 @@ describe("a question's state", () => {
     );
 
     expect(screen.queryByText(t.current)).not.toBeInTheDocument();
-    // Nor the row: a locked question's tag reads "after N", so only the row's
-    // mark says which question is current.
+    // Nor the row, which is what assistive technology hears.
     expect(document.querySelector('[aria-current="step"]')).toBeNull();
   });
 
@@ -538,7 +557,7 @@ test("a paste into an answer is watched as one into the answer", () => {
 // (open in place, or larger in a dialog); the answer field never folds.
 describe("a question with a title", () => {
   const t = en.participant.play.questions;
-  const titled = (overrides: Partial<PlayQuestion> = {}, index = 1) =>
+  const titled = (overrides: Partial<OpenPlayQuestion> = {}, index = 1) =>
     entry({ title: "The greenhouse", ...overrides }, index);
 
   test("shows the title and folds the wording behind Details", () => {
@@ -671,19 +690,14 @@ describe("a question with a title", () => {
     expect(screen.getByText(t.closed)).toBeInTheDocument();
   });
 
-  test("keeps a locked question's title readable and its field disabled", () => {
+  test("gives the locked questions below it nothing to open", () => {
     render(
-      <QuestionsPanel
-        locale="en"
-        contestId="c1"
-        items={[titled({ id: "q0", title: "First" }), titled({ canAnswer: false }, 2)]}
-        dict={en}
-      />,
+      <QuestionsPanel locale="en" contestId="c1" items={[titled(), lockedEntry(2), lockedEntry(3)]} dict={en} />,
     );
 
-    expect(screen.getByText("The greenhouse")).toBeVisible();
-    expect(screen.getAllByRole("textbox")[1]).toBeDisabled();
-    expect(screen.getByText(t.locked)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: t.details })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: t.openLarger })).toHaveLength(1);
+    expect(within(lockedList()).queryAllByRole("heading")).toHaveLength(0);
   });
 });
 
@@ -703,5 +717,88 @@ describe("a question without a title", () => {
 
     expect(screen.getByText("Who was in the greenhouse?")).toBeVisible();
     expect(screen.queryByRole("button", { name: t.details })).not.toBeInTheDocument();
+  });
+});
+
+// docs/ARCHITECTURE.md §6.1.1: past the frontier the server sends a number
+// and nothing else, and the screen shows exactly that.
+describe("a locked question", () => {
+  const t = en.participant.play.questions;
+  const sequence = () => [entry({ id: "q1", closed: true, correct: true }, 1), entry({ id: "q2" }, 2), lockedEntry(3), lockedEntry(4)];
+
+  test("is listed by number below the open ones, naming the question it waits on", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={sequence()} dict={en} />);
+
+    const items = within(lockedList()).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      t.lockedItem.replace("{n}", "3").replace("{m}", "2"),
+      t.lockedItem.replace("{n}", "4").replace("{m}", "3"),
+    ]);
+    // Below the current question, not among the open ones.
+    const current = document.querySelector('[aria-current="step"]')!;
+    expect(current.compareDocumentPosition(lockedList()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("offers no field, no points and no state of its own", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={sequence()} dict={en} />);
+
+    // One field, for the current question; one points label per open question.
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.getAllByText(/pts$/)).toHaveLength(2);
+    const list = lockedList();
+    expect(within(list).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(list).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(list).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(list).queryByText(/pts/)).not.toBeInTheDocument();
+  });
+
+  test("is never a stop for the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={sequence()} dict={en} />);
+    const list = lockedList();
+
+    const visited: Element[] = [];
+    for (let i = 0; i < 10; i++) {
+      await user.tab();
+      if (document.activeElement && document.activeElement !== document.body) visited.push(document.activeElement);
+    }
+    expect(visited.length).toBeGreaterThan(0);
+    expect(visited.some((element) => list.contains(element))).toBe(false);
+    expect(list.querySelector("[tabindex]")).toBeNull();
+  });
+
+  test("is announced as text, its decoration kept from assistive technology", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={sequence()} dict={en} />);
+
+    for (const item of within(lockedList()).getAllByRole("listitem")) {
+      expect(item).not.toHaveAttribute("aria-hidden");
+      for (const svg of item.querySelectorAll("svg")) expect(svg).toHaveAttribute("aria-hidden", "true");
+    }
+    // Only the open question being worked on is the current step.
+    expect(document.querySelectorAll('[aria-current="step"]')).toHaveLength(1);
+  });
+
+  // Unreachable while the publish gate holds (no hidden question in a
+  // sequential contest), but a first question with nothing before it still
+  // reads sensibly.
+  test("first in the list, it says only that it is not open yet", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[lockedEntry(1), lockedEntry(2)]} dict={en} />);
+
+    expect(within(lockedList()).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      t.lockedNotYet.replace("{n}", "1"),
+      t.lockedItem.replace("{n}", "2").replace("{m}", "1"),
+    ]);
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByText(t.empty)).not.toBeInTheDocument();
+  });
+
+  test("a long run of them stays one plain list", () => {
+    const many = [entry({ id: "q1" }, 1), ...Array.from({ length: 40 }, (_, i) => lockedEntry(i + 2))];
+    render(<QuestionsPanel locale="en" contestId="c1" items={many} dict={en} />);
+
+    expect(within(lockedList()).getAllByRole("listitem")).toHaveLength(40);
+    expect(within(lockedList()).getAllByRole("listitem")[39]).toHaveTextContent(
+      t.lockedItem.replace("{n}", "41").replace("{m}", "40"),
+    );
   });
 });

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -359,7 +360,8 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	questions := conteststest.NewQuestions()
 	submissions := conteststest.NewSubmissions()
 	submissions.Clock = func() time.Time { return conteststest.FixtureNow }
-	reader := contests.NewReader(stories, questions, conteststest.NewAttempts(submissions), nil)
+	reader := contests.NewReader(stories, questions, conteststest.NewAttempts(submissions),
+		conteststest.NewSequentialProgress(questions, submissions))
 	access := &fakeAccess{}
 	history := &fakeHistory{}
 	submitter := &fakeSubmitter{}
@@ -843,6 +845,152 @@ func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 	}
 	if payload.Lang != "ru" || payload.BodyMD != "Тело в архиве." {
 		t.Fatalf("payload = %+v, want the Russian story", payload)
+	}
+}
+
+// sequentialPlay stages a running sequential contest of three choice
+// questions, each with a title, a body, labelled choices and points, and
+// returns its identifier, the questions and the caller's registration.
+func (f *participantFixture) sequentialPlay(t *testing.T, maxAttempts int) (uuid.UUID, []contests.Question, uuid.UUID) {
+	t.Helper()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		QuestionMode: contests.QuestionModeMulti, Progression: contests.ProgressionSequential,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: registrationID}
+	staged := make([]contests.Question, 0, 3)
+	for i, word := range []string{"culprit", "weapon", "room"} {
+		staged = append(staged, f.questions.Put(contests.Question{
+			ContestID: contestID, Ord: i + 1, Kind: contests.KindChoice, Points: 10 * (i + 1), IsVisible: true,
+			MaxAttempts: &maxAttempts, ChoiceIDs: []string{"a", "b"},
+			Texts: map[string]contests.QuestionText{"en": {
+				Title: "The " + word, BodyMD: "Which " + word + "?",
+				Choices: map[string]string{"a": "First " + word, "b": "Second " + word},
+			}},
+		}))
+	}
+	return contestID, staged, registrationID
+}
+
+// playItems reads the question list as raw objects, so a test sees every key
+// the server sent rather than the ones a struct names.
+func (f *participantFixture) playItems(t *testing.T, contestID uuid.UUID) ([]map[string]any, string) {
+	t.Helper()
+	rec := f.get("/contests/" + contestID.String() + "/play/questions")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.String()
+	var payload struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return payload.Items, raw
+}
+
+// expectLockedItem fails unless item is exactly {"position": n, "locked": true}.
+func expectLockedItem(t *testing.T, item map[string]any, position int) {
+	t.Helper()
+	want := map[string]any{"position": float64(position), "locked": true}
+	if !reflect.DeepEqual(item, want) {
+		t.Errorf("item %d = %v, want exactly %v", position, item, want)
+	}
+}
+
+// expectOpenItem fails unless item carries q's full content and says it is
+// not locked.
+func expectOpenItem(t *testing.T, item map[string]any, q contests.Question, canAnswer bool) {
+	t.Helper()
+	text := q.Texts["en"]
+	choices, _ := item["choices"].(map[string]any)
+	if item["locked"] != false || item["id"] != q.ID.String() || item["title"] != text.Title ||
+		item["body_md"] != text.BodyMD || item["points"] != float64(q.Points) ||
+		len(choices) != len(text.Choices) || choices["a"] != text.Choices["a"] || item["can_answer"] != canAnswer {
+		t.Errorf("item = %v, want %s in full with can_answer %v", item, q.ID, canAnswer)
+	}
+}
+
+// §6.1.1: the server, not the interface, withholds a question the participant
+// has not reached. Its entry is a number and a marker, nothing more.
+func TestALockedQuestionReachesItsParticipantAsANumberAlone(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID, staged, _ := f.sequentialPlay(t, 2)
+
+	items, raw := f.playItems(t, contestID)
+	if len(items) != 3 {
+		t.Fatalf("items = %v, want three", items)
+	}
+	expectOpenItem(t, items[0], staged[0], true)
+	expectLockedItem(t, items[1], 2)
+	expectLockedItem(t, items[2], 3)
+	for _, q := range staged[1:] {
+		for _, leak := range []string{q.ID.String(), q.Texts["en"].Title, q.Texts["en"].BodyMD, q.Texts["en"].Choices["a"]} {
+			if strings.Contains(raw, leak) {
+				t.Errorf("the locked question's %q reached the response: %s", leak, raw)
+			}
+		}
+	}
+}
+
+// The next question opens once the current one closes, whichever way it
+// closes.
+func TestTheNextQuestionReachesItsParticipantOnceTheCurrentOneCloses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		correct bool
+	}{
+		{name: "answered correctly", correct: true},
+		{name: "attempts spent", correct: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID, staged, registrationID := f.sequentialPlay(t, 1)
+
+			f.submit(t, registrationID, staged[0], tc.correct)
+
+			items, _ := f.playItems(t, contestID)
+			if len(items) != 3 {
+				t.Fatalf("items = %v, want three", items)
+			}
+			expectOpenItem(t, items[0], staged[0], false)
+			if items[0]["closed"] != true || items[0]["correct"] != tc.correct {
+				t.Errorf("first = %v, want it closed with correct %v", items[0], tc.correct)
+			}
+			expectOpenItem(t, items[1], staged[1], true)
+			expectLockedItem(t, items[2], 3)
+		})
+	}
+}
+
+func TestFreeProgressionListsEveryQuestionInFull(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID, staged, _ := f.sequentialPlay(t, 2)
+	f.access.contest.Progression = contests.ProgressionFree
+
+	items, _ := f.playItems(t, contestID)
+	if len(items) != 3 {
+		t.Fatalf("items = %v, want three", items)
+	}
+	for i, q := range staged {
+		expectOpenItem(t, items[i], q, true)
+	}
+}
+
+// Single-question mode has no sequence, whatever progression is stored
+// (Contest.SequentialActive).
+func TestSequentialProgressionLocksNothingInSingleQuestionMode(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID, staged, _ := f.sequentialPlay(t, 2)
+	f.access.contest.QuestionMode = contests.QuestionModeSingle
+
+	items, _ := f.playItems(t, contestID)
+	for i, q := range staged {
+		expectOpenItem(t, items[i], q, true)
 	}
 }
 

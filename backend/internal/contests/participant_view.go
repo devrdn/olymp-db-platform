@@ -42,9 +42,15 @@ type StoryText interface {
 // ParticipantQuestion is one visible question as its participant sees it,
 // with their own standing on it.
 //
-// It has no display position: Question.Ord counts hidden questions too, so
-// gaps would reveal them (§6.1). The list is already in display order.
+// Position is its 1-based place in the list, never Question.Ord: Ord counts
+// hidden questions too, so its gaps would reveal them (§6.1).
+//
+// A Locked question is one a sequential contest has not reached (§6.1.1). It
+// carries Position and nothing else: its wording, choices and points are never
+// copied in, so no client can mistake a withheld title for an absent one.
 type ParticipantQuestion struct {
+	Position  int
+	Locked    bool
 	ID        uuid.UUID
 	Kind      string
 	Points    int
@@ -66,9 +72,9 @@ type ParticipantQuestion struct {
 	// PointsAwarded is this registration's penalty-adjusted award, 0 until
 	// Correct.
 	PointsAwarded int
-	// CanAnswer reports whether Submit would accept an answer now: !Closed,
-	// and under sequential progression (§6.1.1) only for the frontier
-	// question. It is a yes or no, never a position.
+	// CanAnswer reports whether Submit would accept an answer now: !Closed.
+	// Under sequential progression the one question neither Closed nor
+	// Locked is the frontier.
 	CanAnswer bool
 }
 
@@ -95,7 +101,8 @@ type VisibleQuestionRepository interface {
 
 // Questions returns the contest's visible questions in display order, in
 // lang, with this participant's attempt state. sequential must be the
-// contest's SequentialActive(), the same rule Submit checks.
+// contest's SequentialActive(), the same rule Submit checks; under it every
+// unclosed question past the frontier comes back Locked.
 func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang string, sequential bool) ([]ParticipantQuestion, error) {
 	visible, err := r.questions.ForContest(ctx, contestID, lang)
 	if err != nil {
@@ -117,14 +124,16 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 	}
 
 	out := make([]ParticipantQuestion, 0, len(visible))
-	for _, q := range visible {
+	for i, q := range visible {
+		position := i + 1
 		used := stats[q.ID]
 		closed := isClosed(q.MaxAttempts, used)
-		canAnswer := !closed
-		if sequential {
-			canAnswer = !closed && q.ID == frontier
+		if sequential && !closed && q.ID != frontier {
+			out = append(out, ParticipantQuestion{Position: position, Locked: true})
+			continue
 		}
 		out = append(out, ParticipantQuestion{
+			Position:          position,
 			ID:                q.ID,
 			Kind:              q.Kind,
 			Points:            q.Points,
@@ -134,7 +143,7 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 			Choices:           q.Choices,
 			AttemptsRemaining: attemptsRemaining(q.MaxAttempts, used.Attempts),
 			Closed:            closed,
-			CanAnswer:         canAnswer,
+			CanAnswer:         !closed,
 			Correct:           used.Correct,
 			PointsAwarded:     used.PointsAwarded,
 		})
