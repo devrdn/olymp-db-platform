@@ -92,17 +92,25 @@ func RankICPC(entries []Entry, grid Grid) []Row {
 }
 
 // AwardPrizes sets each ranked row's prize tier from its place
-// (contests.PrizePlaces.Tier). Winner mode keeps its single winner and awards
-// none.
+// (contests.PrizePlaces.Tier). Winner mode ignores the counts: its one winner
+// holds the first prize and nobody else holds any.
 //
-// A disqualified row takes no prize and holds no place for one: the tiers
+// A row that scored nothing (no points, or no ICPC solve) takes no prize
+// whatever the counts; such rows rank last, so this moves nobody else. A
+// disqualified row takes no prize and holds no place for one: the tiers
 // follow places counted among the others, so the staff table, which lists the
 // disqualified, shows the prizes everybody else sees.
 func AwardPrizes(rows []Row, scoring string, places contests.PrizePlaces) {
 	previous, counted, prizePlace := 0, 0, 0
 	for i := range rows {
 		rows[i].Prize = 0
-		if scoring == contests.ScoringWinner || rows[i].Disqualified {
+		if scoring == contests.ScoringWinner {
+			if rows[i].Winner && !rows[i].Disqualified {
+				rows[i].Prize = 1
+			}
+			continue
+		}
+		if rows[i].Disqualified || !scored(scoring, rows[i].Entry) {
 			continue
 		}
 		counted++
@@ -112,6 +120,13 @@ func AwardPrizes(rows []Row, scoring string, places contests.PrizePlaces) {
 		previous = rows[i].Place
 		rows[i].Prize = places.Tier(prizePlace)
 	}
+}
+
+func scored(scoring string, e Entry) bool {
+	if scoring == contests.ScoringICPC {
+		return e.Solved > 0
+	}
+	return e.Points > 0
 }
 
 func compareICPC(a, b Entry) int {
