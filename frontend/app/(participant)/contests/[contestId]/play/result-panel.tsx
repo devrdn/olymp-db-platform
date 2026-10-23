@@ -22,11 +22,14 @@ export function ResultPanel({
   contestId,
   state,
   sourceTitle = null,
+  resultDownload,
   dict,
 }: {
   /** For the remembered height of the open-row split. */
   contestId: string;
   state: ConsoleState;
+  /** Whether the contest offers the rows as a CSV file. */
+  resultDownload: boolean;
   /**
    * The name of the SQL tab the run came from, or null before any run. The
    * result stays while the participant types in another tab, so it says what
@@ -47,7 +50,7 @@ export function ResultPanel({
           {dict.participant.play.workspace.resultFrom.replace("{tab}", sourceTitle)}
         </p>
       )}
-      <ResultBody contestId={contestId} state={state} dict={dict} />
+      <ResultBody contestId={contestId} state={state} resultDownload={resultDownload} dict={dict} />
     </div>
   );
 }
@@ -56,10 +59,12 @@ export function ResultPanel({
 function ResultBody({
   contestId,
   state,
+  resultDownload,
   dict,
 }: {
   contestId: string;
   state: Exclude<ConsoleState, { kind: "idle" }>;
+  resultDownload: boolean;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.console;
@@ -107,7 +112,9 @@ function ResultBody({
           </span>
         ) : null}
         <div className="flex-1" />
-        <DownloadButton columns={result.columns} rows={result.rows} label={dict.participant.play.workspace.download} />
+        {resultDownload ? (
+          <DownloadButton columns={result.columns} rows={result.rows} label={dict.participant.play.workspace.download} />
+        ) : null}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">

@@ -114,6 +114,7 @@ function show(
     storyUnavailable?: string | null;
     workspace?: typeof A_WORKSPACE | null;
     sqlMode?: "read_only" | "read_write";
+    resultDownload?: boolean;
   } = {},
 ) {
   return render(
@@ -135,6 +136,7 @@ function show(
       questionEntries={[]}
       schema={schema}
       sqlMode={overrides.sqlMode ?? "read_only"}
+      resultDownload={overrides.resultDownload ?? true}
       initialLog={freshInitialLog()}
       workspace={"workspace" in overrides ? (overrides.workspace ?? null) : A_WORKSPACE}
       locale="en"
@@ -244,6 +246,21 @@ describe("the play workspace", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  test.each([
+    [true, 1],
+    [false, 0],
+  ])("a contest whose result download is %s shows %i download buttons under a result", async (resultDownload, count) => {
+    runResult.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    show(null, { resultDownload });
+    await runQuery();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(screen.queryAllByRole("button", { name: en.participant.play.workspace.download })).toHaveLength(count);
   });
 
   // The log's reads share the participant's `AdmitRead` budget, and a run
@@ -650,6 +667,7 @@ describe("collapsing a panel", () => {
           questionEntries={questionEntries}
           schema={schema}
           sqlMode="read_only"
+          resultDownload
           initialLog={freshInitialLog()}
           workspace={A_WORKSPACE}
           locale="en"

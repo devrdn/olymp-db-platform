@@ -7,8 +7,8 @@ import en from "@/lib/i18n/dictionaries/en";
 import { CELL_CLIP_CHARS, ResultPanel } from "./result-panel";
 import type { ConsoleState } from "./requests";
 
-function show(state: ConsoleState, contestId = "c1") {
-  return render(<ResultPanel contestId={contestId} state={state} dict={en} />);
+function show(state: ConsoleState, contestId = "c1", resultDownload = true) {
+  return render(<ResultPanel contestId={contestId} state={state} resultDownload={resultDownload} dict={en} />);
 }
 
 afterEach(() => {
@@ -113,6 +113,23 @@ describe("the result panel", () => {
     expect(screen.getByRole("button", { name: en.participant.play.workspace.download })).toBeInTheDocument();
   });
 
+  // A convenience, not a control: the rows stay on screen and an open row can
+  // still be copied.
+  test("offers no download in a contest that withdrew it, and still shows the rows", async () => {
+    const user = userEvent.setup();
+    show(
+      { kind: "answer", result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 } },
+      "c1",
+      false,
+    );
+
+    expect(screen.queryByRole("button", { name: en.participant.play.workspace.download })).not.toBeInTheDocument();
+    const cell = within(screen.getByRole("table")).getByText("1");
+
+    await user.click(cell.closest("tr") as HTMLElement);
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.row.copyRow })).toBeInTheDocument();
+  });
+
   // The download carries exactly the rows in state, never more than the
   // screen showed; checked against the generated file.
   test("downloads exactly the rows already shown, as CSV", async () => {
@@ -142,6 +159,7 @@ describe("what the table says about itself", () => {
   test("counts the rows and says how long the statement took", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{
           kind: "answer",
@@ -168,6 +186,7 @@ describe("what the table says about itself", () => {
   test("says nothing about time when the answer carried no duration", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{
           kind: "answer",
@@ -183,6 +202,7 @@ describe("what the table says about itself", () => {
   test("prints each column's type under its name", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{
           kind: "answer",
@@ -207,6 +227,7 @@ describe("what the table says about itself", () => {
   test("leaves a column bare when its type could not be named", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{
           kind: "answer",
@@ -340,6 +361,7 @@ describe("which tab the result came from", () => {
   test("names the tab above the answer", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{ kind: "answer", result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 } }}
         sourceTitle="Suspects"
@@ -355,6 +377,7 @@ describe("which tab the result came from", () => {
   test("names it above a refusal too", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{ kind: "refused", code: "query_syntax_error" }}
         sourceTitle="Suspects"
@@ -368,7 +391,7 @@ describe("which tab the result came from", () => {
   });
 
   test("says nothing about a tab before anything has been run", () => {
-    render(<ResultPanel contestId="c1" state={{ kind: "idle" }} sourceTitle={null} dict={en} />);
+    render(<ResultPanel contestId="c1" resultDownload state={{ kind: "idle" }} sourceTitle={null} dict={en} />);
 
     expect(screen.queryByText(/^From /)).not.toBeInTheDocument();
   });
@@ -378,6 +401,7 @@ describe("which tab the result came from", () => {
   test("draws no heading for a run whose tab has no name", () => {
     render(
       <ResultPanel
+        resultDownload
         contestId="c1"
         state={{
           kind: "answer",
@@ -512,7 +536,7 @@ describe("opening one row of the result", () => {
     await user.click(rowOf(3));
     expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
 
-    rerender(<ResultPanel contestId="c1" state={answer(10)} dict={en} />);
+    rerender(<ResultPanel contestId="c1" resultDownload state={answer(10)} dict={en} />);
     expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
   });
 
@@ -521,7 +545,7 @@ describe("opening one row of the result", () => {
     const { rerender } = show(answer(10));
 
     await user.click(rowOf(3));
-    rerender(<ResultPanel contestId="c1" state={{ kind: "refused", code: "query_syntax_error" }} dict={en} />);
+    rerender(<ResultPanel contestId="c1" resultDownload state={{ kind: "refused", code: "query_syntax_error" }} dict={en} />);
 
     expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
   });
