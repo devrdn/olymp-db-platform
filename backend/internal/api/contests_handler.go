@@ -83,12 +83,11 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 			r.Group(func(r chi.Router) {
 				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestEdit))
 				r.Patch("/", h.update)
-				// Unlike the rest of this group, reachable on a finished or
-				// archived contest: extending the grace period is the one
-				// exception SettingsEditable allows (§2.4).
+				// Unlike the rest of this group, these two are reachable after
+				// the finish, the exceptions to SettingsEditable: extending
+				// the grace period (§2.4), also once archived, and the prize
+				// places, until archived.
 				r.Patch("/grace", h.extendGrace)
-				// Reachable on a finished contest too, refused once archived
-				// (contests.Service.SetPrizePlaces).
 				r.Put("/prize-places", h.setPrizePlaces)
 				r.Delete("/", h.delete)
 				r.Put("/languages", h.setLanguages)
@@ -615,7 +614,7 @@ type graceRequest struct {
 }
 
 // extendGrace lengthens a finished or archived contest's game-database grace
-// period (§2.4), the one exception to its frozen settings.
+// period (§2.4), one of the two writes its frozen settings still take.
 func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
 	id, ok := contestIDFrom(w, r)
 	if !ok {
