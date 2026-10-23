@@ -60,9 +60,17 @@ type Submitter interface {
 }
 
 // QueryHistory is the read side of the query log: one registration's own rows,
-// newest first, paged.
+// newest first, paged, one of them whole, or all of them as a file.
 type QueryHistory interface {
 	History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error)
+	// HistoryEntry reads row id with its statement whole. found is false when
+	// the row is not that registration's, whether or not it exists.
+	HistoryEntry(ctx context.Context, registrationID uuid.UUID, id int64) (entry queryrunner.HistoryEntry, found bool, err error)
+	QueryLogExport
+}
+
+// QueryLogExport is the part of the query log the CSV download reads.
+type QueryLogExport interface {
 	// ExportHistory streams every row of that registration, oldest first, for
 	// the CSV download. A failing yield stops the stream, so a client that hung
 	// up does not have the rest of the log read on its behalf. truncated says
@@ -198,6 +206,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
 		r.Get("/contests/{"+contestIDParam+"}/play/log", h.queryLog)
+		r.Get("/contests/{"+contestIDParam+"}/play/log/{"+queryLogEntryParam+"}", h.queryLogEntry)
 		// The same log as a file (§9.1). A separate path rather than ?format=,
 		// because the file is the whole session, not a page.
 		r.Get("/contests/{"+contestIDParam+"}/play/log.csv", h.queryLogCSV)
@@ -355,10 +364,12 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 
 // queryLogEntryResponse is one row of the participant's own query log.
 type queryLogEntryResponse struct {
+	// ID names the row for reading it whole (.../play/log/{entryId}).
+	ID  int64  `json:"id"`
 	SQL string `json:"sql"`
 	// SQLTruncated says sql is only the beginning of the statement: the page is
 	// bounded in bytes as well as rows (queryrunner.MaxHistorySQLChars). The
-	// whole statement is in the CSV download.
+	// row read on its own, and the CSV download, carry it whole.
 	SQLTruncated bool   `json:"sql_truncated,omitempty"`
 	Status       string `json:"status"`
 	// Error is omitted for a query that did not fail.
@@ -395,17 +406,56 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]queryLogEntryResponse, 0, len(found))
 	for _, entry := range found {
-		items = append(items, queryLogEntryResponse{
-			SQL:          entry.SQL,
-			SQLTruncated: entry.SQLTruncated,
-			Status:       string(entry.Status),
-			Error:        participantSafeError(entry.Status, entry.Error),
-			DurationMs:   entry.DurationMs,
-			RowCount:     entry.RowCount,
-			ExecutedAt:   entry.ExecutedAt.UTC().Format(timeLayout),
-		})
+		items = append(items, toQueryLogEntryResponse(entry))
 	}
 	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})
+}
+
+func toQueryLogEntryResponse(entry queryrunner.HistoryEntry) queryLogEntryResponse {
+	return queryLogEntryResponse{
+		ID:           entry.ID,
+		SQL:          entry.SQL,
+		SQLTruncated: entry.SQLTruncated,
+		Status:       string(entry.Status),
+		Error:        participantSafeError(entry.Status, entry.Error),
+		DurationMs:   entry.DurationMs,
+		RowCount:     entry.RowCount,
+		ExecutedAt:   entry.ExecutedAt.UTC().Format(timeLayout),
+	}
+}
+
+// queryLogEntryParam names the row in .../play/log/{entryId}.
+const queryLogEntryParam = "entryId"
+
+// queryLogEntry serves one row of this participant's own log with its
+// statement whole, which a page cuts. It is admitted and charged like the
+// page. An id that is not one of the caller's rows, or cannot be an id at
+// all, is not found: whether it is someone else's is not theirs to learn.
+func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Request) {
+	participant, _, ok := h.admit(w, r)
+	if !ok {
+		return
+	}
+	notFound := func() {
+		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "No such query in your log")
+	}
+
+	id, err := strconv.ParseInt(chi.URLParam(r, queryLogEntryParam), 10, 64)
+	if err != nil || id <= 0 {
+		notFound()
+		return
+	}
+	entry, found, err := h.history.HistoryEntry(r.Context(), participant.ID, id)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not read a row of the participant's query history", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+	if !found {
+		notFound()
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toQueryLogEntryResponse(entry))
 }
 
 // queryLogCSV serves this participant's whole query log as a file. The file and

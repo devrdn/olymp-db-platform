@@ -403,6 +403,68 @@ func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
 	})
 }
 
+func TestHistoryNamesEachRowByItsJournalID(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		id := completeRow(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 1, 1)
+
+		found, _, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 || found[0].ID != id {
+			t.Fatalf("found = %+v, want the one row named %d", found, id)
+		}
+	})
+}
+
+// The page cuts a long statement; one row read on its own carries it whole.
+func TestHistoryEntryReadsOneOwnRowWithItsStatementWhole(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		long := "SELECT '" + strings.Repeat("x", 5*queryrunner.MaxHistorySQLChars) + "'"
+		id := completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 7, 12)
+
+		entry, found, err := log.HistoryEntry(ctx, registration, id)
+		if err != nil {
+			t.Fatalf("HistoryEntry: %v", err)
+		}
+		if !found {
+			t.Fatal("the registration's own row was not found")
+		}
+		if entry.ID != id || entry.SQL != long || entry.SQLTruncated {
+			t.Fatalf("row %d carried %d characters (truncated %v), want row %d whole",
+				entry.ID, utf8.RuneCountInString(entry.SQL), entry.SQLTruncated, id)
+		}
+		if entry.Status != queryrunner.StatusOK || entry.RowCount == nil || *entry.RowCount != 7 ||
+			entry.DurationMs == nil || *entry.DurationMs != 12 || entry.ExecutedAt.IsZero() {
+			t.Fatalf("row = %+v, want the outcome Complete recorded for it", entry)
+		}
+	})
+}
+
+// Another registration's row reads exactly as a missing one, so an id tells a
+// participant nothing about anyone else's log.
+func TestHistoryEntryOfAnotherRegistrationsRowIsNotFound(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		theirs := completeRow(t, ctx, log, someRegistration(t, ctx), "SELECT * FROM secrets", queryrunner.StatusOK, 1, 1)
+
+		for _, id := range []int64{theirs, theirs + 1_000_000} {
+			entry, found, err := log.HistoryEntry(ctx, mine, id)
+			if err != nil {
+				t.Fatalf("HistoryEntry(%d): %v", id, err)
+			}
+			if found || entry.SQL != "" {
+				t.Fatalf("HistoryEntry(%d) = %+v, found %v; want nothing", id, entry, found)
+			}
+		}
+	})
+}
+
 func TestExportHistoryCarriesEveryStatementWhole(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
@@ -468,7 +530,8 @@ func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 }
 
 // completeRow opens and closes one row.
-func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
+// completeRow journals one finished query and returns its row's id.
+func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) int64 {
 	t.Helper()
 
 	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: uuid.New(), SQL: sql})
@@ -480,6 +543,7 @@ func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration 
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
+	return id
 }
 
 func someRegistration(t *testing.T, ctx context.Context) uuid.UUID {
