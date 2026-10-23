@@ -100,6 +100,21 @@ describe("SchemaNotesEditor", () => {
     expect(screen.getByRole("button", { name: dict.workspace.schemaNotes.save })).toBeDisabled();
   });
 
+  test("once frozen, says so beside its heading and names a language left empty", () => {
+    show({ editable: false, translations: { ro: "Tabelul `suspects`." } });
+
+    const heading = screen.getByRole("heading", { name: dict.workspace.schemaNotes.heading });
+    expect(heading.parentElement).toHaveTextContent(dict.workspace.facts.frozen);
+    expect(screen.getAllByText(dict.workspace.schemaNotes.empty)).toHaveLength(1);
+  });
+
+  test("while editable, carries no frozen tag", () => {
+    show();
+
+    expect(screen.queryByText(dict.workspace.facts.frozen)).not.toBeInTheDocument();
+    expect(screen.queryByText(dict.workspace.schemaNotes.empty)).not.toBeInTheDocument();
+  });
+
   test("renders a long document whole once frozen", () => {
     const long = Array.from({ length: 200 }, (_, i) => `## table_${i}\n\nColumn \`id\` of table ${i}.`).join("\n\n");
     show({ editable: false, translations: { en: long } });

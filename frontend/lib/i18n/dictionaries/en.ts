@@ -921,6 +921,7 @@ const en = {
       save: "Save the table descriptions",
       saving: "Saving",
       saved: "Saved.",
+      empty: "Nothing written in this language.",
     },
     questions: {
       heading: "Questions",
