@@ -205,6 +205,10 @@ drifted silently once already.
 before the first byte of HTML, which is why there is no flash and no blocking
 inline script. `localStorage` cannot do this: it arrives after the page is
 built, and after the API has been asked for content in the wrong language.
+Changing them differs: the theme toggle writes the cookie and the attribute in
+the browser, since no server-rendered text depends on the theme, while the
+language goes through a Server Action, because every sentence is rendered on
+the server.
 
 **The session is httpOnly.** `proxy.ts` can only see that the cookie exists; the
 API decides whether it is still worth anything. A stale one comes back as

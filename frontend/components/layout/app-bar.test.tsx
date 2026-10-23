@@ -3,9 +3,8 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-// The switchers' Server Actions would pull in `next/headers`.
+// The language and sign-out Server Actions would pull in `next/headers`.
 vi.mock("./locale-actions", () => ({ chooseLocale: vi.fn() }));
-vi.mock("./theme-actions", () => ({ chooseTheme: vi.fn() }));
 vi.mock("./session-actions", () => ({ signOutAction: vi.fn() }));
 
 import { FocusShell } from "./focus-shell";
