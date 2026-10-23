@@ -152,9 +152,9 @@ participant.
   CSV, built from the rows already sent rather than from a second trip to the
   database. An organiser can turn the download off per contest
   (`contests.result_download`, on by default, changeable while the contest
-  runs; the participant's listing carries it). It is a convenience, not a
-  control: the rows are on the participant's screen and can still be selected
-  or copied.
+  runs; the participant's listing carries it, so an open play screen follows
+  a change at its next load). It is a convenience, not a control: the rows are
+  on the participant's screen and can still be selected or copied.
 - **The query history** holds the participant's own queries, from `query_log`,
   with their status and timing; clicking one restores it in the editor. It
   doubles as saved work: a way back to the query that worked after a run of
@@ -2000,9 +2000,10 @@ making somebody discover it through a refusal.
 
 **There are two editability boundaries, not one.** Content freezes at the
 start: changing a question while people are answering it changes the problem
-under them. Settings stay open even at `running`, because extending the window
-after a power cut and fixing a mistyped network range are exactly what a
-running olympiad needs. What does not move is **shape**: the question mode,
+under them. Settings stay open even at `running`, the query rate and the
+result download among them, because extending the window after a power cut
+and fixing a mistyped network range are exactly what a running olympiad
+needs. What does not move is **shape**: the question mode,
 the timing model, the session length — people are already answering under
 them. The SQL policy freezes with the content (section 4.1), or participants
 would have different privileges depending on when they connected, and the

@@ -258,7 +258,7 @@ choose their own password.
 
 | Tab | What to set for the beta |
 |---|---|
-| **Settings**, Who may enter, and from where | **Enrolment** by invitation; **Allowed networks** empty, since participants are remote |
+| **Settings**, Who may enter, and from where | **Enrolment** by invitation; **Allowed networks** empty, since participants are remote; **Participants may download a result as CSV** on, the default, unless results should not leave the console as files |
 | **Settings**, When it runs | **Starts** and **Ends**, both needed to publish |
 | **Settings**, SQL access | **reading and writing**, the writable tables, the disk quota factor |
 | **Story**, **Questions** | the content, in every declared language, with a reference answer per question |
@@ -269,8 +269,8 @@ The **Overview** tab's **Ready to publish** panel lists everything the
 publication gate still refuses, at once. Two of its refusals catch a beta
 setup in particular: `no_game` (the game is not built, still building, or
 failed) and `staff_registered` (a participant's account administers every
-contest). Content freezes at the start; the window and the network stay
-editable while the contest runs.
+contest). Content freezes at the start; the window, the network and the CSV
+download stay editable while the contest runs.
 
 **9. Run the load test at the beta's size.** At a quiet time, never during
 somebody else's contest. `consoleload -profile beta` drives forty synthetic
@@ -424,6 +424,11 @@ Behaviour of the product that surprises people on the day:
   **Reset database** on the play screen puts every table back as the contest
   started it. Answers, score, notes, tabs and the query log stay. Three resets
   per ten minutes; the fourth answers `reset_too_often`.
+- **The CSV download is a setting, not a lock.** With **Participants may
+  download a result as CSV** off, the **Download CSV** button under a query
+  result is gone; the rows are still on screen, can be selected and copied,
+  and an open row keeps **Copy row**. A change while the contest runs reaches
+  a participant's open play screen when they reload it.
 - **Late answers.** `DEADLINE_GRACE`, five seconds by default, absorbs a
   request already on its way at the deadline. It is not extra time.
 

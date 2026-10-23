@@ -58,6 +58,7 @@ export function Workspace({
   icpcPenaltyMin = 20,
   schema: initialSchema,
   sqlMode,
+  resultDownload,
   initialLog,
   workspace,
   locale,
@@ -85,6 +86,11 @@ export function Workspace({
   schema: GameSchema | null;
   /** The contest's SQL mode; only `read_write` offers the database reset. */
   sqlMode: SqlMode;
+  /**
+   * Whether the result offers a CSV file, as the page read it. A change made
+   * by the organiser reaches this screen at its next load.
+   */
+  resultDownload: boolean;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   /** The participant's notes and SQL tabs, or null when the read failed; the notes then say they could not be loaded. */
   workspace: WorkspaceSnapshot | null;
@@ -361,6 +367,7 @@ export function Workspace({
                   contestId={contestId}
                   state={lastResult}
                   sourceTitle={resultFrom}
+                  resultDownload={resultDownload}
                   dict={dict}
                 />
               </div>

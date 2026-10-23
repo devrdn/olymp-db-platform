@@ -38,6 +38,7 @@ function show(contestId = "c1") {
       questionEntries={[]}
       schema={A_SCHEMA}
       sqlMode="read_only"
+      resultDownload
       initialLog={{ items: [], total: 0, failed: false }}
       workspace={null}
       locale="en"
