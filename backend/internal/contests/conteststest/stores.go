@@ -293,6 +293,22 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	return nil
 }
 
+// SetPrizePlaces writes the counts alone and keeps UpdatedAt, as the real
+// repository does.
+func (r *Contests) SetPrizePlaces(_ context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
+	stored, ok := r.byID[id]
+	if !ok {
+		return contests.PrizePlaces{}, contests.ErrNotFound
+	}
+	if stored.Status == contests.StatusArchived {
+		return contests.PrizePlaces{}, contests.ErrNotEditable
+	}
+	previous := stored.PrizePlaces
+	stored.PrizePlaces = places
+	r.store(stored)
+	return previous, nil
+}
+
 func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
 	// A staged race: a concurrent request committed between the caller's
 	// read and this write.

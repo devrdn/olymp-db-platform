@@ -168,6 +168,9 @@ type Contest struct {
 	// ResultDownload offers the participant a CSV file of a query result. A
 	// convenience, not a control: the rows are on their screen either way.
 	ResultDownload bool
+	// PrizePlaces is how many places earn each prize on the standings.
+	// Service.SetPrizePlaces is its one writer; Service.Update leaves it alone.
+	PrizePlaces PrizePlaces
 	// Languages has exactly one default.
 	Languages []ContestLanguage
 	// Translations hold the title and description per language code.
@@ -392,6 +395,10 @@ func (c Contest) Validate() error {
 			ErrInvalidContest, c.Settings.GracePeriodMin, maxGracePeriodMin)
 	}
 
+	if err := c.PrizePlaces.Validate(); err != nil {
+		return err
+	}
+
 	if !slices.Contains([]string{LeaderboardNamesLogin, LeaderboardNamesFullName}, c.LeaderboardNames) {
 		return fmt.Errorf("%w: unknown leaderboard label %q", ErrInvalidContest, c.LeaderboardNames)
 	}
@@ -481,8 +488,14 @@ type Repository interface {
 	ByID(ctx context.Context, id uuid.UUID) (Contest, error)
 	// List returns a page of contests and the total matching the filter.
 	List(ctx context.Context, f Filter) ([]Contest, int, error)
-	// Update saves the contest's own fields; status is not among them.
+	// Update saves the contest's own fields; status and the prize places are
+	// not among them.
 	Update(ctx context.Context, c Contest) error
+	// SetPrizePlaces writes the prize counts alone, leaving updated_at as it
+	// was, and returns the counts it replaced, read under the row's lock. It
+	// reports ErrNotEditable for an archived contest, decided in the same
+	// statement, and ErrNotFound for a missing one.
+	SetPrizePlaces(ctx context.Context, id uuid.UUID, places PrizePlaces) (PrizePlaces, error)
 	// SetStatus moves the contest from status from to status to, and reports
 	// ErrStatusChanged if a concurrent request moved it since the caller read
 	// it. A move to finished finishes every active registration of the

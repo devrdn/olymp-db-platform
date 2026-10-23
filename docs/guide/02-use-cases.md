@@ -332,6 +332,7 @@ flowchart LR
 | See the live standings | `/contests/{contestID}/standings` | `GET /contests/{contestID}/leaderboard/live` | `leaderboard` | `contest.view` |
 | Reveal a frozen leaderboard | `/contests/{contestID}/standings` | `POST /contests/{contestID}/leaderboard/reveal` | `leaderboard` | `contest.edit`; the contest has finished and was frozen (`leaderboard_not_revealable`) |
 | List and drop participant databases | `/contests/{contestID}/databases` | `GET /contests/{contestID}/game/instances`, `DELETE .../game/instances/{database}` | `provisioning` | `contest.view` to list, `contest.edit` to drop |
+| Set how many prize places there are | `/contests/{contestID}/settings` | `PUT /contests/{contestID}/prize-places` | `contests` | `contest.edit`; also on a finished contest, refused once archived (`not_editable`) |
 | Extend the grace before databases are reclaimed | API only | `PATCH /contests/{contestID}/grace` | `contests` | `contest.edit`; only on a finished or archived contest, and only longer |
 
 `...` in this table stands for `/contests/{contestID}`.

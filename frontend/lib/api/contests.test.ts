@@ -9,6 +9,8 @@ import {
   defaultLanguage,
   icpcPenaltyFromForm,
   NEXT_STATUSES,
+  prizePlacesEditable,
+  prizePlacesFromForm,
   sequentialActive,
   settingsEditable,
   shapeEditable,
@@ -205,6 +207,15 @@ describe("contestSchema", () => {
     expect(contestSchema.parse(detail).mayMonitor).toBe(false);
   });
 
+  test("reads the prize places, and none from a server older than them", () => {
+    expect(contestSchema.parse({ ...detail, prize_places: { first: 1, second: 2, third: 3 } }).prizePlaces).toEqual({
+      first: 1,
+      second: 2,
+      third: 3,
+    });
+    expect(contestSchema.parse(detail).prizePlaces).toEqual({ first: 0, second: 0, third: 0 });
+  });
+
   test("reads whether the console offers its result as a CSV file", () => {
     expect(contestSchema.parse(detail).resultDownload).toBe(true);
     expect(contestSchema.parse({ ...detail, result_download: false }).resultDownload).toBe(false);
@@ -293,6 +304,13 @@ describe("the editing windows", () => {
     expect(settingsEditable("finished")).toBe(false);
   });
 
+  test("prize places stay open after the finish and close only with the archive", () => {
+    for (const status of ["draft", "published", "running", "finished"] as const) {
+      expect(prizePlacesEditable(status)).toBe(true);
+    }
+    expect(prizePlacesEditable("archived")).toBe(false);
+  });
+
   test("the shape closes with the content, not with the settings", () => {
     expect(shapeEditable("published")).toBe(true);
     expect(shapeEditable("running")).toBe(false);
@@ -349,6 +367,28 @@ describe("icpcPenaltyFromForm", () => {
 
 // A running contest disables the shape fieldset, so its fields are absent, and
 // a defaulted one would make the API refuse the whole PATCH.
+describe("prizePlacesFromForm", () => {
+  function form(fields: Record<string, string>): FormData {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.set(key, value);
+    return data;
+  }
+
+  test("reads the three counts, a blank one as none", () => {
+    expect(prizePlacesFromForm(form({ prizeFirst: "1", prizeSecond: " 2 ", prizeThird: "" }))).toEqual({
+      ok: true,
+      value: { first: 1, second: 2, third: 0 },
+    });
+  });
+
+  test("accepts the bound and refuses anything past it, negative or not whole", () => {
+    expect(prizePlacesFromForm(form({ prizeFirst: "1000", prizeSecond: "0", prizeThird: "0" })).ok).toBe(true);
+    for (const bad of ["1001", "-1", "1.5", "two", "1e2"]) {
+      expect(prizePlacesFromForm(form({ prizeFirst: bad, prizeSecond: "0", prizeThird: "0" }))).toEqual({ ok: false });
+    }
+  });
+});
+
 describe("shapeFromForm", () => {
   test("sends nothing at all when the whole shape is locked", () => {
     expect(shapeFromForm(shapeForm({}))).toEqual({ ok: true, value: {} });

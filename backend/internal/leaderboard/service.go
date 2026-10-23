@@ -209,7 +209,7 @@ func (s *Service) computePublic(ctx context.Context, contestID uuid.UUID, now ti
 		if decision.State == StateFrozen && c.Scoring == contests.ScoringICPC && !c.SequentialActive() {
 			q.Pending = &Window{From: *decision.FrozenAt, Until: now}
 		}
-		t, err := s.rank(ctx, q)
+		t, err := s.rank(ctx, q, c.PrizePlaces)
 		if err != nil {
 			return View{}, err
 		}
@@ -274,7 +274,7 @@ func (s *Service) computeLive(ctx context.Context, contestID uuid.UUID, now time
 	// Never Pending: the staff table shows the results themselves.
 	t, err := s.rank(ctx, Query{
 		ContestID: c.ID, Cutoff: now, Scoring: c.Scoring, IncludeDisqualified: true,
-	})
+	}, c.PrizePlaces)
 	if err != nil {
 		return StaffView{}, err
 	}
@@ -357,7 +357,7 @@ type table struct {
 }
 
 // rank reads one entry past the bound, so truncation is known, not guessed.
-func (s *Service) rank(ctx context.Context, q Query) (table, error) {
+func (s *Service) rank(ctx context.Context, q Query, places contests.PrizePlaces) (table, error) {
 	q.Limit = s.maxRows + 1
 	if q.Scoring != contests.ScoringICPC {
 		entries, err := s.standings.Standings(ctx, q)
@@ -365,7 +365,9 @@ func (s *Service) rank(ctx context.Context, q Query) (table, error) {
 			return table{}, fmt.Errorf("read the standings: %w", err)
 		}
 		entries, truncated := s.cut(entries)
-		return table{rows: Rank(q.Scoring, entries), truncated: truncated}, nil
+		rows := Rank(q.Scoring, entries)
+		AwardPrizes(rows, q.Scoring, places)
+		return table{rows: rows, truncated: truncated}, nil
 	}
 
 	entries, grid, err := s.standings.ICPCStandings(ctx, q)
@@ -382,7 +384,9 @@ func (s *Service) rank(ctx context.Context, q Query) (table, error) {
 		}
 	}
 	entries, truncated := s.cut(entries)
-	return table{rows: RankICPC(entries, grid), truncated: truncated, questions: grid.Questions}, nil
+	rows := RankICPC(entries, grid)
+	AwardPrizes(rows, q.Scoring, places)
+	return table{rows: rows, truncated: truncated, questions: grid.Questions}, nil
 }
 
 func (s *Service) cut(entries []Entry) ([]Entry, bool) {

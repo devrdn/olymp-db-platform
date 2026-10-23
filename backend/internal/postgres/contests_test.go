@@ -117,6 +117,146 @@ func TestAContestStoredWithoutTheResultDownloadOffersIt(t *testing.T) {
 	})
 }
 
+// Every contest stored before the setting existed awards no prizes.
+func TestAContestStoredWithoutPrizePlacesHasNone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-prize-default")
+		var id uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author.ID).Scan(&id); err != nil {
+			t.Fatalf("insert = %v", err)
+		}
+
+		got, err := NewContests(testPool).ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if got.PrizePlaces != (contests.PrizePlaces{}) {
+			t.Errorf("PrizePlaces = %+v, want the column defaults, none", got.PrizePlaces)
+		}
+	})
+}
+
+// The CHECK bounds a row written past Contest.Validate, and is no tighter than
+// the domain's bound (maxPrizePlaces, prizes.go).
+func TestPrizePlacesAreBoundedAtTheDatabaseToo(t *testing.T) {
+	for _, column := range []string{"prize_first", "prize_second", "prize_third"} {
+		t.Run(column, func(t *testing.T) {
+			for value, accepted := range map[int]bool{-1: false, 0: true, 1000: true, 1001: false} {
+				withTx(t, func(ctx context.Context) {
+					author := makeUser(t, ctx, "author-prize-bound")
+					_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+						`INSERT INTO contests (created_by, `+column+`) VALUES ($1, $2)`, author.ID, value)
+
+					var pgErr *pgconn.PgError
+					switch {
+					case accepted && err != nil:
+						t.Errorf("%s = %d: %v, want it accepted", column, value, err)
+					case !accepted && (!errors.As(err, &pgErr) || pgErr.Code != checkViolation):
+						t.Errorf("%s = %d: err = %v, want a %s check violation", column, value, err, checkViolation)
+					}
+				})
+			}
+		})
+	}
+}
+
+// The reclaim sweep measures a finished contest's grace from updated_at, so a
+// display-only save must not move it.
+func TestSettingPrizePlacesLeavesTheReclaimClockAlone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-prize-clock")
+		q := storage.QuerierFrom(ctx, testPool)
+		var id uuid.UUID
+		var before time.Time
+		if err := q.QueryRow(ctx, `
+			INSERT INTO contests (created_by, status, updated_at)
+			VALUES ($1, 'finished', now() - interval '3 days')
+			RETURNING id, updated_at`, author.ID).Scan(&id, &before); err != nil {
+			t.Fatalf("insert = %v", err)
+		}
+
+		if _, err := NewContests(testPool).SetPrizePlaces(ctx, id, contests.PrizePlaces{First: 1, Second: 2, Third: 3}); err != nil {
+			t.Fatalf("SetPrizePlaces() = %v", err)
+		}
+
+		var after time.Time
+		if err := q.QueryRow(ctx, `SELECT updated_at FROM contests WHERE id = $1`, id).Scan(&after); err != nil {
+			t.Fatalf("read = %v", err)
+		}
+		if !after.Equal(before) {
+			t.Errorf("updated_at = %v, want %v left alone", after, before)
+		}
+	})
+}
+
+// An archive that commits while the save waits for the row is seen by the
+// save, which is then refused rather than writing into an archived contest.
+func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	author := makeUser(t, ctx, "prize-race-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contest)
+	})
+	if _, err := testPool.Exec(ctx, `UPDATE contests SET status = 'finished' WHERE id = $1`, contest); err != nil {
+		t.Fatalf("finish = %v", err)
+	}
+	repo := NewContests(testPool)
+
+	archiving := make(chan struct{})
+	commit := make(chan struct{})
+	archived := make(chan error, 1)
+	go func() {
+		archived <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE contests SET status = 'archived' WHERE id = $1`, contest); err != nil {
+				return err
+			}
+			close(archiving)
+			<-commit
+			return nil
+		})
+	}()
+	<-archiving
+
+	saved := make(chan error, 1)
+	go func() {
+		_, err := repo.SetPrizePlaces(ctx, contest, contests.PrizePlaces{First: 3})
+		saved <- err
+	}()
+	select {
+	case err := <-saved:
+		t.Fatalf("SetPrizePlaces() = %v while the archive still held the row, want it to wait", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(commit)
+	if err := <-archived; err != nil {
+		t.Fatalf("archive = %v", err)
+	}
+	select {
+	case err := <-saved:
+		if !errors.Is(err, contests.ErrNotEditable) {
+			t.Errorf("SetPrizePlaces() = %v, want ErrNotEditable once the archive committed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SetPrizePlaces() never returned after the archive committed")
+	}
+	got, err := repo.ByID(ctx, contest)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if got.PrizePlaces != (contests.PrizePlaces{}) {
+		t.Errorf("PrizePlaces = %+v, want the archived contest's counts untouched", got.PrizePlaces)
+	}
+}
+
 func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)

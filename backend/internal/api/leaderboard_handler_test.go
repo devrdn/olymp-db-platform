@@ -470,8 +470,8 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	public := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, "")
 	want := `{"state":"live","scoring":"points","title":"The Library Murder","ends_at":"2026-03-01T12:00:00Z",` +
 		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
-		`{"place":1,"label":"student","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
-		`{"place":2,"label":"idle","points":0,"solved":0}]}` + "\n"
+		`{"place":1,"prize":null,"label":"student","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
+		`{"place":2,"prize":null,"label":"idle","points":0,"solved":0}]}` + "\n"
 	if got := public.Body.String(); got != want {
 		t.Errorf("public body =\n%s\nwant\n%s", got, want)
 	}
@@ -480,8 +480,8 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	live := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, "")
 	want = `{"shown":{"state":"live"},"status":"running","scoring":"points","freeze_min":null,"names":"login",` +
 		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
-		`{"place":1,"login":"student","full_name":"","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
-		`{"place":2,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
+		`{"place":1,"prize":null,"login":"student","full_name":"","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
+		`{"place":2,"prize":null,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
 	if got := live.Body.String(); got != want {
 		t.Errorf("live body =\n%s\nwant\n%s", got, want)
 	}
@@ -508,8 +508,8 @@ func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
 	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, "")
 	want := `{"state":"frozen","scoring":"winner","title":"The Library Murder","frozen_at":"2026-03-01T11:30:00Z",` +
 		`"ends_at":"2026-03-01T12:00:00Z","generated_at":"2026-03-01T11:40:00Z","truncated":false,"rows":[` +
-		`{"place":1,"label":"student","points":5,"solved":1,"last_scored_at":"2026-03-01T11:10:00Z","winner":true,"is_you":true},` +
-		`{"place":null,"label":"rival","points":20,"solved":0,"last_scored_at":"2026-03-01T11:00:00Z"}]}` + "\n"
+		`{"place":1,"prize":1,"label":"student","points":5,"solved":1,"last_scored_at":"2026-03-01T11:10:00Z","winner":true,"is_you":true},` +
+		`{"place":null,"prize":null,"label":"rival","points":20,"solved":0,"last_scored_at":"2026-03-01T11:00:00Z"}]}` + "\n"
 	if got := rec.Body.String(); got != want {
 		t.Errorf("participant body =\n%s\nwant\n%s", got, want)
 	}
@@ -727,4 +727,104 @@ func TestTheLiveICPCTableSeesTheResultsAndNoPending(t *testing.T) {
 	if rival := body.Rows[1]; !strings.Contains(string(rival.Cells), `{"state":"solved","attempts":1,"minute":151,"first":true}`) {
 		t.Errorf("rival cells = %s, want B solved first at minute 151", rival.Cells)
 	}
+}
+
+func prizesIn(t *testing.T, rec *httptest.ResponseRecorder, name string) map[string]any {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	rows, _ := decode(t, rec)["rows"].([]any)
+	out := map[string]any{}
+	for _, item := range rows {
+		row, _ := item.(map[string]any)
+		prize, present := row["prize"]
+		if !present {
+			t.Fatalf("row %v carries no prize key", row)
+		}
+		out[row[name].(string)] = prize
+	}
+	return out
+}
+
+func samePrizes(t *testing.T, audience string, got, want map[string]any) {
+	t.Helper()
+	for label, tier := range want {
+		if got[label] != tier {
+			t.Errorf("%s prizes = %v, want %v", audience, got, want)
+			return
+		}
+	}
+}
+
+func TestEveryAudienceSeesThePrizeTiers(t *testing.T) {
+	f := newBoardFixture(t)
+	c, me := f.contest(t, contests.StatusRunning, nil)
+	c.PrizePlaces = contests.PrizePlaces{First: 1, Second: 1, Third: 1}
+	f.stores.Contests.Put(c)
+	at := scoredAt(f.now.Add(-time.Minute))
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "cheat", Points: 90, LastScoredAt: at, Disqualified: true},
+		{Registration: uuid.New(), Login: "first", Points: 50, LastScoredAt: at},
+		{Registration: me.ID, Login: "student", Points: 40, LastScoredAt: at},
+		{Registration: uuid.New(), Login: "third", Points: 30, LastScoredAt: at},
+		{Registration: uuid.New(), Login: "fourth", Points: 20, LastScoredAt: at},
+	}
+	want := map[string]any{"first": float64(1), "student": float64(2), "third": float64(3), "fourth": nil}
+
+	student, organizer := f.student.ID, f.organizer.ID
+	samePrizes(t, "public", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"), want)
+	samePrizes(t, "participant", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, ""), "label"), want)
+	want["cheat"] = nil
+	samePrizes(t, "staff", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, ""), "login"), want)
+}
+
+// The frozen table awards prizes by the standings it shows; a score made
+// after the freeze moves nobody's prize.
+func TestAFrozenTableAwardsPrizesByTheFrozenStandings(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	c, _ := f.contest(t, contests.StatusRunning, &freeze)
+	c.PrizePlaces = contests.PrizePlaces{First: 1}
+	f.stores.Contests.Put(c)
+	freezeAt := c.EndsAt.Add(-30 * time.Minute)
+	f.now = freezeAt.Add(10 * time.Minute)
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "leader", Points: 10, LastScoredAt: scoredAt(freezeAt.Add(-time.Minute))},
+		{Registration: uuid.New(), Login: "latecomer", Points: 777, LastScoredAt: scoredAt(freezeAt.Add(time.Minute))},
+	}
+
+	got := prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label")
+	samePrizes(t, "frozen", got, map[string]any{"leader": float64(1)})
+}
+
+func TestNoPrizePlacesShowNoTierAnywhere(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.contest(t, contests.StatusRunning, nil)
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "leader", Points: 10, LastScoredAt: scoredAt(f.now.Add(-time.Minute))},
+	}
+
+	organizer := f.organizer.ID
+	samePrizes(t, "public", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"),
+		map[string]any{"leader": nil})
+	samePrizes(t, "staff", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, ""), "login"),
+		map[string]any{"leader": nil})
+}
+
+// The counts do not apply in winner mode; its one winner holds the first prize.
+func TestAWinnerTableGivesOnlyTheWinnerTheFirstPrize(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.contest(t, contests.StatusRunning, nil)
+	c.Scoring = contests.ScoringWinner
+	c.PrizePlaces = contests.PrizePlaces{First: 3, Second: 3, Third: 3}
+	f.stores.Contests.Put(c)
+	at := scoredAt(f.now.Add(-time.Minute))
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "winner", Points: 5, LastScoredAt: at, FinalAt: at},
+		{Registration: uuid.New(), Login: "rich", Points: 50, LastScoredAt: at},
+	}
+
+	samePrizes(t, "winner", prizesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"),
+		map[string]any{"winner": float64(1), "rich": nil})
 }

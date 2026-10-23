@@ -91,6 +91,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesFullName,
 			ICPCPenaltyMin:       45,
 			ResultDownload:       false,
+			PrizePlaces:          contests.PrizePlaces{First: 1, Second: 2, Third: 3},
 			CreatedBy:            author,
 		}
 	}
@@ -116,6 +117,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:       5,
 			ResultDownload:       true,
+			PrizePlaces:          contests.PrizePlaces{First: 1000, Second: 0, Third: 7},
 			CreatedBy:            author,
 		}
 	}
@@ -280,6 +282,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		check("LeaderboardNames", got.LeaderboardNames == want.LeaderboardNames, got.LeaderboardNames, want.LeaderboardNames)
 		check("ICPCPenaltyMin", got.ICPCPenaltyMin == want.ICPCPenaltyMin, got.ICPCPenaltyMin, want.ICPCPenaltyMin)
 		check("ResultDownload", got.ResultDownload == want.ResultDownload, got.ResultDownload, want.ResultDownload)
+		check("PrizePlaces", got.PrizePlaces == want.PrizePlaces, got.PrizePlaces, want.PrizePlaces)
 		check("CreatedBy", got.CreatedBy == want.CreatedBy, got.CreatedBy, want.CreatedBy)
 		return wrong
 	}
@@ -470,6 +473,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			want.Status = created.Status
 
 			update(t, ctx, target, want)
+			want.PrizePlaces = created.PrizePlaces
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
@@ -484,6 +488,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			want.Status = created.Status
 
 			update(t, ctx, target, want)
+			want.PrizePlaces = created.PrizePlaces
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
@@ -500,6 +505,67 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			update(t, ctx, target, want)
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	// SetPrizePlaces is their one writer, so a settings save made from an
+	// earlier read cannot undo a prize change made since.
+	t.Run("Update leaves the prize places alone", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, full(author))
+			stale := created
+			stale.PrizePlaces = contests.PrizePlaces{}
+
+			update(t, ctx, target, stale)
+
+			wantFields(t, byID(t, ctx, target, created.ID), created)
+		})
+	})
+
+	t.Run("SetPrizePlaces writes the counts, returns the ones it replaced and leaves updated_at alone", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, full(author))
+			want := created
+			want.PrizePlaces = contests.PrizePlaces{First: 4, Second: 0, Third: 9}
+
+			previous, err := target.Repo.SetPrizePlaces(ctx, created.ID, want.PrizePlaces)
+			if err != nil {
+				t.Fatalf("SetPrizePlaces() = %v", err)
+			}
+
+			if previous != created.PrizePlaces {
+				t.Errorf("previous = %+v, want %+v", previous, created.PrizePlaces)
+			}
+			got := byID(t, ctx, target, created.ID)
+			wantFields(t, got, want)
+			if !got.UpdatedAt.Equal(created.UpdatedAt) {
+				t.Errorf("UpdatedAt = %v, want %v left alone", got.UpdatedAt, created.UpdatedAt)
+			}
+		})
+	})
+
+	t.Run("SetPrizePlaces refuses an archived contest and keeps its counts", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			c := full(author)
+			c.Status = contests.StatusArchived
+			created := create(t, ctx, target, c)
+
+			_, err := target.Repo.SetPrizePlaces(ctx, created.ID, contests.PrizePlaces{First: 7})
+
+			if !errors.Is(err, contests.ErrNotEditable) {
+				t.Errorf("SetPrizePlaces() = %v, want ErrNotEditable", err)
+			}
+			wantFields(t, byID(t, ctx, target, created.ID), created)
+		})
+	})
+
+	t.Run("SetPrizePlaces of a contest that is not there is reported", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			_, err := target.Repo.SetPrizePlaces(ctx, uuid.New(), contests.PrizePlaces{First: 1})
+			notFound(t, err, "SetPrizePlaces")
 		})
 	})
 
@@ -934,6 +1000,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 
 			want := other(author)
 			want.Status = created.Status
+			want.PrizePlaces = created.PrizePlaces
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 
 			given := []contests.ContestLanguage{english, {Code: "ro"}}

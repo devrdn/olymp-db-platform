@@ -3549,12 +3549,30 @@ and reading through the packages' own interfaces leaves room for one later.
 table is seen by three audiences: the organiser, always live, at
 `/contests/{id}/standings`; the participant, on the contest screen's table
 tab; and anybody at all without signing in, at
-`/contests/{id}/leaderboard`. The organiser configures two things per contest:
+`/contests/{id}/leaderboard`. The organiser configures three things per contest:
 
 - **a freeze** — none, or N minutes or hours before `ends_at`; from then on
   everybody but the organiser sees the table as it stood at the freeze, while
   answers continue to be accepted and scored;
-- **how a participant is labelled** — by login (default) or by full name.
+- **how a participant is labelled** — by login (default) or by full name;
+- **how many prize places** — counts of first, second and third prizes, each
+  0..1000 and none by default (`contests.prize_first`, `prize_second`,
+  `prize_third`). Tiers go down the places, and a shared place is shared whole,
+  so a tie on a boundary takes the better tier. A row that scored nothing (no
+  points, or no ICPC solve) takes no prize whatever the counts. A disqualified
+  row takes no prize and holds no place for one, so the organiser's table,
+  which lists them, shows the prizes everybody else sees. Each row carries its
+  tier as `prize` (1, 2, 3 or null) beside `place`, and the interface draws the
+  tier, not the place, as the badge; everybody without a prize shows a dash. A
+  frozen table awards them by its frozen places. Winner mode ignores the
+  counts: its one winner holds the first prize. They change only what is
+  displayed, so they stay editable while the contest runs and after it
+  finishes, through their own `PUT /contests/{id}/prize-places` rather than the
+  general update, and are refused once the contest is archived. That write
+  touches the three counts alone and leaves `updated_at`, from which the
+  reclaim sweep measures the grace, where it was; it refuses an archived
+  contest in the same statement, under the row's lock. A change shows on a
+  cached public table within its ten seconds.
 
 A frozen table stays frozen after the end until the organiser presses "reveal
 results", which is irreversible and written to `audit_log`. There are no

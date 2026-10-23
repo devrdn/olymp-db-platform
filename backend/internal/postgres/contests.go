@@ -28,6 +28,7 @@ const contestColumns = `
 	c.created_at, c.updated_at,
 	c.leaderboard_freeze_min, c.leaderboard_names, c.leaderboard_revealed_at,
 	c.icpc_penalty_min, c.result_download,
+	c.prize_first, c.prize_second, c.prize_third,
 	COALESCE((
 		SELECT json_agg(json_build_object('code', cl.lang, 'is_default', cl.is_default)
 		                ORDER BY cl.is_default DESC, cl.lang)
@@ -85,6 +86,7 @@ func contestScanTargets(c *contests.Contest, settings, languages, translations *
 		&c.CreatedAt, &c.UpdatedAt,
 		&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
 		&c.ICPCPenaltyMin, &c.ResultDownload,
+		&c.PrizePlaces.First, &c.PrizePlaces.Second, &c.PrizePlaces.Third,
 		languages, translations,
 		&c.CoverHash, &c.CoverAttribution,
 		&c.SQLMode,
@@ -146,14 +148,16 @@ func (r *Contests) Create(ctx context.Context, c contests.Contest) (contests.Con
 		WITH inserted AS (
 			INSERT INTO contests (status, enrollment, question_mode, progression, scoring, timing, duration_min,
 			                      starts_at, ends_at, allowed_cidrs, settings, created_by,
-			                      leaderboard_freeze_min, leaderboard_names, icpc_penalty_min, result_download)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			                      leaderboard_freeze_min, leaderboard_names, icpc_penalty_min, result_download,
+			                      prize_first, prize_second, prize_third)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 			RETURNING *
 		)
 		SELECT `+contestColumns+` FROM inserted c`,
 		c.Status, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings, c.CreatedBy,
-		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin, c.ResultDownload)
+		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin, c.ResultDownload,
+		c.PrizePlaces.First, c.PrizePlaces.Second, c.PrizePlaces.Third)
 
 	return scanContest(row)
 }
@@ -273,6 +277,40 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 		return contests.ErrNotFound
 	}
 	return nil
+}
+
+// SetPrizePlaces leaves updated_at alone: the reclaim sweep measures a
+// finished contest's grace from it. The row lock taken while reading the old
+// counts makes a concurrent archive either commit first, so the status test
+// excludes the row, or wait for this write.
+func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
+	var previous contests.PrizePlaces
+	err := r.querier(ctx).QueryRow(ctx, `
+		WITH old AS (
+			SELECT id, prize_first, prize_second, prize_third
+			FROM contests
+			WHERE id = $1 AND status <> 'archived'
+			FOR UPDATE
+		)
+		UPDATE contests c
+		SET prize_first = $2, prize_second = $3, prize_third = $4
+		FROM old
+		WHERE c.id = old.id
+		RETURNING old.prize_first, old.prize_second, old.prize_third`,
+		id, places.First, places.Second, places.Third).
+		Scan(&previous.First, &previous.Second, &previous.Third)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Nothing matched: a second read tells a missing contest from an
+		// archived one.
+		if _, err := r.ByID(ctx, id); err != nil {
+			return contests.PrizePlaces{}, err
+		}
+		return contests.PrizePlaces{}, fmt.Errorf("%w: it is archived", contests.ErrNotEditable)
+	case err != nil:
+		return contests.PrizePlaces{}, fmt.Errorf("set prize places: %w", err)
+	}
+	return previous, nil
 }
 
 // finishRoster is the CTE that finishes the active registrations of every

@@ -183,3 +183,22 @@ func TestOwnInWinnerModeSaysNothingWhileTheTableIsFrozen(t *testing.T) {
 		t.Errorf("Own() = %+v, want the caller's own numbers", own.Row)
 	}
 }
+
+// The own row comes from the live table while the public one is frozen; a
+// prize read from it would tell the caller where they stand.
+func TestOwnHidesThePrizeWhileTheTableIsFrozen(t *testing.T) {
+	r := newRig(t)
+	c := contest(contests.StatusFinished, minutes(30), nil)
+	c.PrizePlaces = contests.PrizePlaces{First: 3}
+	c = r.contests.Put(c)
+	caller := uuid.New()
+	r.standings.entries = ownEntries(caller)
+
+	own, err := r.service.Own(context.Background(), c.ID, caller)
+	if err != nil {
+		t.Fatalf("Own() = %v", err)
+	}
+	if own.Open || own.Row.Prize != 0 {
+		t.Errorf("Own() = %+v, want no prize on a table that is not open", own)
+	}
+}

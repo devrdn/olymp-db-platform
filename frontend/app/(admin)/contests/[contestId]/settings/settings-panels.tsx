@@ -20,14 +20,15 @@ import { cn } from "@/lib/utils";
 import {
   saveLanguagesAction,
   savePolicyAction,
+  savePrizePlacesAction,
   saveSettingsAction,
   type SettingsState,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * A titled block with its own save. Four forms for four endpoints, so one
- * refusal does not discard the others.
+ * A titled block with its own save. One form per endpoint, so one refusal
+ * does not discard the others.
  */
 function Panel({
   title,
@@ -494,6 +495,75 @@ export function ContestPanel({
           </label>
           <p id={resultDownloadHintId} className="max-w-body text-small text-ink-3">
             {t.access.resultDownloadHint}
+          </p>
+        </div>
+
+        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+      </Panel>
+    </form>
+  );
+}
+
+/**
+ * How many places earn each prize. A form of its own, because it stays open
+ * after the contest finishes, when the rest of the settings are closed.
+ */
+export function PrizePanel({
+  contest,
+  editable,
+  dict,
+}: {
+  contest: Contest;
+  editable: boolean;
+  dict: Dictionary;
+}) {
+  const t = dict.workspace.settings.prizes;
+  const [state, formAction, pending] = useActionState<SettingsState, FormData>(savePrizePlacesAction, {});
+  const hintId = useId();
+  const winnerId = useId();
+
+  const fields = [
+    { name: "prizeFirst", label: t.first, value: contest.prizePlaces.first },
+    { name: "prizeSecond", label: t.second, value: contest.prizePlaces.second },
+    { name: "prizeThird", label: t.third, value: contest.prizePlaces.third },
+  ];
+
+  // Keyed on the counts, not updatedAt, which this save leaves alone: a save
+  // remounts the uncontrolled fields onto the server's values.
+  const { first, second, third } = contest.prizePlaces;
+  return (
+    <form key={`${first}-${second}-${third}`} action={formAction} className="contents">
+      <Panel
+        title={t.heading}
+        help={t.help}
+        dict={dict}
+        frozen={editable ? undefined : dict.workspace.facts.frozen}
+      >
+        <input type="hidden" name="contestId" value={contest.id} />
+
+        <div className="grid gap-6 narrow:grid-cols-3">
+          {fields.map((field) => (
+            <Field key={field.name} id={field.name} label={field.label} describedBy={`${hintId} ${winnerId}`}>
+              <Input
+                name={field.name}
+                type="number"
+                min={0}
+                max={1000}
+                step={1}
+                defaultValue={field.value}
+                disabled={!editable}
+                className="max-w-40"
+              />
+            </Field>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <p id={hintId} className="max-w-body text-small text-ink-3">
+            {t.hint}
+          </p>
+          <p id={winnerId} className={cn("max-w-body text-small", contest.scoring === "winner" ? "text-warn" : "text-ink-3")}>
+            {t.winnerHint}
           </p>
         </div>
 
