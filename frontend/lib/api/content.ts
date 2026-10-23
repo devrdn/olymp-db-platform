@@ -31,6 +31,19 @@ export const storySchema = z
 export type Story = z.infer<typeof storySchema>;
 
 /**
+ * The table descriptions, a body per language that has one. A contest with
+ * none answers with an empty set and no `updated_at`, not a 404.
+ */
+export const schemaNotesSchema = z
+  .object({
+    translations: z.record(z.string(), z.string()),
+    updated_at: z.string().optional(),
+  })
+  .transform((raw) => ({ translations: raw.translations, updatedAt: raw.updated_at }));
+
+export type SchemaNotes = z.infer<typeof schemaNotesSchema>;
+
+/**
  * One question's text in one language. `choices` maps language-independent
  * choice ids to labels; an answer is an id, so checking ignores the language.
  */

@@ -224,9 +224,12 @@ async function PlayPanels({
   // The story, or a shown reason on `story_not_found`. A screen-taking refusal
   // here is answered as for the questions.
   let storyBody: string | null = null;
+  let schemaNotes: string | null = null;
   let storyUnavailable: string | null = null;
   if (storyResult.status === "fulfilled") {
-    storyBody = playStorySchema.parse(storyResult.value).bodyMd;
+    const story = playStorySchema.parse(storyResult.value);
+    storyBody = story.bodyMd;
+    schemaNotes = story.schemaNotesMd;
   } else {
     const error = storyResult.reason;
     if (error instanceof ApiError && takesTheScreen(error.code)) {
@@ -274,10 +277,11 @@ async function PlayPanels({
     workspace = parsed.success ? parsed.data : null;
   }
 
-  // The questions, the story and its print copy are rendered here, on the
-  // server, so the browser does not ship the Markdown parser (about 32 KiB
-  // gzipped) or parse the same text twice. Only a question that opens later
-  // in a sequential contest fetches it (questions-panel.tsx).
+  // The questions, the story with its table descriptions, and the print copy
+  // are rendered here, on the server, so the browser does not ship the
+  // Markdown parser (about 32 KiB gzipped) or parse the same text twice. Only
+  // a question that opens later in a sequential contest fetches it
+  // (questions-panel.tsx).
   const questionEntries: QuestionEntry[] = questions.map((question, index) =>
     question.locked
       ? { question, index: index + 1, body: null }
@@ -333,6 +337,7 @@ async function PlayPanels({
         storyCover={storyCover}
         printView={printView}
         storyUnavailable={storyUnavailable}
+        schemaNotes={schemaNotes !== null ? <StoryText markdown={schemaNotes} /> : null}
         questionEntries={questionEntries}
         scoring={scoring}
         icpcPenaltyMin={icpcPenaltyMin}

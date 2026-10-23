@@ -13,7 +13,26 @@ describe("playStorySchema", () => {
     expect(playStorySchema.parse({ lang: "en", body_md: "The greenhouse was locked." })).toEqual({
       lang: "en",
       bodyMd: "The greenhouse was locked.",
+      schemaNotesMd: null,
     });
+  });
+
+  test("carries the table descriptions the server resolved for this language", () => {
+    const parsed = playStorySchema.parse({
+      lang: "en",
+      body_md: "The greenhouse was locked.",
+      schema_notes_md: "## suspects\nOne row per person of interest.",
+    });
+
+    expect(parsed.schemaNotesMd).toBe("## suspects\nOne row per person of interest.");
+  });
+
+  // Null decides that the Tables tab is not offered at all.
+  test.each([
+    ["empty", ""],
+    ["blank", "  \n\t "],
+  ])("reads %s table descriptions as none", (_name, notes) => {
+    expect(playStorySchema.parse({ lang: "en", body_md: "x", schema_notes_md: notes }).schemaNotesMd).toBeNull();
   });
 });
 

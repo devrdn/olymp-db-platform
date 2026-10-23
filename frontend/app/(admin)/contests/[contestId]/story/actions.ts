@@ -42,3 +42,36 @@ export async function saveStoryAction(_previous: StoryState, form: FormData): Pr
 
   return { saved: true };
 }
+
+export type SchemaNotesState = { code?: string; saved?: boolean };
+
+/**
+ * Saves the table descriptions for every language in one request, the set the
+ * endpoint replaces. An empty box is dropped, so that language has none and a
+ * participant reading it falls back to the default language's.
+ */
+export async function saveSchemaNotesAction(_previous: SchemaNotesState, form: FormData): Promise<SchemaNotesState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const translations: Record<string, string> = {};
+  for (const [key, value] of form.entries()) {
+    if (!key.startsWith("schemaNotes.")) continue;
+    const body = cleanEditorMarkdown(String(value)).trim();
+    if (body) translations[key.slice("schemaNotes.".length)] = body;
+  }
+
+  const failure = await serverRequest(`/contests/${contestId}/schema-notes`, {
+    method: "PUT",
+    body: { translations },
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  if (failure) return { code: failureCode(failure) };
+
+  revalidatePath(`/contests/${contestId}/story`);
+
+  return { saved: true };
+}
