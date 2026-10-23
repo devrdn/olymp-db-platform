@@ -13,8 +13,10 @@ type HistoryEntry struct {
 	// statement whole. Never set by the streamed export.
 	ID  int64
 	SQL string
-	// SQLTruncated says SQL was cut at MaxHistorySQLChars, so a shortened
-	// statement is never shown as whole. Never set by the streamed export.
+	// SQLTruncated says SQL was cut at the bound of the read that produced
+	// it (MaxHistorySQLChars for a page, MaxEntrySQLChars for one row), so a
+	// shortened statement is never shown as whole. Never set by the streamed
+	// export.
 	SQLTruncated bool
 	Status       Status
 	// Error is empty for a query that did not fail.

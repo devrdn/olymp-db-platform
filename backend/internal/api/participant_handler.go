@@ -62,7 +62,9 @@ type Submitter interface {
 // QueryHistory is the read side of the query log: one registration's own rows,
 // newest first, paged, one of them whole, or all of them as a file.
 type QueryHistory interface {
-	History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error)
+	// History pages from the newest row, or, with a positive before, from
+	// the rows older than that one.
+	History(ctx context.Context, registrationID uuid.UUID, limit, offset int, before int64) ([]queryrunner.HistoryEntry, int, error)
 	// HistoryEntry reads row id with its statement whole. found is false when
 	// the row is not that registration's, whether or not it exists.
 	HistoryEntry(ctx context.Context, registrationID uuid.UUID, id int64) (entry queryrunner.HistoryEntry, found bool, err error)
@@ -390,14 +392,20 @@ type queryLogResponse struct {
 // queryLog serves this participant's own query history. limit and offset are
 // passed through unchecked: History clamps them
 // (queryrunner.NormalizeHistoryPage), so an oversized page gets the largest
-// allowed (CLAUDE.md rule 2).
+// allowed (CLAUDE.md rule 2). "Load older" sends ?before= instead of an
+// offset, which a query run meanwhile would shift.
 func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 	participant, _, ok := h.admit(w, r)
 	if !ok {
 		return
 	}
 
-	found, total, err := h.history.History(r.Context(), participant.ID, intParam(r, "limit"), intParam(r, "offset"))
+	// Anything that is not a row id asks for the newest page.
+	before, err := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	if err != nil || before < 0 {
+		before = 0
+	}
+	found, total, err := h.history.History(r.Context(), participant.ID, intParam(r, "limit"), intParam(r, "offset"), before)
 	if err != nil {
 		h.log.ErrorContext(r.Context(), "could not read the participant's query history", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

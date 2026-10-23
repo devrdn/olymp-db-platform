@@ -116,15 +116,36 @@ describe("the query log panel", () => {
     expect(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore })).toBeInTheDocument();
   });
 
-  test("load more appends the next page rather than replacing the first", async () => {
+  test("load more appends the rows older than the last one held", async () => {
     fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2")], total: 2 });
-    show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
+    const first = entry("SELECT 1");
+    show({ initial: { items: [first], total: 2, failed: false } });
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
 
     await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
-    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 1);
+    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0, first.id);
+  });
+
+  // However the page came to repeat a row (a refresh racing it, an older
+  // server paging by offset), one row is one row: ids are the rows' keys.
+  test("a row the next page repeats is shown once, and stays as it was", async () => {
+    const user = userEvent.setup();
+    const kept = entry("SELECT kept");
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [{ ...kept }, entry("SELECT older")], total: 3 });
+    show({ initial: { items: [entry("SELECT newest"), kept], total: 3, failed: false } });
+    const row = () => screen.getAllByRole("row").filter((r) => r.textContent?.includes("SELECT kept"));
+    await user.click(within(row()[0]).getByRole("button", { name: en.participant.play.workspace.log.show }));
+
+    await user.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
+
+    await waitFor(() => expect(screen.getByText("SELECT older")).toBeInTheDocument());
+    expect(screen.getAllByText("SELECT kept", { selector: "span" })).toHaveLength(1);
+    expect(within(row()[0]).getByRole("button", { name: en.participant.play.workspace.log.hide })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   test("a failed load more leaves the existing rows on screen, with a way to retry", async () => {

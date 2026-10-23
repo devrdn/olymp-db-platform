@@ -170,6 +170,7 @@ type fakeHistory struct {
 	gotRegistration uuid.UUID
 	gotLimit        int
 	gotOffset       int
+	gotBefore       int64
 	called          bool
 	// exported, exportErr and gotExportRegistration are the same three facts
 	// for the CSV download.
@@ -251,11 +252,12 @@ func (h *fakeHistory) awaitInsideExport(t *testing.T) {
 	t.Fatal("no export ever started")
 }
 
-func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
+func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit, offset int, before int64) ([]queryrunner.HistoryEntry, int, error) {
 	h.called = true
 	h.gotRegistration = registrationID
 	h.gotLimit = limit
 	h.gotOffset = offset
+	h.gotBefore = before
 	return h.items, h.total, h.err
 }
 
@@ -1436,6 +1438,27 @@ func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 	}
 }
 
+// "Load older" names the last row it holds; anything that is not a row id
+// asks for the newest page.
+func TestQueryLogPagesOlderThanTheRowItIsGiven(t *testing.T) {
+	for query, want := range map[string]int64{"before=42": 42, "before=abc": 0, "before=-3": 0, "": 0} {
+		t.Run(query, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := uuid.New()
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+			f.access.participant = contests.Participant{ID: uuid.New()}
+
+			rec := f.get("/contests/" + contestID.String() + "/play/log?limit=50&" + query)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if f.history.gotBefore != want {
+				t.Fatalf("before = %d, want %d", f.history.gotBefore, want)
+			}
+		})
+	}
+}
+
 // The list hands each row's id back, so one row can be read whole.
 func TestQueryLogNamesEachRowByItsID(t *testing.T) {
 	f := newParticipantFixture(t)
@@ -1523,6 +1546,10 @@ func TestQueryLogEntryWithAnIDThatCannotBeOneIsNotFoundAndReadsNothing(t *testin
 			rec := f.get("/contests/" + contestID.String() + "/play/log/" + id)
 			if rec.Code != http.StatusNotFound {
 				t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+			}
+			// The same answer as someone else's row, so the two cannot be told apart.
+			if code := errorCode(t, rec); code != "not_found" {
+				t.Fatalf("code = %q, want not_found", code)
 			}
 			if f.history.entryCalled {
 				t.Fatal("the log was read for an id that cannot name a row")

@@ -120,10 +120,6 @@ type profileHistory struct {
 	calls atomic.Int64
 }
 
-func (h *profileHistory) History(context.Context, uuid.UUID, int, int) ([]queryrunner.HistoryEntry, int, error) {
-	return h.rows, len(h.rows), nil
-}
-
 func (h *profileHistory) ExportHistory(_ context.Context, _ uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
 	h.calls.Add(1)
 	if h.hold != nil {
