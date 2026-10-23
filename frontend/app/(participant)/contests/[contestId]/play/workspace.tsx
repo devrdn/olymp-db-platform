@@ -120,7 +120,6 @@ export function Workspace({
   const [resultFrom, setResultFrom] = useState<string | null>(null);
   // Controlled so a completed run can switch to "Result" by itself.
   const [bottomTab, setBottomTab] = useState("result");
-  const { containerRef, sizes: widths, commit, sideBounds } = usePaneWidths(contestId);
   // The console column's split is its own group: it is stored in percent,
   // the widths in rem.
   const { containerRef: columnRef, sizes: rows, commit: commitRows } = useConsoleRows(contestId);
@@ -133,6 +132,8 @@ export function Workspace({
   useSchemaPanel(schema !== null);
 
   const showSchema = schema !== null && !collapsed.schema;
+  // An open schema column narrows how far the side column may grow.
+  const { containerRef, sizes: widths, commit, sideBounds } = usePaneWidths(contestId, showSchema);
   const showSide = !collapsed.side;
   const showBottom = !collapsed.bottom;
 

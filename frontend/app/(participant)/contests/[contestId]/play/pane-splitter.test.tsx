@@ -17,8 +17,16 @@ vi.mock("./use-contest-events", () => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
+import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { Workspace } from "./workspace";
-import { DEFAULT_EDITOR_PCT, DEFAULT_SCHEMA_REM, DEFAULT_SIDE_REM, WIDTH_BOUNDS } from "./pane-splitter";
+import {
+  CONSOLE_MIN_REM,
+  DEFAULT_EDITOR_PCT,
+  DEFAULT_SCHEMA_REM,
+  DEFAULT_SIDE_REM,
+  WIDTH_BOUNDS,
+  useSideBounds,
+} from "./pane-splitter";
 
 const A_SCHEMA = {
   truncated: false,
@@ -193,15 +201,83 @@ describe("the side column's width", () => {
 
   test("a stored width larger than the window allows is drawn at the bound", () => {
     resizeWindow(1600);
-    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ side: 90, schema: 90 }));
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ side: 90 }));
     const { container } = show();
 
     expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuenow", "60");
     expect(sideWidth(container)).toBe("60rem");
+  });
+
+  test("a stored schema width larger than its ceiling is drawn at the ceiling", () => {
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ schema: 90 }));
+    show();
+
     expect(screen.getByRole("separator", { name: t.schema })).toHaveAttribute(
       "aria-valuenow",
       String(WIDTH_BOUNDS.max),
     );
+  });
+
+  // Beside the widest schema, 60% of the window would leave the console
+  // nothing: at 1280px, 80rem less 32 for the schema less the console's 16.
+  test("leaves the console its minimum beside a wide schema", () => {
+    resizeWindow(1280);
+    window.localStorage.setItem("dbcontest.console.panes.c1", JSON.stringify({ schema: 32, side: 60 }));
+    const { container } = show();
+
+    const handle = screen.getByRole("separator", { name: t.side });
+    expect(handle).toHaveAttribute("aria-valuemax", String(80 - 32 - CONSOLE_MIN_REM));
+    expect(sideWidth(container)).toBe(`${80 - 32 - CONSOLE_MIN_REM}rem`);
+  });
+
+  test("gives the room back when the schema panel is collapsed", async () => {
+    resizeWindow(1280);
+    window.localStorage.setItem("dbcontest.console.panes.c9", JSON.stringify({ schema: 32, side: 60 }));
+    render(
+      <PanelVisibilityProvider contestId="c9">
+        <PanelToggles dict={en} />
+        <Workspace
+          accountId="u1"
+          contestId="c9"
+          storyBody={null}
+          printView={null}
+          storyCover={null}
+          storyUnavailable={null}
+          questionEntries={[]}
+          schema={A_SCHEMA}
+          sqlMode="read_only"
+          resultDownload
+          initialLog={{ items: [], total: 0, failed: false }}
+          workspace={null}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuemax", "32");
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.panels.schema }));
+
+    // 60% of 80rem, now that only the console has to fit beside it.
+    expect(screen.getByRole("separator", { name: t.side })).toHaveAttribute("aria-valuemax", "48");
+  });
+
+  test("every component reading the bound follows a resize, not only the first", () => {
+    function Bound({ label }: { label: string }) {
+      return <output aria-label={label}>{useSideBounds(0).max}</output>;
+    }
+    resizeWindow(1600);
+    render(
+      <>
+        <Bound label="one" />
+        <Bound label="two" />
+      </>,
+    );
+
+    resizeWindow(1000);
+
+    expect(screen.getByLabelText("one")).toHaveTextContent("37");
+    expect(screen.getByLabelText("two")).toHaveTextContent("37");
   });
 
   test("follows the window when it narrows", () => {
