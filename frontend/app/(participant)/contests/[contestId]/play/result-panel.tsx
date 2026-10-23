@@ -28,7 +28,6 @@ export function ResultPanel({
   /** For the remembered height of the open-row split. */
   contestId: string;
   state: ConsoleState;
-  /** Whether the contest offers the rows as a CSV file. */
   resultDownload: boolean;
   /**
    * The name of the SQL tab the run came from, or null before any run. The

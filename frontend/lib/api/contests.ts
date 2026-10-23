@@ -149,8 +149,8 @@ export const contestSchema = z
     // Minutes per wrong attempt on a question later solved. Always present,
     // but meaningful only while `scoring` is `icpc`.
     icpc_penalty_min: z.number(),
-    // Whether the participant's console offers its result as a CSV file.
-    result_download: z.boolean(),
+    // Defaulted for an older server, as in the summary.
+    result_download: z.boolean().default(true),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),

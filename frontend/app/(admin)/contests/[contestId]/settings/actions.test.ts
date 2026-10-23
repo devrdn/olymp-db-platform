@@ -124,7 +124,6 @@ describe("saveSettingsAction, the result download", () => {
     expect(init.body.result_download).toBe(true);
   });
 
-  // A cleared checkbox submits nothing, so absence is the "off" answer.
   test("withdraws it when the box is cleared", async () => {
     serverRequest.mockResolvedValueOnce({});
 
