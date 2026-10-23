@@ -202,6 +202,7 @@ flowchart LR
 |---|---|---|---|---|
 | Wait for the start, hear about changes | `/contests/{contestID}/play` | `GET /contests/{contestID}/events` (server-sent events) | `queryproxy` | Gate: `MayWait`; a cap on open channels per participant (`too_many_connections`) |
 | Read the story | `/contests/{contestID}/play`, download at `/contests/{contestID}/play/story.md` | `GET /contests/{contestID}/play/story` | `contests` (`Reader`) | Gate: `MayAct` |
+| Read the table descriptions | `/contests/{contestID}/play`, "Tables" tab | `GET /contests/{contestID}/play/story` (`schema_notes_md`) | `contests` (`Reader`) | Gate: `MayAct` |
 | Read the questions | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/questions` | `contests` (`Reader`) | Gate: `MayAct` |
 | See the game schema | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/schema` | `queryproxy` | Gate: `MayAct`; the contest shows its schema, otherwise `schema_hidden`, which is also the answer when no Query Runner is deployed. The read provisions the participant's copy, so it can answer `no_game_yet` or `game_cluster_full` |
 | Run a SQL query | `/contests/{contestID}/play` | `POST /contests/{contestID}/query` | `queryproxy`, then the Query Runner (`queryrunner`, `sqlpolicy`) | Gate: `MayAct`; at least one question still answerable; the contest's SQL policy; per-participant rate and one query at a time. Mounted only when both `GAME_PROVISIONER_DSN` and `QUERY_RUNNER_ADDR` are set |
@@ -269,6 +270,7 @@ flowchart LR
 | Export the contest as a package | `/contests/{contestID}` (export menu) | `GET /contests/{contestID}/export` | `contests` | `contest.edit`, because the package carries the reference answers |
 | Delete a draft | API only | `DELETE /contests/{contestID}` | `contests` | `contest.edit`; only a draft (`not_editable` otherwise) |
 | Write the story | `/contests/{contestID}/story` | `GET`, `PUT /contests/{contestID}/story` | `contests` | `contest.view` to read, `contest.edit` to write |
+| Write the table descriptions | `/contests/{contestID}/story` | `GET`, `PUT /contests/{contestID}/schema-notes` | `contests` | `contest.view` to read, `contest.edit` to write |
 | List, add, reorder and delete questions | `/contests/{contestID}/questions` | `GET`, `POST /contests/{contestID}/questions`; `PUT .../questions/order`; `DELETE .../questions/{questionID}` | `contests` | `contest.view` to read, `contest.edit` to write |
 | Edit one question with its wording and answers | `/contests/{contestID}/questions/{questionID}` | `GET`, `PUT .../questions/{questionID}`; API only: `PATCH .../questions/{questionID}`, `PUT .../texts`, `PUT .../answers` | `contests` | `contest.view` to read, `contest.edit` to write |
 | Write the game script and build it | `/contests/{contestID}/game` | `GET /game`, `GET`, `PUT /game/script`, `POST /game/build` | `provisioning` | `contest.view` to read, `contest.edit` to write; replacing the game of a live contest is refused (`game_not_editable`), and so is rebuilding it unless its template is missing from the game cluster |

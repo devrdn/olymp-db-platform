@@ -28,6 +28,7 @@ type Fixture struct {
 	Service       *contests.Service
 	Contests      *Contests
 	Stories       *Stories
+	SchemaNotes   *SchemaNotes
 	Questions     *Questions
 	Managers      *Managers
 	Registrations *Registrations
@@ -58,6 +59,7 @@ func NewFixture() *Fixture {
 	f := &Fixture{
 		Contests:      NewContests(),
 		Stories:       NewStories(),
+		SchemaNotes:   NewSchemaNotes(),
 		Questions:     NewQuestions(),
 		Managers:      NewManagers(),
 		Registrations: NewRegistrations(),
@@ -88,6 +90,7 @@ func NewFixture() *Fixture {
 	// profile rigs register accounts they never create.
 	f.Questions.ContestExists = f.Contests.Exists
 	f.Stories.ContestExists = f.Contests.Exists
+	f.SchemaNotes.ContestExists = f.Contests.Exists
 	f.Policies.ContestExists = f.Contests.Exists
 	f.Registrations.ContestExists = f.Contests.Exists
 	// The publish gate reads these to find a participant who administers
@@ -106,6 +109,7 @@ func NewFixture() *Fixture {
 	f.Managers.Clock = func() time.Time { return f.Now }
 	f.Contests.Clock = func() time.Time { return f.Now }
 	f.Stories.Clock = func() time.Time { return f.Now }
+	f.SchemaNotes.Clock = func() time.Time { return f.Now }
 	f.Policies.Clock = func() time.Time { return f.Now }
 	f.Contests.Rosters(f.Managers, f.Registrations)
 	f.Contests.ModesFrom(f.Policies)
@@ -114,6 +118,7 @@ func NewFixture() *Fixture {
 	f.config = contests.ServiceConfig{
 		Contests:      f.Contests,
 		Stories:       f.Stories,
+		SchemaNotes:   f.SchemaNotes,
 		Questions:     f.Questions,
 		Managers:      f.Managers,
 		Registrations: f.Registrations,

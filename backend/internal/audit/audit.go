@@ -65,6 +65,9 @@ const (
 	ActionAnswersChange      = "contest.answers_change"
 	ActionManagerGrant       = "contest.manager_grant"
 	ActionManagerRevoke      = "contest.manager_revoke"
+	// ActionContestSchemaNotesChange records the table descriptions being
+	// rewritten; the payload names the languages, never the text.
+	ActionContestSchemaNotesChange = "contest.schema_notes_change"
 	// ActionContestPackageExport records a whole contest, reference answers
 	// included, leaving the installation as a file. The payload carries
 	// counts only.
@@ -152,6 +155,7 @@ var actions = []string{
 	ActionContestStoryChange, ActionQuestionCreate,
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
+	ActionContestSchemaNotesChange,
 	ActionContestPackageExport, ActionContestLeaderboardReveal,
 	ActionContestMonitorView, ActionContestMonitorExport,
 

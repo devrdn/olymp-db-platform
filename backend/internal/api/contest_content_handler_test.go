@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/google/uuid"
@@ -44,6 +45,107 @@ func TestAContestWithNoStoryAnswersNotFound(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "story_not_found" {
 		t.Errorf("error code = %q, want story_not_found", code)
+	}
+}
+
+func TestTheSchemaNotesSurviveARoundTripThroughTheAPI(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	saved := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/schema-notes", `{
+		"translations": {"en": "## suspects\nOne row per person.", "ro": "## suspects\nCâte un rând.", "ru": "  "}
+	}`)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT schema-notes status = %d, want 200 (%s)", saved.Code, saved.Body.String())
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/schema-notes", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET schema-notes status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	translations, _ := body["translations"].(map[string]any)
+	if translations["ro"] != "## suspects\nCâte un rând." || len(translations) != 2 {
+		t.Errorf("translations = %v, want English and Romanian, the blank Russian dropped", translations)
+	}
+	if body["updated_at"] == nil || body["updated_at"] == "" {
+		t.Errorf("updated_at = %v, want the save's time", body["updated_at"])
+	}
+	if !f.stores.Audit.Recorded(audit.ActionContestSchemaNotesChange) {
+		t.Errorf("audit entries = %v, want a %s", f.stores.Audit.Actions(), audit.ActionContestSchemaNotesChange)
+	}
+}
+
+// Optional content: an editor opens on an empty document, not a 404.
+func TestAContestWithNoSchemaNotesAnswersWithNone(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/schema-notes", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if translations, ok := body["translations"].(map[string]any); !ok || len(translations) != 0 {
+		t.Errorf("translations = %v, want an empty object, never null", body["translations"])
+	}
+	if _, present := body["updated_at"]; present {
+		t.Errorf("updated_at = %v, want it absent when nothing was written", body["updated_at"])
+	}
+}
+
+func TestSchemaNotesRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		status string
+		body   string
+		want   int
+		code   string
+	}{
+		{"frozen once running", contests.StatusRunning, `{"translations": {"en": "Too late."}}`,
+			http.StatusConflict, "not_editable"},
+		{"past the bound", contests.StatusDraft, `{"translations": {"en": "` + strings.Repeat("a", 100_001) + `"}}`,
+			http.StatusBadRequest, "invalid_request"},
+		{"a language the installation does not offer", contests.StatusDraft, `{"translations": {"xx": "Tables."}}`,
+			http.StatusBadRequest, "invalid_request"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newContestFixture(t)
+			c := f.ownedContest(t, tc.status)
+
+			rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/schema-notes", tc.body)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Errorf("code = %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+func TestSchemaNotesOfAContestThatIsNotThereAreNotFound(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.New().String()+"/schema-notes", "")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWritingTheSchemaNotesNeedsThePermissionToEdit(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusDraft)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/schema-notes", `{"translations": {"en": "Tables."}}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }
 

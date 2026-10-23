@@ -43,6 +43,9 @@ type ContestPackage struct {
 	Questions  []PackagedQuestion `json:"questions"`
 	SQLPolicy  PackagedSQLPolicy  `json:"sql_policy"`
 	Game       *PackagedGame      `json:"game,omitempty"`
+	// SchemaNotes are the table descriptions per language, left out when the
+	// contest has none so such a file reads as it did before they existed.
+	SchemaNotes map[string]string `json:"schema_notes,omitempty"`
 }
 
 // PackagedContest is the contest's own configuration and authored titles.
@@ -229,6 +232,9 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 	}
 	for lang, body := range pkg.Story.Bodies {
 		out.Story[lang] = body
+	}
+	if len(pkg.SchemaNotes.Bodies) > 0 {
+		out.SchemaNotes = pkg.SchemaNotes.Bodies
 	}
 
 	for _, q := range pkg.Questions {

@@ -249,3 +249,63 @@ func TestTheQuestionTitleMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("after applying 000045 title = %+v, want NOT NULL DEFAULT '' bounded at 200 characters", up)
 	}
 }
+
+// schemaNotesTable is what of the table descriptions' table exists.
+type schemaNotesTable struct {
+	exists, bounded, cascades bool
+}
+
+func readSchemaNotesTable(t *testing.T, dsn string) schemaNotesTable {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	var s schemaNotesTable
+	err = conn.QueryRow(ctx, `
+		SELECT to_regclass('contest_schema_notes') IS NOT NULL,
+		       EXISTS (SELECT 1 FROM pg_constraint
+		               WHERE conname = 'contest_schema_notes_body_length'
+		                 AND pg_get_constraintdef(oid) LIKE '%char_length(body_md) <= 100000%'),
+		       EXISTS (SELECT 1 FROM pg_constraint
+		               WHERE conname = 'contest_schema_notes_contest_id_fkey' AND confdeltype = 'c')`).
+		Scan(&s.exists, &s.bounded, &s.cascades)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	return s
+}
+
+func TestTheSchemaNotesMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := m.Migrate(45); err != nil {
+		t.Fatalf("migrate to 45: %v", err)
+	}
+	if down := readSchemaNotesTable(t, dsn); down.exists || down.bounded || down.cascades {
+		t.Fatalf("after rolling back 000046 the table is left: %+v", down)
+	}
+
+	if err := m.Migrate(46); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate to 46: %v", err)
+	}
+	if up := readSchemaNotesTable(t, dsn); !up.exists || !up.bounded || !up.cascades {
+		t.Fatalf("after applying 000046 = %+v, want the table, bounded at 100000 characters, deleted with its contest", up)
+	}
+}

@@ -205,6 +205,25 @@ func TestStoriesHonoursTheRepositoryContract(t *testing.T) {
 	})
 }
 
+func TestSchemaNotesHonoursTheRepositoryContract(t *testing.T) {
+	SchemaNotesRepositoryContract(t, func(t *testing.T, run func(context.Context, SchemaNotesTarget)) {
+		repo := NewSchemaNotes()
+		repo.Clock = func() time.Time { return FixtureNow }
+		known := map[uuid.UUID]bool{}
+		repo.ContestExists = func(id uuid.UUID) bool { return known[id] }
+		run(context.Background(), SchemaNotesTarget{
+			Repo: repo,
+			Text: repo,
+			NewContest: func() uuid.UUID {
+				id := uuid.New()
+				known[id] = true
+				return id
+			},
+			Now: repo.Clock,
+		})
+	})
+}
+
 func TestLanguagesHonoursTheCatalogContract(t *testing.T) {
 	LanguageCatalogContract(t, func(t *testing.T, run func(context.Context, LanguageTarget)) {
 		catalog := NewLanguages()
