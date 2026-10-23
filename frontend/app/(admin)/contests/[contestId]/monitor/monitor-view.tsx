@@ -24,7 +24,7 @@ export function MonitorView({
   contestId: string;
   roster: Roster;
   feed: FeedPage;
-  dict: Dictionary;
+  dict: Pick<Dictionary, "workspace">;
   locale: string;
 }) {
   const t = dict.workspace.monitor;
