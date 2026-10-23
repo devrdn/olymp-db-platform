@@ -92,15 +92,43 @@ describe("one query", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Copied");
   });
 
+  // Both ways refused: the async clipboard, and the selection fallback a
+  // plain-HTTP page relies on.
   test("says when copying failed", async () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn(async () => Promise.reject(new Error("no"))) } });
+    const exec = vi.fn(() => false);
+    Object.defineProperty(document, "execCommand", { value: exec, configurable: true, writable: true });
     renderRow();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show the query" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Show the query" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      });
+    } finally {
+      Reflect.deleteProperty(document, "execCommand");
+    }
+    expect(exec).toHaveBeenCalledWith("copy");
     expect(screen.getByRole("status")).toHaveTextContent("Could not copy");
+  });
+
+  // An olympiad served over plain HTTP has no async clipboard at all.
+  test("copies through the selection where there is no clipboard API", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: exec, configurable: true, writable: true });
+    renderRow();
+
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Show the query" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      });
+    } finally {
+      Reflect.deleteProperty(document, "execCommand");
+    }
+    expect(exec).toHaveBeenCalledWith("copy");
+    expect(screen.getByRole("status")).toHaveTextContent("Copied");
   });
 
   test("says a shortened statement is shortened", () => {

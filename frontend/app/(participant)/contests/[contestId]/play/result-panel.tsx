@@ -115,7 +115,12 @@ function ResultBody({
         {/* A bulk copy is a download by other means, so it follows the same
             setting. */}
         {resultDownload && result.rows.length > 0 ? (
-          <CopyRowsButton columns={result.columns} rows={result.rows} t={dict.participant.play.workspace.copyRows} />
+          <CopyRowsButton
+            columns={result.columns}
+            rows={result.rows}
+            truncated={result.truncated}
+            t={dict.participant.play.workspace.copyRows}
+          />
         ) : null}
         {resultDownload ? (
           <DownloadButton columns={result.columns} rows={result.rows} label={dict.participant.play.workspace.download} />
@@ -660,10 +665,13 @@ export const COPY_ROWS = 5;
 function CopyRowsButton({
   columns,
   rows,
+  truncated,
   t,
 }: {
   columns: readonly string[];
   rows: readonly (string | null)[][];
+  /** The runner cut the result short, so the rows shown are not all of them. */
+  truncated: boolean;
   t: PlayDictionary["participant"]["play"]["workspace"]["copyRows"];
 }) {
   const [notice, setNotice] = useState<"copied" | "failed" | null>(null);
@@ -686,7 +694,8 @@ function CopyRowsButton({
           setNotice((await copyText(toTsv(columns, rows.slice(0, COPY_ROWS)))) ? "copied" : "failed");
         }}
       >
-        {rows.length > COPY_ROWS ? t.first : t.all}
+        {/* "All" only when it is: a truncated result holds fewer rows than the query produced. */}
+        {rows.length > COPY_ROWS || truncated ? t.first : t.all}
       </Button>
     </>
   );
