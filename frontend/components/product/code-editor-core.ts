@@ -1,8 +1,10 @@
 /**
- * Everything that depends on CodeMirror (~140 KiB gzipped). Only
- * `code-editor.tsx` imports it, and only dynamically; a static import anywhere
- * would put CodeMirror on the play route's critical path.
+ * Everything that depends on CodeMirror (about 120 KiB minified and gzipped,
+ * completion included). Only `code-editor.tsx` imports it, and only
+ * dynamically; a static import anywhere would put CodeMirror on the play
+ * route's critical path.
  */
+import { acceptCompletion, closeCompletion } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { PostgreSQL, sql } from "@codemirror/lang-sql";
 import { HighlightStyle, bracketMatching, syntaxHighlighting } from "@codemirror/language";
@@ -17,7 +19,10 @@ import {
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
+import type { GameSchema } from "@/lib/api/schema";
+
 import { placeInsertion } from "./code-insertion";
+import { sqlCompletion } from "./sql-completion";
 
 /**
  * SQL highlighting. Colours are `var()` references into `styles/tokens.css`,
@@ -84,6 +89,30 @@ const editorTheme = EditorView.theme({
     textUnderlineOffset: "3px",
     backgroundColor: "var(--bad-wash)",
   },
+  // The completion popup, drawn like the product's other popups. Each selector
+  // is more specific than the base theme's literal-coloured one, so the tokens
+  // win whatever order the style sheets are mounted in.
+  ".cm-tooltip.cm-tooltip-autocomplete": {
+    backgroundColor: "var(--panel)",
+    border: "1px solid var(--line-2)",
+    color: "var(--ink)",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+    fontFamily: "var(--font-mono)",
+    fontSize: "var(--text-body)",
+    maxHeight: "14em",
+    padding: "0.25rem 0",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+    padding: "0.125rem 0.75rem",
+    lineHeight: "var(--text-body--line-height)",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    background: "var(--select-bg)",
+    color: "var(--select-fg)",
+  },
+  ".cm-completionMatchedText": { textDecoration: "none", fontWeight: "600" },
+  ".cm-completionDetail": { color: "var(--ink-3)", fontStyle: "normal", marginLeft: "0.75em" },
 });
 
 const setErrorPositionEffect = StateEffect.define<number | null>();
@@ -137,6 +166,9 @@ export type { EditorState, EditorView };
  */
 const documentExtensions = new WeakMap<EditorView, Extension[]>();
 
+/** Each view's way to change the tables and columns it offers. */
+const completionSchemas = new WeakMap<EditorView, (schema: GameSchema | null) => void>();
+
 /** Builds the editor inside `host`, which must already be in the document. */
 export function mountEditor(
   host: HTMLElement,
@@ -160,6 +192,7 @@ export function mountEditor(
     shortcuts?: readonly { key: string; run: () => boolean }[];
   },
 ): EditorView {
+  const completion = sqlCompletion();
   const extensions: Extension[] = [
     history(),
     lineNumbers(),
@@ -169,7 +202,8 @@ export function mountEditor(
           keymap.of([
             {
               key: "Mod-Enter",
-              run: () => {
+              run: (view) => {
+                closeCompletion(view);
                 opts.onSubmit?.();
                 return true;
               },
@@ -182,9 +216,12 @@ export function mountEditor(
     ...(opts.shortcuts?.length ? [keymap.of(opts.shortcuts.map(({ key, run }) => ({ key, run })))] : []),
     // `indentWithTab` comes after the defaults, so it only applies where Tab
     // has no other meaning. It takes Tab away from focus movement; Escape then
-    // Tab still leaves the editor.
-    keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-    sql({ dialect: PostgreSQL }),
+    // Tab still leaves the editor. Ahead of both, Tab accepts an open
+    // completion; `acceptCompletion` declines when none is open.
+    keymap.of([{ key: "Tab", run: acceptCompletion }, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+    // Upper-case keywords, like the SQL the product writes itself.
+    sql({ dialect: PostgreSQL, upperCaseKeywords: true }),
+    completion.extension,
     syntaxHighlighting(highlightStyle),
     bracketMatching(),
     errorField,
@@ -203,7 +240,16 @@ export function mountEditor(
     parent: host,
   });
   documentExtensions.set(view, extensions);
+  completionSchemas.set(view, completion.setSchema);
   return view;
+}
+
+/**
+ * Offers the tables and columns of `schema` in every document of the view,
+ * or only keywords on `null` (a contest that hides its schema).
+ */
+export function setCompletionSchema(view: EditorView, schema: GameSchema | null): void {
+  completionSchemas.get(view)?.(schema);
 }
 
 /** Another document for an existing view, with its own undo history and caret. */

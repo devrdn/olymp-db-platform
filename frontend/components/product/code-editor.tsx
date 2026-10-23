@@ -2,6 +2,7 @@
 
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
+import type { GameSchema } from "@/lib/api/schema";
 import { cn } from "@/lib/utils";
 
 import type { EditorState, EditorView } from "./code-editor-core";
@@ -85,6 +86,12 @@ export type CodeEditorProps = {
    * only `setDocumentValue` replaces it.
    */
   getDocumentValue?: (id: string) => string;
+  /**
+   * Tables and columns to offer as completions in every document, besides
+   * PostgreSQL's keywords. `null` or omitted offers keywords only. May arrive
+   * or change after mount; the documents and their undo history stay.
+   */
+  schema?: GameSchema | null;
   ref?: React.Ref<CodeEditorHandle>;
   className?: string;
 };
@@ -93,7 +100,7 @@ export type CodeEditorProps = {
  * SQL editor: CodeMirror 6 in the product theme, underlining the position of
  * a PostgreSQL syntax error.
  *
- * CodeMirror (`code-editor-core.ts`, about 140 KiB gzipped) is loaded with a
+ * CodeMirror (`code-editor-core.ts`, about 120 KiB gzipped) is loaded with a
  * dynamic `import()` to keep it off the play route's critical path. Until it
  * arrives, a server-rendered `<textarea>` stands in so keystrokes typed
  * before hydration are not lost; its text and selection carry over when the
@@ -113,6 +120,7 @@ export function CodeEditor({
   shortcuts,
   documentId,
   getDocumentValue,
+  schema,
   ref,
   className,
 }: CodeEditorProps) {
@@ -144,11 +152,13 @@ export function CodeEditor({
   const onChangeRef = useRef(onChange);
   const onSubmitRef = useRef(onSubmit);
   const shortcutsRef = useRef(shortcuts);
+  const schemaRef = useRef(schema);
   useEffect(() => {
     onChangeRef.current = onChange;
     onSubmitRef.current = onSubmit;
     shortcutsRef.current = shortcuts;
     getDocumentValueRef.current = getDocumentValue;
+    schemaRef.current = schema;
   });
 
   const report = (text: string) => {
@@ -298,6 +308,8 @@ export function CodeEditor({
         })),
       });
       viewRef.current = view;
+      // The schema may have arrived while the chunk was loading.
+      core.setCompletionSchema(view, schemaRef.current ?? null);
       if (errorPosition != null) core.setErrorPosition(view, errorPosition);
       // Keep the participant's caret and selection: the fallback is about to
       // unmount.
@@ -339,6 +351,12 @@ export function CodeEditor({
       userEvent: "select",
     });
   }, [ready]);
+
+  useEffect(() => {
+    const core = coreRef.current;
+    const view = viewRef.current;
+    if (core && view) core.setCompletionSchema(view, schema ?? null);
+  }, [schema]);
 
   useEffect(() => {
     const view = viewRef.current;

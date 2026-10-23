@@ -3,15 +3,22 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
+import type { GameSchema } from "@/lib/api/schema";
+
 import { CodeEditor, type CodeEditorHandle } from "./code-editor";
+import { offeredCompletions, waitForAcceptableCompletion, waitForCompletion } from "./completion-test-support";
 
 /**
  * CodeMirror arrives through a dynamic `import()` that resolves on a later
  * microtask even when cached. `.cm-editor` appears only once `mountEditor` has
- * run.
+ * run, and React removes the fallback field in a later commit, so until then
+ * there are two textboxes.
  */
 async function waitForRealEditor(container: HTMLElement) {
-  await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+  await waitFor(() => {
+    expect(container.querySelector(".cm-editor")).toBeInTheDocument();
+    expect(container.querySelector("textarea")).not.toBeInTheDocument();
+  });
 }
 
 describe("the SQL editor", () => {
@@ -214,7 +221,7 @@ describe("the editor's own affordances", () => {
         onChange={() => {}}
       />,
     );
-    await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+    await waitForRealEditor(container);
 
     const gutter = container.querySelector(".cm-lineNumbers");
     expect(gutter).not.toBeNull();
@@ -236,7 +243,7 @@ describe("the editor's own affordances", () => {
         }}
       />,
     );
-    await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+    await waitForRealEditor(container);
 
     await user.click(screen.getByRole("textbox"));
     await user.keyboard("{Tab}");
@@ -726,5 +733,283 @@ describe("the keys the owner reserves", () => {
     const notPrevented = fireEvent.keyDown(content, { key: "b", code: "KeyB", ctrlKey: true });
 
     expect(notPrevented).toBe(false);
+  });
+});
+
+/**
+ * Completion: PostgreSQL's keywords and functions always, the contest's tables
+ * and columns when the schema document is given.
+ */
+describe("completion", () => {
+  const SCHEMA: GameSchema = {
+    tables: [
+      {
+        name: "suspects",
+        columns: [
+          { name: "id", type: "integer", nullable: false, references: "" },
+          { name: "motive", type: "text", nullable: true, references: "" },
+        ],
+      },
+      {
+        name: "CaseFiles",
+        columns: [{ name: "OpenedAt", type: "timestamp", nullable: false, references: "" }],
+      },
+      { name: "selfies", columns: [] },
+      // A column named by a keyword ranks above the keyword itself.
+      { name: "events", columns: [{ name: "end", type: "timestamp", nullable: true, references: "" }] },
+    ],
+    truncated: false,
+  };
+
+
+  async function typeInto(container: HTMLElement, text: string) {
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard(text);
+  }
+
+  function Editor({
+    schema,
+    onChange = () => {},
+    initial = "",
+  }: {
+    schema?: GameSchema | null;
+    onChange?: (text: string) => void;
+    initial?: string;
+  }) {
+    return (
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => initial}
+        onChange={onChange}
+        schema={schema}
+      />
+    );
+  }
+
+  test("offers PostgreSQL's keywords as the participant types", async () => {
+    const { container } = render(<Editor />);
+    await typeInto(container, "SEL");
+
+    await waitForCompletion("SELECT");
+  });
+
+  test("offers PostgreSQL's functions as well as its keywords", async () => {
+    const { container } = render(<Editor />);
+    await typeInto(container, "SELECT date_tr");
+
+    await waitForCompletion("DATE_TRUNC");
+  });
+
+  test("Tab accepts the highlighted option", async () => {
+    let text = "";
+    const { container } = render(<Editor onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELE");
+    await waitForAcceptableCompletion("SELECT");
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text).toBe("SELECT");
+    expect(offeredCompletions()).toEqual([]);
+  });
+
+  test("Enter accepts the highlighted option rather than breaking the line", async () => {
+    let text = "";
+    const { container } = render(<Editor onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELE");
+    await waitForAcceptableCompletion("SELECT");
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(text).toBe("SELECT");
+  });
+
+  // Otherwise every line that ends in a table name or a keyword would take two
+  // presses of Enter to break.
+  test("Enter breaks the line when the option would only repeat the word typed", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM suspects");
+    await waitForAcceptableCompletion("suspects");
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(text).toBe("SELECT * FROM suspects\n");
+    expect(offeredCompletions()).toEqual([]);
+  });
+
+  test("Enter breaks the line after a keyword typed whole in lower case, leaving its case alone", async () => {
+    let text = "";
+    const { container } = render(<Editor onChange={(value) => (text = value)} />);
+    await typeInto(container, "select");
+    await waitForAcceptableCompletion("SELECT");
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(text).toBe("select\n");
+  });
+
+  // Typed in either case: in lower case the column matches exactly and ranks
+  // first, and its written form is the quoted `"end"`.
+  test.each(["END", "end"])(
+    "Enter breaks the line after %s, a keyword that is also a column's name, leaving it as typed",
+    async (keyword) => {
+      let text = "";
+      const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+      await typeInto(container, `SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}`);
+      await waitForAcceptableCompletion("end");
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(text).toBe(`SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}\n`);
+      expect(offeredCompletions()).toEqual([]);
+    },
+  );
+
+  // Enter never rewrites a word typed whole; Tab is how to take the quoted form.
+  test("Enter breaks the line after a mixed-case table name typed whole, and Tab would quote it", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM CaseFiles");
+    await waitForAcceptableCompletion("CaseFiles");
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(text).toBe("SELECT * FROM CaseFiles\n");
+  });
+
+  test("Tab writes a mixed-case table name typed whole in its quoted form", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM CaseFiles");
+    await waitForAcceptableCompletion("CaseFiles");
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text).toBe('SELECT * FROM "CaseFiles"');
+  });
+
+  test("Escape closes the popup and leaves the text as typed", async () => {
+    let text = "";
+    const { container } = render(<Editor onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELE");
+    await waitForCompletion("SELECT");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(offeredCompletions()).toEqual([]);
+    expect(text).toBe("SELE");
+  });
+
+  test("Tab still indents when no popup is open", async () => {
+    let text = "";
+    const { container } = render(<Editor initial="SELECT" onChange={(value) => (text = value)} />);
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text.length).toBeGreaterThan("SELECT".length);
+    expect(text.trim()).toBe("SELECT");
+  });
+
+  test("offers the schema's tables", async () => {
+    const { container } = render(<Editor schema={SCHEMA} />);
+    await typeInto(container, "SELECT * FROM sus");
+
+    await waitForCompletion("suspects");
+  });
+
+  test("writes a mixed-case table name quoted, so PostgreSQL does not fold it", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, "SELECT * FROM CaseF");
+    await waitForAcceptableCompletion("CaseFiles");
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text).toBe('SELECT * FROM "CaseFiles"');
+  });
+
+  test("offers a table's columns after its name and a dot, quoted where they need it", async () => {
+    let text = "";
+    const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
+    await typeInto(container, 'SELECT "CaseFiles".Op');
+    await waitForAcceptableCompletion("OpenedAt");
+
+    await userEvent.keyboard("{Tab}");
+
+    expect(text).toBe('SELECT "CaseFiles"."OpenedAt"');
+  });
+
+  test("offers the columns of the tables the statement reads, without a table name in front", async () => {
+    const { container } = render(<Editor schema={SCHEMA} />);
+    await typeInto(container, "SELECT * FROM suspects WHERE mot");
+
+    await waitForCompletion("motive");
+  });
+
+  test("does not offer the columns of a table the statement does not read", async () => {
+    const { container } = render(<Editor schema={SCHEMA} />);
+    await typeInto(container, 'SELECT * FROM "CaseFiles" WHERE o');
+    await waitForCompletion("OpenedAt");
+
+    expect(offeredCompletions()).not.toContain("motive");
+  });
+
+  test("offers no table or column when the contest hides its schema", async () => {
+    const { container } = render(<Editor schema={null} />);
+    await typeInto(container, "SEL");
+    await waitForCompletion("SELECT");
+
+    expect(offeredCompletions()).not.toContain("selfies");
+  });
+
+  // The view holds each SQL tab as its own document; the schema is the contest's, not a tab's.
+  test("offers a schema that arrived while another document was showing", async () => {
+    function Tabs({ schema }: { schema: GameSchema | null }) {
+      const [id, setId] = useState("a");
+      return (
+        <>
+          <button type="button" onClick={() => setId("b")}>
+            second
+          </button>
+          <CodeEditor
+            ariaLabel="Your query"
+            placeholder=""
+            documentId={id}
+            getDocumentValue={() => ""}
+            getInitialValue={() => ""}
+            onChange={() => {}}
+            schema={schema}
+          />
+        </>
+      );
+    }
+    const { container, rerender } = render(<Tabs schema={null} />);
+    await waitForRealEditor(container);
+
+    rerender(<Tabs schema={SCHEMA} />);
+    await userEvent.click(screen.getByRole("button", { name: "second" }));
+    await typeInto(container, "SELECT * FROM sus");
+
+    await waitForCompletion("suspects");
+  });
+
+  test("offers the tables of a schema that arrives after the editor was built, keeping the text and its undo", async () => {
+    let text = "";
+    const onChange = (value: string) => (text = value);
+    const { container, rerender } = render(<Editor schema={null} onChange={onChange} />);
+    await typeInto(container, "SELECT 1; ");
+
+    rerender(<Editor schema={SCHEMA} onChange={onChange} />);
+    await userEvent.keyboard("sel");
+    await waitForCompletion("selfies");
+    await userEvent.keyboard("{Escape}");
+
+    expect(text).toBe("SELECT 1; sel");
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(text).not.toBe("SELECT 1; sel");
   });
 });

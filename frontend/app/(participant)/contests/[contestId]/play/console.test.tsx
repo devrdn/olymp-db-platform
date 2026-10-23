@@ -5,6 +5,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
+import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
 
@@ -260,6 +262,47 @@ describe("⌘↵", () => {
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
 
     await waitFor(() => expect(runQuery).toHaveBeenCalled());
+  });
+});
+
+describe("completion in the console", () => {
+  const SCHEMA: GameSchema = {
+    tables: [{ name: "suspects", columns: [{ name: "motive", type: "text", nullable: true, references: "" }] }],
+    truncated: false,
+  };
+
+  test("offers the contest's tables from the schema it is given", async () => {
+    const { container } = render(
+      <ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} schema={SCHEMA} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("SELECT * FROM sus");
+
+    await waitForCompletion("suspects");
+  });
+
+  // The popup must not take the run shortcut for itself, nor have a choice
+  // slipped into the statement.
+  test("⌘↵ runs what was typed while the popup is open, and closes it", async () => {
+    answer.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    const { container } = render(
+      <ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} schema={SCHEMA} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+    runQuery.mockClear();
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("SELECT * FROM sus");
+    await waitForCompletion("suspects");
+
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+
+    await waitFor(() => expect(runQuery).toHaveBeenCalled());
+    expect(submitted.current?.get("sql")).toBe("SELECT * FROM sus");
+    expect(offeredCompletions()).toEqual([]);
   });
 });
 

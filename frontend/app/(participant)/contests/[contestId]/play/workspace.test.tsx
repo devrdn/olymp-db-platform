@@ -1,10 +1,11 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
@@ -183,7 +184,11 @@ function printOnlyContainer(container: HTMLElement): HTMLElement | null {
  * into the fallback.
  */
 async function waitForRealEditor(container: HTMLElement = document.body) {
-  await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+  await waitFor(() => {
+    expect(container.querySelector(".cm-editor")).toBeInTheDocument();
+    // React removes the fallback a commit later; until then the label names two fields.
+    expect(within(container).getAllByRole("textbox", { name: en.participant.console.label })).toHaveLength(1);
+  });
 }
 
 /** The name of a table in the schema panel, the button that writes a query on it. */
@@ -528,6 +533,40 @@ describe("the database reset", () => {
 
     expect(await screen.findByRole("button", tableName("suspects"))).toBeInTheDocument();
     expect(screen.queryByRole("button", tableName("guests"))).not.toBeInTheDocument();
+  });
+
+  test("offers the tables of the schema read after the reset as completions", async () => {
+    schemaReads.next = {
+      kind: "ok",
+      schema: { truncated: false, tables: [{ name: "suspects", columns: [] }] },
+    };
+    show(A_SCHEMA, { sqlMode: "read_write" });
+    await reset();
+    await screen.findByRole("button", tableName("suspects"));
+
+    await waitForRealEditor();
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard("SELECT * FROM sus");
+
+    await waitForCompletion("suspects");
+  });
+
+  // The invariant is the server's; this checks the screen adds no way round it.
+  test("offers no table as a completion in a contest that hides its schema, even after a reset", async () => {
+    schemaReads.next = {
+      kind: "ok",
+      schema: { truncated: false, tables: [{ name: "selfies", columns: [] }] },
+    };
+    show(null, { sqlMode: "read_write" });
+    await reset();
+
+    await waitForRealEditor();
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard("SEL");
+    await waitForCompletion("SELECT");
+
+    expect(offeredCompletions()).not.toContain("selfies");
+    expect(schemaReads.count).toBe(0);
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {

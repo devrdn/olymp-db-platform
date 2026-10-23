@@ -294,6 +294,7 @@ export function Workspace({
                 shortcuts={editorShortcuts}
                 // Stable across renders, so the memoised panels are not disturbed.
                 tabs={workspace?.tabs ?? null}
+                schema={schema}
                 actions={
                   // The log is a toolbar button, not a tab strip over the result: the
                   // result is what this pane is for.
