@@ -24,6 +24,7 @@ import {
   type SortOrder,
   type WidestCells,
 } from "./roster";
+import { pieces, remToPx, rowWindow, UNMEASURED_ROWS, type RowRange } from "./row-window";
 
 type MonitorDict = Dictionary["workspace"]["monitor"];
 
@@ -39,29 +40,21 @@ const COLUMNS: { key: SortKey; numeric: boolean }[] = [
 const CONTROL = "h-(--control-h) border border-edge bg-bg px-2.5 text-control text-ink";
 
 /**
- * Row height in rem, a little above what the name and login lines, the padding
- * and the rule need, so every row is the same height and the window is
- * arithmetic.
+ * Row height in rem, a little above what the name and login lines (each held
+ * to its line height), the padding and the rule need, so every row is the same
+ * height and the window is arithmetic.
  */
 export const ROSTER_ROW_REM = 3.375;
-
-/** Rows rendered past each edge, so a fast scroll or a run of Tab presses meets rendered rows. */
-const OVERSCAN = 8;
-
-/** Rows rendered before the box can be measured, which includes the server's render. */
-const UNMEASURED_ROWS = 24;
-
-function rowHeightPx(): number {
-  return ROSTER_ROW_REM * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
-}
 
 /**
  * Every participant with counters and flags (SPEC.md §5.1). Scrolls both ways
  * inside its own box with the name column and heading held. Only the rows in
- * view are rendered, at a fixed height, between two spacer rows that keep the
- * scroll height; sorting and filtering still work on the whole list. Rows are
- * memoised and arrive merged (`mergeRoster`), so a poll that changed one
- * participant renders at most one row.
+ * view are rendered, at a fixed height, between spacer rows that keep the
+ * scroll height; sorting and filtering still work on the whole list. The row
+ * holding focus is rendered wherever it is, so scrolling or a poll's re-sort
+ * never drops the keyboard to the page. Rows are memoised and arrive merged
+ * (`mergeRoster`), so a poll that changed one participant renders at most one
+ * row.
  */
 export function ParticipantsTable({
   contestId,
@@ -92,26 +85,26 @@ export function ParticipantsTable({
   const scrollRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLTableSectionElement>(null);
   const rowHeightRef = useRef(ROSTER_ROW_REM * 16);
-  const [range, setRange] = useState({ start: 0, end: UNMEASURED_ROWS });
+  const [range, setRange] = useState<RowRange>({ start: 0, end: UNMEASURED_ROWS });
+  // The participant whose row holds focus; that row is rendered even outside
+  // the window. A re-sort that moves its node blurs it, and React's commit
+  // focuses it again, since the node is still in the document.
+  const [held, setHeld] = useState<string | null>(null);
 
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    const rowHeight = rowHeightRef.current;
-    const intoRows = element.scrollTop - (headRef.current?.offsetHeight ?? 0);
-    const first = Math.max(0, Math.floor(intoRows / rowHeight));
-    const fits = Math.ceil(element.clientHeight / rowHeight);
-    const start = Math.max(0, first - OVERSCAN);
-    const end = first + fits + OVERSCAN;
+    const { start, end } = rowWindow(element, rowHeightRef.current, headRef.current?.offsetHeight ?? 0);
     setRange((current) => (current.start === start && current.end === end ? current : { start, end }));
   }, []);
 
   // A shorter list may have pulled the offset back; the box may have just
   // appeared after "no match".
   useLayoutEffect(() => {
-    rowHeightRef.current = rowHeightPx();
+    rowHeightRef.current = remToPx(ROSTER_ROW_REM);
     measure();
   }, [total, measure]);
+
 
   // A taller box needs more rows. The box exists only while a row is shown.
   const boxed = total > 0;
@@ -123,8 +116,31 @@ export function ParticipantsTable({
     return () => observer.disconnect();
   }, [measure, boxed]);
 
-  const start = Math.min(range.start, total);
-  const end = Math.max(start, Math.min(range.end, total));
+  const heldIndex = held === null ? -1 : shown.findIndex((row) => row.registrationId === held);
+  const bodyRows = pieces(range, total, heldIndex).flatMap((piece) =>
+    piece.kind === "gap"
+      ? [<Spacer key={piece.key} rows={piece.rows} />]
+      : shown.slice(piece.from, piece.to).map((row, i) => (
+          <ParticipantRow
+            key={row.registrationId}
+            row={row}
+            index={piece.from + i}
+            fresh={fresh.has(row.registrationId)}
+            contestId={contestId}
+            t={t}
+            statuses={statuses}
+            locale={locale}
+          />
+        )),
+  );
+
+  const onBodyFocus = (event: React.FocusEvent) => {
+    const id = (event.target as HTMLElement).closest<HTMLElement>("tr[data-row]")?.dataset.row;
+    if (id) setHeld(id);
+  };
+  const onBodyBlur = (event: React.FocusEvent<HTMLTableSectionElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(null);
+  };
 
   const sortBy = (key: SortKey, numeric: boolean) =>
     setOrder((current) =>
@@ -249,22 +265,9 @@ export function ParticipantsTable({
                 })}
               </tr>
             </thead>
-            <tbody>
+            <tbody onFocus={onBodyFocus} onBlur={onBodyBlur}>
               <ColumnSizer widest={widest} t={t} statuses={statuses} locale={locale} />
-              <Spacer rows={start} />
-              {shown.slice(start, end).map((row, i) => (
-                <ParticipantRow
-                  key={row.registrationId}
-                  row={row}
-                  index={start + i}
-                  fresh={fresh.has(row.registrationId)}
-                  contestId={contestId}
-                  t={t}
-                  statuses={statuses}
-                  locale={locale}
-                />
-              ))}
-              <Spacer rows={total - end} />
+              {bodyRows}
             </tbody>
           </table>
         </div>
@@ -311,6 +314,9 @@ const CELL_X = "px-2";
 const CELL = cn(CELL_X, "border-b border-line py-1.5");
 const NUMBER = "text-right font-mono text-data tabular-nums";
 const NAME_WIDTH = "max-w-56 min-w-40";
+// One line of the element's own line height (`lh`), so a fallback glyph with a
+// taller ascent cannot push a row past `ROSTER_ROW_REM`.
+const ONE_LINE = "h-[1lh]";
 
 /** Stands in for rows outside the window, so the scroll height stays that of the whole list. */
 function Spacer({ rows }: { rows: number }) {
@@ -418,6 +424,7 @@ const ParticipantRow = memo(function ParticipantRow({
     // too.
     <tr
       aria-rowindex={index + 2}
+      data-row={row.registrationId}
       data-fresh={fresh || undefined}
       className="group transition-colors duration-(--t-state) ease-standard data-fresh:bg-accent-wash"
       style={{ height: `${ROSTER_ROW_REM}rem` }}
@@ -433,11 +440,11 @@ const ParticipantRow = memo(function ParticipantRow({
       >
         <Link
           href={`/contests/${contestId}/monitor/${row.registrationId}`}
-          className="block truncate text-control text-ink underline-offset-4 hover:underline"
+          className={cn(ONE_LINE, "block truncate text-control text-ink underline-offset-4 hover:underline")}
         >
           {row.fullName || row.login}
         </Link>
-        <span className="block truncate font-mono text-label text-ink-3">{row.login}</span>
+        <span className={cn(ONE_LINE, "block truncate font-mono text-label text-ink-3")}>{row.login}</span>
       </td>
       <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2")}>{statuses[row.status] ?? row.status}</td>
       <td className={cn(CELL, "min-w-28")}>
