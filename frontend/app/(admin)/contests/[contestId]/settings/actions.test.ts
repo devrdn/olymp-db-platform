@@ -8,7 +8,7 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
 vi.mock("next/cache", () => ({ revalidatePath }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
-import { saveSettingsAction } from "./actions";
+import { savePrizePlacesAction, saveSettingsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
@@ -131,5 +131,42 @@ describe("saveSettingsAction, the result download", () => {
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.result_download).toBe(false);
+  });
+});
+
+describe("savePrizePlacesAction", () => {
+  test("replaces the three counts on their own endpoint, a blank one as none", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    const state = await savePrizePlacesAction({}, form({ prizeFirst: "1", prizeSecond: "2", prizeThird: "" }));
+
+    expect(state).toEqual({ saved: true });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/prize-places`, {
+      method: "PUT",
+      body: { first: 1, second: 2, third: 0 },
+    });
+    expect(revalidatePath).toHaveBeenCalled();
+  });
+
+  test("refuses a count past the bound before asking the server", async () => {
+    const state = await savePrizePlacesAction({}, form({ prizeFirst: "1001" }));
+
+    expect(state).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses a contest id that is not an identifier", async () => {
+    const data = form({ prizeFirst: "1" });
+    data.set("contestId", "../users");
+
+    expect(await savePrizePlacesAction({}, data)).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal, such as an archived contest", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    serverRequest.mockRejectedValueOnce(new ApiError("not_editable", 409, "archived"));
+
+    expect(await savePrizePlacesAction({}, form({ prizeFirst: "1" }))).toEqual({ code: "not_editable" });
   });
 });

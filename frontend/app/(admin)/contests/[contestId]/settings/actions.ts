@@ -3,7 +3,16 @@
 import { revalidatePath } from "next/cache";
 
 import { ApiError, failureCode } from "@/lib/api/client";
-import { type ContestCover, contestCoverSchema, type Enrollment, ENROLLMENTS, enumFromForm, icpcPenaltyFromForm, shapeFromForm } from "@/lib/api/contests";
+import {
+  type ContestCover,
+  contestCoverSchema,
+  type Enrollment,
+  ENROLLMENTS,
+  enumFromForm,
+  icpcPenaltyFromForm,
+  prizePlacesFromForm,
+  shapeFromForm,
+} from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
@@ -116,6 +125,24 @@ export async function saveSettingsAction(
   if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;
 
   return attempt(`/contests/${contestId}`, { method: "PATCH", body }, contestId);
+}
+
+/**
+ * Saves the prize counts on their own endpoint, the one setting a finished
+ * contest still takes; the three are sent together because the request
+ * replaces them all.
+ */
+export async function savePrizePlacesAction(
+  _previous: SettingsState,
+  form: FormData,
+): Promise<SettingsState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const places = prizePlacesFromForm(form);
+  if (!places.ok) return { code: "invalid_request" };
+
+  return attempt(`/contests/${contestId}/prize-places`, { method: "PUT", body: places.value }, contestId);
 }
 
 /**

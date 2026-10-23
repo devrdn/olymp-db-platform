@@ -39,8 +39,8 @@ function board(overrides: Partial<StaffStandings> = {}): StaffStandings {
     truncated: false,
     questions: undefined,
     rows: [
-      { place: 1, login: "holmes", fullName: "Sherlock Holmes", deleted: false, disqualified: false, points: 30, solved: 3, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
-      { place: 2, login: "moriarty", fullName: "James Moriarty", deleted: false, disqualified: true, points: 99, solved: 9, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
+      { place: 1, prize: 1, login: "holmes", fullName: "Sherlock Holmes", deleted: false, disqualified: false, points: 30, solved: 3, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
+      { place: 2, prize: null, login: "moriarty", fullName: "James Moriarty", deleted: false, disqualified: true, points: 99, solved: 9, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
     ],
     ...overrides,
   };
@@ -67,6 +67,21 @@ describe("the staff table", () => {
     expect(
       screen.getByText(t().shownFrozen.replace("{time}", formatTime("2026-09-20T11:30:00Z", { locale: "en" }))),
     ).toBeInTheDocument();
+  });
+
+  test("shows each row's prize tier, the disqualified with none, and names it in words", () => {
+    show(board(), "running");
+
+    const holmes = within(screen.getByText("Sherlock Holmes").closest("tr") as HTMLElement).getByTestId("prize");
+    expect(holmes).toHaveAttribute("data-medal", "gold");
+    expect(within(holmes).getByText("I")).toBeInTheDocument();
+    expect(within(holmes).getByText(dict.leaderboard.prizes.first)).toHaveClass("sr-only");
+
+    const moriarty = within(screen.getByText("James Moriarty").closest("tr") as HTMLElement).getByTestId("prize");
+    expect(moriarty).not.toHaveAttribute("data-medal");
+    expect(moriarty).not.toHaveTextContent("2");
+    expect(within(moriarty).getByText(dict.leaderboard.prizes.none)).toHaveClass("sr-only");
+    expect(screen.getByRole("columnheader", { name: dict.leaderboard.columns.prize })).toBeInTheDocument();
   });
 
   test("links the public page", () => {
@@ -117,6 +132,7 @@ describe("the staff table", () => {
         rows: [
           {
             place: 1,
+            prize: null,
             login: "holmes",
             fullName: "Sherlock Holmes",
             deleted: false,
@@ -153,6 +169,7 @@ describe("the staff table", () => {
         rows: [
           {
             place: 1,
+            prize: null,
             login: "holmes",
             fullName: "Sherlock Holmes",
             deleted: false,

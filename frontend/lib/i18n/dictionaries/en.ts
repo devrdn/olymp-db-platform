@@ -1146,6 +1146,15 @@ const en = {
         namesFullName: "Full name",
         namesPublicHint: "The table is open to anyone with the link, so full names become visible to them.",
       },
+      prizes: {
+        heading: "Prize places",
+        help: "How many places down the standings earn each prize. Everybody else shows a dash. Only what the table shows changes, so this stays open while the contest runs and after it ends, until it is archived.",
+        first: "First prizes",
+        second: "Second prizes",
+        third: "Third prizes",
+        hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. With all three at 0 nobody gets a prize.",
+        winnerHint: "In winner mode the table names its one winner, and these counts do not apply.",
+      },
       access: {
         heading: "Who may enter, and from where",
         help: "Checked on every attempt, against the address the trusted proxy reports — never against a header. An address that cannot be read is refused rather than allowed.",
@@ -2020,7 +2029,7 @@ const en = {
     notStarted: "The table appears once the contest starts.",
     empty: "Nobody is on the table yet.",
     columns: {
-      place: "Place",
+      prize: "Prize",
       participant: "Participant",
       points: "Points",
       solved: "Solved",
@@ -2038,7 +2047,12 @@ const en = {
     you: "You",
     winner: "Winner",
     deleted: "Deleted account",
-    unplaced: "No place",
+    prizes: {
+      first: "First prize",
+      second: "Second prize",
+      third: "Third prize",
+      none: "No prize",
+    },
     truncated: "Showing the first {count} rows.",
     updated: "Updated {time}",
     failed: "The table could not be refreshed. Showing the last copy.",
