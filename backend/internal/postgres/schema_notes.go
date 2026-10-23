@@ -86,23 +86,30 @@ func (r *SchemaNotes) Save(ctx context.Context, contestID uuid.UUID, bodies map[
 		texts = append(texts, body)
 	}
 
-	if _, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM contest_schema_notes WHERE contest_id = $1 AND NOT (lang = ANY($2))`,
-		contestID, langs); err != nil {
+	const stale = `DELETE FROM contest_schema_notes WHERE contest_id = $1 AND NOT (lang = ANY($2))`
+	if len(langs) == 0 {
+		exists, err := clearChildren(ctx, r.querier(ctx), stale, "contests", contestID, langs)
+		if err != nil {
+			return contests.SchemaNotes{}, fmt.Errorf("save table descriptions: %w", err)
+		}
+		if !exists {
+			return contests.SchemaNotes{}, contests.ErrNotFound
+		}
+		return contests.SchemaNotes{Bodies: map[string]string{}}, nil
+	}
+	if _, err := r.querier(ctx).Exec(ctx, stale, contestID, langs); err != nil {
 		return contests.SchemaNotes{}, fmt.Errorf("save table descriptions: %w", err)
 	}
-	if len(langs) > 0 {
-		if _, err := r.querier(ctx).Exec(ctx, `
-			INSERT INTO contest_schema_notes (contest_id, lang, body_md)
-			SELECT $1, lang, body FROM unnest($2::text[], $3::text[]) AS t(lang, body)
-			ON CONFLICT (contest_id, lang) DO UPDATE
-			SET body_md = EXCLUDED.body_md, updated_at = now()`,
-			contestID, langs, texts); err != nil {
-			// The foreign key refuses a contest deleted since the caller read it.
-			return contests.SchemaNotes{}, fmt.Errorf("save table descriptions: %w", missingParent(err, map[string]error{
-				"contest_schema_notes_contest_id_fkey": contests.ErrNotFound,
-			}))
-		}
+	if _, err := r.querier(ctx).Exec(ctx, `
+		INSERT INTO contest_schema_notes (contest_id, lang, body_md)
+		SELECT $1, lang, body FROM unnest($2::text[], $3::text[]) AS t(lang, body)
+		ON CONFLICT (contest_id, lang) DO UPDATE
+		SET body_md = EXCLUDED.body_md, updated_at = now()`,
+		contestID, langs, texts); err != nil {
+		// The foreign key refuses a contest deleted since the caller read it.
+		return contests.SchemaNotes{}, fmt.Errorf("save table descriptions: %w", missingParent(err, map[string]error{
+			"contest_schema_notes_contest_id_fkey": contests.ErrNotFound,
+		}))
 	}
 
 	return r.ByContest(ctx, contestID)
