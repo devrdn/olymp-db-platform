@@ -47,6 +47,39 @@ describe("the standings a viewer is sent", () => {
     expect(parsed.rows[2].isYou).toBe(true);
   });
 
+  test("reads each row's prize tier, and a row without one as no prize", () => {
+    const parsed = standingsSchema.parse({
+      state: "final",
+      scoring: "points",
+      title: "The Library Murder",
+      generated_at: "2026-09-20T12:04:10Z",
+      truncated: false,
+      rows: [
+        { place: 1, prize: 1, label: "a", points: 9, solved: 2 },
+        { place: 1, prize: 1, label: "b", points: 9, solved: 2 },
+        { place: 3, prize: 3, label: "c", points: 4, solved: 1 },
+        { place: 4, prize: null, label: "d", points: 1, solved: 1 },
+        // An API older than prize places sends no key at all.
+        { place: 5, label: "e", points: 0, solved: 0 },
+      ],
+    });
+
+    expect(parsed.rows.map((row) => row.prize)).toEqual([1, 1, 3, null, null]);
+  });
+
+  test("refuses a prize tier past the third", () => {
+    expect(() =>
+      standingsSchema.parse({
+        state: "final",
+        scoring: "points",
+        title: "",
+        generated_at: "x",
+        truncated: false,
+        rows: [{ place: 1, prize: 4, label: "a", points: 1, solved: 1 }],
+      }),
+    ).toThrow();
+  });
+
   test("refuses a state this build does not know rather than guessing at it", () => {
     expect(() =>
       standingsSchema.parse({
@@ -170,6 +203,25 @@ describe("the standings a viewer is sent", () => {
       fullName: "Ivan Ivanov",
       disqualified: true,
     });
+  });
+
+  test("reads the staff rows' prize tiers, and a row without one as no prize", () => {
+    const parsed = staffStandingsSchema.parse({
+      shown: { state: "live" },
+      status: "running",
+      scoring: "points",
+      freeze_min: null,
+      names: "login",
+      generated_at: "2026-09-20T12:04:10Z",
+      truncated: false,
+      rows: [
+        { place: 1, prize: null, login: "cheat", full_name: "", disqualified: true, points: 9, solved: 2 },
+        { place: 2, prize: 2, login: "ivanov", full_name: "", points: 5, solved: 1 },
+        { place: 3, login: "petrov", full_name: "", points: 1, solved: 1 },
+      ],
+    });
+
+    expect(parsed.rows.map((row) => row.prize)).toEqual([null, 2, null]);
   });
 });
 

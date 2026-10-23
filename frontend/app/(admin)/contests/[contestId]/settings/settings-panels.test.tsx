@@ -6,7 +6,7 @@ import type { Contest } from "@/lib/api/contests";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-import { ContestPanel } from "./settings-panels";
+import { ContestPanel, PrizePanel } from "./settings-panels";
 
 let dict: Dictionary;
 
@@ -24,6 +24,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     scoring: "points",
     icpcPenaltyMin: 20,
     resultDownload: true,
+    prizePlaces: { first: 0, second: 0, third: 0 },
     timing: "fixed",
     durationMin: undefined,
     startsAt: "2026-11-08T17:00:00Z",
@@ -407,5 +408,103 @@ describe("ContestPanel, the fields say what the service does with them", () => {
     expect(t.schedule.graceHelp).toMatch(/after the contest finishes/i);
     expect(t.schedule.graceHelp).toMatch(/no extra time/i);
     expect(t.access.rateHint).toMatch(/above .* no effect/i);
+  });
+});
+
+describe("PrizePanel", () => {
+  const t = () => dict.workspace.settings.prizes;
+
+  test("offers the three counts as the contest holds them, bounded and described by their rule", () => {
+    render(<PrizePanel contest={contest({ prizePlaces: { first: 1, second: 2, third: 3 } })} editable dict={dict} />);
+
+    for (const [label, value] of [
+      [t().first, 1],
+      [t().second, 2],
+      [t().third, 3],
+    ] as const) {
+      const field = screen.getByRole("spinbutton", { name: label });
+      expect(field).toHaveValue(value);
+      expect(field).toHaveAttribute("min", "0");
+      expect(field).toHaveAttribute("max", "1000");
+      expect(field).toHaveAttribute("step", "1");
+      expect(field).toHaveAccessibleDescription(`${t().hint} ${t().winnerHint}`);
+    }
+  });
+
+  test("defaults to no prizes at all", () => {
+    render(<PrizePanel contest={contest()} editable dict={dict} />);
+
+    for (const label of [t().first, t().second, t().third]) {
+      expect(screen.getByRole("spinbutton", { name: label })).toHaveValue(0);
+    }
+  });
+
+  test("submits the counts as typed, from the keyboard alone", async () => {
+    const user = userEvent.setup();
+    render(<PrizePanel contest={contest({ status: "finished" })} editable dict={dict} />);
+
+    const first = screen.getByRole("spinbutton", { name: t().first });
+    await user.click(first);
+    await user.clear(first);
+    await user.keyboard("2");
+    await user.tab();
+    expect(screen.getByRole("spinbutton", { name: t().second })).toHaveFocus();
+    await user.keyboard("{Backspace}5");
+
+    const form = new FormData(first.closest("form")!);
+    expect(form.get("prizeFirst")).toBe("2");
+    expect(form.get("prizeSecond")).toBe("5");
+    expect(form.get("prizeThird")).toBe("0");
+    expect(form.get("contestId")).toBe(contest().id);
+    expect(screen.getByRole("button", { name: dict.workspace.settings.save })).toBeEnabled();
+  });
+
+  test("closes once the contest is archived, and says so", () => {
+    render(<PrizePanel contest={contest({ status: "archived" })} editable={false} dict={dict} />);
+
+    for (const label of [t().first, t().second, t().third]) {
+      expect(screen.getByRole("spinbutton", { name: label })).toBeDisabled();
+    }
+    expect(screen.getByRole("button", { name: dict.workspace.settings.save })).toBeDisabled();
+    expect(screen.getByText(dict.workspace.facts.frozen)).toBeInTheDocument();
+  });
+
+  test("shows the counts the server now holds after a save", () => {
+    const { rerender } = render(<PrizePanel contest={contest()} editable dict={dict} />);
+
+    rerender(
+      <PrizePanel
+        contest={contest({ prizePlaces: { first: 4, second: 0, third: 0 }, updatedAt: "2026-08-31T18:00:00Z" })}
+        editable
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("spinbutton", { name: t().first })).toHaveValue(4);
+  });
+
+  test("lays the three fields out in one column on a phone", () => {
+    render(<PrizePanel contest={contest()} editable dict={dict} />);
+
+    const grid = screen.getByRole("spinbutton", { name: t().first }).closest(".grid") as HTMLElement;
+    expect(grid.className).toContain("narrow:grid-cols-3");
+    expect(grid.className).not.toMatch(/(^| )grid-cols-3/);
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the prize places' rule in %s", (locale) => {
+  const words = {
+    en: { tie: /tie/i, none: /0/, winner: /winner/i, archive: /archiv/i },
+    ro: { tie: /egalitate/i, none: /0/, winner: /câștigător/i, archive: /arhiv/i },
+    ru: { tie: /равн/i, none: /0/, winner: /победител/i, archive: /архив/i },
+  }[locale];
+
+  test("says ties share a place, 0 means none, winner mode ignores the counts, and the archive closes them", async () => {
+    const t = (await getDictionary(locale)).workspace.settings.prizes;
+
+    expect(t.hint).toMatch(words.tie);
+    expect(t.hint).toMatch(words.none);
+    expect(t.winnerHint).toMatch(words.winner);
+    expect(t.help).toMatch(words.archive);
   });
 });

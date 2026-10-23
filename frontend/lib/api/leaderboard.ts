@@ -42,9 +42,22 @@ const cellSchema = z.object({
 
 export type StandingsCell = z.infer<typeof cellSchema>;
 
+/**
+ * A row's prize tier: first, second or third, or `null` for none. Absent from
+ * an API older than prize places, read as none.
+ */
+export const PRIZES = [1, 2, 3] as const;
+export type Prize = (typeof PRIZES)[number];
+
+const prizeSchema = z
+  .union([z.literal(1), z.literal(2), z.literal(3)])
+  .nullish()
+  .transform((prize): Prize | null => prize ?? null);
+
 const rowSchema = z
   .object({
     place: z.number().nullable(),
+    prize: prizeSchema,
     label: z.string(),
     deleted: z.boolean().optional(),
     points: z.number(),
@@ -57,6 +70,7 @@ const rowSchema = z
   })
   .transform((raw) => ({
     place: raw.place,
+    prize: raw.prize,
     label: raw.label,
     deleted: raw.deleted ?? false,
     points: raw.points,
@@ -99,6 +113,7 @@ export type Standings = z.infer<typeof standingsSchema>;
 const staffRowSchema = z
   .object({
     place: z.number().nullable(),
+    prize: prizeSchema,
     login: z.string(),
     full_name: z.string(),
     deleted: z.boolean().optional(),
@@ -112,6 +127,7 @@ const staffRowSchema = z
   })
   .transform((raw) => ({
     place: raw.place,
+    prize: raw.prize,
     login: raw.login,
     fullName: raw.full_name,
     deleted: raw.deleted ?? false,
