@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// The authored content of a contest: its story, questions and reference
-// answers. Every endpoint here is staff-only and carries the reference answers.
+// The authored content of a contest: its story, table descriptions, questions
+// and reference answers. Every endpoint here is staff-only and carries the reference answers.
 // The participant view is a separate projection, not this payload with a field
 // removed: a filter can be forgotten.
 
@@ -71,6 +71,64 @@ func (h *ContestsHandler) setStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, toStoryResponse(saved))
+}
+
+// SchemaNotesResponse is the table descriptions in every language they were
+// written in.
+type SchemaNotesResponse struct {
+	// Translations maps a language code to the markdown body; never null.
+	Translations map[string]string `json:"translations"`
+	// UpdatedAt is absent when nothing was ever written.
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+func toSchemaNotesResponse(n contests.SchemaNotes) SchemaNotesResponse {
+	out := SchemaNotesResponse{Translations: n.Bodies}
+	if out.Translations == nil {
+		out.Translations = map[string]string{}
+	}
+	if !n.UpdatedAt.IsZero() {
+		out.UpdatedAt = n.UpdatedAt.UTC().Format(timeLayout)
+	}
+	return out
+}
+
+func (h *ContestsHandler) schemaNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := contestIDFrom(w, r)
+	if !ok {
+		return
+	}
+
+	notes, err := h.service.SchemaNotes(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toSchemaNotesResponse(notes))
+}
+
+type schemaNotesRequest struct {
+	Translations map[string]string `json:"translations"`
+}
+
+func (h *ContestsHandler) setSchemaNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := contestIDFrom(w, r)
+	if !ok {
+		return
+	}
+
+	var req schemaNotesRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	saved, err := h.service.SetSchemaNotes(r.Context(), identity.UserID, id, req.Translations)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toSchemaNotesResponse(saved))
 }
 
 // QuestionResponse is a question as its authors see it.

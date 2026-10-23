@@ -47,6 +47,7 @@ type UserDirectory interface {
 type ServiceConfig struct {
 	Contests      Repository
 	Stories       StoryRepository
+	SchemaNotes   SchemaNotesRepository
 	Questions     QuestionRepository
 	Managers      ManagerRepository
 	Registrations RegistrationRepository
@@ -94,6 +95,7 @@ type ServiceConfig struct {
 type Service struct {
 	contests        Repository
 	stories         StoryRepository
+	schemaNotes     SchemaNotesRepository
 	questions       QuestionRepository
 	managers        ManagerRepository
 	registrations   RegistrationRepository
@@ -142,6 +144,7 @@ func NewService(cfg ServiceConfig) *Service {
 	return &Service{
 		contests:        cfg.Contests,
 		stories:         cfg.Stories,
+		schemaNotes:     cfg.SchemaNotes,
 		questions:       cfg.Questions,
 		managers:        cfg.Managers,
 		registrations:   cfg.Registrations,

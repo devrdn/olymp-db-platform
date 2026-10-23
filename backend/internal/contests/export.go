@@ -30,6 +30,9 @@ type Package struct {
 	Contest Contest
 	// Story has empty Bodies when the contest has no story yet.
 	Story Story
+	// SchemaNotes has empty Bodies when the contest has no table
+	// descriptions.
+	SchemaNotes SchemaNotes
 	// Questions are in display order, with texts, options and answers.
 	Questions []Question
 	// Policy is DefaultSQLPolicy for an unconfigured contest.
@@ -85,6 +88,10 @@ func (s *Service) ExportPackage(ctx context.Context, actorID, contestID uuid.UUI
 	case errors.Is(err, ErrStoryNotFound):
 	default:
 		return Package{}, fmt.Errorf("read the story: %w", err)
+	}
+
+	if pkg.SchemaNotes, err = s.schemaNotes.ByContest(ctx, contestID); err != nil {
+		return Package{}, fmt.Errorf("read the table descriptions: %w", err)
 	}
 
 	questions, err := s.questions.List(ctx, contestID)

@@ -64,6 +64,13 @@ func seedExportable(t *testing.T, f *conteststest.Fixture) contests.Contest {
 		t.Fatalf("seed policy: %v", err)
 	}
 
+	if _, err := f.SchemaNotes.Save(context.Background(), c.ID, map[string]string{
+		"ro": "Tabelul `suspects`.",
+		"en": "The `suspects` table.",
+	}); err != nil {
+		t.Fatalf("seed table descriptions: %v", err)
+	}
+
 	f.Games.Put(c.ID, "CREATE TABLE suspects (id int);")
 	return c
 }
@@ -103,6 +110,13 @@ func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
 	}
 	if got := pkg.Story.Bodies["en"]; got != "A body in the stacks." {
 		t.Errorf("english story is %q", got)
+	}
+
+	if got := pkg.SchemaNotes.Bodies["ro"]; got != "Tabelul `suspects`." {
+		t.Errorf("romanian table descriptions are %q", got)
+	}
+	if got := pkg.SchemaNotes.Bodies["en"]; got != "The `suspects` table." {
+		t.Errorf("english table descriptions are %q", got)
 	}
 
 	if len(pkg.Questions) != 2 {
@@ -205,6 +219,9 @@ func TestADraftWithNoStoryAndNoGameStillExports(t *testing.T) {
 	}
 	if len(pkg.Story.Bodies) != 0 {
 		t.Errorf("a contest with no story exported %v", pkg.Story.Bodies)
+	}
+	if len(pkg.SchemaNotes.Bodies) != 0 {
+		t.Errorf("a contest with no table descriptions exported %v", pkg.SchemaNotes.Bodies)
 	}
 	if pkg.HasGame {
 		t.Error("a contest with no game exported one")
