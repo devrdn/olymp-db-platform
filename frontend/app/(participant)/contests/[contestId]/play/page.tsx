@@ -189,7 +189,6 @@ async function PlayPanels({
   icpcPenaltyMin: number;
   /** The contest's SQL mode; only `read_write` offers the database reset. */
   sqlMode: ContestSummary["sqlMode"];
-  /** Whether the result offers a CSV file. */
   resultDownload: boolean;
   locale: Locale;
   dict: PlayDictionary;

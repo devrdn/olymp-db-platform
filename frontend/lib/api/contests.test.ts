@@ -208,6 +208,7 @@ describe("contestSchema", () => {
   test("reads whether the console offers its result as a CSV file", () => {
     expect(contestSchema.parse(detail).resultDownload).toBe(true);
     expect(contestSchema.parse({ ...detail, result_download: false }).resultDownload).toBe(false);
+    expect(contestSchema.parse({ ...detail, result_download: undefined }).resultDownload).toBe(true);
   });
 
   // Go writes `null` for fixed timing; left as is, a number input would show "null".
