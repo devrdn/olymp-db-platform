@@ -454,7 +454,7 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 		stage func(f *participantFixture)
 		want  int
 	}{
-		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryrunner.ErrTooManyQueries }, http.StatusTooManyRequests},
+		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryproxy.ErrTooManyReads }, http.StatusTooManyRequests},
 		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = contests.ErrAddressNotAllowed }, http.StatusForbidden},
 		"a story that does not exist": {"/play/story", func(f *participantFixture) {
 			_ = f.stories.Delete(context.Background(), f.access.contest.ID)
@@ -690,14 +690,14 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 	for _, path := range []string{"story", "questions", "log"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
-			f.access.admitReadErr = queryrunner.ErrTooManyQueries
+			f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 			rec := f.get("/contests/" + uuid.New().String() + "/play/" + path)
 			if rec.Code != http.StatusTooManyRequests {
 				t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
 			}
-			if code := errorCode(t, rec); code != "query_too_often" {
-				t.Fatalf("code = %q, want query_too_often", code)
+			if code := errorCode(t, rec); code != "play_read_too_often" {
+				t.Fatalf("code = %q, want play_read_too_often", code)
 			}
 			if f.access.accessCalled {
 				t.Fatal("Access was called after AdmitRead refused — the rate check must run first, before Access's own lookups")
@@ -1164,14 +1164,14 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 
 func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	rec := f.post("/contests/"+uuid.New().String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "query_too_often" {
-		t.Fatalf("code = %q, want query_too_often", code)
+	if code := errorCode(t, rec); code != "play_read_too_often" {
+		t.Fatalf("code = %q, want play_read_too_often", code)
 	}
 	if f.access.accessCalled || f.submitter.called {
 		t.Fatal("Access or Submit was reached after AdmitRead refused")
@@ -1537,11 +1537,11 @@ func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 13: the most expensive read here is charged like a query,
-// before any round trip.
-func TestTheQueryLogCSVSpendsTheSameRateBudgetAQueryDoes(t *testing.T) {
+// CLAUDE.md rule 13: the most expensive read here is charged before any round
+// trip.
+func TestTheQueryLogCSVSpendsTheReadBudgetFirst(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
 	if rec.Code != http.StatusTooManyRequests {

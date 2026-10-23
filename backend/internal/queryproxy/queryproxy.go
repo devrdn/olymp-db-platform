@@ -47,6 +47,12 @@ var (
 	// hides its schema: "relation x does not exist" would let a participant
 	// rebuild the hidden catalogue by guessing names.
 	ErrDatabaseDeclined = errors.New("the database refused the query")
+	// ErrTooManyReads is a participant loading the play screen faster than
+	// the read budget (WithReadsPerMinute) allows. It is not
+	// queryrunner.ErrTooManyQueries: the two budgets are separate, and a
+	// participant told "too many queries" after reloading a page would wait
+	// for nothing.
+	ErrTooManyReads = errors.New("too many page reads")
 )
 
 // Errors lists every sentinel this package declares, so internal/api can
@@ -56,6 +62,7 @@ func Errors() []error {
 	return []error{
 		ErrNothingLeftToAnswer, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
 		ErrDatabaseDeclined, ErrSchemaHidden, ErrResetReadOnly, ErrResetTooOften,
+		ErrTooManyReads,
 	}
 }
 
@@ -161,6 +168,10 @@ type Service struct {
 	// resets is keyed by registration ID, so its keys are bounded by the
 	// rosters (CLAUDE.md rule 5).
 	resets *queryrunner.RateLimiter
+	// reads is the play screen's budget, apart from rate so that reloading a
+	// page never refuses the next query. Keyed by user ID, before any lookup.
+	reads          *queryrunner.RateLimiter
+	readsPerMinute int
 	// perMinuteDefault is the rate for a contest left at zero and the ceiling
 	// for any contest's own setting. Zero means no limit.
 	perMinuteDefault int
@@ -199,7 +210,9 @@ func New(people People, contestStore Contests, games Games, databases Databases,
 		lookup:           defaultLookup{people: people, contests: contestStore, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		resets:           queryrunner.NewRateLimiter(ResetsPerWindow, ResetWindow),
+		reads:            queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
+		readsPerMinute:   ReadsPerMinute,
 		now:              func() time.Time { return time.Now().UTC() },
 		gate:             gate,
 	}
@@ -257,6 +270,22 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 		panic(fmt.Sprintf("queryproxy: negative per-minute default %d", perMinute))
 	}
 	s.perMinuteDefault = perMinute
+	return s
+}
+
+// ReadsPerMinute is the play screen's default read budget: the story, the
+// questions, the schema, the query log, the workspace and each events channel
+// opened all spend it. A reload costs about six reads, so this allows a
+// reload every few seconds for a minute.
+const ReadsPerMinute = 120
+
+// WithReadsPerMinute sets the read budget (PLAY_READ_PER_MINUTE). Zero means
+// no limit; a negative value panics, as WithPerMinuteDefault does.
+func (s *Service) WithReadsPerMinute(perMinute int) *Service {
+	if perMinute < 0 {
+		panic(fmt.Sprintf("queryproxy: negative read budget %d", perMinute))
+	}
+	s.readsPerMinute = perMinute
 	return s
 }
 
@@ -430,8 +459,8 @@ func (s *Service) admit(contest contests.Contest, participant contests.Participa
 // Access resolves who is asking and confirms they may currently interact with
 // contestID, for the read endpoints (story, questions). It is the same gate
 // Run asks, without Run's game lookup or provisioning. It starts no clock (see
-// StartOnRead) and charges no rate; AdmitRead is the separate rate check for
-// these reads.
+// StartOnRead) and charges no rate: AdmitRead before it is the read budget,
+// which a workspace write must not spend.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
@@ -520,11 +549,14 @@ func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UU
 	return participant, contest, standing, nil
 }
 
-// AdmitRead applies Run's pre-lookup rate check to the read endpoints: keyed
-// by user ID (bounded, CLAUDE.md rule 5), against the installation's rate. It
-// shares Run's limiter and keys, so queries and reads spend one budget.
+// AdmitRead charges a play-screen read to the caller's account before any
+// lookup: the contest ID is caller-chosen, the user ID is one key per account
+// (CLAUDE.md rule 5). Reads never spend the query budget, nor queries this.
 func (s *Service) AdmitRead(userID uuid.UUID) error {
-	return s.rate.Admit(userID.String(), s.perMinuteDefault)
+	if err := s.reads.Admit(userID.String(), s.readsPerMinute); err != nil {
+		return ErrTooManyReads
+	}
+	return nil
 }
 
 // speaksForTheDatabase reports an error carrying PostgreSQL's own words about

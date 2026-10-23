@@ -136,6 +136,9 @@ var queryproxyErrors = joined(errorTable{
 	{err: queryproxy.ErrResetTooOften, status: http.StatusTooManyRequests, code: codeResetTooOften,
 		message:    "This participant has reset their database as often as allowed for now",
 		retryAfter: queryproxy.ResetWindow},
+	{err: queryproxy.ErrTooManyReads, status: http.StatusTooManyRequests, code: codePlayReadTooOften,
+		message:    "This participant is loading the contest faster than this installation allows",
+		retryAfter: queryRetryAfter},
 }, standingErrors)
 
 // queryRetryAfter is long enough for a slot to be free: the limiter is a

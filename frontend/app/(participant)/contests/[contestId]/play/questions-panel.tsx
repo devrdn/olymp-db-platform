@@ -167,7 +167,7 @@ function QuestionCard({
 
   // Controlled because React's form Actions reset an uncontrolled field when
   // the action settles, refusals included, and `attempt_conflict` or
-  // `query_too_often` would then ask for a retry of text already erased.
+  // `play_read_too_often` would then ask for a retry of text already erased.
   // Cleared once an attempt is recorded, right or wrong; kept on a refusal.
   // Adjusted during render, React's pattern for resetting state on a change.
   const [value, setValue] = useState("");

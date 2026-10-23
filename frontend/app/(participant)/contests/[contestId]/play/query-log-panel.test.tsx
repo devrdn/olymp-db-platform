@@ -183,7 +183,7 @@ describe("the query log panel", () => {
   });
 
   // Toggling back within QUERY_LOG_REFRESH_MIN_INTERVAL_MS must not spend
-  // another AdmitRead, the budget Run shares.
+  // another read of the play screen's budget.
   test("does not refetch a second time when toggled back within the minimum refresh interval", async () => {
     fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
     const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });

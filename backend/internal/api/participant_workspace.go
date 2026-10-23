@@ -21,8 +21,8 @@ import (
 // Admitted like the rest of /play, so it closes with the contest; there is no
 // read-only mode. Unlike the other /play routes, nothing here starts the
 // participant's clock, and a write spends the workspace's own budget
-// (workspace.Service.AdmitWrite) instead of the read budget the console shares,
-// so autosave cannot take queries away.
+// (workspace.Service.AdmitWrite) instead of the read budget, so autosave
+// cannot lock the participant out of reloading the page.
 
 // Workspaces is the slice of workspace.Service these endpoints need.
 type Workspaces interface {

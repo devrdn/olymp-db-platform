@@ -562,9 +562,8 @@ A non-200 response closes an `EventSource` for good, which would freeze the
 clock silently. The hook then probes the same URL with `fetch` to learn the
 refusal code, shows it, and reconnects after a delay that doubles from 5 s to
 a 60 s ceiling, plus up to 50% random spread. It does not reconnect after a
-refusal that cannot clear on a timer (`excluded` or `elsewhere`). Every reconnect spends the request
-budget the channel shares with the SQL console, which is why the backoff
-never stays at its floor.
+refusal that cannot clear on a timer (`excluded` or `elsewhere`). Every reconnect spends the play
+screen's read budget, which is why the backoff never stays at its floor.
 
 ### Refusals
 
@@ -579,7 +578,7 @@ own reaction.
 | `dormant` | not open now, may open later | `contest_not_running` |
 | `excluded` | not taking part | `not_a_participant` |
 | `elsewhere` | outside the contest's network | `address_not_allowed` |
-| `passing` | lifts by itself shortly | `query_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict`, `reset_too_often` |
+| `passing` | lifts by itself shortly | `query_too_often`, `play_read_too_often`, `query_busy`, `query_already_running`, `no_game_yet`, `answer_too_often`, `attempt_conflict`, `reset_too_often` |
 | `fault` | our failure; with a code the dictionary has no sentence for, the only case that shows a request reference (`showsReference`) | `internal_error`, `query_service_down`, `game_cluster_full`, `unreachable` |
 | `refused` | every other code; the dictionary sentence says what to change | (unlisted) |
 

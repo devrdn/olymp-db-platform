@@ -48,9 +48,9 @@ type EventsAccess interface {
 //   - A connection limit. AdmitRead bounds how often a caller may open one
 //     (charged like any read, CLAUDE.md rule 13), not how many are open at
 //     once; connLimiter caps that per registration.
-//   - No AdmitRead charge per tick. A resync is a push the server chose, and
-//     charging it would let an idle connection starve its own account's query
-//     rate.
+//   - No read charge per tick. A resync is a push the server chose, and
+//     charging it would let an idle connection starve its own account's read
+//     budget.
 //   - Paced reconnects. The stream's retry field is set to the resync interval
 //     instead of EventSource's three-second default, which would spend the
 //     account's read budget on flaky wifi.
@@ -384,7 +384,7 @@ func (l *connLimiter) count(id uuid.UUID) int {
 	return l.open[id]
 }
 
-// fail maps a refusal from AdmitRead or AccessForEvents to a response, from the
+// fail maps a refusal from the read budget or AccessForEvents to a response, from the
 // same tables the console and the play screen use (CLAUDE.md rule 1).
 func (h *EventsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {

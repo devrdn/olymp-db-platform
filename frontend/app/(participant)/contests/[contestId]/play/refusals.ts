@@ -47,6 +47,7 @@ const KINDS = {
   address_not_allowed: "elsewhere",
 
   query_too_often: "passing",
+  play_read_too_often: "passing",
   query_busy: "passing",
   query_already_running: "passing",
   no_game_yet: "passing",
@@ -79,6 +80,14 @@ export function refusalKind(code: string): RefusalKind {
 /** Whether `code` means the contest is over for this participant. */
 export function isClosed(code: string): code is ClosedCode {
   return refusalKind(code) === "closed";
+}
+
+/**
+ * Whether `code` is the rate limit the play screen's reads meet, which lifts
+ * within the minute and so is answered with a reload.
+ */
+export function isReadRateLimit(code: string): boolean {
+  return code === "play_read_too_often";
 }
 
 /**

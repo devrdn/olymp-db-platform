@@ -263,8 +263,8 @@ describe("the play workspace", () => {
     expect(screen.queryAllByRole("button", { name: en.participant.play.workspace.download })).toHaveLength(count);
   });
 
-  // The log's reads share the participant's `AdmitRead` budget, and a run
-  // switches the bottom panel to "Result" anyway.
+  // The log's reads spend the play screen's read budget, and a run switches
+  // the bottom panel to "Result" anyway.
   test("running a query does not refresh the query log", async () => {
     runResult.current = { kind: "refused", code: "query_too_often" };
     show();
@@ -456,7 +456,7 @@ describe("the database reset", () => {
   });
 
   test("keeps the schema on screen when it cannot be read again", async () => {
-    schemaReads.next = { kind: "refused", code: "query_too_often" };
+    schemaReads.next = { kind: "refused", code: "play_read_too_often" };
     show(A_SCHEMA, { sqlMode: "read_write" });
 
     await reset();

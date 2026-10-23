@@ -25,7 +25,7 @@ import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
-import { refusalKind } from "./refusals";
+import { isReadRateLimit, refusalKind } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
@@ -48,14 +48,14 @@ export async function generateMetadata() {
  */
 function takesTheScreen(code: string): boolean {
   const kind = refusalKind(code);
-  // query_too_often is named rather than matched by kind: it is the only
+  // The read rate limit is named rather than matched by kind: it is the only
   // self-lifting refusal these reads meet.
   return (
     kind === "closed" ||
     kind === "dormant" ||
     kind === "excluded" ||
     kind === "elsewhere" ||
-    code === "query_too_often" ||
+    isReadRateLimit(code) ||
     code === "question_not_found"
   );
 }
@@ -357,7 +357,7 @@ function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; 
     <div className="flex min-h-0 flex-col items-start gap-4 p-10 max-narrow:p-4.5 narrow:flex-1">
       {code !== undefined ? <RenderedRefusalSignal code={code} /> : null}
       <p className="max-w-body text-body text-ink">{body}</p>
-      {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
+      {code !== undefined && isReadRateLimit(code) ? <ReloadLink dict={dict} /> : null}
     </div>
   );
 }
@@ -386,7 +386,7 @@ function UnavailablePage({
       <div className="flex flex-col gap-4">
         <h1 className="text-h2 text-ink">{title}</h1>
         <p className="max-w-body text-body text-ink">{body}</p>
-        {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
+        {code !== undefined && isReadRateLimit(code) ? <ReloadLink dict={dict} /> : null}
         <FeedbackLink href={feedbackUrl} labels={dict.participant.feedback} className="self-start text-small" />
       </div>
     </Band>

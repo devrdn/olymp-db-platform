@@ -27,8 +27,7 @@ const RECONNECT_MAX_DELAY_MS = 60_000;
 /**
  * Random spread added to a reconnect delay: a wait falls in
  * `[delay, delay * 1.5)`. Added, never subtracted, because every attempt
- * spends the query-rate budget this channel shares with the SQL console. A
- * deploy cuts every channel at once, and without jitter they would all return
+ * spends the play screen's read budget. A deploy cuts every channel at once, and without jitter they would all return
  * in the same instant against the per-participant connection cap.
  */
 const RECONNECT_JITTER = 0.5;
@@ -115,7 +114,7 @@ export function useContestEvents(
      * channel, whatever failed. The delay doubles up to the ceiling for every
      * cause, including an admitted probe; a fixed floor there would reconnect
      * every five seconds for the whole contest, each turn spending two charges
-     * of the budget shared with the SQL console (AdmitRead). A `sync` resets
+     * of the play screen's read budget (AdmitRead). A `sync` resets
      * it, since it arrives only on an accepted connection.
      */
     const scheduleReconnect = () => {
@@ -201,9 +200,9 @@ export function useContestEvents(
     /**
      * Asks for one fresh sync now, at most once per channel. The server syncs
      * only when a connection opens, so this reopens the channel. Bounded to
-     * one because every connection spends the read budget shared with the SQL
-     * console. A failed connection is left to its scheduled reconnect, whose
-     * first sync is the fresh one.
+     * one because every connection spends the play screen's read budget. A
+     * failed connection is left to its scheduled reconnect, whose first sync
+     * is the fresh one.
      */
     let resynced = false;
     resyncRef.current = () => {

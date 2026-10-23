@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
 	"github.com/devrdn/db-contest/backend/internal/workspace/workspacetest"
@@ -132,9 +132,9 @@ func TestReadingTheWorkspaceStartsNoClockAndSpendsTheReadBudget(t *testing.T) {
 		t.Fatalf("AdmitRead called %d times, want 1", f.access.admitReads)
 	}
 
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 	f.access.accessCalled = false
-	expectStatus(t, f.get(play+"/workspace"), http.StatusTooManyRequests, "query_too_often")
+	expectStatus(t, f.get(play+"/workspace"), http.StatusTooManyRequests, "play_read_too_often")
 	if f.access.accessCalled {
 		t.Fatal("Access ran after the read budget refused")
 	}
@@ -285,7 +285,7 @@ func TestTheEleventhTabIsA409(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPost, play+"/tabs", `{}`), http.StatusConflict, "workspace_tab_limit")
 }
 
-// Autosave must not spend the read budget the SQL console shares.
+// Autosave has a budget of its own, apart from the read budget.
 func TestWritesPastTheirRateAreA429BeforeAnyLookup(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
@@ -330,6 +330,18 @@ func TestAWriteStartsNoClock(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPost, play+"/tabs", `{}`), http.StatusCreated, "")
 	if len(f.access.startedOnRead) != 0 {
 		t.Fatalf("StartOnRead was called for %v", f.access.startedOnRead)
+	}
+}
+
+// Autosave must not lock a participant out of reloading the page.
+func TestAWorkspaceWriteSpendsNoReadBudget(t *testing.T) {
+	f := newParticipantFixture(t)
+	play := f.workspaceContest(t)
+	f.access.admitReads = 0
+
+	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
+	if f.access.admitReads != 0 {
+		t.Fatalf("a write spent the read budget: AdmitRead called %d times", f.access.admitReads)
 	}
 }
 

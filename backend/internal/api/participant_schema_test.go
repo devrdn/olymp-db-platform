@@ -190,7 +190,7 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 
 func TestSchemaEndpointIsRateLimitedBeforeItLooksAnythingUp(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+	f.access.admitReadErr = queryproxy.ErrTooManyReads
 
 	rec := f.get("/contests/" + uuid.NewString() + "/play/schema")
 	if rec.Code != http.StatusTooManyRequests {

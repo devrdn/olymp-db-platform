@@ -27,6 +27,9 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 	if cfg.MaxRows != 1000 || cfg.MaxBytes != 5<<20 {
 		t.Fatalf("result limits = %d rows / %d bytes", cfg.MaxRows, cfg.MaxBytes)
 	}
+	if cfg.PerMinute != 60 {
+		t.Fatalf("per minute = %d, want 60, the Core API's QUERY_PER_MINUTE default", cfg.PerMinute)
+	}
 	if cfg.ListenAddr != "127.0.0.1:9100" {
 		t.Fatalf("listen address = %q, want 127.0.0.1:9100", cfg.ListenAddr)
 	}

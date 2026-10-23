@@ -853,3 +853,12 @@ func TestADeadlineIsReportedAsATimeoutThatRan(t *testing.T) {
 		t.Errorf("endings = %q, executed = %q; want timeout/deadline, timeout", endings, executed)
 	}
 }
+
+// The figure a Runner built without configuration uses, and the one
+// queryproxy.New starts from; the deployed processes both take
+// QUERY_PER_MINUTE's default from config instead.
+func TestTheDefaultRateIsSixtyQueriesAMinute(t *testing.T) {
+	if got := queryrunner.DefaultLimits().PerMinute; got != 60 {
+		t.Fatalf("DefaultLimits().PerMinute = %d, want 60", got)
+	}
+}
