@@ -24,7 +24,9 @@ export default async function MonitorPage(props: PageProps<"/contests/[contestId
       contestId={contest.id}
       roster={roster ?? { generatedAt: "", truncated: false, rows: [] }}
       feed={feed ?? { items: [], more: false }}
-      dict={dict}
+      // Every prop of a client component is serialised into the page; the
+      // screen reads one section of the dictionary.
+      dict={{ workspace: dict.workspace }}
       locale={locale}
     />
   );
