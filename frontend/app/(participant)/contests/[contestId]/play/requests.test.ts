@@ -234,6 +234,14 @@ describe("fetchQueryLog", () => {
     expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/log?limit=20&offset=40`);
   });
 
+  test("asks for the rows older than a given one", async () => {
+    answer(200, { items: [], total: 0 });
+
+    await fetchQueryLog(contestId, 50, 0, 42);
+
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/log?limit=50&offset=0&before=42`);
+  });
+
   test("passes a refusal on as its code", async () => {
     answer(429, refusal("play_read_too_often"));
 
