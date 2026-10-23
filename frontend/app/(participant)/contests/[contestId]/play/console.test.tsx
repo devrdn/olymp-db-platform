@@ -72,11 +72,15 @@ function mirror(container: HTMLElement): HTMLTextAreaElement {
 }
 
 /**
- * Waits for CodeMirror, which arrives through a dynamic `import()` on a later
- * microtask, replacing the fallback field.
+ * Waits until CodeMirror has replaced the fallback field. CodeMirror is mounted
+ * into the DOM first and React removes the fallback in a later commit, so both
+ * textboxes exist for a moment and `getByRole("textbox")` would throw on the pair.
  */
 async function waitForRealEditor(container: HTMLElement) {
-  await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+  await waitFor(() => {
+    expect(container.querySelector(".cm-editor")).toBeInTheDocument();
+    expect(within(container).getAllByRole("textbox")).toHaveLength(1);
+  });
 }
 
 async function run(onResult: (state: ConsoleState) => void) {
