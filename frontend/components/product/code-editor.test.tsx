@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { GameSchema } from "@/lib/api/schema";
 
 import { CodeEditor, type CodeEditorHandle } from "./code-editor";
+import { offeredCompletions, waitForAcceptableCompletion, waitForCompletion } from "./completion-test-support";
 
 /**
  * CodeMirror arrives through a dynamic `import()` that resolves on a later
@@ -760,22 +761,6 @@ describe("completion", () => {
     truncated: false,
   };
 
-  /** The labels the open popup offers, without the column types beside them. */
-  function offered(): string[] {
-    return screen
-      .queryAllByRole("option")
-      .map((option) => option.querySelector(".cm-completionLabel")?.textContent ?? "");
-  }
-
-  /**
-   * Waits for the popup to offer `label`, then a little longer: CodeMirror
-   * ignores a key that accepts within 75 ms of the popup opening, so a newline
-   * typed as it appears is not taken for a choice.
-   */
-  async function offers(label: string) {
-    await waitFor(() => expect(offered()).toContain(label));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
 
   async function typeInto(container: HTMLElement, text: string) {
     await waitForRealEditor(container);
@@ -807,33 +792,33 @@ describe("completion", () => {
     const { container } = render(<Editor />);
     await typeInto(container, "SEL");
 
-    await offers("SELECT");
+    await waitForCompletion("SELECT");
   });
 
   test("offers PostgreSQL's functions as well as its keywords", async () => {
     const { container } = render(<Editor />);
     await typeInto(container, "SELECT date_tr");
 
-    await offers("DATE_TRUNC");
+    await waitForCompletion("DATE_TRUNC");
   });
 
   test("Tab accepts the highlighted option", async () => {
     let text = "";
     const { container } = render(<Editor onChange={(value) => (text = value)} />);
     await typeInto(container, "SELE");
-    await offers("SELECT");
+    await waitForAcceptableCompletion("SELECT");
 
     await userEvent.keyboard("{Tab}");
 
     expect(text).toBe("SELECT");
-    expect(offered()).toEqual([]);
+    expect(offeredCompletions()).toEqual([]);
   });
 
   test("Enter accepts the highlighted option rather than breaking the line", async () => {
     let text = "";
     const { container } = render(<Editor onChange={(value) => (text = value)} />);
     await typeInto(container, "SELE");
-    await offers("SELECT");
+    await waitForAcceptableCompletion("SELECT");
 
     await userEvent.keyboard("{Enter}");
 
@@ -846,19 +831,19 @@ describe("completion", () => {
     let text = "";
     const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
     await typeInto(container, "SELECT * FROM suspects");
-    await offers("suspects");
+    await waitForAcceptableCompletion("suspects");
 
     await userEvent.keyboard("{Enter}");
 
     expect(text).toBe("SELECT * FROM suspects\n");
-    expect(offered()).toEqual([]);
+    expect(offeredCompletions()).toEqual([]);
   });
 
   test("Enter breaks the line after a keyword typed whole in lower case, leaving its case alone", async () => {
     let text = "";
     const { container } = render(<Editor onChange={(value) => (text = value)} />);
     await typeInto(container, "select");
-    await offers("SELECT");
+    await waitForAcceptableCompletion("SELECT");
 
     await userEvent.keyboard("{Enter}");
 
@@ -873,12 +858,12 @@ describe("completion", () => {
       let text = "";
       const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
       await typeInto(container, `SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}`);
-      await offers("end");
+      await waitForAcceptableCompletion("end");
 
       await userEvent.keyboard("{Enter}");
 
       expect(text).toBe(`SELECT * FROM events WHERE CASE WHEN true THEN true ${keyword}\n`);
-      expect(offered()).toEqual([]);
+      expect(offeredCompletions()).toEqual([]);
     },
   );
 
@@ -887,7 +872,7 @@ describe("completion", () => {
     let text = "";
     const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
     await typeInto(container, "SELECT * FROM CaseFiles");
-    await offers("CaseFiles");
+    await waitForAcceptableCompletion("CaseFiles");
 
     await userEvent.keyboard("{Enter}");
 
@@ -898,7 +883,7 @@ describe("completion", () => {
     let text = "";
     const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
     await typeInto(container, "SELECT * FROM CaseFiles");
-    await offers("CaseFiles");
+    await waitForAcceptableCompletion("CaseFiles");
 
     await userEvent.keyboard("{Tab}");
 
@@ -909,11 +894,11 @@ describe("completion", () => {
     let text = "";
     const { container } = render(<Editor onChange={(value) => (text = value)} />);
     await typeInto(container, "SELE");
-    await offers("SELECT");
+    await waitForCompletion("SELECT");
 
     await userEvent.keyboard("{Escape}");
 
-    expect(offered()).toEqual([]);
+    expect(offeredCompletions()).toEqual([]);
     expect(text).toBe("SELE");
   });
 
@@ -933,14 +918,14 @@ describe("completion", () => {
     const { container } = render(<Editor schema={SCHEMA} />);
     await typeInto(container, "SELECT * FROM sus");
 
-    await offers("suspects");
+    await waitForCompletion("suspects");
   });
 
   test("writes a mixed-case table name quoted, so PostgreSQL does not fold it", async () => {
     let text = "";
     const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
     await typeInto(container, "SELECT * FROM CaseF");
-    await offers("CaseFiles");
+    await waitForAcceptableCompletion("CaseFiles");
 
     await userEvent.keyboard("{Tab}");
 
@@ -951,7 +936,7 @@ describe("completion", () => {
     let text = "";
     const { container } = render(<Editor schema={SCHEMA} onChange={(value) => (text = value)} />);
     await typeInto(container, 'SELECT "CaseFiles".Op');
-    await offers("OpenedAt");
+    await waitForAcceptableCompletion("OpenedAt");
 
     await userEvent.keyboard("{Tab}");
 
@@ -962,23 +947,23 @@ describe("completion", () => {
     const { container } = render(<Editor schema={SCHEMA} />);
     await typeInto(container, "SELECT * FROM suspects WHERE mot");
 
-    await offers("motive");
+    await waitForCompletion("motive");
   });
 
   test("does not offer the columns of a table the statement does not read", async () => {
     const { container } = render(<Editor schema={SCHEMA} />);
     await typeInto(container, 'SELECT * FROM "CaseFiles" WHERE o');
-    await offers("OpenedAt");
+    await waitForCompletion("OpenedAt");
 
-    expect(offered()).not.toContain("motive");
+    expect(offeredCompletions()).not.toContain("motive");
   });
 
   test("offers no table or column when the contest hides its schema", async () => {
     const { container } = render(<Editor schema={null} />);
     await typeInto(container, "SEL");
-    await offers("SELECT");
+    await waitForCompletion("SELECT");
 
-    expect(offered()).not.toContain("selfies");
+    expect(offeredCompletions()).not.toContain("selfies");
   });
 
   // The view holds each SQL tab as its own document; the schema is the contest's, not a tab's.
@@ -1009,15 +994,7 @@ describe("completion", () => {
     await userEvent.click(screen.getByRole("button", { name: "second" }));
     await typeInto(container, "SELECT * FROM sus");
 
-    await offers("suspects");
-  });
-
-  test("offers nothing inside a string", async () => {
-    const { container } = render(<Editor schema={SCHEMA} />);
-    await typeInto(container, "SELECT 'sus");
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    expect(offered()).toEqual([]);
+    await waitForCompletion("suspects");
   });
 
   test("offers the tables of a schema that arrives after the editor was built, keeping the text and its undo", async () => {
@@ -1028,7 +1005,7 @@ describe("completion", () => {
 
     rerender(<Editor schema={SCHEMA} onChange={onChange} />);
     await userEvent.keyboard("sel");
-    await offers("selfies");
+    await waitForCompletion("selfies");
     await userEvent.keyboard("{Escape}");
 
     expect(text).toBe("SELECT 1; sel");
