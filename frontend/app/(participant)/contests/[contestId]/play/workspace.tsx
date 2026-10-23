@@ -119,7 +119,7 @@ export function Workspace({
   const [resultFrom, setResultFrom] = useState<string | null>(null);
   // Controlled so a completed run can switch to "Result" by itself.
   const [bottomTab, setBottomTab] = useState("result");
-  const { containerRef, sizes: widths, commit } = usePaneWidths(contestId);
+  const { containerRef, sizes: widths, commit, sideBounds } = usePaneWidths(contestId);
   // The console column's split is its own group: it is stored in percent,
   // the widths in rem.
   const { containerRef: columnRef, sizes: rows, commit: commitRows } = useConsoleRows(contestId);
@@ -396,7 +396,7 @@ export function Workspace({
               label={t.panes.side}
               property="--pane-side"
               value={widths.side}
-              bounds={WIDTH_BOUNDS}
+              bounds={sideBounds}
               direction={-1}
               containerRef={containerRef}
               onResize={(rem) => commit({ ...widths, side: rem })}
