@@ -1,4 +1,4 @@
-import type { Standings, StandingsCell, StandingsRow } from "@/lib/api/leaderboard";
+import type { Prize, Standings, StandingsCell, StandingsRow } from "@/lib/api/leaderboard";
 import { identityHue } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { initials } from "@/lib/format/initials";
@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
  * play tab and the public page share it.
  *
  * The one place the standings sub-palette is spent (SPEC §3.5). No colour is
- * the only carrier of a fact: the medal holds its number, the freeze has its
- * sentence, your row says "You".
+ * the only carrier of a fact: the medal holds its prize's numeral and names it
+ * in words, the freeze has its sentence, your row says "You".
  */
 
 /** The part of the dictionary the standings read. */
@@ -20,7 +20,9 @@ export type StandingsDictionary = Pick<Dictionary, "leaderboard">;
 
 type Medal = "gold" | "silver" | "bronze";
 
-const MEDALS: Record<number, Medal> = { 1: "gold", 2: "silver", 3: "bronze" };
+const MEDALS: Record<Prize, Medal> = { 1: "gold", 2: "silver", 3: "bronze" };
+
+const NUMERALS: Record<Prize, string> = { 1: "I", 2: "II", 3: "III" };
 
 // Written out whole so Tailwind finds every class. `row` tints a medal's whole
 // row; your own row's tint wins over it.
@@ -60,39 +62,55 @@ const HUE_CLASSES: Record<number, { disc: string; bar: string }> = {
   6: { disc: "bg-id-6-wash text-id-6", bar: "bg-id-6" },
 };
 
-function medalOf(row: { place: number | null }): Medal | undefined {
-  return row.place === null ? undefined : MEDALS[row.place];
+function medalOf(prize: Prize | null): Medal | undefined {
+  return prize === null ? undefined : MEDALS[prize];
 }
 
-/** The left edge a medal row carries, for tables other than StandingsView. */
-export function medalEdge(place: number | null): string {
-  const medal = medalOf({ place });
+/** The left edge a prize row carries, for tables other than StandingsView. */
+export function medalEdge(prize: Prize | null): string {
+  const medal = medalOf(prize);
   return medal ? MEDAL_CLASSES[medal].edge : "border-l-transparent";
 }
 
-export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced: string }) {
-  const medal = medalOf({ place });
+type PrizeNames = StandingsDictionary["leaderboard"]["prizes"];
+
+function prizeName(prize: Prize | null, names: PrizeNames): string {
+  switch (prize) {
+    case 1:
+      return names.first;
+    case 2:
+      return names.second;
+    case 3:
+      return names.third;
+    case null:
+      return names.none;
+  }
+}
+
+/**
+ * A row's prize tier as a medal with its numeral, or a dash for none. The
+ * place itself is not shown: rows keep their order, and the tier is what the
+ * organiser awards.
+ */
+export function PrizeBadge({ prize, names }: { prize: Prize | null; names: PrizeNames }) {
   return (
-    <span data-testid="place" data-medal={medal} className="inline-flex">
-      {place === null ? (
-        <>
-          <span aria-hidden className="font-mono text-data text-ink-3">
-            —
-          </span>
-          <span className="sr-only">{unplaced}</span>
-        </>
-      ) : medal ? (
+    <span data-testid="prize" data-medal={medalOf(prize)} className="inline-flex">
+      {prize !== null ? (
         <span
+          aria-hidden
           className={cn(
-            "grid size-7 place-items-center rounded-full font-mono text-label font-medium tabular-nums ring-2 ring-offset-1 ring-offset-bg",
-            MEDAL_CLASSES[medal].disc,
+            "grid size-7 place-items-center rounded-full font-mono text-label font-medium ring-2 ring-offset-1 ring-offset-bg",
+            MEDAL_CLASSES[MEDALS[prize]].disc,
           )}
         >
-          {place}
+          {NUMERALS[prize]}
         </span>
       ) : (
-        <span className="grid size-7 place-items-center font-mono text-data text-ink-2 tabular-nums">{place}</span>
+        <span aria-hidden className="grid size-7 place-items-center font-mono text-data text-ink-3">
+          —
+        </span>
       )}
+      <span className="sr-only">{prizeName(prize, names)}</span>
     </span>
   );
 }
@@ -331,7 +349,7 @@ export function StandingsView({
                     scope="col"
                     className={cn(ICPC_COLUMN.place.className, "py-2 pr-2 pl-3 text-left font-normal")}
                   >
-                    {t.columns.place}
+                    {t.columns.prize}
                   </th>
                   <th scope="col" className="px-2 py-2 text-left font-normal">
                     {t.columns.participant}
@@ -424,7 +442,7 @@ function Row({
   questions?: string[];
 }) {
   const t = dict.leaderboard;
-  const medal = medalOf(row);
+  const medal = medalOf(row.prize);
   // The ICPC branch has no score bar, so neither is needed there.
   const hue = icpc ? 0 : identityHue(row.label);
   const share = !icpc && leader > 0 ? Math.round((row.points / leader) * 100) : 0;
@@ -439,9 +457,9 @@ function Row({
       )}
     >
       <td
-        className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.place))}
+        className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.prize))}
       >
-        <PlaceBadge place={row.place} unplaced={t.unplaced} />
+        <PrizeBadge prize={row.prize} names={t.prizes} />
       </td>
 
       <td className="px-2 py-2.5 align-middle">
@@ -525,8 +543,8 @@ function Row({
 }
 
 /**
- * The top three, second-first-third at three heights (SPEC §15). Only rows that
- * scored stand on it.
+ * The top three prize winners, second-first-third at three heights (SPEC §15),
+ * each on their tier's medal. Only rows with a prize that scored stand on it.
  */
 function Podium({
   rows,
@@ -538,9 +556,7 @@ function Podium({
   scoring: Standings["scoring"];
 }) {
   const icpc = scoring === "icpc";
-  const top = rows
-    .filter((r) => r.place !== null && r.place <= 3 && (icpc ? r.solved > 0 : r.points > 0))
-    .slice(0, 3);
+  const top = rows.filter((r) => r.prize !== null && (icpc ? r.solved > 0 : r.points > 0)).slice(0, 3);
   if (top.length === 0) return null;
 
   const order = [top[1], top[0], top[2]];
@@ -553,8 +569,8 @@ function Podium({
       className="grid grid-cols-3 items-end gap-3 pt-2 max-narrow:hidden"
     >
       {order.map((row, i) => {
-        if (!row) return <div key={i} />;
-        const medal = medalOf(row) ?? "bronze";
+        if (!row || row.prize === null) return <div key={i} />;
+        const medal = MEDALS[row.prize];
         return (
           <div key={i} className="flex min-w-0 flex-col items-center gap-2">
             <span
@@ -563,7 +579,7 @@ function Podium({
                 MEDAL_CLASSES[medal].disc,
               )}
             >
-              {row.place}
+              {NUMERALS[row.prize]}
             </span>
             <span className="max-w-full truncate text-body text-ink">
               {row.deleted ? dict.leaderboard.deleted : row.label}

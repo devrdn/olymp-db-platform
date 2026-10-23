@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { getDictionary } from "@/lib/i18n/dictionary";
 import {
   identityHue,
   type Standings,
@@ -9,13 +10,14 @@ import {
 } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 
-import { StandingsView } from "./standings";
+import { PrizeBadge, StandingsView } from "./standings";
 
 const t = en.leaderboard;
 
 function row(overrides: Partial<StandingsRow>): StandingsRow {
   return {
     place: 1,
+    prize: null,
     label: "ivanov",
     deleted: false,
     points: 10,
@@ -40,10 +42,10 @@ function standings(overrides: Partial<Standings> = {}): Standings {
     truncated: false,
     questions: undefined,
     rows: [
-      row({ place: 1, label: "alpha", points: 40 }),
-      row({ place: 2, label: "beta", points: 20, isYou: true }),
-      row({ place: 3, label: "gamma", points: 10 }),
-      row({ place: 4, label: "delta", points: 5 }),
+      row({ place: 1, prize: 1, label: "alpha", points: 40 }),
+      row({ place: 2, prize: 2, label: "beta", points: 20, isYou: true }),
+      row({ place: 3, prize: 3, label: "gamma", points: 10 }),
+      row({ place: 4, prize: null, label: "delta", points: 5 }),
     ],
     ...overrides,
   };
@@ -60,21 +62,94 @@ function rowOf(label: string) {
 }
 
 describe("the standings", () => {
-  test("give places one to three a medal that still carries the number", () => {
+  test("give each prize tier its medal and its numeral, and name the tier in words", () => {
     show(standings());
 
-    for (const [label, medal, place] of [
-      ["alpha", "gold", "1"],
-      ["beta", "silver", "2"],
-      ["gamma", "bronze", "3"],
+    for (const [label, medal, numeral, name] of [
+      ["alpha", "gold", "I", t.prizes.first],
+      ["beta", "silver", "II", t.prizes.second],
+      ["gamma", "bronze", "III", t.prizes.third],
     ]) {
-      const cell = within(rowOf(label)).getByTestId("place");
+      const cell = within(rowOf(label)).getByTestId("prize");
       expect(cell).toHaveAttribute("data-medal", medal);
-      expect(cell).toHaveTextContent(place);
+      expect(within(cell).getByText(numeral)).toHaveAttribute("aria-hidden");
+      expect(within(cell).getByText(name)).toHaveClass("sr-only");
     }
-    expect(within(rowOf("delta")).getByTestId("place")).not.toHaveAttribute(
-      "data-medal",
+  });
+
+  test("show a dash, named as no prize, for a row without one, whatever its place", () => {
+    show(standings());
+
+    const cell = within(rowOf("delta")).getByTestId("prize");
+    expect(cell).not.toHaveAttribute("data-medal");
+    expect(within(cell).getByText("—")).toHaveAttribute("aria-hidden");
+    expect(within(cell).getByText(t.prizes.none)).toHaveClass("sr-only");
+    // The rank itself is not the badge any more.
+    expect(cell).not.toHaveTextContent("4");
+  });
+
+  test("show the tier, not the place: tied rows share it, and the place number appears nowhere", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: 1, label: "alpha", points: 40 }),
+          row({ place: 1, prize: 1, label: "beta", points: 40 }),
+          row({ place: 3, prize: 2, label: "gamma", points: 10 }),
+        ],
+      }),
     );
+
+    expect(within(rowOf("alpha")).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
+    expect(within(rowOf("beta")).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
+    const third = within(rowOf("gamma")).getByTestId("prize");
+    expect(third).toHaveAttribute("data-medal", "silver");
+    expect(third).not.toHaveTextContent("3");
+  });
+
+  test("keep the rows in the order they were ranked", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: null, label: "alpha" }),
+          row({ place: 2, prize: 3, label: "beta" }),
+          row({ place: 3, prize: null, label: "gamma" }),
+        ],
+      }),
+    );
+
+    const body = screen.getAllByRole("row").slice(1);
+    ["alpha", "beta", "gamma"].forEach((label, i) => {
+      expect(within(body[i]).getByText(label)).toBeInTheDocument();
+    });
+  });
+
+  test("give no medal anywhere when the contest has no prize places", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, label: "alpha", points: 40 }),
+          row({ place: 2, label: "beta", points: 20 }),
+        ],
+      }),
+      "page",
+    );
+
+    for (const label of ["alpha", "beta"]) {
+      const tr = tableRowOf(label);
+      expect(within(tr).getByTestId("prize")).not.toHaveAttribute("data-medal");
+      expect(within(tr).getByText(t.prizes.none)).toBeInTheDocument();
+      expect(tr.className).not.toMatch(/gold|silver|bronze/);
+    }
+    expect(screen.queryByTestId("podium")).not.toBeInTheDocument();
+  });
+
+  test("tint a prize row and its edge by its tier", () => {
+    show(standings());
+
+    expect(rowOf("alpha")).toHaveClass("bg-gold-wash");
+    expect(rowOf("gamma")).toHaveClass("bg-bronze-wash");
+    expect(rowOf("delta").className).not.toMatch(/gold|silver|bronze/);
+    expect(within(rowOf("beta")).getAllByRole("cell")[0]).toHaveClass("border-l-silver-fill");
   });
 
   test("say in words which row is yours, not only in colour", () => {
@@ -106,7 +181,7 @@ describe("the standings", () => {
     );
   });
 
-  test("name the winner, and show an unplaced row without a number", () => {
+  test("name the winner in winner mode, where nobody has a prize tier", () => {
     show(
       standings({
         scoring: "winner",
@@ -118,9 +193,9 @@ describe("the standings", () => {
     );
 
     expect(within(rowOf("sherlock")).getByText(t.winner)).toBeInTheDocument();
-    expect(within(rowOf("watson")).getByTestId("place")).toHaveTextContent(
-      t.unplaced,
-    );
+    for (const label of ["sherlock", "watson"]) {
+      expect(within(rowOf(label)).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+    }
   });
 
   test("never show a deleted account under a login", () => {
@@ -163,6 +238,25 @@ describe("the standings", () => {
     ).toBeInTheDocument();
   });
 
+  test("stand only prize winners on the podium, each with their tier's numeral", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: 1, label: "alpha", points: 40 }),
+          row({ place: 2, prize: 2, label: "beta", points: 20 }),
+          row({ place: 3, prize: null, label: "gamma", points: 10 }),
+        ],
+      }),
+      "page",
+    );
+
+    const podium = screen.getByTestId("podium");
+    expect(within(podium).getByText("I")).toBeInTheDocument();
+    expect(within(podium).getByText("II")).toBeInTheDocument();
+    expect(within(podium).queryByText("gamma")).not.toBeInTheDocument();
+    expect(within(podium).queryByText("1")).not.toBeInTheDocument();
+  });
+
   test("raise the podium on the page, and not in the narrow panel", () => {
     const { unmount } = show(standings(), "page");
     expect(screen.getByTestId("podium")).toBeInTheDocument();
@@ -176,6 +270,7 @@ describe("the standings", () => {
 function icpcRow(overrides: Partial<StandingsRow> & { cells: NonNullable<StandingsRow["cells"]> }): StandingsRow {
   return {
     place: 1,
+    prize: null,
     label: "ivanov",
     deleted: false,
     points: 0,
@@ -201,6 +296,7 @@ function icpcStandings(overrides: Partial<Standings> = {}): Standings {
     rows: [
       icpcRow({
         place: 1,
+        prize: 1,
         label: "alpha",
         solved: 2,
         penalty: 65,
@@ -366,5 +462,23 @@ describe("the ICPC standings", () => {
     const table = screen.getByRole("table");
     expect(table.style.getPropertyValue("--grid-min-width")).toBe("");
     expect(table.className).not.toContain("--grid-min-width");
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the prize badge in %s", (locale) => {
+  test("names each tier, and no prize, to a screen reader in the reader's language", async () => {
+    const names = (await getDictionary(locale)).leaderboard.prizes;
+
+    for (const [prize, name] of [
+      [1, names.first],
+      [2, names.second],
+      [3, names.third],
+      [null, names.none],
+    ] as const) {
+      const { unmount } = render(<PrizeBadge prize={prize} names={names} />);
+      expect(screen.getByText(name)).toHaveClass("sr-only");
+      unmount();
+    }
+    expect(new Set([names.first, names.second, names.third, names.none]).size).toBe(4);
   });
 });

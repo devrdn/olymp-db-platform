@@ -1,19 +1,26 @@
-import { contentEditable, contestCoverSchema, settingsEditable, shapeEditable } from "@/lib/api/contests";
+import {
+  contentEditable,
+  contestCoverSchema,
+  prizePlacesEditable,
+  settingsEditable,
+  shapeEditable,
+} from "@/lib/api/contests";
 import { sqlPolicySchema } from "@/lib/api/policy";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
 import { CoverPanel } from "./cover-panel";
-import { ContestPanel, LanguagePanel, PolicyPanel } from "./settings-panels";
+import { ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
 
 /**
  * Configuration rather than content; the title is edited in the workspace
  * heading (`TitleEditor`).
  *
- * Three freezes apply: schedule and network rules stay editable while the
+ * Four freezes apply: schedule and network rules stay editable while the
  * contest runs (extending after a power cut); the shape freezes at the start;
  * the SQL policy freezes with the content, so rights do not depend on when
- * someone connected.
+ * someone connected; the prize places, which change only what the standings
+ * show, stay open until the contest is archived.
  */
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
@@ -43,6 +50,8 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
         shapeOpen={shapeEditable(contest.status)}
         dict={dict}
       />
+
+      <PrizePanel contest={contest} editable={prizePlacesEditable(contest.status)} dict={dict} />
 
       <LanguagePanel
         contest={contest}

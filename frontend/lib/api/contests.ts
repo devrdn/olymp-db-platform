@@ -151,6 +151,10 @@ export const contestSchema = z
     icpc_penalty_min: z.number(),
     // Defaulted for an older server, as in the summary.
     result_download: z.boolean().default(true),
+    // Defaulted to none for a server older than prize places.
+    prize_places: z
+      .object({ first: z.number(), second: z.number(), third: z.number() })
+      .default({ first: 0, second: 0, third: 0 }),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),
@@ -179,6 +183,7 @@ export const contestSchema = z
     scoring: raw.scoring,
     icpcPenaltyMin: raw.icpc_penalty_min,
     resultDownload: raw.result_download,
+    prizePlaces: raw.prize_places,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,
     startsAt: raw.starts_at,
@@ -287,6 +292,39 @@ export function contentEditable(status: ContestStatus): boolean {
  */
 export function settingsEditable(status: ContestStatus): boolean {
   return status === "draft" || status === "published" || status === "running";
+}
+
+/**
+ * Whether the prize counts may change. They alter only what the standings
+ * display, so they stay open after the finish and close with the archive.
+ */
+export function prizePlacesEditable(status: ContestStatus): boolean {
+  return status !== "archived";
+}
+
+/** The most places one prize may cover, the column's `CHECK`. */
+const MAX_PRIZE_PLACES = 1000;
+
+export type PrizePlaces = { first: number; second: number; third: number };
+
+/**
+ * The three prize counts as the form submitted them. A blank field is none;
+ * anything but a whole number in 0..1000 refuses the save rather than being
+ * rounded into a count nobody chose.
+ */
+export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePlaces } | { ok: false } {
+  const counts: number[] = [];
+  for (const name of ["prizeFirst", "prizeSecond", "prizeThird"]) {
+    const raw = String(form.get(name) ?? "").trim();
+    if (raw === "") {
+      counts.push(0);
+      continue;
+    }
+    if (!/^\d+$/.test(raw) || Number(raw) > MAX_PRIZE_PLACES) return { ok: false };
+    counts.push(Number(raw));
+  }
+  const [first, second, third] = counts;
+  return { ok: true, value: { first, second, third } };
 }
 
 /**

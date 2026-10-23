@@ -459,7 +459,7 @@ describe("the side panel's table", () => {
       standings: {
         state: "live", scoring: "points", title: "", generatedAt: "2026-09-20T10:00:00Z", truncated: false,
         frozenAt: undefined, endsAt: undefined, questions: undefined,
-        rows: [{ place: 1, label: "sherlock", deleted: false, points: 12, solved: 2, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false, isYou: true }],
+        rows: [{ place: 1, prize: 1, label: "sherlock", deleted: false, points: 12, solved: 2, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false, isYou: true }],
       },
     });
     show();
@@ -471,5 +471,7 @@ describe("the side panel's table", () => {
     expect(await screen.findByText("sherlock")).toBeInTheDocument();
     expect(fetchStandings).toHaveBeenCalledWith("c1", "en");
     expect(screen.getByText(en.leaderboard.you)).toBeInTheDocument();
+    expect(screen.getByTestId("prize")).toHaveAttribute("data-medal", "gold");
+    expect(screen.getByText(en.leaderboard.prizes.first)).toHaveClass("sr-only");
   });
 });
