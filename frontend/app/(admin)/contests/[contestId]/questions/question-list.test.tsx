@@ -29,7 +29,7 @@ function question(overrides: Partial<Question> = {}): Question {
     penaltyPct: 0,
     isVisible: true,
     choiceIds: [],
-    texts: { en: { bodyMd: "Who did it?", choices: {} } },
+    texts: { en: { title: "", bodyMd: "Who did it?", choices: {} } },
     answers: [],
     ...overrides,
   } as Question;
@@ -76,5 +76,37 @@ describe("QuestionList, the points column", () => {
     const headers = within(table).getAllByRole("columnheader").length;
     const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell").length;
     expect(cells).toBe(headers);
+  });
+});
+
+describe("QuestionList, naming a question", () => {
+  test("names a question by its title when it has one", () => {
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[question({ texts: { en: { title: "The culprit", bodyMd: "Who did it?", choices: {} } } })]}
+        languages={["en"]}
+        editable={false}
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "The culprit" })).toBeInTheDocument();
+  });
+
+  test("falls back to the wording's first line without one", () => {
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[question({ texts: { en: { title: "", bodyMd: "Who did it?\nThink.", choices: {} } } })]}
+        languages={["en"]}
+        editable={false}
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Who did it?" })).toBeInTheDocument();
   });
 });

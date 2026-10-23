@@ -17,6 +17,7 @@ describe("playQuestionSchema", () => {
     kind: "choice",
     points: 10,
     choice_ids: ["a", "b"],
+    title: "The greenhouse",
     body_md: "Who was in the greenhouse?",
     choices: { a: "The butler", b: "The gardener" },
     closed: false,
@@ -24,6 +25,19 @@ describe("playQuestionSchema", () => {
     correct: false,
     points_awarded: 0,
   };
+
+  test("carries the title beside the body", () => {
+    expect(playQuestionSchema.parse(base)).toMatchObject({
+      title: "The greenhouse",
+      bodyMd: "Who was in the greenhouse?",
+    });
+  });
+
+  test("reads an omitted title as none, and derives nothing from the body", () => {
+    const untitled: Record<string, unknown> = { ...base };
+    delete untitled.title;
+    expect(playQuestionSchema.parse(untitled).title).toBe("");
+  });
 
   test("reads an omitted attempt count as no limit, not as zero", () => {
     expect(playQuestionSchema.parse(base).attemptsRemaining).toBeUndefined();

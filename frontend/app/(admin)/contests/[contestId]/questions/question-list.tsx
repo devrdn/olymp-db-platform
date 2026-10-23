@@ -105,8 +105,8 @@ export function QuestionList({
                       href={`/contests/${contestId}/questions/${question.id}`}
                       className="block w-fit max-w-body text-row text-ink underline decoration-edge underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"
                     >
-                      {/* The body's first line in any language; a draft without
-                         one is still openable. */}
+                      {/* The title, or else the body's first line, in any
+                         language; a draft without either is still openable. */}
                       {firstLine(question) || (
                         <span className="text-ink-3">{t.untitled}</span>
                       )}
@@ -163,7 +163,7 @@ export function QuestionList({
 
 function firstLine(question: Question): string {
   for (const text of Object.values(question.texts)) {
-    const line = text.bodyMd.trim().split("\n")[0];
+    const line = text.title.trim() || text.bodyMd.trim().split("\n")[0];
     if (line) return line.length > 120 ? `${line.slice(0, 120)}…` : line;
   }
   return "";

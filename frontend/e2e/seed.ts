@@ -100,7 +100,7 @@ export default async function seed(): Promise<void> {
       kind: "text",
       points: 10,
       is_visible: true,
-      texts: { en: { body_md: "Which suspect has no alibi?" } },
+      texts: { en: { title: "The alibi", body_md: "Which suspect has no alibi?" } },
     });
     record.question = { id: question.id, answer: ANSWER, wrongAnswer: WRONG_ANSWER };
     writeRecord(record);

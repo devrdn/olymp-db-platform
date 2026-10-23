@@ -12,8 +12,12 @@ const question = {
   is_visible: true,
   choice_ids: ["a", "b", "c"],
   texts: {
-    en: { body_md: "Who was in the greenhouse?", choices: { a: "The butler", b: "The gardener" } },
-    ro: { body_md: "Cine era în seră?", choices: { a: "Majordomul", b: "Grădinarul" } },
+    en: {
+      title: "The greenhouse",
+      body_md: "Who was in the greenhouse?",
+      choices: { a: "The butler", b: "The gardener" },
+    },
+    ro: { title: "", body_md: "Cine era în seră?", choices: { a: "Majordomul", b: "Grădinarul" } },
   },
   answers: [{ id: "9f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6", match_kind: "exact", value: "a" }],
 };
@@ -31,6 +35,8 @@ describe("questionSchema", () => {
     });
     expect(parsed.choiceIds).toEqual(["a", "b", "c"]);
     expect(parsed.texts.en.bodyMd).toBe("Who was in the greenhouse?");
+    expect(parsed.texts.en.title).toBe("The greenhouse");
+    expect(parsed.texts.ro.title).toBe("");
     expect(parsed.answers[0]).toMatchObject({ matchKind: "exact", value: "a" });
   });
 
@@ -55,6 +61,13 @@ describe("questionSchema", () => {
     });
 
     expect(parsed.texts.en.choices).toEqual({});
+  });
+
+  /** An API older than titles sends none; the editor then shows an empty field. */
+  test("reads a text with no title as an empty one", () => {
+    const parsed = questionSchema.parse({ ...question, texts: { en: { body_md: "Name the hour." } } });
+
+    expect(parsed.texts.en.title).toBe("");
   });
 });
 
