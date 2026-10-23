@@ -1,10 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-import { ParticipantsTable } from "./participants-table";
+import { ParticipantsTable, ROSTER_ROW_REM } from "./participants-table";
 import { NO_FLAGS, rosterRow } from "./test-fixtures";
 
 const CONTEST = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
@@ -154,4 +154,122 @@ describe("filters", () => {
 test("says when the table is cut short", () => {
   renderTable({ truncated: true });
   expect(screen.getByText(dict.workspace.monitor.table.truncated.replace("{n}", "3"))).toBeInTheDocument();
+});
+
+describe("a long roster", () => {
+  const ROW_PX = ROSTER_ROW_REM * 16;
+  const VIEW_PX = ROW_PX * 12;
+  const TOTAL = 2000;
+
+  /** Names sort in the order of their number; queries run the other way. */
+  const long = Array.from({ length: TOTAL }, (_, i) => {
+    const n = String(i).padStart(4, "0");
+    return rosterRow(`r-${n}`, {
+      login: `p${n}`,
+      fullName: `Person ${n}`,
+      status: i % 2 === 0 ? "active" : "finished",
+      queries: TOTAL - i,
+      flags: { ...NO_FLAGS, largePaste: i % 10 === 0 },
+    });
+  });
+
+  /** jsdom has no layout: the box gets a height and the test sets its offset. */
+  function scroller(): HTMLElement {
+    const element = screen.getByTestId("roster-scroller");
+    Object.defineProperty(element, "clientHeight", { value: VIEW_PX, configurable: true });
+    return element;
+  }
+
+  function scrollTo(element: HTMLElement, top: number) {
+    act(() => {
+      element.scrollTop = top;
+      fireEvent.scroll(element);
+    });
+  }
+
+  function bodyRows(): HTMLElement[] {
+    const [, ...rest] = within(screen.getByRole("table")).getAllByRole("row");
+    return rest;
+  }
+
+  test("renders a bounded number of rows before it can measure, as the server does", () => {
+    renderTable({ rows: long });
+    expect(bodyRows().length).toBeLessThanOrEqual(24);
+  });
+
+  test("renders only the rows in view, and still reports the whole table", () => {
+    renderTable({ rows: long });
+    scrollTo(scroller(), 1000 * ROW_PX);
+
+    const shown = bodyRows();
+    expect(shown.length).toBeLessThanOrEqual(12 + 2 * 8 + 1);
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", String(TOTAL + 1));
+    // The heading is row 1, so the participant at index 1000 is row 1002.
+    const row = screen.getByRole("row", { name: /Person 1000/ });
+    expect(row).toHaveAttribute("aria-rowindex", "1002");
+    expect(screen.queryByRole("row", { name: /Person 0000/ })).not.toBeInTheDocument();
+  });
+
+  test("keeps the place the scroll offset says, so the spacer rows hold the full height", () => {
+    renderTable({ rows: long });
+    scrollTo(scroller(), 1000 * ROW_PX);
+
+    const [before, after] = screen
+      .getByRole("table")
+      .querySelectorAll<HTMLElement>("tbody > tr[data-spacer]");
+    const first = Number(bodyRows()[0].getAttribute("aria-rowindex")) - 2;
+    const last = Number(bodyRows().at(-1)?.getAttribute("aria-rowindex")) - 2;
+    expect(before.style.height).toBe(`${first * ROSTER_ROW_REM}rem`);
+    expect(after.style.height).toBe(`${(TOTAL - 1 - last) * ROSTER_ROW_REM}rem`);
+  });
+
+  test("sorts the whole roster, not only the rows on screen", async () => {
+    renderTable({ rows: long });
+    const box = scroller();
+    scrollTo(box, 0);
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.monitor.table.columns.queries }));
+
+    // Most queries first: the last participant by name.
+    expect(bodyNames()[0]).toBe("Person 0000");
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.monitor.table.columns.queries }));
+    expect(bodyNames()[0]).toBe("Person 1999");
+    expect(bodyRows().length).toBeLessThanOrEqual(12 + 2 * 8 + 1);
+  });
+
+  test("filters the whole roster and counts what matched", async () => {
+    renderTable({ rows: long });
+    scroller();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: dict.workspace.monitor.table.filters.flaggedOnly }));
+
+    const t = dict.workspace.monitor.table;
+    expect(screen.getByText(t.count.replace("{shown}", "200").replace("{total}", String(TOTAL)))).toBeInTheDocument();
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "201");
+    expect(bodyNames().slice(0, 3)).toEqual(["Person 0000", "Person 0010", "Person 0020"]);
+    expect(bodyRows().length).toBeLessThanOrEqual(12 + 2 * 8 + 1);
+  });
+
+  test("keeps each column as wide as its widest row anywhere in the list", () => {
+    const widest = { ...NO_FLAGS, largePaste: true, identicalQueries: true, answerWithoutQueries: true };
+    renderTable({ rows: [...long.slice(0, TOTAL - 1), rosterRow("r-last", { fullName: "Zoe Last", flags: widest })] });
+
+    // Far below the window, yet its badges size the column.
+    expect(screen.queryByRole("row", { name: /Zoe Last/ })).not.toBeInTheDocument();
+    const sizer = screen.getByRole("table").querySelector<HTMLElement>("tbody > tr[data-sizer]");
+    expect(sizer).toHaveAttribute("aria-hidden", "true");
+    expect(sizer).toHaveTextContent(dict.workspace.monitor.flags.answerWithoutQueries.label);
+    expect(sizer).toHaveTextContent(dict.workspace.monitor.flags.identicalQueries.label);
+  });
+
+  test("lets the keyboard walk from the column headings into the rows", async () => {
+    renderTable({ rows: long });
+    const lastHeading = screen.getByRole("button", { name: dict.workspace.monitor.table.columns.lastActivity });
+    lastHeading.focus();
+
+    await userEvent.tab();
+    expect(screen.getByRole("link", { name: /Person 0000/ })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("link", { name: /Person 0001/ })).toHaveFocus();
+  });
 });
