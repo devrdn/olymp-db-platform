@@ -149,8 +149,9 @@ func TestSettingPrizePlacesOnAFinishedContestChangesNothingElse(t *testing.T) {
 		t.Fatalf("SetPrizePlaces() = %v", err)
 	}
 
+	// UpdatedAt included: the reclaim sweep measures the grace from it.
 	after, _ := f.Contests.ByID(context.Background(), c.ID)
-	after.PrizePlaces, after.UpdatedAt = before.PrizePlaces, before.UpdatedAt
+	after.PrizePlaces = before.PrizePlaces
 	if fmt.Sprintf("%+v", after) != fmt.Sprintf("%+v", before) {
 		t.Errorf("contest = %+v\nwant only the prize places changed from %+v", after, before)
 	}

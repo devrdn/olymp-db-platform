@@ -52,31 +52,32 @@ func (p PrizePlaces) Tier(place int) int {
 // SetPrizePlaces changes how many prizes the standings show. It is a second
 // door beside Update, not a widening of it: the counts change only what the
 // table displays, so they stay open while the contest runs and after it
-// finishes, until it is archived.
+// finishes, until it is archived. The repository decides the archived refusal
+// in the write itself, so an archive racing this save cannot be overtaken.
 func (s *Service) SetPrizePlaces(ctx context.Context, actorID, contestID uuid.UUID, places PrizePlaces) (Contest, error) {
-	current, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return Contest{}, err
-	}
-	if current.Status == StatusArchived {
-		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, current.Status)
-	}
 	if err := places.Validate(); err != nil {
 		return Contest{}, err
 	}
 
-	updated := current
-	updated.PrizePlaces = places
-	changes := audit.Between(current.auditFields(), updated.auditFields())
-
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.contests.Update(ctx, updated); err != nil {
+	var updated Contest
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		previous, err := s.contests.SetPrizePlaces(ctx, contestID, places)
+		if err != nil {
 			return err
 		}
+		if updated, err = s.contests.ByID(ctx, contestID); err != nil {
+			return err
+		}
+		changes := audit.Between(prizeAuditFields(previous), prizeAuditFields(places))
 		return s.record(ctx, actorID, audit.ActionContestUpdate, contestID, changes.Payload())
 	})
 	if err != nil {
 		return Contest{}, err
 	}
 	return updated, nil
+}
+
+// prizeAuditFields is the counts as the audit trail names them.
+func prizeAuditFields(p PrizePlaces) map[string]any {
+	return map[string]any{"prize_first": p.First, "prize_second": p.Second, "prize_third": p.Third}
 }

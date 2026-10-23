@@ -265,13 +265,11 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 		SET enrollment = $2, question_mode = $3, progression = $4, scoring = $5, timing = $6, duration_min = $7,
 		    starts_at = $8, ends_at = $9, allowed_cidrs = $10, settings = $11,
 		    leaderboard_freeze_min = $12, leaderboard_names = $13, icpc_penalty_min = $14,
-		    result_download = $15, prize_first = $16, prize_second = $17, prize_third = $18,
-		    updated_at = now()
+		    result_download = $15, updated_at = now()
 		WHERE id = $1`,
 		c.ID, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings,
-		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin, c.ResultDownload,
-		c.PrizePlaces.First, c.PrizePlaces.Second, c.PrizePlaces.Third)
+		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin, c.ResultDownload)
 	if err != nil {
 		return fmt.Errorf("update contest: %w", err)
 	}
@@ -279,6 +277,40 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 		return contests.ErrNotFound
 	}
 	return nil
+}
+
+// SetPrizePlaces leaves updated_at alone: the reclaim sweep measures a
+// finished contest's grace from it. The row lock taken while reading the old
+// counts makes a concurrent archive either commit first, so the status test
+// excludes the row, or wait for this write.
+func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
+	var previous contests.PrizePlaces
+	err := r.querier(ctx).QueryRow(ctx, `
+		WITH old AS (
+			SELECT id, prize_first, prize_second, prize_third
+			FROM contests
+			WHERE id = $1 AND status <> 'archived'
+			FOR UPDATE
+		)
+		UPDATE contests c
+		SET prize_first = $2, prize_second = $3, prize_third = $4
+		FROM old
+		WHERE c.id = old.id
+		RETURNING old.prize_first, old.prize_second, old.prize_third`,
+		id, places.First, places.Second, places.Third).
+		Scan(&previous.First, &previous.Second, &previous.Third)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Nothing matched: a second read tells a missing contest from an
+		// archived one.
+		if _, err := r.ByID(ctx, id); err != nil {
+			return contests.PrizePlaces{}, err
+		}
+		return contests.PrizePlaces{}, fmt.Errorf("%w: it is archived", contests.ErrNotEditable)
+	case err != nil:
+		return contests.PrizePlaces{}, fmt.Errorf("set prize places: %w", err)
+	}
+	return previous, nil
 }
 
 // finishRoster is the CTE that finishes the active registrations of every
