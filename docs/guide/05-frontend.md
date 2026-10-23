@@ -473,7 +473,7 @@ budgets and surviving a closed tab.
 | `side-panel.tsx` | Tabs for story, questions, notes and leaderboard; the story's Markdown and print exports. |
 | `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswer`. |
 | `notes-panel.tsx` | One self-saving notes field. |
-| `schema-panel.tsx` | Tables, columns, types and foreign keys. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
+| `schema-panel.tsx`, `table-query.ts` | Tables, columns, types and foreign keys; a click on a table's name writes `SELECT * FROM <table> LIMIT 5;`, quoted as PostgreSQL needs, into the open SQL tab, and the chevron opens the table. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
 | `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. |
 | `panel-toggles.tsx`, `pane-splitter.tsx` | Collapsible panels with keyboard shortcuts; draggable, remembered pane sizes. |
 | `use-autosave.ts` | The autosave engine for notes and SQL tabs. |

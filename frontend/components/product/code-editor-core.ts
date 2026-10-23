@@ -17,6 +17,8 @@ import {
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
+import { placeInsertion } from "./code-insertion";
+
 /**
  * SQL highlighting. Colours are `var()` references into `styles/tokens.css`,
  * never literals, so the palette lives in one place.
@@ -210,6 +212,22 @@ export function swapDocument(view: EditorView, next: EditorState): EditorState {
 /** Replaces the showing document's text with a recovered draft. */
 export function setDocumentText(view: EditorView, text: string): void {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
+/**
+ * Inserts text into the showing document as one edit (undoable, and reported
+ * like typing), puts the caret after it and gives the editor the focus.
+ */
+export function insertAtCursor(view: EditorView, text: string): void {
+  const caret = view.state.selection.main.head;
+  const { at, insert } = placeInsertion(view.state.doc.lineAt(caret), caret, text);
+  view.dispatch({
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  });
+  view.focus();
 }
 
 /**

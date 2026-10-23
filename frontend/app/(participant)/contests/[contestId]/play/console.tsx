@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
 import { CodeEditor, type CodeEditorHandle, type EditorShortcut } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
@@ -35,6 +35,7 @@ export function ConsoleEditor({
   onResult,
   actions,
   shortcuts,
+  ref,
 }: {
   /** Whose console this is; each tab's draft is keyed by it. */
   accountId: string | null;
@@ -54,6 +55,7 @@ export function ConsoleEditor({
    * flight: `useActionState`'s `state` changes only when the action settles.
    */
   onResult: (state: ConsoleState, source?: RunSource) => void;
+  ref?: React.Ref<ConsoleHandle>;
 }) {
   const t = dict.participant.console;
   const te = dict.participant.play.workspace.editor;
@@ -109,6 +111,10 @@ export function ConsoleEditor({
     },
     onDrop: (id) => editorRef.current?.dropDocument(id),
   });
+
+  // The editor always shows the open tab, so text inserted into it lands
+  // there and reaches the field a run sends through `onChange`.
+  useImperativeHandle(ref, () => ({ insert: (text) => editorRef.current?.insertAtCursor(text) }), []);
 
   // Keeps the field a run sends in step with the open tab. A no-op while it
   // already holds that tab, where its value may be one the browser restored.
@@ -240,6 +246,12 @@ export function ConsoleEditor({
     </form>
   );
 }
+
+/** What the workspace may do to the editor from outside it. */
+export type ConsoleHandle = {
+  /** Writes text into the open SQL tab at the caret, as an edit the participant could have typed. */
+  insert: (text: string) => void;
+};
 
 /** The tab a completed run was started from, for the result's heading. */
 export type RunSource = { tabTitle: string };

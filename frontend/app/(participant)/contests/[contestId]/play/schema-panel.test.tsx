@@ -28,15 +28,27 @@ function schema(overrides: Partial<GameSchema> = {}): GameSchema {
   };
 }
 
-function panel(value: GameSchema = schema()) {
-  return render(<SchemaPanel schema={value} dict={en} />);
+const t = en.participant.play.schema;
+
+function panel(value: GameSchema = schema(), onQueryTable = vi.fn()) {
+  return render(<SchemaPanel schema={value} onQueryTable={onQueryTable} dict={en} />);
+}
+
+/** The button on a table's name, which writes a query on it. */
+function nameButton(table: string) {
+  return screen.getByRole("button", { name: t.query.replace("{table}", table) });
+}
+
+/** The chevron beside it, which opens and closes the table. */
+function chevron(table: string, open = true) {
+  return screen.getByRole("button", { name: (open ? t.collapse : t.expand).replace("{table}", table) });
 }
 
 describe("the schema panel", () => {
   test("shows the tables, their columns and the type of each", () => {
     panel();
 
-    expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
+    expect(nameButton("guests")).toHaveTextContent("guests");
     expect(screen.getByText("full_name")).toBeInTheDocument();
     expect(screen.getByText("text")).toBeInTheDocument();
   });
@@ -47,7 +59,7 @@ describe("the schema panel", () => {
 
     expect(screen.getByText("fk rooms")).toBeInTheDocument();
     // And counted on the table row, as the design draws it.
-    expect(within(screen.getByRole("button", { name: /guests/ })).getByText("fk 1")).toBeInTheDocument();
+    expect(within(nameButton("guests")).getByText("fk 1")).toBeInTheDocument();
   });
 
   // At the design's 212px pane the row does not always fit. The name is what
@@ -81,19 +93,62 @@ describe("the schema panel", () => {
     expect(scroller!.className).toMatch(/(^|\s)relative(\s|$)/);
   });
 
-  test("a table can be collapsed and opened again", async () => {
+  test("a table is collapsed and opened again by its chevron", async () => {
     const user = userEvent.setup();
     panel();
 
-    const guests = screen.getByRole("button", { name: /guests/ });
+    const guests = chevron("guests");
     expect(guests).toHaveAttribute("aria-expanded", "true");
 
     await user.click(guests);
     expect(guests).toHaveAttribute("aria-expanded", "false");
+    expect(guests).toHaveAccessibleName(t.expand.replace("{table}", "guests"));
     expect(screen.queryByText("full_name")).not.toBeInTheDocument();
 
     await user.click(guests);
     expect(screen.getByText("full_name")).toBeInTheDocument();
+  });
+
+  test("the chevron answers Enter and Space", async () => {
+    const user = userEvent.setup();
+    panel();
+
+    chevron("guests").focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText("full_name")).not.toBeInTheDocument();
+
+    await user.keyboard(" ");
+    expect(screen.getByText("full_name")).toBeInTheDocument();
+  });
+
+  test("a click on a table's name hands it over for a query, and opens or closes nothing", async () => {
+    const user = userEvent.setup();
+    const onQueryTable = vi.fn();
+    panel(schema(), onQueryTable);
+
+    await user.click(nameButton("rooms"));
+
+    expect(onQueryTable).toHaveBeenCalledWith("rooms");
+    expect(chevron("rooms")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("Enter and Space on a table's name hand it over too", async () => {
+    const user = userEvent.setup();
+    const onQueryTable = vi.fn();
+    panel(schema(), onQueryTable);
+
+    nameButton("guests").focus();
+    await user.keyboard("{Enter}");
+    await user.keyboard(" ");
+
+    expect(onQueryTable).toHaveBeenCalledTimes(2);
+    expect(onQueryTable).toHaveBeenNthCalledWith(2, "guests");
+  });
+
+  test("the name says what a click does, for a pointer as well as a screen reader", () => {
+    panel();
+
+    expect(nameButton("guests")).toHaveAttribute("title", t.query.replace("{table}", "guests"));
   });
 
   test("searching narrows to the matching columns", async () => {
@@ -105,7 +160,7 @@ describe("the schema panel", () => {
     expect(screen.getByText("full_name")).toBeInTheDocument();
     // `rooms` matched nothing and is gone, as is the unmatched `id` of
     // `guests`.
-    expect(screen.queryByRole("button", { name: /rooms/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.query.replace("{table}", "rooms") })).not.toBeInTheDocument();
     expect(screen.queryByText("room_id")).not.toBeInTheDocument();
   });
 
@@ -114,8 +169,7 @@ describe("the schema panel", () => {
     const user = userEvent.setup();
     panel();
 
-    const guests = screen.getByRole("button", { name: /guests/ });
-    await user.click(guests);
+    await user.click(chevron("guests"));
     expect(screen.queryByText("full_name")).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText(en.participant.play.schema.searchLabel), "full");
@@ -165,14 +219,14 @@ describe("the schema panel", () => {
     const user = userEvent.setup();
     const onReveal = vi.fn();
     const { rerender } = render(
-      <SchemaPanel schema={schema()} hidden onReveal={onReveal} dict={en} />,
+      <SchemaPanel schema={schema()} hidden onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />,
     );
 
     document.body.focus();
     await user.keyboard("{Meta>}k{/Meta}");
     expect(onReveal).toHaveBeenCalledTimes(1);
 
-    rerender(<SchemaPanel schema={schema()} hidden={false} onReveal={onReveal} dict={en} />);
+    rerender(<SchemaPanel schema={schema()} hidden={false} onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />);
 
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });
@@ -193,7 +247,7 @@ describe("the schema panel", () => {
     };
     panel(many);
 
-    expect(screen.getByRole("button", { name: /t0/ })).toHaveAttribute("aria-expanded", "false");
+    expect(chevron("t0", false)).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("c0")).not.toBeInTheDocument();
   });
 
