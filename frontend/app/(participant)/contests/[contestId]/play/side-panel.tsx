@@ -42,7 +42,8 @@ function printStory(contestId: string) {
 
 /**
  * The panel beside the console: story, questions, notes and leaderboard as
- * tabs. Every tab stays mounted while hidden, so switching keeps an
+ * tabs, with the organiser's table descriptions after the story when there
+ * are any. Every tab stays mounted while hidden, so switching keeps an
  * unfinished answer, a scroll position and a pending notes save.
  *
  * Once there is a story, its tab offers two exports:
@@ -57,6 +58,7 @@ export function SidePanel({
   storyBody,
   storyCover,
   storyUnavailable,
+  schemaNotes = null,
   accountId,
   contestId,
   questionEntries,
@@ -70,6 +72,11 @@ export function SidePanel({
   /** The picture above the story, rendered on the server (`story-cover.tsx`). */
   storyCover: React.ReactNode;
   storyUnavailable: string | null;
+  /**
+   * The table descriptions, rendered on the server; null when there are none
+   * in this language or the default, and then there is no Tables tab.
+   */
+  schemaNotes?: React.ReactNode;
   /** Whose screen this is; the notes draft is keyed by it. */
   accountId: string | null;
   contestId: string;
@@ -95,12 +102,15 @@ export function SidePanel({
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="h-full min-h-0">
-      {/* The four labels can be wider than the panel at its narrower widths.
+      {/* The labels can be wider than the panel at its narrower widths.
           `overflow-x-auto` keeps the overflow inside the strip, and `min-w-0`
           lifts the flex item's automatic min-content floor. */}
       <div ref={tabListWrapRef} className="min-w-0">
         <TabsList className="overflow-x-auto">
           <TabsTrigger value="story" className="px-2">{t.story}</TabsTrigger>
+          {schemaNotes !== null ? (
+            <TabsTrigger value="tables" className="px-2">{t.tables}</TabsTrigger>
+          ) : null}
           <TabsTrigger value="questions" className="px-2">{t.questions}</TabsTrigger>
           <TabsTrigger value="notes" className="px-2">{t.notes}</TabsTrigger>
           <TabsTrigger value="leaderboard" className="px-2">{dict.leaderboard.tab}</TabsTrigger>
@@ -142,6 +152,11 @@ export function SidePanel({
           </>
         )}
       </TabsContent>
+      {schemaNotes !== null ? (
+        <TabsContent value="tables" fill={false} className="relative overflow-y-auto p-4">
+          {schemaNotes}
+        </TabsContent>
+      ) : null}
       <TabsContent value="questions" fill={false} className="relative overflow-y-auto p-4">
         <QuestionsPanel
           contestId={contestId}

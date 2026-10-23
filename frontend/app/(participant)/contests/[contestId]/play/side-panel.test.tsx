@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { StoryText } from "@/components/product/story-text";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { fetchStandings } from "./requests";
@@ -12,13 +13,14 @@ vi.mock("./requests", async (importOriginal) => ({
   fetchStandings: vi.fn(),
 }));
 
-function show() {
+function show(schemaNotes: React.ReactNode = null) {
   return render(
     <SidePanel
       accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
       storyCover={null}
       storyUnavailable={null}
+      schemaNotes={schemaNotes}
       contestId="c1"
       questionEntries={[]}
       initialNotes={{ body: "the butler did it", updatedAt: "2026-09-17T10:00:00Z" }}
@@ -325,6 +327,103 @@ test("scrolls the newly selected tab into view, since the strip may be scrolled 
   } finally {
     HTMLElement.prototype.scrollIntoView = original;
   }
+});
+
+describe("the side panel's Tables tab", () => {
+  const tabs = en.participant.play.workspace.tabs;
+  const tablesTab = () => screen.queryByRole("tab", { name: tabs.tables });
+
+  test("is not offered when the contest has no table descriptions in this language", () => {
+    show(null);
+
+    expect(tablesTab()).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      tabs.story,
+      tabs.questions,
+      tabs.notes,
+      en.leaderboard.tab,
+    ]);
+  });
+
+  test("is offered right after the story once they are written, with the notes still right after the questions", () => {
+    show(<p>The suspects table.</p>);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      tabs.story,
+      tabs.tables,
+      tabs.questions,
+      tabs.notes,
+      en.leaderboard.tab,
+    ]);
+  });
+
+  test("keeps the descriptions mounted behind the default tab, and shows them once chosen", async () => {
+    show(<p>The suspects table.</p>);
+
+    expect(tablesTab()).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText("The suspects table.")).not.toBeVisible();
+
+    await userEvent.click(tablesTab()!);
+
+    expect(tablesTab()).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("The suspects table.")).toBeVisible();
+    expect(screen.getByRole("tabpanel", { name: tabs.tables })).toContainElement(screen.getByText("The suspects table."));
+  });
+
+  test("joins the roving focus: arrows reach it, Enter selects it, and the ends still wrap", async () => {
+    show(<p>The suspects table.</p>);
+    const user = userEvent.setup();
+    const tab = (name: string) => screen.getByRole("tab", { name });
+
+    // Only the selected tab is in the tab order.
+    expect(tablesTab()).toHaveAttribute("tabindex", "-1");
+    tab(tabs.questions).focus();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(tablesTab()).toHaveFocus();
+    expect(tab(tabs.questions)).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{Enter}");
+    expect(tablesTab()).toHaveAttribute("aria-selected", "true");
+    expect(tablesTab()).toHaveAttribute("tabindex", "0");
+    expect(screen.getByText("The suspects table.")).toBeVisible();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(tab(tabs.story)).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    expect(tab(en.leaderboard.tab)).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(tab(tabs.story)).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(tablesTab()).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(tab(en.leaderboard.tab)).toHaveFocus();
+  });
+
+  test("scrolls a long document inside its own panel and loses none of it", async () => {
+    const sections = Array.from(
+      { length: 120 },
+      (_, i) => `## table_${i}\n\n| column | meaning |\n| --- | --- |\n| id | row ${i} |\n`,
+    ).join("\n");
+    show(<StoryText markdown={sections} />);
+
+    await userEvent.click(tablesTab()!);
+
+    const panel = screen.getByRole("tabpanel", { name: tabs.tables });
+    expect(panel.className).toMatch(/(^|\s)overflow-y-auto(\s|$)/);
+    expect(panel.querySelectorAll("h2")).toHaveLength(120);
+    expect(screen.getByRole("heading", { name: "table_119" })).toBeVisible();
+  });
+
+  test("renders raw HTML in the descriptions as text", async () => {
+    show(<StoryText markdown={'<img src=x onerror="alert(1)"> and <script>alert(2)</script>'} />);
+
+    await userEvent.click(tablesTab()!);
+
+    const panel = screen.getByRole("tabpanel", { name: tabs.tables });
+    expect(panel.querySelector("img, script")).toBeNull();
+    expect(panel.textContent).toContain("<script>");
+  });
 });
 
 describe("the side panel's table", () => {

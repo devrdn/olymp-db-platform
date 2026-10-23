@@ -113,6 +113,7 @@ function show(
   overrides: {
     storyMarkdown?: string | null;
     storyUnavailable?: string | null;
+    schemaNotes?: React.ReactNode;
     workspace?: typeof A_WORKSPACE | null;
     sqlMode?: "read_only" | "read_write";
     resultDownload?: boolean;
@@ -134,6 +135,7 @@ function show(
       }
       printView={printCopy("storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes.")}
       storyUnavailable={overrides.storyUnavailable ?? null}
+      schemaNotes={overrides.schemaNotes ?? null}
       questionEntries={[]}
       schema={schema}
       sqlMode={overrides.sqlMode ?? "read_only"}
@@ -214,6 +216,16 @@ describe("the play workspace", () => {
     expect(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
+  });
+
+  test("offers the table descriptions on their own tab only when the page has them", () => {
+    const { unmount } = show();
+    expect(screen.queryByRole("tab", { name: en.participant.play.workspace.tabs.tables })).not.toBeInTheDocument();
+    unmount();
+
+    show(null, { schemaNotes: <p>The suspects table.</p> });
+    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.tables })).toBeInTheDocument();
+    expect(screen.getByText("The suspects table.")).toBeInTheDocument();
   });
 
   test("a half-typed query survives switching every tab and back", async () => {

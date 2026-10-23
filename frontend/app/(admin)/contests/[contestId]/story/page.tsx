@@ -1,23 +1,26 @@
 import { Tag } from "@/components/ui/tag";
-import { storySchema } from "@/lib/api/content";
+import { schemaNotesSchema, storySchema } from "@/lib/api/content";
 import { contentEditable, defaultLanguage } from "@/lib/api/contests";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
+import { SchemaNotesEditor } from "./schema-notes-editor";
 import { StoryEditor } from "./story-editor";
 
 /**
- * The story. A 404 means nothing is written yet, so the editor opens empty
- * rather than showing a not-found page.
+ * The story, and the table descriptions below it. A 404 for the story means
+ * nothing is written yet, so the editor opens empty rather than showing a
+ * not-found page; the descriptions answer an empty set instead.
  */
 export default async function StoryPage(props: PageProps<"/contests/[contestId]/story">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, story] = await Promise.all([
+  const [contest, story, schemaNotes] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/story", (payload) => storySchema.parse(payload), {
       notFoundIsEmpty: true,
     }),
+    loadContestResource(contestId, "/schema-notes", (payload) => schemaNotesSchema.parse(payload)),
   ]);
 
   const t = dict.workspace.story;
@@ -38,14 +41,24 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
         /* No languages yet; they are chosen in Settings. */
         <p className="max-w-body text-body text-ink-3">{t.noLanguages}</p>
       ) : (
-        <StoryEditor
-          contestId={contest.id}
-          languages={languages}
-          defaultLanguage={defaultLanguage(contest)}
-          translations={story?.translations ?? {}}
-          editable={editable}
-          dict={dict}
-        />
+        <>
+          <StoryEditor
+            contestId={contest.id}
+            languages={languages}
+            defaultLanguage={defaultLanguage(contest)}
+            translations={story?.translations ?? {}}
+            editable={editable}
+            dict={dict}
+          />
+          <SchemaNotesEditor
+            contestId={contest.id}
+            languages={languages}
+            defaultLanguage={defaultLanguage(contest)}
+            translations={schemaNotes?.translations ?? {}}
+            editable={editable}
+            dict={dict}
+          />
+        </>
       )}
     </div>
   );
