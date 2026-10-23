@@ -15,7 +15,7 @@ export type QuestionBody = {
   penalty_pct: number | null;
   is_visible: boolean;
   choice_ids: string[];
-  texts: Record<string, { body_md: string; choices?: Record<string, string> }>;
+  texts: Record<string, { title?: string; body_md: string; choices?: Record<string, string> }>;
   answers: { match_kind: MatchKind; value: string }[];
 };
 
@@ -69,7 +69,15 @@ export function questionFrom(form: FormData): Parsed {
     if (body) texts[key.slice("body.".length)] = { body_md: body };
   }
 
-  // Labels only for languages that have a body.
+  // Titles and labels only for languages that have a body. An empty title is
+  // left out, which the API reads as none.
+  for (const [key, value] of form.entries()) {
+    if (!key.startsWith("title.")) continue;
+    const lang = key.slice("title.".length);
+    const title = String(value).trim();
+    if (title && texts[lang]) texts[lang].title = title;
+  }
+
   for (const [key, value] of form.entries()) {
     if (!key.startsWith("choice.")) continue;
     const [, lang, choiceId] = key.split(".");

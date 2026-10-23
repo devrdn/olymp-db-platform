@@ -26,6 +26,8 @@ export const playQuestionSchema = z
     kind: z.enum(QUESTION_KINDS),
     points: z.number(),
     choice_ids: z.array(z.string()),
+    /** Empty, or absent, when the question has no title in this language. */
+    title: z.string().optional(),
     body_md: z.string(),
     choices: z.record(z.string(), z.string()).optional(),
     attempts_remaining: z.number().nullish(),
@@ -47,6 +49,7 @@ export const playQuestionSchema = z
     kind: raw.kind,
     points: raw.points,
     choiceIds: raw.choice_ids,
+    title: raw.title ?? "",
     bodyMd: raw.body_md,
     choices: raw.choices ?? {},
     attemptsRemaining: raw.attempts_remaining ?? undefined,

@@ -297,12 +297,15 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 // It has no ordinal either: items arrive in display order, and a number dense
 // across hidden questions would reveal how many are hidden and where.
 type participantQuestionResponse struct {
-	ID        string            `json:"id"`
-	Kind      string            `json:"kind"`
-	Points    int               `json:"points"`
-	ChoiceIDs []string          `json:"choice_ids"`
-	BodyMD    string            `json:"body_md"`
-	Choices   map[string]string `json:"choices,omitempty"`
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Points    int      `json:"points"`
+	ChoiceIDs []string `json:"choice_ids"`
+	// Title is empty when the question has none in this language; nothing is
+	// derived from the body in its place.
+	Title   string            `json:"title"`
+	BodyMD  string            `json:"body_md"`
+	Choices map[string]string `json:"choices,omitempty"`
 	// AttemptsRemaining is omitted for a question with no cap: absent, not
 	// zero, because zero would read as "no attempts left".
 	AttemptsRemaining *int `json:"attempts_remaining,omitempty"`
@@ -324,6 +327,7 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 		Kind:              q.Kind,
 		Points:            q.Points,
 		ChoiceIDs:         q.ChoiceIDs,
+		Title:             q.Title,
 		BodyMD:            q.BodyMD,
 		Choices:           q.Choices,
 		AttemptsRemaining: q.AttemptsRemaining,

@@ -31,6 +31,7 @@ function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
     kind: "text",
     points: 10,
     choiceIds: [],
+    title: "",
     bodyMd: "Who was in the greenhouse?",
     choices: {},
     attemptsRemaining: undefined,
@@ -531,4 +532,176 @@ describe("the questions panel, ICPC scoring", () => {
 test("a paste into an answer is watched as one into the answer", () => {
   render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
   expect(pasteTargetOf(screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }))).toBe("answer");
+});
+
+// A titled question reads as its title, with the wording folded under it
+// (open in place, or larger in a dialog); the answer field never folds.
+describe("a question with a title", () => {
+  const t = en.participant.play.questions;
+  const titled = (overrides: Partial<PlayQuestion> = {}, index = 1) =>
+    entry({ title: "The greenhouse", ...overrides }, index);
+
+  test("shows the title and folds the wording behind Details", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+
+    expect(screen.getByText("The greenhouse")).toBeVisible();
+    const details = screen.getByRole("button", { name: t.details });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    const region = document.getElementById(details.getAttribute("aria-controls")!);
+    expect(region).not.toBeNull();
+    expect(region).not.toBeVisible();
+    expect(screen.getByText("Who was in the greenhouse?")).not.toBeVisible();
+  });
+
+  test("keeps the answer field reachable while the wording is folded", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+
+    expect(screen.getByRole("textbox", { name: t.answerLabel })).toBeEnabled();
+    expect(screen.getByRole("button", { name: t.submit })).toBeEnabled();
+  });
+
+  test("opens the wording in place and folds it again", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+    const details = screen.getByRole("button", { name: t.details });
+
+    await user.click(details);
+
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Who was in the greenhouse?")).toBeVisible();
+
+    await user.click(details);
+
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Who was in the greenhouse?")).not.toBeVisible();
+  });
+
+  test("opens from the keyboard with Enter and with Space", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+    const details = screen.getByRole("button", { name: t.details });
+
+    await user.tab();
+    expect(details).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard(" ");
+    expect(details).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("names which question each control belongs to", () => {
+    render(
+      <QuestionsPanel
+        locale="en"
+        contestId="c1"
+        items={[titled(), titled({ id: "q2", title: "The weapon" }, 2)]}
+        dict={en}
+      />,
+    );
+
+    const [first, second] = screen.getAllByRole("button", { name: t.details });
+    expect(first).toHaveAccessibleDescription("The greenhouse");
+    expect(second).toHaveAccessibleDescription("The weapon");
+    expect(screen.getAllByRole("button", { name: t.openLarger })[1]).toHaveAccessibleDescription("The weapon");
+  });
+
+  test("shows the wording larger in a dialog named by the title, and returns focus on close", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+    const larger = screen.getByRole("button", { name: t.openLarger });
+
+    await user.click(larger);
+
+    const dialog = await screen.findByRole("dialog", { name: "The greenhouse" });
+    expect(within(dialog).getByText("Who was in the greenhouse?")).toBeVisible();
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(larger).toHaveFocus());
+  });
+
+  test("keeps focus inside the dialog while it is open", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+
+    await user.click(screen.getByRole("button", { name: t.openLarger }));
+    const dialog = await screen.findByRole("dialog", { name: "The greenhouse" });
+
+    // Tabbing off either end lands on a focus guard, which sends focus back in.
+    for (const shift of [false, false, false, true, true, true]) {
+      await user.tab({ shift });
+      await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+    }
+  });
+
+  test("closes the dialog from its own close control", async () => {
+    const user = userEvent.setup();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled()]} dict={en} />);
+
+    await user.click(screen.getByRole("button", { name: t.openLarger }));
+    const dialog = await screen.findByRole("dialog", { name: "The greenhouse" });
+    await user.click(within(dialog).getByRole("button", { name: t.closeLarger }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  test("shows a long title whole, never cut short", () => {
+    const long = "Who among the seven guests could have reached the greenhouse ".repeat(3).trim();
+    render(<QuestionsPanel locale="en" contestId="c1" items={[titled({ title: long })]} dict={en} />);
+
+    expect(screen.getByText(long)).toBeVisible();
+    expect(screen.getByRole("button", { name: t.details })).toHaveAccessibleDescription(long);
+  });
+
+  test("keeps the title and the folded wording on a closed question", () => {
+    render(
+      <QuestionsPanel
+        locale="en"
+        contestId="c1"
+        items={[titled({ closed: true, correct: true, pointsAwarded: 10, attemptsRemaining: 0 })]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText("The greenhouse")).toBeVisible();
+    expect(screen.getByRole("button", { name: t.details })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText(t.closed)).toBeInTheDocument();
+  });
+
+  test("keeps a locked question's title readable and its field disabled", () => {
+    render(
+      <QuestionsPanel
+        locale="en"
+        contestId="c1"
+        items={[titled({ id: "q0", title: "First" }), titled({ canAnswer: false }, 2)]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText("The greenhouse")).toBeVisible();
+    expect(screen.getAllByRole("textbox")[1]).toBeDisabled();
+    expect(screen.getByText(t.locked)).toBeInTheDocument();
+  });
+});
+
+describe("a question without a title", () => {
+  const t = en.participant.play.questions;
+
+  test("shows its wording as before, unfolded and with nothing to open", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
+
+    expect(screen.getByText("Who was in the greenhouse?")).toBeVisible();
+    expect(screen.queryByRole("button", { name: t.details })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.openLarger })).not.toBeInTheDocument();
+  });
+
+  test("treats a title of spaces as none", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ title: "   " })]} dict={en} />);
+
+    expect(screen.getByText("Who was in the greenhouse?")).toBeVisible();
+    expect(screen.queryByRole("button", { name: t.details })).not.toBeInTheDocument();
+  });
 });

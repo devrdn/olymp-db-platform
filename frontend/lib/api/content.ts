@@ -36,10 +36,11 @@ export type Story = z.infer<typeof storySchema>;
  */
 export const questionTextSchema = z
   .object({
+    title: z.string().optional(),
     body_md: z.string(),
     choices: z.record(z.string(), z.string()).optional(),
   })
-  .transform((raw) => ({ bodyMd: raw.body_md, choices: raw.choices ?? {} }));
+  .transform((raw) => ({ title: raw.title ?? "", bodyMd: raw.body_md, choices: raw.choices ?? {} }));
 
 export type QuestionText = z.infer<typeof questionTextSchema>;
 
