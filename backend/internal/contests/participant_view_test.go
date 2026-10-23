@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -362,67 +363,155 @@ func TestQuestionsCanAnswerMatchesClosedOutsideSequentialProgression(t *testing.
 	}
 }
 
-// §6.1.1: only the lowest unclosed question in display order is answerable.
-func TestQuestionsMarksOnlyTheSequentialFrontierAnswerable(t *testing.T) {
-	reader, _, questions, _ := newReader()
-	contestID := uuid.New()
-	registrationID := uuid.New()
-
-	first := questions.Put(contests.Question{
-		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
-		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
-	})
-	second := questions.Put(contests.Question{
-		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
-		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
-	})
-
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
-	if err != nil {
-		t.Fatalf("Questions() = %v", err)
+// sequentialQuestions stages three questions of a sequential contest, each with
+// every kind of content a locked entry must not carry: a title, a body, choice
+// labels and points.
+func sequentialQuestions(questions *conteststest.Questions, contestID uuid.UUID, maxAttempts int) []contests.Question {
+	staged := make([]contests.Question, 0, 3)
+	for i, word := range []string{"culprit", "weapon", "room"} {
+		staged = append(staged, questions.Put(contests.Question{
+			ContestID: contestID, Ord: i + 1, Kind: contests.KindChoice, Points: 10 * (i + 1), IsVisible: true,
+			MaxAttempts: &maxAttempts, ChoiceIDs: []string{"a", "b"},
+			Texts: map[string]contests.QuestionText{"en": {
+				Title: "The " + word, BodyMD: "Which " + word + "?",
+				Choices: map[string]string{"a": "First " + word, "b": "Second " + word},
+			}},
+		}))
 	}
-	byID := map[uuid.UUID]contests.ParticipantQuestion{}
-	for _, q := range found {
-		byID[q.ID] = q
-	}
+	return staged
+}
 
-	if !byID[first.ID].CanAnswer {
-		t.Errorf("first question CanAnswer = false, want true (nothing has closed it yet)")
-	}
-	if byID[second.ID].CanAnswer {
-		t.Errorf("second question CanAnswer = true, want false (the first has not closed)")
+// lockedAt is the whole of what a participant learns about a question their
+// sequential contest has not reached (§6.1.1).
+func lockedAt(position int) contests.ParticipantQuestion {
+	return contests.ParticipantQuestion{Position: position, Locked: true}
+}
+
+// expectOpen fails unless got is q's full content at position, answerable or
+// not as canAnswer says.
+func expectOpen(t *testing.T, got contests.ParticipantQuestion, q contests.Question, position int, canAnswer bool) {
+	t.Helper()
+	text := q.Texts["en"]
+	if got.Locked || got.Position != position || got.ID != q.ID || got.Title != text.Title ||
+		got.BodyMD != text.BodyMD || got.Points != q.Points || !reflect.DeepEqual(got.Choices, text.Choices) ||
+		!reflect.DeepEqual(got.ChoiceIDs, q.ChoiceIDs) || got.CanAnswer != canAnswer {
+		t.Errorf("question %d = %+v, want its full content with CanAnswer %v", position, got, canAnswer)
 	}
 }
 
-func TestQuestionsMovesTheSequentialFrontierOnceAQuestionCloses(t *testing.T) {
+// §6.1.1: past the frontier the server withholds everything but the number.
+func TestQuestionsWithholdsEveryQuestionPastTheSequentialFrontier(t *testing.T) {
+	reader, _, questions, _ := newReader()
+	contestID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
+
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", true)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	if len(found) != 3 {
+		t.Fatalf("got %d questions, want 3 (a locked question is listed, by number)", len(found))
+	}
+	expectOpen(t, found[0], staged[0], 1, true)
+	for i, got := range found[1:] {
+		if want := lockedAt(i + 2); !reflect.DeepEqual(got, want) {
+			t.Errorf("question %d = %+v, want %+v and nothing else", i+2, got, want)
+		}
+	}
+	// Belt and braces: the formatted list names nothing past the first.
+	if dump := fmt.Sprintf("%+v", found[1:]); strings.Contains(dump, "weapon") || strings.Contains(dump, "room") {
+		t.Errorf("a locked question's wording reached the list: %s", dump)
+	}
+}
+
+func TestQuestionsOpensTheNextQuestionOnceTheCurrentOneIsAnswered(t *testing.T) {
 	reader, _, questions, submissions := newReader()
 	contestID := uuid.New()
 	registrationID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
 
-	first := questions.Put(contests.Question{
-		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
-		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
-	})
-	second := questions.Put(contests.Question{
-		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
-		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
-	})
-
-	submit(t, submissions, registrationID, first, true, 0)
+	submit(t, submissions, registrationID, staged[0], true, 0)
 
 	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
-	byID := map[uuid.UUID]contests.ParticipantQuestion{}
-	for _, q := range found {
-		byID[q.ID] = q
+	expectOpen(t, found[0], staged[0], 1, false)
+	if !found[0].Closed || !found[0].Correct {
+		t.Errorf("the answered question = %+v, want it closed and correct, shown in full", found[0])
+	}
+	expectOpen(t, found[1], staged[1], 2, true)
+	if !reflect.DeepEqual(found[2], lockedAt(3)) {
+		t.Errorf("question 3 = %+v, want it still locked", found[2])
+	}
+}
+
+func TestQuestionsOpensTheNextQuestionOnceTheCurrentOneRunsOutOfAttempts(t *testing.T) {
+	reader, _, questions, submissions := newReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
+
+	submit(t, submissions, registrationID, staged[0], false, 0)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	expectOpen(t, found[0], staged[0], 1, true)
+	if !reflect.DeepEqual(found[1], lockedAt(2)) {
+		t.Fatalf("question 2 = %+v, want it locked while one attempt on question 1 is left", found[1])
 	}
 
-	if byID[first.ID].CanAnswer {
-		t.Errorf("closed first question CanAnswer = true, want false")
+	submit(t, submissions, registrationID, staged[0], false, 0)
+	found, err = reader.Questions(t.Context(), contestID, registrationID, "en", true)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
 	}
-	if !byID[second.ID].CanAnswer {
-		t.Errorf("second question CanAnswer = false, want true (the first is now closed)")
+	expectOpen(t, found[0], staged[0], 1, false)
+	if !found[0].Closed || found[0].Correct {
+		t.Errorf("the spent question = %+v, want it closed and not correct, shown in full", found[0])
+	}
+	expectOpen(t, found[1], staged[1], 2, true)
+	if !reflect.DeepEqual(found[2], lockedAt(3)) {
+		t.Errorf("question 3 = %+v, want it still locked", found[2])
+	}
+}
+
+// Every closed question is shown in full wherever it stands, even past the
+// frontier, since what the participant answered is already theirs.
+func TestQuestionsShowsAClosedQuestionPastTheFrontierInFull(t *testing.T) {
+	reader, _, questions, submissions := newReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
+
+	submit(t, submissions, registrationID, staged[2], true, 0)
+
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	expectOpen(t, found[0], staged[0], 1, true)
+	if !reflect.DeepEqual(found[1], lockedAt(2)) {
+		t.Errorf("question 2 = %+v, want it locked", found[1])
+	}
+	expectOpen(t, found[2], staged[2], 3, false)
+}
+
+// Free progression locks nothing: every question is listed in full.
+func TestQuestionsLocksNothingUnderFreeProgression(t *testing.T) {
+	reader, _, questions, _ := newReader()
+	contestID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
+
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	if len(found) != len(staged) {
+		t.Fatalf("got %d questions, want %d", len(found), len(staged))
+	}
+	for i, q := range staged {
+		expectOpen(t, found[i], q, i+1, true)
 	}
 }
