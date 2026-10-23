@@ -488,8 +488,14 @@ type Repository interface {
 	ByID(ctx context.Context, id uuid.UUID) (Contest, error)
 	// List returns a page of contests and the total matching the filter.
 	List(ctx context.Context, f Filter) ([]Contest, int, error)
-	// Update saves the contest's own fields; status is not among them.
+	// Update saves the contest's own fields; status and the prize places are
+	// not among them.
 	Update(ctx context.Context, c Contest) error
+	// SetPrizePlaces writes the prize counts alone, leaving updated_at as it
+	// was, and returns the counts it replaced, read under the row's lock. It
+	// reports ErrNotEditable for an archived contest, decided in the same
+	// statement, and ErrNotFound for a missing one.
+	SetPrizePlaces(ctx context.Context, id uuid.UUID, places PrizePlaces) (PrizePlaces, error)
 	// SetStatus moves the contest from status from to status to, and reports
 	// ErrStatusChanged if a concurrent request moved it since the caller read
 	// it. A move to finished finishes every active registration of the
@@ -532,8 +538,5 @@ func (c Contest) auditFields() map[string]any {
 		"leaderboard_names":        c.LeaderboardNames,
 		"icpc_penalty_min":         c.ICPCPenaltyMin,
 		"result_download":          c.ResultDownload,
-		"prize_first":              c.PrizePlaces.First,
-		"prize_second":             c.PrizePlaces.Second,
-		"prize_third":              c.PrizePlaces.Third,
 	}
 }
