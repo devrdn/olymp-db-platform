@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { answerable, questionSchema, storySchema, untranslated } from "./content";
+import { answerable, questionSchema, schemaNotesSchema, storySchema, untranslated } from "./content";
 
 const question = {
   id: "5f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
@@ -108,5 +108,17 @@ describe("storySchema", () => {
 
     expect(parsed.translations.en).toContain("greenhouse");
     expect(parsed.updatedAt).toBe("2026-10-02T08:00:00Z");
+  });
+});
+
+describe("schemaNotesSchema", () => {
+  test("parses the table descriptions as one body per language", () => {
+    expect(
+      schemaNotesSchema.parse({ translations: { ro: "Tabelul `suspects`." }, updated_at: "2026-10-02T08:00:00Z" }),
+    ).toEqual({ translations: { ro: "Tabelul `suspects`." }, updatedAt: "2026-10-02T08:00:00Z" });
+  });
+
+  test("parses a contest with none, which has no time of writing", () => {
+    expect(schemaNotesSchema.parse({ translations: {} })).toEqual({ translations: {}, updatedAt: undefined });
   });
 });

@@ -9,10 +9,19 @@ import { QUESTION_KINDS } from "./content-terms";
  * docs/ARCHITECTURE.md §6.1 cannot be confused with it.
  */
 
-/** The story, negotiated to one language. */
+/**
+ * The story, negotiated to one language, with the table descriptions the
+ * server resolved beside it (in this language, else the contest's default).
+ * `schemaNotesMd` is null when there are none to read, which is what keeps
+ * the Tables tab off the screen; blank text counts as none.
+ */
 export const playStorySchema = z
-  .object({ lang: z.string(), body_md: z.string() })
-  .transform((raw) => ({ lang: raw.lang, bodyMd: raw.body_md }));
+  .object({ lang: z.string(), body_md: z.string(), schema_notes_md: z.string().optional() })
+  .transform((raw) => ({
+    lang: raw.lang,
+    bodyMd: raw.body_md,
+    schemaNotesMd: raw.schema_notes_md?.trim() ? raw.schema_notes_md : null,
+  }));
 
 export type PlayStory = z.infer<typeof playStorySchema>;
 
