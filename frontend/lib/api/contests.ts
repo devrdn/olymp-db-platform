@@ -73,6 +73,11 @@ export const contestSummarySchema = z
      * `read_write`. An older server omits it, read as `read_only`.
      */
     sql_mode: z.enum(SQL_MODES).default("read_only"),
+    /**
+     * Whether the console offers its result as a CSV file. An older server
+     * omits it; it offered the download to everybody.
+     */
+    result_download: z.boolean().default(true),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -91,6 +96,7 @@ export const contestSummarySchema = z
     coverHash: raw.cover_hash,
     coverAttribution: raw.cover_attribution,
     sqlMode: raw.sql_mode,
+    resultDownload: raw.result_download,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;
@@ -143,6 +149,8 @@ export const contestSchema = z
     // Minutes per wrong attempt on a question later solved. Always present,
     // but meaningful only while `scoring` is `icpc`.
     icpc_penalty_min: z.number(),
+    // Whether the participant's console offers its result as a CSV file.
+    result_download: z.boolean(),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),
@@ -170,6 +178,7 @@ export const contestSchema = z
     progression: raw.progression,
     scoring: raw.scoring,
     icpcPenaltyMin: raw.icpc_penalty_min,
+    resultDownload: raw.result_download,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,
     startsAt: raw.starts_at,

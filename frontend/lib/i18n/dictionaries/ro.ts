@@ -1028,6 +1028,8 @@ const ro = {
         networkHint: "Intervale CIDR, separate prin virgulă. Gol înseamnă oriunde.",
         rate: "Interogări pe minut",
         rateHint: "Interogări SQL pe care fiecare participant le poate rula pe minut. 0 înseamnă limita instalării; o valoare peste această limită nu are efect.",
+        resultDownload: "Participanții pot descărca un rezultat în CSV",
+        resultDownloadHint: "Activat implicit. O modificare ajunge la pagina deja deschisă a unui participant la următoarea reîncărcare. Dezactivarea doar ascunde butonul „Descărcați CSV”: rândurile pot fi în continuare selectate și copiate din tabel.",
       },
       languages: {
         heading: "Limbi",
