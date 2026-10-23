@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
@@ -271,5 +271,82 @@ describe("a long roster", () => {
     expect(screen.getByRole("link", { name: /Person 0000/ })).toHaveFocus();
     await userEvent.tab();
     expect(screen.getByRole("link", { name: /Person 0001/ })).toHaveFocus();
+  });
+
+  /** PageDown or the wheel scrolls the box under a focused link; focus must not fall to the page. */
+  test("keeps the focused row, and its focus, when the box scrolls far past it", () => {
+    renderTable({ rows: long });
+    const box = scroller();
+    const link = screen.getByRole("link", { name: /Person 0003/ });
+    act(() => link.focus());
+
+    scrollTo(box, 1000 * ROW_PX);
+
+    expect(screen.getByRole("link", { name: /Person 0003/ })).toHaveFocus();
+    expect(screen.getByRole("row", { name: /Person 0003/ })).toHaveAttribute("aria-rowindex", "5");
+    expect(screen.getByRole("row", { name: /Person 1000/ })).toBeInTheDocument();
+    // The spacers around the held row still add up to the whole list.
+    const spacers = [...screen.getByRole("table").querySelectorAll<HTMLElement>("tbody > tr[data-spacer]")];
+    const spaced = spacers.reduce((sum, row) => sum + parseFloat(row.style.height || "0"), 0) / ROSTER_ROW_REM;
+    expect(Math.round(spaced) + bodyRows().length).toBe(TOTAL);
+  });
+
+  test("moves Tab from a focused row scrolled out of view to the row truly after it", async () => {
+    renderTable({ rows: long });
+    const box = scroller();
+    act(() => screen.getByRole("link", { name: /Person 0003/ }).focus());
+    scrollTo(box, 1000 * ROW_PX);
+
+    await userEvent.tab();
+    expect(screen.getByRole("link", { name: /Person 0004/ })).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(screen.getByRole("link", { name: /Person 0003/ })).toHaveFocus();
+  });
+
+  /**
+   * jsdom keeps focus on a node that is moved; Chromium blurs it, as a removal
+   * and an insertion. This makes jsdom do the same for the rest of a test.
+   */
+  function blurOnMove() {
+    for (const method of ["insertBefore", "appendChild"] as const) {
+      const original = Node.prototype[method] as (this: Node, ...args: Node[]) => Node;
+      vi.spyOn(Node.prototype, method).mockImplementation(function (this: Node, ...args: Node[]) {
+        const [node] = args;
+        const active = document.activeElement;
+        if (node.isConnected && active instanceof HTMLElement && node.contains(active)) active.blur();
+        return original.apply(this, args);
+      });
+    }
+  }
+
+  test("keeps the focused row, and its focus, when a poll sorts it out of view", async () => {
+    blurOnMove();
+    const view = renderTable({ rows: long });
+    scroller();
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.monitor.table.columns.queries }));
+    const link = screen.getByRole("link", { name: /Person 0000/ });
+    act(() => link.focus());
+
+    // Their queries drop to nothing: most queries first, they now sort last.
+    const resorted = [{ ...long[0], queries: 0 }, ...long.slice(1)];
+    view.rerender(
+      <ParticipantsTable contestId={CONTEST} rows={resorted} truncated={false} fresh={new Set()} dict={dict} locale="en" />,
+    );
+
+    expect(screen.getByRole("link", { name: /Person 0000/ })).toHaveFocus();
+    expect(screen.getByRole("row", { name: /Person 0000/ })).toHaveAttribute("aria-rowindex", String(TOTAL + 1));
+    expect(bodyNames()[0]).toBe("Person 0001");
+    vi.restoreAllMocks();
+  });
+
+  test("lets a row go once focus has left the table", () => {
+    renderTable({ rows: long });
+    const box = scroller();
+    act(() => screen.getByRole("link", { name: /Person 0003/ }).focus());
+    act(() => screen.getByRole("searchbox", { name: dict.workspace.monitor.table.filters.search }).focus());
+
+    scrollTo(box, 1000 * ROW_PX);
+
+    expect(screen.queryByRole("row", { name: /Person 0003/ })).not.toBeInTheDocument();
   });
 });

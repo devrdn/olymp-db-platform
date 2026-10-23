@@ -13,6 +13,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import type { FeedState } from "./feed-list";
+import { remToPx, rowWindow, UNMEASURED_ROWS } from "./row-window";
 
 type MonitorDict = Dictionary["workspace"]["monitor"];
 
@@ -32,15 +33,6 @@ const GROUPS = Object.keys(KIND_GROUPS) as KindGroup[];
 
 /** Line height in rem. Lines are clipped to two rows, so the virtual window is arithmetic. */
 export const FEED_ROW_REM = 3.5;
-
-/** Lines rendered past each edge, so a fast scroll shows no blank band. */
-const OVERSCAN = 8;
-
-const UNMEASURED_ROWS = 24;
-
-function rowHeightPx(): number {
-  return FEED_ROW_REM * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
-}
 
 /**
  * The contest's live feed, newest at the bottom (SPEC.md §5.1). At the bottom it
@@ -90,11 +82,9 @@ export function LiveFeed({
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    const rowHeight = rowHeightRef.current;
-    const first = Math.max(0, Math.floor(element.scrollTop / rowHeight));
-    const fits = Math.ceil(element.clientHeight / rowHeight);
-    const start = Math.max(0, first - OVERSCAN);
-    const end = Math.min(total, first + fits + OVERSCAN);
+    const visible = rowWindow(element, rowHeightRef.current);
+    const start = visible.start;
+    const end = Math.min(total, visible.end);
     setRange((current) => (current.start === start && current.end === end ? current : { start, end }));
   }, [total]);
 
@@ -120,7 +110,7 @@ export function LiveFeed({
   // Stay at the bottom while following; otherwise keep the line being read in
   // place.
   useLayoutEffect(() => {
-    rowHeightRef.current = rowHeightPx();
+    rowHeightRef.current = remToPx(FEED_ROW_REM);
     const element = scrollRef.current;
     const before = previousItems.current;
     previousItems.current = items;
