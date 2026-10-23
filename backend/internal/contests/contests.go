@@ -165,6 +165,9 @@ type Contest struct {
 	// LeaderboardRevealedAt is when an organiser revealed a frozen table's
 	// final state. Set once, never cleared, and never through Update.
 	LeaderboardRevealedAt *time.Time
+	// ResultDownload offers the participant a CSV file of a query result. A
+	// convenience, not a control: the rows are on their screen either way.
+	ResultDownload bool
 	// Languages has exactly one default.
 	Languages []ContestLanguage
 	// Translations hold the title and description per language code.
@@ -521,5 +524,6 @@ func (c Contest) auditFields() map[string]any {
 		"leaderboard_freeze_min":   c.LeaderboardFreezeMin,
 		"leaderboard_names":        c.LeaderboardNames,
 		"icpc_penalty_min":         c.ICPCPenaltyMin,
+		"result_download":          c.ResultDownload,
 	}
 }

@@ -215,7 +215,8 @@ func (f *Fixture) SeedContest(status string) contests.Contest {
 		Translations: map[string]contests.Translation{
 			"en": {Lang: "en", Title: "The Library Murder"},
 		},
-		CreatedBy: uuid.New(),
+		CreatedBy:      uuid.New(),
+		ResultDownload: true,
 	})
 }
 

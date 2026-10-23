@@ -63,6 +63,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			Timing:           contests.TimingFixed,
 			LeaderboardNames: contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:   20,
+			ResultDownload:   true,
 			CreatedBy:        author,
 		}
 	}
@@ -89,6 +90,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardFreezeMin: &freeze,
 			LeaderboardNames:     contests.LeaderboardNamesFullName,
 			ICPCPenaltyMin:       45,
+			ResultDownload:       false,
 			CreatedBy:            author,
 		}
 	}
@@ -113,6 +115,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardFreezeMin: &freeze,
 			LeaderboardNames:     contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:       5,
+			ResultDownload:       true,
 			CreatedBy:            author,
 		}
 	}
@@ -276,6 +279,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			show(got.LeaderboardFreezeMin), show(want.LeaderboardFreezeMin))
 		check("LeaderboardNames", got.LeaderboardNames == want.LeaderboardNames, got.LeaderboardNames, want.LeaderboardNames)
 		check("ICPCPenaltyMin", got.ICPCPenaltyMin == want.ICPCPenaltyMin, got.ICPCPenaltyMin, want.ICPCPenaltyMin)
+		check("ResultDownload", got.ResultDownload == want.ResultDownload, got.ResultDownload, want.ResultDownload)
 		check("CreatedBy", got.CreatedBy == want.CreatedBy, got.CreatedBy, want.CreatedBy)
 		return wrong
 	}
@@ -478,6 +482,20 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			want := plain(author)
 			want.ID = created.ID
 			want.Status = created.Status
+
+			update(t, ctx, target, want)
+
+			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	t.Run("Update turns the result download off", func(t *testing.T) {
+		// The other cases only ever turn it on.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, plain(author))
+			want := created
+			want.ResultDownload = false
 
 			update(t, ctx, target, want)
 

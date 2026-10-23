@@ -1377,3 +1377,83 @@ func TestUpdateRefusesToChangeTheICPCPenaltyWhileRunning(t *testing.T) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
 	}
 }
+
+// Matches the column default, so a new contest behaves like one created
+// before the setting existed.
+func TestCreateOffersTheResultDownloadByDefault(t *testing.T) {
+	f := conteststest.NewFixture()
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if !created.ResultDownload {
+		t.Error("ResultDownload = false, want true when the command does not mention it")
+	}
+}
+
+func TestCreateHonoursAResultDownloadTurnedOff(t *testing.T) {
+	f := conteststest.NewFixture()
+	off := false
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
+		ActorID: uuid.New(), ResultDownload: &off,
+	})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if created.ResultDownload {
+		t.Error("ResultDownload = true, want the false the command asked for")
+	}
+}
+
+// Nothing a participant has already done depends on it, unlike the scoring.
+func TestUpdateTurnsTheResultDownloadOffWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	off := false
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ResultDownload: &off,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.ResultDownload {
+		t.Error("ResultDownload = true, want it turned off")
+	}
+	change, ok := changesIn(t, f, audit.ActionContestUpdate)["result_download"].(map[string]any)
+	if !ok || change["from"] != true || change["to"] != false {
+		t.Errorf("result_download change = %v, want true → false recorded", change)
+	}
+}
+
+func TestUpdateLeavesTheResultDownloadAloneWhenNotMentioned(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	c.ResultDownload = false
+	f.Contests.Put(c)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.ResultDownload {
+		t.Error("ResultDownload = true, want false to survive an unrelated update")
+	}
+}
+
+func TestUpdateRefusesTheResultDownloadOnceFinished(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	off := false
+
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ResultDownload: &off,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}
