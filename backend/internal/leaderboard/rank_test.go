@@ -205,3 +205,102 @@ func TestRankICPCMarksBothSolvesInTheSameInstantFirst(t *testing.T) {
 		}
 	}
 }
+
+func prizes(rows []leaderboard.Row) map[string]int {
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		out[r.Login] = r.Prize
+	}
+	return out
+}
+
+func samePrizes(t *testing.T, rows []leaderboard.Row, want map[string]int) {
+	t.Helper()
+	got := prizes(rows)
+	for login, tier := range want {
+		if got[login] != tier {
+			t.Errorf("prizes = %v, want %v", got, want)
+			return
+		}
+	}
+}
+
+func TestPrizesGoDownThePointsTable(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 50, at(1)), entry("b", 40, at(1)), entry("c", 30, at(1)),
+		entry("d", 20, at(1)), entry("e", 10, at(1)),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 1, Third: 2})
+
+	samePrizes(t, rows, map[string]int{"a": 1, "b": 2, "c": 3, "d": 3, "e": 0})
+}
+
+// A shared place is shared whole: a tie on a boundary takes the better tier,
+// and the place after it still counts the rows above.
+func TestATieOnEachBoundaryTakesTheBetterTier(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("i-a", 50, at(1)), entry("i-b", 50, at(1)), // place 1, straddles I/II
+		entry("ii-a", 40, at(1)), entry("ii-b", 40, at(1)), // place 3, straddles II/III
+		entry("iii-a", 30, at(1)), entry("iii-b", 30, at(1)), // place 5, straddles III/none
+		entry("none", 20, at(1)), // place 7
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 3, Third: 1})
+
+	samePrizes(t, rows, map[string]int{
+		"i-a": 1, "i-b": 1, "ii-a": 2, "ii-b": 2, "iii-a": 3, "iii-b": 3, "none": 0,
+	})
+}
+
+func TestNoPrizePlacesAwardNothing(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 50, at(1)), entry("b", 40, at(1)),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{})
+
+	samePrizes(t, rows, map[string]int{"a": 0, "b": 0})
+}
+
+// ICPC's places come from solved, then penalty, so a tie there is shared too.
+func TestPrizesFollowICPCPlaces(t *testing.T) {
+	solved := func(login string, n, penalty int) leaderboard.Entry {
+		return leaderboard.Entry{Registration: uuid.New(), Login: login, Solved: n, Penalty: penalty}
+	}
+	rows := leaderboard.RankICPC([]leaderboard.Entry{
+		solved("slow", 3, 90), solved("fast", 3, 40), solved("tied", 3, 90), solved("two", 2, 10),
+	}, leaderboard.Grid{})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringICPC, contests.PrizePlaces{First: 1, Second: 1})
+
+	samePrizes(t, rows, map[string]int{"fast": 1, "slow": 2, "tied": 2, "two": 0})
+}
+
+// Winner mode keeps its single winner; the counts do not apply.
+func TestWinnerModeAwardsNoPrizes(t *testing.T) {
+	final := entry("winner", 5, at(30))
+	final.FinalAt = at(30)
+	rows := leaderboard.Rank(contests.ScoringWinner, []leaderboard.Entry{final, entry("rich", 50, at(10))})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringWinner, contests.PrizePlaces{First: 5, Second: 5, Third: 5})
+
+	samePrizes(t, rows, map[string]int{"winner": 0, "rich": 0})
+	if !rows[0].Winner || rows[0].Place != 1 {
+		t.Errorf("first row = %+v, want the winner still placed first", rows[0])
+	}
+}
+
+// The staff table lists the disqualified among everybody else. They take no
+// prize and hold no place for one, so staff see the prizes everybody sees.
+func TestADisqualifiedRowTakesNoPrizeAndHoldsNoPlaceForOne(t *testing.T) {
+	cheat := entry("cheat", 90, at(1))
+	cheat.Disqualified = true
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		cheat, entry("a", 50, at(1)), entry("b", 50, at(1)), entry("c", 40, at(1)), entry("d", 30, at(1)),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 1, Third: 1})
+
+	samePrizes(t, rows, map[string]int{"cheat": 0, "a": 1, "b": 1, "c": 3, "d": 0})
+}

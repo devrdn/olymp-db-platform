@@ -9,7 +9,7 @@ import (
 // Own is what a participant may be told about their own standing, read from
 // the same computation as the contest's table.
 type Own struct {
-	// Row is the registration's own row; its Place is always zero.
+	// Row is the registration's own row; its Place and Prize are always zero.
 	Row   Row
 	State string
 	// Open says the table is final or revealed. Place and Participants mean
@@ -45,7 +45,7 @@ func (s *Service) Own(ctx context.Context, contestID, registration uuid.UUID) (O
 			}
 			own.Open, own.Place, own.Participants = true, row.Place, len(view.Rows)
 			own.Truncated = view.Truncated
-			row.Place = 0
+			row.Place, row.Prize = 0, 0
 			own.Row = row
 			return own, nil
 		}
@@ -60,7 +60,7 @@ func (s *Service) Own(ctx context.Context, contestID, registration uuid.UUID) (O
 		if row.Registration != registration {
 			continue
 		}
-		row.Place, row.Winner = 0, false
+		row.Place, row.Winner, row.Prize = 0, false, 0
 		own.Row = row
 		return own, nil
 	}

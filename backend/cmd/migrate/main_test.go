@@ -309,3 +309,69 @@ func TestTheSchemaNotesMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("after applying 000046 = %+v, want the table, bounded at 100000 characters, deleted with its contest", up)
 	}
 }
+
+// prizeColumns counts which of the three prize columns exist, and how many of
+// them are NOT NULL DEFAULT 0 with a CHECK bounding them at 0..1000.
+type prizeColumns struct {
+	present, shaped int
+}
+
+func readPrizeColumns(t *testing.T, dsn string) prizeColumns {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	var p prizeColumns
+	err = conn.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE c.is_nullable = 'NO' AND c.column_default = '0'
+		                          AND c.data_type = 'integer'
+		                          AND EXISTS (SELECT 1 FROM pg_constraint k
+		                                      WHERE k.conrelid = 'contests'::regclass
+		                                        AND k.conname = 'contests_' || c.column_name || '_range'
+		                                        AND pg_get_constraintdef(k.oid) LIKE '%>= 0%'
+		                                        AND pg_get_constraintdef(k.oid) LIKE '%<= 1000%'))
+		FROM information_schema.columns c
+		WHERE c.table_name = 'contests'
+		  AND c.column_name IN ('prize_first', 'prize_second', 'prize_third')`).
+		Scan(&p.present, &p.shaped)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	return p
+}
+
+func TestThePrizePlacesMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := m.Migrate(46); err != nil {
+		t.Fatalf("migrate to 46: %v", err)
+	}
+	if down := readPrizeColumns(t, dsn); down.present != 0 {
+		t.Fatalf("after rolling back 000047 the prize columns are left: %+v", down)
+	}
+
+	if err := m.Migrate(47); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate to 47: %v", err)
+	}
+	if up := readPrizeColumns(t, dsn); up.present != 3 || up.shaped != 3 {
+		t.Fatalf("after applying 000047 = %+v, want three integer columns NOT NULL DEFAULT 0 bounded at 0..1000", up)
+	}
+}

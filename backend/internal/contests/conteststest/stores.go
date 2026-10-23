@@ -285,7 +285,7 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	stored.StartsAt, stored.EndsAt = c.StartsAt, c.EndsAt
 	stored.AllowedCIDRs, stored.Settings = c.AllowedCIDRs, c.Settings
 	stored.LeaderboardFreezeMin, stored.LeaderboardNames = c.LeaderboardFreezeMin, c.LeaderboardNames
-	stored.ResultDownload = c.ResultDownload
+	stored.ResultDownload, stored.PrizePlaces = c.ResultDownload, c.PrizePlaces
 	if now, ok := r.now(); ok {
 		stored.UpdatedAt = now
 	}

@@ -69,7 +69,9 @@ func (h *LeaderboardHandler) Mount(r chi.Router) {
 // identifier, and one label, never both.
 type leaderboardRow struct {
 	// Place is null for an unplaced row (winner mode, not the winner).
-	Place        *int   `json:"place"`
+	Place *int `json:"place"`
+	// Prize is the tier, 1 to 3, or null for a row without one.
+	Prize        *int   `json:"prize"`
 	Label        string `json:"label"`
 	Deleted      bool   `json:"deleted,omitempty"`
 	Points       int    `json:"points"`
@@ -154,6 +156,7 @@ func (h *LeaderboardHandler) participant(w http.ResponseWriter, r *http.Request)
 
 type staffRow struct {
 	Place        *int   `json:"place"`
+	Prize        *int   `json:"prize"`
 	Login        string `json:"login"`
 	FullName     string `json:"full_name"`
 	Deleted      bool   `json:"deleted,omitempty"`
@@ -213,7 +216,7 @@ func (h *LeaderboardHandler) live(w http.ResponseWriter, r *http.Request) {
 	for _, row := range view.Rows {
 		penalty, cells := icpcRow(view.Contest.Scoring, row)
 		out.Rows = append(out.Rows, staffRow{
-			Place: place(row), Login: row.Login, FullName: row.FullName, Deleted: row.AccountDeleted,
+			Place: place(row), Prize: prize(row), Login: row.Login, FullName: row.FullName, Deleted: row.AccountDeleted,
 			Disqualified: row.Disqualified, Points: row.Points, Solved: row.Solved,
 			LastScoredAt: formatTime(row.LastScoredAt), Winner: row.Winner, Penalty: penalty, Cells: cells,
 		})
@@ -253,7 +256,7 @@ func (h *LeaderboardHandler) toResponse(r *http.Request, view leaderboard.View, 
 	for _, row := range view.Rows {
 		penalty, cells := icpcRow(c.Scoring, row)
 		out.Rows = append(out.Rows, leaderboardRow{
-			Place: place(row), Label: row.Label(c.LeaderboardNames), Deleted: row.AccountDeleted,
+			Place: place(row), Prize: prize(row), Label: row.Label(c.LeaderboardNames), Deleted: row.AccountDeleted,
 			Points: row.Points, Solved: row.Solved, LastScoredAt: formatTime(row.LastScoredAt),
 			Winner: row.Winner, IsYou: own != uuid.Nil && row.Registration == own,
 			Penalty: penalty, Cells: cells,
@@ -311,6 +314,14 @@ func place(row leaderboard.Row) *int {
 		return nil
 	}
 	p := row.Place
+	return &p
+}
+
+func prize(row leaderboard.Row) *int {
+	if row.Prize == 0 {
+		return nil
+	}
+	p := row.Prize
 	return &p
 }
 

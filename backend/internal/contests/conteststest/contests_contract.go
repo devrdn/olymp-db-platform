@@ -91,6 +91,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesFullName,
 			ICPCPenaltyMin:       45,
 			ResultDownload:       false,
+			PrizePlaces:          contests.PrizePlaces{First: 1, Second: 2, Third: 3},
 			CreatedBy:            author,
 		}
 	}
@@ -116,6 +117,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:       5,
 			ResultDownload:       true,
+			PrizePlaces:          contests.PrizePlaces{First: 1000, Second: 0, Third: 7},
 			CreatedBy:            author,
 		}
 	}
@@ -280,6 +282,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		check("LeaderboardNames", got.LeaderboardNames == want.LeaderboardNames, got.LeaderboardNames, want.LeaderboardNames)
 		check("ICPCPenaltyMin", got.ICPCPenaltyMin == want.ICPCPenaltyMin, got.ICPCPenaltyMin, want.ICPCPenaltyMin)
 		check("ResultDownload", got.ResultDownload == want.ResultDownload, got.ResultDownload, want.ResultDownload)
+		check("PrizePlaces", got.PrizePlaces == want.PrizePlaces, got.PrizePlaces, want.PrizePlaces)
 		check("CreatedBy", got.CreatedBy == want.CreatedBy, got.CreatedBy, want.CreatedBy)
 		return wrong
 	}
@@ -496,6 +499,20 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			created := create(t, ctx, target, plain(author))
 			want := created
 			want.ResultDownload = false
+
+			update(t, ctx, target, want)
+
+			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	t.Run("Update clears the prize places", func(t *testing.T) {
+		// The other cases only ever set them.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, full(author))
+			want := created
+			want.PrizePlaces = contests.PrizePlaces{}
 
 			update(t, ctx, target, want)
 

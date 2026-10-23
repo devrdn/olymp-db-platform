@@ -386,3 +386,22 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 		}
 	}
 }
+
+// Configuration, so it travels with the contest.
+func TestTheContestPackageCarriesThePrizePlaces(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+	c := seedPackagedContest(t, f)
+	c.PrizePlaces = contests.PrizePlaces{First: 1, Second: 2, Third: 3}
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	contest, _ := decode(t, rec)["contest"].(map[string]any)
+	places, _ := contest["prize_places"].(map[string]any)
+	if places["first"] != float64(1) || places["second"] != float64(2) || places["third"] != float64(3) {
+		t.Errorf("prize_places = %v, want 1/2/3", contest["prize_places"])
+	}
+}
