@@ -81,6 +81,15 @@ const (
 	ActionContestMonitorView = "contest.monitor_view"
 	// ActionContestMonitorExport is recorded on every export, unthrottled.
 	ActionContestMonitorExport = "contest.monitor_export"
+	// ActionClarificationAnswer records a private answer to a participant's
+	// question; ActionClarificationPublish an answer shown to every
+	// participant, with the question it answers, whether published at once or
+	// later. ActionClarificationEdit records any other change to an answer,
+	// with the text it replaced. A question itself is not recorded.
+	ActionClarificationAnswer  = "contest.clarification_answer"
+	ActionClarificationPublish = "contest.clarification_publish"
+	ActionClarificationEdit    = "contest.clarification_edit"
+	ActionAnnouncementCreate   = "contest.announcement_create"
 
 	ActionParticipantAdd        = "participant.add"
 	ActionParticipantRemove     = "participant.remove"
@@ -158,6 +167,8 @@ var actions = []string{
 	ActionContestSchemaNotesChange,
 	ActionContestPackageExport, ActionContestLeaderboardReveal,
 	ActionContestMonitorView, ActionContestMonitorExport,
+	ActionClarificationAnswer, ActionClarificationPublish, ActionClarificationEdit,
+	ActionAnnouncementCreate,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionParticipantStart, ActionParticipantFinish,

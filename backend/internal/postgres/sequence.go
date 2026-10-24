@@ -30,6 +30,40 @@ func (r *Sequence) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
+// questionClosed is the condition that question alias is closed for the
+// registration in parameter registration: answered correctly, or every attempt
+// spent. One text for every statement that asks, so they cannot disagree.
+func questionClosed(alias, registration string) string {
+	return `(
+		EXISTS (
+			SELECT 1 FROM submissions s
+			WHERE s.registration_id = ` + registration + ` AND s.question_id = ` + alias + `.id AND s.is_correct
+		)
+		OR (
+			` + alias + `.max_attempts IS NOT NULL
+			AND (SELECT COUNT(*) FROM submissions s2
+			     WHERE s2.registration_id = ` + registration + ` AND s2.question_id = ` + alias + `.id) >= ` + alias + `.max_attempts
+		)
+	)`
+}
+
+// questionReachable is the condition that question alias, of the contest in
+// parameter contest, is one the registration's participant can see: visible
+// and, when the boolean parameter sequential holds, closed or with every
+// question ordered before it closed, hidden ones included (§6.1.1), which is
+// contests.Reader's notion of a question that is not locked.
+func questionReachable(alias, contest, registration, sequential string) string {
+	return `(` + alias + `.contest_id = ` + contest + ` AND ` + alias + `.is_visible AND (
+		NOT ` + sequential + `
+		OR ` + questionClosed(alias, registration) + `
+		OR NOT EXISTS (
+			SELECT 1 FROM questions earlier
+			WHERE earlier.contest_id = ` + contest + ` AND earlier.ord < ` + alias + `.ord
+			  AND NOT ` + questionClosed("earlier", registration) + `
+		)
+	))`
+}
+
 // Open reports whether every question of contestID ordered strictly before
 // ord is closed for registrationID: answered correctly, or every attempt
 // spent.
@@ -45,17 +79,7 @@ func (r *Sequence) Open(ctx context.Context, contestID, registrationID uuid.UUID
 			SELECT 1
 			FROM questions q
 			WHERE q.contest_id = $1 AND q.ord < $2
-			  AND NOT (
-			      EXISTS (
-			          SELECT 1 FROM submissions s
-			          WHERE s.registration_id = $3 AND s.question_id = q.id AND s.is_correct
-			      )
-			      OR (
-			          q.max_attempts IS NOT NULL
-			          AND (SELECT COUNT(*) FROM submissions s2
-			               WHERE s2.registration_id = $3 AND s2.question_id = q.id) >= q.max_attempts
-			      )
-			  )
+			  AND NOT `+questionClosed("q", "$3")+`
 		)`, contestID, ord, registrationID).Scan(&open)
 	if err != nil {
 		return false, fmt.Errorf("check sequential progress for contest %s: %w", contestID, err)
@@ -72,17 +96,7 @@ func (r *Sequence) Frontier(ctx context.Context, contestID, registrationID uuid.
 		SELECT q.id
 		FROM questions q
 		WHERE q.contest_id = $1
-		  AND NOT (
-		      EXISTS (
-		          SELECT 1 FROM submissions s
-		          WHERE s.registration_id = $2 AND s.question_id = q.id AND s.is_correct
-		      )
-		      OR (
-		          q.max_attempts IS NOT NULL
-		          AND (SELECT COUNT(*) FROM submissions s2
-		               WHERE s2.registration_id = $2 AND s2.question_id = q.id) >= q.max_attempts
-		      )
-		  )
+		  AND NOT `+questionClosed("q", "$2")+`
 		ORDER BY q.ord
 		LIMIT 1`, contestID, registrationID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {

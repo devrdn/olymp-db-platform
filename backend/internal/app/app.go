@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
@@ -26,6 +27,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/devrdn/db-contest/backend/internal/platform/fanout"
 	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -502,10 +504,23 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		participantHandler = participantHandler.WithDatabaseReset(console)
 	}
 	modules = append(modules, participantHandler)
+	// Answers and announcements reach the participants' open event channels
+	// through hints, in this process (internal/platform/fanout).
+	hints := fanout.NewHub()
+	clarifyService := clarifications.NewService(clarifications.Config{
+		Repository: postgres.NewClarifications(pool),
+		Contests:   postgres.NewContests(pool),
+		Limiter:    limiter,
+		Notifier:   hints,
+		Audit:      auditRecorder,
+		UnitOfWork: storage.NewUnitOfWork(pool),
+	})
+	modules = append(modules, api.NewClarificationsHandler(clarifyService, participantAccess, authMiddleware, log).
+		WithWatcher(participantTracker))
 	// The SSE channel shares participantAccess and its budget. ctx.Done() is
 	// the shutdown signal Run waits on, so open streams close as draining
 	// begins.
-	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
+	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()).WithHints(hints))
 	// The profile reuses standings, watch and the query log rather than
 	// reimplementing them.
 	modules = append(modules, api.NewProfileHandler(profile.NewService(profile.Config{

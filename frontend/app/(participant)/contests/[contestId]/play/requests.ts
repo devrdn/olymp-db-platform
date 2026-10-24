@@ -3,6 +3,12 @@ import { ApiError, request, type RequestOptions } from "@/lib/api/client";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
+import {
+  askedSchema,
+  clarificationFeedSchema,
+  type ClarificationFeed,
+  type SeenClarification,
+} from "@/lib/api/clarifications";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
 import { queryLogEntrySchema, queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
@@ -229,6 +235,48 @@ export async function refreshSchema(contestId: string): Promise<SchemaRefreshRes
   try {
     const payload = await browserRequest(`/contests/${contestId}/play/schema`);
     return { kind: "ok", schema: gameSchemaSchema.parse(payload) };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+/** A page of the questions to the organisers, or why it could not be read. */
+export type ClarificationsResult = { kind: "ok"; feed: ClarificationFeed } | { kind: "refused"; code: string };
+
+/**
+ * Reads one page of the participant's questions to the organisers, the public
+ * answers and the announcements; `before` is the cursor the previous page
+ * gave. The server scopes it to the session's registration.
+ */
+export async function fetchClarifications(contestId: string, before?: string): Promise<ClarificationsResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  const cursor = before ? `?before=${encodeURIComponent(before)}` : "";
+  try {
+    const payload = await browserRequest(`/contests/${contestId}/play/clarifications${cursor}`);
+    return { kind: "ok", feed: clarificationFeedSchema.parse(payload) };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+export type AskResult = { kind: "ok"; asked: SeenClarification } | { kind: "refused"; code: string };
+
+/**
+ * Sends a question to the organisers, about one of the contest's questions or
+ * none. An empty question is not sent: it would spend one of the few asks a
+ * minute allows.
+ */
+export async function askOrganisers(contestId: string, body: string, questionId: string | null): Promise<AskResult> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (body.trim() === "") return { kind: "refused", code: "clarification_empty" };
+  try {
+    const payload = await browserRequest(`/contests/${contestId}/play/clarifications`, {
+      method: "POST",
+      body: questionId ? { body, question_id: questionId } : { body },
+    });
+    return { kind: "ok", asked: askedSchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };

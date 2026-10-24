@@ -362,12 +362,63 @@ const en = {
       databases: "Databases",
       leaderboard: "Leaderboard",
       monitor: "Monitoring",
+      clarifications: "Participant questions",
     },
     /**
      * The organiser's monitoring screen: the participants table and the live
      * feed of the whole contest. Flags and browser signals are named as hints
      * throughout, never as findings — the screen decides nothing for anybody.
      */
+    /**
+     * The staff desk for participants' questions and announcements
+     * (ARCHITECTURE §6.5). A participant sees only their own questions, the
+     * answers published for everyone, and the announcements.
+     */
+    clarifications: {
+      lede: "Questions participants ask while the contest runs, and announcements to all of them. A participant sees only their own questions and the answers you publish for everyone.",
+      states: "Which questions",
+      waiting: "Waiting ({n})",
+      answered: "Answered ({n})",
+      emptyOpen: "No questions are waiting.",
+      emptyAnswered: "Nothing has been answered yet.",
+      asker: "{name} ({login})",
+      askedAt: "Asked at {time}",
+      general: "About the contest in general",
+      about: "About question {n}",
+      aboutTitled: "About question {n}: {title}",
+      answerLabel: "Answer",
+      counter: "{n} / {max}",
+      visibility: "Who sees the answer",
+      private: "Only the participant who asked",
+      public: "Every participant",
+      publicNote: "Publishing shows the question's text to every participant too, never who asked it.",
+      decline: "Decline to answer",
+      declineNote: "The participant is told you declined; a reply is optional.",
+      markdownNote: "Answers and announcements are Markdown.",
+      send: "Send answer",
+      save: "Save changes",
+      sending: "Sending…",
+      sent: "Answer sent.",
+      edit: "Edit answer",
+      cancel: "Cancel",
+      answeredBy: "Answered by {login} at {time}",
+      answeredAt: "Answered at {time}",
+      edited: "edited",
+      declined: "declined",
+      visibilityTag: { private: "private", public: "public" },
+      announcements: "Announcements",
+      announcementLabel: "New announcement",
+      announcementNote: "Every participant sees it at once.",
+      post: "Post announcement",
+      posting: "Posting…",
+      posted: "Announcement posted.",
+      noAnnouncements: "No announcements yet.",
+      postedAt: "Posted at {time}",
+      older: "Show older",
+      closed: "The contest is not running, so answers and announcements would reach nobody. The questions stay readable.",
+      pollFailed: "Could not refresh the questions; trying again.",
+      forbidden: "You may not answer this contest's questions.",
+    },
     monitor: {
       lede: "What every participant is doing while it happens: the table adds it up, the feed lists it line by line.",
       notes: {
@@ -1721,6 +1772,49 @@ const en = {
         lockedItem: "Question {n} — opens after question {m}",
         lockedNotYet: "Question {n} — not open yet",
       },
+      // The side panel's tab for questions to the organisers (ARCHITECTURE
+      // §6.5). A participant's own text is shown as typed; the organisers'
+      // answers and announcements as Markdown.
+      clarifications: {
+        tab: "Questions to organisers",
+        /** Read beside the tab's dot by assistive technology. */
+        unread: "new",
+        intro: "Ask the organisers about the contest. They answer you alone, or everyone when the answer matters to all.",
+        privacy: "The organisers see who asked. If they publish an answer, everyone sees your question, never your name.",
+        about: "About",
+        general: "The contest in general",
+        questionOption: "Question {n}",
+        questionOptionTitled: "Question {n}: {title}",
+        label: "Your question",
+        counter: "{n} / {max}",
+        open: "{n} of {max} waiting for an answer",
+        atCap: "You have 20 questions waiting for an answer. You can ask another once one is answered.",
+        send: "Send question",
+        sending: "Sending…",
+        sent: "Your question was sent.",
+        shortcut: "Ctrl/⌘+Enter sends it.",
+        closed: "The contest is over for you, so no more questions can be asked. The answers stay here until you leave this page.",
+        announcements: "Announcements",
+        thread: "Questions and answers",
+        empty: "No questions yet. Answers the organisers publish for everyone appear here too.",
+        mine: "Your question",
+        public: "Answer for everyone",
+        published: "Published for everyone",
+        aboutQuestion: "About question {n}",
+        aboutQuestionTitled: "About question {n}: {title}",
+        waiting: "Waiting for an answer",
+        declined: "The organisers declined to answer.",
+        edited: "edited",
+        askedAt: "Asked at {time}",
+        answeredAt: "Answered at {time}",
+        postedAt: "Posted at {time}",
+        loading: "Loading the questions to the organisers…",
+        failed: "Could not load the questions to the organisers.",
+        refreshFailed: "Could not check for new answers.",
+        retry: "Try again",
+        older: "Show older",
+        loadingOlder: "Loading…",
+      },
       // The full-screen workspace's own vocabulary (Task 3): the two tab
       // groups beside the console, the download, and the query log's own
       // table. Kept apart from `console` and the two panels above so a
@@ -2026,6 +2120,10 @@ const en = {
       "contest.leaderboard_reveal": "Revealed the final standings",
       "contest.monitor_view": "Viewed participants' activity",
       "contest.monitor_export": "Exported participants' activity",
+      "contest.clarification_answer": "Answered a participant's question privately",
+      "contest.clarification_publish": "Published an answer to every participant",
+      "contest.clarification_edit": "Edited an answer to a participant's question",
+      "contest.announcement_create": "Posted an announcement",
       "contest.manager_grant": "Appointed a manager",
       "contest.manager_revoke": "Removed a manager",
       "participant.add": "Added a participant",
@@ -2402,6 +2500,22 @@ const en = {
     signals_batch_too_large: "Too much page activity was sent at once. It will be sent in smaller parts.",
     signals_too_many_stored:
       "As much of your page activity has been recorded as this contest keeps. Nothing you have done is lost.",
+    clarification_too_long: "A question can be at most 2,000 characters. Shorten it or ask two.",
+    clarification_answer_too_long: "An answer can be at most 4,000 characters.",
+    announcement_too_long: "An announcement can be at most 4,000 characters.",
+    clarification_empty: "Write something first.",
+    clarification_text_invalid:
+      "The text contains a character that cannot be saved. Remove it and try again.",
+    clarification_too_many_open:
+      "You already have 20 questions waiting for an answer. You can ask another once one is answered.",
+    clarification_too_often: "You are asking questions too often. Wait a minute and try again.",
+    clarification_not_found: "This question is not in this contest.",
+    clarification_already_answered:
+      "This question has just been answered, perhaps by another organiser. Read the answer and edit it if needed.",
+    clarification_not_answered: "This question has no answer yet. Answer it first.",
+    clarifications_closed:
+      "The contest is not running, so participants would not see an answer or an announcement.",
+    clarification_invalid_cursor: "The list could not be continued. Reload the page.",
     monitor_too_often: "You are refreshing the monitoring pages too often. Wait a minute and try again.",
     monitor_participant_not_found: "This participant is not in this contest.",
     monitor_revision_not_found: "This version of the notes or tab no longer exists.",

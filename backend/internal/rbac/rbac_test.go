@@ -221,3 +221,24 @@ func TestContestStaffMayMonitorTheirOwnContestOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestContestStaffMayClarifyTheirOwnContestOnly(t *testing.T) {
+	ctx := context.Background()
+	for _, role := range []ContestRole{RoleOwner, RoleManager} {
+		auth := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: role}})
+		if err := auth.Authorize(ctx, identity(), PermissionContestClarify, contestA); err != nil {
+			t.Errorf("%s was denied contest.clarify on their contest: %v", role, err)
+		}
+		if err := auth.Authorize(ctx, identity(), PermissionContestClarify, contestB); !errors.Is(err, ErrForbidden) {
+			t.Errorf("%s on somebody else's contest: err = %v, want ErrForbidden", role, err)
+		}
+	}
+	// The global grant to organizers never answers a contest they do not run.
+	auth := New(&fakeRoles{})
+	if err := auth.Authorize(ctx, identity(PermissionContestClarify), PermissionContestClarify, contestA); !errors.Is(err, ErrForbidden) {
+		t.Errorf("a global contest.clarify without a role = %v, want ErrForbidden", err)
+	}
+	if err := auth.Authorize(ctx, identity(PermissionContestAdminAll), PermissionContestClarify, contestA); err != nil {
+		t.Errorf("contest.admin_all was denied contest.clarify: %v", err)
+	}
+}
