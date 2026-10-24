@@ -24,8 +24,16 @@ type Repository struct {
 	clarifs       []clarifications.Clarification
 	announcements []clarifications.Announcement
 	registrations map[uuid.UUID]registration
-	questions     map[uuid.UUID]uuid.UUID
-	accounts      map[uuid.UUID]string
+	questions     map[uuid.UUID]question
+	// closed holds each registration's closed questions.
+	closed   map[uuid.UUID]map[uuid.UUID]bool
+	accounts map[uuid.UUID]string
+}
+
+type question struct {
+	contest uuid.UUID
+	ord     int
+	hidden  bool
 }
 
 type registration struct {
@@ -36,7 +44,8 @@ type registration struct {
 func NewRepository() *Repository {
 	return &Repository{
 		registrations: map[uuid.UUID]registration{},
-		questions:     map[uuid.UUID]uuid.UUID{},
+		questions:     map[uuid.UUID]question{},
+		closed:        map[uuid.UUID]map[uuid.UUID]bool{},
 		accounts:      map[uuid.UUID]string{},
 	}
 }
@@ -49,11 +58,51 @@ func (m *Repository) Register(contest, id uuid.UUID, login, fullName string) {
 	m.registrations[id] = registration{contest: contest, login: login, fullName: fullName}
 }
 
-// AddQuestion adds a question of contest.
-func (m *Repository) AddQuestion(contest, id uuid.UUID) {
+// AddQuestion adds a visible question of contest after its others.
+func (m *Repository) AddQuestion(contest, id uuid.UUID) { m.addQuestion(contest, id, false) }
+
+// AddHiddenQuestion adds a hidden question of contest after its others.
+func (m *Repository) AddHiddenQuestion(contest, id uuid.UUID) { m.addQuestion(contest, id, true) }
+
+func (m *Repository) addQuestion(contest, id uuid.UUID, hidden bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.questions[id] = contest
+	ord := 0
+	for _, q := range m.questions {
+		if q.contest == contest {
+			ord = max(ord, q.ord)
+		}
+	}
+	m.questions[id] = question{contest: contest, ord: ord + 1, hidden: hidden}
+}
+
+// Close records that registration answered question correctly.
+func (m *Repository) Close(registration, id uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed[registration] == nil {
+		m.closed[registration] = map[uuid.UUID]bool{}
+	}
+	m.closed[registration][id] = true
+}
+
+// reachable is the real schema's rule: a visible question of the contest
+// that, under sequential order, is closed or has every question before it
+// closed, hidden ones included. The caller holds the lock.
+func (m *Repository) reachable(contest, registration, id uuid.UUID, sequential bool) bool {
+	q, ok := m.questions[id]
+	if !ok || q.contest != contest || q.hidden {
+		return false
+	}
+	if !sequential || m.closed[registration][id] {
+		return true
+	}
+	for other, earlier := range m.questions {
+		if earlier.contest == contest && earlier.ord < q.ord && !m.closed[registration][other] {
+			return false
+		}
+	}
+	return true
 }
 
 // AddAccount adds a staff account, so the queue can name who answered.
@@ -63,10 +112,10 @@ func (m *Repository) AddAccount(id uuid.UUID, login string) {
 	m.accounts[id] = login
 }
 
-func (m *Repository) Ask(_ context.Context, c clarifications.Clarification, openLimit int) (clarifications.Clarification, error) {
+func (m *Repository) Ask(_ context.Context, c clarifications.Clarification, openLimit int, sequential bool) (clarifications.Clarification, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c.QuestionID != nil && m.questions[*c.QuestionID] != c.ContestID {
+	if c.QuestionID != nil && !m.reachable(c.ContestID, c.RegistrationID, *c.QuestionID, sequential) {
 		return clarifications.Clarification{}, clarifications.ErrQuestionNotFound
 	}
 	open := 0
@@ -83,7 +132,7 @@ func (m *Repository) Ask(_ context.Context, c clarifications.Clarification, open
 	return c, nil
 }
 
-func (m *Repository) Feed(_ context.Context, contestID, registrationID uuid.UUID, before clarifications.Cursor, limit int) ([]clarifications.Entry, error) {
+func (m *Repository) Feed(_ context.Context, contestID, registrationID uuid.UUID, before clarifications.Cursor, limit int, sequential bool) ([]clarifications.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var entries []clarifications.Entry
@@ -93,6 +142,10 @@ func (m *Repository) Feed(_ context.Context, contestID, registrationID uuid.UUID
 		}
 		if older(c.PostedAt().UnixMicro(), c.ID, before) {
 			copied := c
+			if c.RegistrationID != registrationID && c.QuestionID != nil &&
+				!m.reachable(contestID, registrationID, *c.QuestionID, sequential) {
+				copied.QuestionID = nil
+			}
 			entries = append(entries, clarifications.Entry{Clarification: &copied})
 		}
 	}
