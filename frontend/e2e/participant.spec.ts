@@ -59,7 +59,7 @@ test("a participant runs a query, resets their database and answers", async ({ p
   });
 
   await test.step("submits answers and sees each judged", async () => {
-    await page.getByRole("tab", { name: "Questions" }).click();
+    await page.getByRole("tab", { name: "Questions", exact: true }).click();
     // A titled question folds its wording under the title.
     await expect(page.getByRole("heading", { name: "The alibi" })).toBeVisible();
     await page.getByRole("button", { name: "Details" }).click();
