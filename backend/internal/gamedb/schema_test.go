@@ -216,7 +216,7 @@ func TestReadSchemaListsAKeyToAPartitionedTableOnce(t *testing.T) {
 
 // CLAUDE.md rules 2 and 12: the catalogue read stops at the document's total
 // of foreign keys, and a table sorting after the keys still gets its primary
-// key.
+// key. The keys are spread over tables at the per-table cap.
 func TestReadSchemaStopsAtTheDocumentsTotalOfForeignKeys(t *testing.T) {
 	requireCluster(t)
 
@@ -232,12 +232,15 @@ func TestReadSchemaStopsAtTheDocumentsTotalOfForeignKeys(t *testing.T) {
 			database := scratchDatabase(t)
 			asOwner(t, database,
 				`CREATE TABLE anchor (id int PRIMARY KEY)`,
-				`CREATE TABLE many (a int)`,
 				fmt.Sprintf(`DO $$ BEGIN
-					FOR i IN 1..%d LOOP
-						EXECUTE format('ALTER TABLE many ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor', lpad(i::text, 4, '0'));
+					FOR i IN 0..%d - 1 LOOP
+						IF i %% %d = 0 THEN
+							EXECUTE format('CREATE TABLE many_%%s (a int)', i / %d);
+						END IF;
+						EXECUTE format('ALTER TABLE many_%%s ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor',
+							i / %d, lpad(i::text, 4, '0'));
 					END LOOP;
-				END $$`, tc.keys),
+				END $$`, tc.keys, provisioning.MaxSchemaForeignKeys, provisioning.MaxSchemaForeignKeys, provisioning.MaxSchemaForeignKeys),
 				`CREATE TABLE zebra (id int PRIMARY KEY)`,
 			)
 
@@ -245,19 +248,59 @@ func TestReadSchemaStopsAtTheDocumentsTotalOfForeignKeys(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read the schema: %v", err)
 			}
-			tables := map[string]provisioning.Table{}
+			total := 0
+			var zebra provisioning.Table
 			for _, table := range schema.Tables {
-				tables[table.Name] = table
+				total += len(table.ForeignKeys)
+				if table.Name == "zebra" {
+					zebra = table
+				}
 			}
-			if n := len(tables["many"].ForeignKeys); n != provisioning.MaxDocumentForeignKeys {
-				t.Fatalf("read %d foreign keys, want %d", n, provisioning.MaxDocumentForeignKeys)
+			if total != provisioning.MaxDocumentForeignKeys {
+				t.Fatalf("read %d foreign keys, want %d", total, provisioning.MaxDocumentForeignKeys)
 			}
 			if schema.Truncated != tc.truncated {
 				t.Fatalf("truncated = %v, want %v", schema.Truncated, tc.truncated)
 			}
-			if got := tables["zebra"].PrimaryKey; !slices.Equal(got, []string{"id"}) {
-				t.Fatalf("zebra's primary key read as %v after the keys", got)
+			if !slices.Equal(zebra.PrimaryKey, []string{"id"}) {
+				t.Fatalf("zebra's primary key read as %v after the keys", zebra.PrimaryKey)
 			}
 		})
+	}
+}
+
+// A table past the per-table cap must not spend the document's total on keys
+// that would be cut anyway, leaving the tables after it with none.
+func TestReadSchemaSpendsTheTotalOnlyOnKeysItKeeps(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE TABLE anchor (id int PRIMARY KEY)`,
+		`CREATE TABLE crowded (a int)`,
+		fmt.Sprintf(`DO $$ BEGIN
+			FOR i IN 1..%d LOOP
+				EXECUTE format('ALTER TABLE crowded ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor', lpad(i::text, 4, '0'));
+			END LOOP;
+		END $$`, provisioning.MaxDocumentForeignKeys),
+		`CREATE TABLE later (a int, b int, c int, d int, e int,
+			FOREIGN KEY (a) REFERENCES anchor, FOREIGN KEY (b) REFERENCES anchor, FOREIGN KEY (c) REFERENCES anchor,
+			FOREIGN KEY (d) REFERENCES anchor, FOREIGN KEY (e) REFERENCES anchor)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	keys := map[string]int{}
+	for _, table := range schema.Tables {
+		keys[table.Name] = len(table.ForeignKeys)
+	}
+	if keys["crowded"] != provisioning.MaxSchemaForeignKeys || keys["later"] != 5 {
+		t.Fatalf("read crowded %d and later %d foreign keys, want %d and 5",
+			keys["crowded"], keys["later"], provisioning.MaxSchemaForeignKeys)
+	}
+	if !schema.Truncated {
+		t.Fatal("cut crowded's keys without saying so")
 	}
 }

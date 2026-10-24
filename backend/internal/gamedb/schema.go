@@ -40,30 +40,42 @@ LIMIT $2`
 // than the table's. A foreign key is listed only when it points into the
 // public schema, where the diagram has a box to draw it to, and only on the
 // table that declared it: the clones PostgreSQL keeps for partitions
-// (conparentid) would draw one arrow many times. Every primary key sorts
-// before every foreign key, so the row bound cuts only foreign keys.
+// (conparentid) would draw one arrow many times. A table yields at most $4
+// foreign keys, one past the per-table cap so readKeys can tell it was cut.
+// Every primary key sorts before every foreign key, so the row bound cuts
+// only foreign keys.
 const keysQuery = `
-SELECT c.relname,
-       con.contype = 'p',
-       con.conname,
+WITH keys AS (
+    SELECT c.relname,
+           con.contype = 'p' AS is_primary,
+           con.conname,
+           con.conrelid, con.conkey, con.confrelid, con.confkey,
+           fc.relname AS referenced,
+           row_number() OVER (PARTITION BY con.conrelid, con.contype ORDER BY con.conname) AS nth
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_class fc ON fc.oid = con.confrelid
+    LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = ANY ($1) AND c.relname = ANY ($3)
+      AND (con.contype = 'p'
+           OR (con.contype = 'f' AND fn.nspname = 'public' AND con.conparentid = 0))
+)
+SELECT relname,
+       is_primary,
+       conname,
        ARRAY(SELECT a.attname::text
-             FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, position)
-             JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+             FROM unnest(conkey) WITH ORDINALITY AS k(attnum, position)
+             JOIN pg_attribute a ON a.attrelid = conrelid AND a.attnum = k.attnum
              ORDER BY k.position),
-       COALESCE(fc.relname, ''),
+       COALESCE(referenced, ''),
        ARRAY(SELECT a.attname::text
-             FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, position)
-             JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum
+             FROM unnest(confkey) WITH ORDINALITY AS k(attnum, position)
+             JOIN pg_attribute a ON a.attrelid = confrelid AND a.attnum = k.attnum
              ORDER BY k.position)
-FROM pg_constraint con
-JOIN pg_class c ON c.oid = con.conrelid
-JOIN pg_namespace n ON n.oid = c.relnamespace
-LEFT JOIN pg_class fc ON fc.oid = con.confrelid
-LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
-WHERE n.nspname = 'public' AND c.relkind = ANY ($1) AND c.relname = ANY ($3)
-  AND (con.contype = 'p'
-       OR (con.contype = 'f' AND fn.nspname = 'public' AND con.conparentid = 0))
-ORDER BY con.contype = 'p' DESC, c.relname, con.conname
+FROM keys
+WHERE is_primary OR nth <= $4
+ORDER BY is_primary DESC, relname, conname
 LIMIT $2`
 
 // gameRelkinds are the relation kinds a participant can SELECT from: tables,
@@ -72,10 +84,11 @@ var gameRelkinds = []byte{'r', 'p', 'v', 'm'}
 
 // maxSchemaRows and maxKeyRows bound the catalogue reads as rows arrive
 // (CLAUDE.md rule 12); the init script is an organiser's SQL, so the column
-// and constraint counts are unbounded.
+// and constraint counts are unbounded. The key rows are the primary keys, the
+// foreign keys kept, and at most one foreign key past the cap per table.
 const (
 	maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColumns
-	maxKeyRows    = provisioning.MaxSchemaTables + provisioning.MaxDocumentForeignKeys
+	maxKeyRows    = 2*provisioning.MaxSchemaTables + provisioning.MaxDocumentForeignKeys
 )
 
 // ReadSchema describes one game database, for the console's schema panel and
@@ -117,8 +130,8 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 	return schema, nil
 }
 
-func readColumns(ctx context.Context, conn pgx.Tx) (provisioning.Schema, error) {
-	rows, err := conn.Query(ctx, schemaQuery, gameRelkinds, maxSchemaRows+1)
+func readColumns(ctx context.Context, tx pgx.Tx) (provisioning.Schema, error) {
+	rows, err := tx.Query(ctx, schemaQuery, gameRelkinds, maxSchemaRows+1)
 	if err != nil {
 		return provisioning.Schema{}, err
 	}
@@ -157,9 +170,11 @@ func readColumns(ctx context.Context, conn pgx.Tx) (provisioning.Schema, error) 
 	return schema, nil
 }
 
-// readKeys attaches each relation's keys to the tables readColumns kept, and
-// stops at MaxDocumentForeignKeys foreign keys.
-func readKeys(ctx context.Context, conn pgx.Tx, schema *provisioning.Schema) error {
+// readKeys attaches each relation's keys to the tables readColumns kept. It
+// applies the document's bounds as the rows arrive, the per-table cap and the
+// key width before the document's total, so a crowded table does not spend
+// the total on keys it cannot keep.
+func readKeys(ctx context.Context, tx pgx.Tx, schema *provisioning.Schema) error {
 	byName := make(map[string]int, len(schema.Tables))
 	names := make([]string, len(schema.Tables))
 	for i, table := range schema.Tables {
@@ -167,13 +182,13 @@ func readKeys(ctx context.Context, conn pgx.Tx, schema *provisioning.Schema) err
 		names[i] = table.Name
 	}
 
-	rows, err := conn.Query(ctx, keysQuery, gameRelkinds, maxKeyRows+1, names)
+	rows, err := tx.Query(ctx, keysQuery, gameRelkinds, maxKeyRows+1, names, provisioning.MaxSchemaForeignKeys+1)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
-	seen, foreign, stopped := 0, 0, false
+	seen, foreign, cut := 0, 0, false
 	for rows.Next() {
 		var (
 			table, name, referenced string
@@ -186,7 +201,7 @@ func readKeys(ctx context.Context, conn pgx.Tx, schema *provisioning.Schema) err
 
 		seen++
 		if seen > maxKeyRows {
-			stopped = true
+			cut = true
 			break
 		}
 
@@ -194,20 +209,29 @@ func readKeys(ctx context.Context, conn pgx.Tx, schema *provisioning.Schema) err
 		if !kept {
 			continue
 		}
+		into := &schema.Tables[i]
+		if len(columns) > provisioning.MaxKeyColumns || len(referencedCols) > provisioning.MaxKeyColumns {
+			cut = true
+			continue
+		}
 		if primary {
-			schema.Tables[i].PrimaryKey = columns
+			into.PrimaryKey = columns
+			continue
+		}
+		if len(into.ForeignKeys) == provisioning.MaxSchemaForeignKeys {
+			cut = true
 			continue
 		}
 		foreign++
 		if foreign > provisioning.MaxDocumentForeignKeys {
-			stopped = true
+			cut = true
 			break
 		}
-		schema.Tables[i].ForeignKeys = append(schema.Tables[i].ForeignKeys, provisioning.ForeignKey{
+		into.ForeignKeys = append(into.ForeignKeys, provisioning.ForeignKey{
 			Name: name, Columns: columns, ReferencedTable: referenced, ReferencedColumns: referencedCols,
 		})
 	}
-	if stopped {
+	if cut {
 		schema.Truncated = true
 		return nil
 	}
