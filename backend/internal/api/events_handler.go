@@ -31,6 +31,13 @@ type EventsAccess interface {
 	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error)
 }
 
+// Hints is where the channel hears that a participant's clarifications have
+// changed (fanout.Hub). Subscribe returns a channel of hints for any of topics
+// and the function that ends the subscription.
+type Hints interface {
+	Subscribe(topics ...uuid.UUID) (<-chan struct{}, func())
+}
+
 // EventsHandler serves GET /contests/{id}/events, a Server-Sent Events channel
 // for a participant of a running contest, or a published one waiting to start
 // (docs/ARCHITECTURE.md §8).
@@ -38,10 +45,16 @@ type EventsAccess interface {
 // It sends a "sync" event every resync interval with server_now and this
 // caller's deadline (contests.Deadline, without the gate's grace: that is an
 // allowance for a request already in flight, not time to show),
-// "contest_started" when the contest starts, and "contest_finished" when the
-// channel closes because the contest is over for this participant. Every event
-// is built from this caller's own Participant and Contest; nothing about
-// another participant crosses it.
+// "contest_started" when the contest starts, "contest_finished" when the
+// channel closes because the contest is over for this participant, and
+// "clarification", with no content, when the participant's clarifications
+// changed and should be read again. Every event is built from this caller's own
+// Participant and Contest; nothing about another participant crosses it.
+//
+// A clarification hint is pushed, not polled: the channel subscribes to two
+// topics, the contest (a public answer or an announcement, for everyone) and
+// the registration (a private answer, for its asker). Without hints
+// (WithHints) the event is never sent.
 //
 // Beyond admission, a held-open connection needs:
 //
@@ -75,6 +88,8 @@ type EventsHandler struct {
 	// shutdown is closed when the process starts shutting down; without it each
 	// open stream would run until its client left.
 	shutdown <-chan struct{}
+	// hints is nil until WithHints.
+	hints Hints
 }
 
 // defaultResyncInterval sits in the 30 to 60 seconds docs/ARCHITECTURE.md §8
@@ -102,6 +117,7 @@ const (
 	eventSync            = "sync"
 	eventContestStarted  = "contest_started"
 	eventContestFinished = "contest_finished"
+	eventClarification   = "clarification"
 )
 
 // NewEventsHandler assembles the events endpoint. shutdown is closed to end
@@ -141,6 +157,13 @@ func (h *EventsHandler) WithMaxConnections(n int) *EventsHandler {
 	if n > 0 {
 		h.limiter = newConnLimiter(n)
 	}
+	return h
+}
+
+// WithHints sends a clarification event whenever hints publishes the
+// participant's contest or registration.
+func (h *EventsHandler) WithHints(hints Hints) *EventsHandler {
+	h.hints = hints
 	return h
 }
 
@@ -194,6 +217,15 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.limiter.release(participant.ID)
 
+	// Subscribed before the first event, so nothing published while the stream
+	// opens is lost. A nil channel never fires.
+	var hints <-chan struct{}
+	if h.hints != nil {
+		var unsubscribe func()
+		hints, unsubscribe = h.hints.Subscribe(contest.ID, participant.ID)
+		defer unsubscribe()
+	}
+
 	// Past every check that could answer an ordinary 4xx: from here the request
 	// is a stream, and its duration belongs in the stream histogram
 	// (metrics.MarkStreaming).
@@ -236,6 +268,14 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-h.shutdown:
 			return
+		case <-hints:
+			h.setWriteDeadline(rc)
+			if err := writeEvent(w, eventClarification, struct{}{}); err != nil {
+				return
+			}
+			if err := rc.Flush(); err != nil {
+				return
+			}
 		case <-ticker.C:
 			// The stream outlives the session check made when it opened, so
 			// each tick checks again. An invalid session or account ends the

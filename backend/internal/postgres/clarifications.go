@@ -199,19 +199,30 @@ var queueOrder = map[clarifications.State]string{
 	clarifications.StateAnswered: `c.answered_at IS NOT NULL ORDER BY c.answered_at DESC, c.id DESC`,
 }
 
+// askedSelect reads clarifications c with who asked and who answered, for
+// scanAsked.
+const askedSelect = `
+	SELECT c.id, c.contest_id, c.registration_id, c.question_id, c.body, c.created_at,
+	       c.answer, c.declined, c.answered_by, c.answered_at, c.edited_at, c.visibility,
+	       u.login, u.full_name, coalesce(s.login, '')
+	FROM clarifications c
+	JOIN registrations r ON r.id = c.registration_id
+	JOIN users u ON u.id = r.user_id
+	LEFT JOIN users s ON s.id = c.answered_by`
+
+func scanAsked(row pgx.Row) (clarifications.Asked, error) {
+	var a clarifications.Asked
+	var err error
+	a.Clarification, err = scanClarification(row, &a.AskerLogin, &a.AskerFullName, &a.AnsweredByLogin)
+	return a, err
+}
+
 func (r *Clarifications) Queue(ctx context.Context, contestID uuid.UUID, state clarifications.State, limit, offset int) ([]clarifications.Asked, error) {
 	order, ok := queueOrder[state]
 	if !ok {
 		return nil, fmt.Errorf("unknown queue state %q", state)
 	}
-	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT c.id, c.contest_id, c.registration_id, c.question_id, c.body, c.created_at,
-		       c.answer, c.declined, c.answered_by, c.answered_at, c.edited_at, c.visibility,
-		       u.login, u.full_name, coalesce(s.login, '')
-		FROM clarifications c
-		JOIN registrations r ON r.id = c.registration_id
-		JOIN users u ON u.id = r.user_id
-		LEFT JOIN users s ON s.id = c.answered_by
+	rows, err := r.querier(ctx).Query(ctx, askedSelect+`
 		WHERE c.contest_id = $1 AND `+order+`
 		LIMIT $2 OFFSET $3`, contestID, limit, offset)
 	if err != nil {
@@ -221,8 +232,8 @@ func (r *Clarifications) Queue(ctx context.Context, contestID uuid.UUID, state c
 
 	var items []clarifications.Asked
 	for rows.Next() {
-		var a clarifications.Asked
-		if a.Clarification, err = scanClarification(rows, &a.AskerLogin, &a.AskerFullName, &a.AnsweredByLogin); err != nil {
+		a, err := scanAsked(rows)
+		if err != nil {
 			return nil, fmt.Errorf("read a queued question: %w", err)
 		}
 		items = append(items, a)
@@ -231,6 +242,18 @@ func (r *Clarifications) Queue(ctx context.Context, contestID uuid.UUID, state c
 		return nil, fmt.Errorf("read the queue: %w", err)
 	}
 	return items, nil
+}
+
+func (r *Clarifications) Asked(ctx context.Context, contestID, id uuid.UUID) (clarifications.Asked, error) {
+	a, err := scanAsked(r.querier(ctx).QueryRow(ctx, askedSelect+`
+		WHERE c.id = $1 AND c.contest_id = $2`, id, contestID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return clarifications.Asked{}, clarifications.ErrNotFound
+	}
+	if err != nil {
+		return clarifications.Asked{}, fmt.Errorf("read the clarification: %w", err)
+	}
+	return a, nil
 }
 
 func (r *Clarifications) Counts(ctx context.Context, contestID uuid.UUID) (clarifications.Counts, error) {

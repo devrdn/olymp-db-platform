@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -242,6 +243,32 @@ var monitorErrors = errorTable{
 	// by speed, so the collector should drop the batch rather than retry
 	// (docs/ARCHITECTURE.md §9.4).
 	{err: monitor.ErrTooManyEvents, status: http.StatusConflict, code: codeSignalsTooManyStored},
+}
+
+// clarificationsErrors answers every error in clarifications.Errors() (walked
+// by TestEveryClarificationsErrorHasItsAnswer), for both the participant's
+// routes and the staff's.
+var clarificationsErrors = errorTable{
+	{err: clarifications.ErrQuestionTooLong, status: http.StatusBadRequest, code: codeClarificationTooLong},
+	{err: clarifications.ErrAnswerTooLong, status: http.StatusBadRequest, code: codeClarificationAnswerTooLong},
+	{err: clarifications.ErrAnnouncementTooLong, status: http.StatusBadRequest, code: codeAnnouncementTooLong},
+	{err: clarifications.ErrEmpty, status: http.StatusBadRequest, code: codeClarificationEmpty},
+	{err: clarifications.ErrTextInvalid, status: http.StatusBadRequest, code: codeClarificationTextInvalid},
+	{err: clarifications.ErrInvalidVisibility, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: clarifications.ErrInvalidCursor, status: http.StatusBadRequest, code: codeClarificationInvalidCursor},
+	{err: clarifications.ErrTooManyOpen, status: http.StatusConflict, code: codeClarificationTooManyOpen},
+	{err: clarifications.ErrTooOften, status: http.StatusTooManyRequests, code: codeClarificationTooOften,
+		retryAfter: clarifications.RetryAfter()},
+	// One answer for a clarification that does not exist and one of another
+	// contest, so an id says nothing about where it belongs.
+	{err: clarifications.ErrNotFound, status: http.StatusNotFound, code: codeClarificationNotFound},
+	{err: clarifications.ErrQuestionNotFound, status: http.StatusNotFound, code: codeQuestionNotFound,
+		message: "No such question in this contest"},
+	{err: clarifications.ErrContestNotFound, status: http.StatusNotFound, code: codeNotFound,
+		message: "Contest not found"},
+	{err: clarifications.ErrAlreadyAnswered, status: http.StatusConflict, code: codeClarificationAlreadyAnswered},
+	{err: clarifications.ErrNotAnswered, status: http.StatusConflict, code: codeClarificationNotAnswered},
+	{err: clarifications.ErrClosed, status: http.StatusConflict, code: codeClarificationsClosed},
 }
 
 // contestsErrors answers every error in contests.Errors() (walked by

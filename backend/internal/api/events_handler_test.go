@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
+	"github.com/devrdn/db-contest/backend/internal/platform/fanout"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -957,4 +958,64 @@ func TestEventsCloseWhenTheSessionPassesItsMaximumLifetime(t *testing.T) {
 
 	waitForSubstring(t, rec, "event: sync")
 	waitDone(t, done)
+}
+
+// runningStream opens a stream for participant in a running contest whose
+// handler hears hints from hub.
+func runningStream(t *testing.T, hub *fanout.Hub, contestID, participantID uuid.UUID) (*syncedRecorder, context.CancelFunc, <-chan struct{}) {
+	t.Helper()
+	f := newEventsFixture(t)
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: participantID}
+	f.handler.WithResyncInterval(time.Hour).WithHints(hub)
+	req, cancel := f.request(contestID)
+	rec, done := f.serve(req)
+	waitForSubstring(t, rec, "event: contest_started")
+	return rec, cancel, done
+}
+
+// A clarification event is a bare hint: the asker hears of a private answer,
+// everyone of a public one or an announcement, and nobody else's private
+// answer reaches a stream.
+func TestEventsCarryAClarificationHintToItsAudienceOnly(t *testing.T) {
+	hub := fanout.NewHub()
+	contestID, ana, ben := uuid.New(), uuid.New(), uuid.New()
+	anaStream, closeAna, anaDone := runningStream(t, hub, contestID, ana)
+	benStream, closeBen, benDone := runningStream(t, hub, contestID, ben)
+
+	hub.Publish(ana)
+	waitForSubstring(t, anaStream, "event: clarification\ndata: {}\n\n")
+	hub.Publish(contestID)
+	waitForCount(t, anaStream, "event: clarification", 2)
+	waitForCount(t, benStream, "event: clarification", 1)
+	// Another contest's announcement reaches neither.
+	hub.Publish(uuid.New())
+	time.Sleep(30 * time.Millisecond)
+
+	closeAna()
+	closeBen()
+	waitDone(t, anaDone)
+	waitDone(t, benDone)
+	if got := strings.Count(anaStream.String(), "event: clarification"); got != 2 {
+		t.Errorf("ana's stream carried %d hints, want 2 (her private answer and the public one)", got)
+	}
+	if got := strings.Count(benStream.String(), "event: clarification"); got != 1 {
+		t.Errorf("ben's stream carried %d hints, want 1: ana's private answer is not his business", got)
+	}
+}
+
+func TestEventsLeaveNoSubscriptionBehindOnDisconnect(t *testing.T) {
+	hub := fanout.NewHub()
+	contestID, participantID := uuid.New(), uuid.New()
+	_, cancel, done := runningStream(t, hub, contestID, participantID)
+	if hub.Subscribers(contestID) != 1 || hub.Subscribers(participantID) != 1 {
+		t.Fatalf("an open stream holds %d contest and %d registration subscriptions, want one each",
+			hub.Subscribers(contestID), hub.Subscribers(participantID))
+	}
+	cancel()
+	waitDone(t, done)
+	if hub.Subscribers(contestID) != 0 || hub.Subscribers(participantID) != 0 {
+		t.Fatal("a closed stream left its subscription in the hub")
+	}
 }

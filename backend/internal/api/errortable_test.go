@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -452,6 +453,70 @@ func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 			wrapped, ok := answer(t, contestsErrors, fmt.Errorf("%w: while deciding", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+func TestEveryClarificationsErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		clarifications.ErrQuestionTooLong: {status: http.StatusBadRequest, code: "clarification_too_long",
+			message: "a question is at most 2000 characters"},
+		clarifications.ErrAnswerTooLong: {status: http.StatusBadRequest, code: "clarification_answer_too_long",
+			message: "an answer is at most 4000 characters"},
+		clarifications.ErrAnnouncementTooLong: {status: http.StatusBadRequest, code: "announcement_too_long",
+			message: "an announcement is at most 4000 characters"},
+		clarifications.ErrEmpty: {status: http.StatusBadRequest, code: "clarification_empty",
+			message: "the text is empty"},
+		clarifications.ErrTextInvalid: {status: http.StatusBadRequest, code: "clarification_text_invalid",
+			message: "the text contains a NUL character or is not valid UTF-8"},
+		clarifications.ErrTooManyOpen: {status: http.StatusConflict, code: "clarification_too_many_open",
+			message: "a participant may have at most 20 questions waiting for an answer"},
+		clarifications.ErrTooOften: {status: http.StatusTooManyRequests, code: "clarification_too_often",
+			message: "too many questions asked this minute", retryAfter: "60"},
+		clarifications.ErrNotFound: {status: http.StatusNotFound, code: "clarification_not_found",
+			message: "no such clarification in this contest"},
+		clarifications.ErrQuestionNotFound: {status: http.StatusNotFound, code: "question_not_found",
+			message: "No such question in this contest"},
+		clarifications.ErrAlreadyAnswered: {status: http.StatusConflict, code: "clarification_already_answered",
+			message: "the question is already answered; edit the answer instead"},
+		clarifications.ErrNotAnswered: {status: http.StatusConflict, code: "clarification_not_answered",
+			message: "the question has no answer to edit yet"},
+		clarifications.ErrInvalidVisibility: {status: http.StatusBadRequest, code: "invalid_request",
+			message: "an answer's visibility is private or public"},
+		clarifications.ErrClosed: {status: http.StatusConflict, code: "clarifications_closed",
+			message: "the contest is not running, so nothing can be answered or announced"},
+		clarifications.ErrContestNotFound: {status: http.StatusNotFound, code: "not_found",
+			message: "Contest not found"},
+		clarifications.ErrInvalidCursor: {status: http.StatusBadRequest, code: "clarification_invalid_cursor",
+			message: "the cursor is not valid"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range clarifications.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, clarificationsErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, clarificationsErrors, fmt.Errorf("%w: while answering", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
 					wrapped, ok, expected.status, expected.code)

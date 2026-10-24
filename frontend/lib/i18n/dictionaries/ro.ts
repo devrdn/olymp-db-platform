@@ -2185,6 +2185,22 @@ const ro = {
     signals_batch_too_large: "Au fost trimise prea multe acțiuni de pe pagină deodată. Vor fi trimise pe părți.",
     signals_too_many_stored:
       "S-au înregistrat atâtea acțiuni de pe pagină câte păstrează această olimpiadă. Nimic din ce ați făcut nu s-a pierdut.",
+    clarification_too_long: "O întrebare poate avea cel mult 2.000 de caractere. Scurtați-o sau puneți două întrebări.",
+    clarification_answer_too_long: "Un răspuns poate avea cel mult 4.000 de caractere.",
+    announcement_too_long: "Un anunț poate avea cel mult 4.000 de caractere.",
+    clarification_empty: "Scrieți mai întâi un text.",
+    clarification_text_invalid:
+      "Textul conține un caracter care nu poate fi salvat. Eliminați-l și încercați din nou.",
+    clarification_too_many_open:
+      "Aveți deja 20 de întrebări care așteaptă răspuns. Veți putea pune alta după ce se răspunde la una dintre ele.",
+    clarification_too_often: "Puneți întrebări prea des. Așteptați un minut și încercați din nou.",
+    clarification_not_found: "Această întrebare nu aparține acestei olimpiade.",
+    clarification_already_answered:
+      "La această întrebare tocmai s-a răspuns, poate de un alt organizator. Citiți răspunsul și modificați-l dacă e nevoie.",
+    clarification_not_answered: "Această întrebare nu are încă răspuns. Răspundeți mai întâi.",
+    clarifications_closed:
+      "Olimpiada nu se desfășoară acum, deci participanții nu ar vedea un răspuns sau un anunț.",
+    clarification_invalid_cursor: "Lista nu a putut fi continuată. Reîncărcați pagina.",
     monitor_too_often: "Paginile de monitorizare sunt reîncărcate prea des. Așteptați un minut și încercați din nou.",
     monitor_participant_not_found: "Acest participant nu este în acest concurs.",
     monitor_revision_not_found: "Această versiune a notițelor sau a filei nu mai există.",

@@ -118,7 +118,7 @@ collects the worst of them.
 | Grace period | How long a finished contest's game databases are kept (`settings.grace_period_min`, installation default `GAME_INSTANCE_GRACE_MIN`, 1440 minutes). Unrelated to the deadline grace. Can be extended after the end. | `Settings.GracePeriodMin`, `Service.ExtendGrace`; `PATCH /contests/{contestID}/grace` |
 | Enrollment deadline | Closes self-signup before the start, so databases can be prepared. | `Settings.EnrollmentDeadline` |
 | Freeze | The leaderboard stops changing for everyone but staff `leaderboard_freeze_min` minutes before `ends_at`, and stays frozen past the finish until an organiser reveals it. | `Contest.FreezeAt`, `Contest.LeaderboardRevealedAt`; `POST /contests/{contestID}/leaderboard/reveal` |
-| Events channel | A Server-Sent Events stream per participant: periodic `sync` events with the server time and their deadline, `contest_started`, and `contest_finished` when the contest is over for them. | [`events_handler.go`](../../backend/internal/api/events_handler.go); `GET /contests/{contestID}/events` |
+| Events channel | A Server-Sent Events stream per participant: periodic `sync` events with the server time and their deadline, `contest_started`, `contest_finished` when the contest is over for them, and `clarification`, an empty hint to reread their questions to the organisers. | [`events_handler.go`](../../backend/internal/api/events_handler.go); `GET /contests/{contestID}/events` |
 
 ### Questions, answers and results
 
