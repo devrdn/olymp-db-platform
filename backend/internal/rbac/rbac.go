@@ -37,6 +37,11 @@ const (
 	// gate an installation-wide view of every contest's participants.
 	PermissionContestMonitor = "contest.monitor"
 
+	// PermissionContestClarify lets its holder read participants' questions,
+	// answer them and post announcements. Like contest.monitor it is granted
+	// wherever contest.view is and only ever checked with a contest id.
+	PermissionContestClarify = "contest.clarify"
+
 	// PermissionContestAdminAll lifts the contest scope: its holder acts on
 	// every contest without being listed as a manager. Being a permission, it
 	// can be given to a new role from data.
@@ -63,6 +68,7 @@ var ErrForbidden = errors.New("forbidden")
 var managerPermissions = map[string]struct{}{
 	PermissionContestView:       {},
 	PermissionContestMonitor:    {},
+	PermissionContestClarify:    {},
 	PermissionContestEdit:       {},
 	PermissionContestPublish:    {},
 	PermissionParticipantManage: {},
