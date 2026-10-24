@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -61,6 +62,36 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 		}
 		if !got.Tables[1].Columns[1].Nullable {
 			t.Fatal("nullability did not survive the round trip")
+		}
+	})
+}
+
+// The keys and the format are what decide whether a cached document is drawn
+// or read again, so losing either in the jsonb would re-read every game on
+// every request.
+func TestTheGamesKeysAndFormatSurviveAWriteAndARead(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aGameWithNoSchemaYet(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		schema := aSchema()
+		schema.Format = provisioning.SchemaFormat
+		schema.Tables[0].PrimaryKey = []string{"id"}
+		schema.Tables[1].ForeignKeys = []provisioning.ForeignKey{{
+			Name: "guests_room_id_fkey", Columns: []string{"room_id"},
+			ReferencedTable: "rooms", ReferencedColumns: []string{"id"},
+		}}
+		rebuild(t, ctx, contest, 2)
+		if err := repo.SaveSchema(ctx, contest, 2, schema); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+
+		got, _, err := repo.CachedSchema(ctx, contest)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if !reflect.DeepEqual(got, schema) {
+			t.Fatalf("read back %+v, want %+v", got, schema)
 		}
 	})
 }

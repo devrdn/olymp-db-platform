@@ -631,7 +631,8 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 	}
 }
 
-// schemaResponse is the game's shape, as the console's schema panel draws it.
+// schemaResponse is the game's shape, as the console's schema panel and
+// diagram draw it.
 type schemaResponse struct {
 	Tables []schemaTable `json:"tables"`
 	// Truncated says the game has more than the panel shows, so a short answer
@@ -640,8 +641,17 @@ type schemaResponse struct {
 }
 
 type schemaTable struct {
-	Name    string         `json:"name"`
-	Columns []schemaColumn `json:"columns"`
+	Name        string             `json:"name"`
+	Columns     []schemaColumn     `json:"columns"`
+	PrimaryKey  []string           `json:"primary_key"`
+	ForeignKeys []schemaForeignKey `json:"foreign_keys"`
+}
+
+type schemaForeignKey struct {
+	Name              string   `json:"name"`
+	Columns           []string `json:"columns"`
+	ReferencedTable   string   `json:"referenced_table"`
+	ReferencedColumns []string `json:"referenced_columns"`
 }
 
 type schemaColumn struct {
@@ -676,7 +686,20 @@ func (h *ParticipantHandler) schema(w http.ResponseWriter, r *http.Request) {
 				Nullable: column.Nullable, References: column.References,
 			})
 		}
-		answer.Tables = append(answer.Tables, schemaTable{Name: table.Name, Columns: columns})
+		keys := make([]schemaForeignKey, 0, len(table.ForeignKeys))
+		for _, key := range table.ForeignKeys {
+			keys = append(keys, schemaForeignKey{
+				Name: key.Name, Columns: key.Columns,
+				ReferencedTable: key.ReferencedTable, ReferencedColumns: key.ReferencedColumns,
+			})
+		}
+		primary := table.PrimaryKey
+		if primary == nil {
+			primary = []string{}
+		}
+		answer.Tables = append(answer.Tables, schemaTable{
+			Name: table.Name, Columns: columns, PrimaryKey: primary, ForeignKeys: keys,
+		})
 	}
 	httpx.JSON(w, r, http.StatusOK, answer)
 }

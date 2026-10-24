@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,20 +15,41 @@ import (
 // not built yet, or its build stored none.
 var ErrNoSchema = errors.New("the game's schema is not known yet")
 
-// Schema is the shape of a game database as the console's schema panel draws
-// it: tables, columns, types and foreign-key targets only. Indexes,
-// constraints and privileges are left to the catalogue.
+// Schema is the shape of a game database as the console's schema panel and
+// diagram draw it: tables, columns, types, primary keys and foreign keys only.
+// Indexes, other constraints and privileges are left to the catalogue.
 type Schema struct {
 	Tables []Table `json:"tables"`
-	// Truncated says the game has more tables, or a table more columns, than
-	// this document carries.
+	// Truncated says the game has more tables, a table more columns or keys,
+	// or a key more columns, than this document carries.
 	Truncated bool `json:"truncated,omitempty"`
+	// Format is the document's shape when it was stored. A cached document of
+	// another format is read as a miss and replaced.
+	Format int `json:"format,omitempty"`
 }
+
+// SchemaFormat is the current Format. Documents stored before keys were
+// described carry none (zero).
+const SchemaFormat = 1
 
 // Table is one relation and its columns, in declaration order.
 type Table struct {
 	Name    string   `json:"name"`
 	Columns []Column `json:"columns"`
+	// PrimaryKey names the primary key's columns in key order; empty when the
+	// relation has none.
+	PrimaryKey  []string     `json:"primary_key,omitempty"`
+	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"`
+}
+
+// ForeignKey is one foreign-key constraint whose referenced table is in the
+// public schema. Columns and ReferencedColumns pair up by position, in the
+// constraint's order.
+type ForeignKey struct {
+	Name              string   `json:"name"`
+	Columns           []string `json:"columns"`
+	ReferencedTable   string   `json:"referenced_table"`
+	ReferencedColumns []string `json:"referenced_columns"`
 }
 
 // Column is one column, named with the type the participant would have to
@@ -40,12 +62,16 @@ type Column struct {
 	References string `json:"references,omitempty"`
 }
 
-// MaxSchemaTables and MaxSchemaColumns bound the document (CLAUDE.md rule 2).
-// The init script is an organiser's own SQL, and the document is stored as one
-// jsonb value and sent to every participant's browser.
+// MaxSchemaTables, MaxSchemaColumns and MaxSchemaForeignKeys bound the
+// document (CLAUDE.md rule 2). The init script is an organiser's own SQL, and
+// the document is stored as one jsonb value and sent to every participant's
+// browser. MaxKeyColumns is PostgreSQL's own limit on a key (INDEX_MAX_KEYS);
+// a key past it is dropped rather than cut, since half a key is a wrong one.
 const (
-	MaxSchemaTables  = 200
-	MaxSchemaColumns = 200
+	MaxSchemaTables      = 200
+	MaxSchemaColumns     = 200
+	MaxSchemaForeignKeys = 200
+	MaxKeyColumns        = 32
 )
 
 // SchemaStore is the schema cache. CachedSchema reports ErrNoSchema when
@@ -119,7 +145,7 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 		if err != nil {
 			return nil, fmt.Errorf("read the game's schema: %w", err)
 		}
-		schema = boundSchema(schema)
+		schema = storable(schema)
 
 		if readable {
 			// Best effort: the next caller reads again if this fails.
@@ -134,7 +160,7 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 }
 
 // cached returns the cached document when it describes the build the contest
-// is running (hit). readable is false when the cache itself failed, as opposed
+// is running, in the current format (hit). readable is false when the cache itself failed, as opposed
 // to holding nothing for this build.
 func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Schema, hit, readable bool) {
 	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
@@ -143,25 +169,44 @@ func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Sche
 		return Schema{}, false, true
 	case err != nil:
 		return Schema{}, false, false
-	case version != contest.Version:
+	case version != contest.Version, cached.Format != SchemaFormat:
 		return Schema{}, false, true
 	}
 	return cached, true, true
 }
 
-// boundSchema cuts the document to MaxSchemaTables and MaxSchemaColumns and
-// sets Truncated if it had to. It runs before the cache write so the stored
-// jsonb is bounded too (CLAUDE.md rule 2).
-func boundSchema(schema Schema) Schema {
+// storable bounds the document to MaxSchemaTables, MaxSchemaColumns,
+// MaxSchemaForeignKeys and MaxKeyColumns, sets Truncated if it had to, and
+// stamps the current format. Both writers of the cache call it first, so the
+// stored jsonb is bounded too (CLAUDE.md rule 2).
+func storable(schema Schema) Schema {
+	schema.Format = SchemaFormat
 	if len(schema.Tables) > MaxSchemaTables {
 		schema.Tables = schema.Tables[:MaxSchemaTables]
 		schema.Truncated = true
 	}
-	for i, table := range schema.Tables {
+	for i := range schema.Tables {
+		table := &schema.Tables[i]
 		if len(table.Columns) > MaxSchemaColumns {
-			schema.Tables[i].Columns = table.Columns[:MaxSchemaColumns]
+			table.Columns = table.Columns[:MaxSchemaColumns]
+			schema.Truncated = true
+		}
+		if len(table.PrimaryKey) > MaxKeyColumns {
+			table.PrimaryKey = nil
+			schema.Truncated = true
+		}
+		if len(table.ForeignKeys) > MaxSchemaForeignKeys {
+			table.ForeignKeys = table.ForeignKeys[:MaxSchemaForeignKeys]
+			schema.Truncated = true
+		}
+		if slices.ContainsFunc(table.ForeignKeys, tooWide) {
+			table.ForeignKeys = slices.DeleteFunc(slices.Clone(table.ForeignKeys), tooWide)
 			schema.Truncated = true
 		}
 	}
 	return schema
+}
+
+func tooWide(key ForeignKey) bool {
+	return len(key.Columns) > MaxKeyColumns || len(key.ReferencedColumns) > MaxKeyColumns
 }
