@@ -349,8 +349,6 @@ func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 	})
 }
 
-// "Load older" names the last row it has, so a query journalled meanwhile
-// cannot shift the page and hand a row back twice, as an offset would.
 func TestHistoryPagesOlderThanTheRowItIsGiven(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)

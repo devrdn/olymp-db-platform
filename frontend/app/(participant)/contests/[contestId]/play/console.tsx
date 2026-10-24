@@ -178,7 +178,7 @@ export function ConsoleEditor({
       />
       {/* The toolbar sits above the editor so the action used most does not
           move when the result changes height. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+      <div className="@container flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <button
           type="submit"
           disabled={running}
@@ -191,8 +191,12 @@ export function ConsoleEditor({
           </span>
         </button>
         {/* The one rule typing can break (a second statement is refused), kept in
-            sight. It may wrap on a phone rather than push the buttons off. */}
-        <span className="min-w-0 flex-1 text-small text-ink-3">{t.hint}</span>
+            sight while the toolbar has room for it. In a console narrowed beside a
+            wide side column it would wrap a word a line across the buttons, so it
+            goes; the outer span still pushes the buttons to the end. */}
+        <span className="min-w-0 flex-1 overflow-hidden text-small text-ink-3">
+          <span className="hidden @min-[30rem]:inline">{t.hint}</span>
+        </span>
         {actions}
       </div>
 

@@ -433,8 +433,7 @@ type queryLogResponse struct {
 // queryLog serves this participant's own query history. limit and offset are
 // passed through unchecked: History clamps them
 // (queryrunner.NormalizeHistoryPage), so an oversized page gets the largest
-// allowed (CLAUDE.md rule 2). "Load older" sends ?before= instead of an
-// offset, which a query run meanwhile would shift.
+// allowed (CLAUDE.md rule 2). "Load older" sends ?before=, a row id.
 func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 	participant, _, ok := h.admit(w, r)
 	if !ok {

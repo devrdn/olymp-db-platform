@@ -48,8 +48,8 @@ export const SIDE_WINDOW_SHARE = 0.6;
 
 /**
  * The console's least width in rem beside the side column (and the schema,
- * where it is a column): the narrowest it was ever left when the side
- * column's ceiling was 32rem.
+ * where it is a column): room for the editor's gutter and about twenty
+ * characters of SQL.
  */
 export const CONSOLE_MIN_REM = 16;
 
