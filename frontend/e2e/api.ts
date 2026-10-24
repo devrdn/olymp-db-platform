@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { request, type APIRequestContext } from "@playwright/test";
 
+import type { FeatureSeed } from "./seed-features";
+
 /**
  * The Core API as the seed and the teardown use it: through the stack's own
  * public address, the way a browser reaches it, never the database. Every
@@ -30,6 +32,8 @@ export type SeedRecord = {
   participant?: Account;
   contest?: { id: string; title: string };
   question?: { id: string; answer: string; wrongAnswer: string };
+  /** The post-beta checks' accounts and contests (seed-features.ts). */
+  features?: FeatureSeed;
 };
 
 /** A finished seed, which is all a spec ever reads. */
