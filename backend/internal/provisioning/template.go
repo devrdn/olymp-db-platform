@@ -893,7 +893,7 @@ func (g *Games) describe(ctx context.Context, claimed Template) error {
 	if err != nil {
 		return fmt.Errorf("describe the built game: %w", err)
 	}
-	if err := g.repo.SaveSchema(ctx, claimed.ContestID, claimed.Version, boundSchema(schema)); err != nil {
+	if err := g.repo.SaveSchema(ctx, claimed.ContestID, claimed.Version, storable(schema)); err != nil {
 		return fmt.Errorf("describe the built game: %w", err)
 	}
 	return nil

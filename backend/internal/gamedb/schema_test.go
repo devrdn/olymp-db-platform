@@ -2,7 +2,11 @@ package gamedb_test
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
 // A real database, because the catalogue query is the whole of the method.
@@ -111,4 +115,100 @@ func TestReadSchemaRefusesAnUnspellableName(t *testing.T) {
 	if _, err := provisioner(t).ReadSchema(context.Background(), `game"; DROP DATABASE x --`); err == nil {
 		t.Fatal("a name that is not a plain identifier was accepted")
 	}
+}
+
+func TestReadSchemaDescribesEachKeyWithItsColumnsInKeyOrder(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE SCHEMA staffroom`,
+		`CREATE TABLE staffroom.badges (id int PRIMARY KEY)`,
+		// The key's order differs from the declaration order.
+		`CREATE TABLE floors (building text, level int, PRIMARY KEY (level, building))`,
+		`CREATE TABLE rooms (
+			id    int PRIMARY KEY,
+			lvl   int,
+			bld   text,
+			badge int REFERENCES staffroom.badges,
+			CONSTRAINT rooms_on_a_floor FOREIGN KEY (lvl, bld) REFERENCES floors (level, building)
+		)`,
+		`CREATE TABLE staff (
+			id         int PRIMARY KEY,
+			manager_id int CONSTRAINT staff_manager REFERENCES staff
+		)`,
+		`CREATE TABLE notes (body text)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	tables := map[string]provisioning.Table{}
+	for _, table := range schema.Tables {
+		tables[table.Name] = table
+	}
+
+	if got := tables["floors"].PrimaryKey; !slices.Equal(got, []string{"level", "building"}) {
+		t.Errorf("floors has primary key %v, want [level building] in key order", got)
+	}
+	if got := tables["notes"].PrimaryKey; len(got) != 0 {
+		t.Errorf("notes has no primary key and was given %v", got)
+	}
+
+	// The badge key points outside the public schema, where the diagram has
+	// no box to draw an arrow to.
+	want := []provisioning.ForeignKey{{
+		Name:              "rooms_on_a_floor",
+		Columns:           []string{"lvl", "bld"},
+		ReferencedTable:   "floors",
+		ReferencedColumns: []string{"level", "building"},
+	}}
+	if got := tables["rooms"].ForeignKeys; !reflect.DeepEqual(got, want) {
+		t.Errorf("rooms has foreign keys %+v, want %+v", got, want)
+	}
+
+	wantSelf := []provisioning.ForeignKey{{
+		Name: "staff_manager", Columns: []string{"manager_id"},
+		ReferencedTable: "staff", ReferencedColumns: []string{"id"},
+	}}
+	if got := tables["staff"].ForeignKeys; !reflect.DeepEqual(got, wantSelf) {
+		t.Errorf("staff has foreign keys %+v, want %+v", got, wantSelf)
+	}
+	if got := tables["floors"].ForeignKeys; len(got) != 0 {
+		t.Errorf("floors has no foreign key and was given %+v", got)
+	}
+}
+
+// PostgreSQL clones a key that points at a partitioned table once per
+// partition; the diagram must draw it once.
+func TestReadSchemaListsAKeyToAPartitionedTableOnce(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE TABLE visits (id int, day date, PRIMARY KEY (id, day)) PARTITION BY RANGE (day)`,
+		`CREATE TABLE visits_2026 PARTITION OF visits FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+		`CREATE TABLE visits_2027 PARTITION OF visits FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')`,
+		`CREATE TABLE stamps (visit int, day date, CONSTRAINT stamps_visit FOREIGN KEY (visit, day) REFERENCES visits)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	for _, table := range schema.Tables {
+		if table.Name != "stamps" {
+			continue
+		}
+		want := []provisioning.ForeignKey{{
+			Name: "stamps_visit", Columns: []string{"visit", "day"},
+			ReferencedTable: "visits", ReferencedColumns: []string{"id", "day"},
+		}}
+		if !reflect.DeepEqual(table.ForeignKeys, want) {
+			t.Fatalf("stamps has foreign keys %+v, want %+v", table.ForeignKeys, want)
+		}
+		return
+	}
+	t.Fatal("stamps is missing from the schema")
 }

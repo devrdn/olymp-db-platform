@@ -66,6 +66,73 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	}
 }
 
+func TestSchemaEndpointCarriesEachTablesKeys(t *testing.T) {
+	f := newParticipantFixture(t)
+	contest := f.playContest(t)
+	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
+		{Name: "floors", PrimaryKey: []string{"level", "building"}, Columns: []provisioning.Column{
+			{Name: "building", Type: "text"}, {Name: "level", Type: "integer"},
+		}},
+		{Name: "rooms", Columns: []provisioning.Column{
+			{Name: "lvl", Type: "integer", References: "floors"}, {Name: "bld", Type: "text", References: "floors"},
+		}, ForeignKeys: []provisioning.ForeignKey{{
+			Name: "rooms_on_a_floor", Columns: []string{"lvl", "bld"},
+			ReferencedTable: "floors", ReferencedColumns: []string{"level", "building"},
+		}}},
+	}}
+
+	rec := f.get("/contests/" + contest.String() + "/play/schema")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Tables []struct {
+			Name        string   `json:"name"`
+			PrimaryKey  []string `json:"primary_key"`
+			ForeignKeys []struct {
+				Name              string   `json:"name"`
+				Columns           []string `json:"columns"`
+				ReferencedTable   string   `json:"referenced_table"`
+				ReferencedColumns []string `json:"referenced_columns"`
+			} `json:"foreign_keys"`
+		} `json:"tables"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v — %s", err, rec.Body)
+	}
+	if got := strings.Join(body.Tables[0].PrimaryKey, ","); got != "level,building" {
+		t.Errorf("floors' primary key reached the client as %q", got)
+	}
+	keys := body.Tables[1].ForeignKeys
+	if len(keys) != 1 || keys[0].Name != "rooms_on_a_floor" || keys[0].ReferencedTable != "floors" ||
+		strings.Join(keys[0].Columns, ",") != "lvl,bld" ||
+		strings.Join(keys[0].ReferencedColumns, ",") != "level,building" {
+		t.Errorf("rooms' foreign keys reached the client as %+v", keys)
+	}
+}
+
+// A table with no keys answers [] for both, never null.
+func TestSchemaEndpointAnswersATableWithoutKeysWithEmptyLists(t *testing.T) {
+	f := newParticipantFixture(t)
+	contest := f.playContest(t)
+	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
+		{Name: "notes", Columns: []provisioning.Column{{Name: "body", Type: "text"}}},
+	}}
+
+	rec := f.get("/contests/" + contest.String() + "/play/schema")
+	var body struct {
+		Tables []map[string]any `json:"tables"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v — %s", err, rec.Body)
+	}
+	for _, field := range []string{"primary_key", "foreign_keys"} {
+		if list, ok := body.Tables[0][field].([]any); !ok || len(list) != 0 {
+			t.Errorf("%s came back as %v, want []", field, body.Tables[0][field])
+		}
+	}
+}
+
 // A client that must tell null from [] before drawing a tree is a bug waiting.
 func TestSchemaEndpointNeverAnswersWithANullList(t *testing.T) {
 	f := newParticipantFixture(t)
