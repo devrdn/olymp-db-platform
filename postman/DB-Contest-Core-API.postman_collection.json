@@ -1776,7 +1776,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications?state=open&limit=50&offset=0",
+              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications?state=open&limit=50",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1793,14 +1793,10 @@
                 {
                   "key": "limit",
                   "value": "50"
-                },
-                {
-                  "key": "offset",
-                  "value": "0"
                 }
               ]
             },
-            "description": "Staff (`contest.clarify`). `state=open` (the default) lists the questions waiting, oldest first; `state=answered` the answered ones, most recently answered first. Each item names the asker (`asker.login`, `asker.full_name`) and, once answered, who answered first (`answer.answered_by`). `counts` gives both states' totals. A staff screen polls this every five seconds.\n\nResponses: 200 `{items, counts: {open, answered}}` · 400 `invalid_contest_id` · 403"
+            "description": "Staff (`contest.clarify`). `state=open` (the default) lists the questions waiting, oldest first; `state=answered` the answered ones, most recently answered first. Each item names the asker (`asker.login`, `asker.full_name`) and, once answered, who answered first (`answer.answered_by`). `counts` gives both states' totals. A staff screen polls this every five seconds. `after`, a clarification id, reads the page past that item in the state's order (the last one the caller holds), so answers given meanwhile neither repeat nor skip an item.\n\nResponses: 200 `{items, counts: {open, answered}}` · 400 `invalid_contest_id` / `clarification_invalid_cursor` · 403"
           },
           "response": []
         },

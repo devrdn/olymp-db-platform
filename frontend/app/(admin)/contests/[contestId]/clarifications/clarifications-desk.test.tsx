@@ -12,8 +12,8 @@ const t = en.workspace.clarifications;
 
 const api = vi.hoisted(() => ({
   queues: {} as Record<string, ClarificationQueue | { refused: string }>,
-  pages: {} as Record<string, (offset: number, limit: number) => ClarificationQueue>,
-  reads: [] as { state: QueueState; limit: number; offset: number }[],
+  pages: {} as Record<string, (after: string | undefined, limit: number) => ClarificationQueue>,
+  reads: [] as { state: QueueState; limit: number; after?: string }[],
   answers: [] as { id: string; answer: AnswerInput; mode: string }[],
   answerResult: null as null | { kind: "ok"; clarification: StaffClarification } | { kind: "refused"; code: string },
   posts: [] as string[],
@@ -22,10 +22,9 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@/lib/api/clarifications", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/clarifications")>()),
-  fetchQueue: async (_contestId: string, state: QueueState, page: { limit: number; offset?: number }) => {
-    const offset = page.offset ?? 0;
-    api.reads.push({ state, limit: page.limit, offset });
-    if (api.pages[state]) return { kind: "ok", queue: api.pages[state](offset, page.limit) };
+  fetchQueue: async (_contestId: string, state: QueueState, page: { limit: number; after?: string }) => {
+    api.reads.push({ state, limit: page.limit, after: page.after });
+    if (api.pages[state]) return { kind: "ok", queue: api.pages[state](page.after, page.limit) };
     const queue = api.queues[state];
     if (queue && "refused" in queue) return { kind: "refused", code: queue.refused };
     return { kind: "ok", queue: queue ?? { items: [], counts: { open: 0, answered: 0 } } };
@@ -45,6 +44,9 @@ vi.mock("@/lib/api/clarifications", async (importOriginal) => ({
     return api.postResult ?? { kind: "ok", announcement: { id: `a${api.posts.length}`, body, createdAt: "2026-11-02T09:20:00.000000Z" } };
   },
 }));
+
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 vi.mock("@/components/product/story-text", () => ({
   StoryText: ({ markdown }: { markdown: string }) => <div data-testid="markdown">{markdown}</div>,
@@ -88,6 +90,7 @@ function show(props: Partial<React.ComponentProps<typeof ClarificationsDesk>> = 
 }
 
 beforeEach(() => {
+  router.refresh.mockReset();
   api.queues = {};
   api.pages = {};
   api.reads = [];
@@ -218,6 +221,31 @@ describe("the staff desk", () => {
     expect(screen.getByRole("button", { name: t.waiting.replace("{n}", "2") })).toBeInTheDocument();
   });
 
+  // The navigation's waiting count is drawn by the server layout, once; the
+  // desk is what notices it changed.
+  test("redraws the navigation when the number waiting changes, and only then", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.queues.open = queue([waiting("c1", { questionId: "q1" })], { open: 1, answered: 2 });
+    show();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DESK_POLL_MS);
+    });
+    await waitFor(() => expect(api.reads).toHaveLength(1));
+    expect(router.refresh).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByRole("textbox", { name: t.answerLabel }), "Yes.");
+    await userEvent.click(screen.getByRole("button", { name: t.send }));
+    await screen.findByText(t.sent);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+
+    api.queues.open = queue([waiting("c2", { body: "A new one" })], { open: 1, answered: 3 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DESK_POLL_MS);
+    });
+    await screen.findByText("A new one");
+    expect(router.refresh).toHaveBeenCalledTimes(2);
+  });
+
   test("reads nothing while the tab is hidden", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
@@ -286,9 +314,14 @@ describe("the staff desk", () => {
     await waitFor(() => expect(api.answers[0].answer.visibility).toBe("public"));
   });
 
+  // Each page names the last item held, so answers given meanwhile, which
+  // move the list, neither repeat an item nor skip one.
   test("reaches answered questions past the hundred it keeps live, a page at a time", async () => {
     const all = Array.from({ length: 160 }, (_, i) => answered(`a${i}`));
-    api.pages.answered = (offset, limit) => queue(all.slice(offset, offset + limit), { open: 1, answered: all.length });
+    api.pages.answered = (after, limit) => {
+      const from = after === undefined ? 0 : all.findIndex((item) => item.id === after) + 1;
+      return queue(all.slice(from, from + limit), { open: 1, answered: all.length });
+    };
     show();
     await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(50));
@@ -298,10 +331,10 @@ describe("the staff desk", () => {
       await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(expected));
     }
     expect(screen.queryByRole("button", { name: t.older })).toBeNull();
-    expect(api.reads.slice(-3).map((r) => [r.offset, r.limit])).toEqual([
-      [0, 100],
-      [100, 50],
-      [150, 50],
+    expect(api.reads.slice(-3).map((r) => [r.after, r.limit])).toEqual([
+      [undefined, 100],
+      ["a99", 50],
+      ["a149", 50],
     ]);
   });
 

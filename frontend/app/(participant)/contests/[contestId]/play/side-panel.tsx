@@ -14,6 +14,7 @@ import { fetchStandings } from "./requests";
 
 import { ClarificationsPanel } from "./clarifications-panel";
 import { NotesPanel } from "./notes-panel";
+import { useSideMarker } from "./panel-toggles";
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 
 /**
@@ -42,11 +43,14 @@ function printStory(contestId: string) {
 }
 
 /**
- * The panel beside the console: story, questions, notes, questions to the
- * organisers and leaderboard as tabs, with the organiser's table descriptions
- * after the story when there are any. Every tab stays mounted while hidden, so
- * switching keeps an unfinished answer, a scroll position and a pending notes
- * save, and the questions to the organisers can raise their tab's marker.
+ * The panel beside the console: story, questions, questions to the
+ * organisers, notes and leaderboard as tabs, with the organiser's table
+ * descriptions after the story when there are any. Every tab stays mounted
+ * while hidden, so switching keeps an unfinished answer, a scroll position and
+ * a pending notes save, and the questions to the organisers can raise their
+ * tab's marker. Six tabs outgrow the column at its default width, so that tab
+ * comes right after the questions, is scrolled into view when its marker
+ * rises, and has the marker repeated on the side panel's toggle in the header.
  *
  * Once there is a story, its tab offers two exports:
  *
@@ -101,12 +105,18 @@ export function SidePanel({
   const onClarificationsUnread = useCallback((unread: boolean) => setClarificationsUnread(unread), []);
   const clarifyT = dict.participant.play.clarifications;
 
-  // Scroll the selected tab back into view when the selection changes; the
-  // strip scrolls sideways.
+  // Scroll the selected tab back into view when the selection changes, and
+  // the organisers' tab when its marker rises; the strip scrolls sideways.
   useEffect(() => {
     const selected = tabListWrapRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
     selected?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [shown]);
+  useEffect(() => {
+    if (!clarificationsUnread) return;
+    const marked = tabListWrapRef.current?.querySelector<HTMLElement>('[data-tab="clarifications"]');
+    marked?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [clarificationsUnread]);
+  useSideMarker(clarificationsUnread);
 
   return (
     <Tabs value={shown} onValueChange={setTab} className="h-full min-h-0">
@@ -120,10 +130,10 @@ export function SidePanel({
             <TabsTrigger value="tables" className="px-2">{t.tables}</TabsTrigger>
           ) : null}
           <TabsTrigger value="questions" className="px-2">{t.questions}</TabsTrigger>
-          <TabsTrigger value="notes" className="px-2">{t.notes}</TabsTrigger>
           {/* The dot is drawn for the eye; the label carries it to a screen reader. */}
           <TabsTrigger
             value="clarifications"
+            data-tab="clarifications"
             className="inline-flex items-center gap-1.5 px-2"
             aria-label={clarificationsUnread ? `${clarifyT.tab} (${clarifyT.unread})` : undefined}
           >
@@ -132,6 +142,7 @@ export function SidePanel({
               <span aria-hidden data-testid="clarifications-unread" className="size-1.5 shrink-0 rounded-full bg-accent" />
             ) : null}
           </TabsTrigger>
+          <TabsTrigger value="notes" className="px-2">{t.notes}</TabsTrigger>
           <TabsTrigger value="leaderboard" className="px-2">{dict.leaderboard.tab}</TabsTrigger>
         </TabsList>
       </div>

@@ -254,8 +254,11 @@ type Repository interface {
 	Feed(ctx context.Context, contestID, registrationID uuid.UUID, before Cursor, limit int, sequential bool) ([]Entry, error)
 	// OpenCount is how many of the registration's questions wait.
 	OpenCount(ctx context.Context, registrationID uuid.UUID) (int, error)
-	// Queue pages one state of the contest's questions (see State).
-	Queue(ctx context.Context, contestID uuid.UUID, state State, limit, offset int) ([]Asked, error)
+	// Queue pages one state of the contest's questions (see State): from the
+	// start when after is uuid.Nil, otherwise past the clarification after in
+	// that state's order, wherever it has gone since; nothing when after is not
+	// one of this contest's.
+	Queue(ctx context.Context, contestID uuid.UUID, state State, limit int, after uuid.UUID) ([]Asked, error)
 	// Asked reads one clarification as staff see it, or ErrNotFound.
 	Asked(ctx context.Context, contestID, id uuid.UUID) (Asked, error)
 	Counts(ctx context.Context, contestID uuid.UUID) (Counts, error)
@@ -475,12 +478,13 @@ func seenBy(e Entry, registration uuid.UUID) FeedItem {
 	}}
 }
 
-// QueueQuery asks for one page of one state of the staff queue.
+// QueueQuery asks for one page of one state of the staff queue. After names
+// the last clarification the caller holds, uuid.Nil for the first page.
 type QueueQuery struct {
 	ContestID uuid.UUID
 	State     State
 	Limit     int
-	Offset    int
+	After     uuid.UUID
 }
 
 // QueuePage is one page of the staff queue, with both states' counts.
@@ -496,7 +500,7 @@ func (s *Service) Queue(ctx context.Context, q QueueQuery) (QueuePage, error) {
 	if state != StateAnswered {
 		state = StateOpen
 	}
-	items, err := s.repo.Queue(ctx, q.ContestID, state, clampLimit(q.Limit), max(q.Offset, 0))
+	items, err := s.repo.Queue(ctx, q.ContestID, state, clampLimit(q.Limit), q.After)
 	if err != nil {
 		return QueuePage{}, fmt.Errorf("read the queue: %w", err)
 	}

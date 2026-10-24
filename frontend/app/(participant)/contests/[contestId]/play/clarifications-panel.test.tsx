@@ -311,7 +311,9 @@ describe("the questions to the organisers", () => {
     expect(await screen.findByText(t.closed)).toBeInTheDocument();
   });
 
-  test("reads again a moment after a hint, spread so a whole contest does not ask at once", async () => {
+  // Five hundred screens read the feed after one announcement; ten seconds
+  // spreads them to about fifty reads a second.
+  test("reads again a moment after a hint, spread over ten seconds so a whole contest does not ask at once", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     api.feeds = [feed([]), feed([announcement(9, "New announcement")])];
@@ -319,9 +321,12 @@ describe("the questions to the organisers", () => {
     await screen.findByText(t.empty);
 
     act(() => publisher.hint());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_900);
+    });
     expect(api.fetches).toHaveLength(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(200);
     });
 
     expect(api.fetches).toHaveLength(2);
@@ -363,25 +368,27 @@ describe("keeping the list right", () => {
 
     act(() => publisher.hint());
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(6_000);
     });
     act(() => publisher.hint());
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.advanceTimersByTimeAsync(4_500);
     });
 
-    // The first hint's read happened 3 s after it, not 3 s after the second.
+    // The first hint's read happened 10 s after it, not 10 s after the second.
     expect(api.fetches).toHaveLength(2);
   });
 
-  test("an answer taken back from everyone leaves the older pages too", async () => {
+  // Each read spends the play screen's read budget, so a hint costs one read
+  // however far back the participant has scrolled; an older page that may
+  // have changed (an answer taken back) goes, to be loaded again on demand.
+  test("a hint reads the newest page alone, and the older pages load again on demand", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(Math, "random").mockReturnValue(0);
     const unpublished = answered(2, { id: "taken-back", mine: false, body: "Soon private again" });
     api.feeds = [
       feed([announcement(9)], { next: "older-1" }),
       feed([unpublished, announcement(1, "From the start")]),
-      // The re-read after a hint: the newest page, then the older one again.
       feed([announcement(9)], { next: "older-1" }),
       feed([announcement(1, "From the start")]),
     ];
@@ -391,7 +398,12 @@ describe("keeping the list right", () => {
 
     act(() => publisher.hint());
     await waitFor(() => expect(screen.queryByText("Soon private again")).toBeNull());
-    expect(screen.getByText("From the start")).toBeInTheDocument();
+    expect(api.fetches).toEqual([undefined, "older-1", undefined]);
+    expect(screen.queryByText("From the start")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: t.older }));
+    expect(await screen.findByText("From the start")).toBeInTheDocument();
+    expect(screen.queryByText("Soon private again")).toBeNull();
     expect(api.fetches).toEqual([undefined, "older-1", undefined, "older-1"]);
   });
 

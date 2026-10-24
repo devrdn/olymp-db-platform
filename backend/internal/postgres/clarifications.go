@@ -204,10 +204,19 @@ func (r *Clarifications) OpenCount(ctx context.Context, registrationID uuid.UUID
 	return open, nil
 }
 
-// queueOrder is each state's filter and order, matching its partial index.
+// queueOrder is each state's filter, the keyset past the clarification $3
+// (skipped when $3 is null), and order, matching its partial index. The keyset
+// is the cursor row's own sort key, so a row that changed state since still
+// marks a place.
 var queueOrder = map[clarifications.State]string{
-	clarifications.StateOpen:     `c.answered_at IS NULL ORDER BY c.created_at, c.id`,
-	clarifications.StateAnswered: `c.answered_at IS NOT NULL ORDER BY c.answered_at DESC, c.id DESC`,
+	clarifications.StateOpen: `c.answered_at IS NULL
+		AND ($3::uuid IS NULL OR (c.created_at, c.id) >
+		     (SELECT created_at, id FROM clarifications WHERE id = $3 AND contest_id = $1))
+		ORDER BY c.created_at, c.id`,
+	clarifications.StateAnswered: `c.answered_at IS NOT NULL
+		AND ($3::uuid IS NULL OR (c.answered_at, c.id) <
+		     (SELECT answered_at, id FROM clarifications WHERE id = $3 AND contest_id = $1))
+		ORDER BY c.answered_at DESC, c.id DESC`,
 }
 
 // askedSelect reads clarifications c with who asked and who answered, for
@@ -228,14 +237,18 @@ func scanAsked(row pgx.Row) (clarifications.Asked, error) {
 	return a, err
 }
 
-func (r *Clarifications) Queue(ctx context.Context, contestID uuid.UUID, state clarifications.State, limit, offset int) ([]clarifications.Asked, error) {
+func (r *Clarifications) Queue(ctx context.Context, contestID uuid.UUID, state clarifications.State, limit int, after uuid.UUID) ([]clarifications.Asked, error) {
 	order, ok := queueOrder[state]
 	if !ok {
 		return nil, fmt.Errorf("unknown queue state %q", state)
 	}
+	var cursor *uuid.UUID
+	if after != uuid.Nil {
+		cursor = &after
+	}
 	rows, err := r.querier(ctx).Query(ctx, askedSelect+`
 		WHERE c.contest_id = $1 AND `+order+`
-		LIMIT $2 OFFSET $3`, contestID, limit, offset)
+		LIMIT $2`, contestID, limit, cursor)
 	if err != nil {
 		return nil, fmt.Errorf("read the queue: %w", err)
 	}
