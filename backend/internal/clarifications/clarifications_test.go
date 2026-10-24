@@ -28,7 +28,7 @@ func ask(t *testing.T, f *clarificationstest.Fixture, contest, registration uuid
 	return asked
 }
 
-func answer(t *testing.T, f *clarificationstest.Fixture, contest, id uuid.UUID, visibility clarifications.Visibility) clarifications.Clarification {
+func answer(t *testing.T, f *clarificationstest.Fixture, contest, id uuid.UUID, visibility clarifications.Visibility) clarifications.Asked {
 	t.Helper()
 	f.Tick()
 	answered, err := f.Service.Answer(ctx, clarifications.AnswerCommand{

@@ -252,6 +252,8 @@ type Repository interface {
 	OpenCount(ctx context.Context, registrationID uuid.UUID) (int, error)
 	// Queue pages one state of the contest's questions (see State).
 	Queue(ctx context.Context, contestID uuid.UUID, state State, limit, offset int) ([]Asked, error)
+	// Asked reads one clarification as staff see it, or ErrNotFound.
+	Asked(ctx context.Context, contestID, id uuid.UUID) (Asked, error)
 	Counts(ctx context.Context, contestID uuid.UUID) (Counts, error)
 	// Answer gives an unanswered clarification its answer: ErrNotFound, or
 	// ErrAlreadyAnswered when it has one.
@@ -519,41 +521,47 @@ func (cmd AnswerCommand) answer(body string, at time.Time) Answer {
 	return Answer{Body: body, Declined: cmd.Declined, Visibility: cmd.Visibility, By: &actor, At: at}
 }
 
-// Answer answers a waiting question, once. A public answer shows the question
-// with it to every participant, and is recorded as a publication.
-func (s *Service) Answer(ctx context.Context, cmd AnswerCommand) (Clarification, error) {
+// Answer answers a waiting question, once, and returns it as staff see it. A
+// public answer shows the question with it to every participant, and is
+// recorded as a publication.
+func (s *Service) Answer(ctx context.Context, cmd AnswerCommand) (Asked, error) {
 	body, err := s.checkAnswer(ctx, cmd)
 	if err != nil {
-		return Clarification{}, err
+		return Asked{}, err
 	}
-	var answered Clarification
+	var answered Asked
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		var err error
-		if answered, err = s.repo.Answer(ctx, cmd.ContestID, cmd.ClarificationID, cmd.answer(body, s.now())); err != nil {
+		written, err := s.repo.Answer(ctx, cmd.ContestID, cmd.ClarificationID, cmd.answer(body, s.now()))
+		if err != nil {
 			return err
 		}
 		action := audit.ActionClarificationAnswer
-		if answered.Visibility() == Public {
+		if written.Visibility() == Public {
 			action = audit.ActionClarificationPublish
 		}
-		return s.record(ctx, cmd.Actor, action, cmd.ContestID, answerPayload(answered))
+		if err := s.record(ctx, cmd.Actor, action, cmd.ContestID, answerPayload(written)); err != nil {
+			return err
+		}
+		answered, err = s.repo.Asked(ctx, cmd.ContestID, cmd.ClarificationID)
+		return err
 	})
 	if err != nil {
-		return Clarification{}, writeError(err, "answer the question")
+		return Asked{}, writeError(err, "answer the question")
 	}
-	s.tell(answered, answered.Visibility() == Public)
+	s.tell(answered.Clarification, answered.Visibility() == Public)
 	return answered, nil
 }
 
-// EditAnswer replaces an existing answer. Turning a private answer public is
-// recorded as a publication; any other change as an edit, with the text it
-// replaced.
-func (s *Service) EditAnswer(ctx context.Context, cmd AnswerCommand) (Clarification, error) {
+// EditAnswer replaces an existing answer and returns it as staff see it.
+// Turning a private answer public is recorded as a publication; any other
+// change as an edit, with the text it replaced.
+func (s *Service) EditAnswer(ctx context.Context, cmd AnswerCommand) (Asked, error) {
 	body, err := s.checkAnswer(ctx, cmd)
 	if err != nil {
-		return Clarification{}, err
+		return Asked{}, err
 	}
 	var before, after Clarification
+	var edited Asked
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
 		replacement := cmd.answer(body, s.now())
@@ -568,14 +576,18 @@ func (s *Service) EditAnswer(ctx context.Context, cmd AnswerCommand) (Clarificat
 		payload["previous_visibility"] = string(before.Visibility())
 		payload["previous_declined"] = before.Answer.Declined
 		payload["previous_answer"] = before.Answer.Body
-		return s.record(ctx, cmd.Actor, action, cmd.ContestID, payload)
+		if err := s.record(ctx, cmd.Actor, action, cmd.ContestID, payload); err != nil {
+			return err
+		}
+		edited, err = s.repo.Asked(ctx, cmd.ContestID, cmd.ClarificationID)
+		return err
 	})
 	if err != nil {
-		return Clarification{}, writeError(err, "edit the answer")
+		return Asked{}, writeError(err, "edit the answer")
 	}
 	// An answer taken back from everyone must leave every screen too.
 	s.tell(after, before.Visibility() == Public || after.Visibility() == Public)
-	return after, nil
+	return edited, nil
 }
 
 // checkAnswer validates an answer and that the contest still runs.

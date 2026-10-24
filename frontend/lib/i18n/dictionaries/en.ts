@@ -2406,6 +2406,22 @@ const en = {
     signals_batch_too_large: "Too much page activity was sent at once. It will be sent in smaller parts.",
     signals_too_many_stored:
       "As much of your page activity has been recorded as this contest keeps. Nothing you have done is lost.",
+    clarification_too_long: "A question can be at most 2,000 characters. Shorten it or ask two.",
+    clarification_answer_too_long: "An answer can be at most 4,000 characters.",
+    announcement_too_long: "An announcement can be at most 4,000 characters.",
+    clarification_empty: "Write something first.",
+    clarification_text_invalid:
+      "The text contains a character that cannot be saved. Remove it and try again.",
+    clarification_too_many_open:
+      "You already have 20 questions waiting for an answer. You can ask another once one is answered.",
+    clarification_too_often: "You are asking questions too often. Wait a minute and try again.",
+    clarification_not_found: "This question is not in this contest.",
+    clarification_already_answered:
+      "This question has just been answered, perhaps by another organiser. Read the answer and edit it if needed.",
+    clarification_not_answered: "This question has no answer yet. Answer it first.",
+    clarifications_closed:
+      "The contest is not running, so participants would not see an answer or an announcement.",
+    clarification_invalid_cursor: "The list could not be continued. Reload the page.",
     monitor_too_often: "You are refreshing the monitoring pages too often. Wait a minute and try again.",
     monitor_participant_not_found: "This participant is not in this contest.",
     monitor_revision_not_found: "This version of the notes or tab no longer exists.",

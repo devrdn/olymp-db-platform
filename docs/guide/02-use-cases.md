@@ -212,6 +212,7 @@ flowchart LR
 | See the leaderboard with my row marked | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/leaderboard` | `leaderboard` | Session and a registration (`not_a_participant` otherwise); rate-limited per account |
 | Reset my database | `/contests/{contestID}/play` (a `read_write` contest only, behind a confirmation) | `POST /contests/{contestID}/play/reset` | `queryproxy`, then `provisioning` | Gate: `MayAct`; a `read_write` contest (`reset_read_only` otherwise); at least one question still answerable; three resets per registration in ten minutes, refused ones included (`reset_too_often`). Mounted only with the console |
 | Send browser signals (leaving the page, pasting) | `/contests/{contestID}/play` (automatic) | `POST /contests/{contestID}/play/signals` | `monitor` (`Signals`) | Gate: `MayAct`; at most 50 events per batch, batches per minute capped |
+| Ask the organisers; read answers and announcements | `/contests/{contestID}/play`, "Questions to organisers" tab | `GET` and `POST .../play/clarifications` | `clarifications` | Gate: `MayAct`; reading spends the read budget; asking is capped per account and per registration (`clarification_too_often`), at most 20 questions waiting (`clarification_too_many_open`) |
 
 `...` in this table stands for `/contests/{contestID}`.
 
@@ -328,6 +329,7 @@ flowchart LR
 | Remove a participant | `/contests/{contestID}/people` | `DELETE /contests/{contestID}/participants/{userID}` | `contests` | `participant.manage`; only before they have a record (`participant_started`) |
 | Disqualify a participant | `/contests/{contestID}/people` | `POST /contests/{contestID}/participants/{userID}/disqualify` | `contests` | `participant.manage`; keeps everything they did |
 | Watch every participant | `/contests/{contestID}/monitor` | `GET .../monitor/participants`, `GET .../monitor/feed`, `GET .../monitor/export.csv` | `monitor` | `contest.monitor`; reads per minute capped (`monitor_too_often`) |
+| Answer participants' questions, post announcements | `/contests/{contestID}/clarifications` | `GET .../clarifications`, `POST` and `PUT .../clarifications/{clarificationID}/answer`, `GET` and `POST .../announcements` | `clarifications` | `contest.clarify`; writes only while the contest runs (`clarifications_closed`) |
 | Watch one participant | `/contests/{contestID}/monitor/{registrationID}` | `GET .../monitor/participants/{registrationID}` and its `/timeline`, `/queries`, `/answers`, `/workspace`, `/workspace/revisions/{revisionID}`, `/export.csv` | `monitor` | `contest.monitor` |
 | See the live standings | `/contests/{contestID}/standings` | `GET /contests/{contestID}/leaderboard/live` | `leaderboard` | `contest.view` |
 | Reveal a frozen leaderboard | `/contests/{contestID}/standings` | `POST /contests/{contestID}/leaderboard/reveal` | `leaderboard` | `contest.edit`; the contest has finished and was frozen (`leaderboard_not_revealable`) |
@@ -451,8 +453,9 @@ and [backend/README.md, "Two levels of authorisation"](../../backend/README.md#t
 The global columns are the state after the seeding migrations
 [`000005`](../../backend/migrations/000005_seed_roles_and_permissions.up.sql),
 [`000006`](../../backend/migrations/000006_auth_columns_and_admin_permission.up.sql),
-[`000009`](../../backend/migrations/000009_installation_settings.up.sql) and
-[`000033`](../../backend/migrations/000033_participant_monitoring.up.sql).
+[`000009`](../../backend/migrations/000009_installation_settings.up.sql),
+[`000033`](../../backend/migrations/000033_participant_monitoring.up.sql) and
+[`000049`](../../backend/migrations/000049_clarifications.up.sql).
 "held" means the role has the row but no route checks the permission without
 a contest, so it unlocks nothing on its own.
 
@@ -465,6 +468,7 @@ a contest, so it unlocks nothing on its own.
 | `contest.manage` | | | held | yes | | Appointing and revoking managers |
 | `participant.manage` | | | held | yes | yes | The participant roster, disqualification, the account directory search |
 | `contest.monitor` | | held | held | yes | yes | Every `/contests/{contestID}/monitor/...` read; the staff screen shows the tab only to holders |
+| `contest.clarify` | | held | held | yes | yes | The question queue, answering, announcements (`/contests/{contestID}/clarifications`, `/announcements`); the staff screen shows the tab only to holders |
 | `reports.view` | | | held | yes | yes | No route checks it today. The frontend counts it as a staff permission when choosing where an account lands after sign-in |
 | `users.manage` | | | yes | | | `/users/...` and `/roles` |
 | `audit.view` | | | yes | | | `/audit` and `/audit/actions` |
@@ -511,7 +515,7 @@ screen treats each kind is in
 
 Rate limits answer 429 with their own codes (`query_too_often`,
 `play_read_too_often`, `answer_too_often`, `workspace_too_often`,
-`signals_too_often`) and a
+`signals_too_often`, `clarification_too_often`) and a
 `Retry-After` header. A new refusal follows CLAUDE.md, security rule 1: a
 sentinel, a row in the error table, a code in
 [`codes.go`](../../backend/internal/api/codes.go) and a sentence in every
