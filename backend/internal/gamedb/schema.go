@@ -35,12 +35,13 @@ WHERE n.nspname = 'public' AND c.relkind = ANY ($1)
 ORDER BY c.relname, a.attnum
 LIMIT $2`
 
-// keysQuery reads the primary key and the foreign keys of the same relations,
-// each key's columns in the constraint's order rather than the table's. A
-// foreign key is listed only when it points into the public schema, where the
-// diagram has a box to draw it to, and only on the table that declared it:
-// the clones PostgreSQL keeps for partitions (conparentid) would draw one
-// arrow many times. The primary key sorts first in each relation.
+// keysQuery reads the primary key and the foreign keys of the relations
+// readColumns kept ($3), each key's columns in the constraint's order rather
+// than the table's. A foreign key is listed only when it points into the
+// public schema, where the diagram has a box to draw it to, and only on the
+// table that declared it: the clones PostgreSQL keeps for partitions
+// (conparentid) would draw one arrow many times. Every primary key sorts
+// before every foreign key, so the row bound cuts only foreign keys.
 const keysQuery = `
 SELECT c.relname,
        con.contype = 'p',
@@ -59,10 +60,10 @@ JOIN pg_class c ON c.oid = con.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_class fc ON fc.oid = con.confrelid
 LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
-WHERE n.nspname = 'public' AND c.relkind = ANY ($1)
+WHERE n.nspname = 'public' AND c.relkind = ANY ($1) AND c.relname = ANY ($3)
   AND (con.contype = 'p'
        OR (con.contype = 'f' AND fn.nspname = 'public' AND con.conparentid = 0))
-ORDER BY c.relname, con.contype = 'p' DESC, con.conname
+ORDER BY con.contype = 'p' DESC, c.relname, con.conname
 LIMIT $2`
 
 // gameRelkinds are the relation kinds a participant can SELECT from: tables,
@@ -74,7 +75,7 @@ var gameRelkinds = []byte{'r', 'p', 'v', 'm'}
 // and constraint counts are unbounded.
 const (
 	maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColumns
-	maxKeyRows    = provisioning.MaxSchemaTables * (provisioning.MaxSchemaForeignKeys + 1)
+	maxKeyRows    = provisioning.MaxSchemaTables + provisioning.MaxDocumentForeignKeys
 )
 
 // ReadSchema describes one game database, for the console's schema panel and
@@ -99,17 +100,24 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 		return provisioning.Schema{}, fmt.Errorf("bound the schema read of %s: %w", database, err)
 	}
 
-	schema, err := readColumns(ctx, conn)
+	// One snapshot for both reads, so no key names a column the first missed.
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
 	}
-	if err := readKeys(ctx, conn, &schema); err != nil {
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	schema, err := readColumns(ctx, tx)
+	if err != nil {
+		return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
+	}
+	if err := readKeys(ctx, tx, &schema); err != nil {
 		return provisioning.Schema{}, fmt.Errorf("read the keys of %s: %w", database, err)
 	}
 	return schema, nil
 }
 
-func readColumns(ctx context.Context, conn *pgx.Conn) (provisioning.Schema, error) {
+func readColumns(ctx context.Context, conn pgx.Tx) (provisioning.Schema, error) {
 	rows, err := conn.Query(ctx, schemaQuery, gameRelkinds, maxSchemaRows+1)
 	if err != nil {
 		return provisioning.Schema{}, err
@@ -149,21 +157,23 @@ func readColumns(ctx context.Context, conn *pgx.Conn) (provisioning.Schema, erro
 	return schema, nil
 }
 
-// readKeys attaches each relation's keys to the tables readColumns kept; keys
-// of a relation it cut off are dropped with it.
-func readKeys(ctx context.Context, conn *pgx.Conn, schema *provisioning.Schema) error {
-	rows, err := conn.Query(ctx, keysQuery, gameRelkinds, maxKeyRows+1)
+// readKeys attaches each relation's keys to the tables readColumns kept, and
+// stops at MaxDocumentForeignKeys foreign keys.
+func readKeys(ctx context.Context, conn pgx.Tx, schema *provisioning.Schema) error {
+	byName := make(map[string]int, len(schema.Tables))
+	names := make([]string, len(schema.Tables))
+	for i, table := range schema.Tables {
+		byName[table.Name] = i
+		names[i] = table.Name
+	}
+
+	rows, err := conn.Query(ctx, keysQuery, gameRelkinds, maxKeyRows+1, names)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
-	byName := make(map[string]int, len(schema.Tables))
-	for i, table := range schema.Tables {
-		byName[table.Name] = i
-	}
-
-	seen := 0
+	seen, foreign, stopped := 0, 0, false
 	for rows.Next() {
 		var (
 			table, name, referenced string
@@ -176,7 +186,7 @@ func readKeys(ctx context.Context, conn *pgx.Conn, schema *provisioning.Schema) 
 
 		seen++
 		if seen > maxKeyRows {
-			schema.Truncated = true
+			stopped = true
 			break
 		}
 
@@ -188,12 +198,18 @@ func readKeys(ctx context.Context, conn *pgx.Conn, schema *provisioning.Schema) 
 			schema.Tables[i].PrimaryKey = columns
 			continue
 		}
+		foreign++
+		if foreign > provisioning.MaxDocumentForeignKeys {
+			stopped = true
+			break
+		}
 		schema.Tables[i].ForeignKeys = append(schema.Tables[i].ForeignKeys, provisioning.ForeignKey{
 			Name: name, Columns: columns, ReferencedTable: referenced, ReferencedColumns: referencedCols,
 		})
 	}
-	if err := rows.Err(); err != nil && seen <= maxKeyRows {
-		return err
+	if stopped {
+		schema.Truncated = true
+		return nil
 	}
-	return nil
+	return rows.Err()
 }
