@@ -21,6 +21,10 @@ export const PUBLISH_PROBLEMS = {
   sequentialNeedsMaxAttempts: "sequential_needs_max_attempts",
   sequentialHidesQuestion: "sequential_hides_question",
   winnerNeedsFinal: "winner_needs_final",
+  // A bonus question outside points scoring, or a points contest whose every
+  // question is a bonus (docs/ARCHITECTURE.md §6.1.1).
+  bonusNeedsPoints: "bonus_needs_points",
+  noRegularQuestion: "no_regular_question",
   // A final question with no attempt limit is won by guessing.
   winnerFinalNeedsAttemptLimit: "winner_final_needs_attempt_limit",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",

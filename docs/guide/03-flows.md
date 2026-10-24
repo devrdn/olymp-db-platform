@@ -374,6 +374,7 @@ and the scheduler. It reports every problem at once; the codes are constants in
 | Each question translated, with choice labels and a reference answer | `missing_question_translation`, `missing_choice_label`, `no_reference_answer` |
 | Attempt caps where guessing would otherwise win | `choice_needs_attempt_limit`, `icpc_choice_needs_attempt_limit`, `winner_final_needs_attempt_limit`, `sequential_needs_max_attempts` |
 | Winner scoring: at least one final question | `winner_needs_final` |
+| Bonus questions only under points scoring, and not every question a bonus | `bonus_needs_points`, `no_regular_question` |
 | Sequential progression: no hidden question before the last | `sequential_hides_question` |
 | No account with `contest.admin_all` registered as a participant | `staff_registered` |
 | An uploaded cover carries an attribution | `cover_needs_attribution` |

@@ -141,6 +141,15 @@ describe("the report wire shape", () => {
     ],
   };
 
+  it("carries a question's bonus flag, and reads an omitted one as a regular question", () => {
+    const parsed = profileReportSchema.parse({
+      ...report,
+      questions: [{ ...report.questions[0], is_bonus: true }, report.questions[1]],
+    });
+
+    expect(parsed.questions.map((q) => q.isBonus)).toEqual([true, false]);
+  });
+
   it("carries the place, the count it is a place among, and the work behind it", () => {
     const parsed = profileReportSchema.parse(report);
 

@@ -102,12 +102,20 @@ type Attempt struct {
 	At          time.Time
 	Queries     []LoggedQuery
 	MoreQueries int
+	// QuestionPoints and QuestionBonus describe the question answered, zero
+	// for one since deleted; GroupAttempts lifts them onto the group.
+	QuestionPoints int
+	QuestionBonus  bool
 }
 
 type QuestionAttempts struct {
 	QuestionID  uuid.UUID
 	QuestionOrd int
-	Attempts    []Attempt
+	// QuestionPoints is the question's face value and IsBonus its bonus flag
+	// (§6.1.1), what the participant's report needs to show the bonus credit.
+	QuestionPoints int
+	IsBonus        bool
+	Attempts       []Attempt
 }
 
 type Answers struct {
@@ -124,7 +132,8 @@ func GroupAttempts(attempts []Attempt) []QuestionAttempts {
 		if !ok {
 			i = len(out)
 			index[a.QuestionID] = i
-			out = append(out, QuestionAttempts{QuestionID: a.QuestionID, QuestionOrd: a.QuestionOrd})
+			out = append(out, QuestionAttempts{QuestionID: a.QuestionID, QuestionOrd: a.QuestionOrd,
+				QuestionPoints: a.QuestionPoints, IsBonus: a.QuestionBonus})
 		}
 		out[i].Attempts = append(out[i].Attempts, a)
 	}

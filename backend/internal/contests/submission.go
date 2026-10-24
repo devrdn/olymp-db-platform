@@ -325,7 +325,7 @@ func awardablePoints(q Question, c Contest) int {
 // bonusCredit is how many penalty points a correct answer to q may remove:
 // its points if it is a bonus in a points contest, else none.
 func bonusCredit(q Question, c Contest) int {
-	if !q.IsBonus || c.Scoring != ScoringPoints {
+	if !q.IsBonus || !c.ScoresPoints() {
 		return 0
 	}
 	return q.Points
