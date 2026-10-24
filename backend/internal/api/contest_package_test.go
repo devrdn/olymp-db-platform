@@ -130,6 +130,13 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 	if second["is_visible"] != false {
 		t.Errorf("the hidden question exported as visible: %v", second)
 	}
+	// An untitled question writes no title key, so the package reads as it did
+	// before titles existed.
+	secondTexts, _ := second["texts"].(map[string]any)
+	secondEnglish, _ := secondTexts["en"].(map[string]any)
+	if _, has := secondEnglish["title"]; has || secondEnglish["body_md"] != "Who did it?" {
+		t.Errorf("the untitled question's wording came back as %v, want its body and no title key", secondEnglish)
+	}
 
 	policy, _ := body["sql_policy"].(map[string]any)
 	if policy["mode"] != contests.ModeReadOnly || policy["disk_quota_ratio"] != float64(5) {

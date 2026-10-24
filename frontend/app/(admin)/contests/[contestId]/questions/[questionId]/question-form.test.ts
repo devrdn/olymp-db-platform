@@ -72,7 +72,7 @@ describe("questionFrom", () => {
     expect(parsed.ok && "title" in parsed.body.texts.ro).toBe(false);
   });
 
-  // The API keeps a title only beside a body, and a body is what a language
+  // The form sends a title only beside a body, and a body is what a language
   // needs to be offered at all.
   test("drops a title whose language has no body", () => {
     const parsed = questionFrom(form([...base, ["title.ru", "Виновник"], ["body.ru", "  "]]));
