@@ -425,13 +425,17 @@ describe("the schema column", () => {
 
     expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeInTheDocument();
     expect(screen.getByRole("button", tableName("guests"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.participant.play.schema.diagram.openLabel })).toBeInTheDocument();
   });
 
-  test("is absent entirely in a contest that hides it", () => {
+  test("is absent entirely in a contest that hides it, and so is the diagram", () => {
     show(null);
 
     expect(
       screen.queryByRole("region", { name: en.participant.play.schema.heading }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.participant.play.schema.diagram.openLabel, hidden: true }),
     ).not.toBeInTheDocument();
   });
 });

@@ -5,13 +5,14 @@ import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState
 import { cn } from "@/lib/utils";
 import type { GameSchema, GameTable } from "@/lib/api/schema";
 import type { PlayDictionary } from "./dictionary";
+import { SchemaDiagramDialog } from "./schema-diagram-dialog";
 
 /**
  * The console's schema panel: the game's tables, their columns, each column's
- * type and the table a foreign key points at. A permanent column because it
- * is read while typing. Absent, not empty, when the organiser closed the
- * catalogues, where discovering the shape is the puzzle
- * (queryproxy.ErrSchemaHidden).
+ * type and the table a foreign key points at, and a button that opens it all
+ * as a diagram. A permanent column because it is read while typing. Absent,
+ * not empty, when the organiser closed the catalogues, where discovering the
+ * shape is the puzzle (queryproxy.ErrSchemaHidden).
  */
 export function SchemaPanel({
   schema,
@@ -91,7 +92,10 @@ export function SchemaPanel({
         <span>
           {t.heading} · {t.language}
         </span>
-        <span>{schema.tables.length}</span>
+        <span className="flex items-center gap-3">
+          <SchemaDiagramDialog schema={schema} dict={dict} />
+          <span>{schema.tables.length}</span>
+        </span>
       </header>
 
       {/* `relative` so this scroll box is the containing block of the

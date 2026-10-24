@@ -45,6 +45,15 @@ function chevron(table: string, open = true) {
 }
 
 describe("the schema panel", () => {
+  // The dialog itself is tested beside it; here, only that the panel offers it.
+  test("offers the schema as a diagram", async () => {
+    panel();
+
+    await userEvent.click(screen.getByRole("button", { name: t.diagram.openLabel }));
+
+    expect(await screen.findByRole("dialog", { name: t.diagram.title })).toBeInTheDocument();
+  });
+
   test("shows the tables, their columns and the type of each", () => {
     panel();
 
