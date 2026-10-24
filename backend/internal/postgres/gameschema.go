@@ -11,12 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The cached schema of a contest's game lives on its game_templates row. The
-// build writes it, read from the template itself (provisioning.Games.describe).
+// The cached schema of a contest's game lives on its game_templates row. Only
+// the build writes it, read from the template itself
+// (provisioning.Games.describe).
 
 // CachedSchema reads the cached schema and the template version it describes;
 // the caller decides whether that version is current. ErrNoSchema means never
-// cached or no game row.
+// cached or no game row; a stored document that does not decode is an error.
 func (r *GameInstances) CachedSchema(ctx context.Context, contestID uuid.UUID) (provisioning.Schema, int, error) {
 	var (
 		document []byte
@@ -36,17 +37,15 @@ func (r *GameInstances) CachedSchema(ctx context.Context, contestID uuid.UUID) (
 
 	var schema provisioning.Schema
 	if err := json.Unmarshal(document, &schema); err != nil {
-		// Unreadable derived data reads as not cached, so the caller fetches
-		// it again and overwrites this.
-		return provisioning.Schema{}, 0, provisioning.ErrNoSchema
+		// A failure, not ErrNoSchema: only a build may replace the description.
+		return provisioning.Schema{}, 0, fmt.Errorf("decode the game's cached schema: %w", err)
 	}
 	return schema, version, nil
 }
 
 // SaveSchema caches the schema against the template version it describes,
 // and writes nothing when the game has moved to another version: a
-// superseded build or a reader holding an older build must not replace the
-// current build's description. It is an UPDATE, not an upsert: a row created
+// superseded build must not replace the current build's description. It is an UPDATE, not an upsert: a row created
 // here would have no template_db or init_script.
 func (r *GameInstances) SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema provisioning.Schema) error {
 	document, err := json.Marshal(schema)
