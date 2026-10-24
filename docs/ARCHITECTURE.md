@@ -1738,7 +1738,9 @@ replicas: with more than one API replica a hint reaches only the channels of
 the replica that wrote the answer. The deployment runs one, and the play
 screen reads the feed again whenever a channel (re)connects. The staff
 screen does not use the channel; it polls the queue every five seconds, like
-monitoring.
+monitoring. `GET /contests/{id}` carries `may_clarify`, decided as
+`may_monitor` is (section 9.4), and the staff navigation offers the tab from
+it, with the number of questions waiting beside it while the contest runs.
 
 ## 7. Authentication and authorisation
 

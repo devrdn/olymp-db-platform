@@ -168,6 +168,9 @@ type ContestResponse struct {
 	// workspace can offer its monitoring tab without restating the rule. Sent
 	// only by GET /contests/{id}.
 	MayMonitor *bool `json:"may_monitor,omitempty"`
+	// MayClarify says the same of contest.clarify, for the tab of questions to
+	// the organisers.
+	MayClarify *bool `json:"may_clarify,omitempty"`
 }
 
 // LeaderboardSettingsResponse is how the contest's table is shown. FreezeMin is
@@ -533,18 +536,23 @@ func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	// A second authorisation, since the middleware keeps no decision to reuse.
-	// It only decides whether a tab is offered, so a failure is logged and
-	// treated as "no".
-	may, err := h.mw.MayOnContest(r, rbac.PermissionContestMonitor, id)
-	if err != nil {
-		h.log.WarnContext(r.Context(), "could not decide whether the caller may monitor the contest", "error", err)
-		may = false
-	}
 	// Every translation, not the negotiated one: staff are editing all of them.
 	out := toContestResponse(c)
-	out.MayMonitor = &may
+	monitor, clarify := h.mayOffer(r, rbac.PermissionContestMonitor, id), h.mayOffer(r, rbac.PermissionContestClarify, id)
+	out.MayMonitor, out.MayClarify = &monitor, &clarify
 	httpx.JSON(w, r, http.StatusOK, out)
+}
+
+// mayOffer is a second authorisation, since the middleware keeps no decision
+// to reuse. It only decides whether a tab is offered, so a failure is logged
+// and treated as "no".
+func (h *ContestsHandler) mayOffer(r *http.Request, permission string, contestID uuid.UUID) bool {
+	may, err := h.mw.MayOnContest(r, permission, contestID)
+	if err != nil {
+		h.log.WarnContext(r.Context(), "could not decide whether to offer a contest tab", "permission", permission, "error", err)
+		return false
+	}
+	return may
 }
 
 func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {

@@ -207,6 +207,11 @@ describe("contestSchema", () => {
     expect(contestSchema.parse(detail).mayMonitor).toBe(false);
   });
 
+  test("reads whether the viewer may answer the contest's questions to the organisers", () => {
+    expect(contestSchema.parse({ ...detail, may_clarify: true }).mayClarify).toBe(true);
+    expect(contestSchema.parse(detail).mayClarify).toBe(false);
+  });
+
   test("reads the prize places, and none from a server older than them", () => {
     expect(contestSchema.parse({ ...detail, prize_places: { first: 1, second: 2, third: 3 } }).prizePlaces).toEqual({
       first: 1,

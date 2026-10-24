@@ -1,6 +1,7 @@
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
+import { clarificationQueueSchema } from "@/lib/api/clarifications";
 import { questionListSchema, untranslated } from "@/lib/api/content";
 import { contentEditable, publishCheckSchema, titleIn } from "@/lib/api/contests";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
@@ -42,16 +43,15 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   ]);
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
-  // The server decides contest.monitor with the monitoring routes' authoriser.
-  const monitor = contest.mayMonitor;
-
+  // The server decides contest.monitor and contest.clarify with the routes'
+  // own authoriser.
   const groups = await navigation(
     contestId,
     base,
     contest.languages.map((l) => l.code),
     dict,
     check,
-    monitor,
+    { monitor: contest.mayMonitor, clarify: contest.mayClarify, running: contest.status === "running" },
   );
 
   return (
@@ -71,6 +71,7 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
             databases: t.tabs.databases,
             standings: t.tabs.leaderboard,
             monitor: t.tabs.monitor,
+            clarifications: t.tabs.clarifications,
           }}
         />
 
@@ -131,7 +132,7 @@ async function navigation(
   languages: string[],
   dict: Awaited<ReturnType<typeof activeDictionary>>,
   check: ReturnType<typeof publishCheckSchema.parse> | null,
-  monitor: boolean,
+  offers: { monitor: boolean; clarify: boolean; running: boolean },
 ): Promise<NavGroup[]> {
   const t = dict.workspace;
 
@@ -142,9 +143,10 @@ async function navigation(
     ? t.notes.none
     : countLanguages(problems, PUBLISH_PROBLEMS.missingStoryTranslation, languages);
 
-  const questionNote = has(PUBLISH_PROBLEMS.noQuestions)
-    ? t.notes.none
-    : await questionNoteFor(contestId, languages);
+  const [questionNote, waiting] = await Promise.all([
+    has(PUBLISH_PROBLEMS.noQuestions) ? t.notes.none : questionNoteFor(contestId, languages),
+    offers.clarify && offers.running ? waitingNoteFor(contestId) : undefined,
+  ]);
 
   return [
     { items: [{ href: base, label: t.tabs.overview, exact: true }] },
@@ -170,10 +172,22 @@ async function navigation(
         // Read during and after the contest.
         { href: `${base}/standings`, label: t.tabs.leaderboard },
         // Only for holders of contest.monitor.
-        ...(monitor ? [{ href: `${base}/monitor`, label: t.tabs.monitor }] : []),
+        ...(offers.monitor ? [{ href: `${base}/monitor`, label: t.tabs.monitor }] : []),
+        // Only for holders of contest.clarify; the note is how many questions
+        // wait, read only while the contest runs.
+        ...(offers.clarify ? [{ href: `${base}/clarifications`, label: t.tabs.clarifications, note: waiting }] : []),
       ],
     },
   ];
+}
+
+/** How many participants' questions wait for an answer, or nothing when none do. */
+async function waitingNoteFor(contestId: string): Promise<string | undefined> {
+  const queue = await loadContestResource(contestId, "/clarifications?state=open&limit=1", (payload) =>
+    clarificationQueueSchema.parse(payload),
+  ).catch(() => null);
+  const open = queue?.counts.open ?? 0;
+  return open > 0 ? `${open}` : undefined;
 }
 
 /** How many declared languages a per-language problem names. */
