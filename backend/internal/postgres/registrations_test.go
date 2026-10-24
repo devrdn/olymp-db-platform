@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -118,10 +119,10 @@ func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
 			return err
 		}
 		close(answered)
-		// Time for the other recount to start; were it later, it would see
-		// this answer committed and pass for the wrong reason.
-		time.Sleep(200 * time.Millisecond)
-		return nil
+		// Commit only once the other recount is blocked behind this
+		// transaction; one that started after the commit would see the
+		// answer and pass for the wrong reason.
+		return waitForALockWaiter(t, registrationID)
 	})
 	if err != nil {
 		t.Fatalf("answer: %v", err)
@@ -137,6 +138,27 @@ func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
 	if final.TotalScore != 10 {
 		t.Errorf("TotalScore = %d, want 10: the recount must count the answer it waited for", final.TotalScore)
 	}
+}
+
+// waitForALockWaiter polls, from a connection of its own, until a statement on
+// registrations waits for a lock, or fails the test after five seconds.
+func waitForALockWaiter(t *testing.T, registrationID uuid.UUID) error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			               WHERE datname = current_database() AND wait_event_type = 'Lock'
+			                 AND query ILIKE '%registrations%')`).Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("no recount of %s ever waited for the lock", registrationID)
 }
 
 func TestRefreshScoreRefusesToRunOutsideATransaction(t *testing.T) {

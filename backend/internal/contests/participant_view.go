@@ -66,8 +66,7 @@ type ParticipantQuestion struct {
 	ID       uuid.UUID
 	Kind     string
 	Points   int
-	// IsBonus says Points is a bonus (Question.IsBonus): up to that many
-	// penalty points removed when answered correctly, nothing else.
+	// IsBonus is Question.IsBonus.
 	IsBonus   bool
 	ChoiceIDs []string
 	// Title is empty when the question has none in the resolved language.

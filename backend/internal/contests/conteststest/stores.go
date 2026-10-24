@@ -1071,9 +1071,7 @@ func NewScores(questions *Questions, submissions *Submissions) *Scores {
 	return &Scores{questions: questions, submissions: submissions}
 }
 
-// Total is the points awarded on regular questions, plus the bonus credit of
-// the solved bonus questions up to the penalty points: for each solved
-// regular question, its face value less what it awarded (§6.1.1).
+// Total mirrors postgres.scoreTotal.
 func (s *Scores) Total(registrationID uuid.UUID) int {
 	awarded, credit, penalty := 0, 0, 0
 	for key, recorded := range s.submissions.byKey {

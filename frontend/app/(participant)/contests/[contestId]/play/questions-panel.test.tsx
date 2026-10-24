@@ -554,8 +554,6 @@ test("a paste into an answer is watched as one into the answer", () => {
   expect(pasteTargetOf(screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }))).toBe("answer");
 });
 
-// A titled question reads as its title, with the wording folded under it
-// (open in place, or larger in a dialog); the answer field never folds.
 // A bonus question gives back penalty points rather than earning its own
 // (docs/ARCHITECTURE.md §6.1.1), so it never reads as "+0 points".
 describe("a bonus question", () => {
@@ -632,6 +630,8 @@ describe("a bonus question", () => {
   });
 });
 
+// A titled question reads as its title, with the wording folded under it
+// (open in place, or larger in a dialog); the answer field never folds.
 describe("a question with a title", () => {
   const t = en.participant.play.questions;
   const titled = (overrides: Partial<OpenPlayQuestion> = {}, index = 1) =>
