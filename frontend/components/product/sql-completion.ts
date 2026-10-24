@@ -18,7 +18,7 @@ import {
 } from "@codemirror/autocomplete";
 import { PostgreSQL, schemaCompletionSource, type SQLNamespace } from "@codemirror/lang-sql";
 import { syntaxTree } from "@codemirror/language";
-import { Prec, type Extension } from "@codemirror/state";
+import { Prec, type EditorState, type Extension } from "@codemirror/state";
 import { keymap, type EditorView } from "@codemirror/view";
 
 import type { GameSchema } from "@/lib/api/schema";
@@ -74,6 +74,41 @@ function referencedName(text: string, quoted: boolean): string {
 }
 
 /**
+ * Where a completion typed inside a closed quoted name ends: after its closing
+ * quote, so accepting replaces the whole name instead of leaving its tail
+ * behind. Only a name of word characters counts: an unclosed quote runs to the
+ * next one, and the text between is not part of the name being typed.
+ */
+function closedQuotedEnd(state: EditorState, pos: number): number | undefined {
+  const at = syntaxTree(state).resolveInner(pos, -1);
+  if (at.name !== "QuotedIdentifier" || pos <= at.from || pos >= at.to) return undefined;
+  return /^\w*"$/.test(state.sliceDoc(pos, at.to)) ? at.to : undefined;
+}
+
+/**
+ * A pause between an option's label and its type for a screen reader, which
+ * otherwise reads the two spans as one word ("idinteger"). Hidden from the
+ * eye; the type's own margin already separates them on screen.
+ */
+function detailSeparator(completion: Completion): Node | null {
+  if (!completion.detail) return null;
+  const separator = document.createElement("span");
+  separator.className = "sr-only";
+  separator.textContent = ", ";
+  return separator;
+}
+
+/** A source whose results inside a closed quoted name replace all of it. */
+function replacingQuotedName(source: CompletionSource): CompletionSource {
+  return async (context) => {
+    const result = await source(context);
+    if (!result) return result;
+    const to = closedQuotedEnd(context.state, context.pos);
+    return to === undefined ? result : { ...result, to };
+  };
+}
+
+/**
  * Columns without a table name in front: those of every table the statement
  * names anywhere, subqueries included. lang-sql completes only `table.column`.
  */
@@ -82,15 +117,14 @@ function columnsInScope(schema: GameSchema): CompletionSource {
   return (context: CompletionContext): CompletionResult | null => {
     const { state, pos } = context;
     const at = syntaxTree(state).resolveInner(pos, -1);
-    // Inside a quoted name the word runs from its opening quote, and a closing
-    // quote already after the caret is replaced rather than doubled.
+    // Inside a quoted name the word runs from its opening quote; where it ends
+    // is `closedQuotedEnd`'s answer.
     const quoted = at.name === "QuotedIdentifier";
     if (quoted && pos === at.to && at.to - at.from > 1 && state.sliceDoc(at.to - 1, at.to) === '"') return null;
     const word = quoted ? { from: at.from, to: pos } : context.matchBefore(/\w*$/);
     if (!word || (word.from === word.to && !context.explicit)) return null;
     // After `table.` lang-sql offers that table's columns alone.
     if (state.sliceDoc(word.from - 1, word.from) === ".") return null;
-    const to = quoted && state.sliceDoc(pos, pos + 1) === '"' ? pos + 1 : undefined;
     let statement = at;
     while (statement.parent && statement.name !== "Statement") statement = statement.parent;
     if (statement.name !== "Statement") return null;
@@ -116,7 +150,7 @@ function columnsInScope(schema: GameSchema): CompletionSource {
       const written = `"${option.label.replace(/"/g, '""')}"`;
       return { ...option, label: written, apply: written };
     });
-    return { from: word.from, to, options: inQuotes, validFor: /^"\w*"?$/ };
+    return { from: word.from, to: closedQuotedEnd(state, pos), options: inQuotes, validFor: /^"\w*"?$/ };
   };
 }
 
@@ -167,14 +201,19 @@ export function sqlCompletion(): {
       Prec.highest(keymap.of([{ key: "Enter", run: breakLineOnTypedWord }])),
       // Icons off: CodeMirror's are glyphs in no design system; a column shows
       // its type instead.
-      autocompletion({ icons: false, interactionDelay: INTERACTION_DELAY_MS }),
+      // The separator goes between the label (position 50) and the detail (80).
+      autocompletion({
+        icons: false,
+        interactionDelay: INTERACTION_DELAY_MS,
+        addToOptions: [{ render: detailSeparator, position: 70 }],
+      }),
       PostgreSQL.language.data.of({ autocomplete: ifNotIn(NOT_CODE, completeFromList(FUNCTIONS)) }),
       PostgreSQL.language.data.of({ autocomplete: (context: CompletionContext) => tables(context) }),
       PostgreSQL.language.data.of({ autocomplete: (context: CompletionContext) => columns(context) }),
     ],
     setSchema: (schema) => {
       tables = schema
-        ? schemaCompletionSource({ dialect: PostgreSQL, schema: namespaceOf(schema) })
+        ? replacingQuotedName(schemaCompletionSource({ dialect: PostgreSQL, schema: namespaceOf(schema) }))
         : offerNothing;
       columns = schema ? ifNotIn(NOT_NAME, columnsInScope(schema)) : offerNothing;
     },
