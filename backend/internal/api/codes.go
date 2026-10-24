@@ -394,6 +394,32 @@ var (
 	codeSignalsTooManyStored = httpx.NewCode("signals_too_many_stored",
 		"This participant has stored as many browser signals as the installation keeps for one registration. Nothing in this batch was stored, and nothing stored before it was lost; sending the batch again will not help.")
 
+	// --- Questions to the organisers and announcements ------------------------
+	codeClarificationTooLong = httpx.NewCode("clarification_too_long",
+		"A participant's question is longer than 2000 characters. Nothing was stored; shorten it or split it in two.")
+	codeClarificationAnswerTooLong = httpx.NewCode("clarification_answer_too_long",
+		"An answer to a participant's question is longer than 4000 characters. Nothing was stored.")
+	codeAnnouncementTooLong = httpx.NewCode("announcement_too_long",
+		"An announcement is longer than 4000 characters. Nothing was posted.")
+	codeClarificationEmpty = httpx.NewCode("clarification_empty",
+		"A question, an answer or an announcement holds nothing but spaces. A declined question is the one text that may be left empty.")
+	codeClarificationTextInvalid = httpx.NewCode("clarification_text_invalid",
+		"The text contains a NUL character or is not valid UTF-8, which cannot be stored. Nothing was stored.")
+	codeClarificationTooManyOpen = httpx.NewCode("clarification_too_many_open",
+		"This participant already has 20 questions waiting for an answer. Another may be asked once one of them is answered.")
+	codeClarificationTooOften = httpx.NewCode("clarification_too_often",
+		"This participant has asked more questions this minute than the installation allows, refused ones included. Nothing was stored; `Retry-After` says how long to wait at most.")
+	codeClarificationNotFound = httpx.NewCode("clarification_not_found",
+		"No such question in this contest. Also the answer for a question of another contest.")
+	codeClarificationAlreadyAnswered = httpx.NewCode("clarification_already_answered",
+		"The question already has an answer, perhaps given meanwhile by another organiser. Read it, and edit it if it must change.")
+	codeClarificationNotAnswered = httpx.NewCode("clarification_not_answered",
+		"The question has no answer yet, so there is nothing to edit; answer it instead.")
+	codeClarificationsClosed = httpx.NewCode("clarifications_closed",
+		"The contest is not running, so no participant could read an answer or an announcement. The questions stay readable.")
+	codeClarificationInvalidCursor = httpx.NewCode("clarification_invalid_cursor",
+		"The `before` cursor is not one this service issued. Ask for the first page again.")
+
 	// --- Watching participants -------------------------------------------------
 	// One code per monitor.WatchService refusal (CLAUDE.md rule 1), plus the
 	// organiser's read budget.

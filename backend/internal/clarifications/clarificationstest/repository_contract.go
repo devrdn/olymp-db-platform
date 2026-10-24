@@ -186,6 +186,21 @@ var repositoryCases = []struct {
 			t.Fatalf("Counts = %+v, %v, want two open and two answered", counts, err)
 		}
 	}},
+	{"one clarification reads as staff see it, only in its own contest", func(t *testing.T, ctx context.Context, x Target) {
+		contest, other := x.NewContest(), x.NewContest()
+		p := x.NewParticipant(contest)
+		staff, staffLogin := x.NewStaff()
+		asked := ask(t, ctx, x, contest, p.Registration, nil, "q", x.Now)
+		if _, err := x.Repo.Asked(ctx, other, asked.ID); !errors.Is(err, clarifications.ErrNotFound) {
+			t.Fatalf("reading through another contest = %v, want ErrNotFound", err)
+		}
+		answer(t, ctx, x, contest, asked.ID, staff, clarifications.Private, x.Now.Add(time.Minute))
+		got, err := x.Repo.Asked(ctx, contest, asked.ID)
+		if err != nil || got.ID != asked.ID || got.AskerLogin != p.Login || got.AskerFullName != p.FullName ||
+			got.AnsweredByLogin != staffLogin || got.Answer == nil {
+			t.Fatalf("Asked = %+v, %v, want the answered question with %q as asker and %q as who answered", got, err, p.Login, staffLogin)
+		}
+	}},
 	{"a question is answered once, only in its own contest", func(t *testing.T, ctx context.Context, x Target) {
 		contest, other := x.NewContest(), x.NewContest()
 		p := x.NewParticipant(contest)

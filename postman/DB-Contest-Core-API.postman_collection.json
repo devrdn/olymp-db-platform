@@ -73,6 +73,12 @@
       "value": "",
       "type": "string",
       "description": "The id of a revision from Participant monitoring ▸ Participant workspace."
+    },
+    {
+      "key": "clarificationId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Questions to the organisers ▸ Ask the organisers."
     }
   ],
   "event": [
@@ -1680,6 +1686,257 @@
               ]
             },
             "description": "Drops the caller's database and copies the contest's template under the same name, so every table and view in it is as the contest started it. A query running at that moment is cut off. Recorded on the audit trail as `contest.instance_reset`, or `contest.instance_reset_failed` when the copy fails (the next query then makes a fresh database); submissions, score and time are untouched. A participant with no database yet gets 204 and nothing is copied: their first query makes a fresh one.\n\nResponses: 204 · 400 `invalid_contest_id` · 403 · 408 `query_cancelled` (the caller left while the press waited for an earlier one) · 409 `reset_read_only` / `nothing_left_to_answer` / `no_game_yet` · 429 `reset_too_often` / `query_too_often` · 503 `game_cluster_full`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Questions to the organisers",
+      "description": "Participants of a running contest ask its organisers questions; the owner and managers answer privately or publish the answer to every participant, and post announcements (ARCHITECTURE §6.5).\n\nThe participant's routes (under `/play`) are admitted like the rest of `/play`: `403 not_a_participant` / `address_not_allowed`, `409 contest_not_running` / `contest_ended` / `deadline_passed` / `contest_finished`. Reading spends the play screen's read budget (`429 play_read_too_often`); asking spends its own, six a minute per account and three per registration, refused attempts included (`429 clarification_too_often` with `Retry-After`).\n\nThe staff routes need `contest.clarify` on the contest (its owner and managers, or `contest.admin_all`): otherwise `403 forbidden`. Staff write only while the contest runs (`409 clarifications_closed`); every answer, publication, edit and announcement is audited.\n\nA participant never learns who asked a question. Publishing an answer shows the question's text with it. Times are RFC 3339 in UTC with exactly six fractional digits (the database's microseconds), so they compare as text.\n\nThe events channel (`GET /contests/{id}/events`) sends an empty `clarification` event when the feed changed: to the asker for a private answer, to everyone for a public one or an announcement.",
+      "item": [
+        {
+          "name": "My questions, public answers and announcements",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/clarifications?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "clarifications"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "The signed-in participant's own questions with their answers, every public answer with the question it answers, and the announcements, newest first by when each was posted (asked, then answered). Items are told apart by `kind`: `clarification` (`id`, `posted_at`, `mine`, `question_id` or null, `body`, `asked_at`, `answer` or null with `body`, `declined`, `visibility`, `answered_at`, `edited_at`) or `announcement` (`id`, `posted_at`, `body`). Nothing names an asker. `open` is how many of the caller's questions wait (at most 20). `next` is the cursor for `?before=`, null on the last page; `limit` is 1-100, 50 by default.\n\nResponses: 200 · 400 `invalid_contest_id` / `clarification_invalid_cursor` · 403 · 409 · 429 `play_read_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Ask the organisers",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/clarifications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "clarifications"
+              ]
+            },
+            "description": "Asks a question, optionally about one question of the contest (`question_id`, or omit it). `body` is 1-2000 characters after trimming. A participant has at most 20 questions waiting for an answer.\n\nResponses: 201 the item as the feed shows it · 400 `clarification_too_long` / `clarification_empty` / `clarification_text_invalid` / `invalid_question_id` / `invalid_request` · 403 · 404 `question_not_found` · 409 `clarification_too_many_open` or a gate refusal · 429 `clarification_too_often`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question_id\": \"{{questionId}}\",\n  \"body\": \"Does \\\"between\\\" include the last day?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('clarificationId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The question queue",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications?state=open&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "clarifications"
+              ],
+              "query": [
+                {
+                  "key": "state",
+                  "value": "open"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Staff (`contest.clarify`). `state=open` (the default) lists the questions waiting, oldest first; `state=answered` the answered ones, most recently answered first. Each item names the asker (`asker.login`, `asker.full_name`) and, once answered, who answered first (`answer.answered_by`). `counts` gives both states' totals. A staff screen polls this every five seconds.\n\nResponses: 200 `{items, counts: {open, answered}}` · 400 `invalid_contest_id` · 403"
+          },
+          "response": []
+        },
+        {
+          "name": "Answer a question",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications/{{clarificationId}}/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "clarifications",
+                "{{clarificationId}}",
+                "answer"
+              ]
+            },
+            "description": "Staff (`contest.clarify`). Answers once: `visibility` is `private` (the asker alone) or `public` (every participant, with the question's text). `declined: true` declines, and its `body` may be empty; otherwise `body` is 1-4000 characters. Recorded as `contest.clarification_answer`, or `contest.clarification_publish` when public.\n\nResponses: 200 the queue item · 400 `clarification_answer_too_long` / `clarification_empty` / `clarification_text_invalid` / `invalid_request` · 403 · 404 `clarification_not_found` (also for another contest's) · 409 `clarification_already_answered` / `clarifications_closed`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Yes, the last day is included.\",\n  \"declined\": false,\n  \"visibility\": \"public\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Edit an answer",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications/{{clarificationId}}/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "clarifications",
+                "{{clarificationId}}",
+                "answer"
+              ]
+            },
+            "description": "Staff (`contest.clarify`). Replaces an answer's text, decline and visibility; the first answer's author and time stay. Turning it public is recorded as `contest.clarification_publish`, any other change as `contest.clarification_edit` with the text it replaced.\n\nResponses: 200 the queue item · 400 · 403 · 404 `clarification_not_found` · 409 `clarification_not_answered` / `clarifications_closed`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Yes: the last day is included, until midnight.\",\n  \"declined\": false,\n  \"visibility\": \"public\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Announcements",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/announcements?limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "announcements"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Staff (`contest.clarify`). The contest's announcements, newest first.\n\nResponses: 200 `{items: [{id, body, created_at}], total}` · 400 `invalid_contest_id` · 403"
+          },
+          "response": []
+        },
+        {
+          "name": "Post an announcement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/announcements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "announcements"
+              ]
+            },
+            "description": "Staff (`contest.clarify`). A message to every participant, 1-4000 characters; it reaches their open screens at once. Recorded as `contest.announcement_create`.\n\nResponses: 201 `{id, body, created_at}` · 400 `announcement_too_long` / `clarification_empty` / `clarification_text_invalid` · 403 · 409 `clarifications_closed`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Question 3: the table is called suspects, not suspect.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         }

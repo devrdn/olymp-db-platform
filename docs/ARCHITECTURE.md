@@ -192,6 +192,7 @@ access of its own.
 | `gamefile` | An organiser's uploaded dump and the table builder's CSV files, kept on the API host's disk as they arrive in chunks |
 | `queryproxy` | A thin façade: takes SQL from the interface, applies the rate limit, hands it to the Query Runner, writes the query log |
 | `workspace` | A participant's notes and SQL editor tabs, kept per registration (section 6.4) |
+| `clarifications` | Participants' questions to the organisers, the answers, private or public, and announcements (section 6.5) |
 | `leaderboard` | The standings as each audience may see them: live, frozen, final (section 10) |
 | `profile` | What a participant is told about their own account: totals, contests and, for each contest over, the report, queries, answers and notes (section 9.5) |
 | `audit` | The append-only record of what staff did |
@@ -1675,6 +1676,70 @@ rest of the API — it is simply not needed anywhere else.
   and a reload before the server answered shows the draft and immediately
   tries to save it again.
 
+## 6.5 Questions to the organisers and announcements
+
+During a running contest a participant may ask the organisers a question,
+optionally about one question of the contest. The owner and the managers
+answer it privately, to its asker alone, or publish the answer to every
+participant, as ICPC publishes clarifications; they may decline with a short
+reply, or none. They may also post an announcement to everyone. The package
+is `internal/clarifications`; the tables are `clarifications` and
+`announcements` (migration `000049`).
+
+**What a participant sees, decided by the server.** Their own questions with
+their answers, every public answer together with the question it answers,
+and the announcements, newest first. Another participant's private question
+never leaves the database in a participant's response, and nothing a
+participant receives names an asker: a public item says only that it is not
+theirs. Publishing an answer publishes the question's text with it, since the
+answer needs it, and the staff screen says so.
+
+**Bounds** (CLAUDE.md rule 2): a question is at most 2000 characters, an
+answer or an announcement 4000; a participant has at most twenty questions
+waiting at once, counted under a per-registration advisory lock so two tabs
+cannot both take the last place; every list is paged (fifty by default, a
+hundred at most).
+
+**Who may do what.**
+
+- Asking is a write. It closes with the contest, like every `/play` route:
+  the participation gate (`queryproxy.Access`) admits it only while the
+  participant may act. It spends its own budget before the gate is asked:
+  six a minute per account, then three a minute per registration after it,
+  refused attempts included. Reading the feed spends the play screen's read
+  budget (`AdmitRead`) before the gate.
+- Staff routes need `contest.clarify`, which owners and managers hold, and
+  which `contest.admin_all` lifts like every contest permission. Staff read
+  the queue at any time but write only while the contest runs: after it no
+  participant could read the answer.
+- An answer is given once; a second one is refused, so two organisers do not
+  overwrite each other, and the second edits the first instead.
+- Every answer (`contest.clarification_answer`), publication
+  (`contest.clarification_publish`, at answer time or later), edit
+  (`contest.clarification_edit`, with the text it replaced) and announcement
+  (`contest.announcement_create`) is audited in the transaction of the
+  change. A participant's question is stored, not audited.
+
+**Routes.** The participant's `GET` and `POST
+/contests/{id}/play/clarifications`; the staff's `GET
+/contests/{id}/clarifications?state=open|answered`, `POST` and `PUT
+/contests/{id}/clarifications/{clarificationId}/answer`, and `GET` and `POST
+/contests/{id}/announcements`.
+
+**Realtime.** The events channel (section 8) sends a `clarification` event
+with an empty body, a hint to read the feed again, never its content. Its
+audience follows the answer: a private answer reaches the asker's channels, a
+public one, a change of visibility either way and an announcement reach every
+channel of the contest. A channel subscribes to two topics when it opens, its
+contest and its registration, in an in-process hub
+(`internal/platform/fanout`); a publish costs one non-blocking send per open
+channel on the topic, and unread hints coalesce. The hub does not cross
+replicas: with more than one API replica a hint reaches only the channels of
+the replica that wrote the answer. The deployment runs one, and the play
+screen reads the feed again whenever a channel (re)connects. The staff
+screen does not use the channel; it polls the queue every five seconds, like
+monitoring.
+
 ## 7. Authentication and authorisation
 
 - **Sign-in:** a login and a password (argon2id, per-user salt). Against
@@ -2270,7 +2335,8 @@ nothing.
 - **The interface synchronises** by receiving `server_now` and **its own**
   `deadline` at load, computing the offset locally, and resynchronising every
   thirty seconds over **SSE** (`/api/v1/contests/{id}/events`), which
-  also carries `contest_started` and `contest_finished`. SSE was chosen over
+  also carries `contest_started`, `contest_finished` and `clarification`
+  (section 6.5). SSE was chosen over
   WebSocket because the traffic is one-way, and SSE is simpler and survives a
   reconnect out of the box.
 - The transitions `published → running → finished` are driven by a background
@@ -4732,7 +4798,7 @@ Product decisions the items below are built on.
 - [ ] **32. No readiness event for a late enrolee's database** (section 4.2).
   Section 4.2 has a late enrolee told that their database is being prepared
   and the console open on a readiness event over SSE. The event stream sends
-  `sync`, `contest_started` and `contest_finished` only, and there is no
+  `sync`, `contest_started`, `contest_finished` and `clarification` only, and there is no
   "being prepared" state: the participant's first query, or first look at
   the schema, takes a copy from the pool or, when the pool is empty, copies
   the template inside that request and waits for it

@@ -148,12 +148,7 @@ func (m *Repository) Queue(_ context.Context, contestID uuid.UUID, state clarifi
 		if c.ContestID != contestID || (c.Answer == nil) != (state == clarifications.StateOpen) {
 			continue
 		}
-		reg := m.registrations[c.RegistrationID]
-		asked := clarifications.Asked{Clarification: c, AskerLogin: reg.login, AskerFullName: reg.fullName}
-		if c.Answer != nil && c.Answer.By != nil {
-			asked.AnsweredByLogin = m.accounts[*c.Answer.By]
-		}
-		found = append(found, asked)
+		found = append(found, m.asked(c))
 	}
 	slices.SortFunc(found, func(a, b clarifications.Asked) int {
 		if state == clarifications.StateOpen {
@@ -165,6 +160,26 @@ func (m *Repository) Queue(_ context.Context, contestID uuid.UUID, state clarifi
 		return nil, nil
 	}
 	return found[offset:min(offset+limit, len(found))], nil
+}
+
+func (m *Repository) Asked(_ context.Context, contestID, id uuid.UUID) (clarifications.Asked, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i := m.find(contestID, id)
+	if i < 0 {
+		return clarifications.Asked{}, clarifications.ErrNotFound
+	}
+	return m.asked(m.clarifs[i]), nil
+}
+
+// asked is c as staff see it. The caller holds the lock.
+func (m *Repository) asked(c clarifications.Clarification) clarifications.Asked {
+	reg := m.registrations[c.RegistrationID]
+	asked := clarifications.Asked{Clarification: c, AskerLogin: reg.login, AskerFullName: reg.fullName}
+	if c.Answer != nil && c.Answer.By != nil {
+		asked.AnsweredByLogin = m.accounts[*c.Answer.By]
+	}
+	return asked
 }
 
 func (m *Repository) Counts(_ context.Context, contestID uuid.UUID) (clarifications.Counts, error) {
