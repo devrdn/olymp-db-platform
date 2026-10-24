@@ -122,6 +122,16 @@ describe("playQuestionSchema", () => {
     expect(parsed.pointsAwarded).toBe(0);
   });
 
+  test("carries whether the question is a bonus", () => {
+    expect(parseOpen({ ...base, is_bonus: true }).isBonus).toBe(true);
+    expect(parseOpen({ ...base, is_bonus: false }).isBonus).toBe(false);
+  });
+
+  // An older API sends no flag, and every question it serves is a regular one.
+  test("reads an omitted bonus flag as a regular question", () => {
+    expect(parseOpen(base).isBonus).toBe(false);
+  });
+
   test("an open question says it is not locked", () => {
     expect(parseOpen(base).locked).toBe(false);
   });
@@ -147,6 +157,7 @@ describe("a locked question", () => {
       title: "The weapon",
       body_md: "Which weapon?",
       points: 20,
+      is_bonus: true,
     });
     expect(parsed).toEqual({ locked: true, position: 2 });
   });

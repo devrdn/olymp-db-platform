@@ -49,6 +49,7 @@ export default async function QuestionPage(
           {!question.isVisible ? (
             <Tag tone="mute">{dict.workspace.questions.hidden}</Tag>
           ) : null}
+          {question.isBonus ? <Tag tone="good">{dict.workspace.questions.bonus}</Tag> : null}
           {!editable ? <Tag tone="mute">{dict.workspace.facts.frozen}</Tag> : null}
         </div>
       </div>

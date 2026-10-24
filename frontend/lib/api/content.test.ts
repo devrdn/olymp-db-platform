@@ -40,6 +40,11 @@ describe("questionSchema", () => {
     expect(parsed.answers[0]).toMatchObject({ matchKind: "exact", value: "a" });
   });
 
+  test("carries whether the question is a bonus, and reads an omitted flag as not", () => {
+    expect(questionSchema.parse({ ...question, is_bonus: true }).isBonus).toBe(true);
+    expect(questionSchema.parse(question).isBonus).toBe(false);
+  });
+
   /** Go writes a nil `*int` as null, and a number input would show "null". */
   test("reads a null attempt limit as no limit", () => {
     expect(questionSchema.parse({ ...question, max_attempts: null }).maxAttempts).toBeUndefined();

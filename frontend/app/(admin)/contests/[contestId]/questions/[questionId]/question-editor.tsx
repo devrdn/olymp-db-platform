@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -183,8 +183,16 @@ function ShapeSection({
   const [points, setPoints] = useState(question.points);
   const [penaltyPct, setPenaltyPct] = useState<number | null>(question.penaltyPct);
   const [unlimitedAttempts, setUnlimitedAttempts] = useState(question.maxAttempts == null);
+  // Only points scoring has bonus questions; elsewhere the box is disabled,
+  // so it is not submitted and a save leaves the question regular, as shown.
+  const bonusAllowed = scoring === "points";
+  const [bonus, setBonus] = useState(question.isBonus && bonusAllowed);
+  // A wrong answer to a bonus question costs nothing, so the penalty is set
+  // aside like under ICPC: disabled, and its stored value resubmitted.
+  const penaltyUnused = icpc || bonus;
 
   const penaltyPerAttempt = Math.floor((points * (penaltyPct ?? 0)) / 100);
+  const bonusHintId = useId();
 
   return (
     <>
@@ -269,10 +277,10 @@ function ShapeSection({
           label={t.shape.penalty}
           help={t.shape.penaltyHelp}
           helpLabel={dict.chrome.helpLabel}
-          hint={icpc ? t.shape.icpcDisabled : undefined}
+          hint={icpc ? t.shape.icpcDisabled : bonus ? t.shape.bonusNoPenalty : undefined}
         >
           <Input
-            name={icpc ? undefined : "penaltyPct"}
+            name={penaltyUnused ? undefined : "penaltyPct"}
             type="number"
             min={0}
             max={100}
@@ -287,19 +295,19 @@ function ShapeSection({
               const value = Number(raw);
               setPenaltyPct(Number.isFinite(value) ? value : null);
             }}
-            disabled={!editable || icpc}
+            disabled={!editable || penaltyUnused}
             className="max-w-40"
           />
         </Field>
-        {/* As with `points`: the visible field is disabled under ICPC, so the
-           stored penalty is resubmitted here. */}
-        {icpc ? (
+        {/* As with `points`: the visible field is disabled, so the stored
+           penalty is resubmitted here. */}
+        {penaltyUnused ? (
           <input type="hidden" name="penaltyPct" value={penaltyPct ?? ""} />
         ) : null}
 
         {/* The penalty worked out for this question (docs/ARCHITECTURE.md
-            §6.1.1); not used under ICPC. */}
-        {!icpc ? (
+            §6.1.1); not used under ICPC or for a bonus. */}
+        {!penaltyUnused ? (
           <p className="-mt-3 max-w-body text-small text-ink-3">
             {t.shape.penaltyPreview
               .replace("{n}", String(penaltyPerAttempt))
@@ -345,6 +353,29 @@ function ShapeSection({
             {t.shape.visible}
           </label>
           <Tooltip label={dict.chrome.helpLabel}>{t.shape.visibleHelp}</Tooltip>
+        </div>
+
+        {/* The rule is spelled out rather than behind a "?": it changes what
+           the points mean. */}
+        <div className="flex flex-col gap-1.5">
+          <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
+            <input
+              type="checkbox"
+              name="isBonus"
+              checked={bonus}
+              onChange={(event) => setBonus(event.target.checked)}
+              disabled={!editable || !bonusAllowed}
+              aria-describedby={bonusHintId}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+            />
+            {t.shape.bonus}
+          </label>
+          <p id={bonusHintId} className="max-w-body pl-7 text-small text-ink-3">
+            {t.shape.bonusHint}
+          </p>
+          {!bonusAllowed ? (
+            <p className="max-w-body pl-7 text-small text-warn">{t.shape.bonusPointsOnly}</p>
+          ) : null}
         </div>
 
       </Section>

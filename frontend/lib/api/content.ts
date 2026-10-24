@@ -82,6 +82,8 @@ export const questionSchema = z
     // (docs/ARCHITECTURE.md §6.1.1); zero means no penalty.
     penalty_pct: z.number(),
     is_visible: z.boolean(),
+    // Absent from an older API, whose questions are all regular ones.
+    is_bonus: z.boolean().optional(),
     choice_ids: z.array(z.string()),
     texts: z.record(z.string(), questionTextSchema),
     answers: z.array(answerSchema).optional(),
@@ -95,6 +97,11 @@ export const questionSchema = z
     penaltyPct: raw.penalty_pct,
     /** A hidden question exists in full but is not shown; finding it is part of the task. */
     isVisible: raw.is_visible,
+    /**
+     * Answered correctly, a bonus question gives back up to its points of
+     * the penalty a participant's wrong attempts cost; points scoring only.
+     */
+    isBonus: raw.is_bonus ?? false,
     choiceIds: raw.choice_ids,
     texts: raw.texts,
     answers: raw.answers ?? [],
