@@ -107,8 +107,8 @@ is checking out the previous tag and the same command with that version
 ([Releases and deployment](../../backend/README.md#releases-and-deployment)).
 
 **2. Rebuild any game built before v0.4.0.** A host already on v0.4.0 skips
-this step. A game built before the schema fix has no stored description, so the schema panel still reads it from
-a participant's copy (ARCHITECTURE.md §15, item 49). Rebuild the beta's game
+this step. A game built before the schema fix has no stored description, so the schema panel reads each
+participant's own copy on every request, and never keeps it (ARCHITECTURE.md §15, item 49). Rebuild the beta's game
 while the contest is a draft or published; once it runs, a rebuild is refused.
 For a game written as a script, open the contest's **Database** tab and press
 **Save and build** without changing the script. For any game, call the build

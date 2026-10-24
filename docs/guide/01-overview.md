@@ -185,7 +185,7 @@ The gate's refusals and their API codes, from
 | Reclaim | Dropping instances and templates once the contest's grace period has passed. | `Service.Reclaim` in [`reclaim.go`](../../backend/internal/provisioning/reclaim.go) |
 | Game cluster | The separate PostgreSQL server holding templates and instances (`pg-game`). Not the core database. | [`internal/gamedb`](../../backend/internal/gamedb/cluster.go) |
 | Game roles | `game_reader` and `game_writer`: the roles participant SQL runs as, held only by the Query Runner. `game_author`: the role an organiser's script runs as. The provisioning role, a superuser on the game cluster, is held by the Core API for creating and dropping databases. | `gamedb.RoleReader`, `RoleWriter`, `RoleAuthor`; `cmd/gamedb` |
-| Schema panel | The tree of tables and columns on the play screen, and the diagram of the same tables with their keys: a cached description of the game, read once per template version over the provisioning connection. Browsing it costs the participant no query. | `provisioning.SchemaReader` in [`schema.go`](../../backend/internal/provisioning/schema.go); `GET /contests/{contestID}/play/schema` |
+| Schema panel | The tree of tables and columns on the play screen, and the diagram of the same tables with their keys: the description each build reads from its template and stores. Browsing it costs the participant no query. | `provisioning.SchemaReader` in [`schema.go`](../../backend/internal/provisioning/schema.go); `GET /contests/{contestID}/play/schema` |
 
 ### Running SQL
 

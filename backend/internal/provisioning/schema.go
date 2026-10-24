@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sync/singleflight"
 )
 
 // ErrNoSchema means no description is stored for the contest's game: it is
@@ -73,13 +72,12 @@ const (
 	MaxDocumentForeignKeys = 1000
 )
 
-// SchemaStore is the schema cache. CachedSchema reports ErrNoSchema when
-// nothing is cached; the version it returns is the template build the
-// document describes, so a rebuild is detected without explicit invalidation.
-// SaveSchema writes nothing unless version is the game's current one.
+// SchemaStore is the schema cache, which only a build writes
+// (Games.describe). CachedSchema reports ErrNoSchema when nothing is stored;
+// the version it returns is the template build the document describes, so a
+// rebuild is detected without explicit invalidation.
 type SchemaStore interface {
 	CachedSchema(ctx context.Context, contestID uuid.UUID) (Schema, int, error)
-	SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema Schema) error
 }
 
 // SchemaSource reads one database's schema from the game cluster.
@@ -92,92 +90,64 @@ type SchemaSource interface {
 type SchemaReader struct {
 	store  SchemaStore
 	source SchemaSource
-	// reads collapses concurrent misses of one contest into one catalogue read.
-	reads singleflight.Group
+	// copyReads holds one token per copy being read (maxCopyReads).
+	copyReads chan struct{}
 }
 
-// schemaReadTimeout bounds the shared catalogue read, which is detached from
-// the caller's deadline. It sits above the ten-second statement timeout
-// gamedb sets, so it bounds dialling a cluster that never answers.
+// schemaReadTimeout bounds a copy read, waiting for its turn included. It
+// sits above the ten-second statement timeout gamedb sets, so it bounds
+// dialling a cluster that never answers.
 const schemaReadTimeout = 30 * time.Second
+
+// maxCopyReads bounds the copies read at once. With no description stored
+// every participant reads their own at a contest's start, and each read is a
+// provisioning connection to the game cluster.
+const maxCopyReads = 4
 
 // NewSchemaReader assembles the reader.
 func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
-	return &SchemaReader{store: store, source: source}
+	return &SchemaReader{store: store, source: source, copyReads: make(chan struct{}, maxCopyReads)}
 }
 
-// Schema answers what contest's game looks like, reading database only if it
-// has to.
+// Schema answers what contest's game looks like: the description the build
+// read from the template and stored (Games.describe), when it describes the
+// build the contest is running.
 //
-// The build stores the description, read from the template itself
-// (Games.describe), so this is normally a cache read. A miss reads database,
-// the participant's own copy, never the template (Games.describe says why). A
-// copy's public schema is the template's for everything a participant's role
-// can do: their own objects live in `work`, which is not read, and only
-// game_author may alter the game's tables. A copy read because the cache could
-// not be read is not saved, so it never replaces the build's description.
-//
-// Cache failures never refuse the answer; only a cluster failure does, since
-// an empty panel would claim the game has no tables.
-//
-// At a contest's start every participant misses at once, so misses are
-// collapsed into one read per contest and version (singleflight), and a
-// rebuild is a separate flight. The cache is checked again inside the flight
-// for a caller that arrives after the winner saved. The shared read drops the
-// first caller's cancellation, so one participant leaving does not fail the
-// others, and takes schemaReadTimeout instead.
+// Otherwise (nothing stored, a game built before builds described their
+// templates; a description of another build; or a cache that cannot be read)
+// it reads database, the requesting participant's own copy, and answers that
+// participant alone. What it reads is never saved and never handed to another
+// participant: the organiser's SECURITY DEFINER code run by one participant
+// can change their copy's public tables. The template is never read here
+// (Games.describe says why). A cluster failure refuses the answer, since an
+// empty panel would claim the game has no tables.
 func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database string) (Schema, error) {
-	if cached, hit, _ := r.cached(ctx, contest); hit {
+	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
+	if err == nil && version == contest.Version {
 		return cached, nil
 	}
 
-	answer, err, _ := r.reads.Do(fmt.Sprintf("%s@%d", contest.ID, contest.Version), func() (any, error) {
-		cached, hit, readable := r.cached(ctx, contest)
-		if hit {
-			return cached, nil
-		}
+	ctx, cancel := context.WithTimeout(ctx, schemaReadTimeout)
+	defer cancel()
+	select {
+	case r.copyReads <- struct{}{}:
+		defer func() { <-r.copyReads }()
+	case <-ctx.Done():
+		return Schema{}, fmt.Errorf("wait to read the game's schema: %w", ctx.Err())
+	}
 
-		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaReadTimeout)
-		defer cancel()
-
-		schema, err := r.source.ReadSchema(shared, database)
-		if err != nil {
-			return nil, fmt.Errorf("read the game's schema: %w", err)
-		}
-		schema = storable(schema)
-
-		if readable {
-			// Best effort: the next caller reads again if this fails.
-			_ = r.store.SaveSchema(shared, contest.ID, contest.Version, schema)
-		}
-		return schema, nil
-	})
+	schema, err := r.source.ReadSchema(ctx, database)
 	if err != nil {
-		return Schema{}, err
+		return Schema{}, fmt.Errorf("read the game's schema: %w", err)
 	}
-	return answer.(Schema), nil
-}
-
-// cached returns the cached document when it describes the build the contest
-// is running (hit). readable is false when the cache itself failed, as opposed
-// to holding nothing for this build.
-func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Schema, hit, readable bool) {
-	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
-	switch {
-	case errors.Is(err, ErrNoSchema):
-		return Schema{}, false, true
-	case err != nil:
-		return Schema{}, false, false
-	case version != contest.Version:
-		return Schema{}, false, true
-	}
-	return cached, true, true
+	return storable(schema), nil
 }
 
 // storable bounds the document to MaxSchemaTables, MaxSchemaColumns,
 // MaxSchemaForeignKeys, MaxDocumentForeignKeys and MaxKeyColumns, and sets
-// Truncated if it had to. Both writers of the cache call it first, so the
-// stored jsonb is bounded too (CLAUDE.md rule 2).
+// Truncated if it had to. The build calls it before storing, so the stored
+// jsonb is bounded too (CLAUDE.md rule 2), and the reader before answering
+// from a copy.
 func storable(schema Schema) Schema {
 	if len(schema.Tables) > MaxSchemaTables {
 		schema.Tables = schema.Tables[:MaxSchemaTables]
