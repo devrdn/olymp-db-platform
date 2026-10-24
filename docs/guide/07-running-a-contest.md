@@ -111,10 +111,15 @@ its migration job, and the Query Runner moves to the new tag too. Rolling back
 is checking out the previous tag and the same command with that version
 ([Releases and deployment](../../backend/README.md#releases-and-deployment)).
 
-**2. Rebuild any game built before v0.4.0.** A host already on v0.4.0 skips
-this step. A game built before the schema fix has no stored description, so the schema panel reads each
-participant's own copy on every request, and never keeps it (ARCHITECTURE.md §15, item 49). Rebuild the beta's game
-while the contest is a draft or published; once it runs, a rebuild is refused.
+**2. Rebuild any game built before this release.** Every host does this
+step, including one already on v0.4.0. A game built before v0.4.0 has no
+stored description, so the schema panel reads each participant's own copy
+on every request, and never keeps it (ARCHITECTURE.md §15, item 49). A game
+built on v0.4.0 or v0.5.0, the beta's included, has a description without
+its foreign keys: the panel works, but the diagram draws its boxes with no
+arrows and the Relations list is empty, which reads as a schema with no
+keys. Rebuild the beta's game while the contest is a draft or published;
+once it runs, a rebuild is refused.
 For a game written as a script, open the contest's **Database** tab and press
 **Save and build** without changing the script. For any game, call the build
 route as staff ([below](#calling-a-staff-route-from-the-command-line)):

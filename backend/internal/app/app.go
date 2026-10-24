@@ -298,7 +298,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				WithLookup(consoleRegistrations).
 				// The schema panel; a console-less Service answers
 				// ErrSchemaHidden.
-				WithSchemas(provisioning.NewSchemaReader(games, cluster)).
+				WithSchemas(provisioning.NewSchemaReader(games, cluster).WithLog(log)).
 				// Run and Reset refuse once nothing is left to answer
 				// (ErrNothingLeftToAnswer); the read endpoints stay open.
 				WithAnswerable(postgres.NewAnswerable(pool)).

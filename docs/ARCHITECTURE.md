@@ -5033,8 +5033,9 @@ Product decisions the items below are built on.
   `SECURITY DEFINER` code run by a participant could. So only the build
   writes the description. When none describes the build the contest runs (a
   game built before this change, or a cache that cannot be read or decoded),
-  the requesting participant's own copy is read, at most four at a time, and
-  answers that participant alone: it is never saved and never shared.
+  the requesting participant's own copy is read, a few at a time
+  (`maxCopyReads`), and answers that participant alone: it is never saved and
+  never shared; a cache that cannot be read is logged once per contest.
 
 ## 16. Assumptions
 
