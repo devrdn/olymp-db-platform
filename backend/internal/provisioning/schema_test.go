@@ -494,3 +494,79 @@ func TestSchemaIsBounded(t *testing.T) {
 		}
 	}
 }
+
+// A document cached before keys were described has none; drawn as it is, the
+// diagram of a game built before the change would have no arrows at all.
+func TestSchemaReReadsADocumentCachedBeforeKeysWereDescribed(t *testing.T) {
+	t.Parallel()
+
+	old := twoTables()
+	store := &schemaStore{present: true, version: 1, schema: old}
+	withKeys := twoTables()
+	withKeys.Tables[1].ForeignKeys = []provisioning.ForeignKey{{
+		Name: "keycard_events_guest_id_fkey", Columns: []string{"guest_id"},
+		ReferencedTable: "guests", ReferencedColumns: []string{"id"},
+	}}
+	source := &schemaSource{schema: withKeys}
+	reader := provisioning.NewSchemaReader(store, source)
+	contest := game(1)
+
+	got, err := reader.Schema(context.Background(), contest, "game_c1_r1")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got.Tables) != 2 || len(got.Tables[1].ForeignKeys) != 1 {
+		t.Fatalf("served the old document without keys: %+v", got.Tables)
+	}
+	if source.timesAsked() != 1 || store.saveCount() != 1 {
+		t.Fatalf("asked the cluster %d times and saved %d times, want once each", source.timesAsked(), store.saveCount())
+	}
+
+	// The document it saved is the current one, so the next reader is served
+	// from the cache.
+	if _, err := reader.Schema(context.Background(), contest, "game_c1_r2"); err != nil {
+		t.Fatalf("second read: %v", err)
+	}
+	if source.timesAsked() != 1 {
+		t.Fatal("the re-read document was not served from the cache")
+	}
+}
+
+// CLAUDE.md rule 2.
+func TestSchemaKeysAreBounded(t *testing.T) {
+	t.Parallel()
+
+	wide := make([]string, provisioning.MaxKeyColumns+1)
+	for i := range wide {
+		wide[i] = fmt.Sprintf("c%d", i)
+	}
+	keys := make([]provisioning.ForeignKey, provisioning.MaxSchemaForeignKeys+3)
+	for i := range keys {
+		keys[i] = provisioning.ForeignKey{
+			Name: fmt.Sprintf("fk%d", i), Columns: []string{"a"},
+			ReferencedTable: "t", ReferencedColumns: []string{"id"},
+		}
+	}
+	tooWideKey := provisioning.ForeignKey{Name: "wide", Columns: wide, ReferencedTable: "t", ReferencedColumns: wide}
+	schema := provisioning.Schema{Tables: []provisioning.Table{
+		{Name: "many", Columns: []provisioning.Column{{Name: "a", Type: "int"}}, ForeignKeys: keys},
+		{Name: "wide", Columns: []provisioning.Column{{Name: "a", Type: "int"}},
+			PrimaryKey: wide, ForeignKeys: []provisioning.ForeignKey{tooWideKey}},
+	}}
+
+	reader := provisioning.NewSchemaReader(&schemaStore{}, &schemaSource{schema: schema})
+	got, err := reader.Schema(context.Background(), game(1), "game_c1_r1")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if n := len(got.Tables[0].ForeignKeys); n != provisioning.MaxSchemaForeignKeys {
+		t.Fatalf("kept %d foreign keys, want the bound of %d", n, provisioning.MaxSchemaForeignKeys)
+	}
+	// Half a key is a wrong key, so one past the bound is dropped whole.
+	if len(got.Tables[1].PrimaryKey) != 0 || len(got.Tables[1].ForeignKeys) != 0 {
+		t.Fatalf("kept a key wider than %d columns: %+v", provisioning.MaxKeyColumns, got.Tables[1])
+	}
+	if !got.Truncated {
+		t.Fatal("cut the keys down without saying so")
+	}
+}
