@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
@@ -160,6 +160,11 @@ describe("a long roster", () => {
   const ROW_PX = ROSTER_ROW_REM * 16;
   const VIEW_PX = ROW_PX * 12;
   const TOTAL = 2000;
+
+  // `blurOnMove` patches `Node.prototype`; a failing test must not leave it patched.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   /** Names sort in the order of their number; queries run the other way. */
   const long = Array.from({ length: TOTAL }, (_, i) => {
@@ -336,7 +341,6 @@ describe("a long roster", () => {
     expect(screen.getByRole("link", { name: /Person 0000/ })).toHaveFocus();
     expect(screen.getByRole("row", { name: /Person 0000/ })).toHaveAttribute("aria-rowindex", String(TOTAL + 1));
     expect(bodyNames()[0]).toBe("Person 0001");
-    vi.restoreAllMocks();
   });
 
   test("lets a row go once focus has left the table", () => {

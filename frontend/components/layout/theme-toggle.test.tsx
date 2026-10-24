@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { renderToString } from "react-dom/server";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
