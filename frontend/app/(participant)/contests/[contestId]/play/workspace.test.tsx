@@ -35,6 +35,7 @@ vi.mock("./requests", () => ({
     return { kind: "ok", items: [], total: 0 };
   },
   resetDatabase: async (): Promise<ResetState> => ({ kind: "done" }),
+  fetchClarifications: async () => ({ kind: "ok", feed: { items: [], next: null, open: 0 } }),
   refreshSchema: async (): Promise<SchemaRefreshResult> => {
     schemaReads.count++;
     return schemaReads.next;
