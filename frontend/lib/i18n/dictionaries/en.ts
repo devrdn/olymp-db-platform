@@ -362,12 +362,63 @@ const en = {
       databases: "Databases",
       leaderboard: "Leaderboard",
       monitor: "Monitoring",
+      clarifications: "Participant questions",
     },
     /**
      * The organiser's monitoring screen: the participants table and the live
      * feed of the whole contest. Flags and browser signals are named as hints
      * throughout, never as findings — the screen decides nothing for anybody.
      */
+    /**
+     * The staff desk for participants' questions and announcements
+     * (ARCHITECTURE §6.5). A participant sees only their own questions, the
+     * answers published for everyone, and the announcements.
+     */
+    clarifications: {
+      lede: "Questions participants ask while the contest runs, and announcements to all of them. A participant sees only their own questions and the answers you publish for everyone.",
+      states: "Which questions",
+      waiting: "Waiting ({n})",
+      answered: "Answered ({n})",
+      emptyOpen: "No questions are waiting.",
+      emptyAnswered: "Nothing has been answered yet.",
+      asker: "{name} ({login})",
+      askedAt: "Asked at {time}",
+      general: "About the contest in general",
+      about: "About question {n}",
+      aboutTitled: "About question {n}: {title}",
+      answerLabel: "Answer",
+      counter: "{n} / {max}",
+      visibility: "Who sees the answer",
+      private: "Only the participant who asked",
+      public: "Every participant",
+      publicNote: "Publishing shows the question's text to every participant too, never who asked it.",
+      decline: "Decline to answer",
+      declineNote: "The participant is told you declined; a reply is optional.",
+      markdownNote: "Answers and announcements are Markdown.",
+      send: "Send answer",
+      save: "Save changes",
+      sending: "Sending…",
+      sent: "Answer sent.",
+      edit: "Edit answer",
+      cancel: "Cancel",
+      answeredBy: "Answered by {login} at {time}",
+      answeredAt: "Answered at {time}",
+      edited: "edited",
+      declined: "declined",
+      visibilityTag: { private: "private", public: "public" },
+      announcements: "Announcements",
+      announcementLabel: "New announcement",
+      announcementNote: "Every participant sees it at once.",
+      post: "Post announcement",
+      posting: "Posting…",
+      posted: "Announcement posted.",
+      noAnnouncements: "No announcements yet.",
+      postedAt: "Posted at {time}",
+      older: "Show older",
+      closed: "The contest is not running, so answers and announcements would reach nobody. The questions stay readable.",
+      pollFailed: "Could not refresh the questions; trying again.",
+      forbidden: "You may not answer this contest's questions.",
+    },
     monitor: {
       lede: "What every participant is doing while it happens: the table adds it up, the feed lists it line by line.",
       notes: {

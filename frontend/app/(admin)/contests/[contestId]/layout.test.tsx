@@ -84,3 +84,36 @@ describe("the monitoring tab", () => {
     expect(loadContestResource).not.toHaveBeenCalledWith(CONTEST_ID, "/managers", expect.anything());
   });
 });
+
+/** The questions to the organisers follow the API's `may_clarify`, and say how many wait. */
+describe("the participant questions tab", () => {
+  const label = /^Participant questions/;
+
+  test("is offered when the API says the viewer may answer, with the count still waiting", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayClarify: true });
+    loadContestResource.mockImplementation(async (_id: string, path: string, parse: (payload: unknown) => unknown) =>
+      path.startsWith("/clarifications") ? parse({ items: [], counts: { open: 3, answered: 1 } }) : null,
+    );
+    await renderLayout();
+
+    const link = screen.getByRole("link", { name: label });
+    expect(link).toHaveAttribute("href", `/contests/${CONTEST_ID}/clarifications`);
+    expect(link).toHaveTextContent("3");
+    expect(loadContestResource).toHaveBeenCalledWith(CONTEST_ID, "/clarifications?state=open&limit=1", expect.anything());
+  });
+
+  test("carries no count when nothing waits, and asks for none once the contest is over", async () => {
+    loadContest.mockResolvedValue({ ...contest, status: "finished", mayClarify: true });
+    await renderLayout();
+
+    expect(screen.getByRole("link", { name: "Participant questions" })).toBeInTheDocument();
+    expect(loadContestResource).not.toHaveBeenCalledWith(CONTEST_ID, expect.stringContaining("/clarifications"), expect.anything());
+  });
+
+  test("is not offered otherwise", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayClarify: false });
+    await renderLayout();
+
+    expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
+  });
+});

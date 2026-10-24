@@ -287,6 +287,48 @@ func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
 	})
 }
 
+// The workspace offers its tab of questions to the organisers from this field
+// alone.
+func TestReadingAContestSaysWhetherTheViewerMayAnswerItsQuestions(t *testing.T) {
+	t.Run("the owner may", func(t *testing.T) {
+		f := newContestFixture(t)
+		c := f.ownedContest(t, contests.StatusRunning)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if got := decode(t, rec)["may_clarify"]; got != true {
+			t.Errorf("may_clarify = %v, want true", got)
+		}
+	})
+
+	t.Run("a decision that could not be made is a no, not a 500", func(t *testing.T) {
+		f := newContestFixtureAuthz(t, func(inner auth.Authorizer) auth.Authorizer {
+			return failing{inner: inner, permission: rbac.PermissionContestClarify}
+		})
+		c := f.ownedContest(t, contests.StatusRunning)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		if got, ok := decode(t, rec)["may_clarify"]; !ok || got != false {
+			t.Errorf("may_clarify = %v (present %v), want false", got, ok)
+		}
+	})
+
+	t.Run("staff without the permission may not", func(t *testing.T) {
+		f := newContestFixtureDenying(t, rbac.PermissionContestClarify)
+		c := f.ownedContest(t, contests.StatusRunning)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if got, ok := decode(t, rec)["may_clarify"]; !ok || got != false {
+			t.Errorf("may_clarify = %v (present %v), want false", got, ok)
+		}
+	})
+}
+
 func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 	// The title lives only in the translations, so a listing has to negotiate
 	// one (§6.2).

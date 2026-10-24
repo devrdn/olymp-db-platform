@@ -231,14 +231,18 @@ straight to the API, same-origin through `/api/v1` (Caddy in production, the
 "same-origin" })` from `client.ts`:
 
 - everything the play screen sends or reads while the contest runs: queries,
-  answers, the question list, the query log, the standings, the schema and
-  the database reset (`play/requests.ts`), and the autosave of notes and SQL
+  answers, the question list, the query log, the standings, the schema, the
+  database reset and the questions to the organisers (`play/requests.ts`),
+  and the autosave of notes and SQL
   tabs with its browser signals (`lib/api/workspace.ts`). Next dispatches a
   page's server actions one at a time, so as actions an answer would wait
   behind a running query (section 6); the autosave additionally needs a
   `keepalive` fetch as the page closes, which an action cannot make;
-- the live monitoring reads (`lib/api/monitor.ts`) and the profile's query
-  pages (`lib/api/profile.ts`);
+- the live monitoring reads (`lib/api/monitor.ts`), the profile's query
+  pages (`lib/api/profile.ts`), and the staff desk of participants' questions,
+  which polls its queue every five seconds and answers and announces from the
+  same place (`lib/api/clarifications.ts`,
+  `app/(admin)/contests/[contestId]/clarifications/`);
 - the game database's chunked upload
   (`app/(admin)/contests/[contestId]/game/game-upload.tsx`), streamed from the
   file as a `rawBody` `Blob` without passing through the Next server;

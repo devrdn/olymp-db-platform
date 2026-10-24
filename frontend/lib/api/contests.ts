@@ -173,6 +173,8 @@ export const contestSchema = z
     // Whether the caller holds contest.monitor here. Only the single-contest
     // read sends it; a write's answer omits it, which reads as "no".
     may_monitor: z.boolean().default(false),
+    // The same for contest.clarify, which offers the questions to the organisers.
+    may_clarify: z.boolean().default(false),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -200,6 +202,7 @@ export const contestSchema = z
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
     mayMonitor: raw.may_monitor,
+    mayClarify: raw.may_clarify,
   }));
 
 export type Contest = z.infer<typeof contestSchema>;
