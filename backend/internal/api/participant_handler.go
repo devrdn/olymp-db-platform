@@ -342,7 +342,8 @@ type participantQuestionResponse struct {
 
 // lockedQuestionResponse is a question a sequential contest has not reached
 // (§6.1.1): a type with no field for content, rather than a question with its
-// content blanked. Position counts only the listed questions.
+// content blanked, so a client cannot read a withheld title as none. Position
+// counts only the listed questions.
 type lockedQuestionResponse struct {
 	Position int  `json:"position"`
 	Locked   bool `json:"locked"`

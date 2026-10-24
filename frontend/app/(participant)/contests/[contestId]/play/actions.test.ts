@@ -11,7 +11,6 @@ vi.mock("@/lib/i18n/server", () => ({ activeLocale: async () => "en" }));
 import {
   fetchQueryLogAction,
   fetchStandingsAction,
-  refreshQuestionsAction,
   refreshSchemaAction,
   resetDatabaseAction,
   runQueryAction,
@@ -87,24 +86,6 @@ describe("submitAnswerAction", () => {
 
     expect(state).toEqual({ kind: "idle" });
     expect(serverRequest).not.toHaveBeenCalled();
-  });
-});
-
-describe("refreshQuestionsAction", () => {
-  test.each(hostile)("sends no request for the contest id %j", async (id) => {
-    const result = await refreshQuestionsAction(id);
-
-    expect(result).toEqual({ kind: "refused", code: "invalid_contest_id" });
-    expect(serverRequest).not.toHaveBeenCalled();
-  });
-
-  test("asks for the questions of the contest itself", async () => {
-    serverRequest.mockResolvedValueOnce({ lang: "en", items: [] });
-
-    const result = await refreshQuestionsAction(contestId);
-
-    expect(result).toEqual({ kind: "ok", items: [] });
-    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/play/questions?lang=en`);
   });
 });
 
