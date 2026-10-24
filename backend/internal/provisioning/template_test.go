@@ -415,6 +415,37 @@ func TestABuildDescribesTheTemplateItBuiltBeforeItIsReady(t *testing.T) {
 	}
 }
 
+// The build's description, keys and all, is what the reader serves; it never
+// reads a participant's copy in its place.
+func TestABuildsDescriptionIsServedFromTheCache(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	cluster.schema = provisioning.Schema{Tables: []provisioning.Table{
+		{Name: "guests", Columns: []provisioning.Column{{Name: "id", Type: "integer"}}, PrimaryKey: []string{"id"}},
+	}}
+	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int PRIMARY KEY);`)
+	if err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+	if _, err := service.Build(t.Context(), time.Minute); err != nil {
+		t.Fatalf("building: %v", err)
+	}
+	if len(store.described) != 1 {
+		t.Fatalf("cached %d descriptions, want 1", len(store.described))
+	}
+
+	described := store.described[0]
+	cache := &schemaStore{present: true, version: described.version, schema: described.schema}
+	never := &schemaSource{fail: errors.New("the cluster must not be read")}
+	got, err := provisioning.NewSchemaReader(cache, never).Schema(t.Context(), game(saved.Version), "game_c1_r1")
+	if err != nil {
+		t.Fatalf("the build's description was not served from the cache: %v", err)
+	}
+	if len(got.Tables) != 1 || got.Tables[0].PrimaryKey[0] != "id" {
+		t.Fatalf("served %+v", got.Tables)
+	}
+}
+
 // A game marked ready always carries its description, so a template that
 // cannot be described is a failed build, not a ready game with no schema.
 func TestABuildWhoseTemplateCannotBeDescribedFailsAndDropsIt(t *testing.T) {

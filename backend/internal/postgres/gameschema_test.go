@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -61,6 +62,34 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 		}
 		if !got.Tables[1].Columns[1].Nullable {
 			t.Fatal("nullability did not survive the round trip")
+		}
+	})
+}
+
+// The keys are what the diagram draws; a cached document that lost them would
+// draw a game with no relations until its next build.
+func TestTheGamesSchemaKeysSurviveAWriteAndARead(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aGameWithNoSchemaYet(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		schema := aSchema()
+		schema.Tables[0].PrimaryKey = []string{"id"}
+		schema.Tables[1].ForeignKeys = []provisioning.ForeignKey{{
+			Name: "guests_room_id_fkey", Columns: []string{"room_id"},
+			ReferencedTable: "rooms", ReferencedColumns: []string{"id"},
+		}}
+		rebuild(t, ctx, contest, 2)
+		if err := repo.SaveSchema(ctx, contest, 2, schema); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+
+		got, _, err := repo.CachedSchema(ctx, contest)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if !reflect.DeepEqual(got, schema) {
+			t.Fatalf("read back %+v, want %+v", got, schema)
 		}
 	})
 }
@@ -126,19 +155,67 @@ func rebuild(t *testing.T, ctx context.Context, contest uuid.UUID, version int) 
 	}
 }
 
-func TestAnUnreadableCachedSchemaReadsAsNotCached(t *testing.T) {
+// A stored document that does not parse is a failure of the cache, not an
+// empty one. Read as "nothing stored" it would let the caller describe the
+// game from a participant's copy as if no description existed.
+func TestAnUnreadableCachedSchemaIsAnErrorNotAMiss(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aGameWithNoSchemaYet(t, ctx)
-		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
-			`UPDATE game_templates SET schema_json = '"not an object"'::jsonb, schema_version = 1
-			 WHERE contest_id = $1`, contest); err != nil {
-			t.Fatalf("plant a bad document: %v", err)
-		}
+		plantUnreadableSchema(t, ctx, contest)
 
-		if _, _, err := NewGameInstances(testPool).CachedSchema(ctx, contest); !errors.Is(err, provisioning.ErrNoSchema) {
-			t.Fatalf("a document that cannot be parsed answered %v, want ErrNoSchema", err)
+		_, _, err := NewGameInstances(testPool).CachedSchema(ctx, contest)
+		if err == nil || errors.Is(err, provisioning.ErrNoSchema) {
+			t.Fatalf("a document that cannot be parsed answered %v, want an error that is not ErrNoSchema", err)
 		}
 	})
+}
+
+// The participant is answered from their own copy, and the stored document is
+// left as it was: only a build writes the description.
+func TestAnUnreadableCachedSchemaIsAnsweredFromTheCopyAndNotReplaced(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aGameWithNoSchemaYet(t, ctx)
+		plantUnreadableSchema(t, ctx, contest)
+		source := &copySchema{schema: aSchema()}
+		reader := provisioning.NewSchemaReader(NewGameInstances(testPool), source)
+
+		got, err := reader.Schema(ctx, provisioning.Contest{ID: contest, Version: 1}, "game_c1_r1")
+		if err != nil {
+			t.Fatalf("the participant was refused: %v", err)
+		}
+		if len(got.Tables) != 2 || len(source.asked) != 1 || source.asked[0] != "game_c1_r1" {
+			t.Fatalf("answered %+v after reading %v, want the participant's own copy", got.Tables, source.asked)
+		}
+
+		var stored string
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT schema_json::text FROM game_templates WHERE contest_id = $1`, contest).Scan(&stored); err != nil {
+			t.Fatalf("read the stored document: %v", err)
+		}
+		if stored != `"not an object"` {
+			t.Fatalf("the stored document became %s; a participant's copy was saved", stored)
+		}
+	})
+}
+
+func plantUnreadableSchema(t *testing.T, ctx context.Context, contest uuid.UUID) {
+	t.Helper()
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE game_templates SET schema_json = '"not an object"'::jsonb, schema_version = 1
+		 WHERE contest_id = $1`, contest); err != nil {
+		t.Fatalf("plant a bad document: %v", err)
+	}
+}
+
+// copySchema stands in for the game cluster, recording which copy it read.
+type copySchema struct {
+	schema provisioning.Schema
+	asked  []string
+}
+
+func (c *copySchema) ReadSchema(_ context.Context, database string) (provisioning.Schema, error) {
+	c.asked = append(c.asked, database)
+	return c.schema, nil
 }
 
 // The pairing constraint from migration 22.

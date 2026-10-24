@@ -1643,6 +1643,28 @@ const en = {
         collapse: "Collapse table {table}",
         /** A click on a table's name writes `SELECT * FROM <table> LIMIT 5;` into the open SQL tab, without running it. */
         query: "Insert a query on {table} into the editor",
+        diagram: {
+          /** The schema panel's button that opens the diagram. */
+          open: "Diagram",
+          openLabel: "Open the schema as a diagram",
+          title: "Schema diagram",
+          description: "Tables with their columns: PK marks a primary-key column, FK a foreign-key column. An arrow runs from a foreign key to the columns it references.",
+          close: "Close the diagram",
+          loading: "Drawing the diagram…",
+          empty: "This database has no tables to draw.",
+          /** Names the drawing for assistive technology; the keys are in `keys`. */
+          canvas: "Schema diagram",
+          keys: "Drag or use the arrow keys to move the diagram, the wheel or + and − to zoom, 0 to fit it to the window.",
+          zoomIn: "Zoom in",
+          zoomOut: "Zoom out",
+          fit: "Fit to the window",
+          relations: "Relations",
+          /** One foreign key, e.g. `rooms (floor_id) references floors (id)`. */
+          relation: "{table} ({columns}) references {target} ({targetColumns})",
+          noRelations: "No table references another.",
+          primaryKeys: "Primary keys",
+          primaryKey: "{table}: {columns}",
+        },
       },
       story: {
         heading: "The story",

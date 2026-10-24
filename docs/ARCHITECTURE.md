@@ -4953,11 +4953,11 @@ Product decisions the items below are built on.
   template that cannot be described fails the build. A participant's own
   tables never reached it (they live in `work`, which is not read, and only
   `game_author` may alter the game's tables), but the organiser's
-  `SECURITY DEFINER` code run by a participant could. A participant's copy is
-  still read when no description is stored (a game built before this change)
-  and when the cache cannot be read; the second is answered but never cached,
-  and a description saved for any version but the game's current one is not
-  written.
+  `SECURITY DEFINER` code run by a participant could. So only the build
+  writes the description. When none describes the build the contest runs (a
+  game built before this change, or a cache that cannot be read or decoded),
+  the requesting participant's own copy is read, at most four at a time, and
+  answers that participant alone: it is never saved and never shared.
 
 ## 16. Assumptions
 

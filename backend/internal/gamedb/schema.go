@@ -6,6 +6,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/jackc/pgx/v5"
 )
 
 // schemaQuery reads one database's relations, their columns in declaration
@@ -34,15 +35,64 @@ WHERE n.nspname = 'public' AND c.relkind = ANY ($1)
 ORDER BY c.relname, a.attnum
 LIMIT $2`
 
+// keysQuery reads the primary key and the foreign keys of the relations
+// readColumns kept ($3), each key's columns in the constraint's order rather
+// than the table's. A foreign key is listed only when it points into the
+// public schema, where the diagram has a box to draw it to, and only on the
+// table that declared it: the clones PostgreSQL keeps for partitions
+// (conparentid) would draw one arrow many times. A table yields at most $4
+// foreign keys, one past the per-table cap so readKeys can tell it was cut.
+// Every primary key sorts before every foreign key, so the row bound cuts
+// only foreign keys.
+const keysQuery = `
+WITH keys AS (
+    SELECT c.relname,
+           con.contype = 'p' AS is_primary,
+           con.conname,
+           con.conrelid, con.conkey, con.confrelid, con.confkey,
+           fc.relname AS referenced,
+           row_number() OVER (PARTITION BY con.conrelid, con.contype ORDER BY con.conname) AS nth
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_class fc ON fc.oid = con.confrelid
+    LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = ANY ($1) AND c.relname = ANY ($3)
+      AND (con.contype = 'p'
+           OR (con.contype = 'f' AND fn.nspname = 'public' AND con.conparentid = 0))
+)
+SELECT relname,
+       is_primary,
+       conname,
+       ARRAY(SELECT a.attname::text
+             FROM unnest(conkey) WITH ORDINALITY AS k(attnum, position)
+             JOIN pg_attribute a ON a.attrelid = conrelid AND a.attnum = k.attnum
+             ORDER BY k.position),
+       COALESCE(referenced, ''),
+       ARRAY(SELECT a.attname::text
+             FROM unnest(confkey) WITH ORDINALITY AS k(attnum, position)
+             JOIN pg_attribute a ON a.attrelid = confrelid AND a.attnum = k.attnum
+             ORDER BY k.position)
+FROM keys
+WHERE is_primary OR nth <= $4
+ORDER BY is_primary DESC, relname, conname
+LIMIT $2`
+
 // gameRelkinds are the relation kinds a participant can SELECT from: tables,
 // partitioned tables, views and materialised views.
 var gameRelkinds = []byte{'r', 'p', 'v', 'm'}
 
-// maxSchemaRows bounds the catalogue read as rows arrive (CLAUDE.md rule 12);
-// the init script is an organiser's SQL, so the column count is unbounded.
-const maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColumns
+// maxSchemaRows and maxKeyRows bound the catalogue reads as rows arrive
+// (CLAUDE.md rule 12); the init script is an organiser's SQL, so the column
+// and constraint counts are unbounded. The key rows are the primary keys, the
+// foreign keys kept, and at most one foreign key past the cap per table.
+const (
+	maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColumns
+	maxKeyRows    = 2*provisioning.MaxSchemaTables + provisioning.MaxDocumentForeignKeys
+)
 
-// ReadSchema describes one game database, for the console's schema panel.
+// ReadSchema describes one game database, for the console's schema panel and
+// diagram.
 //
 // database is an instance, or a template only from provisioning.Games.describe,
 // whose comment says when reading a template is safe. It connects as the superuser provisioning role, so it never
@@ -63,9 +113,27 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 		return provisioning.Schema{}, fmt.Errorf("bound the schema read of %s: %w", database, err)
 	}
 
-	rows, err := conn.Query(ctx, schemaQuery, gameRelkinds, maxSchemaRows+1)
+	// One snapshot for both reads, so no key names a column the first missed.
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	schema, err := readColumns(ctx, tx)
+	if err != nil {
+		return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
+	}
+	if err := readKeys(ctx, tx, &schema); err != nil {
+		return provisioning.Schema{}, fmt.Errorf("read the keys of %s: %w", database, err)
+	}
+	return schema, nil
+}
+
+func readColumns(ctx context.Context, tx pgx.Tx) (provisioning.Schema, error) {
+	rows, err := tx.Query(ctx, schemaQuery, gameRelkinds, maxSchemaRows+1)
+	if err != nil {
+		return provisioning.Schema{}, err
 	}
 	defer rows.Close()
 
@@ -77,7 +145,7 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 		var table, column, columnType, references string
 		var nullable bool
 		if err := rows.Scan(&table, &column, &columnType, &nullable, &references); err != nil {
-			return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
+			return provisioning.Schema{}, err
 		}
 
 		seen++
@@ -97,7 +165,75 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 		})
 	}
 	if err := rows.Err(); err != nil && !schema.Truncated {
-		return provisioning.Schema{}, fmt.Errorf("read the schema of %s: %w", database, err)
+		return provisioning.Schema{}, err
 	}
 	return schema, nil
+}
+
+// readKeys attaches each relation's keys to the tables readColumns kept. It
+// applies the document's bounds as the rows arrive, the per-table cap and the
+// key width before the document's total, so a crowded table does not spend
+// the total on keys it cannot keep.
+func readKeys(ctx context.Context, tx pgx.Tx, schema *provisioning.Schema) error {
+	byName := make(map[string]int, len(schema.Tables))
+	names := make([]string, len(schema.Tables))
+	for i, table := range schema.Tables {
+		byName[table.Name] = i
+		names[i] = table.Name
+	}
+
+	rows, err := tx.Query(ctx, keysQuery, gameRelkinds, maxKeyRows+1, names, provisioning.MaxSchemaForeignKeys+1)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	seen, foreign, cut := 0, 0, false
+	for rows.Next() {
+		var (
+			table, name, referenced string
+			primary                 bool
+			columns, referencedCols []string
+		)
+		if err := rows.Scan(&table, &primary, &name, &columns, &referenced, &referencedCols); err != nil {
+			return err
+		}
+
+		seen++
+		if seen > maxKeyRows {
+			cut = true
+			break
+		}
+
+		i, kept := byName[table]
+		if !kept {
+			continue
+		}
+		into := &schema.Tables[i]
+		if len(columns) > provisioning.MaxKeyColumns || len(referencedCols) > provisioning.MaxKeyColumns {
+			cut = true
+			continue
+		}
+		if primary {
+			into.PrimaryKey = columns
+			continue
+		}
+		if len(into.ForeignKeys) == provisioning.MaxSchemaForeignKeys {
+			cut = true
+			continue
+		}
+		foreign++
+		if foreign > provisioning.MaxDocumentForeignKeys {
+			cut = true
+			break
+		}
+		into.ForeignKeys = append(into.ForeignKeys, provisioning.ForeignKey{
+			Name: name, Columns: columns, ReferencedTable: referenced, ReferencedColumns: referencedCols,
+		})
+	}
+	if cut {
+		schema.Truncated = true
+		return nil
+	}
+	return rows.Err()
 }

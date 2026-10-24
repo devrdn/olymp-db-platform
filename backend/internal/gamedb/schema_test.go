@@ -2,7 +2,12 @@ package gamedb_test
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
 // A real database, because the catalogue query is the whole of the method.
@@ -110,5 +115,192 @@ func TestReadSchemaRefusesAnUnspellableName(t *testing.T) {
 
 	if _, err := provisioner(t).ReadSchema(context.Background(), `game"; DROP DATABASE x --`); err == nil {
 		t.Fatal("a name that is not a plain identifier was accepted")
+	}
+}
+
+func TestReadSchemaDescribesEachKeyWithItsColumnsInKeyOrder(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE SCHEMA staffroom`,
+		`CREATE TABLE staffroom.badges (id int PRIMARY KEY)`,
+		// The key's order differs from the declaration order.
+		`CREATE TABLE floors (building text, level int, PRIMARY KEY (level, building))`,
+		`CREATE TABLE rooms (
+			id    int PRIMARY KEY,
+			lvl   int,
+			bld   text,
+			badge int REFERENCES staffroom.badges,
+			CONSTRAINT rooms_on_a_floor FOREIGN KEY (lvl, bld) REFERENCES floors (level, building)
+		)`,
+		`CREATE TABLE staff (
+			id         int PRIMARY KEY,
+			manager_id int CONSTRAINT staff_manager REFERENCES staff
+		)`,
+		`CREATE TABLE notes (body text)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	tables := map[string]provisioning.Table{}
+	for _, table := range schema.Tables {
+		tables[table.Name] = table
+	}
+
+	if got := tables["floors"].PrimaryKey; !slices.Equal(got, []string{"level", "building"}) {
+		t.Errorf("floors has primary key %v, want [level building] in key order", got)
+	}
+	if got := tables["notes"].PrimaryKey; len(got) != 0 {
+		t.Errorf("notes has no primary key and was given %v", got)
+	}
+
+	// The badge key points outside the public schema, where the diagram has
+	// no box to draw an arrow to.
+	want := []provisioning.ForeignKey{{
+		Name:              "rooms_on_a_floor",
+		Columns:           []string{"lvl", "bld"},
+		ReferencedTable:   "floors",
+		ReferencedColumns: []string{"level", "building"},
+	}}
+	if got := tables["rooms"].ForeignKeys; !reflect.DeepEqual(got, want) {
+		t.Errorf("rooms has foreign keys %+v, want %+v", got, want)
+	}
+
+	wantSelf := []provisioning.ForeignKey{{
+		Name: "staff_manager", Columns: []string{"manager_id"},
+		ReferencedTable: "staff", ReferencedColumns: []string{"id"},
+	}}
+	if got := tables["staff"].ForeignKeys; !reflect.DeepEqual(got, wantSelf) {
+		t.Errorf("staff has foreign keys %+v, want %+v", got, wantSelf)
+	}
+	if got := tables["floors"].ForeignKeys; len(got) != 0 {
+		t.Errorf("floors has no foreign key and was given %+v", got)
+	}
+}
+
+// PostgreSQL clones a key that points at a partitioned table once per
+// partition; the diagram must draw it once.
+func TestReadSchemaListsAKeyToAPartitionedTableOnce(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE TABLE visits (id int, day date, PRIMARY KEY (id, day)) PARTITION BY RANGE (day)`,
+		`CREATE TABLE visits_2026 PARTITION OF visits FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+		`CREATE TABLE visits_2027 PARTITION OF visits FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')`,
+		`CREATE TABLE stamps (visit int, day date, CONSTRAINT stamps_visit FOREIGN KEY (visit, day) REFERENCES visits)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	for _, table := range schema.Tables {
+		if table.Name != "stamps" {
+			continue
+		}
+		want := []provisioning.ForeignKey{{
+			Name: "stamps_visit", Columns: []string{"visit", "day"},
+			ReferencedTable: "visits", ReferencedColumns: []string{"id", "day"},
+		}}
+		if !reflect.DeepEqual(table.ForeignKeys, want) {
+			t.Fatalf("stamps has foreign keys %+v, want %+v", table.ForeignKeys, want)
+		}
+		return
+	}
+	t.Fatal("stamps is missing from the schema")
+}
+
+// CLAUDE.md rules 2 and 12: the catalogue read stops at the document's total
+// of foreign keys, and a table sorting after the keys still gets its primary
+// key. The keys are spread over tables at the per-table cap.
+func TestReadSchemaStopsAtTheDocumentsTotalOfForeignKeys(t *testing.T) {
+	requireCluster(t)
+
+	for _, tc := range []struct {
+		name      string
+		keys      int
+		truncated bool
+	}{
+		{"at the bound", provisioning.MaxDocumentForeignKeys, false},
+		{"one past it", provisioning.MaxDocumentForeignKeys + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := scratchDatabase(t)
+			asOwner(t, database,
+				`CREATE TABLE anchor (id int PRIMARY KEY)`,
+				fmt.Sprintf(`DO $$ BEGIN
+					FOR i IN 0..%d - 1 LOOP
+						IF i %% %d = 0 THEN
+							EXECUTE format('CREATE TABLE many_%%s (a int)', i / %d);
+						END IF;
+						EXECUTE format('ALTER TABLE many_%%s ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor',
+							i / %d, lpad(i::text, 4, '0'));
+					END LOOP;
+				END $$`, tc.keys, provisioning.MaxSchemaForeignKeys, provisioning.MaxSchemaForeignKeys, provisioning.MaxSchemaForeignKeys),
+				`CREATE TABLE zebra (id int PRIMARY KEY)`,
+			)
+
+			schema, err := provisioner(t).ReadSchema(context.Background(), database)
+			if err != nil {
+				t.Fatalf("read the schema: %v", err)
+			}
+			total := 0
+			var zebra provisioning.Table
+			for _, table := range schema.Tables {
+				total += len(table.ForeignKeys)
+				if table.Name == "zebra" {
+					zebra = table
+				}
+			}
+			if total != provisioning.MaxDocumentForeignKeys {
+				t.Fatalf("read %d foreign keys, want %d", total, provisioning.MaxDocumentForeignKeys)
+			}
+			if schema.Truncated != tc.truncated {
+				t.Fatalf("truncated = %v, want %v", schema.Truncated, tc.truncated)
+			}
+			if !slices.Equal(zebra.PrimaryKey, []string{"id"}) {
+				t.Fatalf("zebra's primary key read as %v after the keys", zebra.PrimaryKey)
+			}
+		})
+	}
+}
+
+// A table past the per-table cap must not spend the document's total on keys
+// that would be cut anyway, leaving the tables after it with none.
+func TestReadSchemaSpendsTheTotalOnlyOnKeysItKeeps(t *testing.T) {
+	requireCluster(t)
+
+	database := scratchDatabase(t)
+	asOwner(t, database,
+		`CREATE TABLE anchor (id int PRIMARY KEY)`,
+		`CREATE TABLE crowded (a int)`,
+		fmt.Sprintf(`DO $$ BEGIN
+			FOR i IN 1..%d LOOP
+				EXECUTE format('ALTER TABLE crowded ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor', lpad(i::text, 4, '0'));
+			END LOOP;
+		END $$`, provisioning.MaxDocumentForeignKeys),
+		`CREATE TABLE later (a int, b int, c int, d int, e int,
+			FOREIGN KEY (a) REFERENCES anchor, FOREIGN KEY (b) REFERENCES anchor, FOREIGN KEY (c) REFERENCES anchor,
+			FOREIGN KEY (d) REFERENCES anchor, FOREIGN KEY (e) REFERENCES anchor)`,
+	)
+
+	schema, err := provisioner(t).ReadSchema(context.Background(), database)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	keys := map[string]int{}
+	for _, table := range schema.Tables {
+		keys[table.Name] = len(table.ForeignKeys)
+	}
+	if keys["crowded"] != provisioning.MaxSchemaForeignKeys || keys["later"] != 5 {
+		t.Fatalf("read crowded %d and later %d foreign keys, want %d and 5",
+			keys["crowded"], keys["later"], provisioning.MaxSchemaForeignKeys)
+	}
+	if !schema.Truncated {
+		t.Fatal("cut crowded's keys without saying so")
 	}
 }

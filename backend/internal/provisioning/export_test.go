@@ -12,3 +12,6 @@ var (
 
 // SetClock replaces the clock the cluster measurement ages by.
 func SetClock(s *Service, now func() time.Time) { s.now = now }
+
+// MaxCopyReads is how many participants' copies the schema reader reads at once.
+const MaxCopyReads = maxCopyReads
