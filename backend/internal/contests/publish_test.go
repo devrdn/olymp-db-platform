@@ -539,3 +539,54 @@ func TestGateRefusesAnUncappedChoiceQuestionInPointsScoring(t *testing.T) {
 		t.Errorf("problems = %v, want %s", codes, contests.ProblemChoiceNeedsAttemptLimit)
 	}
 }
+
+// A backstop for the refusals in bonus.go, which are checked before writing
+// and could race a scoring change.
+func TestGateRefusesABonusQuestionOutsidePointsScoring(t *testing.T) {
+	for _, scoring := range []string{contests.ScoringWinner, contests.ScoringICPC} {
+		t.Run(scoring, func(t *testing.T) {
+			c, story, questions := publishable()
+			c.Scoring = scoring
+			limit := 1
+			questions[0].MaxAttempts = &limit
+			bonus := questions[0]
+			bonus.ID, bonus.Ord, bonus.Kind, bonus.IsBonus = uuid.New(), 2, contests.KindText, true
+			questions = append(questions, bonus)
+
+			var notReady *contests.NotPublishableError
+			if !errors.As(contests.CheckPublishable(c, story, questions), &notReady) {
+				t.Fatal("contests.CheckPublishable() accepted a bonus question outside points scoring")
+			}
+			found := false
+			for _, p := range notReady.Problems {
+				found = found || (p.Code == contests.ProblemBonusNeedsPoints && p.QuestionID == bonus.ID)
+			}
+			if !found {
+				t.Errorf("problems = %+v, want %s naming the bonus question", notReady.Problems, contests.ProblemBonusNeedsPoints)
+			}
+		})
+	}
+}
+
+// Every question a bonus means nobody can score at all: a bonus only gives
+// back what regular questions cost.
+func TestGateRefusesAPointsContestWhoseEveryQuestionIsABonus(t *testing.T) {
+	c, story, questions := publishable()
+	questions[0].IsBonus = true
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemNoRegularQuestion) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemNoRegularQuestion)
+	}
+}
+
+func TestGateAcceptsABonusQuestionBesideARegularOneUnderPointsScoring(t *testing.T) {
+	c, story, questions := publishable()
+	bonus := questions[0]
+	bonus.ID, bonus.Ord, bonus.Kind, bonus.IsBonus = uuid.New(), 2, contests.KindText, true
+	questions = append(questions, bonus)
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}

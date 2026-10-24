@@ -15,7 +15,7 @@ var ErrBonusNeedsPoints = errors.New("a bonus question needs points scoring")
 // checkBonus refuses q as a question of c when it is a bonus and c does not
 // score points.
 func checkBonus(c Contest, q Question) error {
-	if q.IsBonus && c.Scoring != ScoringPoints {
+	if q.IsBonus && !c.ScoresPoints() {
 		return fmt.Errorf("%w: the contest scores by %s", ErrBonusNeedsPoints, c.Scoring)
 	}
 	return nil
@@ -25,7 +25,7 @@ func checkBonus(c Contest, q Question) error {
 // any of its questions is a bonus. A save that leaves the scoring alone is
 // never refused for it.
 func (s *Service) checkScoringKeepsBonus(ctx context.Context, current, updated Contest) error {
-	if updated.Scoring == ScoringPoints || updated.Scoring == current.Scoring {
+	if updated.ScoresPoints() || updated.Scoring == current.Scoring {
 		return nil
 	}
 	questions, err := s.questions.List(ctx, current.ID)

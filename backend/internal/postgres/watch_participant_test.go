@@ -115,6 +115,31 @@ func TestWatchQueriesPagesFiltersAndSearches(t *testing.T) {
 	})
 }
 
+// The participant's report shows a bonus's credit from these two (§6.1.1).
+func TestWatchAnswersCarryEachQuestionsPointsAndBonusFlag(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		bonus := f.makeQuestion(2)
+		exec(t, ctx, `UPDATE questions SET points = 4, is_bonus = true WHERE id = $1`, bonus)
+		reg, _ := f.participant("answerer")
+		f.answer(reg, f.question, 1, true, f.at(1*time.Minute))
+		f.answer(reg, bonus, 1, true, f.at(2*time.Minute))
+
+		answers, err := NewWatch(testPool).Answers(ctx, f.contest, reg, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(answers.Questions) != 2 {
+			t.Fatalf("answers = %+v", answers)
+		}
+		regular, extra := answers.Questions[0], answers.Questions[1]
+		if regular.QuestionPoints != 10 || regular.IsBonus || extra.QuestionPoints != 4 || !extra.IsBonus {
+			t.Errorf("(points, bonus) = (%d, %v), (%d, %v); want (10, false), (4, true)",
+				regular.QuestionPoints, regular.IsBonus, extra.QuestionPoints, extra.IsBonus)
+		}
+	})
+}
+
 func TestWatchAnswersCarryTheQueriesThatLedToThem(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)

@@ -270,6 +270,8 @@ const en = {
         heading: "By question",
         empty: "This contest had no questions.",
         truncated: "You made more attempts than this report carries; the first {n} are counted here.",
+        bonus: "bonus",
+        bonusNote: "A bonus row shows the lost points it gave back, so the points add up to your total.",
         columns: {
           question: "Question",
           verdict: "Result",
@@ -888,6 +890,8 @@ const en = {
         sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
         sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",
+        bonus_needs_points: "A question is marked as a bonus, but only Points scoring has bonus questions. Untick it or switch the scoring to Points.",
+        no_regular_question: "Every question is a bonus, so nobody could score: a bonus only gives back points lost on regular questions.",
         winner_final_needs_attempt_limit: "A final question has no attempt limit while scoring is first to solve, so the contest could be won by trying candidates one after another.",
         leaderboard_freeze_exceeds_window: "The leaderboard freeze starts before the contest does, or the contest has no end to count it back from.",
         staff_registered: "A participant's account administers every contest, so it already reads this contest's reference answers and its unfrozen leaderboard. Remove them from the roster before publishing, or take the permission away from the account.",

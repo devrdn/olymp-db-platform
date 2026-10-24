@@ -187,3 +187,69 @@ func TestTheReportChargesNoPenaltyOutsideICPC(t *testing.T) {
 		t.Errorf("the question reads %+v, want 10 points and no penalty", report.Questions[0])
 	}
 }
+
+// faced builds one question's answers tab with its face value and bonus
+// flag, as the answers read carries them: awards are the points each attempt
+// stored, minutes are when each was made.
+func faced(question uuid.UUID, ord, points int, bonus bool, attempts ...[3]int) monitor.QuestionAttempts {
+	group := monitor.QuestionAttempts{QuestionID: question, QuestionOrd: ord, QuestionPoints: points, IsBonus: bonus}
+	for i, a := range attempts {
+		correct, awarded, minute := a[0] == 1, a[1], a[2]
+		group.Attempts = append(group.Attempts, monitor.Attempt{
+			AnswerData: monitor.AnswerData{QuestionID: question, QuestionOrd: ord,
+				AttemptNo: i + 1, Correct: correct, PointsAwarded: awarded},
+			At: start.Add(time.Duration(minute) * time.Minute),
+		})
+	}
+	return group
+}
+
+// §6.1.1: the bonus rows show the credit the total actually took, given to
+// the solved bonuses in the order they were answered, so the column adds up
+// to the Points figure above it.
+func TestTheReportShowsTheBonusCreditTheTotalTookSoTheRowsAddUp(t *testing.T) {
+	r := newRig(t)
+	penalised, clean, small, large, missed := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	r.attempts.answers = monitor.Answers{Questions: []monitor.QuestionAttempts{
+		faced(penalised, 1, 10, false, [3]int{0, 0, 5}, [3]int{1, 5, 10}),
+		faced(clean, 2, 8, false, [3]int{1, 8, 12}),
+		// Solved last, so it takes what the earlier bonus left.
+		faced(large, 3, 4, true, [3]int{1, 0, 25}),
+		faced(small, 4, 3, true, [3]int{1, 0, 20}),
+		faced(missed, 5, 7, true, [3]int{0, 0, 22}),
+	}}
+
+	report := r.report(t, contests.StatusFinished)
+
+	want := map[uuid.UUID]struct {
+		points int
+		bonus  bool
+	}{penalised: {5, false}, clean: {8, false}, small: {3, true}, large: {2, true}, missed: {0, true}}
+	sum := 0
+	for _, q := range report.Questions {
+		w := want[q.QuestionID]
+		if q.Points != w.points || q.Bonus != w.bonus {
+			t.Errorf("question %d reads %d points, bonus %v; want %d, %v", q.Ord, q.Points, q.Bonus, w.points, w.bonus)
+		}
+		sum += q.Points
+	}
+	// 13 awarded and 5 penalty points, all of which the 7 of credit covers.
+	if sum != 18 {
+		t.Errorf("the rows add up to %d, want 18", sum)
+	}
+}
+
+func TestTheReportGivesNoBonusCreditWithoutPenaltyPoints(t *testing.T) {
+	r := newRig(t)
+	regular, bonus := uuid.New(), uuid.New()
+	r.attempts.answers = monitor.Answers{Questions: []monitor.QuestionAttempts{
+		faced(regular, 1, 10, false, [3]int{1, 10, 5}),
+		faced(bonus, 2, 4, true, [3]int{1, 0, 10}),
+	}}
+
+	report := r.report(t, contests.StatusFinished)
+
+	if got := report.Questions[1]; !got.Bonus || got.Points != 0 || !got.Solved {
+		t.Errorf("the bonus reads %+v, want a solved bonus that took nothing", got)
+	}
+}
