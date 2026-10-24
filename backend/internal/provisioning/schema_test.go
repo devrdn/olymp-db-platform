@@ -12,75 +12,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// schemaStore is an in-memory schema cache.
+// schemaStore is an in-memory schema cache. SaveSchema is not on the reader's
+// interface; it is a trap, so a reader that saved by any route would be
+// counted.
 type schemaStore struct {
 	mu       sync.Mutex
 	schema   provisioning.Schema
 	version  int
 	present  bool
 	saves    int
-	saveFail error
 	readFail error
-
-	// gate, when set, holds the first gateLeft cache reads until all of them
-	// have arrived, then releases them together.
-	gate     chan struct{}
-	gateLeft int
-
-	// park, when set, holds only the first cache read until closed; parked is
-	// closed once it is held. It models a caller descheduled after a miss.
-	park     chan struct{}
-	parked   chan struct{}
-	parkOnce sync.Once
 }
 
 func (s *schemaStore) CachedSchema(context.Context, uuid.UUID) (provisioning.Schema, int, error) {
 	s.mu.Lock()
-	schema, version, present, readFail := s.schema, s.version, s.present, s.readFail
-	s.mu.Unlock()
-
-	// Gated after the answer is decided: gated before, an early save could
-	// let later callers see a warm cache and hide an unfixed stampede.
-	s.arrive()
-	s.parkFirst()
-
+	defer s.mu.Unlock()
 	switch {
-	case readFail != nil:
-		return provisioning.Schema{}, 0, readFail
-	case !present:
+	case s.readFail != nil:
+		return provisioning.Schema{}, 0, s.readFail
+	case !s.present:
 		return provisioning.Schema{}, 0, provisioning.ErrNoSchema
 	}
-	return schema, version, nil
-}
-
-// arrive blocks until every gated caller has arrived. Once open, the gate
-// stays open.
-func (s *schemaStore) arrive() {
-	s.mu.Lock()
-	gate := s.gate
-	if gate == nil {
-		s.mu.Unlock()
-		return
-	}
-	if s.gateLeft > 0 {
-		s.gateLeft--
-		if s.gateLeft == 0 {
-			close(gate)
-		}
-	}
-	s.mu.Unlock()
-	<-gate
-}
-
-func (s *schemaStore) parkFirst() {
-	if s.park == nil {
-		return
-	}
-	held := false
-	s.parkOnce.Do(func() { held = true; close(s.parked) })
-	if held {
-		<-s.park
-	}
+	return s.schema, s.version, nil
 }
 
 func (s *schemaStore) saveCount() int {
@@ -93,9 +46,6 @@ func (s *schemaStore) SaveSchema(_ context.Context, _ uuid.UUID, version int, sc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saves++
-	if s.saveFail != nil {
-		return s.saveFail
-	}
 	s.schema, s.version, s.present = schema, version, true
 	return nil
 }
@@ -104,8 +54,11 @@ func (s *schemaStore) SaveSchema(_ context.Context, _ uuid.UUID, version int, sc
 type schemaSource struct {
 	mu     sync.Mutex
 	schema provisioning.Schema
-	asked  []string
-	fail   error
+	// byDatabase, when it names the database read, answers in place of schema:
+	// one participant's copy that has drifted from another's.
+	byDatabase map[string]provisioning.Schema
+	asked      []string
+	fail       error
 
 	// holdFor names the database whose read blocks until hold is closed
 	// (empty: every read). entered is closed once such a read is under way;
@@ -144,6 +97,9 @@ func (s *schemaSource) ReadSchema(ctx context.Context, database string) (provisi
 	if fail != nil {
 		return provisioning.Schema{}, fail
 	}
+	if own, ok := s.byDatabase[database]; ok {
+		return own, nil
+	}
 	return schema, nil
 }
 
@@ -176,134 +132,42 @@ func game(version int) provisioning.Contest {
 	return provisioning.Contest{ID: uuid.New(), Template: "game_tpl_c1", Version: version}
 }
 
-func TestSchemaReadsTheClusterOnceForEveryoneAfterIt(t *testing.T) {
+// A ready game with nothing stored (built before the build described it)
+// answers each participant from their own copy, and keeps none of it: the
+// organiser's SECURITY DEFINER code run by one participant can change their
+// copy's tables, and that must not become another participant's panel.
+func TestSchemaWithNothingStoredAnswersEachParticipantFromTheirOwnCopy(t *testing.T) {
 	t.Parallel()
 
-	store, source := &schemaStore{}, &schemaSource{schema: twoTables()}
+	first := twoTables()
+	second := twoTables()
+	second.Tables = append(second.Tables, provisioning.Table{Name: "planted_by_r2"})
+	store := &schemaStore{}
+	source := &schemaSource{byDatabase: map[string]provisioning.Schema{"game_c1_r1": first, "game_c1_r2": second}}
 	reader := provisioning.NewSchemaReader(store, source)
 	contest := game(1)
 
-	first, err := reader.Schema(context.Background(), contest, "game_c1_r1")
-	if err != nil {
-		t.Fatalf("first read: %v", err)
-	}
-	if got := len(first.Tables); got != 2 {
-		t.Fatalf("first read returned %d tables, want 2", got)
-	}
-
-	for i := 0; i < 5; i++ {
-		again, err := reader.Schema(context.Background(), contest, "game_c1_r2")
+	for _, step := range []struct {
+		database string
+		tables   int
+	}{{"game_c1_r2", 3}, {"game_c1_r1", 2}, {"game_c1_r2", 3}} {
+		got, err := reader.Schema(context.Background(), contest, step.database)
 		if err != nil {
-			t.Fatalf("read %d: %v", i, err)
+			t.Fatalf("%s: %v", step.database, err)
 		}
-		if len(again.Tables) != 2 {
-			t.Fatalf("read %d returned %d tables, want 2", i, len(again.Tables))
+		if len(got.Tables) != step.tables {
+			t.Fatalf("%s was answered with %d tables, want its own copy's %d", step.database, len(got.Tables), step.tables)
 		}
 	}
-
-	if got := source.timesAsked(); got != 1 {
-		t.Fatalf("asked the cluster %d times, want 1 — the cache is not being used", got)
+	if got := source.timesAsked(); got != 3 {
+		t.Fatalf("read copies %d times for three requests, want 3", got)
 	}
-	if store.saves != 1 {
-		t.Fatalf("wrote the cache %d times, want 1", store.saves)
+	if got := store.saveCount(); got != 0 {
+		t.Fatalf("saved a participant's copy %d times; only a build writes the description", got)
 	}
 }
 
-// The gate holds every caller until all have missed, and the cluster read is
-// held open while callers arrive, so the test counts reads started, not reads
-// finished before a winner warmed the cache.
-func TestSchemaReadsTheClusterOnceForConcurrentMisses(t *testing.T) {
-	t.Parallel()
-
-	const callers = 32
-	// Spent in full only when the collapse works; a slow machine that stops
-	// early still fails on a second read.
-	const settle = 250 * time.Millisecond
-
-	store := &schemaStore{gate: make(chan struct{}), gateLeft: callers}
-	source := &schemaSource{
-		schema:   twoTables(),
-		hold:     make(chan struct{}),
-		arrivals: make(chan struct{}, callers),
-	}
-	reader := provisioning.NewSchemaReader(store, source)
-	contest := game(1)
-
-	var wg sync.WaitGroup
-	failures := make(chan error, callers)
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			// Each participant reads their own copy of the same template.
-			got, err := reader.Schema(context.Background(), contest, fmt.Sprintf("game_c1_r%d", i))
-			switch {
-			case err != nil:
-				failures <- fmt.Errorf("caller %d: %w", i, err)
-			case len(got.Tables) != 2:
-				failures <- fmt.Errorf("caller %d saw %d tables, want 2", i, len(got.Tables))
-			}
-		}(i)
-	}
-
-	arriving := time.After(settle)
-counting:
-	for i := 0; i < callers; i++ {
-		select {
-		case <-source.arrivals:
-		case <-arriving:
-			break counting
-		}
-	}
-	close(source.hold)
-
-	wg.Wait()
-	close(failures)
-	for err := range failures {
-		t.Error(err)
-	}
-
-	if got := source.timesAsked(); got != 1 {
-		t.Fatalf("%d concurrent misses read the cluster %d times, want 1", callers, got)
-	}
-	if got := store.saveCount(); got != 1 {
-		t.Fatalf("%d concurrent misses wrote the cache %d times, want 1", callers, got)
-	}
-}
-
-// The parked caller's flight starts after the other one finished, so only the
-// cache check inside the flight saves a second read.
-func TestSchemaDoesNotActOnAMissThatWasOvertaken(t *testing.T) {
-	t.Parallel()
-
-	store := &schemaStore{park: make(chan struct{}), parked: make(chan struct{})}
-	source := &schemaSource{schema: twoTables()}
-	reader := provisioning.NewSchemaReader(store, source)
-	contest := game(1)
-
-	overtaken := make(chan error, 1)
-	go func() {
-		_, err := reader.Schema(context.Background(), contest, "game_c1_r1")
-		overtaken <- err
-	}()
-	<-store.parked // it has missed the cache and is holding that miss
-
-	// Somebody else reads the cluster and fills the cache in the meantime.
-	if _, err := reader.Schema(context.Background(), contest, "game_c1_r2"); err != nil {
-		t.Fatalf("the caller that got there first: %v", err)
-	}
-
-	close(store.park)
-	if err := <-overtaken; err != nil {
-		t.Fatalf("the overtaken caller: %v", err)
-	}
-
-	if got := source.timesAsked(); got != 1 {
-		t.Fatalf("read the cluster %d times, want 1 — a stale miss was acted on", got)
-	}
-}
-
-// Collapsing one contest's misses must not serialise other contests.
+// One slow copy read must not hold up another participant's.
 func TestSchemaLetsAnotherContestThroughWhileOneIsBeingRead(t *testing.T) {
 	t.Parallel()
 
@@ -343,34 +207,20 @@ func TestSchemaLetsAnotherContestThroughWhileOneIsBeingRead(t *testing.T) {
 	}
 }
 
-// The shared read drops the caller's cancellation and carries its own
-// deadline, so one abandoned request does not fail everyone waiting on it.
-func TestSchemaReadIsNotCancelledByTheCallerThatStartedIt(t *testing.T) {
+// A copy read carries a deadline of its own, so a cluster that never answers
+// does not hold a request open past it.
+func TestSchemaReadOfACopyHasADeadline(t *testing.T) {
 	t.Parallel()
 
-	store, source := &schemaStore{}, &schemaSource{schema: twoTables()}
-	reader := provisioning.NewSchemaReader(store, source)
+	source := &schemaSource{schema: twoTables()}
+	reader := provisioning.NewSchemaReader(&schemaStore{}, source)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	got, err := reader.Schema(ctx, game(1), "game_c1_r1")
-	if err != nil {
+	if _, err := reader.Schema(context.Background(), game(1), "game_c1_r1"); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(got.Tables) != 2 {
-		t.Fatalf("returned %d tables, want 2", len(got.Tables))
-	}
-
-	called, live, deadline := source.contextGiven()
-	if !called {
-		t.Fatal("the cluster was never asked")
-	}
-	if live != nil {
-		t.Fatalf("the cluster read carried the caller's cancellation: %v", live)
-	}
-	if !deadline {
-		t.Fatal("the cluster read was detached from the caller without a deadline of its own")
+	called, _, deadline := source.contextGiven()
+	if !called || !deadline {
+		t.Fatalf("asked the cluster: %v, with a deadline: %v", called, deadline)
 	}
 }
 
@@ -393,24 +243,8 @@ func TestSchemaIsReReadWhenTheTemplateWasRebuilt(t *testing.T) {
 	if source.timesAsked() != 1 {
 		t.Fatal("a rebuilt template did not re-read the cluster")
 	}
-	if store.version != 2 {
-		t.Fatalf("cached the fresh read as version %d, want 2", store.version)
-	}
-}
-
-func TestSchemaIsAnsweredEvenWhenTheCacheCannotBeWritten(t *testing.T) {
-	t.Parallel()
-
-	store := &schemaStore{saveFail: errors.New("the core database is down")}
-	source := &schemaSource{schema: twoTables()}
-	reader := provisioning.NewSchemaReader(store, source)
-
-	got, err := reader.Schema(context.Background(), game(1), "game_c1_r1")
-	if err != nil {
-		t.Fatalf("a failed cache write refused the answer: %v", err)
-	}
-	if len(got.Tables) != 2 {
-		t.Fatalf("returned %d tables, want 2", len(got.Tables))
+	if store.saveCount() != 0 || store.version != 1 {
+		t.Fatal("cached a participant's copy; only a build writes the description")
 	}
 }
 
@@ -627,5 +461,54 @@ func TestSchemaForeignKeysAreBoundedAcrossTheDocument(t *testing.T) {
 				t.Fatalf("truncated = %v, want %v", got.Truncated, tc.truncated)
 			}
 		})
+	}
+}
+
+// Without a stored description every participant reads their own copy, so at
+// a contest's start they would all open a provisioning connection at once.
+func TestSchemaReadsOnlyAFewCopiesAtOnce(t *testing.T) {
+	t.Parallel()
+
+	const callers = 12
+	const settle = 250 * time.Millisecond
+	source := &schemaSource{schema: twoTables(), hold: make(chan struct{}), arrivals: make(chan struct{}, callers)}
+	reader := provisioning.NewSchemaReader(&schemaStore{}, source)
+	contest := game(1)
+
+	var wg sync.WaitGroup
+	failures := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := reader.Schema(context.Background(), contest, fmt.Sprintf("game_c1_r%d", i)); err != nil {
+				failures <- fmt.Errorf("caller %d: %w", i, err)
+			}
+		}(i)
+	}
+
+	started := 0
+	arriving := time.After(settle)
+counting:
+	for {
+		select {
+		case <-source.arrivals:
+			started++
+		case <-arriving:
+			break counting
+		}
+	}
+	close(source.hold)
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		t.Error(err)
+	}
+
+	if started != provisioning.MaxCopyReads {
+		t.Fatalf("%d copy reads were under way at once, want the bound of %d", started, provisioning.MaxCopyReads)
+	}
+	if got := source.timesAsked(); got != callers {
+		t.Fatalf("read %d copies for %d participants, want one each", got, callers)
 	}
 }
