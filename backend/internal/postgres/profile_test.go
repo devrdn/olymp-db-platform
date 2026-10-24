@@ -295,10 +295,18 @@ func TestProfileEnrolmentsCarryTheBonusTotalTheTableAndTheRosterAgreeWith(t *tes
 		if err != nil {
 			t.Fatalf("Standings() = %v", err)
 		}
+		found := false
 		for _, entry := range entries {
-			if entry.Registration == mine && entry.Points != 10 {
+			if entry.Registration != mine {
+				continue
+			}
+			found = true
+			if entry.Points != 10 {
 				t.Errorf("the table says %d points, the profile 10", entry.Points)
 			}
+		}
+		if !found {
+			t.Error("the caller is not on the table at all")
 		}
 	})
 }

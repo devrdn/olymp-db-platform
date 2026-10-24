@@ -40,6 +40,10 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 //
 // Registrations.RefreshScore, Standings and Profile all read it, so
 // total_score, the table and the profile cannot disagree.
+//
+// It reads q.points and q.is_bonus as they are now against points_awarded
+// fixed at answer time, which holds only because questions are frozen once a
+// contest runs (Contest.ContentEditable); relaxing that would re-score P.
 func scoreTotal(over string) string {
 	return `COALESCE(SUM(s.points_awarded)` + over + `, 0)
 	      + LEAST(COALESCE(SUM(q.points) FILTER (WHERE s.is_correct AND q.is_bonus)` + over + `, 0),

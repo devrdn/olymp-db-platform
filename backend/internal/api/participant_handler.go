@@ -317,9 +317,7 @@ type participantQuestionResponse struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	Points int    `json:"points"`
-	// IsBonus says Points is a bonus: up to that many penalty points removed
-	// when answered correctly, nothing else. A locked question carries no
-	// such field.
+	// IsBonus is absent from lockedQuestionResponse on purpose.
 	IsBonus   bool     `json:"is_bonus"`
 	ChoiceIDs []string `json:"choice_ids"`
 	// Title is empty when the question has none in this language; nothing is

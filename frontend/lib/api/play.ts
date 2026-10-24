@@ -36,10 +36,7 @@ export const openPlayQuestionSchema = z
     id: z.string(),
     kind: z.enum(QUESTION_KINDS),
     points: z.number(),
-    /**
-     * A bonus question's points are penalty points it gives back when
-     * answered correctly; it earns nothing else. Absent from an older API.
-     */
+    /** docs/ARCHITECTURE.md §6.1.1; absent from an older API. */
     is_bonus: z.boolean().optional(),
     choice_ids: z.array(z.string()),
     /** Empty, or absent, when the question has no title in this language. */
