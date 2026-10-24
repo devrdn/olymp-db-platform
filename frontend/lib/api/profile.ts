@@ -139,6 +139,8 @@ const reportQuestionSchema = z
     solved: z.boolean(),
     solved_at: z.string().optional(),
     points: z.number(),
+    // docs/ARCHITECTURE.md §6.1.1; absent from an older API.
+    is_bonus: z.boolean().optional(),
     penalty: z.number().optional(),
   })
   .transform((raw) => ({
@@ -147,8 +149,12 @@ const reportQuestionSchema = z
     attempts: raw.attempts,
     solved: raw.solved,
     solvedAt: raw.solved_at,
-    /** Always zero under ICPC scoring. */
+    /**
+     * Always zero under ICPC scoring. On a bonus row, the credit the total
+     * took from it, so the column adds up to the result's points.
+     */
     points: raw.points,
+    isBonus: raw.is_bonus ?? false,
     /**
      * ICPC only, in minutes: the solving minute plus the penalty for each
      * wrong attempt before it. Zero in other modes.

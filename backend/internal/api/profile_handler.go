@@ -301,7 +301,9 @@ type profileQuestionResponse struct {
 	Attempts   int       `json:"attempts"`
 	Solved     bool      `json:"solved"`
 	SolvedAt   string    `json:"solved_at,omitempty"`
-	Points     int       `json:"points"`
+	// Points is a bonus question's credit applied (profile.QuestionResult).
+	Points  int  `json:"points"`
+	IsBonus bool `json:"is_bonus"`
 	// Penalty is the minutes this question cost an ICPC row, zero in other
 	// modes. Always sent beside points; result.scoring decides which one to
 	// show, since both can be zero.
@@ -360,7 +362,7 @@ func (h *ProfileHandler) report(w http.ResponseWriter, r *http.Request) {
 		out.Questions = append(out.Questions, profileQuestionResponse{
 			QuestionID: question.QuestionID, Ord: question.Ord, Attempts: question.Attempts,
 			Solved: question.Solved, SolvedAt: formatTime(question.SolvedAt), Points: question.Points,
-			Penalty: question.Penalty,
+			IsBonus: question.Bonus, Penalty: question.Penalty,
 		})
 	}
 	noIndex(w)

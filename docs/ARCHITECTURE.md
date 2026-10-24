@@ -1268,7 +1268,14 @@ questions this is exactly the last answer with `points_awarded > 0`.
 
 Marking a question as a bonus in a `winner` or `icpc` contest is refused
 (`bonus_needs_points`), and so is moving a contest that has one to either
-mode: neither has penalty points for a bonus to remove.
+mode: neither has penalty points for a bonus to remove. The publication gate
+checks both again (`bonus_needs_points` per question), and refuses a points
+contest whose every question is a bonus (`no_regular_question`), where nobody
+could score.
+
+The participant's report shows each solved bonus with the credit the total
+took from it: `min(B, P)` handed to the solved bonuses in the order they were
+answered, each up to its X. So its points column adds up to the total.
 
 **Progression — `contests.progression`: `free` (default) or `sequential`.**
 

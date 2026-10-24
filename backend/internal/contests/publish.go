@@ -57,6 +57,14 @@ const (
 	// line (§10.1). The upload route and the column check it too; this
 	// catches a restored or hand-repaired row, or a whitespace-only credit.
 	ProblemCoverNeedsAttribution = "cover_needs_attribution"
+	// ProblemBonusNeedsPoints names a bonus question in a contest that does
+	// not score points. Saving refuses it already (ErrBonusNeedsPoints); the
+	// gate catches one that raced a scoring change.
+	ProblemBonusNeedsPoints = "bonus_needs_points"
+	// ProblemNoRegularQuestion names a points contest whose every question is
+	// a bonus: nobody could score, since a bonus only gives back what regular
+	// questions cost.
+	ProblemNoRegularQuestion = "no_regular_question"
 	// ProblemNoGame names a contest whose game template is missing, waiting
 	// for a build, building or failed: every participant's console would
 	// answer no_game_yet.
@@ -170,6 +178,9 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 			}
 			add(PublishProblem{Code: code, QuestionID: q.ID})
 		}
+		if q.IsBonus && !c.ScoresPoints() {
+			add(PublishProblem{Code: ProblemBonusNeedsPoints, QuestionID: q.ID})
+		}
 		if c.Scoring == ScoringWinner && q.Kind == KindFinal && q.MaxAttempts == nil {
 			add(PublishProblem{Code: ProblemWinnerFinalNeedsAttemptLimit, QuestionID: q.ID})
 		}
@@ -187,6 +198,11 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		return q.Kind == KindFinal
 	}) {
 		add(PublishProblem{Code: ProblemWinnerNeedsFinal})
+	}
+	if c.ScoresPoints() && len(questions) > 0 && !slices.ContainsFunc(questions, func(q Question) bool {
+		return !q.IsBonus
+	}) {
+		add(PublishProblem{Code: ProblemNoRegularQuestion})
 	}
 	if !c.FreezeFitsWindow() {
 		add(PublishProblem{Code: ProblemLeaderboardFreezeExceedsWindow})

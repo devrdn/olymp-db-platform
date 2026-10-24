@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 )
 
 // Result is the participant's own standing, as the profile may show it.
@@ -65,7 +67,11 @@ type QuestionResult struct {
 	Solved   bool
 	SolvedAt *time.Time
 	// Points is what the contest recorded, wrong-answer penalties included.
+	// For a bonus question it is the credit the total took from it
+	// (applyBonusCredit), so the rows add up to the result's points.
 	Points int
+	// Bonus marks a bonus question (§6.1.1).
+	Bonus bool
 	// Penalty is this question's share of an ICPC row's penalty minutes
 	// (leaderboard.Cell.Penalty), zero in other modes. ICPC writes
 	// points_awarded = 0, so Points alone would show nought there.
@@ -130,8 +136,8 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 	report.Questions = make([]QuestionResult, 0, len(answers.Questions))
 	for _, group := range answers.Questions {
 		question := QuestionResult{QuestionID: group.QuestionID, Ord: group.QuestionOrd,
-			Attempts: len(group.Attempts),
-			Penalty:  cells[group.QuestionID].Penalty(access.Contest.ICPCPenaltyMin)}
+			Attempts: len(group.Attempts), Bonus: group.IsBonus,
+			Penalty: cells[group.QuestionID].Penalty(access.Contest.ICPCPenaltyMin)}
 		for _, attempt := range group.Attempts {
 			question.Points += attempt.PointsAwarded
 			if !attempt.Correct || question.Solved {
@@ -143,10 +149,40 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 		}
 		report.Questions = append(report.Questions, question)
 	}
+	if access.Contest.ScoresPoints() {
+		applyBonusCredit(report.Questions, answers.Questions)
+	}
 
 	report.Activity, err = s.store.Activity(ctx, access.Participant.ID)
 	if err != nil {
 		return Report{}, fmt.Errorf("read the activity: %w", err)
 	}
 	return report, nil
+}
+
+// applyBonusCredit sets each solved bonus question's Points to the credit the
+// total took from it: min(bonus credit, penalty points) as postgres.scoreTotal
+// counts it, given to the solved bonuses in the order they were answered,
+// each up to its face value. questions and groups are index-aligned. Over a
+// truncated answers tab it counts the attempts read, as the rest of the
+// report does.
+func applyBonusCredit(questions []QuestionResult, groups []monitor.QuestionAttempts) {
+	penalty := 0
+	var bonuses []int
+	for i, q := range questions {
+		if !q.Solved {
+			continue
+		}
+		if q.Bonus {
+			bonuses = append(bonuses, i)
+			continue
+		}
+		penalty += max(0, groups[i].QuestionPoints-q.Points)
+	}
+	slices.SortStableFunc(bonuses, func(a, b int) int { return questions[a].SolvedAt.Compare(*questions[b].SolvedAt) })
+	for _, i := range bonuses {
+		taken := min(groups[i].QuestionPoints, penalty)
+		questions[i].Points = taken
+		penalty -= taken
+	}
 }

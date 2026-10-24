@@ -46,8 +46,8 @@ function report(overrides: Partial<ProfileReport> = {}): ProfileReport {
     workedMs: 5_400_000,
     disqualified: false,
     questions: [
-      { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 20, penalty: 0 },
-      { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0 },
+      { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 20, penalty: 0, isBonus: false },
+      { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0, isBonus: false },
     ],
     truncated: false,
     ...overrides,
@@ -98,6 +98,35 @@ describe("a contest scored in points", () => {
   });
 });
 
+// A bonus row carries the credit the total took from it, so the column adds
+// up to the Points figure (docs/ARCHITECTURE.md §6.1.1).
+describe("a contest with a bonus question", () => {
+  const withBonus = () =>
+    report({
+      result: result({ points: 23 }),
+      questions: [
+        { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 20, penalty: 0, isBonus: false },
+        { questionId: `${CONTEST}-2`, ord: 2, attempts: 1, solved: true, solvedAt: "2026-05-14T08:30:00Z", points: 3, penalty: 0, isBonus: true },
+      ],
+    });
+
+  test("tags the bonus row and shows the points it gave back, which add up to the total", () => {
+    renderSummary(withBonus());
+
+    const rows = within(screen.getByRole("table", { name: t().questions.heading })).getAllByRole("row").slice(1);
+    expect(within(rows[1]).getByText(t().questions.bonus)).toBeInTheDocument();
+    expect(within(rows[1]).getByText("3")).toBeInTheDocument();
+    expect(within(rows[0]).queryByText(t().questions.bonus)).not.toBeInTheDocument();
+    expect(screen.getByText(t().questions.bonusNote)).toBeInTheDocument();
+  });
+
+  test("says nothing about bonuses when there are none", () => {
+    renderSummary();
+
+    expect(screen.queryByText(t().questions.bonusNote)).not.toBeInTheDocument();
+  });
+});
+
 /** ICPC has no points (the server sends 0); solved and penalty are the result. */
 describe("a contest scored the ICPC way", () => {
   test("shows solved and penalty, and no points anywhere", () => {
@@ -106,8 +135,8 @@ describe("a contest scored the ICPC way", () => {
         result: result({ scoring: "icpc", points: 0, solved: 4, penalty: 87 }),
         questions: [
           // No points in this mode; the minutes are the cost.
-          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
-          { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0 },
+          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47, isBonus: false },
+          { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0, isBonus: false },
         ],
       }),
     );
@@ -127,7 +156,7 @@ describe("a contest scored the ICPC way", () => {
       report({
         result: result({ scoring: "icpc", points: 0, solved: 1, penalty: 47 }),
         questions: [
-          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
+          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47, isBonus: false },
         ],
       }),
     );

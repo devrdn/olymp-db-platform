@@ -202,6 +202,8 @@ const ro = {
         heading: "Pe întrebări",
         empty: "Această olimpiadă nu a avut întrebări.",
         truncated: "Ați făcut mai multe încercări decât cuprinde raportul; aici sunt numărate primele {n}.",
+        bonus: "bonus",
+        bonusNote: "Un rând bonus arată punctele pierdute pe care le-a redat, astfel încât punctele se adună la totalul dumneavoastră.",
         columns: {
           question: "Întrebare",
           verdict: "Rezultat",
@@ -788,6 +790,8 @@ const ro = {
         sequential_needs_max_attempts: "O întrebare nu are limită de încercări, așa că un participant blocat pe ea în ordine secvențială nu ar putea trece mai departe.",
         sequential_hides_question: "O întrebare ascunsă în ordine secvențială are o altă întrebare după ea, care nu ar putea fi niciodată atinsă.",
         winner_needs_final: "Punctajul este pe primul care rezolvă, dar nicio întrebare nu este finală, deci nimeni nu ar putea câștiga.",
+        bonus_needs_points: "O întrebare este marcată ca bonus, dar doar punctajul „Puncte” are întrebări bonus. Debifați-o sau treceți punctajul la „Puncte”.",
+        no_regular_question: "Toate întrebările sunt bonus, deci nimeni nu ar putea obține puncte: un bonus doar redă punctele pierdute la întrebările obișnuite.",
         winner_final_needs_attempt_limit: "O întrebare finală nu are o limită de încercări, iar punctajul este pe primul care rezolvă, deci olimpiada ar putea fi câștigată încercând variante una după alta.",
         leaderboard_freeze_exceeds_window: "Înghețarea clasamentului începe înaintea olimpiadei sau olimpiada nu are un final de la care să fie numărată.",
         staff_registered: "Contul unui participant administrează toate olimpiadele, deci citește deja răspunsurile de referință ale acestei olimpiade și clasamentul ei neînghețat. Scoateți-l din lista de participanți înainte de publicare sau retrageți-i dreptul contului.",

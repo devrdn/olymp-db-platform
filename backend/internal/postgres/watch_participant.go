@@ -103,6 +103,7 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 		WITH attempts AS (
 		    SELECT s.id, s.question_id, COALESCE(qu.ord, 0) AS ord, s.attempt_no, s.value, s.is_correct,
 		           s.points_awarded, s.submitted_at,
+		           COALESCE(qu.points, 0) AS question_points, COALESCE(qu.is_bonus, false) AS question_bonus,
 		           lag(s.submitted_at) OVER (ORDER BY s.submitted_at, s.id) AS previous
 		    FROM submissions s
 		    LEFT JOIN questions qu ON qu.id = s.question_id AND qu.contest_id = $2
@@ -111,7 +112,7 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 		    LIMIT $3
 		)
 		SELECT a.id, a.question_id, a.ord, a.attempt_no, a.value, a.is_correct, a.points_awarded, a.submitted_at,
-		       n.total,
+		       a.question_points, a.question_bonus, n.total,
 		       q.id, q.executed_at, left(q.sql_text, $5), char_length(q.sql_text) > $5, q.status,
 		       COALESCE(q.error_text, ''), q.duration_ms, q.row_count, COALESCE(host(q.ip), '')
 		FROM attempts a
@@ -151,7 +152,7 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 			ip        *string
 		)
 		if err := rows.Scan(&a.ID, &a.QuestionID, &a.QuestionOrd, &a.AttemptNo, &a.Value, &a.Correct,
-			&a.PointsAwarded, &a.At, &total,
+			&a.PointsAwarded, &a.At, &a.QuestionPoints, &a.QuestionBonus, &total,
 			&id, &at, &sql, &truncated, &status, &errText, &q.DurationMs, &q.RowCount, &ip); err != nil {
 			return monitor.Answers{}, fmt.Errorf("scan an answer: %w", err)
 		}
