@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
-import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
+import { answerResultSchema, type AnswerResult } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
@@ -98,29 +98,6 @@ export async function submitAnswerAction(
         requestId: error.requestId,
       };
     }
-    return { kind: "refused", code: "unreachable" };
-  }
-}
-
-/** The re-read question list, or why it could not be read. */
-export type QuestionsRefreshResult =
-  | { kind: "ok"; items: PlayQuestion[] }
-  | { kind: "refused"; code: string };
-
-/**
- * Re-reads the question list. A closed question can open the next one in a
- * sequential contest, and the events channel has no push for that; a full
- * `router.refresh()` would also remount the console. Asks in the active
- * language, as the page did, so the list does not change language.
- */
-export async function refreshQuestionsAction(contestId: string): Promise<QuestionsRefreshResult> {
-  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
-  try {
-    const locale = await activeLocale();
-    const payload = await serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`);
-    return { kind: "ok", items: playQuestionListSchema.parse(payload).items };
-  } catch (error: unknown) {
-    if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };
   }
 }
