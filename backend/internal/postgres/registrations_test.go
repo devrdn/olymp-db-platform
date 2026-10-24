@@ -118,11 +118,15 @@ func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
 		if err := repo.RefreshScore(ctx, registrationID); err != nil {
 			return err
 		}
+		var answering int32
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&answering); err != nil {
+			return err
+		}
 		close(answered)
 		// Commit only once the other recount is blocked behind this
 		// transaction; one that started after the commit would see the
 		// answer and pass for the wrong reason.
-		return waitForALockWaiter(t, registrationID)
+		return waitForABackendBlockedBy(t, answering)
 	})
 	if err != nil {
 		t.Fatalf("answer: %v", err)
@@ -140,17 +144,17 @@ func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
 	}
 }
 
-// waitForALockWaiter polls, from a connection of its own, until a statement on
-// registrations waits for a lock, or fails the test after five seconds.
-func waitForALockWaiter(t *testing.T, registrationID uuid.UUID) error {
+// waitForABackendBlockedBy polls, from a connection of its own, until some
+// backend waits on a lock the backend blocker holds, or gives up after five
+// seconds. Tied to blocker, so another test's waiting statement cannot pass it.
+func waitForABackendBlockedBy(t *testing.T, blocker int32) error {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var waiting bool
 		if err := testPool.QueryRow(context.Background(), `
-			SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-			               WHERE datname = current_database() AND wait_event_type = 'Lock'
-			                 AND query ILIKE '%registrations%')`).Scan(&waiting); err != nil {
+			SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid)))`,
+			blocker).Scan(&waiting); err != nil {
 			return err
 		}
 		if waiting {
@@ -158,7 +162,7 @@ func waitForALockWaiter(t *testing.T, registrationID uuid.UUID) error {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return fmt.Errorf("no recount of %s ever waited for the lock", registrationID)
+	return fmt.Errorf("no recount ever waited for backend %d", blocker)
 }
 
 func TestRefreshScoreRefusesToRunOutsideATransaction(t *testing.T) {
