@@ -464,10 +464,11 @@ front-check: front-install ## Everything CI runs for the interface but the smoke
 ## --- Browser smoke test -----------------------------------------------------
 #
 # The main path in a real browser (frontend/e2e): an administrator signs in, a
-# participant runs a query, answers and resets their database. It runs against
-# a stack that is already up, named by E2E_BASE_URL or by E2E_ENV_FILE (a file
-# of the E2E_* variables, which e2e-stack-up writes), and seeds it through the
-# public API. Not in CI.
+# participant runs a query, answers and resets their database; and the screens
+# the post-beta changes added (e2e/features-*). It runs against a stack that
+# is already up, named by E2E_BASE_URL or by E2E_ENV_FILE (a file of the E2E_*
+# variables, which e2e-stack-up writes), and seeds it through the public API.
+# Not in CI.
 #
 # e2e-stack-up and e2e-stack-down are a throwaway stack for it: the deployment's
 # compose file with images built from this tree, under its own project name,

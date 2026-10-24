@@ -1,7 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * The browser smoke test of the main path (e2e/), run against a stack that is
+ * The browser smoke test of the main path, and the checks of the screens the
+ * post-beta changes added (e2e/features-*), run against a stack that is
  * already up: `make e2e-smoke` from the repository root, or
  * `npx playwright test` here with the variables below set. It starts no
  * server of its own, because what it proves is that a deployed stack works.
@@ -16,6 +17,8 @@ import { defineConfig, devices } from "@playwright/test";
  *                            the throwaway stack it started
  *   E2E_TRACE                "1" keeps a trace of a failed test; it records
  *                            what was typed, the run's passwords included
+ *   E2E_SCREENS_DIR          a directory to save each checked screen into,
+ *                            in light and dark (e2e/support.ts capture)
  *   E2E_ENV_FILE             a file of the above, such as the smoke.env
  *                            e2e/stack.sh writes; the environment wins
  */
@@ -25,8 +28,9 @@ export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/seed.ts",
   globalTeardown: "./e2e/teardown.ts",
-  // One participant, one contest, one database: the specs share them, so
-  // they run one at a time and in file order.
+  // The specs share the seed's accounts and contests, and
+  // features-results.spec.ts ends the features contest, so they run one at a
+  // time and in file order.
   workers: 1,
   fullyParallel: false,
   forbidOnly: true,
