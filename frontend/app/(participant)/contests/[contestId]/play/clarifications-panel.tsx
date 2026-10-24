@@ -21,7 +21,7 @@ import { useClarificationSignal } from "./clarification-signal";
 import type { PlayDictionary } from "./dictionary";
 import type { QuestionEntry } from "./questions-panel";
 import { refusalKind } from "./refusals";
-import { askOrganisers, fetchClarifications, type ClarificationsResult } from "./requests";
+import { askOrganisers, fetchClarifications } from "./requests";
 
 // Loaded once there is an answer or an announcement to show.
 const LazyClarificationText = lazy(() =>
@@ -31,9 +31,10 @@ const LazyClarificationText = lazy(() =>
 /**
  * How far a refetch after a hint is spread: an announcement reaches every
  * open screen of the contest at once, and five hundred reads in the same
- * instant would queue behind each other in the database.
+ * instant would queue behind each other in the database. Nothing an organiser
+ * publishes needs to arrive within seconds.
  */
-const HINT_SPREAD_MS = 3_000;
+const HINT_SPREAD_MS = 10_000;
 
 /**
  * A connection's first sync counts as a hint, since one published while the
@@ -94,12 +95,6 @@ export function ClarificationsPanel({
   const [refusedClosed, setRefusedClosed] = useState(false);
   const closed = refusedClosed || signal.finished;
 
-  const olderLoaded = useRef(false);
-  // The newest state for `refresh`, which outlives the render it was made in.
-  const itemsRef = useRef(items);
-  useEffect(() => {
-    itemsRef.current = items;
-  });
   const lastRead = useRef(0);
   const inFlight = useRef(false);
   const again = useRef(false);
@@ -116,7 +111,10 @@ export function ClarificationsPanel({
     }
     inFlight.current = true;
     try {
-      const result = await readAgain(contestId, olderLoaded.current ? itemsRef.current.length : 0);
+      // The newest page alone: each read spends the play screen's read budget.
+      // The older pages it replaces may have changed too, so they go, and load
+      // again on demand.
+      const result = await fetchClarifications(contestId);
       if (result.kind === "ok") {
         lastRead.current = Date.now();
         setItems(result.feed.items);
@@ -176,7 +174,6 @@ export function ClarificationsPanel({
     const result = await fetchClarifications(contestId, next);
     setLoadingOlder(false);
     if (result.kind === "ok") {
-      olderLoaded.current = true;
       setItems((current) => {
         const present = new Set(current.map((item) => item.id));
         return [...current, ...result.feed.items.filter((item) => !present.has(item.id))];
@@ -494,26 +491,6 @@ function OrganiserText({ markdown }: { markdown: string }) {
       </Suspense>
     </div>
   );
-}
-
-/**
- * The newest page, and again every older page already on screen until as many
- * entries are read as were shown. Reading them again rather than keeping them
- * is what takes an answer withdrawn from everyone off every screen.
- */
-async function readAgain(contestId: string, shown: number): Promise<ClarificationsResult> {
-  const first = await fetchClarifications(contestId);
-  if (first.kind !== "ok") return first;
-  const items = [...first.feed.items];
-  let next = first.feed.next;
-  while (next !== null && items.length < shown) {
-    const page = await fetchClarifications(contestId, next);
-    if (page.kind !== "ok") break;
-    const present = new Set(items.map((item) => item.id));
-    items.push(...page.feed.items.filter((item) => !present.has(item.id)));
-    next = page.feed.next;
-  }
-  return { kind: "ok", feed: { ...first.feed, items, next } };
 }
 
 function readSeen(key: string | null): string {

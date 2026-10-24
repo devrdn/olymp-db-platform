@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { StoryText } from "@/components/product/story-text";
 import en from "@/lib/i18n/dictionaries/en";
 
+import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { fetchClarifications, fetchStandings } from "./requests";
 import { SidePanel } from "./side-panel";
 
@@ -43,12 +44,15 @@ describe("the side panel", () => {
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
   });
 
-  test("offers the notes as the tab right after the questions", () => {
+  // Six tabs outgrow the column at its default width; the one that carries a
+  // marker comes right after the questions, so it is the first to show.
+  test("offers the questions to the organisers right after the questions, then the notes", () => {
     show();
 
     const names = screen.getAllByRole("tab").map((tab) => tab.textContent);
     const questions = names.indexOf(en.participant.play.workspace.tabs.questions);
-    expect(names[questions + 1]).toBe(en.participant.play.workspace.tabs.notes);
+    expect(names[questions + 1]).toBe(en.participant.play.clarifications.tab);
+    expect(names[questions + 2]).toBe(en.participant.play.workspace.tabs.notes);
   });
 
   test("keeps the notes mounted behind the other tabs, so their autosave keeps running", () => {
@@ -345,21 +349,21 @@ describe("the side panel's Tables tab", () => {
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       tabs.story,
       tabs.questions,
-      tabs.notes,
       en.participant.play.clarifications.tab,
+      tabs.notes,
       en.leaderboard.tab,
     ]);
   });
 
-  test("is offered right after the story once they are written, with the notes still right after the questions", () => {
+  test("is offered right after the story once they are written", () => {
     show(<p>The suspects table.</p>);
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       tabs.story,
       tabs.tables,
       tabs.questions,
-      tabs.notes,
       en.participant.play.clarifications.tab,
+      tabs.notes,
       en.leaderboard.tab,
     ]);
   });
@@ -492,11 +496,78 @@ describe("the questions to the organisers tab", () => {
     vi.mocked(fetchClarifications).mockResolvedValue({ kind: "ok", feed: { items: [], next: null, open: 0 } });
   });
 
-  test("is a tab of its own, after the notes", () => {
+  test("is a tab of its own, right after the questions", () => {
     show();
 
     const names = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(names[names.indexOf(en.participant.play.workspace.tabs.notes) + 1]).toBe(tab);
+    expect(names[names.indexOf(en.participant.play.workspace.tabs.questions) + 1]).toBe(tab);
+  });
+
+  // The strip scrolls sideways, and a marker on a tab scrolled out of it is
+  // seen by nobody.
+  test("scrolls its tab into view when something new arrives", async () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      vi.mocked(fetchClarifications).mockResolvedValue({
+        kind: "ok",
+        feed: {
+          items: [{ kind: "announcement", id: "a1", postedAt: "2026-11-02T09:00:00.000000Z", body: "Ten minutes left." }],
+          next: null,
+          open: 0,
+        },
+      });
+      show();
+
+      const marked = await screen.findByRole("tab", { name: unread });
+      expect(scrollIntoView.mock.instances).toContain(marked);
+      // The selected tab is not taken away from the participant.
+      expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  // Outside the strip too: the side column may be collapsed, or the strip
+  // scrolled back by hand.
+  test("raises a marker on the side panel's toggle in the header while something new waits", async () => {
+    vi.mocked(fetchClarifications).mockResolvedValue({
+      kind: "ok",
+      feed: {
+        items: [{ kind: "announcement", id: "a1", postedAt: "2026-11-02T09:00:00.000000Z", body: "Ten minutes left." }],
+        next: null,
+        open: 0,
+      },
+    });
+    render(
+      <PanelVisibilityProvider contestId="c1">
+        <PanelToggles dict={en} />
+        <SidePanel
+          accountId="u1"
+          storyBody={<p>A body in the stacks.</p>}
+          storyCover={null}
+          storyUnavailable={null}
+          contestId="c1"
+          questionEntries={[]}
+          initialNotes={{ body: "", updatedAt: null }}
+          dict={en}
+          locale="en"
+        />
+      </PanelVisibilityProvider>,
+    );
+    const toggle = screen.getByRole("button", { name: en.participant.play.workspace.panels.side });
+
+    // The header hears of it in an effect after the tab's render.
+    await waitFor(() => expect(toggle).toHaveAccessibleDescription(en.participant.play.workspace.panels.sideMarked));
+    expect(screen.getByTestId("side-panel-marker")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: unread }));
+    await waitFor(() => expect(screen.queryByTestId("side-panel-marker")).toBeNull());
+    expect(toggle).not.toHaveAccessibleDescription(en.participant.play.workspace.panels.sideMarked);
   });
 
   test("carries a marker while something new waits unread, and loses it once opened", async () => {
@@ -522,10 +593,11 @@ describe("the questions to the organisers tab", () => {
   test("is reached from the keyboard along the tab strip", async () => {
     show();
 
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions }));
     await userEvent.keyboard("{ArrowRight}");
-
     expect(screen.getByRole("tab", { name: tab })).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes })).toHaveFocus();
   });
 });
 

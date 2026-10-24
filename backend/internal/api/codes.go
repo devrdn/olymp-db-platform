@@ -418,7 +418,7 @@ var (
 	codeClarificationsClosed = httpx.NewCode("clarifications_closed",
 		"The contest is not running, so no participant could read an answer or an announcement. The questions stay readable.")
 	codeClarificationInvalidCursor = httpx.NewCode("clarification_invalid_cursor",
-		"The `before` cursor is not one this service issued. Ask for the first page again.")
+		"The `before` cursor is not one this service issued, or `after` is not a clarification id. Ask for the first page again.")
 
 	// --- Watching participants -------------------------------------------------
 	// One code per monitor.WatchService refusal (CLAUDE.md rule 1), plus the

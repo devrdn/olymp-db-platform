@@ -1591,7 +1591,7 @@ const ro = {
         lockedNotYet: "Întrebarea {n} — nu s-a deschis încă",
       },
       clarifications: {
-        tab: "Întrebări pentru organizatori",
+        tab: "Organizatori",
         unread: "nou",
         intro: "Puneți organizatorilor întrebări despre olimpiadă. Ei vă răspund doar dumneavoastră sau tuturor, când răspunsul îi privește pe toți.",
         privacy: "Organizatorii văd cine a întrebat. Dacă publică un răspuns, toți văd întrebarea dumneavoastră, dar niciodată numele.",
@@ -1662,6 +1662,7 @@ const ro = {
         panels: {
           schema: "Panoul schemei",
           side: "Panoul întrebărilor",
+          sideMarked: "Ceva nou de la organizatori",
           bottom: "Panoul rezultatului",
           shortcut: "{name} ({keys})",
           keys: {
