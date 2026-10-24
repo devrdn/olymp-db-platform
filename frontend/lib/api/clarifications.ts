@@ -200,22 +200,25 @@ function staffRequest(path: string, options: { method?: string; body?: unknown; 
 export const QUEUE_MAX_SHOWN = 100;
 
 /**
- * The first `limit` questions of one state of the queue (at most
- * `QUEUE_MAX_SHOWN`), with both states' counts. The desk re-reads from the
- * start on every poll, so an answered question leaves the waiting list.
+ * Questions of one state of the queue, `page.limit` (at most
+ * `QUEUE_MAX_SHOWN`) from `page.offset`, with both states' counts. The desk
+ * re-reads from the start on every poll, so an answered question leaves the
+ * waiting list; past what it keeps live it reads further pages by offset.
  */
 export async function fetchQueue(
   contestId: string,
   state: QueueState,
-  limit: number,
+  page: { limit: number; offset?: number },
   signal?: AbortSignal,
 ): Promise<Result<"queue", ClarificationQueue>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
-  const bounded = Math.min(Math.max(1, limit), QUEUE_MAX_SHOWN);
+  const limit = Math.min(Math.max(1, page.limit), QUEUE_MAX_SHOWN);
+  const offset = Math.max(0, page.offset ?? 0);
   try {
-    const payload = await staffRequest(`/contests/${contestId}/clarifications?state=${state}&limit=${bounded}&offset=0`, {
-      signal,
-    });
+    const payload = await staffRequest(
+      `/contests/${contestId}/clarifications?state=${state}&limit=${limit}&offset=${offset}`,
+      { signal },
+    );
     return { kind: "ok", queue: clarificationQueueSchema.parse(payload) };
   } catch (error: unknown) {
     return refusal(error);

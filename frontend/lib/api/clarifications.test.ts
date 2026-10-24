@@ -168,7 +168,7 @@ describe("the staff's browser requests", () => {
 
   test.each(["../users", "not-an-id", ""])("sends nothing for the contest id %j", async (id) => {
     answerWith(200, {});
-    expect(await fetchQueue(id, "open", 0)).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(await fetchQueue(id, "open", { limit: 50 })).toEqual({ kind: "refused", code: "invalid_contest_id" });
     expect(await answerClarification(id, clarificationId, { body: "x", declined: false, visibility: "private" }, "answer")).toEqual({
       kind: "refused",
       code: "invalid_contest_id",
@@ -179,13 +179,16 @@ describe("the staff's browser requests", () => {
   test("reads one state of the queue with its counts", async () => {
     answerWith(200, { items: [staffItem], counts: { open: 1, answered: 0 } });
 
-    const result = await fetchQueue(contestId, "answered", 50);
-    await fetchQueue(contestId, "open", 500);
+    const result = await fetchQueue(contestId, "answered", { limit: 50 });
+    await fetchQueue(contestId, "open", { limit: 500 });
+    await fetchQueue(contestId, "answered", { limit: 50, offset: 100 });
 
     expect(result.kind).toBe("ok");
     expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&offset=0`);
     // The server's page bound, kept on this side too.
     expect(calls[1].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=open&limit=100&offset=0`);
+    // Past what the desk keeps live, a page further on.
+    expect(calls[2].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&offset=100`);
     expect(calls[0].init).toMatchObject({ credentials: "same-origin" });
   });
 
