@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { StoryText } from "@/components/product/story-text";
@@ -45,7 +46,8 @@ type Problem = "forbidden" | "failed" | null;
  * replaces the list from its start, so a question another organiser answered
  * leaves the waiting list; a form being typed in keeps its text while its
  * question stays. It keeps the first hundred live; older ones are read a page
- * at a time on request and are not polled. Outside a running contest the desk only reads: the server
+ * at a time on request, each after the last item held, and are not polled.
+ * Outside a running contest the desk only reads: the server
  * refuses every answer and announcement there, since nobody could read them.
  *
  * A participant's text is shown as typed; answers and announcements are
@@ -87,6 +89,16 @@ export function ClarificationsDesk({
   });
   // Bumped when the state changes, so an answer to an earlier read is dropped.
   const generation = useRef(0);
+
+  // The navigation's waiting count is drawn once by the server layout, so a
+  // change the desk sees redraws it; a poll that changes nothing costs nothing.
+  const router = useRouter();
+  const drawnOpen = useRef(initialQueue.counts.open);
+  useEffect(() => {
+    if (counts.open === drawnOpen.current) return;
+    drawnOpen.current = counts.open;
+    router.refresh();
+  }, [counts.open, router]);
 
   const read = useCallback(async () => {
     const { state: reading, shown: limit } = wanted.current;
@@ -158,11 +170,14 @@ export function ClarificationsDesk({
     const mine = generation.current;
     const result = await fetchQueue(contestId, state, {
       limit: CLARIFICATION_PAGE_SIZE,
-      offset: QUEUE_MAX_SHOWN + further.length,
+      after: (further.at(-1) ?? items.at(-1))?.id,
     });
     if (mine !== generation.current) return;
     if (result.kind === "ok") {
-      setFurther((current) => [...current, ...result.queue.items]);
+      setFurther((current) => {
+        const held = new Set(current.map((item) => item.id));
+        return [...current, ...result.queue.items.filter((item) => !held.has(item.id))];
+      });
       setCounts(result.queue.counts);
     } else {
       setProblem("failed");

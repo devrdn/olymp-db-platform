@@ -1,9 +1,12 @@
 package provisioning_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,9 +136,7 @@ func game(version int) provisioning.Contest {
 }
 
 // A ready game with nothing stored (built before the build described it)
-// answers each participant from their own copy, and keeps none of it: the
-// organiser's SECURITY DEFINER code run by one participant can change their
-// copy's tables, and that must not become another participant's panel.
+// answers each participant from their own copy, and keeps none of it.
 func TestSchemaWithNothingStoredAnswersEachParticipantFromTheirOwnCopy(t *testing.T) {
 	t.Parallel()
 
@@ -278,6 +279,40 @@ func TestSchemaDoesNotCacheACopyReadBecauseTheCacheCouldNotBeRead(t *testing.T) 
 	}
 	if store.saveCount() != 0 {
 		t.Fatal("a participant's copy was written over the build's description")
+	}
+}
+
+// A cache that cannot be read sends every participant to their own copy until
+// the next build, so the operator is told, once per contest rather than once
+// per request. Nothing stored is the ordinary state of a legacy game and is
+// not reported.
+func TestSchemaReportsAnUnreadableCacheOncePerContest(t *testing.T) {
+	t.Parallel()
+
+	var logged bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logged, nil))
+	source := &schemaSource{schema: twoTables()}
+	broken := provisioning.NewSchemaReader(&schemaStore{readFail: errors.New("decode the stored schema")}, source).WithLog(log)
+	first, second := game(1), game(1)
+	for _, contest := range []provisioning.Contest{first, first, second} {
+		if _, err := broken.Schema(context.Background(), contest, "game_c1_r1"); err != nil {
+			t.Fatalf("a failed cache read refused the answer: %v", err)
+		}
+	}
+	empty := provisioning.NewSchemaReader(&schemaStore{}, source).WithLog(log)
+	if _, err := empty.Schema(context.Background(), game(1), "game_c1_r1"); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logged.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("logged %d lines, want one per contest with an unreadable cache:\n%s", len(lines), logged.String())
+	}
+	for i, contest := range []provisioning.Contest{first, second} {
+		if !strings.Contains(lines[i], `"level":"WARN"`) || !strings.Contains(lines[i], contest.ID.String()) ||
+			!strings.Contains(lines[i], "decode the stored schema") {
+			t.Errorf("line %d = %s, want a warning naming the contest and the error", i, lines[i])
+		}
 	}
 }
 

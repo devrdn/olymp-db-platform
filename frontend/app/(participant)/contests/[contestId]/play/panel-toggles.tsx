@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -147,6 +148,8 @@ type PanelVisibility = {
    * move the focus to it. A stable ref callback.
    */
   registerToggle: (panel: PanelKey, node: HTMLButtonElement | null) => void;
+  /** Something new waits unread in the side panel; its toggle shows it. */
+  sideMarked: boolean;
 };
 
 const OUTSIDE: PanelVisibility = {
@@ -157,9 +160,17 @@ const OUTSIDE: PanelVisibility = {
   reportSchema: () => {},
   present: false,
   registerToggle: () => {},
+  sideMarked: false,
 };
 
 const PanelVisibilityContext = createContext<PanelVisibility>(OUTSIDE);
+
+/**
+ * The side panel's way to raise its marker, apart from the visibility the
+ * workspace reads: the side panel must not re-render when a panel collapses.
+ * The value is a stable callback.
+ */
+const SideMarkerContext = createContext<(marked: boolean) => void>(() => {});
 
 export function PanelVisibilityProvider({
   contestId,
@@ -179,6 +190,9 @@ export function PanelVisibilityProvider({
   // contest with no schema.
   const [hasSchema, setHasSchema] = useState(true);
   const reportSchema = useCallback((present: boolean) => setHasSchema(present), []);
+
+  const [sideMarked, setSideMarked] = useState(false);
+  const markSide = useCallback((marked: boolean) => setSideMarked(marked), []);
 
   const toggleRefs = useRef<Partial<Record<PanelKey, HTMLButtonElement | null>>>({});
   const registerToggle = useCallback((panel: PanelKey, node: HTMLButtonElement | null) => {
@@ -234,10 +248,14 @@ export function PanelVisibilityProvider({
   }, [hasSchema, toggle]);
 
   const value = useMemo(
-    () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle }),
-    [collapsed, toggle, expand, hasSchema, reportSchema, registerToggle],
+    () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle, sideMarked }),
+    [collapsed, toggle, expand, hasSchema, reportSchema, registerToggle, sideMarked],
   );
-  return <PanelVisibilityContext.Provider value={value}>{children}</PanelVisibilityContext.Provider>;
+  return (
+    <PanelVisibilityContext.Provider value={value}>
+      <SideMarkerContext.Provider value={markSide}>{children}</SideMarkerContext.Provider>
+    </PanelVisibilityContext.Provider>
+  );
 }
 
 /** The workspace reads this to lay out its grid. */
@@ -254,6 +272,19 @@ export function useSchemaPanel(present: boolean) {
   useEffect(() => {
     reportSchema(present);
   }, [reportSchema, present]);
+}
+
+/**
+ * Tells the header that the side panel holds something new, so its toggle can
+ * show it outside the tab strip. An effect, for the same reason as
+ * `useSchemaPanel`.
+ */
+export function useSideMarker(marked: boolean) {
+  const markSide = useContext(SideMarkerContext);
+  useEffect(() => {
+    markSide(marked);
+  }, [markSide, marked]);
+  useEffect(() => () => markSide(false), [markSide]);
 }
 
 /**
@@ -286,7 +317,7 @@ function shortcutFor(event: KeyboardEvent): PanelKey | null {
  * tooltip so a screen reader does not read it after every name.
  */
 export function PanelToggles({ dict }: { dict: PlayDictionary }) {
-  const { collapsed, toggle, hasSchema, present, registerToggle } = usePanelVisibility();
+  const { collapsed, toggle, hasSchema, present, registerToggle, sideMarked } = usePanelVisibility();
   const t = dict.participant.play.workspace.panels;
   // Stable ref callbacks: a new identity would detach and reattach the ref
   // on every render.
@@ -314,6 +345,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
         showing={!collapsed.side}
         buttonRef={refSide}
         onClick={() => toggle("side")}
+        marked={sideMarked ? t.sideMarked : null}
       >
         <PanelRight aria-hidden="true" className="size-4" />
       </Toggle>
@@ -336,6 +368,7 @@ function Toggle({
   showing,
   buttonRef,
   onClick,
+  marked = null,
   children,
 }: {
   name: string;
@@ -344,25 +377,44 @@ function Toggle({
   /** Registers the button with the provider for the focus hand-off. */
   buttonRef: (node: HTMLButtonElement | null) => void;
   onClick: () => void;
+  /**
+   * What waits unread behind the panel, or null. A dot for the eye and a
+   * description for a screen reader; the name stays fixed, as a toggle's must.
+   */
+  marked?: string | null;
   children: React.ReactNode;
 }) {
+  const noteId = useId();
   return (
     <button
       ref={buttonRef}
       type="button"
       aria-label={name}
       aria-pressed={showing}
-      title={tooltip}
+      aria-describedby={marked ? noteId : undefined}
+      title={marked ? `${tooltip} · ${marked}` : tooltip}
       onClick={onClick}
       className={cn(
         // 24px, the smallest target WCAG 2.5.8 accepts; the hall has tablets.
-        "inline-flex size-6 items-center justify-center rounded-md",
+        "relative inline-flex size-6 items-center justify-center rounded-md",
         "transition-colors duration-(--t-input) ease-standard",
         showing ? "text-ink" : "text-ink-3",
         "hover:bg-sunk hover:text-ink",
       )}
     >
       {children}
+      {marked ? (
+        <>
+          <span
+            aria-hidden
+            data-testid="side-panel-marker"
+            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-accent"
+          />
+          <span id={noteId} className="sr-only">
+            {marked}
+          </span>
+        </>
+      ) : null}
     </button>
   );
 }

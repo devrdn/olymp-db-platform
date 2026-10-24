@@ -3,7 +3,6 @@
  * of the screens built on it.
  */
 import { screen, waitFor } from "@testing-library/react";
-import { expect } from "vitest";
 
 import { INTERACTION_DELAY_MS } from "./sql-completion";
 
@@ -16,7 +15,10 @@ export function offeredCompletions(): string[] {
 
 /** Waits until the popup offers `label`. */
 export async function waitForCompletion(label: string): Promise<void> {
-  await waitFor(() => expect(offeredCompletions()).toContain(label));
+  await waitFor(() => {
+    const offered = offeredCompletions();
+    if (!offered.includes(label)) throw new Error(`the popup offers ${JSON.stringify(offered)}, not "${label}"`);
+  });
 }
 
 /**

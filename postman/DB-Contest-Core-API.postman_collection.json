@@ -941,10 +941,10 @@
                 "questions"
               ]
             },
-            "description": "Appended at the end. `is_visible` defaults to **true**: hiding is the deliberate choice, and a hidden question still scores — working out what is being asked is then part of the puzzle.\n\n`kind`: `text` | `choice` | `final`. A choice question needs at least two `choice_ids`; the submitted answer is one of those identifiers, never a label, so grading does not depend on the language the participant read.\n\nResponses: 201 `QuestionResponse` · 400 · 409 `not_editable`",
+            "description": "Appended at the end. `is_visible` defaults to **true**: hiding is the deliberate choice, and a hidden question still scores — working out what is being asked is then part of the puzzle.\n\n`kind`: `text` | `choice` | `final`. A choice question needs at least two `choice_ids`; the submitted answer is one of those identifiers, never a label, so grading does not depend on the language the participant read.\n\n`title` in a language's text is optional: one line, the heading participants see first with the wording folded under it.\n\nResponses: 201 `QuestionResponse` · 400 · 409 `not_editable`",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 10,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  }\n}",
+              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 10,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1102,10 +1102,10 @@
                 "texts"
               ]
             },
-            "description": "Replaces the authored text. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
+            "description": "Replaces the authored text. `title` is the one-line heading participants see first; a language sent without it has no title afterwards. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
+              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1776,7 +1776,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications?state=open&limit=50&offset=0",
+              "raw": "{{baseUrl}}/contests/{{contestId}}/clarifications?state=open&limit=50",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1793,14 +1793,10 @@
                 {
                   "key": "limit",
                   "value": "50"
-                },
-                {
-                  "key": "offset",
-                  "value": "0"
                 }
               ]
             },
-            "description": "Staff (`contest.clarify`). `state=open` (the default) lists the questions waiting, oldest first; `state=answered` the answered ones, most recently answered first. Each item names the asker (`asker.login`, `asker.full_name`) and, once answered, who answered first (`answer.answered_by`). `counts` gives both states' totals. A staff screen polls this every five seconds.\n\nResponses: 200 `{items, counts: {open, answered}}` · 400 `invalid_contest_id` · 403"
+            "description": "Staff (`contest.clarify`). `state=open` (the default) lists the questions waiting, oldest first; `state=answered` the answered ones, most recently answered first. Each item names the asker (`asker.login`, `asker.full_name`) and, once answered, who answered first (`answer.answered_by`). `counts` gives both states' totals. A staff screen polls this every five seconds. `after`, a clarification id, reads the page past that item in the state's order (the last one the caller holds), so answers given meanwhile neither repeat nor skip an item.\n\nResponses: 200 `{items, counts: {open, answered}}` · 400 `invalid_contest_id` / `clarification_invalid_cursor` · 403"
           },
           "response": []
         },
@@ -2322,7 +2318,7 @@
                 "report"
               ]
             },
-            "description": "The result of one finished contest of the caller's: their own standing and, when the table is open (`place_open`) **and it gives this row a place**, `place` and `participants` — the only route that names a place. Both are `null` otherwise, which includes every row but the winner in winner mode, where `winner: true` marks the one that has a place. Also when their clock started, how long they worked (`worked_ms`), how many queries they ran and how many succeeded, `disqualified` (that they were, not why — the reason is an organiser's note in the audit trail), and question by question the attempts, whether it was solved, when, and what it earned: `points` in every mode that scores in points, and `penalty` — the minutes that question cost, its solving minute plus `icpc_penalty_min` for each wrong attempt before the solve — in ICPC scoring, where the server awards no points at all. `result.scoring` says which of the two to read.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+            "description": "The result of one finished contest of the caller's: their own standing and, when the table is open (`place_open`) **and it gives this row a place**, `place` and `participants` — the only route that names a place. Both are `null` otherwise, which includes every row but the winner in winner mode, where `winner: true` marks the one that has a place. Also when their clock started, how long they worked (`worked_ms`), how many queries they ran and how many succeeded, `disqualified` (that they were, not why — the reason is an organiser's note in the audit trail), and question by question the attempts, whether it was solved, when, and what it earned: `points` in every mode that scores in points, and `penalty` — the minutes that question cost, its solving minute plus `icpc_penalty_min` for each wrong attempt before the solve — in ICPC scoring, where the server awards no points at all. `result.scoring` says which of the two to read. A bonus question's row carries `is_bonus: true`, and its `points` is the penalty it gave back rather than points of its own, so the column adds up to the total.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
           },
           "response": []
         },

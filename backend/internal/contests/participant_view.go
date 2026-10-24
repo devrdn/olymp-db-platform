@@ -58,8 +58,7 @@ type StoryText interface {
 // hidden questions too, so its gaps would reveal them (§6.1).
 //
 // A Locked question is one a sequential contest has not reached (§6.1.1). It
-// carries Position and nothing else: its wording, choices and points are never
-// copied in, so no client can mistake a withheld title for an absent one.
+// carries only Position; every other field is zero.
 type ParticipantQuestion struct {
 	Position int
 	Locked   bool

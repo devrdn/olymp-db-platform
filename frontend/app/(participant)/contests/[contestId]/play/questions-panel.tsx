@@ -46,7 +46,7 @@ function entriesFrom(items: PlayQuestion[], previous: QuestionEntry[]): Question
     if (!entry.question.locked) bodies.set(entry.question.id, entry.body);
   }
   return items.map((question, i): QuestionEntry => {
-    if (question.locked) return { question, index: i + 1, body: null };
+    if (question.locked) return { question, index: question.position, body: null };
     const body = bodies.has(question.id) ? bodies.get(question.id) : (
       <Suspense fallback={<div aria-hidden="true" className="h-5 w-2/3 animate-pulse bg-sunk" />}>
         <LazyQuestionBody markdown={question.bodyMd} />
@@ -147,7 +147,10 @@ export function QuestionsPanel({
       {/* Numbers only: the server sent nothing else. Plain text, never a
           control, so the keyboard passes them by while a screen reader reads
           them; `role` is restated because Safari drops a list's role once its
-          bullets are styled away. */}
+          bullets are styled away. The list follows every open question, even
+          a closed one numbered past it (an attempt cap raised mid-contest can
+          reopen an earlier question), so what is not open yet stays one
+          region. */}
       {locked.length > 0 ? (
         <ul role="list" aria-label={t.lockedList} className="flex flex-col gap-1.5 px-3">
           {locked.map(({ index }) => (
@@ -250,7 +253,10 @@ function QuestionCard({
             <div className="min-w-0">{body}</div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Wraps rather than overflows: a bonus question's tags can be wider
+            than the side column at its default width, and the "points back"
+            tag is what tells a participant it is worth trying. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <QuestionStatus
             closed={closed}
             correct={correct}

@@ -537,7 +537,7 @@ func TestStaffAnswerOnceThenEditAndEveryWriteIsAudited(t *testing.T) {
 func TestTheStaffQueueListsOneStateWithBothCounts(t *testing.T) {
 	f := newClarifyFixture(t)
 	older := f.ask(t, f.ben, "older")
-	f.ask(t, f.ana, "newer")
+	newer := f.ask(t, f.ana, "newer")
 	done := f.ask(t, f.ana, "done")
 	f.answer(t, done, "private")
 
@@ -554,6 +554,17 @@ func TestTheStaffQueueListsOneStateWithBothCounts(t *testing.T) {
 	}
 	if len(queue.Items) != 1 || queue.Items[0]["id"] != older || queue.Counts.Open != 2 || queue.Counts.Answered != 1 {
 		t.Fatalf("open queue = %+v, want the oldest of two open and one answered", queue)
+	}
+	rec = f.do(f.organizer, http.MethodGet, f.staff()+"?state=open&limit=1&after="+older, "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &queue); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(queue.Items) != 1 || queue.Items[0]["id"] != newer {
+		t.Fatalf("open queue after the oldest = %d %+v, want the newer one", rec.Code, queue)
+	}
+	if rec := f.do(f.organizer, http.MethodGet, f.staff()+"?after=not-an-id", ""); rec.Code != http.StatusBadRequest ||
+		errorCode(t, rec) != "clarification_invalid_cursor" {
+		t.Fatalf("a malformed after = %d %s, want 400 clarification_invalid_cursor", rec.Code, rec.Body)
 	}
 	rec = f.do(f.organizer, http.MethodGet, f.staff()+"?state=answered", "")
 	if err := json.Unmarshal(rec.Body.Bytes(), &queue); err != nil {

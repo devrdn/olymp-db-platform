@@ -201,24 +201,25 @@ export const QUEUE_MAX_SHOWN = 100;
 
 /**
  * Questions of one state of the queue, `page.limit` (at most
- * `QUEUE_MAX_SHOWN`) from `page.offset`, with both states' counts. The desk
- * re-reads from the start on every poll, so an answered question leaves the
- * waiting list; past what it keeps live it reads further pages by offset.
+ * `QUEUE_MAX_SHOWN`) from the start, or after the clarification `page.after`,
+ * with both states' counts. The desk re-reads from the start on every poll,
+ * so an answered question leaves the waiting list; past what it keeps live it
+ * reads the page after the last item it holds.
  */
 export async function fetchQueue(
   contestId: string,
   state: QueueState,
-  page: { limit: number; offset?: number },
+  page: { limit: number; after?: string },
   signal?: AbortSignal,
 ): Promise<Result<"queue", ClarificationQueue>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (page.after !== undefined && !isId(page.after)) return { kind: "refused", code: "clarification_invalid_cursor" };
   const limit = Math.min(Math.max(1, page.limit), QUEUE_MAX_SHOWN);
-  const offset = Math.max(0, page.offset ?? 0);
+  const after = page.after === undefined ? "" : `&after=${page.after}`;
   try {
-    const payload = await staffRequest(
-      `/contests/${contestId}/clarifications?state=${state}&limit=${limit}&offset=${offset}`,
-      { signal },
-    );
+    const payload = await staffRequest(`/contests/${contestId}/clarifications?state=${state}&limit=${limit}${after}`, {
+      signal,
+    });
     return { kind: "ok", queue: clarificationQueueSchema.parse(payload) };
   } catch (error: unknown) {
     return refusal(error);

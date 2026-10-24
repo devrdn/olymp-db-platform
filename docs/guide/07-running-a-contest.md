@@ -100,16 +100,26 @@ make game-check                                     # no game the core database 
 `make backup` prints the name of each file it writes. The `diff` compares
 setting names only, so no secret reaches the screen. A name only in
 `.env.example` is a setting your `deploy/.env` lacks: read its comment there
-and decide (the scheduled backup's `BACKUP_*` ones are optional). Use
+and decide (the scheduled backup's `BACKUP_*` ones are optional). The
+`diff` cannot show a changed default: this release raises
+`QUERY_PER_MINUTE` to 60 and `ANSWER_RATE_PER_MINUTE` to 12, and a
+`deploy/.env` that carries `QUERY_PER_MINUTE=30` or
+`ANSWER_RATE_PER_MINUTE=6` keeps the old limits, so raise those lines or
+delete them to take the defaults. Use
 `make deploy`, not `make deploy-api`: `deploy-api` pulls only the API and
 its migration job, and the Query Runner moves to the new tag too. Rolling back
 is checking out the previous tag and the same command with that version
 ([Releases and deployment](../../backend/README.md#releases-and-deployment)).
 
-**2. Rebuild any game built before v0.4.0.** A host already on v0.4.0 skips
-this step. A game built before the schema fix has no stored description, so the schema panel reads each
-participant's own copy on every request, and never keeps it (ARCHITECTURE.md §15, item 49). Rebuild the beta's game
-while the contest is a draft or published; once it runs, a rebuild is refused.
+**2. Rebuild any game built before this release.** Every host does this
+step, including one already on v0.4.0. A game built before v0.4.0 has no
+stored description, so the schema panel reads each participant's own copy
+on every request, and never keeps it (ARCHITECTURE.md §15, item 49). A game
+built on v0.4.0 or v0.5.0, the beta's included, has a description without
+its foreign keys: the panel works, but the diagram draws its boxes with no
+arrows and the Relations list is empty, which reads as a schema with no
+keys. Rebuild the beta's game while the contest is a draft or published;
+once it runs, a rebuild is refused.
 For a game written as a script, open the contest's **Database** tab and press
 **Save and build** without changing the script. For any game, call the build
 route as staff ([below](#calling-a-staff-route-from-the-command-line)):

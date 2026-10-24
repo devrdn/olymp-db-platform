@@ -1061,7 +1061,7 @@ const en = {
         placeholder: "Who was in the greenhouse at midnight?",
         choiceLabel: "Label for option",
         title: "Title",
-        titleHint: "Optional, one line. Participants see it first, with the wording folded under it.",
+        titleHint: "Optional, one line. Participants see it first, with the wording folded under it. It is saved only with a wording in the same language.",
         // The bound is 200, which takes the plural in every locale.
         titleCounter: "{n} of {max} characters",
         body: "Wording",
@@ -1776,7 +1776,7 @@ const en = {
       // §6.5). A participant's own text is shown as typed; the organisers'
       // answers and announcements as Markdown.
       clarifications: {
-        tab: "Questions to organisers",
+        tab: "Organisers",
         /** Read beside the tab's dot by assistive technology. */
         unread: "new",
         intro: "Ask the organisers about the contest. They answer you alone, or everyone when the answer matters to all.",
@@ -1872,6 +1872,7 @@ const en = {
         panels: {
           schema: "Schema panel",
           side: "Questions panel",
+          sideMarked: "Something new from the organisers",
           bottom: "Result panel",
           shortcut: "{name} ({keys})",
           keys: {

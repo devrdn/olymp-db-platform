@@ -950,6 +950,15 @@ describe("completion", () => {
     await waitForCompletion("motive");
   });
 
+  test("names a column and its type as two words for a screen reader", async () => {
+    const { container } = render(<Editor schema={SCHEMA} />);
+    await typeInto(container, "SELECT * FROM suspects WHERE mot");
+    await waitForCompletion("motive");
+
+    // jsdom trims each part of the name; a browser keeps the comma's space.
+    expect(screen.getByRole("option", { name: /^motive,\s?text$/ })).toBeInTheDocument();
+  });
+
   test("does not offer the columns of a table the statement does not read", async () => {
     const { container } = render(<Editor schema={SCHEMA} />);
     await typeInto(container, 'SELECT * FROM "CaseFiles" WHERE o');

@@ -75,9 +75,7 @@ export type OpenPlayQuestion = z.infer<typeof openPlayQuestionSchema>;
 
 /**
  * A question a sequential contest has not reached yet: its 1-based number and
- * nothing else. The server withholds the rest, so this is a shape without
- * content rather than a question with empty fields, and any extra key is
- * dropped here.
+ * nothing else. The server withholds the rest; any extra key is dropped here.
  */
 export const lockedPlayQuestionSchema = z
   .object({ locked: z.literal(true), position: z.number().int().positive() })

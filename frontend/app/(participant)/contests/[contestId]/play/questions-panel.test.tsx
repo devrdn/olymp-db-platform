@@ -27,8 +27,14 @@ vi.mock("./requests", () => ({
 
 // The wording of a question that opens after the page loaded is rendered in
 // the browser; the stand-in marks which bodies took that path.
+// A body named `NEVER_LOADS` suspends for good, standing in for a chunk
+// still on its way.
+const NEVER_LOADS = "never loads";
 vi.mock("./question-body", () => ({
-  QuestionBody: ({ markdown }: { markdown: string }) => <div data-testid="opened-body">{markdown}</div>,
+  QuestionBody: ({ markdown }: { markdown: string }) => {
+    if (markdown === "never loads") throw new Promise(() => {});
+    return <div data-testid="opened-body">{markdown}</div>;
+  },
 }));
 
 function question(overrides: Partial<OpenPlayQuestion> = {}): OpenPlayQuestion {
@@ -187,6 +193,40 @@ describe("the questions panel", () => {
 
     await screen.findByTestId("opened-body");
     expect(screen.queryByRole("list", { name: en.participant.play.questions.lockedList })).not.toBeInTheDocument();
+  });
+
+  test("a question still loading its wording shows a placeholder hidden from assistive technology", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
+    refresh.current = {
+      kind: "ok",
+      items: [question({ id: "q1", closed: true, canAnswer: false, correct: true }), question({ id: "q2", bodyMd: NEVER_LOADS })],
+    };
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ id: "q1" }), lockedEntry(2)]} dict={en} />);
+
+    await submit();
+
+    await waitFor(() =>
+      expect(screen.queryByRole("list", { name: en.participant.play.questions.lockedList })).not.toBeInTheDocument(),
+    );
+    const placeholder = document.querySelector(".animate-pulse");
+    expect(placeholder).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByTestId("opened-body")).not.toBeInTheDocument();
+  });
+
+  test("a locked question is numbered as the server numbers it", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
+    refresh.current = {
+      kind: "ok",
+      items: [question({ id: "q1", closed: true, canAnswer: false, correct: true }), question({ id: "q2" }), { locked: true, position: 7 }],
+    };
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ id: "q1" }), lockedEntry(2), lockedEntry(3)]} dict={en} />);
+
+    await submit();
+
+    await screen.findByTestId("opened-body");
+    expect(within(lockedList()).getByRole("listitem")).toHaveTextContent(
+      en.participant.play.questions.lockedItem.replace("{n}", "7").replace("{m}", "6"),
+    );
   });
 
   // The server may still say an open question cannot be answered; the form

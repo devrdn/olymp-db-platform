@@ -212,7 +212,7 @@ flowchart LR
 | See the leaderboard with my row marked | `/contests/{contestID}/play` | `GET /contests/{contestID}/play/leaderboard` | `leaderboard` | Session and a registration (`not_a_participant` otherwise); rate-limited per account |
 | Reset my database | `/contests/{contestID}/play` (a `read_write` contest only, behind a confirmation) | `POST /contests/{contestID}/play/reset` | `queryproxy`, then `provisioning` | Gate: `MayAct`; a `read_write` contest (`reset_read_only` otherwise); at least one question still answerable; three resets per registration in ten minutes, refused ones included (`reset_too_often`). Mounted only with the console |
 | Send browser signals (leaving the page, pasting) | `/contests/{contestID}/play` (automatic) | `POST /contests/{contestID}/play/signals` | `monitor` (`Signals`) | Gate: `MayAct`; at most 50 events per batch, batches per minute capped |
-| Ask the organisers; read answers and announcements | `/contests/{contestID}/play`, "Questions to organisers" tab | `GET` and `POST .../play/clarifications` | `clarifications` | Gate: `MayAct`; reading spends the read budget; asking is capped per account and per registration (`clarification_too_often`), at most 20 questions waiting (`clarification_too_many_open`) |
+| Ask the organisers; read answers and announcements | `/contests/{contestID}/play`, "Organisers" tab | `GET` and `POST .../play/clarifications` | `clarifications` | Gate: `MayAct`; reading spends the read budget; asking is capped per account and per registration (`clarification_too_often`), at most 20 questions waiting (`clarification_too_many_open`) |
 
 `...` in this table stands for `/contests/{contestID}`.
 

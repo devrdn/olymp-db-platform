@@ -207,18 +207,20 @@ func TestEveryClarificationReadIsARangeOfItsIndex(t *testing.T) {
 					RETURNING id
 				), regs AS (
 					INSERT INTO registrations (contest_id, user_id) SELECT $2, id FROM people RETURNING id
-				), asked AS (
-					INSERT INTO clarifications (contest_id, registration_id, body, created_at)
-					SELECT $2, r.id, 'q', now() - make_interval(secs => n)
-					FROM regs r CROSS JOIN generate_series(1, 4) n
-					RETURNING id, created_at
 				)
-				UPDATE clarifications c
-				SET answer = 'a', answered_at = a.created_at + interval '1 minute',
-				    visibility = CASE WHEN random() < 0.1 THEN 'public' ELSE 'private' END
-				FROM asked a
-				WHERE c.id = a.id AND random() < 0.7`, uuid.NewString()[:8], c); err != nil {
+				INSERT INTO clarifications (contest_id, registration_id, body, created_at)
+				SELECT $2, r.id, 'q', now() - make_interval(secs => n)
+				FROM regs r CROSS JOIN generate_series(1, 4) n`, uuid.NewString()[:8], c); err != nil {
 				t.Fatalf("load contest %d: %v", i, err)
+			}
+			// A statement of its own: an UPDATE in the same WITH would not see
+			// the rows its sibling inserted.
+			if _, err := q.Exec(ctx, `
+				UPDATE clarifications
+				SET answer = 'a', answered_at = created_at + interval '1 minute',
+				    visibility = CASE WHEN random() < 0.1 THEN 'public' ELSE 'private' END
+				WHERE contest_id = $1 AND random() < 0.7`, c); err != nil {
+				t.Fatalf("answer in contest %d: %v", i, err)
 			}
 			// A contest posts a few dozen; the table holds every contest's.
 			notes := 1000
@@ -255,7 +257,14 @@ func TestEveryClarificationReadIsARangeOfItsIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, state := range []clarifications.State{clarifications.StateOpen, clarifications.StateAnswered} {
-			if _, err := repo.Queue(ctx, contest, state, 50, 0); err != nil {
+			page, err := repo.Queue(ctx, contest, state, 50, uuid.Nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page) == 0 {
+				t.Fatalf("the %s queue is empty; the fixture seeds both states", state)
+			}
+			if _, err := repo.Queue(ctx, contest, state, 50, page[len(page)-1].ID); err != nil {
 				t.Fatal(err)
 			}
 		}

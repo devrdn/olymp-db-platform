@@ -63,7 +63,7 @@
     },
     {
       "code": "clarification_invalid_cursor",
-      "meaning": "The `before` cursor is not one this service issued. Ask for the first page again."
+      "meaning": "The `before` cursor is not one this service issued, or `after` is not a clarification id. Ask for the first page again."
     },
     {
       "code": "clarification_not_answered",

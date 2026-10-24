@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { GameSchema, GameTable } from "@/lib/api/schema";
 
-import { HEADER_HEIGHT, ROW_HEIGHT, layoutDiagram, type DiagramNode } from "./schema-diagram-layout";
+import { HEADER_HEIGHT, ROW_HEIGHT, layoutDiagram, linkPath, type DiagramNode } from "./schema-diagram-layout";
 
 function table(name: string, columns: string[], extra: Partial<GameTable> = {}): GameTable {
   return {
@@ -73,6 +73,58 @@ function many(n: number, keys: (i: number) => { to: string; column: string }[]):
   return { truncated: false, tables };
 }
 
+/**
+ * Who was seen where: `sightings` references `suspects` and `rooms`, and
+ * `suspects` references `rooms`, so the key from sightings to rooms skips the
+ * rank suspects stands in.
+ */
+function sightings(): GameSchema {
+  const key = (name: string, column: string, to: string) => ({
+    name,
+    columns: [column],
+    referenced_table: to,
+    referenced_columns: ["id"],
+  });
+  return {
+    truncated: false,
+    tables: [
+      table("rooms", ["id", "name"], { primary_key: ["id"] }),
+      table("suspects", ["id", "name", "alibi", "room_id"], {
+        primary_key: ["id"],
+        foreign_keys: [key("suspects_room_id_fkey", "room_id", "rooms")],
+      }),
+      table("sightings", ["id", "suspect_id", "room_id", "seen_at"], {
+        primary_key: ["id"],
+        foreign_keys: [
+          key("sightings_suspect_id_fkey", "suspect_id", "suspects"),
+          key("sightings_room_id_fkey", "room_id", "rooms"),
+        ],
+      }),
+      table("CaseFiles", ["id", "note"], { primary_key: ["id"] }),
+    ],
+  };
+}
+
+/** Points along an arrow's path ("M x y" then cubic "C" segments), ends left out. */
+function pointsAlong(path: string): { x: number; y: number }[] {
+  const numbers = path.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  let [x0, y0] = numbers;
+  const points: { x: number; y: number }[] = [];
+  for (let i = 2; i + 5 < numbers.length; i += 6) {
+    const [ax, ay, bx, by, x3, y3] = numbers.slice(i, i + 6);
+    for (let step = 1; step < 20; step++) {
+      const t = step / 20;
+      const u = 1 - t;
+      points.push({
+        x: u * u * u * x0 + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * x3,
+        y: u * u * u * y0 + 3 * u * u * t * ay + 3 * u * t * t * by + t * t * t * y3,
+      });
+    }
+    [x0, y0] = [x3, y3];
+  }
+  return points;
+}
+
 function byName(nodes: DiagramNode[], name: string) {
   const node = nodes.find((n) => n.name === name);
   if (!node) throw new Error(`no node ${name}`);
@@ -120,6 +172,30 @@ describe("the schema diagram's layout", () => {
       expect([rooms.x, rooms.x + rooms.width]).toContain(link.x1);
       expect([floors.x, floors.x + floors.width]).toContain(link.x2);
     }
+  });
+
+  test("an arrow that skips a rank goes around the table in it, not through", () => {
+    const { nodes, edges } = layoutDiagram(sightings());
+
+    expect(edges).toHaveLength(3);
+    for (const edge of edges) {
+      for (const link of edge.links) {
+        for (const node of nodes) {
+          if (node.name === edge.from || node.name === edge.to) continue;
+          const inside = pointsAlong(linkPath(link)).filter(
+            ({ x, y }) => x > node.x && x < node.x + node.width && y > node.y && y < node.y + node.height,
+          );
+          expect(inside, `${edge.name} passes through ${node.name}`).toEqual([]);
+        }
+      }
+    }
+  });
+
+  test("an arrow between neighbouring ranks is one curve", () => {
+    const { edges } = layoutDiagram(sightings());
+    const [link] = edges.find((e) => e.name === "suspects_room_id_fkey")!.links;
+
+    expect(linkPath(link).match(/C/g)).toHaveLength(1);
   });
 
   test("a table that references itself gets a loop on one side", () => {
