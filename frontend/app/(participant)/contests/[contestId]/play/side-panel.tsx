@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ExportMenu } from "@/components/product/export-menu";
 import { StandingsView } from "@/components/product/standings";
@@ -12,6 +12,7 @@ import type { Locale } from "@/lib/i18n/config";
 import type { PlayDictionary } from "./dictionary";
 import { fetchStandings } from "./requests";
 
+import { ClarificationsPanel } from "./clarifications-panel";
 import { NotesPanel } from "./notes-panel";
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 
@@ -41,10 +42,11 @@ function printStory(contestId: string) {
 }
 
 /**
- * The panel beside the console: story, questions, notes and leaderboard as
- * tabs, with the organiser's table descriptions after the story when there
- * are any. Every tab stays mounted while hidden, so switching keeps an
- * unfinished answer, a scroll position and a pending notes save.
+ * The panel beside the console: story, questions, notes, questions to the
+ * organisers and leaderboard as tabs, with the organiser's table descriptions
+ * after the story when there are any. Every tab stays mounted while hidden, so
+ * switching keeps an unfinished answer, a scroll position and a pending notes
+ * save, and the questions to the organisers can raise their tab's marker.
  *
  * Once there is a story, its tab offers two exports:
  *
@@ -95,6 +97,9 @@ export function SidePanel({
   // story stands in so a panel and a tab stop remain.
   const shown = tab === "tables" && schemaNotes === null ? "story" : tab;
   const tabListWrapRef = useRef<HTMLDivElement>(null);
+  const [clarificationsUnread, setClarificationsUnread] = useState(false);
+  const onClarificationsUnread = useCallback((unread: boolean) => setClarificationsUnread(unread), []);
+  const clarifyT = dict.participant.play.clarifications;
 
   // Scroll the selected tab back into view when the selection changes; the
   // strip scrolls sideways.
@@ -116,6 +121,17 @@ export function SidePanel({
           ) : null}
           <TabsTrigger value="questions" className="px-2">{t.questions}</TabsTrigger>
           <TabsTrigger value="notes" className="px-2">{t.notes}</TabsTrigger>
+          {/* The dot is drawn for the eye; the label carries it to a screen reader. */}
+          <TabsTrigger
+            value="clarifications"
+            className="inline-flex items-center gap-1.5 px-2"
+            aria-label={clarificationsUnread ? `${clarifyT.tab} (${clarifyT.unread})` : undefined}
+          >
+            {clarifyT.tab}
+            {clarificationsUnread ? (
+              <span aria-hidden data-testid="clarifications-unread" className="size-1.5 shrink-0 rounded-full bg-accent" />
+            ) : null}
+          </TabsTrigger>
           <TabsTrigger value="leaderboard" className="px-2">{dict.leaderboard.tab}</TabsTrigger>
         </TabsList>
       </div>
@@ -175,6 +191,17 @@ export function SidePanel({
           and for a panel shorter than the field's minimum. */}
       <TabsContent value="notes" className="relative overflow-y-auto">
         <NotesPanel accountId={accountId} contestId={contestId} initial={initialNotes} dict={dict} />
+      </TabsContent>
+      <TabsContent value="clarifications" fill={false} className="relative overflow-y-auto p-4">
+        <ClarificationsPanel
+          contestId={contestId}
+          accountId={accountId}
+          questionEntries={questionEntries}
+          active={shown === "clarifications"}
+          onUnreadChange={onClarificationsUnread}
+          dict={dict}
+          locale={locale}
+        />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
         <LeaderboardTab contestId={contestId} active={shown === "leaderboard"} dict={dict} locale={locale} />

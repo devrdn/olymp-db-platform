@@ -479,4 +479,50 @@ describe("useContestEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(1);
     });
   });
+
+  // The events channel's hint that the questions to the organisers changed.
+  // A connection admitted afresh is a hint too: whatever was published while
+  // the channel was away is lost.
+  describe("clarification hints", () => {
+    const sync = { server_now: "2026-03-01T10:00:00Z" };
+
+    test("reports every clarification event, and nothing else, as a hint", () => {
+      const onClarification = vi.fn();
+      renderHook(() => useContestEvents("c1", "running", false, { onClarification }));
+
+      act(() => FakeEventSource.instances[0].emit("sync", sync));
+      act(() => FakeEventSource.instances[0].emit("clarification", {}));
+      act(() => FakeEventSource.instances[0].emit("clarification", {}));
+
+      expect(onClarification).toHaveBeenCalledTimes(2);
+    });
+
+    test("reports each admitted connection once, at its first sync", () => {
+      const onConnected = vi.fn();
+      const { result } = renderHook(() => useContestEvents("c1", "running", false, { onConnected }));
+
+      act(() => FakeEventSource.instances[0].emit("sync", sync));
+      act(() => FakeEventSource.instances[0].emit("sync", sync));
+      expect(onConnected).toHaveBeenCalledTimes(1);
+
+      act(() => result.current.resync());
+      act(() => FakeEventSource.instances[1].emit("sync", sync));
+      expect(onConnected).toHaveBeenCalledTimes(2);
+    });
+
+    test("reads the latest listeners without reconnecting when the caller passes new ones", () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { rerender } = renderHook(({ fn }) => useContestEvents("c1", "running", false, { onClarification: fn }), {
+        initialProps: { fn: first },
+      });
+      rerender({ fn: second });
+
+      act(() => FakeEventSource.instances[0].emit("clarification", {}));
+
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+    });
+  });
 });

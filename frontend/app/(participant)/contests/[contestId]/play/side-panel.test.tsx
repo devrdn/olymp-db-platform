@@ -5,12 +5,17 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { StoryText } from "@/components/product/story-text";
 import en from "@/lib/i18n/dictionaries/en";
 
-import { fetchStandings } from "./requests";
+import { fetchClarifications, fetchStandings } from "./requests";
 import { SidePanel } from "./side-panel";
 
 vi.mock("./requests", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./requests")>()),
   fetchStandings: vi.fn(),
+  fetchClarifications: vi.fn(async () => ({ kind: "ok", feed: { items: [], next: null, open: 0 } })),
+}));
+
+vi.mock("./clarification-text", () => ({
+  ClarificationText: ({ markdown }: { markdown: string }) => <div>{markdown}</div>,
 }));
 
 function show(schemaNotes: React.ReactNode = null) {
@@ -341,6 +346,7 @@ describe("the side panel's Tables tab", () => {
       tabs.story,
       tabs.questions,
       tabs.notes,
+      en.participant.play.clarifications.tab,
       en.leaderboard.tab,
     ]);
   });
@@ -353,6 +359,7 @@ describe("the side panel's Tables tab", () => {
       tabs.tables,
       tabs.questions,
       tabs.notes,
+      en.participant.play.clarifications.tab,
       en.leaderboard.tab,
     ]);
   });
@@ -475,3 +482,50 @@ describe("the side panel's table", () => {
     expect(screen.getByText(en.leaderboard.prizes.first)).toHaveClass("sr-only");
   });
 });
+
+describe("the questions to the organisers tab", () => {
+  const tab = en.participant.play.clarifications.tab;
+  const unread = `${tab} (${en.participant.play.clarifications.unread})`;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(fetchClarifications).mockResolvedValue({ kind: "ok", feed: { items: [], next: null, open: 0 } });
+  });
+
+  test("is a tab of its own, after the notes", () => {
+    show();
+
+    const names = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(names[names.indexOf(en.participant.play.workspace.tabs.notes) + 1]).toBe(tab);
+  });
+
+  test("carries a marker while something new waits unread, and loses it once opened", async () => {
+    vi.mocked(fetchClarifications).mockResolvedValue({
+      kind: "ok",
+      feed: {
+        items: [{ kind: "announcement", id: "a1", postedAt: "2026-11-02T09:00:00.000000Z", body: "Ten minutes left." }],
+        next: null,
+        open: 0,
+      },
+    });
+    show();
+
+    const marked = await screen.findByRole("tab", { name: unread });
+    await userEvent.click(marked);
+
+    expect(screen.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: unread })).toBeNull();
+    expect(screen.queryByTestId("clarifications-unread")).toBeNull();
+    expect(screen.getByText("Ten minutes left.")).toBeVisible();
+  });
+
+  test("is reached from the keyboard along the tab strip", async () => {
+    show();
+
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(screen.getByRole("tab", { name: tab })).toHaveFocus();
+  });
+});
+

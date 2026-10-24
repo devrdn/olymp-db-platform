@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  askOrganisers,
+  fetchClarifications,
   fetchQueryLog,
   fetchQueryLogEntry,
   fetchStandings,
@@ -368,3 +370,85 @@ describe("refreshSchema", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("fetchClarifications", () => {
+  const page = { items: [], next: null, open: 0 };
+
+  test.each(hostile)("sends no request for the contest id %j", async (id) => {
+    expect(await fetchClarifications(id)).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("asks for the newest page of the participant's own feed", async () => {
+    answer(200, page);
+
+    expect(await fetchClarifications(contestId)).toEqual({ kind: "ok", feed: page });
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/clarifications`);
+    expect(calls[0].init).toMatchObject({ credentials: "same-origin" });
+  });
+
+  test("sends the cursor of an older page as it was given, encoded", async () => {
+    answer(200, page);
+
+    await fetchClarifications(contestId, "a+b/c");
+
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/clarifications?before=a%2Bb%2Fc`);
+  });
+
+  test("passes a refusal on as its code", async () => {
+    answer(409, refusal("contest_ended"));
+
+    expect(await fetchClarifications(contestId)).toEqual({ kind: "refused", code: "contest_ended" });
+  });
+});
+
+describe("askOrganisers", () => {
+  const asked = {
+    kind: "clarification",
+    id: "c1",
+    posted_at: "2026-11-02T09:00:00.000000Z",
+    mine: true,
+    question_id: questionId,
+    body: "Why?",
+    asked_at: "2026-11-02T09:00:00.000000Z",
+    answer: null,
+  };
+
+  test.each(hostile)("sends no request for the contest id %j", async (id) => {
+    expect(await askOrganisers(id, "Why?", null)).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("sends no request for an empty question, which is no question", async () => {
+    expect(await askOrganisers(contestId, "  \n ", null)).toEqual({ kind: "refused", code: "clarification_empty" });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("posts the question, about one of the contest's questions or none", async () => {
+    answer(201, asked);
+
+    const result = await askOrganisers(contestId, "Why?", questionId);
+
+    expect(result.kind).toBe("ok");
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/play/clarifications`);
+    expect(calls[0].init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ body: "Why?", question_id: questionId });
+
+    answer(201, { ...asked, question_id: null });
+    await askOrganisers(contestId, "Why?", null);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ body: "Why?" });
+  });
+
+  test("passes a refusal on as its code", async () => {
+    answer(429, refusal("clarification_too_often"));
+
+    expect(await askOrganisers(contestId, "Why?", null)).toEqual({ kind: "refused", code: "clarification_too_often" });
+  });
+
+  test("reports a network failure as unreachable", async () => {
+    networkDown();
+
+    expect(await askOrganisers(contestId, "Why?", null)).toEqual({ kind: "refused", code: "unreachable" });
+  });
+});
+
