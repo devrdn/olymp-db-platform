@@ -941,10 +941,10 @@
                 "questions"
               ]
             },
-            "description": "Appended at the end. `is_visible` defaults to **true**: hiding is the deliberate choice, and a hidden question still scores — working out what is being asked is then part of the puzzle.\n\n`kind`: `text` | `choice` | `final`. A choice question needs at least two `choice_ids`; the submitted answer is one of those identifiers, never a label, so grading does not depend on the language the participant read.\n\nResponses: 201 `QuestionResponse` · 400 · 409 `not_editable`",
+            "description": "Appended at the end. `is_visible` defaults to **true**: hiding is the deliberate choice, and a hidden question still scores — working out what is being asked is then part of the puzzle.\n\n`kind`: `text` | `choice` | `final`. A choice question needs at least two `choice_ids`; the submitted answer is one of those identifiers, never a label, so grading does not depend on the language the participant read.\n\n`title` in a language's text is optional: one line, the heading participants see first with the wording folded under it.\n\nResponses: 201 `QuestionResponse` · 400 · 409 `not_editable`",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 10,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  }\n}",
+              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 10,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1102,10 +1102,10 @@
                 "texts"
               ]
             },
-            "description": "Replaces the authored text. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
+            "description": "Replaces the authored text. `title` is the one-line heading participants see first; a language sent without it has no title afterwards. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
+              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
