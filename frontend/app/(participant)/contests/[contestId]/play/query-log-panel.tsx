@@ -89,12 +89,17 @@ export function QueryLogPanel({
   }, [active, refresh]);
 
   const loadMore = async () => {
+    const startedAfter = requestSeq.current;
     setLoadingMore(true);
     const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, 0, items.at(-1)?.id);
     setLoadingMore(false);
+    // A refresh started meanwhile replaces the list, and this page's cursor
+    // may no longer be its last row: appending could leave a silent gap. The
+    // next click pages from the right row.
+    if (startedAfter !== requestSeq.current) return;
     if (result.kind === "ok") {
       // Rows are keyed by id, so a row the list already holds is not added
-      // twice, should a refresh have raced this page.
+      // twice.
       setItems((prev) => {
         const held = new Set(prev.map((entry) => entry.id));
         return [...prev, ...result.items.filter((entry) => !held.has(entry.id))];

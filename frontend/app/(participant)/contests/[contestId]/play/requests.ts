@@ -146,8 +146,7 @@ export type QueryLogRefreshResult =
  * Re-reads one page of the participant's query log. The server scopes it to
  * the session's registration, never to a value in the request. Called by
  * QueryLogPanel when it is shown, on "load more" and on retry. `before`, a
- * row id, asks for the rows older than that one: an offset would be shifted
- * by a query run meanwhile.
+ * row id, asks for the rows older than that one.
  */
 export async function fetchQueryLog(
   contestId: string,
