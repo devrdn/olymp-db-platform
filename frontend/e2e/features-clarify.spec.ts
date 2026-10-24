@@ -12,15 +12,13 @@ import { capture, openPlay, openSideTab, signIn } from "./support";
  * marker has something to mark.
  */
 
-const TAB = "Questions to organisers";
+const TAB = "Organisers";
 
 async function open(browser: Browser, account: Account, path: string): Promise<Page> {
-  const context = await browser.newContext({
-    baseURL: process.env.E2E_BASE_URL,
-    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
-    locale: "en-US",
-    viewport: { width: 1600, height: 900 },
-  });
+  // The project's connection settings, so a second browser cannot drift from
+  // the first; the width is this check's own, the side column's default case.
+  const { baseURL, ignoreHTTPSErrors, locale } = test.info().project.use;
+  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
   const page = await context.newPage();
   await signIn(page, account);
   await page.goto(path);
@@ -44,7 +42,7 @@ test("a question asked by one participant is answered publicly, privately, and a
   test.setTimeout(180_000);
   const { accounts, contests } = readSeed().features;
   const admin = readSeed().admin;
-  const id = contests.features!.id;
+  const id = contests.features.id;
   const tag = randomBytes(3).toString("hex");
   const publicQuestion = `Is the Study the same room as the library annex? (${tag})`;
   const publicAnswer = `No: the annex is part of the **Library**. (${tag})`;
@@ -91,8 +89,9 @@ test("a question asked by one participant is answered publicly, privately, and a
     await expect(clarificationsTab(bob, true)).toBeVisible({ timeout: 20_000 });
     await capture(bob, "play-clarifications-unread");
     // The dot must be where a sighted participant can see it, not scrolled
-    // out of the tab strip.
-    await expect.soft(bob.getByTestId("clarifications-unread")).toBeInViewport();
+    // out of the tab strip, and it is repeated on the side panel's toggle.
+    await expect(bob.getByTestId("clarifications-unread")).toBeInViewport();
+    await expect(bob.getByTestId("side-panel-marker")).toBeVisible();
     await openUnread(bob);
     const seen = bob.getByRole("article").filter({ hasText: publicQuestion });
     await expect(seen).toContainText("Answer for everyone");
@@ -111,10 +110,12 @@ test("a question asked by one participant is answered publicly, privately, and a
     await capture(bob, "play-clarifications-public-answer");
 
     // The marker stays cleared after a reload: the last item seen is kept.
+    // The answer in the (hidden) panel shows the feed was read before the
+    // marker is looked for.
     await openPlay(bob, id);
-    await expect(clarificationsTab(bob, false)).toBeVisible();
-    await bob.waitForTimeout(2_000);
+    await expect(bob.getByText(publicQuestion)).toHaveCount(1);
     await expect(clarificationsTab(bob, true)).toHaveCount(0);
+    await expect(bob.getByTestId("side-panel-marker")).toHaveCount(0);
   });
 
   await test.step("Alice sees her own question published", async () => {
@@ -142,12 +143,14 @@ test("a question asked by one participant is answered publicly, privately, and a
       timeout: 20_000,
     });
 
-    // Bob gets no marker, and neither the question nor the answer.
-    await bob.waitForTimeout(5_000);
-    await expect(clarificationsTab(bob, true)).toHaveCount(0);
+    // Bob gets no marker, and neither the question nor the answer: a fresh
+    // read of his feed, once it has landed, holds only what was public.
     const feed = await (await bob.request.get(`/api/v1/contests/${id}/play/clarifications`)).text();
     expect(feed).not.toContain(privateQuestion);
     expect(feed).not.toContain(privateAnswer);
+    await openPlay(bob, id);
+    await expect(bob.getByText(publicQuestion)).toHaveCount(1);
+    await expect(clarificationsTab(bob, true)).toHaveCount(0);
     await openSideTab(bob, TAB);
     await expect(bob.getByText(privateQuestion)).toHaveCount(0);
   });
@@ -174,7 +177,7 @@ test("a question asked by one participant is answered publicly, privately, and a
   await test.step("the desk lists both answers as answered", async () => {
     await expect(staff.getByRole("button", { name: "Waiting (0)" })).toBeVisible();
     // With nothing waiting, the navigation no longer counts a question.
-    await expect.soft(staff.getByRole("link", { name: "Participant questions", exact: true })).toBeVisible();
+    await expect(staff.getByRole("link", { name: "Participant questions", exact: true })).toBeVisible();
     await staff.getByRole("button", { name: /^Answered \(\d+\)$/ }).click();
     await expect(staff.getByRole("article").filter({ hasText: publicQuestion })).toContainText("public");
     await expect(staff.getByRole("article").filter({ hasText: privateQuestion })).toContainText("private");

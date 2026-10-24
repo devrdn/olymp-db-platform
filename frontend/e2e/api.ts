@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { request, type APIRequestContext } from "@playwright/test";
 
-import type { FeatureSeed } from "./seed-features";
+import type { CompleteFeatureSeed, FeatureSeed } from "./seed-features";
 
 /**
  * The Core API as the seed and the teardown use it: through the stack's own
@@ -37,7 +37,7 @@ export type SeedRecord = {
 };
 
 /** A finished seed, which is all a spec ever reads. */
-export type Seed = Required<SeedRecord>;
+export type Seed = Required<Omit<SeedRecord, "features">> & { features: CompleteFeatureSeed };
 
 export function baseURL(): string {
   const url = process.env.E2E_BASE_URL;

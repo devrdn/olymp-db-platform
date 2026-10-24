@@ -54,13 +54,17 @@ async function hintRunsIntoResult(page: Page): Promise<boolean> {
 test("reloading the play page ten times leaves the console free to run queries", async ({ page }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.bob);
+  // Every refusal the API gives, whichever read or query it was.
+  const refused: string[] = [];
+  page.on("response", (response) => {
+    if (response.status() === 429) refused.push(response.url());
+  });
 
   // Ten loads read the story, questions, log, schema, workspace, events and
   // clarifications each: well past the thirty a minute the queries once shared.
   for (let load = 0; load < 10; load++) {
-    await openPlay(page, contests.features!.id);
+    await openPlay(page, contests.features.id);
   }
-  await expect(page.getByText("The contest page is being loaded too often", { exact: false })).toHaveCount(0);
   // The events channel was admitted too: the clock has its first sync.
   await expect(page.getByRole("timer")).toHaveText(/^\d+:\d\d:\d\d$/);
 
@@ -68,13 +72,13 @@ test("reloading the play page ten times leaves the console free to run queries",
     await runQuery(page, `SELECT name FROM suspects WHERE id = ${id}`);
     await expect(resultTable(page, /name/).getByRole("row")).toHaveCount(2);
   }
-  await expect(page.getByText("too often", { exact: false })).toHaveCount(0);
+  expect(refused).toEqual([]);
 });
 
 test("the theme switches in place: same scroll, same editor text, no navigation", async ({ page }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
 
   await runQuery(page, "SELECT g FROM generate_series(1, 200) AS g");
   const table = resultTable(page, /^g/);
@@ -107,7 +111,7 @@ test("the side column widens to sixty percent of the window, and a stored width 
   page,
 }) => {
   const { accounts, contests } = seed();
-  const id = contests.features!.id;
+  const id = contests.features.id;
   await signIn(page, accounts.alice);
   await openPlay(page, id);
 
@@ -145,7 +149,7 @@ test("the side column widens to sixty percent of the window, and a stored width 
     // ...and in that width its toolbar still reads: the hint beside Run does
     // not run into the Result toggle.
     const overlaps = await hintRunsIntoResult(page);
-    expect.soft(overlaps, `the toolbar's hint runs into the Result toggle at ${width}px`).toBe(false);
+    expect(overlaps, `the toolbar's hint runs into the Result toggle at ${width}px`).toBe(false);
     await capture(page, `play-side-stored-200-at-${width}`);
   }
   // Drawn at the bound, the stored width itself waits for the next drag.
@@ -161,7 +165,7 @@ test.describe("with the clipboard", () => {
   test("a query-log row opens to its whole statement, and Copy copies all of it", async ({ page }) => {
     const { accounts, contests } = seed();
     await signIn(page, accounts.alice);
-    await openPlay(page, contests.features!.id);
+    await openPlay(page, contests.features.id);
 
     // Past the thousand characters the log's list keeps of a statement.
     const sql = `SELECT name /* ${"padding ".repeat(150)}*/ FROM suspects WHERE id = 2 -- the-tail-of-a-long-query`;
@@ -191,7 +195,7 @@ test.describe("with the clipboard", () => {
   test("the result copies its first five rows as tab-separated text with a header", async ({ page }) => {
     const { accounts, contests } = seed();
     await signIn(page, accounts.alice);
-    await openPlay(page, contests.features!.id);
+    await openPlay(page, contests.features.id);
 
     await runQuery(page, "SELECT id, name FROM suspects ORDER BY id");
     await expect(resultTable(page, /^id/).getByRole("row")).toHaveCount(8);
@@ -212,7 +216,7 @@ test.describe("with the clipboard", () => {
 test("a click on a table's name writes a query on it into the editor and runs nothing", async ({ page }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
 
   const tab = await newSqlTab(page);
   let runs = 0;
@@ -239,7 +243,7 @@ test("completion offers keywords, tables and columns, and Tab, Enter, Escape and
 }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
   const tab = await newSqlTab(page);
   const editor = page.getByRole("textbox", { name: "Your query" });
   await editor.click();
@@ -282,7 +286,7 @@ test("completion offers keywords, tables and columns, and Tab, Enter, Escape and
   await page.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.getByText("From Query", { exact: false })).toBeVisible();
   await capture(page, "play-completion-after-run-button");
-  await expect.soft(popup, "the completion popup closes when the Run button runs the query").toBeHidden();
+  await expect(popup, "the completion popup closes when the Run button runs the query").toBeHidden();
   await page.keyboard.press("Escape");
   await editor.click();
 
@@ -302,13 +306,13 @@ test("completion offers keywords, tables and columns, and Tab, Enter, Escape and
 test("a titled question folds its wording under Details, in place and in a larger dialog", async ({ page }) => {
   const { accounts, contests, questions } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
   await openSideTab(page, "Questions");
 
   const panel = page.getByRole("tabpanel", { name: "Questions" });
-  await expect(panel.getByRole("heading", { level: 2, name: questions.titled!.title })).toBeVisible();
+  await expect(panel.getByRole("heading", { level: 2, name: questions.titled.title })).toBeVisible();
   const details = panel.getByRole("button", { name: "Details" }).first();
-  await expect(details).toHaveAccessibleDescription(questions.titled!.title);
+  await expect(details).toHaveAccessibleDescription(questions.titled.title);
   await expect(details).toHaveAttribute("aria-expanded", "false");
   const wording = panel.getByText("The night porter swears every guest came back before midnight.");
   await expect(wording).toBeHidden();
@@ -321,7 +325,7 @@ test("a titled question folds its wording under Details, in place and in a large
 
   const larger = panel.getByRole("button", { name: "Open larger" }).first();
   await larger.click();
-  const dialog = page.getByRole("dialog", { name: questions.titled!.title });
+  const dialog = page.getByRole("dialog", { name: questions.titled.title });
   await expect(dialog.getByText("Which suspect has", { exact: false })).toBeVisible();
   await capture(page, "play-question-dialog");
   await page.keyboard.press("Escape");
@@ -337,15 +341,15 @@ test("a titled question folds its wording under Details, in place and in a large
 test("the Tables tab shows the organisers' table descriptions", async ({ page }) => {
   const { accounts, contests, notesHeading } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
 
   const tabs = page.getByRole("tablist").filter({ has: page.getByRole("tab", { name: "Story" }) });
   await expect(tabs.getByRole("tab")).toHaveText([
     "Story",
     "Tables",
     "Questions",
+    "Organisers",
     "Notes",
-    "Questions to organisers",
     "Table",
   ]);
   await openSideTab(page, "Tables");
@@ -360,7 +364,7 @@ test("the Tables tab shows the organisers' table descriptions", async ({ page })
 test("the diagram draws the tables and their keys, pans and zooms, and gives focus back", async ({ page }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.alice);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
 
   const open = page.getByRole("button", { name: "Open the schema as a diagram" });
   await open.click();
@@ -407,7 +411,7 @@ test("the diagram draws the tables and their keys, pans and zooms, and gives foc
     }
     return found;
   });
-  expect.soft(crossings, "arrows drawn through a table").toEqual([]);
+  expect(crossings, "arrows drawn through a table").toEqual([]);
   await capture(page, "play-diagram");
 
   const suspects = canvas.locator('[data-table="suspects"]');
