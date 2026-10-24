@@ -286,7 +286,7 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
 	var previous contests.PrizePlaces
 	err := r.querier(ctx).QueryRow(ctx, `
-		WITH old AS (
+		WITH prior AS (
 			SELECT id, prize_first, prize_second, prize_third
 			FROM contests
 			WHERE id = $1 AND status <> 'archived'
@@ -294,9 +294,9 @@ func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places cont
 		)
 		UPDATE contests c
 		SET prize_first = $2, prize_second = $3, prize_third = $4
-		FROM old
-		WHERE c.id = old.id
-		RETURNING old.prize_first, old.prize_second, old.prize_third`,
+		FROM prior
+		WHERE c.id = prior.id
+		RETURNING prior.prize_first, prior.prize_second, prior.prize_third`,
 		id, places.First, places.Second, places.Third).
 		Scan(&previous.First, &previous.Second, &previous.Third)
 	switch {
