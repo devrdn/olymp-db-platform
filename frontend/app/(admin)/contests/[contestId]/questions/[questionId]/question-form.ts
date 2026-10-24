@@ -14,6 +14,7 @@ export type QuestionBody = {
   // penalty).
   penalty_pct: number | null;
   is_visible: boolean;
+  is_bonus: boolean;
   choice_ids: string[];
   texts: Record<string, { title?: string; body_md: string; choices?: Record<string, string> }>;
   answers: { match_kind: MatchKind; value: string }[];
@@ -110,6 +111,7 @@ export function questionFrom(form: FormData): Parsed {
       max_attempts,
       penalty_pct,
       is_visible: form.get("isVisible") === "on",
+      is_bonus: form.get("isBonus") === "on",
       choice_ids,
       texts,
       answers,

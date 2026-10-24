@@ -33,11 +33,19 @@ describe("questionFrom", () => {
         max_attempts: null,
         penalty_pct: null,
         is_visible: true,
+        is_bonus: false,
         choice_ids: [],
         texts: { en: { body_md: "Who did it?" } },
         answers: [{ match_kind: "exact_ci", value: "the butler" }],
       },
     });
+  });
+
+  // An unticked checkbox sends nothing, and that is a regular question: the
+  // flag is always sent, so unticking it clears a stored bonus.
+  test("reads the bonus checkbox, ticked or not", () => {
+    expect(questionFrom(form([...base, ["isBonus", "on"]]))).toMatchObject({ ok: true, body: { is_bonus: true } });
+    expect(questionFrom(form(base))).toMatchObject({ ok: true, body: { is_bonus: false } });
   });
 
   test("reads a title per language beside its body, trimmed", () => {

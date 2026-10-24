@@ -110,3 +110,25 @@ describe("QuestionList, naming a question", () => {
     expect(screen.getByRole("link", { name: "Who did it?" })).toBeInTheDocument();
   });
 });
+
+describe("QuestionList, a bonus question", () => {
+  test("is marked as a bonus, and a regular one is not", () => {
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[
+          question({ id: "q1", ord: 1, isBonus: true }),
+          question({ id: "q2", ord: 2, texts: { en: { title: "", bodyMd: "Where?", choices: {} } } }),
+        ]}
+        languages={["en"]}
+        editable={false}
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    const [, bonusRow, regularRow] = screen.getAllByRole("row");
+    expect(within(bonusRow).getByText(dict.workspace.questions.bonus)).toBeInTheDocument();
+    expect(within(regularRow).queryByText(dict.workspace.questions.bonus)).not.toBeInTheDocument();
+  });
+});

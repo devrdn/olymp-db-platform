@@ -257,15 +257,22 @@ function QuestionCard({
             current={current}
             t={t}
           />
+          {question.isBonus ? <Tag tone="good">{t.bonus}</Tag> : null}
           {/* ICPC never awards points (docs/ARCHITECTURE.md §6.1.1), so none
               are shown rather than a meaningless zero. */}
           {scoring !== "icpc" ? (
             <span className="font-mono text-label text-ink-3 uppercase">
-              {t.points.replace("{n}", String(question.points))}
+              {(question.isBonus ? t.bonusPoints : t.points).replace("{n}", String(question.points))}
             </span>
           ) : null}
         </div>
       </div>
+
+      {question.isBonus && !closed ? (
+        <p className="text-small text-ink-2 [overflow-wrap:anywhere]">
+          {t.bonusHint.replace("{n}", String(question.points))}
+        </p>
+      ) : null}
 
       {title ? <FoldedBody title={title} titleId={titleId} body={body} dict={dict} /> : null}
 
@@ -274,7 +281,7 @@ function QuestionCard({
           <p className="text-small text-ink-3">{t.closed}</p>
           {/* The verdict from the live submission or, after a reload, the
               server's record of it. */}
-          <Verdict correct={correct} points={pointsAwarded} scoring={scoring} dict={dict} />
+          <Verdict correct={correct} points={pointsAwarded} bonus={bonusOf(question)} scoring={scoring} dict={dict} />
         </div>
       ) : (
         <form action={formAction} className="flex flex-col gap-2.5">
@@ -335,7 +342,13 @@ function QuestionCard({
           </div>
 
           {state.kind === "answer" ? (
-            <Verdict correct={state.result.correct} points={state.result.pointsAwarded} scoring={scoring} dict={dict} />
+            <Verdict
+              correct={state.result.correct}
+              points={state.result.pointsAwarded}
+              bonus={bonusOf(question)}
+              scoring={scoring}
+              dict={dict}
+            />
           ) : null}
           {state.kind === "refused" ? <Refusal state={state} dict={dict} /> : null}
         </form>
@@ -416,21 +429,37 @@ function FoldedBody({
   );
 }
 
+/**
+ * The most a correct bonus answer gives back, or undefined for a regular
+ * question. What it actually gives back depends on penalties the table
+ * counts, so the verdict can only say "up to".
+ */
+function bonusOf(question: OpenPlayQuestion): number | undefined {
+  return question.isBonus ? question.points : undefined;
+}
+
 function Verdict({
   correct,
   points,
+  bonus,
   scoring,
   dict,
 }: {
   correct: boolean;
   points: number;
+  bonus?: number;
   scoring: Scoring;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.questions;
   // ICPC awards no points (`points_awarded` is always 0), so none are
-  // announced.
-  const correctText = scoring === "icpc" ? t.correctIcpc : t.correct.replace("{n}", String(points));
+  // announced. A bonus awards none itself either: it gives some back.
+  const correctText =
+    scoring === "icpc"
+      ? t.correctIcpc
+      : bonus !== undefined
+        ? t.correctBonus.replace("{n}", String(bonus))
+        : t.correct.replace("{n}", String(points));
   return (
     <p role="status" className={cn("text-small", correct ? "text-good" : "text-ink-2")}>
       {correct ? correctText : t.incorrect}
