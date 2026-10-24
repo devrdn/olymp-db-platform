@@ -232,6 +232,36 @@ func TestAQuestionAboutAnotherContestsQuestionIsRefused(t *testing.T) {
 	}
 }
 
+// A participant can name only a question they can see: never a hidden one,
+// nor in a sequential contest one they have not reached. Both are refused as a
+// question of another contest is, so neither says it exists.
+func TestAQuestionAboutAQuestionTheAskerCannotSeeIsRefused(t *testing.T) {
+	f := clarificationstest.NewFixture()
+	contest := f.RunningContest()
+	me := f.Join(contest, "ana")
+	first, second := f.Question(contest), f.Question(contest)
+	hidden := f.HiddenQuestion(contest)
+	about := func(question uuid.UUID, sequential bool) error {
+		f.Limiter.Reset()
+		_, err := f.Service.Ask(ctx, clarifications.AskCommand{
+			ContestID: contest, RegistrationID: me, QuestionID: &question, Sequential: sequential, Body: "Why?",
+		})
+		return err
+	}
+	if err := about(hidden, false); !errors.Is(err, clarifications.ErrQuestionNotFound) {
+		t.Fatalf("about a hidden question = %v, want ErrQuestionNotFound", err)
+	}
+	if err := about(second, true); !errors.Is(err, clarifications.ErrQuestionNotFound) {
+		t.Fatalf("about a question not reached = %v, want ErrQuestionNotFound", err)
+	}
+	if page := feed(t, f, contest, me); len(page.Items) != 0 {
+		t.Fatalf("a refused question was stored: %+v", page.Items)
+	}
+	if err := about(first, true); err != nil {
+		t.Fatalf("about the question reached: %v", err)
+	}
+}
+
 func TestAParticipantSeesOwnQuestionsPublicAnswersAndAnnouncementsWithoutAskers(t *testing.T) {
 	f := clarificationstest.NewFixture()
 	contest := f.RunningContest()

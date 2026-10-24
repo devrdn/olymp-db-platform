@@ -64,6 +64,13 @@ func (f *Fixture) Question(contest uuid.UUID) uuid.UUID {
 	return id
 }
 
+// HiddenQuestion adds a hidden question to contest.
+func (f *Fixture) HiddenQuestion(contest uuid.UUID) uuid.UUID {
+	id := uuid.New()
+	f.Repo.AddHiddenQuestion(contest, id)
+	return id
+}
+
 // Contests is clarifications.Contests in memory.
 type Contests struct {
 	mu   sync.Mutex

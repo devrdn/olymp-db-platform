@@ -1692,7 +1692,12 @@ and the announcements, newest first. Another participant's private question
 never leaves the database in a participant's response, and nothing a
 participant receives names an asker: a public item says only that it is not
 theirs. Publishing an answer publishes the question's text with it, since the
-answer needs it, and the staff screen says so.
+answer needs it, and the staff screen says so. A question may name only a
+contest question its asker can see: visible and, in a sequential contest,
+reached; anything else is refused as a question of another contest is
+(`question_not_found`), decided by the statement that stores the question. For
+the same reason a public answer names its question only to a reader who can
+see that question, and to anyone else it is about the contest in general.
 
 **Bounds** (CLAUDE.md rule 2): a question is at most 2000 characters, an
 answer or an announcement 4000; a participant has at most twenty questions
@@ -1707,7 +1712,10 @@ hundred at most).
   participant may act. It spends its own budget before the gate is asked:
   six a minute per account, then three a minute per registration after it,
   refused attempts included. Reading the feed spends the play screen's read
-  budget (`AdmitRead`) before the gate.
+  budget (`AdmitRead`) before the gate. A successful read of the feed, or a
+  stored question, records the participant's start as the story does
+  (`StartOnRead`): under individual timing it starts their clock, since the
+  feed carries the organisers' corrections of the tasks.
 - Staff routes need `contest.clarify`, which owners and managers hold, and
   which `contest.admin_all` lifts like every contest permission. Staff read
   the queue at any time but write only while the contest runs: after it no
@@ -1724,7 +1732,8 @@ hundred at most).
 /contests/{id}/play/clarifications`; the staff's `GET
 /contests/{id}/clarifications?state=open|answered`, `POST` and `PUT
 /contests/{id}/clarifications/{clarificationId}/answer`, and `GET` and `POST
-/contests/{id}/announcements`.
+/contests/{id}/announcements`. Once the contest is over for a participant the
+gate refuses their feed too, like the rest of `/play`.
 
 **Realtime.** The events channel (section 8) sends a `clarification` event
 with an empty body, a hint to read the feed again, never its content. Its

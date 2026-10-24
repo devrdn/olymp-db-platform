@@ -25,7 +25,12 @@ type Target struct {
 	NewContest func() uuid.UUID
 	// NewParticipant registers a new account in contest.
 	NewParticipant func(contest uuid.UUID) Participant
-	NewQuestion    func(contest uuid.UUID) uuid.UUID
+	// NewQuestion adds a visible question after the contest's others.
+	NewQuestion func(contest uuid.UUID) uuid.UUID
+	// NewHiddenQuestion adds a hidden one after them.
+	NewHiddenQuestion func(contest uuid.UUID) uuid.UUID
+	// Close records registration's correct answer to question.
+	Close func(registration, question uuid.UUID)
 	// NewStaff stores an account that may answer, and returns its login.
 	NewStaff func() (uuid.UUID, string)
 	// Now is a whole second the store accepts; cases add to it.
@@ -64,16 +69,47 @@ var repositoryCases = []struct {
 		foreign := x.NewQuestion(other)
 		_, err := x.Repo.Ask(ctx, clarifications.Clarification{
 			ContestID: contest, RegistrationID: p.Registration, QuestionID: &foreign, Body: "b", CreatedAt: x.Now,
-		}, 20)
+		}, 20, false)
 		if !errors.Is(err, clarifications.ErrQuestionNotFound) {
 			t.Fatalf("asking about another contest's question = %v, want ErrQuestionNotFound", err)
 		}
 		missing := uuid.New()
 		_, err = x.Repo.Ask(ctx, clarifications.Clarification{
 			ContestID: contest, RegistrationID: p.Registration, QuestionID: &missing, Body: "b", CreatedAt: x.Now,
-		}, 20)
+		}, 20, false)
 		if !errors.Is(err, clarifications.ErrQuestionNotFound) {
 			t.Fatalf("asking about a question that does not exist = %v, want ErrQuestionNotFound", err)
+		}
+	}},
+	{"a question names only a question its asker can reach", func(t *testing.T, ctx context.Context, x Target) {
+		contest := x.NewContest()
+		p := x.NewParticipant(contest)
+		first, second := x.NewQuestion(contest), x.NewQuestion(contest)
+		hidden := x.NewHiddenQuestion(contest)
+		askAbout := func(question uuid.UUID, sequential bool) error {
+			_, err := x.Repo.Ask(ctx, clarifications.Clarification{
+				ContestID: contest, RegistrationID: p.Registration, QuestionID: &question, Body: "b", CreatedAt: x.Now,
+			}, 20, sequential)
+			return err
+		}
+		if err := askAbout(hidden, false); !errors.Is(err, clarifications.ErrQuestionNotFound) {
+			t.Fatalf("asking about a hidden question = %v, want ErrQuestionNotFound", err)
+		}
+		if err := askAbout(second, true); !errors.Is(err, clarifications.ErrQuestionNotFound) {
+			t.Fatalf("asking about a question a sequential contest has not reached = %v, want ErrQuestionNotFound", err)
+		}
+		if err := askAbout(first, true); err != nil {
+			t.Fatalf("asking about the question reached: %v", err)
+		}
+		if err := askAbout(second, false); err != nil {
+			t.Fatalf("asking about any visible question of a contest in any order: %v", err)
+		}
+		x.Close(p.Registration, first)
+		if err := askAbout(second, true); err != nil {
+			t.Fatalf("asking about the next question once the first is closed: %v", err)
+		}
+		if err := askAbout(first, true); err != nil {
+			t.Fatalf("asking about a closed question: %v", err)
 		}
 	}},
 	{"the open cap counts only the registration's unanswered questions", func(t *testing.T, ctx context.Context, x Target) {
@@ -84,7 +120,7 @@ var repositoryCases = []struct {
 		ask(t, ctx, x, contest, a.Registration, nil, "two", x.Now.Add(time.Second))
 		_, err := x.Repo.Ask(ctx, clarifications.Clarification{
 			ContestID: contest, RegistrationID: a.Registration, Body: "three", CreatedAt: x.Now,
-		}, 2)
+		}, 2, false)
 		if !errors.Is(err, clarifications.ErrTooManyOpen) {
 			t.Fatalf("a third open question at a cap of two = %v, want ErrTooManyOpen", err)
 		}
@@ -125,6 +161,37 @@ var repositoryCases = []struct {
 		want = []uuid.UUID{note.ID, publicC.ID, privateB.ID, waitingB.ID}
 		if !slices.Equal(got, want) {
 			t.Fatalf("b's feed = %v, want %v", got, want)
+		}
+	}},
+	{"the feed names a public answer's question only when the reader can reach it", func(t *testing.T, ctx context.Context, x Target) {
+		contest := x.NewContest()
+		ana, ben := x.NewParticipant(contest), x.NewParticipant(contest)
+		staff, _ := x.NewStaff()
+		first, second := x.NewQuestion(contest), x.NewQuestion(contest)
+		x.Close(ana.Registration, first)
+		asked := ask(t, ctx, x, contest, ana.Registration, &second, "about the second", x.Now)
+		answer(t, ctx, x, contest, asked.ID, staff, clarifications.Public, x.Now.Add(time.Second))
+
+		named := func(reader uuid.UUID, sequential bool) *uuid.UUID {
+			t.Helper()
+			entries, err := x.Repo.Feed(ctx, contest, reader, latest, 10, sequential)
+			if err != nil || len(entries) != 1 || entries[0].Clarification == nil {
+				t.Fatalf("Feed = %+v, %v, want the one public answer", entries, err)
+			}
+			return entries[0].Clarification.QuestionID
+		}
+		if got := named(ben.Registration, true); got != nil {
+			t.Fatalf("ben, who has not reached the second question, is told its id %v", got)
+		}
+		if got := named(ben.Registration, false); got == nil || *got != second {
+			t.Fatalf("outside sequential order the question is %v, want %v", got, second)
+		}
+		if got := named(ana.Registration, true); got == nil || *got != second {
+			t.Fatalf("the asker's own question names %v, want %v", got, second)
+		}
+		x.Close(ben.Registration, first)
+		if got := named(ben.Registration, true); got == nil || *got != second {
+			t.Fatalf("once ben reaches it the question is %v, want %v", got, second)
 		}
 	}},
 	{"the feed pages newest posted first, strictly before the cursor", func(t *testing.T, ctx context.Context, x Target) {
@@ -280,7 +347,7 @@ func ask(t *testing.T, ctx context.Context, x Target, contest, registration uuid
 	t.Helper()
 	asked, err := x.Repo.Ask(ctx, clarifications.Clarification{
 		ContestID: contest, RegistrationID: registration, QuestionID: question, Body: body, CreatedAt: at,
-	}, clarifications.MaxOpenPerRegistration)
+	}, clarifications.MaxOpenPerRegistration, false)
 	if err != nil {
 		t.Fatalf("Ask(%q): %v", body, err)
 	}
@@ -318,7 +385,7 @@ func openCount(t *testing.T, ctx context.Context, x Target, registration uuid.UU
 
 func feed(t *testing.T, ctx context.Context, x Target, contest, registration uuid.UUID, before clarifications.Cursor, limit int) []clarifications.Entry {
 	t.Helper()
-	entries, err := x.Repo.Feed(ctx, contest, registration, before, limit)
+	entries, err := x.Repo.Feed(ctx, contest, registration, before, limit, false)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
