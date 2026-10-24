@@ -46,11 +46,26 @@ export type DiagramNode = {
 };
 
 /**
+ * Where an arrow crosses a column of other tables: level at `y`, from `enter`
+ * to `leave`, in the direction it travels.
+ */
+export type DiagramPassage = { enter: number; leave: number; y: number };
+
+/**
  * One arrow, from a column's row to the row of the column it references.
  * `out1` and `out2` say which way the curve leaves each end: 1 to the right
- * of its box, -1 to the left.
+ * of its box, -1 to the left. `via` lists the passages an arrow takes past
+ * the tables between its ends, empty when a single curve meets none.
  */
-export type DiagramLink = { x1: number; y1: number; x2: number; y2: number; out1: 1 | -1; out2: 1 | -1 };
+export type DiagramLink = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  out1: 1 | -1;
+  out2: 1 | -1;
+  via: DiagramPassage[];
+};
 
 /**
  * One foreign key: an arrow per column pair, in the key's order. `id` joins
@@ -102,7 +117,7 @@ export function layoutDiagram(schema: GameSchema): Diagram {
         name: key.name,
         from: from.name,
         to: to.name,
-        links: key.columns.map((column, i) => link(from, column, to, key.referenced_columns[i])),
+        links: key.columns.map((column, i) => link(from, column, to, key.referenced_columns[i], nodes)),
       });
     }
   }
@@ -112,10 +127,30 @@ export function layoutDiagram(schema: GameSchema): Diagram {
   return { nodes, edges, width: nodes.length ? width : 0, height: nodes.length ? height : 0 };
 }
 
-/** The SVG path of one arrow: a cubic curve leaving and entering sideways. */
-export function linkPath({ x1, y1, x2, y2, out1, out2 }: DiagramLink): string {
-  const reach = Math.max(32, Math.abs(x2 - x1) / 2);
-  return `M ${x1} ${y1} C ${x1 + out1 * reach} ${y1}, ${x2 + out2 * reach} ${y2}, ${x2} ${y2}`;
+/**
+ * The SVG path of one arrow: a cubic curve leaving and entering sideways, or,
+ * past tables in its way, level runs through each passage joined by curves
+ * that bend only in the free space between columns.
+ */
+export function linkPath({ x1, y1, x2, y2, out1, out2, via }: DiagramLink): string {
+  if (via.length === 0) {
+    const reach = Math.max(32, Math.abs(x2 - x1) / 2);
+    return `M ${x1} ${y1} C ${x1 + out1 * reach} ${y1}, ${x2 + out2 * reach} ${y2}, ${x2} ${y2}`;
+  }
+  // Both control points at the middle: the curve keeps to the x-range between
+  // its ends, and y between theirs.
+  const bend = (ax: number, ay: number, bx: number, by: number) => {
+    const mid = (ax + bx) / 2;
+    return ` C ${mid} ${ay}, ${mid} ${by}, ${bx} ${by}`;
+  };
+  let path = `M ${x1} ${y1}`;
+  let [x, y] = [x1, y1];
+  for (const passage of via) {
+    path += bend(x, y, passage.enter, passage.y);
+    path += ` C ${passage.enter} ${passage.y}, ${passage.leave} ${passage.y}, ${passage.leave} ${passage.y}`;
+    [x, y] = [passage.leave, passage.y];
+  }
+  return path + bend(x, y, x2, y2);
 }
 
 function sizeNode(table: GameSchema["tables"][number]): DiagramNode {
@@ -348,18 +383,92 @@ function placeLoose(nodes: DiagramNode[], top: number, graphWidth: number): numb
 }
 
 /** An arrow's ends, on the facing sides of the two boxes. */
-function link(from: DiagramNode, column: string, to: DiagramNode, referenced: string | undefined): DiagramLink {
+function link(
+  from: DiagramNode,
+  column: string,
+  to: DiagramNode,
+  referenced: string | undefined,
+  nodes: DiagramNode[],
+): DiagramLink {
   const y1 = rowMiddle(from, column);
   const y2 = rowMiddle(to, referenced);
 
   if (from !== to && to.x >= from.x + from.width) {
-    return { x1: from.x + from.width, y1, x2: to.x, y2, out1: 1, out2: -1 };
+    const ends = { x1: from.x + from.width, y1, x2: to.x, y2 };
+    return { ...ends, out1: 1, out2: -1, via: passages(ends, from, to, nodes) };
   }
   if (from !== to && to.x + to.width <= from.x) {
-    return { x1: from.x, y1, x2: to.x + to.width, y2, out1: -1, out2: 1 };
+    const ends = { x1: from.x, y1, x2: to.x + to.width, y2 };
+    return { ...ends, out1: -1, out2: 1, via: passages(ends, from, to, nodes) };
   }
   // The same box, or two in one rank: a loop out of the right side and back.
-  return { x1: from.x + from.width, y1, x2: to.x + to.width, y2, out1: 1, out2: 1 };
+  return { x1: from.x + from.width, y1, x2: to.x + to.width, y2, out1: 1, out2: 1, via: [] };
+}
+
+/** How far an arrow passing a table keeps from its edge. */
+const CLEARANCE = 12;
+
+/**
+ * The passages an arrow between two ranks takes past the tables standing
+ * between them, which dagre's own bend points would give only for its
+ * layout, not after `flowColumns` moves the boxes. A single curve stays
+ * inside the rectangle its ends span, so it is kept when no other table
+ * touches that rectangle. Otherwise each column of tables in the way, the
+ * boxes overlapping in x merged into one, is crossed level at the free height
+ * nearest the straight line, and the curves between bend only in the empty
+ * gaps between columns.
+ */
+function passages(
+  { x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: number },
+  from: DiagramNode,
+  to: DiagramNode,
+  nodes: DiagramNode[],
+): DiagramPassage[] {
+  const left = Math.min(x1, x2);
+  const right = Math.max(x1, x2);
+  const between = nodes.filter((n) => n !== from && n !== to && n.x < right && n.x + n.width > left);
+  const top = Math.min(y1, y2);
+  const bottom = Math.max(y1, y2);
+  if (!between.some((n) => n.y < bottom && n.y + n.height > top)) return [];
+
+  const columns: { x0: number; x1: number; boxes: DiagramNode[] }[] = [];
+  for (const node of [...between].sort((a, b) => a.x - b.x)) {
+    const last = columns.at(-1);
+    if (last && node.x < last.x1) {
+      last.x1 = Math.max(last.x1, node.x + node.width);
+      last.boxes.push(node);
+    } else {
+      columns.push({ x0: node.x, x1: node.x + node.width, boxes: [node] });
+    }
+  }
+  const rightward = x2 > x1;
+  if (!rightward) columns.reverse();
+
+  return columns.map((column) => {
+    const centre = (column.x0 + column.x1) / 2;
+    const straight = y1 + ((centre - x1) / (x2 - x1)) * (y2 - y1);
+    return {
+      enter: rightward ? column.x0 : column.x1,
+      leave: rightward ? column.x1 : column.x0,
+      y: freeHeight(column.boxes, straight),
+    };
+  });
+}
+
+/** The height nearest `wanted` that passes every box `CLEARANCE` clear. */
+function freeHeight(boxes: DiagramNode[], wanted: number): number {
+  const blocked = boxes
+    .map((n) => [n.y - CLEARANCE, n.y + n.height + CLEARANCE] as const)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [start, end] of blocked) {
+    const last = merged.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  const hit = merged.find(([start, end]) => wanted > start && wanted < end);
+  if (!hit) return wanted;
+  return wanted - hit[0] <= hit[1] - wanted ? hit[0] : hit[1];
 }
 
 /** A column's row middle, or the header's when the box does not carry it. */

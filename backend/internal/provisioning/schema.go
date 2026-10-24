@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,6 +94,10 @@ type SchemaReader struct {
 	source SchemaSource
 	// copyReads holds one token per copy being read (maxCopyReads).
 	copyReads chan struct{}
+	log       *slog.Logger
+	// unreadable holds the contests whose unreadable cache was reported, so a
+	// contest's start does not log once per participant.
+	unreadable sync.Map
 }
 
 // schemaReadTimeout bounds a copy read, waiting for its turn included. It
@@ -106,7 +112,18 @@ const maxCopyReads = 4
 
 // NewSchemaReader assembles the reader.
 func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
-	return &SchemaReader{store: store, source: source, copyReads: make(chan struct{}, maxCopyReads)}
+	return &SchemaReader{
+		store: store, source: source,
+		copyReads: make(chan struct{}, maxCopyReads),
+		log:       slog.New(slog.DiscardHandler),
+	}
+}
+
+// WithLog reports a cache that cannot be read: until the next build every
+// participant's panel is then read from their own copy.
+func (r *SchemaReader) WithLog(log *slog.Logger) *SchemaReader {
+	r.log = log
+	return r
 }
 
 // Schema answers what contest's game looks like: the description the build
@@ -125,6 +142,12 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
 	if err == nil && version == contest.Version {
 		return cached, nil
+	}
+	if err != nil && !errors.Is(err, ErrNoSchema) {
+		if _, reported := r.unreadable.LoadOrStore(contest.ID, struct{}{}); !reported {
+			r.log.WarnContext(ctx, "could not read the stored schema; reading each participant's copy until the next build",
+				"contest", contest.ID, "error", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, schemaReadTimeout)
