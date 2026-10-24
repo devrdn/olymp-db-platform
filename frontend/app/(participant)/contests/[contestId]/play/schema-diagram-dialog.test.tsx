@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import ro from "@/lib/i18n/dictionaries/ro";
+import ru from "@/lib/i18n/dictionaries/ru";
 import type { GameSchema } from "@/lib/api/schema";
 
 import { SchemaDiagramDialog } from "./schema-diagram-dialog";
@@ -37,6 +39,15 @@ describe("the schema diagram's dialog", () => {
     expect(dialog).toHaveAccessibleDescription(t.description);
     expect(await within(dialog).findByRole("application", { name: t.canvas })).toBeInTheDocument();
     expect(within(dialog).getByText("rooms: id")).toBeInTheDocument();
+  });
+
+  // The boxes draw "PK" and "FK" in every language, so every description says what they mean.
+  test.each([
+    ["en", en],
+    ["ro", ro],
+    ["ru", ru],
+  ])("the %s description explains the PK and FK marks", (_, dict) => {
+    expect(dict.participant.play.schema.diagram.description).toMatch(/PK.*FK/);
   });
 
   test("keeps focus inside while open and hands it back to the button on Escape", async () => {

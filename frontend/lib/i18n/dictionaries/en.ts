@@ -1648,7 +1648,7 @@ const en = {
           open: "Diagram",
           openLabel: "Open the schema as a diagram",
           title: "Schema diagram",
-          description: "Tables with their columns. An arrow runs from a foreign key to the columns it references.",
+          description: "Tables with their columns: PK marks a primary-key column, FK a foreign-key column. An arrow runs from a foreign key to the columns it references.",
           close: "Close the diagram",
           loading: "Drawing the diagram…",
           empty: "This database has no tables to draw.",

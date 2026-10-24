@@ -196,7 +196,7 @@ function Canvas({ diagram, t }: { diagram: Diagram; t: DiagramDictionary }) {
           </defs>
           <g data-viewport="" transform={`translate(${shown.x} ${shown.y}) scale(${shown.k})`}>
             {diagram.edges.map((edge) => (
-              <g key={edge.id} data-edge={edge.id} className="fill-none stroke-ink-3">
+              <g key={edge.id} data-from={edge.from} data-edge={edge.name} className="fill-none stroke-ink-3">
                 {edge.links.map((link, i) => (
                   <path
                     key={i}
@@ -275,7 +275,7 @@ function TableBox({ node, detailed }: { node: DiagramNode; detailed: boolean }) 
 function Relations({ schema, t }: { schema: GameSchema; t: DiagramDictionary }) {
   const relations = schema.tables.flatMap((table) =>
     (table.foreign_keys ?? []).map((key) => ({
-      id: `${table.name}.${key.name}`,
+      id: `${table.name}\u0000${key.name}`,
       text: t.relation
         .replace("{table}", table.name)
         .replace("{columns}", key.columns.join(", "))
