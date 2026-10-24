@@ -77,7 +77,7 @@ describe("the schema diagram", () => {
   test("draws an arrow from each foreign-key column to the column it references", () => {
     const { container } = draw();
 
-    const edge = container.querySelector('[data-edge="rooms.rooms_on_a_floor"]');
+    const edge = container.querySelector('[data-from="rooms"][data-edge="rooms_on_a_floor"]');
     expect(edge?.querySelectorAll("path")).toHaveLength(2);
     for (const path of edge?.querySelectorAll("path") ?? []) {
       expect(path.getAttribute("d")).toMatch(/^M [\d.]+ [\d.]+ C /);

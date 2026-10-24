@@ -52,7 +52,11 @@ export type DiagramNode = {
  */
 export type DiagramLink = { x1: number; y1: number; x2: number; y2: number; out1: 1 | -1; out2: 1 | -1 };
 
-/** One foreign key: an arrow per column pair, in the key's order. */
+/**
+ * One foreign key: an arrow per column pair, in the key's order. `id` joins
+ * the table and key names with NUL, which no identifier contains; a dot can
+ * be part of a quoted one.
+ */
 export type DiagramEdge = { id: string; name: string; from: string; to: string; links: DiagramLink[] };
 
 export type Diagram = { nodes: DiagramNode[]; edges: DiagramEdge[]; width: number; height: number };
@@ -94,7 +98,7 @@ export function layoutDiagram(schema: GameSchema): Diagram {
       const to = byName.get(key.referenced_table);
       if (!to) continue;
       edges.push({
-        id: `${table.name}.${key.name}`,
+        id: `${table.name}\u0000${key.name}`,
         name: key.name,
         from: from.name,
         to: to.name,
