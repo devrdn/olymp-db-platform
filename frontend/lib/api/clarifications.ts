@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { ApiError, request } from "./client";
+import { isId } from "./ids";
+
 /**
  * Questions to the organisers, their answers and announcements
  * (docs/ARCHITECTURE.md §6.5): the participant's feed and the staff queue.
@@ -176,3 +179,93 @@ export const announcementListSchema = z.object({
 });
 
 export type AnnouncementList = z.infer<typeof announcementListSchema>;
+
+/** A staff read or write, or why it was refused. */
+type Result<K extends string, T> = ({ kind: "ok" } & Record<K, T>) | { kind: "refused"; code: string };
+
+function refusal(error: unknown): { kind: "refused"; code: string } {
+  return { kind: "refused", code: error instanceof ApiError ? error.code : "unreachable" };
+}
+
+/**
+ * The staff desk's requests, made from the browser with the session cookie, as
+ * monitoring's are: the desk polls every five seconds, and Next runs a page's
+ * server actions one at a time.
+ */
+function staffRequest(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}) {
+  return request(path, { ...options, credentials: "same-origin" });
+}
+
+/** The most of one state the desk keeps live: the server's `MaxPageSize`. */
+export const QUEUE_MAX_SHOWN = 100;
+
+/**
+ * The first `limit` questions of one state of the queue (at most
+ * `QUEUE_MAX_SHOWN`), with both states' counts. The desk re-reads from the
+ * start on every poll, so an answered question leaves the waiting list.
+ */
+export async function fetchQueue(
+  contestId: string,
+  state: QueueState,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<Result<"queue", ClarificationQueue>> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  const bounded = Math.min(Math.max(1, limit), QUEUE_MAX_SHOWN);
+  try {
+    const payload = await staffRequest(`/contests/${contestId}/clarifications?state=${state}&limit=${bounded}&offset=0`, {
+      signal,
+    });
+    return { kind: "ok", queue: clarificationQueueSchema.parse(payload) };
+  } catch (error: unknown) {
+    return refusal(error);
+  }
+}
+
+export type AnswerInput = { body: string; declined: boolean; visibility: Visibility };
+
+/** Answers a waiting question (`answer`), or replaces an answer given (`edit`). */
+export async function answerClarification(
+  contestId: string,
+  clarificationId: string,
+  answer: AnswerInput,
+  mode: "answer" | "edit",
+): Promise<Result<"clarification", StaffClarification>> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (!isId(clarificationId)) return { kind: "refused", code: "clarification_not_found" };
+  try {
+    const payload = await staffRequest(`/contests/${contestId}/clarifications/${clarificationId}/answer`, {
+      method: mode === "answer" ? "POST" : "PUT",
+      body: answer,
+    });
+    return { kind: "ok", clarification: staffClarificationSchema.parse(payload) };
+  } catch (error: unknown) {
+    return refusal(error);
+  }
+}
+
+/** One page of the contest's announcements, newest first. */
+export async function fetchAnnouncements(contestId: string, offset: number): Promise<Result<"list", AnnouncementList>> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  try {
+    const payload = await staffRequest(
+      `/contests/${contestId}/announcements?limit=${CLARIFICATION_PAGE_SIZE}&offset=${Math.max(0, offset)}`,
+    );
+    return { kind: "ok", list: announcementListSchema.parse(payload) };
+  } catch (error: unknown) {
+    return refusal(error);
+  }
+}
+
+/** Posts a message to every participant; an empty one is not sent. */
+export async function postAnnouncement(contestId: string, body: string): Promise<Result<"announcement", Announcement>> {
+  if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
+  if (body.trim() === "") return { kind: "refused", code: "clarification_empty" };
+  try {
+    const payload = await staffRequest(`/contests/${contestId}/announcements`, { method: "POST", body: { body } });
+    return { kind: "ok", announcement: announcementSchema.parse(payload) };
+  } catch (error: unknown) {
+    return refusal(error);
+  }
+}
+

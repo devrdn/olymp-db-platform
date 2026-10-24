@@ -1,7 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  answerClarification,
   announcementListSchema,
+  fetchAnnouncements,
+  fetchQueue,
+  postAnnouncement,
   clarificationFeedSchema,
   clarificationQueueSchema,
   latestStamp,
@@ -128,3 +132,99 @@ describe("latestStamp", () => {
     expect(latestStamp([])).toBe("");
   });
 });
+
+describe("the staff's browser requests", () => {
+  const contestId = "11111111-1111-1111-1111-111111111111";
+  const clarificationId = "22222222-2222-2222-2222-222222222222";
+  const calls: { url: string; init: RequestInit }[] = [];
+
+  function answerWith(status: number, body?: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return body === undefined
+          ? new Response(null, { status })
+          : new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const staffItem = {
+    id: clarificationId,
+    question_id: null,
+    body: "Why?",
+    created_at: "2026-11-02T09:00:00.000000Z",
+    asker: { login: "ana", full_name: "Ana" },
+    answer: null,
+  };
+
+  test.each(["../users", "not-an-id", ""])("sends nothing for the contest id %j", async (id) => {
+    answerWith(200, {});
+    expect(await fetchQueue(id, "open", 0)).toEqual({ kind: "refused", code: "invalid_contest_id" });
+    expect(await answerClarification(id, clarificationId, { body: "x", declined: false, visibility: "private" }, "answer")).toEqual({
+      kind: "refused",
+      code: "invalid_contest_id",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("reads one state of the queue with its counts", async () => {
+    answerWith(200, { items: [staffItem], counts: { open: 1, answered: 0 } });
+
+    const result = await fetchQueue(contestId, "answered", 50);
+    await fetchQueue(contestId, "open", 500);
+
+    expect(result.kind).toBe("ok");
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&offset=0`);
+    // The server's page bound, kept on this side too.
+    expect(calls[1].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=open&limit=100&offset=0`);
+    expect(calls[0].init).toMatchObject({ credentials: "same-origin" });
+  });
+
+  test("answers with POST and edits with PUT", async () => {
+    answerWith(200, staffItem);
+    const answer = { body: "Yes.", declined: false, visibility: "public" as const };
+
+    await answerClarification(contestId, clarificationId, answer, "answer");
+    await answerClarification(contestId, clarificationId, answer, "edit");
+
+    expect(calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["POST", `/api/v1/contests/${contestId}/clarifications/${clarificationId}/answer`],
+      ["PUT", `/api/v1/contests/${contestId}/clarifications/${clarificationId}/answer`],
+    ]);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual(answer);
+  });
+
+  test("passes a refusal on as its code", async () => {
+    answerWith(409, { error: { code: "clarification_already_answered", message: "x" } });
+    const result = await answerClarification(contestId, clarificationId, { body: "x", declined: false, visibility: "private" }, "answer");
+    expect(result).toEqual({ kind: "refused", code: "clarification_already_answered" });
+  });
+
+  test("reads and posts announcements", async () => {
+    answerWith(200, { items: [], total: 0 });
+    expect(await fetchAnnouncements(contestId, 0)).toEqual({ kind: "ok", list: { items: [], total: 0 } });
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/announcements?limit=50&offset=0`);
+
+    answerWith(201, { id: "a1", body: "Hello", created_at: "2026-11-02T09:00:00.000000Z" });
+    const posted = await postAnnouncement(contestId, "Hello");
+    expect(posted).toEqual({ kind: "ok", announcement: { id: "a1", body: "Hello", createdAt: "2026-11-02T09:00:00.000000Z" } });
+    expect(calls[1].init.method).toBe("POST");
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ body: "Hello" });
+  });
+
+  test("sends no empty announcement", async () => {
+    answerWith(201, {});
+    expect(await postAnnouncement(contestId, "   ")).toEqual({ kind: "refused", code: "clarification_empty" });
+    expect(calls).toHaveLength(0);
+  });
+});
+
