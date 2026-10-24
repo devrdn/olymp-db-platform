@@ -1314,8 +1314,8 @@ come in full.
 The lock is about answering in order, so it ends with the contest: a view of
 the questions after the end, should one be added, shows every question alike.
 Today there is none. The list is readable only while the participant may act,
-and the profile's report names a question by number alone, never by its
-wording, whether it was reached or not.
+and the profile's report carries no wording, and lists only the questions the
+participant attempted.
 
 It is meaningful only with `question_mode = multi`; with `single` there is one
 question and the sequence degenerates.

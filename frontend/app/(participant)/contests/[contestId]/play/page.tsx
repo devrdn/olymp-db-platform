@@ -288,7 +288,7 @@ async function PlayPanels({
   // (questions-panel.tsx).
   const questionEntries: QuestionEntry[] = questions.map((question, index) =>
     question.locked
-      ? { question, index: index + 1, body: null }
+      ? { question, index: question.position, body: null }
       : { question, index: index + 1, body: <QuestionBody markdown={question.bodyMd} /> },
   );
 
