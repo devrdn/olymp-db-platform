@@ -415,8 +415,8 @@ func TestABuildDescribesTheTemplateItBuiltBeforeItIsReady(t *testing.T) {
 	}
 }
 
-// The build's description is in the current format, so the reader serves it
-// as it is instead of reading a participant's copy again.
+// The build's description, keys and all, is what the reader serves; it never
+// reads a participant's copy in its place.
 func TestABuildsDescriptionIsServedFromTheCache(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)

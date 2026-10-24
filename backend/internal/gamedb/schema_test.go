@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -211,4 +212,52 @@ func TestReadSchemaListsAKeyToAPartitionedTableOnce(t *testing.T) {
 		return
 	}
 	t.Fatal("stamps is missing from the schema")
+}
+
+// CLAUDE.md rules 2 and 12: the catalogue read stops at the document's total
+// of foreign keys, and a table sorting after the keys still gets its primary
+// key.
+func TestReadSchemaStopsAtTheDocumentsTotalOfForeignKeys(t *testing.T) {
+	requireCluster(t)
+
+	for _, tc := range []struct {
+		name      string
+		keys      int
+		truncated bool
+	}{
+		{"at the bound", provisioning.MaxDocumentForeignKeys, false},
+		{"one past it", provisioning.MaxDocumentForeignKeys + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := scratchDatabase(t)
+			asOwner(t, database,
+				`CREATE TABLE anchor (id int PRIMARY KEY)`,
+				`CREATE TABLE many (a int)`,
+				fmt.Sprintf(`DO $$ BEGIN
+					FOR i IN 1..%d LOOP
+						EXECUTE format('ALTER TABLE many ADD CONSTRAINT fk_%%s FOREIGN KEY (a) REFERENCES anchor', lpad(i::text, 4, '0'));
+					END LOOP;
+				END $$`, tc.keys),
+				`CREATE TABLE zebra (id int PRIMARY KEY)`,
+			)
+
+			schema, err := provisioner(t).ReadSchema(context.Background(), database)
+			if err != nil {
+				t.Fatalf("read the schema: %v", err)
+			}
+			tables := map[string]provisioning.Table{}
+			for _, table := range schema.Tables {
+				tables[table.Name] = table
+			}
+			if n := len(tables["many"].ForeignKeys); n != provisioning.MaxDocumentForeignKeys {
+				t.Fatalf("read %d foreign keys, want %d", n, provisioning.MaxDocumentForeignKeys)
+			}
+			if schema.Truncated != tc.truncated {
+				t.Fatalf("truncated = %v, want %v", schema.Truncated, tc.truncated)
+			}
+			if got := tables["zebra"].PrimaryKey; !slices.Equal(got, []string{"id"}) {
+				t.Fatalf("zebra's primary key read as %v after the keys", got)
+			}
+		})
+	}
 }

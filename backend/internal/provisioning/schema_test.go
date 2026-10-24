@@ -495,13 +495,16 @@ func TestSchemaIsBounded(t *testing.T) {
 	}
 }
 
-// A document cached before keys were described has none; drawn as it is, the
-// diagram of a game built before the change would have no arrows at all.
-func TestSchemaReReadsADocumentCachedBeforeKeysWereDescribed(t *testing.T) {
+// A document cached before keys were described has none, and is served as
+// it is: the game gains its arrows at its next build. Reading the
+// participant's copy instead would cache, for everyone and for the rest of a
+// running contest, whatever that copy's tables had become (ARCHITECTURE.md
+// §15, item 49); reading the ready template would break the copies made from
+// it.
+func TestSchemaServesADocumentCachedBeforeKeysWereDescribed(t *testing.T) {
 	t.Parallel()
 
-	old := twoTables()
-	store := &schemaStore{present: true, version: 1, schema: old}
+	store := &schemaStore{present: true, version: 1, schema: twoTables()}
 	withKeys := twoTables()
 	withKeys.Tables[1].ForeignKeys = []provisioning.ForeignKey{{
 		Name: "keycard_events_guest_id_fkey", Columns: []string{"guest_id"},
@@ -509,26 +512,24 @@ func TestSchemaReReadsADocumentCachedBeforeKeysWereDescribed(t *testing.T) {
 	}}
 	source := &schemaSource{schema: withKeys}
 	reader := provisioning.NewSchemaReader(store, source)
-	contest := game(1)
 
-	got, err := reader.Schema(context.Background(), contest, "game_c1_r1")
+	got, err := reader.Schema(context.Background(), game(1), "game_c1_r1")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(got.Tables) != 2 || len(got.Tables[1].ForeignKeys) != 1 {
-		t.Fatalf("served the old document without keys: %+v", got.Tables)
+	if source.timesAsked() != 0 {
+		t.Fatalf("read a copy %d times for a game whose description is cached", source.timesAsked())
 	}
-	if source.timesAsked() != 1 || store.saveCount() != 1 {
-		t.Fatalf("asked the cluster %d times and saved %d times, want once each", source.timesAsked(), store.saveCount())
+	if store.saveCount() != 0 {
+		t.Fatal("replaced the build's description")
 	}
-
-	// The document it saved is the current one, so the next reader is served
-	// from the cache.
-	if _, err := reader.Schema(context.Background(), contest, "game_c1_r2"); err != nil {
-		t.Fatalf("second read: %v", err)
+	if len(got.Tables) != 2 {
+		t.Fatalf("served %d tables, want the cached 2", len(got.Tables))
 	}
-	if source.timesAsked() != 1 {
-		t.Fatal("the re-read document was not served from the cache")
+	for _, table := range got.Tables {
+		if len(table.ForeignKeys) != 0 || len(table.PrimaryKey) != 0 {
+			t.Fatalf("served keys the cached document does not carry: %+v", table)
+		}
 	}
 }
 
@@ -568,5 +569,63 @@ func TestSchemaKeysAreBounded(t *testing.T) {
 	}
 	if !got.Truncated {
 		t.Fatal("cut the keys down without saying so")
+	}
+}
+
+// CLAUDE.md rule 2: the per-table cap alone allows 40,000 keys in one
+// document, read and sent on every schema request.
+func TestSchemaForeignKeysAreBoundedAcrossTheDocument(t *testing.T) {
+	t.Parallel()
+
+	withKeys := func(total int) provisioning.Schema {
+		var schema provisioning.Schema
+		for i := 0; total > 0; i++ {
+			n := min(total, provisioning.MaxSchemaForeignKeys)
+			total -= n
+			keys := make([]provisioning.ForeignKey, n)
+			for k := range keys {
+				keys[k] = provisioning.ForeignKey{
+					Name: fmt.Sprintf("t%d_fk%d", i, k), Columns: []string{"a"},
+					ReferencedTable: "t0", ReferencedColumns: []string{"a"},
+				}
+			}
+			schema.Tables = append(schema.Tables, provisioning.Table{
+				Name: fmt.Sprintf("t%d", i), Columns: []provisioning.Column{{Name: "a", Type: "int"}}, ForeignKeys: keys,
+			})
+		}
+		return schema
+	}
+	count := func(schema provisioning.Schema) int {
+		n := 0
+		for _, table := range schema.Tables {
+			n += len(table.ForeignKeys)
+		}
+		return n
+	}
+
+	for _, tc := range []struct {
+		name      string
+		total     int
+		kept      int
+		truncated bool
+	}{
+		{"at the bound", provisioning.MaxDocumentForeignKeys, provisioning.MaxDocumentForeignKeys, false},
+		{"one past it", provisioning.MaxDocumentForeignKeys + 1, provisioning.MaxDocumentForeignKeys, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reader := provisioning.NewSchemaReader(&schemaStore{}, &schemaSource{schema: withKeys(tc.total)})
+
+			got, err := reader.Schema(context.Background(), game(1), "game_c1_r1")
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if n := count(got); n != tc.kept {
+				t.Fatalf("kept %d foreign keys, want %d", n, tc.kept)
+			}
+			if got.Truncated != tc.truncated {
+				t.Fatalf("truncated = %v, want %v", got.Truncated, tc.truncated)
+			}
+		})
 	}
 }
