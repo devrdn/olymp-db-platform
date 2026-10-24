@@ -1793,7 +1793,7 @@ const en = {
         sending: "Sending…",
         sent: "Your question was sent.",
         shortcut: "Ctrl/⌘+Enter sends it.",
-        closed: "The contest is over for you, so no more questions can be asked. The answers stay here.",
+        closed: "The contest is over for you, so no more questions can be asked. The answers stay here until you leave this page.",
         announcements: "Announcements",
         thread: "Questions and answers",
         empty: "No questions yet. Answers the organisers publish for everyone appear here too.",

@@ -8,7 +8,6 @@ import {
   MAX_OPEN_QUESTIONS,
   QUESTION_MAX_CHARS,
   latestStamp,
-  type ClarificationFeed,
   type FeedItem,
   type SeenAnnouncement,
   type SeenClarification,
@@ -22,7 +21,7 @@ import { useClarificationSignal } from "./clarification-signal";
 import type { PlayDictionary } from "./dictionary";
 import type { QuestionEntry } from "./questions-panel";
 import { refusalKind } from "./refusals";
-import { askOrganisers, fetchClarifications } from "./requests";
+import { askOrganisers, fetchClarifications, type ClarificationsResult } from "./requests";
 
 // Loaded once there is an answer or an announcement to show.
 const LazyClarificationText = lazy(() =>
@@ -98,10 +97,8 @@ export function ClarificationsPanel({
   const olderLoaded = useRef(false);
   // The newest state for `refresh`, which outlives the render it was made in.
   const itemsRef = useRef(items);
-  const nextRef = useRef(next);
   useEffect(() => {
     itemsRef.current = items;
-    nextRef.current = next;
   });
   const lastRead = useRef(0);
   const inFlight = useRef(false);
@@ -119,12 +116,11 @@ export function ClarificationsPanel({
     }
     inFlight.current = true;
     try {
-      const result = await fetchClarifications(contestId);
+      const result = await readAgain(contestId, olderLoaded.current ? itemsRef.current.length : 0);
       if (result.kind === "ok") {
         lastRead.current = Date.now();
-        const merged = mergeNewest(itemsRef.current, result.feed, olderLoaded.current, nextRef.current);
-        setItems(merged.items);
-        setNext(merged.next);
+        setItems(result.feed.items);
+        setNext(result.feed.next);
         setOpen(result.feed.open);
         setLoad({ kind: "ready" });
         setRefreshFailed(null);
@@ -146,14 +142,25 @@ export function ClarificationsPanel({
     void refresh();
   }, [refresh]);
 
-  // A hint from the channel: read again shortly, at a random moment.
+  // A hint from the channel: read again shortly, at a random moment. A hint
+  // while that read is pending joins it rather than pushing it back.
   const seenHints = useRef(signal.hints);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (signal.hints === seenHints.current) return;
     seenHints.current = signal.hints;
-    const timer = setTimeout(() => void refresh(), Math.random() * HINT_SPREAD_MS);
-    return () => clearTimeout(timer);
+    if (hintTimer.current !== null) return;
+    hintTimer.current = setTimeout(() => {
+      hintTimer.current = null;
+      void refresh();
+    }, Math.random() * HINT_SPREAD_MS);
   }, [signal.hints, refresh]);
+  useEffect(
+    () => () => {
+      if (hintTimer.current !== null) clearTimeout(hintTimer.current);
+    },
+    [],
+  );
 
   const seenConnections = useRef(signal.connections);
   useEffect(() => {
@@ -490,25 +497,23 @@ function OrganiserText({ markdown }: { markdown: string }) {
 }
 
 /**
- * The newest page merged into what is on screen. Entries the page covers are
- * replaced by it, so one taken back from everyone disappears; older pages
- * already loaded are kept below it, with their cursor.
+ * The newest page, and again every older page already on screen until as many
+ * entries are read as were shown. Reading them again rather than keeping them
+ * is what takes an answer withdrawn from everyone off every screen.
  */
-function mergeNewest(
-  current: FeedItem[],
-  fresh: ClarificationFeed,
-  olderLoaded: boolean,
-  currentNext: string | null,
-): { items: FeedItem[]; next: string | null } {
-  if (!olderLoaded || fresh.next === null || fresh.items.length === 0) {
-    return { items: fresh.items, next: fresh.next };
+async function readAgain(contestId: string, shown: number): Promise<ClarificationsResult> {
+  const first = await fetchClarifications(contestId);
+  if (first.kind !== "ok") return first;
+  const items = [...first.feed.items];
+  let next = first.feed.next;
+  while (next !== null && items.length < shown) {
+    const page = await fetchClarifications(contestId, next);
+    if (page.kind !== "ok") break;
+    const present = new Set(items.map((item) => item.id));
+    items.push(...page.feed.items.filter((item) => !present.has(item.id)));
+    next = page.feed.next;
   }
-  const last = fresh.items[fresh.items.length - 1];
-  const ids = new Set(fresh.items.map((item) => item.id));
-  const older = current.filter(
-    (item) => !ids.has(item.id) && (item.postedAt < last.postedAt || (item.postedAt === last.postedAt && item.id < last.id)),
-  );
-  return { items: [...fresh.items, ...older], next: currentNext };
+  return { kind: "ok", feed: { ...first.feed, items, next } };
 }
 
 function readSeen(key: string | null): string {

@@ -354,6 +354,55 @@ describe("the questions to the organisers", () => {
   });
 });
 
+describe("keeping the list right", () => {
+  test("a hint arriving while a read is pending does not push that read back", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    show();
+    await screen.findByText(t.empty);
+
+    act(() => publisher.hint());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => publisher.hint());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+
+    // The first hint's read happened 3 s after it, not 3 s after the second.
+    expect(api.fetches).toHaveLength(2);
+  });
+
+  test("an answer taken back from everyone leaves the older pages too", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const unpublished = answered(2, { id: "taken-back", mine: false, body: "Soon private again" });
+    api.feeds = [
+      feed([announcement(9)], { next: "older-1" }),
+      feed([unpublished, announcement(1, "From the start")]),
+      // The re-read after a hint: the newest page, then the older one again.
+      feed([announcement(9)], { next: "older-1" }),
+      feed([announcement(1, "From the start")]),
+    ];
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: t.older }));
+    expect(await screen.findByText("Soon private again")).toBeInTheDocument();
+
+    act(() => publisher.hint());
+    await waitFor(() => expect(screen.queryByText("Soon private again")).toBeNull());
+    expect(screen.getByText("From the start")).toBeInTheDocument();
+    expect(api.fetches).toEqual([undefined, "older-1", undefined, "older-1"]);
+  });
+
+  test("says the answers stay only while the page is open, once the contest is over", async () => {
+    show();
+    await screen.findByText(t.empty);
+    act(() => publisher.finish());
+    expect(screen.getByText(t.closed)).toHaveTextContent(/until you leave this page/);
+  });
+});
+
 describe("the unread marker", () => {
   test("reports news while the tab is hidden, and nothing for the participant's own waiting question", async () => {
     api.feeds = [feed([mine()])];

@@ -12,7 +12,8 @@ const t = en.workspace.clarifications;
 
 const api = vi.hoisted(() => ({
   queues: {} as Record<string, ClarificationQueue | { refused: string }>,
-  reads: [] as { state: QueueState; limit: number }[],
+  pages: {} as Record<string, (offset: number, limit: number) => ClarificationQueue>,
+  reads: [] as { state: QueueState; limit: number; offset: number }[],
   answers: [] as { id: string; answer: AnswerInput; mode: string }[],
   answerResult: null as null | { kind: "ok"; clarification: StaffClarification } | { kind: "refused"; code: string },
   posts: [] as string[],
@@ -21,8 +22,10 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@/lib/api/clarifications", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/clarifications")>()),
-  fetchQueue: async (_contestId: string, state: QueueState, limit: number) => {
-    api.reads.push({ state, limit });
+  fetchQueue: async (_contestId: string, state: QueueState, page: { limit: number; offset?: number }) => {
+    const offset = page.offset ?? 0;
+    api.reads.push({ state, limit: page.limit, offset });
+    if (api.pages[state]) return { kind: "ok", queue: api.pages[state](offset, page.limit) };
     const queue = api.queues[state];
     if (queue && "refused" in queue) return { kind: "refused", code: queue.refused };
     return { kind: "ok", queue: queue ?? { items: [], counts: { open: 0, answered: 0 } } };
@@ -86,6 +89,7 @@ function show(props: Partial<React.ComponentProps<typeof ClarificationsDesk>> = 
 
 beforeEach(() => {
   api.queues = {};
+  api.pages = {};
   api.reads = [];
   api.answers = [];
   api.answerResult = null;
@@ -281,4 +285,60 @@ describe("the staff desk", () => {
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(api.answers[0].answer.visibility).toBe("public"));
   });
+
+  test("reaches answered questions past the hundred it keeps live, a page at a time", async () => {
+    const all = Array.from({ length: 160 }, (_, i) => answered(`a${i}`));
+    api.pages.answered = (offset, limit) => queue(all.slice(offset, offset + limit), { open: 1, answered: all.length });
+    show();
+    await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(50));
+
+    for (const expected of [100, 150, 160]) {
+      await userEvent.click(screen.getByRole("button", { name: t.older }));
+      await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(expected));
+    }
+    expect(screen.queryByRole("button", { name: t.older })).toBeNull();
+    expect(api.reads.slice(-3).map((r) => [r.offset, r.limit])).toEqual([
+      [0, 100],
+      [100, 50],
+      [150, 50],
+    ]);
+  });
+
+  describe("keyboard focus", () => {
+    test("goes to the field when an answer opens for editing, and back to Edit on Cancel", async () => {
+      api.queues.answered = queue([answered("c9")], { open: 1, answered: 1 });
+      show();
+      await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+      const item = await screen.findByRole("article");
+
+      await userEvent.click(within(item).getByRole("button", { name: t.edit }));
+      expect(within(item).getByRole("textbox", { name: t.answerLabel })).toHaveFocus();
+
+      await userEvent.click(within(item).getByRole("button", { name: t.cancel }));
+      expect(within(item).getByRole("button", { name: t.edit })).toHaveFocus();
+    });
+
+    test("returns to Edit once an edit is saved", async () => {
+      api.queues.answered = queue([answered("c9")], { open: 1, answered: 1 });
+      show();
+      await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+      const item = await screen.findByRole("article");
+      await userEvent.click(within(item).getByRole("button", { name: t.edit }));
+      await userEvent.click(within(item).getByRole("button", { name: t.save }));
+
+      await waitFor(() => expect(within(item).getByRole("button", { name: t.edit })).toHaveFocus());
+    });
+
+    test("goes to the status line when an answered question leaves the list", async () => {
+      show();
+      const item = screen.getByRole("article");
+      await userEvent.type(within(item).getByRole("textbox", { name: t.answerLabel }), "Yes.");
+      await userEvent.click(within(item).getByRole("button", { name: t.send }));
+
+      const status = await screen.findByText(t.sent);
+      await waitFor(() => expect(status).toHaveFocus());
+    });
+  });
 });
+
