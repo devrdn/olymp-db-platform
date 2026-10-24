@@ -23,16 +23,11 @@ type Schema struct {
 	// Truncated says the game has more tables, a table more columns or keys,
 	// or a key more columns, than this document carries.
 	Truncated bool `json:"truncated,omitempty"`
-	// Format is the document's shape when it was stored. A cached document of
-	// another format is read as a miss and replaced.
-	Format int `json:"format,omitempty"`
 }
 
-// SchemaFormat is the current Format. Documents stored before keys were
-// described carry none (zero).
-const SchemaFormat = 1
-
-// Table is one relation and its columns, in declaration order.
+// Table is one relation and its columns, in declaration order. A document
+// cached before keys were described has neither key list, and is served as
+// it is until the game's next build describes it again.
 type Table struct {
 	Name    string   `json:"name"`
 	Columns []Column `json:"columns"`
@@ -72,6 +67,10 @@ const (
 	MaxSchemaColumns     = 200
 	MaxSchemaForeignKeys = 200
 	MaxKeyColumns        = 32
+	// MaxDocumentForeignKeys bounds the foreign keys of every table together:
+	// the per-table cap alone allows 40,000. It sits within the diagram's
+	// layout budget.
+	MaxDocumentForeignKeys = 1000
 )
 
 // SchemaStore is the schema cache. CachedSchema reports ErrNoSchema when
@@ -160,7 +159,7 @@ func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database str
 }
 
 // cached returns the cached document when it describes the build the contest
-// is running, in the current format (hit). readable is false when the cache itself failed, as opposed
+// is running (hit). readable is false when the cache itself failed, as opposed
 // to holding nothing for this build.
 func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Schema, hit, readable bool) {
 	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
@@ -169,18 +168,17 @@ func (r *SchemaReader) cached(ctx context.Context, contest Contest) (schema Sche
 		return Schema{}, false, true
 	case err != nil:
 		return Schema{}, false, false
-	case version != contest.Version, cached.Format != SchemaFormat:
+	case version != contest.Version:
 		return Schema{}, false, true
 	}
 	return cached, true, true
 }
 
 // storable bounds the document to MaxSchemaTables, MaxSchemaColumns,
-// MaxSchemaForeignKeys and MaxKeyColumns, sets Truncated if it had to, and
-// stamps the current format. Both writers of the cache call it first, so the
+// MaxSchemaForeignKeys, MaxDocumentForeignKeys and MaxKeyColumns, and sets
+// Truncated if it had to. Both writers of the cache call it first, so the
 // stored jsonb is bounded too (CLAUDE.md rule 2).
 func storable(schema Schema) Schema {
-	schema.Format = SchemaFormat
 	if len(schema.Tables) > MaxSchemaTables {
 		schema.Tables = schema.Tables[:MaxSchemaTables]
 		schema.Truncated = true
@@ -203,6 +201,16 @@ func storable(schema Schema) Schema {
 			table.ForeignKeys = slices.DeleteFunc(slices.Clone(table.ForeignKeys), tooWide)
 			schema.Truncated = true
 		}
+	}
+
+	left := MaxDocumentForeignKeys
+	for i := range schema.Tables {
+		table := &schema.Tables[i]
+		if len(table.ForeignKeys) > left {
+			table.ForeignKeys = table.ForeignKeys[:left]
+			schema.Truncated = true
+		}
+		left -= len(table.ForeignKeys)
 	}
 	return schema
 }

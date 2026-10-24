@@ -66,16 +66,14 @@ func TestTheGamesSchemaSurvivesAWriteAndARead(t *testing.T) {
 	})
 }
 
-// The keys and the format are what decide whether a cached document is drawn
-// or read again, so losing either in the jsonb would re-read every game on
-// every request.
-func TestTheGamesKeysAndFormatSurviveAWriteAndARead(t *testing.T) {
+// The keys are what the diagram draws; a cached document that lost them would
+// draw a game with no relations until its next build.
+func TestTheGamesSchemaKeysSurviveAWriteAndARead(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aGameWithNoSchemaYet(t, ctx)
 		repo := NewGameInstances(testPool)
 
 		schema := aSchema()
-		schema.Format = provisioning.SchemaFormat
 		schema.Tables[0].PrimaryKey = []string{"id"}
 		schema.Tables[1].ForeignKeys = []provisioning.ForeignKey{{
 			Name: "guests_room_id_fkey", Columns: []string{"room_id"},
