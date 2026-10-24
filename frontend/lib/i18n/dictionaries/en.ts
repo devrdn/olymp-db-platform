@@ -1061,7 +1061,7 @@ const en = {
         placeholder: "Who was in the greenhouse at midnight?",
         choiceLabel: "Label for option",
         title: "Title",
-        titleHint: "Optional, one line. Participants see it first, with the wording folded under it.",
+        titleHint: "Optional, one line. Participants see it first, with the wording folded under it. It is saved only with a wording in the same language.",
         // The bound is 200, which takes the plural in every locale.
         titleCounter: "{n} of {max} characters",
         body: "Wording",

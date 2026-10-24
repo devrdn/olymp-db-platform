@@ -63,7 +63,7 @@ func TestQuestionPointsAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
 	})
 }
 
-// The CHECK constraint bounds a title written past Question.Validate, in
+// The CHECK constraint bounds a title written past QuestionText.Validate, in
 // characters as the domain counts them; the insert goes through Exec for that.
 func TestQuestionTitleIsBoundedAtTheDatabaseToo(t *testing.T) {
 	cases := []struct {
