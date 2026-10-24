@@ -144,7 +144,7 @@ type QuestionResponse struct {
 	// IsVisible says whether participants see the question; a hidden question
 	// still scores (§6.1).
 	IsVisible bool `json:"is_visible"`
-	// IsBonus makes Points a bonus that removes penalty points (§6.1.1).
+	// IsBonus: §6.1.1.
 	IsBonus   bool                            `json:"is_bonus"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`

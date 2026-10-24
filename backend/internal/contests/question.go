@@ -74,9 +74,7 @@ type Question struct {
 	// it, but the participant's list leaves it out, identifier included
 	// (Reader, §6.1).
 	IsVisible bool
-	// IsBonus makes Points a bonus (§6.1.1): answered correctly, the question
-	// removes up to Points of the penalty the participant's wrong attempts
-	// have cost them, and is worth nothing else. Points scoring only.
+	// IsBonus makes Points a bonus (§6.1.1); points scoring only.
 	IsBonus bool
 	// ChoiceIDs are the language-independent option identifiers a
 	// submission carries, never a label.
