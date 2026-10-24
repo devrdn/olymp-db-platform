@@ -44,7 +44,8 @@ type Problem = "forbidden" | "failed" | null;
  * visible, not over the events channel, which is the participants'. Each read
  * replaces the list from its start, so a question another organiser answered
  * leaves the waiting list; a form being typed in keeps its text while its
- * question stays. Outside a running contest the desk only reads: the server
+ * question stays. It keeps the first hundred live; older ones are read a page
+ * at a time on request and are not polled. Outside a running contest the desk only reads: the server
  * refuses every answer and announcement there, since nobody could read them.
  *
  * A participant's text is shown as typed; answers and announcements are
@@ -75,6 +76,9 @@ export function ClarificationsDesk({
   const [shown, setShown] = useState(CLARIFICATION_PAGE_SIZE);
   const [problem, setProblem] = useState<Problem>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Pages read past the live hundred; not polled, kept until the state changes.
+  const [further, setFurther] = useState<StaffClarification[]>([]);
+  const noticeRef = useRef<HTMLParagraphElement>(null);
 
   // What a poll must read, current for the chain, which outlives renders.
   const wanted = useRef({ state, shown });
@@ -87,7 +91,7 @@ export function ClarificationsDesk({
   const read = useCallback(async () => {
     const { state: reading, shown: limit } = wanted.current;
     const mine = generation.current;
-    const result = await fetchQueue(contestId, reading, limit);
+    const result = await fetchQueue(contestId, reading, { limit });
     if (mine !== generation.current) return true;
     if (result.kind === "ok") {
       setItems(result.queue.items);
@@ -139,17 +143,35 @@ export function ClarificationsDesk({
     setState(next);
     setShown(CLARIFICATION_PAGE_SIZE);
     setItems([]);
+    setFurther([]);
     void read();
   };
 
-  const showMore = () => {
-    const next = Math.min(shown + CLARIFICATION_PAGE_SIZE, QUEUE_MAX_SHOWN);
-    wanted.current = { state, shown: next };
-    setShown(next);
-    void read();
+  const showMore = async () => {
+    if (shown < QUEUE_MAX_SHOWN) {
+      const next = Math.min(shown + CLARIFICATION_PAGE_SIZE, QUEUE_MAX_SHOWN);
+      wanted.current = { state, shown: next };
+      setShown(next);
+      void read();
+      return;
+    }
+    const mine = generation.current;
+    const result = await fetchQueue(contestId, state, {
+      limit: CLARIFICATION_PAGE_SIZE,
+      offset: QUEUE_MAX_SHOWN + further.length,
+    });
+    if (mine !== generation.current) return;
+    if (result.kind === "ok") {
+      setFurther((current) => [...current, ...result.queue.items]);
+      setCounts(result.queue.counts);
+    } else {
+      setProblem("failed");
+    }
   };
 
   const total = state === "open" ? counts.open : counts.answered;
+  const live = new Set(items.map((item) => item.id));
+  const listed = [...items, ...further.filter((item) => !live.has(item.id))];
   const labelOf = (id: string | null) =>
     id ? (questions.find((q) => q.id === id)?.label ?? null) : t.general;
 
@@ -179,14 +201,15 @@ export function ClarificationsDesk({
             {t.pollFailed}
           </p>
         ) : null}
-        <p role="status" className={notice ? "text-small text-good" : "sr-only"}>
+        {/* Takes focus when an answered question leaves the list under it. */}
+        <p ref={noticeRef} tabIndex={-1} role="status" className={notice ? "text-small text-good" : "sr-only"}>
           {notice ?? ""}
         </p>
-        {items.length === 0 ? (
+        {listed.length === 0 ? (
           <p className="text-body text-ink-2">{state === "open" ? t.emptyOpen : t.emptyAnswered}</p>
         ) : null}
         <div className="flex flex-col gap-4">
-          {items.map((item) => (
+          {listed.map((item) => (
             <QueueItem
               key={item.id}
               item={item}
@@ -198,17 +221,20 @@ export function ClarificationsDesk({
               onWritten={(written, mode) => {
                 setNotice(t.sent);
                 if (mode === "answer") {
+                  noticeRef.current?.focus();
                   setItems((current) => current.filter((c) => c.id !== written.id));
                   setCounts((c) => ({ open: Math.max(0, c.open - 1), answered: c.answered + 1 }));
                 } else {
-                  setItems((current) => current.map((c) => (c.id === written.id ? written : c)));
+                  const replace = (list: StaffClarification[]) => list.map((c) => (c.id === written.id ? written : c));
+                  setItems(replace);
+                  setFurther(replace);
                 }
               }}
             />
           ))}
         </div>
-        {items.length < total && shown < QUEUE_MAX_SHOWN ? (
-          <Button variant="secondary" size="sm" className="self-start" onClick={showMore}>
+        {listed.length < total ? (
+          <Button variant="secondary" size="sm" className="self-start" onClick={() => void showMore()}>
             {t.older}
           </Button>
         ) : null}
@@ -240,6 +266,19 @@ function QueueItem({
   const t = dict.workspace.clarifications;
   const [editing, setEditing] = useState(false);
   const answer = item.answer;
+  // Closing the form unmounts the focused control, so focus returns to Edit.
+  const editRef = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!editing && refocus.current) {
+      refocus.current = false;
+      editRef.current?.focus();
+    }
+  }, [editing]);
+  const close = () => {
+    refocus.current = true;
+    setEditing(false);
+  };
 
   return (
     <article className="flex min-w-0 flex-col gap-3 border border-line p-4">
@@ -268,7 +307,7 @@ function QueueItem({
             <StoryText markdown={answer.body} className="max-w-none font-sans text-body" />
           ) : null}
           {running && !editing ? (
-            <Button variant="quiet" size="sm" className="self-start" onClick={() => setEditing(true)}>
+            <Button ref={editRef} variant="quiet" size="sm" className="self-start" onClick={() => setEditing(true)}>
               {t.edit}
             </Button>
           ) : null}
@@ -279,12 +318,13 @@ function QueueItem({
         <AnswerForm
           initial={answer ? { body: answer.body, declined: answer.declined, visibility: answer.visibility } : null}
           dict={dict}
-          onCancel={answer ? () => setEditing(false) : undefined}
+          focusOnOpen={answer !== null}
+          onCancel={answer ? close : undefined}
           submit={async (input) => {
             const mode = answer ? "edit" : "answer";
             const result = await answerClarification(contestId, item.id, input, mode);
             if (result.kind === "ok") {
-              setEditing(false);
+              if (mode === "edit") close();
               onWritten(result.clarification, mode);
               return null;
             }
@@ -301,9 +341,12 @@ function AnswerForm({
   dict,
   submit,
   onCancel,
+  focusOnOpen = false,
 }: {
   /** The answer being edited; null for a first answer. */
   initial: AnswerInput | null;
+  /** Moves focus to the field when the form opens, as Edit opens it. */
+  focusOnOpen?: boolean;
   dict: DeskDictionary;
   /** Sends the answer; resolves to a refusal code, or null once written. */
   submit: (input: AnswerInput) => Promise<string | null>;
@@ -320,6 +363,10 @@ function AnswerForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = declined || body.trim() !== "";
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (focusOnOpen) fieldRef.current?.focus();
+  }, [focusOnOpen]);
 
   return (
     <form
@@ -339,6 +386,7 @@ function AnswerForm({
           {t.answerLabel}
         </label>
         <textarea
+          ref={fieldRef}
           id={fieldId}
           value={body}
           maxLength={ANSWER_MAX_CHARS}

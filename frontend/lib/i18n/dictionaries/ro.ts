@@ -1607,7 +1607,7 @@ const ro = {
         sending: "Se trimite…",
         sent: "Întrebarea a fost trimisă.",
         shortcut: "Ctrl/⌘+Enter o trimite.",
-        closed: "Olimpiada s-a încheiat pentru dumneavoastră, deci nu mai puteți pune întrebări. Răspunsurile rămân aici.",
+        closed: "Olimpiada s-a încheiat pentru dumneavoastră, deci nu mai puteți pune întrebări. Răspunsurile rămân aici până părăsiți pagina.",
         announcements: "Anunțuri",
         thread: "Întrebări și răspunsuri",
         empty: "Încă nu sunt întrebări. Aici apar și răspunsurile pe care organizatorii le publică pentru toți.",
