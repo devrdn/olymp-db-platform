@@ -26,6 +26,12 @@ func TestTheFakeHonoursTheRepositoryContract(t *testing.T) {
 				repo.AddQuestion(contest, id)
 				return id
 			},
+			NewHiddenQuestion: func(contest uuid.UUID) uuid.UUID {
+				id := uuid.New()
+				repo.AddHiddenQuestion(contest, id)
+				return id
+			},
+			Close: repo.Close,
 			NewStaff: func() (uuid.UUID, string) {
 				n++
 				id, login := uuid.New(), "staff-"+string(rune('a'+n))

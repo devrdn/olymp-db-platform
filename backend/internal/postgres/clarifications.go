@@ -82,11 +82,11 @@ func scanClarification(row pgx.Row, extra ...any) (clarifications.Clarification,
 }
 
 // Ask counts the registration's open questions and inserts under one advisory
-// lock, so two asks at the last open place cannot both pass. The question is
-// checked in the insert rather than left to the foreign key, whose violation
-// would abort a caller's transaction; the key still catches a question deleted
-// meanwhile.
-func (r *Clarifications) Ask(ctx context.Context, c clarifications.Clarification, openLimit int) (clarifications.Clarification, error) {
+// lock, so two asks at the last open place cannot both pass. Whether the asker
+// can reach the question is decided by the insert itself, in its own snapshot,
+// rather than left to the foreign key, whose violation would abort a caller's
+// transaction; the key still catches a question deleted meanwhile.
+func (r *Clarifications) Ask(ctx context.Context, c clarifications.Clarification, openLimit int, sequential bool) (clarifications.Clarification, error) {
 	var stored clarifications.Clarification
 	err := r.uow.Do(ctx, func(ctx context.Context) error {
 		q := r.querier(ctx)
@@ -107,9 +107,12 @@ func (r *Clarifications) Ask(ctx context.Context, c clarifications.Clarification
 		stored, err = scanClarification(q.QueryRow(ctx, `
 			INSERT INTO clarifications (contest_id, registration_id, question_id, body, created_at)
 			SELECT $1, $2, $3, $4, $5
-			WHERE $3::uuid IS NULL OR EXISTS (SELECT 1 FROM questions WHERE id = $3 AND contest_id = $1)
+			WHERE $3::uuid IS NULL OR EXISTS (
+				SELECT 1 FROM questions q
+				WHERE q.id = $3 AND `+questionReachable("q", "$1", "$2", "$6::boolean")+`
+			)
 			RETURNING `+clarificationColumns,
-			c.ContestID, c.RegistrationID, c.QuestionID, c.Body, c.CreatedAt))
+			c.ContestID, c.RegistrationID, c.QuestionID, c.Body, c.CreatedAt, sequential))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return clarifications.ErrQuestionNotFound
 		}
@@ -128,8 +131,10 @@ func (r *Clarifications) Ask(ctx context.Context, c clarifications.Clarification
 
 // Feed merges three ranges, each cut at limit before the merge: the
 // registration's own questions, the contest's public answers (the asker's own
-// public ones come with the first), and the announcements.
-func (r *Clarifications) Feed(ctx context.Context, contestID, registrationID uuid.UUID, before clarifications.Cursor, limit int) ([]clarifications.Entry, error) {
+// public ones come with the first), and the announcements. A public answer
+// names its question only for a reader who can reach it, which costs a few
+// index probes per row of one page.
+func (r *Clarifications) Feed(ctx context.Context, contestID, registrationID uuid.UUID, before clarifications.Cursor, limit int, sequential bool) ([]clarifications.Entry, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT kind, `+clarificationColumns+`
 		FROM (
@@ -139,8 +144,14 @@ func (r *Clarifications) Feed(ctx context.Context, contestID, registrationID uui
 			 ORDER BY posted_at DESC, id DESC
 			 LIMIT $5)
 			UNION ALL
-			(SELECT 'c', `+clarificationColumns+`, posted_at
-			 FROM clarifications
+			(SELECT 'c', c.id, c.contest_id, c.registration_id,
+			        CASE WHEN EXISTS (
+			            SELECT 1 FROM questions q
+			            WHERE q.id = c.question_id AND `+questionReachable("q", "$1", "$2", "$6::boolean")+`
+			        ) THEN c.question_id END,
+			        c.body, c.created_at, c.answer, c.declined, c.answered_by, c.answered_at, c.edited_at,
+			        c.visibility, c.posted_at
+			 FROM clarifications c
 			 WHERE contest_id = $1 AND visibility = 'public' AND registration_id <> $2
 			   AND (posted_at, id) < ($3, $4)
 			 ORDER BY posted_at DESC, id DESC
@@ -154,7 +165,7 @@ func (r *Clarifications) Feed(ctx context.Context, contestID, registrationID uui
 			 LIMIT $5)
 		) AS feed
 		ORDER BY posted_at DESC, id DESC
-		LIMIT $5`, contestID, registrationID, before.At, before.ID, limit)
+		LIMIT $5`, contestID, registrationID, before.At, before.ID, limit, sequential)
 	if err != nil {
 		return nil, fmt.Errorf("read the feed: %w", err)
 	}
@@ -294,7 +305,8 @@ func (r *Clarifications) Answer(ctx context.Context, contestID, id uuid.UUID, an
 		RETURNING `+clarificationColumns,
 		id, contestID, answer.Body, answer.Declined, string(answer.Visibility), answer.By, answer.At))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return clarifications.Clarification{}, r.diagnose(ctx, contestID, id, clarifications.ErrAlreadyAnswered, nil)
+		return clarifications.Clarification{}, r.diagnose(ctx, contestID, id, clarifications.ErrAlreadyAnswered,
+			fmt.Errorf("the answer to clarification %s matched no row while it waits", id))
 	}
 	if err != nil {
 		return clarifications.Clarification{}, fmt.Errorf("store the answer: %w", err)
@@ -327,7 +339,8 @@ func (r *Clarifications) EditAnswer(ctx context.Context, contestID, id uuid.UUID
 		&oldAnswer, &oldDeclined, &oldVisibility, &oldEditedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return clarifications.Clarification{}, clarifications.Clarification{},
-			r.diagnose(ctx, contestID, id, nil, clarifications.ErrNotAnswered)
+			r.diagnose(ctx, contestID, id,
+				fmt.Errorf("the edit of clarification %s matched no row while it is answered", id), clarifications.ErrNotAnswered)
 	}
 	if err != nil {
 		return clarifications.Clarification{}, clarifications.Clarification{}, fmt.Errorf("edit the answer: %w", err)

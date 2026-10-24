@@ -29,13 +29,18 @@ import (
 //
 // A participant is never shown who asked anything; staff see the asker's
 // login and name. The routes that name a clarification by id are staff routes,
-// and one of another contest is not found.
+// and one of another contest is not found. After the contest ends for a
+// participant the gate refuses their feed too, as it refuses all of /play.
 
 // ClarificationAccess is the slice of queryproxy.Service the participant
 // routes need.
 type ClarificationAccess interface {
 	AdmitRead(userID uuid.UUID) error
 	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
+	// StartOnRead records the participant's start, which under individual
+	// timing starts their clock: the feed carries the organisers' corrections
+	// of the tasks, and asking is an act in the contest.
+	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
 }
 
 // Clarifications is the slice of clarifications.Service these routes call.
@@ -94,15 +99,15 @@ func (h *ClarificationsHandler) Mount(r chi.Router) {
 }
 
 // admit resolves the caller as a participant of the contest in the URL.
-func (h *ClarificationsHandler) admit(w http.ResponseWriter, r *http.Request, userID uuid.UUID) (contests.Participant, bool) {
+func (h *ClarificationsHandler) admit(w http.ResponseWriter, r *http.Request, userID uuid.UUID) (contests.Participant, contests.Contest, bool) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
-		return contests.Participant{}, false
+		return contests.Participant{}, contests.Contest{}, false
 	}
 	participant, contest, err := h.access.Access(r.Context(), contestID, userID, clientAddress(r))
 	if err != nil {
 		h.fail(w, r, err)
-		return contests.Participant{}, false
+		return contests.Participant{}, contests.Contest{}, false
 	}
 	if h.watcher != nil {
 		h.watcher.Observe(r.Context(), monitor.Visit{
@@ -110,7 +115,18 @@ func (h *ClarificationsHandler) admit(w http.ResponseWriter, r *http.Request, us
 			Address: clientAddress(r), Session: sessionTag(r), UserAgent: r.UserAgent(),
 		})
 	}
-	return participant, true
+	return participant, contest, true
+}
+
+// startOnRead records the participant's start after a successful read or ask
+// and before anything is sent, so a refused request starts nothing and nothing
+// is sent to a participant whose start could not be recorded.
+func (h *ClarificationsHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
+	if _, err := h.access.StartOnRead(r.Context(), contest, participant, clientAddress(r)); err != nil {
+		h.fail(w, r, err)
+		return false
+	}
+	return true
 }
 
 // clarificationTimeLayout keeps the database's microseconds, always six
@@ -202,7 +218,7 @@ func (h *ClarificationsHandler) feed(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	participant, ok := h.admit(w, r, identity.UserID)
+	participant, contest, ok := h.admit(w, r, identity.UserID)
 	if !ok {
 		return
 	}
@@ -216,11 +232,14 @@ func (h *ClarificationsHandler) feed(w http.ResponseWriter, r *http.Request) {
 		before = &cursor
 	}
 	page, err := h.service.Feed(r.Context(), clarifications.FeedQuery{
-		ContestID: participant.ContestID, RegistrationID: participant.ID,
-		Before: before, Limit: intParam(r, "limit"),
+		ContestID: contest.ID, RegistrationID: participant.ID,
+		Before: before, Limit: intParam(r, "limit"), Sequential: contest.SequentialActive(),
 	})
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.startOnRead(w, r, contest, participant) {
 		return
 	}
 
@@ -256,7 +275,7 @@ func (h *ClarificationsHandler) ask(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	participant, ok := h.admit(w, r, identity.UserID)
+	participant, contest, ok := h.admit(w, r, identity.UserID)
 	if !ok {
 		return
 	}
@@ -274,10 +293,14 @@ func (h *ClarificationsHandler) ask(w http.ResponseWriter, r *http.Request) {
 		questionID = &id
 	}
 	asked, err := h.service.Ask(r.Context(), clarifications.AskCommand{
-		ContestID: participant.ContestID, RegistrationID: participant.ID, QuestionID: questionID, Body: req.Body,
+		ContestID: contest.ID, RegistrationID: participant.ID, QuestionID: questionID,
+		Sequential: contest.SequentialActive(), Body: req.Body,
 	})
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.startOnRead(w, r, contest, participant) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toSeenClarification(asked.ID, asked.PostedAt(), clarifications.Seen{

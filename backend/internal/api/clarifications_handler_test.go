@@ -40,6 +40,27 @@ type clarifyAccess struct {
 	readErr  error
 	reads    int
 	accesses int
+	// started records StartOnRead calls; startErr is its answer.
+	started  []uuid.UUID
+	startErr error
+}
+
+func (a *clarifyAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant, _ netip.Addr) (contests.Participant, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.startErr != nil {
+		return contests.Participant{}, a.startErr
+	}
+	a.started = append(a.started, participant.ID)
+	now := time.Now()
+	participant.StartedAt = &now
+	return participant, nil
+}
+
+func (a *clarifyAccess) starts() []uuid.UUID {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]uuid.UUID(nil), a.started...)
 }
 
 func (a *clarifyAccess) AdmitRead(uuid.UUID) error {
@@ -622,5 +643,102 @@ func TestClarificationTimesCompareAsText(t *testing.T) {
 	page := f.feed(t, f.ana, "")
 	if got := page.Items[0]["posted_at"]; got != "2026-11-02T09:00:01.000000Z" {
 		t.Fatalf("posted_at = %v, want six fractional digits on a whole second", got)
+	}
+}
+
+// Under individual timing a participant's clock starts on their first read of
+// the contest's content or their first act. The feed carries organisers'
+// corrections of the tasks, so it counts, and so does asking; a refused read
+// or ask starts nothing.
+func TestReadingTheFeedOrAskingStartsTheClockAndARefusalDoesNot(t *testing.T) {
+	f := newClarifyFixture(t)
+
+	if rec := f.do(f.ana, http.MethodGet, f.play()+"?before=forged", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a forged cursor = %d", rec.Code)
+	}
+	if got := f.access.starts(); len(got) != 0 {
+		t.Fatalf("a refused read started the clock for %v", got)
+	}
+	f.feed(t, f.ana, "")
+	if got := f.access.starts(); len(got) != 1 || got[0] != f.anaReg {
+		t.Fatalf("after a feed read the clock started for %v, want ana's registration", got)
+	}
+
+	long := `{"body":"` + strings.Repeat("x", clarifications.MaxQuestionRunes+1) + `"}`
+	f.do(f.ben, http.MethodPost, f.play(), long)
+	if got := f.access.starts(); len(got) != 1 {
+		t.Fatalf("a refused ask started a clock: %v", got)
+	}
+	f.ask(t, f.ben, "Why?")
+	if got := f.access.starts(); len(got) != 2 || got[1] != f.benReg {
+		t.Fatalf("after ben's ask the clocks started are %v, want ben's last", got)
+	}
+}
+
+// A start that cannot be recorded sends nothing: content is never shown to a
+// participant whose start was not recorded.
+func TestAFeedWhoseClockCannotStartIsRefused(t *testing.T) {
+	f := newClarifyFixture(t)
+	f.access.startErr = contests.ErrDeadlinePassed
+	rec := f.do(f.ana, http.MethodGet, f.play(), "")
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "deadline_passed" {
+		t.Fatalf("a feed whose start failed = %d %s, want 409 deadline_passed", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "items") {
+		t.Fatalf("the feed was sent anyway: %s", rec.Body)
+	}
+}
+
+func sequentialContest(f *clarifyFixture) {
+	f.access.mu.Lock()
+	defer f.access.mu.Unlock()
+	f.access.contest.Progression = contests.ProgressionSequential
+	f.access.contest.QuestionMode = contests.QuestionModeMulti
+}
+
+func TestAnAskAboutAHiddenOrUnreachedQuestionIsNotFound(t *testing.T) {
+	f := newClarifyFixture(t)
+	sequentialContest(f)
+	first, second := f.domain.Question(f.contest), f.domain.Question(f.contest)
+	hidden := f.domain.HiddenQuestion(f.contest)
+	for _, q := range []uuid.UUID{second, hidden} {
+		f.domain.Limiter.Reset()
+		rec := f.do(f.ana, http.MethodPost, f.play(), `{"body":"Why?","question_id":"`+q.String()+`"}`)
+		if rec.Code != http.StatusNotFound || errorCode(t, rec) != "question_not_found" {
+			t.Fatalf("asking about %v = %d %s, want 404 question_not_found", q, rec.Code, rec.Body)
+		}
+	}
+	if page := f.feed(t, f.ana, ""); len(page.Items) != 0 {
+		t.Fatalf("a refused question was stored: %+v", page.Items)
+	}
+	f.domain.Limiter.Reset()
+	if rec := f.do(f.ana, http.MethodPost, f.play(), `{"body":"Why?","question_id":"`+first.String()+`"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("asking about the question reached = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A published answer names its question only to a reader who has reached it.
+func TestAPublicAnswerNamesItsQuestionOnlyToWhoeverReachedIt(t *testing.T) {
+	f := newClarifyFixture(t)
+	sequentialContest(f)
+	first, second := f.domain.Question(f.contest), f.domain.Question(f.contest)
+	f.domain.Repo.Close(f.anaReg, first)
+	f.domain.Tick()
+	rec := f.do(f.ana, http.MethodPost, f.play(), `{"body":"About the second","question_id":"`+second.String()+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ask = %d %s", rec.Code, rec.Body)
+	}
+	var asked struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &asked)
+	f.answer(t, asked.ID, "public")
+
+	page := f.feed(t, f.ben, "")
+	if len(page.Items) != 1 || page.Items[0]["question_id"] != nil {
+		t.Fatalf("ben, before the second question, reads %v", page.Items)
+	}
+	if strings.Contains(f.do(f.ben, http.MethodGet, f.play(), "").Body.String(), second.String()) {
+		t.Fatal("ben's feed carries the id of a question he has not reached")
 	}
 }

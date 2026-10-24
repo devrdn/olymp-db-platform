@@ -44,6 +44,16 @@ func TestClarificationsHonoursTheRepositoryContract(t *testing.T) {
 					}
 				},
 				NewQuestion: func(contest uuid.UUID) uuid.UUID { return makeQuestion(t, ctx, contest) },
+				NewHiddenQuestion: func(contest uuid.UUID) uuid.UUID {
+					id := makeQuestion(t, ctx, contest)
+					exec(t, ctx, `UPDATE questions SET is_visible = false WHERE id = $1`, id)
+					return id
+				},
+				Close: func(registration, question uuid.UUID) {
+					exec(t, ctx, `
+						INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+						VALUES ($1, $2, 1, 'x', true, 1)`, registration, question)
+				},
 				NewStaff: func() (uuid.UUID, string) {
 					user := makeUser(t, ctx, "clarif-staff-"+uuid.NewString()[:8])
 					return user.ID, user.Login
@@ -70,7 +80,7 @@ func TestConcurrentAsksNeverBothTakeTheLastOpenPlace(t *testing.T) {
 	for range limit - 1 {
 		if _, err := repo.Ask(ctx, clarifications.Clarification{
 			ContestID: contest, RegistrationID: registration, Body: "q", CreatedAt: time.Now(),
-		}, limit); err != nil {
+		}, limit, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -85,7 +95,7 @@ func TestConcurrentAsksNeverBothTakeTheLastOpenPlace(t *testing.T) {
 			start.Wait()
 			_, err := repo.Ask(ctx, clarifications.Clarification{
 				ContestID: contest, RegistrationID: registration, Body: "race", CreatedAt: time.Now(),
-			}, limit)
+			}, limit, false)
 			errs <- err
 		}()
 	}
@@ -238,7 +248,7 @@ func TestEveryClarificationReadIsARangeOfItsIndex(t *testing.T) {
 			return plans
 		}
 		latest := clarifications.Cursor{At: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), ID: uuid.Max}
-		if _, err := repo.Feed(ctx, contest, registration, latest, 51); err != nil {
+		if _, err := repo.Feed(ctx, contest, registration, latest, 51, true); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := repo.OpenCount(ctx, registration); err != nil {

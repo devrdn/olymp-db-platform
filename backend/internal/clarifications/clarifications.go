@@ -241,13 +241,17 @@ func ParseCursor(text string) (Cursor, error) {
 type Repository interface {
 	// Ask stores c, refusing with ErrTooManyOpen when its registration
 	// already has openLimit unanswered questions, and with
-	// ErrQuestionNotFound when c.QuestionID is not a question of c.ContestID.
-	// Two concurrent asks never both pass the count.
-	Ask(ctx context.Context, c Clarification, openLimit int) (Clarification, error)
+	// ErrQuestionNotFound when c.QuestionID is not a question the asker can
+	// reach: one of c.ContestID, visible, and, when sequential, not past the
+	// asker's frontier. Both checks are made by the statement that stores, so
+	// two concurrent asks never both pass the count.
+	Ask(ctx context.Context, c Clarification, openLimit int, sequential bool) (Clarification, error)
 	// Feed returns at most limit entries posted strictly before `before`,
 	// newest first: the registration's own clarifications, every public one
-	// of the contest, and the contest's announcements.
-	Feed(ctx context.Context, contestID, registrationID uuid.UUID, before Cursor, limit int) ([]Entry, error)
+	// of the contest, and the contest's announcements. Another participant's
+	// public item names its question only when the reader can reach it, as
+	// Ask decides it.
+	Feed(ctx context.Context, contestID, registrationID uuid.UUID, before Cursor, limit int, sequential bool) ([]Entry, error)
 	// OpenCount is how many of the registration's questions wait.
 	OpenCount(ctx context.Context, registrationID uuid.UUID) (int, error)
 	// Queue pages one state of the contest's questions (see State).
@@ -355,8 +359,12 @@ func (s *Service) spend(ctx context.Context, subject string, limit int) error {
 type AskCommand struct {
 	ContestID      uuid.UUID
 	RegistrationID uuid.UUID
-	QuestionID     *uuid.UUID
-	Body           string
+	// QuestionID must name a question the participant can see: visible, and
+	// reached when Sequential.
+	QuestionID *uuid.UUID
+	// Sequential is the contest's SequentialActive().
+	Sequential bool
+	Body       string
 }
 
 // Ask stores a question. It spends the registration's budget before looking at
@@ -373,7 +381,7 @@ func (s *Service) Ask(ctx context.Context, cmd AskCommand) (Clarification, error
 	asked, err := s.repo.Ask(ctx, Clarification{
 		ContestID: cmd.ContestID, RegistrationID: cmd.RegistrationID,
 		QuestionID: cmd.QuestionID, Body: body, CreatedAt: s.now(),
-	}, MaxOpenPerRegistration)
+	}, MaxOpenPerRegistration, cmd.Sequential)
 	if err != nil {
 		if errors.Is(err, ErrTooManyOpen) || errors.Is(err, ErrQuestionNotFound) {
 			return Clarification{}, err
@@ -391,6 +399,8 @@ type FeedQuery struct {
 	Before *Cursor
 	// Limit is clamped to 1..MaxPageSize; zero asks for DefaultPageSize.
 	Limit int
+	// Sequential is the contest's SequentialActive().
+	Sequential bool
 }
 
 // FeedPage is one page of a participant's feed.
@@ -431,7 +441,7 @@ func (s *Service) Feed(ctx context.Context, q FeedQuery) (FeedPage, error) {
 	if q.Before != nil {
 		before = *q.Before
 	}
-	entries, err := s.repo.Feed(ctx, q.ContestID, q.RegistrationID, before, limit+1)
+	entries, err := s.repo.Feed(ctx, q.ContestID, q.RegistrationID, before, limit+1, q.Sequential)
 	if err != nil {
 		return FeedPage{}, fmt.Errorf("read the feed: %w", err)
 	}
