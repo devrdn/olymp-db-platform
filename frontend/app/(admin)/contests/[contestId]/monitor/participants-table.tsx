@@ -105,7 +105,6 @@ export function ParticipantsTable({
     measure();
   }, [total, measure]);
 
-
   // A taller box needs more rows. The box exists only while a row is shown.
   const boxed = total > 0;
   useLayoutEffect(() => {
