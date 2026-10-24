@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import { Api, generatedPassword, writeRecord, type Account, type SeedRecord } from "./api";
 
 /**
@@ -42,6 +40,12 @@ export type FeatureSeed = {
   roster: string[];
   notesHeading: string;
   complete: boolean;
+};
+
+/** A finished feature seed, which is all a spec reads: every contest and question made. */
+export type CompleteFeatureSeed = Omit<FeatureSeed, "contests" | "questions"> & {
+  contests: Required<FeatureSeed["contests"]>;
+  questions: Required<FeatureSeed["questions"]>;
 };
 
 const FEATURES_SCRIPT = `
@@ -127,8 +131,7 @@ export async function seedFeatures(operator: Api, record: SeedRecord, run: strin
     ["frank", "Frank Fennimore"],
   ] as const;
   for (const [key, name] of people) {
-    accounts[key] = await createAccount(operator, `e2e-${key}-${run}`, name, () => writeRecord(record));
-    writeRecord(record);
+    await createAccount(operator, accounts, key, `e2e-${key}-${run}`, name, () => writeRecord(record));
   }
 
   const features = await draftContest(operator, record, "features", `E2E features ${run}`, { scoring: "points" });
@@ -148,7 +151,7 @@ export async function seedFeatures(operator: Api, record: SeedRecord, run: strin
 
   // The three builds run side by side; the roster import overlaps them.
   const builds = Promise.all([features, sequential, hidden].map((c) => waitForBuild(operator, c.id)));
-  await importRoster(operator, seed, monitor, () => writeRecord(record));
+  await importRoster(operator, seed, monitor, run, () => writeRecord(record));
   await builds;
 
   await enrol(operator, features, [accounts.alice, accounts.bob, accounts.carol, accounts.dave]);
@@ -377,32 +380,54 @@ async function playScores(seed: FeatureSeed, features: ContestRef, hidden: Conte
   expect(await answer(frank, hidden, final!.id, final!.answer), true, "Frank's verdict");
 }
 
-async function createAccount(operator: Api, login: string, fullName: string, save: () => void): Promise<Account> {
+/**
+ * Creates a student account under `key` and replaces its one-time password.
+ * The account is in `accounts` and saved before anything else can fail, so a
+ * failed sign-in still leaves it where the teardown looks.
+ */
+async function createAccount(
+  operator: Api,
+  accounts: FeatureSeed["accounts"],
+  key: keyof FeatureSeed["accounts"],
+  login: string,
+  fullName: string,
+  save: () => void,
+): Promise<void> {
   const created = await operator.call<{ user: { id: string }; one_time_password: string }>("POST", "/users", {
     login,
     full_name: fullName,
     roles: ["student"],
   });
-  const account = { id: created.user.id, login, password: "" };
+  accounts[key] = { id: created.user.id, login, password: "" };
   save();
   const password = generatedPassword();
   const owner = await Api.open();
   try {
-    await owner.signIn(login, created.one_time_password);
+    if (!(await owner.signIn(login, created.one_time_password))) {
+      throw new Error(`seed: ${login} was created without a one-time password`);
+    }
     await owner.changePassword(created.one_time_password, password);
   } finally {
     await owner.close();
   }
-  account.password = password;
-  return account;
+  accounts[key] = { id: created.user.id, login, password };
+  save();
 }
 
 /**
  * Imports the monitor roster in slices, retrying what a busy hashing pool
  * left out, and puts every account on the draft's roster.
  */
-async function importRoster(operator: Api, seed: FeatureSeed, contest: ContestRef, save: () => void): Promise<void> {
-  const tag = randomBytes(2).toString("hex");
+async function importRoster(
+  operator: Api,
+  seed: FeatureSeed,
+  contest: ContestRef,
+  run: string,
+  save: () => void,
+): Promise<void> {
+  // The run's own tag: a deleted account keeps its login reserved, so a short
+  // random one would in time collide on a long-lived stack.
+  const tag = run;
   let pending = Array.from({ length: ROSTER_SIZE }, (_, i) => ({
     login: `e2e-r${tag}-${String(i + 1).padStart(3, "0")}`,
     full_name: `Roster ${String(i + 1).padStart(3, "0")} ${["Ash", "Birch", "Cedar", "Elm", "Fir"][i % 5]}`,

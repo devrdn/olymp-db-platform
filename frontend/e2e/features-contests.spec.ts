@@ -15,20 +15,32 @@ test.use({ viewport: { width: 1600, height: 900 } });
 const seed = () => readSeed().features;
 const secrets = Object.values(SECRET);
 
-/** Every same-origin response body the page receives from here on. */
-function recordResponses(page: Page): { bodies: { url: string; text: string }[] } {
-  const seen = { bodies: [] as { url: string; text: string }[] };
-  page.on("response", async (response) => {
-    if (!response.url().startsWith(process.env.E2E_BASE_URL ?? "")) return;
+/**
+ * Every same-origin response body the page receives from here on. `bodies`
+ * waits for the ones still being read, so a check never runs over half of
+ * them.
+ */
+function recordResponses(page: Page): { bodies: () => Promise<{ url: string; text: string }[]> } {
+  const origin = test.info().project.use.baseURL;
+  if (!origin) throw new Error("no baseURL: same-origin responses cannot be told from the rest");
+  const read: Promise<{ url: string; text: string } | null>[] = [];
+  page.on("response", (response) => {
+    if (!response.url().startsWith(origin)) return;
     const type = response.headers()["content-type"] ?? "";
-    if (!/json|html|text|javascript|x-component/.test(type)) return;
-    try {
-      seen.bodies.push({ url: response.url(), text: await response.text() });
-    } catch {
-      // A redirect or an aborted stream has no body to read.
-    }
+    // The events stream never ends, so its body would never be read; it
+    // carries no content either (ARCHITECTURE.md section 8).
+    if (!/json|html|text|javascript|x-component/.test(type) || type.includes("event-stream")) return;
+    read.push(
+      response.text().then(
+        (text) => ({ url: response.url(), text }),
+        // A redirect or an aborted stream has no body to read.
+        () => null,
+      ),
+    );
   });
-  return seen;
+  return {
+    bodies: async () => (await Promise.all(read)).filter((body): body is { url: string; text: string } => body !== null),
+  };
 }
 
 function leaks(text: string): string[] {
@@ -37,7 +49,7 @@ function leaks(text: string): string[] {
 
 test("a sequential contest shows later questions as numbers only, and sends nothing of them", async ({ page }) => {
   const { accounts, contests, questions } = seed();
-  const id = contests.sequential!.id;
+  const id = contests.sequential.id;
   await signIn(page, accounts.dave);
   const seen = recordResponses(page);
   await openPlay(page, id);
@@ -47,7 +59,7 @@ test("a sequential contest shows later questions as numbers only, and sends noth
   await openSideTab(page, "Questions");
 
   const panel = page.getByRole("tabpanel", { name: "Questions" });
-  await expect(panel.getByRole("heading", { level: 2, name: questions.first!.title })).toBeVisible();
+  await expect(panel.getByRole("heading", { level: 2, name: questions.first.title })).toBeVisible();
   const locked = panel.getByRole("list", { name: "Questions not open yet" });
   await expect(locked.getByRole("listitem")).toHaveText([
     "Question 2 — opens after question 1",
@@ -62,7 +74,11 @@ test("a sequential contest shows later questions as numbers only, and sends noth
   await page.setViewportSize({ width: 1600, height: 900 });
 
   expect(leaks(await page.content())).toEqual([]);
-  for (const body of seen.bodies) {
+  const received = await seen.bodies();
+  // The play page renders the questions on the server, so its document is
+  // what carries the list; it must be among what was checked.
+  expect(received.some((body) => new URL(body.url).pathname === `/contests/${id}/play`)).toBe(true);
+  for (const body of received) {
     expect(leaks(body.text), body.url).toEqual([]);
   }
 
@@ -72,29 +88,29 @@ test("a sequential contest shows later questions as numbers only, and sends noth
   expect(leaks(raw)).toEqual([]);
   const list = JSON.parse(raw) as { items: Record<string, unknown>[] };
   expect(list.items).toHaveLength(3);
-  expect(list.items[0]).toMatchObject({ locked: false, title: questions.first!.title });
+  expect(list.items[0]).toMatchObject({ locked: false, title: questions.first.title });
   expect(list.items.slice(1)).toEqual([
     { position: 2, locked: true },
     { position: 3, locked: true },
   ]);
 
   // The clarification picker offers only what the participant can see.
-  await openSideTab(page, "Questions to organisers");
+  await openSideTab(page, "Organisers");
   await expect(page.getByRole("combobox", { name: "About" }).getByRole("option")).toHaveText([
     "The contest in general",
-    `Question 1: ${questions.first!.title}`,
+    `Question 1: ${questions.first.title}`,
   ]);
 
   // Answering opens the next question in full, and only that one.
   await openSideTab(page, "Questions");
-  await panel.getByRole("textbox", { name: "Your answer" }).fill(questions.first!.answer);
+  await panel.getByRole("textbox", { name: "Your answer" }).fill(questions.first.answer);
   await panel.getByRole("button", { name: "Submit", exact: true }).click();
   await expect(panel.getByRole("status").filter({ hasText: /^Correct!/ })).toBeVisible();
   await expect(panel.getByRole("heading", { level: 2, name: SECRET.title2 })).toBeVisible();
   await expect(locked.getByRole("listitem")).toHaveText(["Question 3 — opens after question 2"]);
   const after = await page.content();
   expect([SECRET.title3, SECRET.body3, SECRET.choice3].filter((secret) => after.includes(secret))).toEqual([]);
-  for (const body of seen.bodies) {
+  for (const body of await seen.bodies()) {
     expect(
       [SECRET.title3, SECRET.body3, SECRET.choice3].filter((secret) => body.text.includes(secret)),
       body.url,
@@ -107,7 +123,7 @@ test("a closed catalogue hides the schema and the diagram; no descriptions, no T
   page,
 }) => {
   const { accounts, contests } = seed();
-  const id = contests.hidden!.id;
+  const id = contests.hidden.id;
   await signIn(page, accounts.erin);
   await openPlay(page, id);
 
@@ -146,7 +162,7 @@ test("the standings give medals I, II and III to the configured places and a das
   const { accounts, contests } = seed();
   await signIn(page, readSeed().admin);
 
-  await page.goto(`/contests/${contests.features!.id}/standings`);
+  await page.goto(`/contests/${contests.features.id}/standings`);
   const table = page.getByRole("table", { name: "Standings" });
   await expectPrize(standingsRow(table, accounts.bob.login), "First prize", "I", "gold");
   await expectPrize(standingsRow(table, accounts.alice.login), "Second prize", "II", "silver");
@@ -157,7 +173,7 @@ test("the standings give medals I, II and III to the configured places and a das
   await capture(page, "staff-standings-prizes-at-768");
   await page.setViewportSize({ width: 1600, height: 900 });
 
-  await page.goto(`/contests/${contests.hidden!.id}/standings`);
+  await page.goto(`/contests/${contests.hidden.id}/standings`);
   const winner = standingsRow(table, accounts.frank.login);
   await expect(winner).toContainText("Winner");
   await expectPrize(winner, "First prize", "I", "gold");
@@ -168,7 +184,7 @@ test("the standings give medals I, II and III to the configured places and a das
 test("a participant's own table shows the same prize places", async ({ page }) => {
   const { accounts, contests } = seed();
   await signIn(page, accounts.dave);
-  await openPlay(page, contests.features!.id);
+  await openPlay(page, contests.features.id);
   await openSideTab(page, "Table");
 
   const table = page.getByRole("tabpanel", { name: "Table" }).getByRole("table");
@@ -192,7 +208,7 @@ test("the monitoring screen opens on a roster of three hundred and stays respons
   });
   await signIn(page, readSeed().admin);
   const opened = Date.now();
-  await page.goto(`/contests/${contests.monitor!.id}/monitor`);
+  await page.goto(`/contests/${contests.monitor.id}/monitor`);
   const table = page.getByRole("table", { name: "Participants" });
   await expect(table).toHaveAttribute("aria-rowcount", String(roster.length + 1));
   const openMs = Date.now() - opened;
