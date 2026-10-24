@@ -1489,7 +1489,7 @@ const ro = {
           open: "Diagramă",
           openLabel: "Deschide schema ca diagramă",
           title: "Diagrama schemei",
-          description: "Tabelele cu coloanele lor. O săgeată pornește de la o cheie externă spre coloanele la care se referă.",
+          description: "Tabelele cu coloanele lor: PK marchează o coloană a cheii primare, FK una a unei chei externe. O săgeată pornește de la o cheie externă spre coloanele la care se referă.",
           close: "Închide diagrama",
           loading: "Se desenează diagrama…",
           empty: "Această bază de date nu are tabele de desenat.",
