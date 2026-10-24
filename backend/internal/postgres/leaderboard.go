@@ -31,37 +31,78 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
+// scoreTotal is a points total (§6.1.1) aggregated over submissions s joined
+// with their questions q: the points awarded, plus the bonus credit of the
+// solved bonus questions, never more than the penalty points, which are each
+// solved regular question's face value less what it awarded. A bonus answer
+// awards nothing itself (contests.awardablePoints). over is appended to every
+// aggregate, so Standings can run the same total as a window.
+//
+// Registrations.RefreshScore, Standings and Profile all read it, so
+// total_score, the table and the profile cannot disagree.
+//
+// It reads q.points and q.is_bonus as they are now against points_awarded
+// fixed at answer time, which holds only because questions are frozen once a
+// contest runs (Contest.ContentEditable); relaxing that would re-score P.
+func scoreTotal(over string) string {
+	return `COALESCE(SUM(s.points_awarded)` + over + `, 0)
+	      + LEAST(COALESCE(SUM(q.points) FILTER (WHERE s.is_correct AND q.is_bonus)` + over + `, 0),
+	              COALESCE(SUM(GREATEST(0, q.points - s.points_awarded))
+	                       FILTER (WHERE s.is_correct AND NOT q.is_bonus)` + over + `, 0))`
+}
+
 // Standings aggregates every registration's submissions up to the cutoff,
 // for points and winner mode; ICPC has ICPCStandings.
 //
+// The total is scoreTotal, run as a window over each registration's answers
+// in the order they landed, so every answer carries the total it left behind.
+// That total never falls, so its maximum is the row's points, and
+// last_scored_at is the last answer that raised it: a bonus counts when it
+// removed penalty points, and a regular answer that awarded nothing counts
+// when the penalty points it added were what a solved bonus could remove.
+// Without bonus questions this is the latest answer with points_awarded > 0.
+//
 // The cutoff is exclusive and applies to registrations too. Rows come in
 // leaderboard.Rank's order so LIMIT cuts below the top, never through it;
-// Rank still sorts. submissions_registration_submitted_idx serves the join
-// and time filter and carries the columns the aggregate reads.
+// Rank still sorts. submissions_registration_submitted_idx serves the join,
+// the time filter and the window's order, and carries the columns read from
+// submissions.
 func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
 	// An ICPC table here would be ordered by points, all zero, with no grid.
 	if q.Scoring == contests.ScoringICPC {
 		return nil, errors.New("icpc standings are read by ICPCStandings, not Standings")
 	}
 	rows, err := r.querier(ctx).Query(ctx, `
-		WITH scored AS (
-			SELECT r.id,
-			       u.login,
-			       u.full_name,
-			       u.status = 'deleted'                                             AS account_deleted,
-			       r.status = 'disqualified'                                        AS disqualified,
-			       COALESCE(SUM(s.points_awarded), 0)::int                          AS points,
-			       (COUNT(DISTINCT s.question_id) FILTER (WHERE s.is_correct))::int AS solved,
-			       MAX(s.submitted_at) FILTER (WHERE s.points_awarded > 0)          AS last_scored_at,
-			       MIN(s.submitted_at) FILTER (WHERE s.is_correct AND q.kind = 'final') AS final_at
+		WITH entrant AS (
+			SELECT r.id, u.login, u.full_name,
+			       u.status = 'deleted'      AS account_deleted,
+			       r.status = 'disqualified' AS disqualified
 			FROM registrations r
 			JOIN users u ON u.id = r.user_id
-			LEFT JOIN submissions s ON s.registration_id = r.id AND s.submitted_at < $2
-			LEFT JOIN questions q ON q.id = s.question_id
 			WHERE r.contest_id = $1
 			  AND r.created_at < $2
 			  AND ($3 OR r.status <> 'disqualified')
-			GROUP BY r.id, u.login, u.full_name, u.status, r.status
+		), answer AS (
+			SELECT s.registration_id, s.id, s.question_id, s.is_correct, s.submitted_at, q.kind,
+			       (`+scoreTotal(" OVER running")+`)::int AS total
+			FROM entrant e
+			JOIN submissions s ON s.registration_id = e.id AND s.submitted_at < $2
+			JOIN questions q ON q.id = s.question_id
+			WINDOW running AS (PARTITION BY s.registration_id ORDER BY s.submitted_at, s.id)
+		), step AS (
+			SELECT a.*,
+			       a.total > COALESCE(LAG(a.total) OVER (PARTITION BY a.registration_id ORDER BY a.submitted_at, a.id), 0)
+			           AS raised
+			FROM answer a
+		), scored AS (
+			SELECT e.id, e.login, e.full_name, e.account_deleted, e.disqualified,
+			       COALESCE(MAX(a.total), 0)                                        AS points,
+			       (COUNT(DISTINCT a.question_id) FILTER (WHERE a.is_correct))::int AS solved,
+			       MAX(a.submitted_at) FILTER (WHERE a.raised)                      AS last_scored_at,
+			       MIN(a.submitted_at) FILTER (WHERE a.is_correct AND a.kind = 'final') AS final_at
+			FROM entrant e
+			LEFT JOIN step a ON a.registration_id = e.id
+			GROUP BY e.id, e.login, e.full_name, e.account_deleted, e.disqualified
 		), winner AS (
 			SELECT id FROM scored WHERE final_at IS NOT NULL ORDER BY final_at, id LIMIT 1
 		)

@@ -256,6 +256,12 @@ func (c Contest) ContentEditable() bool {
 	return c.Status == StatusDraft || c.Status == StatusPublished
 }
 
+// ScoresPoints reports points scoring, the only mode with bonus questions.
+// An unset mode is points, the default, as penaltyAmount reads it.
+func (c Contest) ScoresPoints() bool {
+	return c.Scoring != ScoringWinner && c.Scoring != ScoringICPC
+}
+
 // FreezeAt is the moment the leaderboard freezes: LeaderboardFreezeMin before
 // EndsAt. ok is false when the contest has no freeze or no end to measure it
 // from.

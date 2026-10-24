@@ -283,6 +283,83 @@ describe("QuestionEditor, ICPC scoring", () => {
   });
 });
 
+// A bonus question (docs/ARCHITECTURE.md §6.1.1) gives back penalty points and
+// is charged none itself; points scoring only.
+describe("QuestionEditor, the bonus question", () => {
+  function renderBonus(overrides: Partial<Question> = {}, scoring: "points" | "winner" | "icpc" = "points", editable = true) {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ points: 4, penaltyPct: 25, ...overrides })}
+        languages={["en"]}
+        editable={editable}
+        scoring={scoring}
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+    return screen.getByRole("checkbox", { name: dict.workspace.question.shape.bonus });
+  }
+
+  test("offers a checkbox, unticked for a regular question, with the rule spelled out beside it", () => {
+    const checkbox = renderBonus();
+
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeEnabled();
+    expect(checkbox).toHaveAccessibleDescription(dict.workspace.question.shape.bonusHint);
+    expect(screen.getByText(dict.workspace.question.shape.bonusHint)).toBeVisible();
+  });
+
+  test("shows a stored bonus ticked, with the penalty field disabled and why", () => {
+    const checkbox = renderBonus({ isBonus: true });
+
+    const t = dict.workspace.question.shape;
+    expect(checkbox).toBeChecked();
+    expect(screen.getByLabelText(t.penalty)).toBeDisabled();
+    expect(screen.getByText(t.bonusNoPenalty)).toBeInTheDocument();
+    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "1").replace("{points}", "4"))).toBeNull();
+  });
+
+  test("ticking it from the keyboard sets the penalty aside, and unticking brings it back", async () => {
+    const user = userEvent.setup();
+    const checkbox = renderBonus();
+    const penalty = screen.getByLabelText(dict.workspace.question.shape.penalty);
+
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(checkbox).toBeChecked();
+    expect(penalty).toBeDisabled();
+
+    await user.keyboard(" ");
+    expect(checkbox).not.toBeChecked();
+    expect(penalty).toBeEnabled();
+  });
+
+  // The percentage is kept, unapplied, so unticking the bonus later restores it.
+  test("submits the flag and still the stored penalty on save", async () => {
+    const user = userEvent.setup();
+    renderBonus({ isBonus: true });
+
+    await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+
+    const form = saveQuestionAction.mock.calls[0][1] as FormData;
+    expect(form.get("isBonus")).toBe("on");
+    expect(form.get("penaltyPct")).toBe("25");
+  });
+
+  test.each(["winner", "icpc"] as const)("is disabled under %s scoring, saying only points scoring has one", (scoring) => {
+    const checkbox = renderBonus({}, scoring);
+
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByText(dict.workspace.question.shape.bonusPointsOnly)).toBeInTheDocument();
+  });
+
+  test("is read-only when the question cannot be edited", () => {
+    expect(renderBonus({ isBonus: true }, "points", false)).toBeDisabled();
+  });
+});
+
 // Patterns match the whole answer, which authors expecting substrings get
 // wrong; the rule is stated beside the answers.
 describe("QuestionEditor, the reference answers", () => {

@@ -34,6 +34,10 @@
       "meaning": "Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response."
     },
     {
+      "code": "bonus_needs_points",
+      "meaning": "A bonus question removes penalty points, which only points scoring has. Marking a question as a bonus is refused in a winner or ICPC contest, and so is moving a contest with a bonus question to either mode; untick the bonus questions first."
+    },
+    {
       "code": "build_in_progress",
       "meaning": "The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice."
     },

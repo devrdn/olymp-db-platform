@@ -270,6 +270,8 @@ const en = {
         heading: "By question",
         empty: "This contest had no questions.",
         truncated: "You made more attempts than this report carries; the first {n} are counted here.",
+        bonus: "bonus",
+        bonusNote: "A bonus row shows the lost points it gave back, so the points add up to your total.",
         columns: {
           question: "Question",
           verdict: "Result",
@@ -888,6 +890,8 @@ const en = {
         sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
         sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",
+        bonus_needs_points: "A question is marked as a bonus, but only Points scoring has bonus questions. Untick it or switch the scoring to Points.",
+        no_regular_question: "Every question is a bonus, so nobody could score: a bonus only gives back points lost on regular questions.",
         winner_final_needs_attempt_limit: "A final question has no attempt limit while scoring is first to solve, so the contest could be won by trying candidates one after another.",
         leaderboard_freeze_exceeds_window: "The leaderboard freeze starts before the contest does, or the contest has no end to count it back from.",
         staff_registered: "A participant's account administers every contest, so it already reads this contest's reference answers and its unfrozen leaderboard. Remove them from the roster before publishing, or take the permission away from the account.",
@@ -947,6 +951,7 @@ const en = {
       },
       hidden: "hidden",
       hiddenHint: "Exists in full, and is not shown. Working out what is being asked is part of the task.",
+      bonus: "bonus",
       noAnswer: "no reference answer",
       missingText: "{n} without text",
       untitled: "Question without text",
@@ -994,6 +999,10 @@ const en = {
         choicesHelp: "The answer is one of these, never a label, which is what keeps checking independent of the language read.",
         visible: "Show this question to participants",
         visibleHelp: "A hidden question exists in full — points, reference answers and all. Working out what is being asked becomes part of the task rather than a line of instructions.",
+        bonus: "Bonus question",
+        bonusHint: "Answered correctly, it gives back up to its points from the penalty the participant's wrong attempts have cost, never more than that penalty. It earns nothing else, a wrong answer to it costs nothing, and the attempt limit still applies.",
+        bonusPointsOnly: "Only Points scoring has bonus questions: under First to solve or ICPC there is no penalty for one to give back.",
+        bonusNoPenalty: "Not used for a bonus question: a wrong answer to it costs nothing.",
       },
       texts: {
         heading: "What it asks",
@@ -1662,6 +1671,10 @@ const en = {
         // rather than announcing "+0 points" as though that were a fact
         // worth stating.
         correctIcpc: "Correct!",
+        bonus: "bonus",
+        bonusPoints: "up to {n} pts back",
+        bonusHint: "Answer it correctly to win back up to {n} of the points your wrong attempts have cost you. A wrong answer here costs nothing.",
+        correctBonus: "Correct! Up to {n} lost points are given back.",
         incorrect: "Not correct.",
         // Shown once, under the whole list, rather than repeated on every
         // question — the penalty is a property of the contest, not of any
@@ -2124,6 +2137,7 @@ const en = {
     not_editable: "A contest in this state cannot be changed.",
     freeze_already_reached: "The leaderboard has already frozen, so the end date can only move later. Every other setting can still be saved.",
     icpc_start_locked: "The start date cannot change while ICPC scoring is running, since penalties are counted from it. Every other setting can still be saved.",
+    bonus_needs_points: "A bonus question only works with Points scoring. Untick the bonus questions before switching the contest to First to solve or ICPC.",
     not_publishable: "The contest is not ready to publish yet.",
     package_too_large: "The contest has more questions than one exported package holds.",
     enrollment_closed: "Enrollment for this contest is closed.",

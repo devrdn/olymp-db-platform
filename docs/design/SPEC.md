@@ -710,6 +710,14 @@ list, and the whole contest carries one question.
 story and the answer field but not the question's text. That is a format, not a
 blank, and the interface has to say so explicitly or it reads as a bug.
 
+**A bonus question** (`questions.is_bonus`, points scoring only) — marked with a
+`good` tag, its points read as "up to N back" rather than "N pts", and one line
+under the header says a correct answer wins back lost points while a wrong one
+costs nothing. A correct answer never announces "+0 points". A locked bonus
+question is a number like any other: the server sends no flag for it. The editor
+states the rule beside the checkbox rather than behind a "?", since it changes
+what the points mean, and sets the penalty field aside while the box is ticked.
+
 **A multiple-choice question** — labels are translated, identifiers (`choice_ids`)
 are not. The identifier is what gets submitted, and it is shown in the interface
 next to the label: that makes the language-independence of checking visible to

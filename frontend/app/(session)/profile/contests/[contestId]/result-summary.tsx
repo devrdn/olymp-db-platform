@@ -1,3 +1,4 @@
+import { Tag } from "@/components/ui/tag";
 import type { ProfileReport, ProfileReportQuestion, ProfileReportResult } from "@/lib/api/profile";
 import { readableDuration } from "@/lib/format/bytes";
 import { formatTime } from "@/lib/format/datetime";
@@ -152,7 +153,12 @@ function Questions({
               <tbody>
                 {questions.map((question) => (
                   <tr key={question.questionId} className="border-b border-line">
-                    <Cell>{question.ord}</Cell>
+                    <Cell>
+                      <span className="flex items-center gap-2">
+                        {question.ord}
+                        {question.isBonus ? <Tag tone="good">{t.questions.bonus}</Tag> : null}
+                      </span>
+                    </Cell>
                     <td className="py-2.5 pr-4">
                       <span className={question.solved ? "text-body text-good" : "text-body text-ink-3"}>
                         {question.solved ? t.questions.solved : t.questions.unsolved}
@@ -169,6 +175,9 @@ function Questions({
               </tbody>
             </table>
           </div>
+          {questions.some((question) => question.isBonus) ? (
+            <p className="max-w-body text-small text-ink-3">{t.questions.bonusNote}</p>
+          ) : null}
           {truncated ? (
             <p className="max-w-body text-small text-warn">
               {/* Counts attempts, since the report is cut at a number of attempts. */}

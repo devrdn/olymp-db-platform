@@ -468,6 +468,10 @@ func TestTheReportCarriesTheResultTheActivityAndTheQuestions(t *testing.T) {
 	if body.Questions[0].Penalty != 0 {
 		t.Errorf("a points contest charges no minutes: %s", rec.Body.String())
 	}
+	// Always sent, so the screen can tell a bonus row from a regular one.
+	if !strings.Contains(rec.Body.String(), `"is_bonus":false`) {
+		t.Errorf("the question carries no bonus flag: %s", rec.Body.String())
+	}
 	if !strings.Contains(rec.Body.String(), `"worked_ms":2400000`) {
 		t.Errorf("the time worked is missing or wrong: %s", rec.Body.String())
 	}

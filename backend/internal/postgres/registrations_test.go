@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -49,9 +50,124 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 						VALUES ($1, 'kept', now())`, registration)
 				},
 				Now: func() time.Time { return now },
+				Answer: func(contest, registration uuid.UUID, a conteststest.ScoredAnswer) {
+					exec(t, ctx, `
+						WITH q AS (
+							INSERT INTO questions (contest_id, ord, kind, points, is_bonus, is_visible)
+							VALUES ($1, (SELECT COALESCE(MAX(ord), 0) + 1 FROM questions WHERE contest_id = $1),
+							        'text', $3, $4, true)
+							RETURNING id
+						)
+						INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+						SELECT $2, q.id, 1, 'an answer', $5, $6 FROM q`,
+						contest, registration, a.Points, a.Bonus, a.Correct, a.Awarded)
+				},
 			})
 		})
 	})
+}
+
+// A recount that starts while another answer's transaction is still open
+// must wait for it and count its answer. Without the lock the recount's
+// snapshot predates that commit, and its write would put back a total missing
+// the answer. (Answers by one registration already queue behind each other on
+// registration_activity; the lock does not rely on that trigger.)
+func TestRefreshScoreWaitsForAnAnswerStillBeingWritten(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := t.Context()
+
+	author := makeUser(t, ctx, "author-"+uuid.NewString()[:8])
+	student := makeUser(t, ctx, "student-"+uuid.NewString()[:8])
+	contestID := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+	registrationID := makeRegistration(t, ctx, contestID, student.ID)
+	// A stale total, so the waiting recount has a write to make; one that
+	// matched the old snapshot would skip the row and never meet the lock.
+	if _, err := testPool.Exec(ctx, `UPDATE registrations SET total_score = 3 WHERE id = $1`, registrationID); err != nil {
+		t.Fatalf("stale the total: %v", err)
+	}
+	var question uuid.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO questions (contest_id, ord, kind, points, is_visible)
+		VALUES ($1, 1, 'text', 10, true) RETURNING id`, contestID).Scan(&question); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+
+	repo := NewRegistrations(testPool)
+	uow := storage.NewUnitOfWork(testPool)
+	answered := make(chan struct{})
+	recounted := make(chan error, 1)
+	go func() {
+		<-answered
+		recounted <- uow.Do(context.Background(), func(ctx context.Context) error {
+			return repo.RefreshScore(ctx, registrationID)
+		})
+	}()
+	err := uow.Do(context.Background(), func(ctx context.Context) error {
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+			INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+			VALUES ($1, $2, 1, 'right', true, 10)`, registrationID, question); err != nil {
+			return err
+		}
+		if err := repo.RefreshScore(ctx, registrationID); err != nil {
+			return err
+		}
+		close(answered)
+		// Commit only once the other recount is blocked behind this
+		// transaction; one that started after the commit would see the
+		// answer and pass for the wrong reason.
+		return waitForALockWaiter(t, registrationID)
+	})
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if err := <-recounted; err != nil {
+		t.Fatalf("recount: %v", err)
+	}
+
+	final, err := repo.ByUser(ctx, contestID, student.ID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if final.TotalScore != 10 {
+		t.Errorf("TotalScore = %d, want 10: the recount must count the answer it waited for", final.TotalScore)
+	}
+}
+
+// waitForALockWaiter polls, from a connection of its own, until a statement on
+// registrations waits for a lock, or fails the test after five seconds.
+func waitForALockWaiter(t *testing.T, registrationID uuid.UUID) error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			               WHERE datname = current_database() AND wait_event_type = 'Lock'
+			                 AND query ILIKE '%registrations%')`).Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("no recount of %s ever waited for the lock", registrationID)
+}
+
+func TestRefreshScoreRefusesToRunOutsideATransaction(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	if err := NewRegistrations(testPool).RefreshScore(t.Context(), uuid.New()); err == nil {
+		t.Error("RefreshScore() outside a transaction = nil, want a refusal")
+	}
 }
 
 // Racers each use their own connection, outside a rolled-back transaction,

@@ -74,9 +74,10 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 // ownResultColumns is the participant's own result in one contest, from their
 // own submissions only.
 //
-// The expressions repeat Leaderboard.Standings and ICPCStandings, since asking
-// the leaderboard would compute a whole table per contest. The
-// TestProfileEnrolmentsCarry... tests compare the two on the same data.
+// The points total is scoreTotal, and the ICPC expressions repeat
+// ICPCStandings, since asking the leaderboard would compute a whole table per
+// contest. The TestProfileEnrolmentsCarry... tests compare the two on the
+// same data.
 //
 // There is no freeze cut-off: a freeze never hides a participant's own work.
 // Points are forced to zero under ICPC, because a contest switched out of
@@ -88,11 +89,12 @@ const ownResultColumns = `
 	COALESCE(icpc.penalty, 0)::int`
 
 // ownResultJoins are the two laterals ownResultColumns reads.
-const ownResultJoins = `
+var ownResultJoins = `
 	LEFT JOIN LATERAL (
-	    SELECT COALESCE(SUM(s.points_awarded), 0)                          AS points,
+	    SELECT ` + scoreTotal("") + `                                       AS points,
 	           COUNT(DISTINCT s.question_id) FILTER (WHERE s.is_correct)   AS solved
-	    FROM submissions s WHERE s.registration_id = r.id
+	    FROM submissions s JOIN questions q ON q.id = s.question_id
+	    WHERE s.registration_id = r.id
 	) points ON true
 	LEFT JOIN LATERAL (
 	    SELECT COUNT(*) AS solved,

@@ -299,6 +299,8 @@ var (
 		"The contest is running and its leaderboard freeze has already been reached, so the end date cannot move earlier. A later end date is accepted and lengthens the freeze by the same minutes, so the board stays frozen where it froze. Every other setting may still be saved.")
 	codeICPCStartLocked = httpx.NewCode("icpc_start_locked",
 		"The contest is running under ICPC scoring, whose penalty minutes are counted from the start date, so it cannot move while the contest runs. Every other setting may still be saved.")
+	codeBonusNeedsPoints = httpx.NewCode("bonus_needs_points",
+		"A bonus question removes penalty points, which only points scoring has. Marking a question as a bonus is refused in a winner or ICPC contest, and so is moving a contest with a bonus question to either mode; untick the bonus questions first.")
 	codeNotPublishable = httpx.NewCode("not_publishable",
 		"The contest is not ready to be published or started. The response carries `problems`, every reason at once, each naming the language or question at fault.")
 

@@ -582,3 +582,40 @@ func TestQuestionsLocksNothingUnderFreeProgression(t *testing.T) {
 		expectOpen(t, found[i], q, i+1, true)
 	}
 }
+
+func TestQuestionsSayWhichQuestionIsABonus(t *testing.T) {
+	reader, _, questions, _ := newReader()
+	contestID := uuid.New()
+	for i, bonus := range []bool{false, true} {
+		questions.Put(contests.Question{
+			ContestID: contestID, Ord: i + 1, Kind: contests.KindText, Points: 4, IsBonus: bonus, IsVisible: true,
+			Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who?"}},
+		})
+	}
+
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	if len(found) != 2 || found[0].IsBonus || !found[1].IsBonus {
+		t.Errorf("questions = %+v, want the second alone marked bonus", found)
+	}
+}
+
+// A locked bonus question is a number like any other: that a bonus lies
+// ahead is part of what the sequence withholds.
+func TestQuestionsWithholdTheBonusFlagOfALockedQuestion(t *testing.T) {
+	reader, _, questions, _ := newReader()
+	contestID := uuid.New()
+	staged := sequentialQuestions(questions, contestID, 2)
+	staged[1].IsBonus = true
+	questions.Put(staged[1])
+
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", true)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	if want := lockedAt(2); !reflect.DeepEqual(found[1], want) {
+		t.Errorf("locked bonus question = %+v, want %+v and nothing else", found[1], want)
+	}
+}

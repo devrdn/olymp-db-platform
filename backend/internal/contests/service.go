@@ -374,6 +374,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	if err := updated.Validate(); err != nil {
 		return Contest{}, err
 	}
+	if err := s.checkScoringKeepsBonus(ctx, current, updated); err != nil {
+		return Contest{}, err
+	}
 
 	changes := audit.Between(current.auditFields(), updated.auditFields())
 

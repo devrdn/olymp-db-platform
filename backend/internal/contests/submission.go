@@ -224,10 +224,11 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	correct := s.grade(ctx, q, cmd.Value)
 	points := awardablePoints(q, cmd.Contest)
 	penaltyPerAttempt := penaltyAmount(q, cmd.Contest)
+	scores := correct && (points > 0 || bonusCredit(q, cmd.Contest) > 0)
 
 	var result Submission
 	for attempt := 0; ; attempt++ {
-		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, penaltyPerAttempt, writeDeadline)
+		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, scores, points, penaltyPerAttempt, writeDeadline)
 		if !errors.Is(err, ErrAttemptConflict) {
 			break
 		}
@@ -300,10 +301,10 @@ func StartParticipant(ctx context.Context, uow storage.UnitOfWork, recorder *aud
 }
 
 // penaltyAmount is the points one wrong attempt costs (§6.1.1): q.PenaltyPct
-// of q.Points, floored, or zero when the result is not points. The organiser's
-// percentage is kept, unapplied, in case the scoring mode changes back.
+// of q.Points, floored, or zero when the result is not points or q is a bonus.
+// The organiser's percentage is kept, unapplied, in case either changes back.
 func penaltyAmount(q Question, c Contest) int {
-	if c.Scoring == ScoringWinner || c.Scoring == ScoringICPC {
+	if c.Scoring == ScoringWinner || c.Scoring == ScoringICPC || q.IsBonus {
 		return 0
 	}
 	return q.Points * q.PenaltyPct / 100
@@ -311,10 +312,20 @@ func penaltyAmount(q Question, c Contest) int {
 
 // awardablePoints is the face value Insert computes points_awarded from:
 // q.Points, except under ICPC, where questions carry no points and every
-// submission writes zero. The configured points are kept, unapplied, in case
-// the scoring mode changes back.
+// submission writes zero, and for a bonus, whose points are what it can take
+// off the penalty and are counted where the total is (RefreshScore). The
+// configured points are kept, unapplied, in case the scoring mode changes back.
 func awardablePoints(q Question, c Contest) int {
-	if c.Scoring == ScoringICPC {
+	if c.Scoring == ScoringICPC || q.IsBonus {
+		return 0
+	}
+	return q.Points
+}
+
+// bonusCredit is how many penalty points a correct answer to q may remove:
+// its points if it is a bonus in a points contest, else none.
+func bonusCredit(q Question, c Contest) int {
+	if !q.IsBonus || !c.ScoresPoints() {
 		return 0
 	}
 	return q.Points
@@ -324,10 +335,10 @@ func awardablePoints(q Question, c Contest) int {
 // check, attempt number and penalty (§8, §6.1.1). On ErrAttemptConflict
 // nothing has taken effect and Submit calls it again.
 //
-// Only a correct answer with points > 0 needs a transaction, since only it can
-// change the score. A zero-point or wrong answer skips the transaction and its
-// extra COMMIT round trip.
-func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, points, penaltyPerAttempt int, deadline time.Time) (Submission, error) {
+// Only an answer that scores (correct, and worth points or bonus credit)
+// needs a transaction, since only it can change the score. Any other answer
+// skips the transaction and its extra COMMIT round trip.
+func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct, scores bool, points, penaltyPerAttempt int, deadline time.Time) (Submission, error) {
 	req := SubmissionRequest{
 		RegistrationID:    registrationID,
 		QuestionID:        q.ID,
@@ -339,10 +350,12 @@ func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Qu
 		MaxAttempts:       q.MaxAttempts,
 	}
 
-	if !correct || points <= 0 {
+	if !scores {
 		return s.submissions.Insert(ctx, req)
 	}
 
+	// Refreshed even when the penalty consumed the face value: the penalty
+	// points it adds may be what a solved bonus was waiting to remove.
 	var result Submission
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -350,12 +363,7 @@ func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Qu
 		if err != nil {
 			return err
 		}
-		if result.PointsAwarded <= 0 {
-			// The penalty consumed the face value: skip a zero-delta write
-			// (CLAUDE.md rule 6).
-			return nil
-		}
-		return s.registrations.AddScore(ctx, registrationID, result.PointsAwarded)
+		return s.registrations.RefreshScore(ctx, registrationID)
 	})
 	return result, err
 }

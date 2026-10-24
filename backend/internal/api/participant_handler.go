@@ -313,10 +313,12 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 type participantQuestionResponse struct {
 	// Locked is always false here; it is what tells this shape from
 	// lockedQuestionResponse in the same list.
-	Locked    bool     `json:"locked"`
-	ID        string   `json:"id"`
-	Kind      string   `json:"kind"`
-	Points    int      `json:"points"`
+	Locked bool   `json:"locked"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Points int    `json:"points"`
+	// IsBonus is absent from lockedQuestionResponse on purpose.
+	IsBonus   bool     `json:"is_bonus"`
 	ChoiceIDs []string `json:"choice_ids"`
 	// Title is empty when the question has none in this language; nothing is
 	// derived from the body in its place.
@@ -360,6 +362,7 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 		ID:                q.ID.String(),
 		Kind:              q.Kind,
 		Points:            q.Points,
+		IsBonus:           q.IsBonus,
 		ChoiceIDs:         q.ChoiceIDs,
 		Title:             q.Title,
 		BodyMD:            q.BodyMD,

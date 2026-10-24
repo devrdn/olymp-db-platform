@@ -165,10 +165,11 @@ type RegistrationRepository interface {
 	// EnrolledIn reports which of these contests the user is registered for,
 	// in one query.
 	EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error)
-	// AddScore adds delta to total_score as an atomic SQL increment, never a
-	// read-modify-write, so concurrent scoring answers cannot overwrite each
-	// other.
-	AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error
+	// RefreshScore sets total_score to the points total of the registration's
+	// submissions (§6.1.1), the same total the leaderboard computes. It runs
+	// inside the transaction that wrote the submission, and serialises on the
+	// registration, so two answers landing together each count the other.
+	RefreshScore(ctx context.Context, registrationID uuid.UUID) error
 	// RegisteredWithPermission returns, ordered by login and at most
 	// MaxReportedStaff, the logins of registered participants whose account
 	// currently holds permission. One query; the permission is read through

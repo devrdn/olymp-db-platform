@@ -997,6 +997,7 @@ describe("collapsing a panel", () => {
       locked: false as const,
       kind: "text" as const,
       points: 10,
+      isBonus: false,
       choiceIds: [],
       title: "",
       bodyMd: "Who was in the greenhouse?",

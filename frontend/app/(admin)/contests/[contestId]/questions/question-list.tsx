@@ -132,6 +132,7 @@ export function QuestionList({
                           <Tooltip label={dict.chrome.helpLabel}>{t.hiddenHint}</Tooltip>
                         </span>
                       ) : null}
+                      {question.isBonus ? <Tag tone="good">{t.bonus}</Tag> : null}
                       {!answerable(question) ? <Tag tone="warn">{t.noAnswer}</Tag> : null}
                       {missing.length > 0 ? (
                         <Tag tone="warn">{t.missingText.replace("{n}", String(missing.length))}</Tag>

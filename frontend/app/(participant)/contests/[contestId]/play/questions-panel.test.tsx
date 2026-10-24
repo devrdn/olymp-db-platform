@@ -37,6 +37,7 @@ function question(overrides: Partial<OpenPlayQuestion> = {}): OpenPlayQuestion {
     id: "q1",
     kind: "text",
     points: 10,
+    isBonus: false,
     choiceIds: [],
     title: "",
     bodyMd: "Who was in the greenhouse?",
@@ -551,6 +552,82 @@ describe("the questions panel, ICPC scoring", () => {
 test("a paste into an answer is watched as one into the answer", () => {
   render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} dict={en} />);
   expect(pasteTargetOf(screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }))).toBe("answer");
+});
+
+// A bonus question gives back penalty points rather than earning its own
+// (docs/ARCHITECTURE.md §6.1.1), so it never reads as "+0 points".
+describe("a bonus question", () => {
+  const t = en.participant.play.questions;
+
+  test("is marked, and says its points are given back rather than earned", () => {
+    render(
+      <QuestionsPanel locale="en" contestId="c1" items={[entry({ isBonus: true, points: 4 }), entry({ id: "q2" }, 2)]} dict={en} />,
+    );
+
+    expect(screen.getAllByText(t.bonus)).toHaveLength(1);
+    expect(screen.getByText(t.bonusPoints.replace("{n}", "4"))).toBeInTheDocument();
+    expect(screen.getByText(t.bonusHint.replace("{n}", "4"))).toBeInTheDocument();
+    expect(screen.queryByText("4 pts")).not.toBeInTheDocument();
+    // The regular question beside it keeps its plain points.
+    expect(screen.getByText("10 pts")).toBeInTheDocument();
+  });
+
+  test("a correct answer says lost points are given back, not that it earned nothing", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 0, attemptsRemaining: 2, closed: false } };
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ isBonus: true, points: 4 })]} dict={en} />);
+
+    await submit();
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.correctBonus.replace("{n}", "4")));
+    expect(screen.queryByText(/\+0 points/)).not.toBeInTheDocument();
+  });
+
+  test("closed from an earlier visit, it keeps the same verdict", () => {
+    render(
+      <QuestionsPanel
+        locale="en"
+        contestId="c1"
+        items={[entry({ isBonus: true, points: 4, closed: true, canAnswer: false, correct: true, pointsAwarded: 0 })]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(t.correctBonus.replace("{n}", "4"));
+    // The invitation to answer is for an open question only.
+    expect(screen.queryByText(t.bonusHint.replace("{n}", "4"))).not.toBeInTheDocument();
+    expect(screen.getByText(t.bonus)).toBeInTheDocument();
+  });
+
+  test("a wrong answer reads as a plain miss", async () => {
+    answer.current = { kind: "answer", result: { correct: false, pointsAwarded: 0, attemptsRemaining: 1, closed: false } };
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ isBonus: true, points: 4, attemptsRemaining: 2 })]} dict={en} />);
+
+    await submit("wrong guess");
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.incorrect));
+  });
+
+  // The server sends a locked question as a number alone, so nothing here can
+  // say a bonus lies ahead.
+  test("locked, it is a number like any other, with no bonus mark", () => {
+    render(
+      <QuestionsPanel
+        locale="en"
+        contestId="c1"
+        items={[entry({ id: "q1" }, 1), lockedEntry(2)]}
+        dict={en}
+      />,
+    );
+
+    expect(within(lockedList()).queryByText(t.bonus)).not.toBeInTheDocument();
+    expect(screen.queryByText(t.bonus)).not.toBeInTheDocument();
+  });
+
+  test("keeps the bonus line wrapping inside a narrow panel", () => {
+    render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ isBonus: true, points: 4 })]} dict={en} />);
+
+    expect(screen.getByText(t.bonusHint.replace("{n}", "4"))).toHaveClass("[overflow-wrap:anywhere]");
+  });
 });
 
 // A titled question reads as its title, with the wording folded under it

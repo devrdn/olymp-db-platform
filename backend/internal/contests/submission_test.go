@@ -1277,3 +1277,185 @@ func TestSubmitFailsClosedWhenStartLeavesTheClockPending(t *testing.T) {
 		t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
 	}
 }
+
+// bonusRig is a running points contest with one participant, for the bonus
+// rule (§6.1.1). Every question it adds is answered by "yes".
+type bonusRig struct {
+	t *testing.T
+	f *conteststest.Fixture
+	c contests.Contest
+	p contests.Participant
+}
+
+func newBonusRig(t *testing.T) bonusRig {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	c.Scoring = contests.ScoringPoints
+	f.Contests.Put(c)
+	began := f.Now.Add(-time.Minute)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &began})
+	return bonusRig{t: t, f: f, c: c, p: p}
+}
+
+func (r bonusRig) question(points, penaltyPct int, bonus bool) contests.Question {
+	max := 5
+	return r.f.Questions.Put(contests.Question{
+		ContestID: r.c.ID, Kind: contests.KindText, Points: points, PenaltyPct: penaltyPct,
+		IsBonus: bonus, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+}
+
+func (r bonusRig) submit(q contests.Question, value string) contests.SubmitOutcome {
+	r.t.Helper()
+	outcome, err := r.f.Service.Submit(r.t.Context(), contests.SubmitCommand{
+		Participant: r.p, Contest: r.c, QuestionID: q.ID, Value: value,
+	})
+	if err != nil {
+		r.t.Fatalf("Submit(%q) = %v", value, err)
+	}
+	return outcome
+}
+
+func (r bonusRig) total() int {
+	r.t.Helper()
+	stored, err := r.f.Registrations.ByUser(r.t.Context(), r.c.ID, r.p.UserID)
+	if err != nil {
+		r.t.Fatalf("ByUser() = %v", err)
+	}
+	return stored.TotalScore
+}
+
+// penalised answers a regular question once wrong, then right: 10 points at
+// 50% leave 5 awarded and 5 penalty points.
+func (r bonusRig) penalised() {
+	r.t.Helper()
+	q := r.question(10, 50, false)
+	r.submit(q, "no")
+	if got := r.submit(q, "yes"); got.PointsAwarded != 5 {
+		r.t.Fatalf("the regular question awarded %d, want 5", got.PointsAwarded)
+	}
+}
+
+func TestSubmitABonusRemovesNoMoreThanThePenaltyThereIs(t *testing.T) {
+	r := newBonusRig(t)
+	r.penalised()
+	if got := r.total(); got != 5 {
+		t.Fatalf("TotalScore before the bonus = %d, want 5", got)
+	}
+
+	outcome := r.submit(r.question(3, 0, true), "yes")
+	if !outcome.Correct || outcome.PointsAwarded != 0 {
+		t.Errorf("bonus outcome = %+v, want correct and no points of its own", outcome)
+	}
+	if got := r.total(); got != 8 {
+		t.Errorf("TotalScore after a 3-point bonus = %d, want 8 (5 + 3 of the 5 penalty points)", got)
+	}
+
+	r.submit(r.question(4, 0, true), "yes")
+	if got := r.total(); got != 10 {
+		t.Errorf("TotalScore after a second, 4-point bonus = %d, want 10 (5 + all 5 penalty points, not 7)", got)
+	}
+}
+
+func TestSubmitABonusCoversAPenaltyThatArrivesAfterIt(t *testing.T) {
+	r := newBonusRig(t)
+	r.submit(r.question(4, 0, true), "yes")
+	if got := r.total(); got != 0 {
+		t.Fatalf("TotalScore after a bonus with no penalty yet = %d, want 0", got)
+	}
+
+	r.penalised()
+	if got := r.total(); got != 9 {
+		t.Errorf("TotalScore = %d, want 9 (5 awarded + 4 of the 5 penalty points)", got)
+	}
+}
+
+// The penalty took all ten points, so the regular answer awards nothing, and
+// still the bonus has something to give back.
+func TestSubmitABonusGivesBackAPenaltyThatConsumedTheWholeQuestion(t *testing.T) {
+	r := newBonusRig(t)
+	r.submit(r.question(6, 0, true), "yes")
+	q := r.question(10, 100, false)
+	r.submit(q, "no")
+	if got := r.submit(q, "yes"); got.PointsAwarded != 0 {
+		t.Fatalf("the regular question awarded %d, want 0", got.PointsAwarded)
+	}
+
+	if got := r.total(); got != 6 {
+		t.Errorf("TotalScore = %d, want 6 (0 awarded + 6 of the 10 penalty points)", got)
+	}
+}
+
+func TestSubmitABonusWithNoPenaltyToRemoveAddsNothing(t *testing.T) {
+	r := newBonusRig(t)
+	r.submit(r.question(10, 50, false), "yes")
+	r.submit(r.question(5, 0, true), "yes")
+
+	if got := r.total(); got != 10 {
+		t.Errorf("TotalScore = %d, want 10: a bonus is worth nothing without penalty points", got)
+	}
+}
+
+// Whatever penalty_pct says, and still within max_attempts.
+func TestSubmitAWrongBonusAnswerCostsNothing(t *testing.T) {
+	r := newBonusRig(t)
+	r.penalised()
+	max := 2
+	bonus := r.f.Questions.Put(contests.Question{
+		ContestID: r.c.ID, Kind: contests.KindText, Points: 4, PenaltyPct: 50, IsBonus: true,
+		MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+
+	if got := r.submit(bonus, "no"); got.Correct || got.PointsAwarded != 0 {
+		t.Fatalf("outcome = %+v, want a wrong answer worth nothing", got)
+	}
+	if last := r.f.Submissions.Requests[len(r.f.Submissions.Requests)-1]; last.PenaltyPerAttempt != 0 || last.Points != 0 {
+		t.Errorf("Insert was handed (points %d, penalty %d), want (0, 0) for a bonus", last.Points, last.PenaltyPerAttempt)
+	}
+	if got := r.total(); got != 5 {
+		t.Errorf("TotalScore = %d, want 5, untouched by a wrong bonus answer", got)
+	}
+
+	r.submit(bonus, "yes")
+	if got := r.total(); got != 9 {
+		t.Errorf("TotalScore after the bonus on its second attempt = %d, want 9 (the full 4, nothing deducted)", got)
+	}
+
+	spent := r.f.Questions.Put(contests.Question{
+		ContestID: r.c.ID, Kind: contests.KindText, Points: 4, IsBonus: true, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+	r.submit(spent, "no")
+	r.submit(spent, "no")
+	if _, err := r.f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: r.p, Contest: r.c, QuestionID: spent.ID, Value: "yes",
+	}); !errors.Is(err, contests.ErrQuestionClosed) {
+		t.Errorf("a third attempt on a two-attempt bonus = %v, want ErrQuestionClosed", err)
+	}
+}
+
+// Its score can only change together with the row that changes it.
+func TestSubmitRunsACorrectBonusInsideOneTransaction(t *testing.T) {
+	r := newBonusRig(t)
+	r.submit(r.question(3, 0, true), "yes")
+	if r.f.UnitOfWork.Calls != 1 {
+		t.Errorf("UnitOfWork.Calls = %d, want exactly 1", r.f.UnitOfWork.Calls)
+	}
+}
+
+// Refused when authored (bonus.go), but a bonus that reached an ICPC contest
+// anyway still moves nothing: ICPC has no points to give back.
+func TestSubmitABonusOutsidePointsScoringScoresNothing(t *testing.T) {
+	r := newBonusRig(t)
+	r.c.Scoring = contests.ScoringICPC
+	r.f.Contests.Put(r.c)
+
+	r.submit(r.question(10, 0, false), "yes")
+	r.submit(r.question(4, 0, true), "yes")
+
+	if r.f.UnitOfWork.Calls != 0 || r.total() != 0 {
+		t.Errorf("UnitOfWork.Calls = %d, TotalScore = %d; want 0, 0", r.f.UnitOfWork.Calls, r.total())
+	}
+}
