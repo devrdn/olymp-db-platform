@@ -10,6 +10,7 @@ import {
   type Account,
   type SeedRecord,
 } from "./api";
+import { seedFeatures } from "./seed-features";
 import { closeRecord } from "./teardown";
 
 /**
@@ -23,7 +24,8 @@ import { closeRecord } from "./teardown";
  * - a read_write contest with a story, one question and its answer, a small
  *   game script built into the template, and the participant on its roster;
  * - then publishes and starts it, and waits until a database is ready for
- *   the participant to claim.
+ *   the participant to claim;
+ * - then the post-beta checks' own accounts and contests (seed-features.ts).
  *
  * Each object goes into e2e/.state/seed.json (0600) the moment it exists,
  * for the specs and for the teardown, which Playwright runs even when this
@@ -127,6 +129,8 @@ export default async function seed(): Promise<void> {
     await operator.call("POST", `${at}/status`, { status: "published" });
     await operator.call("POST", `${at}/status`, { status: "running" });
     await waitForDatabase(operator, at);
+
+    await seedFeatures(operator, record, run);
 
     record.complete = true;
     writeRecord(record);

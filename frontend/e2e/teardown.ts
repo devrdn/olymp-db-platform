@@ -3,10 +3,10 @@ import { ApiError, clearSeed, readRecord, signInAsOperator, type Api, type SeedR
 /**
  * The global teardown, which Playwright runs even when the setup threw:
  * closes whatever the setup recorded, so a run against a longer-lived stack
- * leaves an archived (or, if never published, deleted) contest and two
- * deleted, restorable accounts rather than a running contest and live
- * credentials. A failure fails the run and keeps seed.json, which the next
- * setup closes before it starts.
+ * leaves archived (or, if never published, deleted) contests and deleted,
+ * restorable accounts rather than running contests and live credentials. A
+ * failure fails the run and keeps seed.json, which the next setup closes
+ * before it starts.
  */
 export default async function teardown(): Promise<void> {
   const record = readRecord();
@@ -40,9 +40,11 @@ export async function closeRecord(operator: Api, record: SeedRecord): Promise<st
     }
   };
 
-  if (record.contest) {
-    const at = `/contests/${record.contest.id}`;
-    await attempt("close the contest", async () => {
+  const contests = [record.contest, ...Object.values(record.features?.contests ?? {})];
+  for (const contest of contests) {
+    if (!contest) continue;
+    const at = `/contests/${contest.id}`;
+    await attempt(`close ${contest.title}`, async () => {
       const { status } = await operator.call<{ status: string }>("GET", at);
       // The lifecycle's own steps: a draft can be deleted; anything that was
       // published is a record and can only be archived.
@@ -53,9 +55,16 @@ export async function closeRecord(operator: Api, record: SeedRecord): Promise<st
   }
 
   const reason = { reason: "Created by the browser smoke test" };
-  for (const account of [record.participant, record.admin]) {
+  const accounts = [record.participant, ...Object.values(record.features?.accounts ?? {}), record.admin];
+  for (const account of accounts) {
     if (!account) continue;
     await attempt(`delete ${account.login}`, () => operator.call("POST", `/users/${account.id}/delete`, reason));
+  }
+  const roster = record.features?.roster ?? [];
+  if (roster.length > 0) {
+    await attempt("delete the monitor roster", () =>
+      operator.call("POST", "/users/bulk/status", { ids: roster, status: "deleted", ...reason }),
+    );
   }
   return failures;
 }
