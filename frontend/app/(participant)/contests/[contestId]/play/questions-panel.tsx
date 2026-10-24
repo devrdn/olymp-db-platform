@@ -253,7 +253,10 @@ function QuestionCard({
             <div className="min-w-0">{body}</div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Wraps rather than overflows: a bonus question's tags can be wider
+            than the side column at its default width, and the "points back"
+            tag is what tells a participant it is worth trying. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <QuestionStatus
             closed={closed}
             correct={correct}
