@@ -63,6 +63,7 @@ function admitChannel() {
   act(() => FakeEventSource.instances.at(-1)!.emit("sync", { server_now: "2026-01-01T00:00:00.000Z" }));
 }
 
+import { ClarificationSignalProvider, useClarificationSignal } from "./clarification-signal";
 import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
@@ -486,3 +487,41 @@ describe("the panel toggles", () => {
     expect(screen.queryByRole("button", { name: t.bottom })).not.toBeInTheDocument();
   });
 });
+
+// The header holds the one events channel; the questions to the organisers
+// hear of it through the signal (clarification-signal.tsx).
+describe("the channel's word on the questions to the organisers", () => {
+  beforeEach(() => {
+    events.real = true;
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => {
+    events.real = false;
+    vi.unstubAllGlobals();
+  });
+
+  function Probe() {
+    const signal = useClarificationSignal();
+    return <p data-testid="signal">{`${signal.hints} ${signal.connections} ${signal.finished}`}</p>;
+  }
+
+  test("passes on each hint, each admitted connection and the finish", () => {
+    render(
+      <ClarificationSignalProvider>
+        <PlayHeader feedbackUrl="" contestId="c1" title="X" waitingForStart={false} dict={en} />
+        <Probe />
+      </ClarificationSignalProvider>,
+    );
+    expect(screen.getByTestId("signal")).toHaveTextContent("0 0 false");
+
+    admitChannel();
+    act(() => FakeEventSource.instances.at(-1)!.emit("clarification", {}));
+    act(() => FakeEventSource.instances.at(-1)!.emit("clarification", {}));
+    expect(screen.getByTestId("signal")).toHaveTextContent("2 1 false");
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("contest_finished", { status: "finished" }));
+    expect(screen.getByTestId("signal")).toHaveTextContent("2 1 true");
+  });
+});
+

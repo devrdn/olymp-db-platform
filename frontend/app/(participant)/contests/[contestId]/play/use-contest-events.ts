@@ -11,6 +11,17 @@ export type ContestPhase = "waiting" | "running" | "finished";
 type SyncPayload = { server_now: string; deadline?: string };
 
 /**
+ * What the channel tells a caller beyond the clock. `onClarification` hears
+ * each `clarification` event, an empty hint that the questions to the
+ * organisers changed; `onConnected` hears each connection's first sync, since
+ * a hint sent while the channel was away is lost.
+ */
+export type ContestEventListeners = {
+  onClarification?: () => void;
+  onConnected?: () => void;
+};
+
+/**
  * Whether a refusal of the channel cannot clear on a timer: the participant
  * is excluded (disqualified, say) or is outside the contest's network. The
  * header says why meanwhile.
@@ -62,6 +73,7 @@ export function useContestEvents(
   contestId: string,
   initialPhase: ContestPhase = "waiting",
   renderedDormant = false,
+  listeners: ContestEventListeners = {},
 ) {
   const offsetRef = useRef(0);
   // `undefined`: no sync yet. `null`: the server said this participant has no
@@ -78,6 +90,10 @@ export function useContestEvents(
   const [reopened, setReopened] = useState(false);
   // Read by the channel, which outlives every render.
   const renderedDormantRef = useRef(renderedDormant);
+  const listenersRef = useRef(listeners);
+  useEffect(() => {
+    listenersRef.current = listeners;
+  });
   // Whether any connection has been admitted. A ref: an ordinary sync must
   // not render.
   const admittedRef = useRef(false);
@@ -130,6 +146,7 @@ export function useContestEvents(
     const connect = () => {
       const es = new EventSource(url);
       source = es;
+      let synced = false;
 
       const onSync = (event: MessageEvent) => {
         try {
@@ -141,6 +158,10 @@ export function useContestEvents(
           retryDelay = RECONNECT_MIN_DELAY_MS;
           setChannelError(null);
           admittedRef.current = true;
+          if (!synced) {
+            synced = true;
+            listenersRef.current.onConnected?.();
+          }
           if (dormant || renderedDormantRef.current) {
             dormant = false;
             setReopened(true);
@@ -192,6 +213,7 @@ export function useContestEvents(
       es.addEventListener("sync", onSync);
       es.addEventListener("contest_started", onStarted);
       es.addEventListener("contest_finished", onFinished);
+      es.addEventListener("clarification", () => listenersRef.current.onClarification?.());
       es.addEventListener("error", onError);
     };
 

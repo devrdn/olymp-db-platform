@@ -9,6 +9,7 @@ import type { PlayDictionary } from "./dictionary";
 import { readableDuration } from "@/lib/format/bytes";
 import { cn } from "@/lib/utils";
 
+import { useClarificationPublisher } from "./clarification-signal";
 import { useContentLoaded, useRenderedRefusal } from "./content-loaded";
 import { PanelToggles } from "./panel-toggles";
 import { refusalKind } from "./refusals";
@@ -49,11 +50,17 @@ export function PlayHeader({
   const renderedRefusal = useRenderedRefusal();
   const renderedDormant = renderedRefusal !== null && refusalKind(renderedRefusal) === "dormant";
   const renderedClosed = renderedRefusal !== null && refusalKind(renderedRefusal) === "closed";
+  // The questions to the organisers hear of the channel through this.
+  const clarifications = useClarificationPublisher();
   const { offsetRef, deadlineRef, phase, channelError, resync, reopened } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
     renderedDormant,
+    { onClarification: clarifications.hint, onConnected: clarifications.connected },
   );
+  useEffect(() => {
+    if (phase === "finished") clarifications.finish();
+  }, [phase, clarifications]);
 
   // Under individual timing the content reads start the clock on the server,
   // possibly after the first sync reported no deadline. Once they succeed,

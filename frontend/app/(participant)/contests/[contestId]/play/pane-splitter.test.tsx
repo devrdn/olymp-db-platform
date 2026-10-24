@@ -11,6 +11,7 @@ vi.mock("./requests", () => ({
   submitAnswer: async () => ({ kind: "idle" }),
   refreshQuestions: async () => ({ kind: "ok", items: [] }),
   fetchQueryLog: async () => ({ kind: "ok", items: [], total: 0 }),
+  fetchClarifications: async () => ({ kind: "ok", feed: { items: [], next: null, open: 0 } }),
 }));
 vi.mock("./use-contest-events", () => ({
   useContestEvents: () => ({ offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" }),

@@ -470,9 +470,11 @@ budgets and surviving a closed tab.
 | `sql-tabs.tsx`, `use-sql-tabs.ts` | The tab strip (draws only) and its state: which tabs exist, which is open, one autosave engine per tab. |
 | `result-panel.tsx`, `row-detail.tsx` | The last query's result or refusal; one row opened in full. |
 | `query-log-panel.tsx` | Every statement this participant ran, paged by `QUERY_LOG_PAGE_SIZE`; a row opens to its whole statement with a Copy button, read from the server when the page carried only its start. |
-| `side-panel.tsx` | Tabs for story, questions, notes and leaderboard; the story's Markdown and print exports. |
+| `side-panel.tsx` | Tabs for story, questions, notes, questions to the organisers and leaderboard; the story's Markdown and print exports; the dot on the organisers' tab while something new is unread. |
 | `questions-panel.tsx` | The questions (rendered to HTML on the server) and one answer form each, bound to `submitAnswer`. |
 | `notes-panel.tsx` | One self-saving notes field. |
+| `clarifications-panel.tsx`, `clarification-text.tsx` | Questions to the organisers: the form (a question picker that never offers a locked question, the text with its counter, Ctrl/⌘+Enter), the announcements and the questions with their answers. A participant's text is shown as typed; the organisers' answers and announcements through `StoryText`, a lazy chunk. Read on mount, a random moment within three seconds after each `clarification` hint, and on a reconnect; what was seen is kept per account and contest in `localStorage`. Read-only once the contest is over for the participant. |
+| `clarification-signal.tsx` | Carries the channel's `clarification` hints, admitted connections and finish from the header to the side panel, across the Suspense boundary. |
 | `schema-panel.tsx`, `table-query.ts` | Tables, columns, types and foreign keys; a click on a table's name writes `SELECT * FROM <table> LIMIT 5;`, quoted as PostgreSQL needs, into the open SQL tab, and the chevron opens the table. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
 | `schema-diagram-dialog.tsx`, `schema-diagram.tsx`, `schema-diagram-layout.ts` | The schema panel's "Diagram" button and the large view it opens: tables as boxes with their primary and foreign keys marked, an arrow from each foreign-key column to the column it references, panned and zoomed by pointer, wheel and keyboard, with the relations as a list for a screen reader. The drawing and its layout engine (`@dagrejs/dagre`) are a lazy chunk fetched when the button is hovered, focused or pressed. Past a measured budget of edge segments the layout ranks the tables itself instead of calling dagre, so a 200-table schema opens in under half a second. |
 | `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. |
@@ -482,7 +484,7 @@ budgets and surviving a closed tab.
 | `use-signals.ts` | Page-left and paste signals reported to the organiser. |
 | `refusals.ts` | What each refusal code means for this screen. |
 | `content-loaded.tsx` | Tells the header, across the Suspense boundary, whether the workspace or a refusal rendered. |
-| `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log and read one row of it whole, read the standings, reset the database and re-read the schema. Not server actions; see below. |
+| `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log and read one row of it whole, read the standings, reset the database, re-read the schema, read the questions to the organisers and ask one. Not server actions; see below. |
 | `story.md/route.ts` | Route Handler: the story as a Markdown download. |
 | `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `reload-link.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton, rate-limit reload button. |
 
@@ -553,11 +555,13 @@ else on this screen. `AutosaveEngine` in `use-autosave.ts`:
 ### The events channel
 
 `useContestEvents` opens one `EventSource` to
-`/api/v1/contests/{id}/events` and listens for `sync`, `contest_started` and
-`contest_finished`. `sync` carries the server's time and the participant's
-deadline, from which the clock is corrected; the browser clock is never
-trusted on its own. The waiting room reloads into the workspace on
-`contest_started`.
+`/api/v1/contests/{id}/events` and listens for `sync`, `contest_started`,
+`contest_finished` and `clarification`. `sync` carries the server's time and
+the participant's deadline, from which the clock is corrected; the browser
+clock is never trusted on its own. The waiting room reloads into the
+workspace on `contest_started`. `clarification` has no content: the
+questions to the organisers read their feed again, and so they do when a
+connection is admitted afresh, since a hint sent while it was away is lost.
 
 A non-200 response closes an `EventSource` for good, which would freeze the
 clock silently. The hook then probes the same URL with `fetch` to learn the

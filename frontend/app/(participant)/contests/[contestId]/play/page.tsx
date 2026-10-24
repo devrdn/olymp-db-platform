@@ -20,6 +20,7 @@ import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
 
+import { ClarificationSignalProvider } from "./clarification-signal";
 import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
 import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
@@ -126,35 +127,38 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // it would clip the print copy of the story at one screen.
   return (
     <div className="flex min-h-0 flex-col print:contents narrow:h-[calc(100dvh-3rem-1px)]">
-      {/* Both providers carry state across the Suspense boundary.
+      {/* The providers carry state across the Suspense boundary.
           `ContentLoadedProvider` tells the header the content reads succeeded,
           which under individual timing means the clock started
           (content-loaded.tsx). `PanelVisibilityProvider` holds the panel toggles
-          shared by the header and the workspace. */}
+          shared by the header and the workspace. `ClarificationSignalProvider`
+          carries the channel's hints to the questions to the organisers. */}
       <ContentLoadedProvider>
-        <PanelVisibilityProvider contestId={contestId}>
-          <PlayHeader
-            contestId={contestId}
-            title={contest.title}
-            waitingForStart={false}
-            feedbackUrl={brand.feedback}
-            dict={dict}
-          />
-          <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
-            <PlayPanels
+        <ClarificationSignalProvider>
+          <PanelVisibilityProvider contestId={contestId}>
+            <PlayHeader
               contestId={contestId}
-              contestTitle={contest.title}
-              coverHash={contest.coverHash}
-              coverAttribution={contest.coverAttribution}
-              scoring={contest.scoring}
-              icpcPenaltyMin={contest.icpcPenaltyMin}
-              sqlMode={contest.sqlMode}
-              resultDownload={contest.resultDownload}
-              locale={locale}
+              title={contest.title}
+              waitingForStart={false}
+              feedbackUrl={brand.feedback}
               dict={dict}
             />
-          </Suspense>
-        </PanelVisibilityProvider>
+            <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
+              <PlayPanels
+                contestId={contestId}
+                contestTitle={contest.title}
+                coverHash={contest.coverHash}
+                coverAttribution={contest.coverAttribution}
+                scoring={contest.scoring}
+                icpcPenaltyMin={contest.icpcPenaltyMin}
+                sqlMode={contest.sqlMode}
+                resultDownload={contest.resultDownload}
+                locale={locale}
+                dict={dict}
+              />
+            </Suspense>
+          </PanelVisibilityProvider>
+        </ClarificationSignalProvider>
       </ContentLoadedProvider>
     </div>
   );
