@@ -205,8 +205,8 @@ type TemplateRepository interface {
 	// before it is cleared, so a row added during the build keeps its mark for
 	// the next one.
 	FinishBuild(ctx context.Context, contestID uuid.UUID, version int, buildError string, claimedAt time.Time) error
-	// SaveSchema caches the schema panel's description of version
-	// (SchemaStore).
+	// SaveSchema caches the schema panel's description of version, which
+	// SchemaReader reads back through SchemaStore.
 	SaveSchema(ctx context.Context, contestID uuid.UUID, version int, schema Schema) error
 	// MarkTableDataChanged records that this contest's table data no longer
 	// matches its built database. Called inside the transaction of each write
