@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,6 +212,10 @@ func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
 
 	archiving := make(chan struct{})
 	commit := make(chan struct{})
+	// A failure below must still end the archive's transaction, or the
+	// cleanup's DELETE waits on its row lock.
+	release := sync.OnceFunc(func() { close(commit) })
+	t.Cleanup(release)
 	archived := make(chan error, 1)
 	go func() {
 		archived <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
@@ -236,7 +241,7 @@ func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	close(commit)
+	release()
 	if err := <-archived; err != nil {
 		t.Fatalf("archive = %v", err)
 	}
