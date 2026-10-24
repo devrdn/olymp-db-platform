@@ -375,3 +375,82 @@ func TestThePrizePlacesMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("after applying 000047 = %+v, want three integer columns NOT NULL DEFAULT 0 bounded at 0..1000", up)
 	}
 }
+
+// clarificationsSchema is what of migration 000049 exists in a database.
+type clarificationsSchema struct {
+	tables, indexes, questionKey, permission int
+	// grantsMatchView is true when contest.clarify is held by exactly the
+	// roles holding contest.view, and by at least one.
+	grantsMatchView bool
+}
+
+func readClarificationsSchema(t *testing.T, dsn string) clarificationsSchema {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	var s clarificationsSchema
+	err = conn.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM pg_class WHERE relname IN ('clarifications', 'announcements') AND relkind = 'r'),
+		       (SELECT count(*) FROM pg_class WHERE relkind = 'i' AND relname IN (
+		            'clarifications_registration_posted_idx', 'clarifications_public_posted_idx',
+		            'clarifications_open_idx', 'clarifications_answered_idx', 'clarifications_question_idx',
+		            'announcements_contest_time_idx')),
+		       (SELECT count(*) FROM pg_constraint WHERE conname = 'questions_id_contest_key'),
+		       (SELECT count(*) FROM permissions WHERE code = 'contest.clarify'),
+		       EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		               WHERE p.code = 'contest.clarify')
+		       AND NOT EXISTS (
+		            (SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		             WHERE p.code = 'contest.view'
+		             EXCEPT
+		             SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		             WHERE p.code = 'contest.clarify')
+		            UNION ALL
+		            (SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		             WHERE p.code = 'contest.clarify'
+		             EXCEPT
+		             SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		             WHERE p.code = 'contest.view'))`).
+		Scan(&s.tables, &s.indexes, &s.questionKey, &s.permission, &s.grantsMatchView)
+	if err != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	return s
+}
+
+func TestTheClarificationsMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := m.Migrate(48); err != nil {
+		t.Fatalf("migrate to 48: %v", err)
+	}
+	if down := readClarificationsSchema(t, dsn); down != (clarificationsSchema{}) {
+		t.Fatalf("after rolling back 000049 something is left: %+v", down)
+	}
+
+	if err := m.Migrate(49); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate to 49: %v", err)
+	}
+	want := clarificationsSchema{tables: 2, indexes: 6, questionKey: 1, permission: 1, grantsMatchView: true}
+	if up := readClarificationsSchema(t, dsn); up != want {
+		t.Fatalf("after applying 000049 = %+v, want %+v", up, want)
+	}
+}
