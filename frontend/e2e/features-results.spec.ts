@@ -7,6 +7,11 @@ import { capture, openPlay, openSideTab, signIn } from "./support";
  * The bonus question, last of the post-beta checks because it ends the
  * features contest: Alice's correct bonus gives back the points her wrong
  * attempt cost, in the standings and on her report once the contest is over.
+ *
+ * Last by its name: one worker runs the files in name order
+ * (playwright.config.ts), and `features-results` sorts after every other
+ * `features-*` spec. A spec that reads the features contest running must keep
+ * a name that sorts before this one.
  */
 
 test.use({ viewport: { width: 1600, height: 900 } });
@@ -21,7 +26,7 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
 }) => {
   const seed = readSeed();
   const { accounts, contests, questions } = seed.features;
-  const id = contests.features!.id;
+  const id = contests.features.id;
   await signIn(page, accounts.alice);
   await openPlay(page, id);
 
@@ -32,16 +37,16 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
   await openSideTab(page, "Questions");
   const panel = page.getByRole("tabpanel", { name: "Questions" });
   // The bonus is the second question, the only one titled "The locked room".
-  const bonusTitle = panel.getByRole("heading", { level: 2, name: questions.bonus!.title });
+  const bonusTitle = panel.getByRole("heading", { level: 2, name: questions.bonus.title });
   await expect(bonusTitle).toBeVisible();
   await expect(panel.getByText("up to 5 pts back")).toBeVisible();
   // At the side column's default width the whole tag must show.
-  await expect.soft(panel.getByText("up to 5 pts back"), "the bonus tag is cut off").toBeInViewport({ ratio: 1 });
+  await expect(panel.getByText("up to 5 pts back"), "the bonus tag is cut off").toBeInViewport({ ratio: 1 });
   const answers = panel.getByRole("textbox", { name: "Your answer" });
   await answers.first().fill("Library");
   await panel.getByRole("button", { name: "Submit", exact: true }).first().click();
   await expect(panel.getByRole("status").filter({ hasText: "Not correct." })).toBeVisible();
-  await answers.first().fill(questions.bonus!.answer);
+  await answers.first().fill(questions.bonus.answer);
   await panel.getByRole("button", { name: "Submit", exact: true }).first().click();
   await expect(
     panel.getByRole("status").filter({ hasText: "Correct! Up to 5 lost points are given back." }),
@@ -54,12 +59,9 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
   await expect(pointsOf(own, accounts.alice.login)).toHaveText("10", { timeout: 20_000 });
   await capture(page, "play-bonus-standings");
 
-  const staff = await browser.newContext({
-    baseURL: process.env.E2E_BASE_URL,
-    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
-    locale: "en-US",
-    viewport: { width: 1600, height: 900 },
-  });
+  // The project's connection settings, so a second browser cannot drift from the first.
+  const { baseURL, ignoreHTTPSErrors, locale } = test.info().project.use;
+  const staff = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
   const desk = await staff.newPage();
   await signIn(desk, seed.admin);
   await desk.goto(`/contests/${id}/standings`);

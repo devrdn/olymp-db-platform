@@ -202,17 +202,30 @@ the row back, then answers the question wrongly and rightly and sees each
 judged. It is the only test that crosses Caddy, the interface, the API, the
 Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
 
+The `features-*` specs walk what the post-beta changes added: the play
+screen's layout, the query log, completion, question titles, the Tables tab
+and the diagram (`features-play`); sequential hiding, a closed catalogue,
+prize places and a monitoring roster of 300 (`features-contests`); the
+questions to the organisers across three browsers (`features-clarify`); and
+the bonus question (`features-results`, last because it finishes its
+contest). The main path alone runs with `npx playwright test
+participant.spec.ts` from `frontend/`.
+
 - **It seeds through the public API** (`e2e/seed.ts`, the global setup),
   signed in as the stack's administrator (`E2E_ADMIN_LOGIN`,
   `E2E_ADMIN_PASSWORD`): an administrator and a participant of its own, a
   contest with a story, a question and its answer, a three-row game script,
-  the roster, then publish and start. Names and passwords are generated per
-  run and nothing is printed. Each object is written to
-  `frontend/e2e/.state/seed.json` (git-ignored, 0600) the moment it exists,
-  so the teardown, which Playwright runs even after a failed setup, closes
-  whatever was made: the contest is archived (deleted if never published)
-  and the two accounts are deleted. A record a failed teardown kept is
-  closed by the next setup before it starts.
+  the roster, then publish and start. `e2e/seed-features.ts` then adds the
+  features specs' six participants, four contests (three running, one draft
+  with a roster of 300 imported accounts) and their answers, which makes the
+  setup about half a minute longer and keeps about forty game databases
+  while the run lasts. Names and passwords are generated per run and nothing
+  is printed. Each object is written to `frontend/e2e/.state/seed.json`
+  (git-ignored, 0600) the moment it exists, so the teardown, which
+  Playwright runs even after a failed setup, closes whatever was made: the
+  contests are archived (deleted if never published) and every account the
+  seed made, the roster's included, is deleted. A record a failed teardown
+  kept is closed by the next setup before it starts.
 - **It leaves a one-time password alone** unless
   `E2E_ALLOW_ADMIN_PASSWORD_CHANGE=1`, which `e2e/stack.sh` writes only into
   the throwaway stack's `smoke.env`. Without it, an administrator still on a
@@ -245,8 +258,11 @@ Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
   Against any other stack, put `E2E_BASE_URL`, `E2E_ADMIN_LOGIN` and
   `E2E_ADMIN_PASSWORD` in a 0600 file and pass it as `E2E_ENV_FILE`, rather
   than on the command line, where the password reaches the shell history
-  and the process list. The run leaves an archived contest and two deleted
-  accounts in that stack's audit trail.
+  and the process list. Each run leaves four archived contests, one deleted
+  draft and some 308 deleted accounts in that stack's audit trail, and a
+  deleted account keeps its login reserved.
+- **Screens are saved on request.** `E2E_SCREENS_DIR` names a directory into
+  which each checked screen is saved in light and dark.
 - **Traces are off.** `E2E_TRACE=1` keeps one per failed test under
   `frontend/test-results/` (git-ignored), and it records everything typed,
   the run's passwords among it.
