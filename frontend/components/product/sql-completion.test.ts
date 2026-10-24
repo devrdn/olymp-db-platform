@@ -76,6 +76,14 @@ describe("the schema's names", () => {
     });
   });
 
+  test("a table's quoted name is replaced whole when the caret is inside it", async () => {
+    const before = "SELECT * FROM ";
+    const results = await resultsAt(`${before}"Case|Files" WHERE true`, SCHEMA);
+    const table = results.find((result) => result.options.some((option) => option.label === '"CaseFiles"'));
+
+    expect(table).toMatchObject({ from: before.length, to: `${before}"CaseFiles"`.length });
+  });
+
   test("after an alias and a dot, only that table's columns", async () => {
     const labels = await labelsAt("SELECT a.| FROM alibis a", SCHEMA);
 
@@ -114,6 +122,24 @@ describe("columns without a table in front", () => {
     const closed = await resultsAt(`${before}"Sh|"`, SCHEMA);
     const replacing = closed.find((result) => result.options.some((option) => option.label === '"Shelf"'));
     expect(replacing).toMatchObject({ from: before.length, to: `${before}"Sh"`.length });
+  });
+
+  test("replace the whole quoted name when the caret is inside it", async () => {
+    const before = 'SELECT * FROM "CaseFiles" WHERE ';
+    const results = await resultsAt(`${before}"Sh|elf" = 1`, SCHEMA);
+    const shelf = results.find((result) => result.options.some((option) => option.label === '"Shelf"'));
+
+    expect(shelf).toMatchObject({ from: before.length, to: `${before}"Shelf"`.length });
+  });
+
+  // An unclosed quote runs to the next one; replacing up to it would eat the
+  // text between.
+  test("an unclosed quote is not replaced up to the next quote in the statement", async () => {
+    const before = "SELECT ";
+    const results = await resultsAt(`${before}"Sh| FROM "CaseFiles"`, SCHEMA);
+    const shelf = results.find((result) => result.options.some((option) => option.label === '"Shelf"'));
+
+    expect(shelf?.to ?? before.length + 3).toBe(before.length + 3);
   });
 
   test("are not offered right after a closing quote", async () => {
