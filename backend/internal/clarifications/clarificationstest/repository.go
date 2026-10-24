@@ -193,26 +193,43 @@ func (m *Repository) OpenCount(_ context.Context, registrationID uuid.UUID) (int
 	return open, nil
 }
 
-func (m *Repository) Queue(_ context.Context, contestID uuid.UUID, state clarifications.State, limit, offset int) ([]clarifications.Asked, error) {
+func (m *Repository) Queue(_ context.Context, contestID uuid.UUID, state clarifications.State, limit int, after uuid.UUID) ([]clarifications.Asked, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var found []clarifications.Asked
+	// order is the state's sort: negative when a comes first.
+	order := func(a, b clarifications.Clarification) int {
+		if state == clarifications.StateOpen {
+			return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), compareIDs(a.ID, b.ID))
+		}
+		if a.Answer == nil || b.Answer == nil {
+			return 0
+		}
+		return -cmp.Or(a.Answer.At.Compare(b.Answer.At), compareIDs(a.ID, b.ID))
+	}
+	var cursor *clarifications.Clarification
+	if after != uuid.Nil {
+		i := m.find(contestID, after)
+		if i < 0 || (state == clarifications.StateAnswered && m.clarifs[i].Answer == nil) {
+			return nil, nil
+		}
+		cursor = &m.clarifs[i]
+	}
+	var found []clarifications.Clarification
 	for _, c := range m.clarifs {
 		if c.ContestID != contestID || (c.Answer == nil) != (state == clarifications.StateOpen) {
 			continue
 		}
-		found = append(found, m.asked(c))
-	}
-	slices.SortFunc(found, func(a, b clarifications.Asked) int {
-		if state == clarifications.StateOpen {
-			return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), compareIDs(a.ID, b.ID))
+		if cursor != nil && order(c, *cursor) <= 0 {
+			continue
 		}
-		return -cmp.Or(a.Answer.At.Compare(b.Answer.At), compareIDs(a.ID, b.ID))
-	})
-	if offset >= len(found) {
-		return nil, nil
+		found = append(found, c)
 	}
-	return found[offset:min(offset+limit, len(found))], nil
+	slices.SortFunc(found, order)
+	var page []clarifications.Asked
+	for _, c := range found[:min(limit, len(found))] {
+		page = append(page, m.asked(c))
+	}
+	return page, nil
 }
 
 func (m *Repository) Asked(_ context.Context, contestID, id uuid.UUID) (clarifications.Asked, error) {

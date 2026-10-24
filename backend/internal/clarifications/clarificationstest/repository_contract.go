@@ -231,26 +231,55 @@ var repositoryCases = []struct {
 		answer(t, ctx, x, contest, fourth.ID, staff, clarifications.Private, x.Now.Add(time.Minute))
 		answer(t, ctx, x, contest, third.ID, staff, clarifications.Public, x.Now.Add(2*time.Minute))
 
-		open := queue(t, ctx, x, contest, clarifications.StateOpen, 50, 0)
+		open := queue(t, ctx, x, contest, clarifications.StateOpen, 50, uuid.Nil)
 		if len(open) != 2 || open[0].ID != older.ID || open[1].ID != newer.ID {
 			t.Fatalf("open queue = %+v, want %v then %v", open, older.ID, newer.ID)
 		}
 		if open[0].AskerLogin != b.Login || open[0].AskerFullName != b.FullName || open[0].Answer != nil {
 			t.Fatalf("an open item = %+v, want b's login %q and name %q, unanswered", open[0], b.Login, b.FullName)
 		}
-		if paged := queue(t, ctx, x, contest, clarifications.StateOpen, 1, 1); len(paged) != 1 || paged[0].ID != newer.ID {
-			t.Fatalf("open queue at offset 1, limit 1 = %+v, want %v", paged, newer.ID)
+		if paged := queue(t, ctx, x, contest, clarifications.StateOpen, 1, older.ID); len(paged) != 1 || paged[0].ID != newer.ID {
+			t.Fatalf("open queue after %v, limit 1 = %+v, want %v", older.ID, paged, newer.ID)
 		}
-		done := queue(t, ctx, x, contest, clarifications.StateAnswered, 50, 0)
+		done := queue(t, ctx, x, contest, clarifications.StateAnswered, 50, uuid.Nil)
 		if len(done) != 2 || done[0].ID != third.ID || done[1].ID != fourth.ID {
 			t.Fatalf("answered queue = %+v, want %v then %v", done, third.ID, fourth.ID)
 		}
 		if done[0].AnsweredByLogin != staffLogin || done[0].Answer == nil || done[0].Answer.Visibility != clarifications.Public {
 			t.Fatalf("an answered item = %+v, want answered publicly by %q", done[0], staffLogin)
 		}
+		if paged := queue(t, ctx, x, contest, clarifications.StateAnswered, 1, third.ID); len(paged) != 1 || paged[0].ID != fourth.ID {
+			t.Fatalf("answered queue after %v, limit 1 = %+v, want %v", third.ID, paged, fourth.ID)
+		}
 		counts, err := x.Repo.Counts(ctx, contest)
 		if err != nil || counts != (clarifications.Counts{Open: 2, Answered: 2}) {
 			t.Fatalf("Counts = %+v, %v, want two open and two answered", counts, err)
+		}
+	}},
+	// The desk pages past the hundred it keeps live by naming the last item it
+	// holds; an offset would repeat or skip items as answers move the lists.
+	{"a queue page starts after the item it names, wherever that item has gone since", func(t *testing.T, ctx context.Context, x Target) {
+		contest, other := x.NewContest(), x.NewContest()
+		p := x.NewParticipant(contest)
+		outsider := x.NewParticipant(other)
+		staff, _ := x.NewStaff()
+		first := ask(t, ctx, x, contest, p.Registration, nil, "first", x.Now)
+		second := ask(t, ctx, x, contest, p.Registration, nil, "second", x.Now.Add(time.Second))
+		third := ask(t, ctx, x, contest, p.Registration, nil, "third", x.Now.Add(2*time.Second))
+		foreign := ask(t, ctx, x, other, outsider.Registration, nil, "elsewhere", x.Now)
+
+		// The page the desk read ended at second; second is answered meanwhile.
+		answer(t, ctx, x, contest, second.ID, staff, clarifications.Private, x.Now.Add(time.Minute))
+		if rest := queue(t, ctx, x, contest, clarifications.StateOpen, 50, second.ID); len(rest) != 1 || rest[0].ID != third.ID {
+			t.Fatalf("open queue after the answered %v = %+v, want only %v", second.ID, rest, third.ID)
+		}
+		if rest := queue(t, ctx, x, contest, clarifications.StateOpen, 50, first.ID); len(rest) != 1 || rest[0].ID != third.ID {
+			t.Fatalf("open queue after %v = %+v, want only %v", first.ID, rest, third.ID)
+		}
+		for _, unknown := range []uuid.UUID{uuid.New(), foreign.ID} {
+			if rest := queue(t, ctx, x, contest, clarifications.StateOpen, 50, unknown); len(rest) != 0 {
+				t.Fatalf("open queue after %v, not this contest's = %+v, want nothing", unknown, rest)
+			}
 		}
 	}},
 	{"one clarification reads as staff see it, only in its own contest", func(t *testing.T, ctx context.Context, x Target) {
@@ -405,9 +434,9 @@ func feedIDs(t *testing.T, ctx context.Context, x Target, contest, registration 
 	return ids
 }
 
-func queue(t *testing.T, ctx context.Context, x Target, contest uuid.UUID, state clarifications.State, limit, offset int) []clarifications.Asked {
+func queue(t *testing.T, ctx context.Context, x Target, contest uuid.UUID, state clarifications.State, limit int, after uuid.UUID) []clarifications.Asked {
 	t.Helper()
-	items, err := x.Repo.Queue(ctx, contest, state, limit, offset)
+	items, err := x.Repo.Queue(ctx, contest, state, limit, after)
 	if err != nil {
 		t.Fatalf("Queue: %v", err)
 	}

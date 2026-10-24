@@ -181,14 +181,16 @@ describe("the staff's browser requests", () => {
 
     const result = await fetchQueue(contestId, "answered", { limit: 50 });
     await fetchQueue(contestId, "open", { limit: 500 });
-    await fetchQueue(contestId, "answered", { limit: 50, offset: 100 });
+    await fetchQueue(contestId, "answered", { limit: 50, after: clarificationId });
 
     expect(result.kind).toBe("ok");
-    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&offset=0`);
+    expect(calls[0].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50`);
     // The server's page bound, kept on this side too.
-    expect(calls[1].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=open&limit=100&offset=0`);
-    // Past what the desk keeps live, a page further on.
-    expect(calls[2].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&offset=100`);
+    expect(calls[1].url).toBe(`/api/v1/contests/${contestId}/clarifications?state=open&limit=100`);
+    // Past what the desk keeps live, the page after the last item it holds.
+    expect(calls[2].url).toBe(
+      `/api/v1/contests/${contestId}/clarifications?state=answered&limit=50&after=${clarificationId}`,
+    );
     expect(calls[0].init).toMatchObject({ credentials: "same-origin" });
   });
 

@@ -361,15 +361,25 @@ type queueResponse struct {
 }
 
 // queue pages ?state=open (oldest first, the default) or ?state=answered
-// (most recently answered first), with ?limit and ?offset.
+// (most recently answered first), with ?limit, and ?after naming the last
+// clarification the desk holds.
 func (h *ClarificationsHandler) queue(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
+	after := uuid.Nil
+	if text := r.URL.Query().Get("after"); text != "" {
+		parsed, err := uuid.Parse(text)
+		if err != nil {
+			h.fail(w, r, clarifications.ErrInvalidCursor)
+			return
+		}
+		after = parsed
+	}
 	page, err := h.service.Queue(r.Context(), clarifications.QueueQuery{
 		ContestID: contestID, State: clarifications.State(r.URL.Query().Get("state")),
-		Limit: intParam(r, "limit"), Offset: intParam(r, "offset"),
+		Limit: intParam(r, "limit"), After: after,
 	})
 	if err != nil {
 		h.fail(w, r, err)
