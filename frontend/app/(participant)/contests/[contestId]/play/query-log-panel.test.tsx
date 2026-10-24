@@ -148,6 +148,35 @@ describe("the query log panel", () => {
     );
   });
 
+  // The refresh replaces the list, so the page's cursor may no longer be the
+  // last row held; appending the page would leave a silent gap above it.
+  test("a page of older rows is dropped when a refresh started while it loaded", async () => {
+    const user = userEvent.setup();
+    let resolvePage!: (value: QueryLogRefreshResult) => void;
+    let resolveRefresh!: (value: QueryLogRefreshResult) => void;
+    fetchQueryLog
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+    const r1 = entry("SELECT r1");
+    const r2 = entry("SELECT r2");
+    const initial = { items: [r1, r2], total: 3, failed: false };
+    const { rerender } = show({ active: false, initial });
+
+    await user.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
+    rerender(<QueryLogPanel contestId="c1" initial={initial} active locale="en" dict={en} />);
+    await waitFor(() => expect(fetchQueryLog).toHaveBeenCalledTimes(2));
+
+    resolveRefresh({ kind: "ok", items: [entry("SELECT n1"), r1], total: 4 });
+    await waitFor(() => expect(screen.getByText("SELECT n1")).toBeInTheDocument());
+    resolvePage({ kind: "ok", items: [entry("SELECT r3")], total: 3 });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: en.participant.play.workspace.log.loadingMore })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("SELECT r3")).not.toBeInTheDocument();
+    expect(screen.queryByText("SELECT r2")).not.toBeInTheDocument();
+  });
+
   test("a failed load more leaves the existing rows on screen, with a way to retry", async () => {
     fetchQueryLog.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
     show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
