@@ -30,6 +30,7 @@ backend/
 │   ├── leaderboard/, monitor/, profile/, showcase/, covers/, workspace/
 │   │                    standings, watching participants, own profile, front page,
 │   │                    cover pictures, notes and SQL tabs
+│   ├── clarifications/  participants' questions to the organisers, the answers, announcements
 │   ├── mailing/         the texts of email, the outbox and the job that delivers it
 │   ├── provisioning/, gamefile/, gamedb/
 │   │                    game templates and per-participant databases, uploaded dumps,
