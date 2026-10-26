@@ -258,6 +258,7 @@ export function Workspace({
             >
               <MemoSchemaPanel
                 schema={schema}
+                contestId={contestId}
                 diagram={schemaDiagram}
                 hidden={!showSchema}
                 onReveal={revealSchema}

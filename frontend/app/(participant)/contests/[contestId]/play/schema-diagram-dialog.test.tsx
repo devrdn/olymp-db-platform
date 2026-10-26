@@ -30,7 +30,7 @@ function opener() {
 describe("the schema diagram's dialog", () => {
   test("opens a large view titled as the diagram, drawing the schema once loaded", async () => {
     const user = userEvent.setup();
-    render(<SchemaDiagramDialog schema={schema} dict={en} />);
+    render(<SchemaDiagramDialog schema={schema} contestId="c1" dict={en} />);
 
     expect(opener()).toHaveTextContent(t.open);
     await user.click(opener());
@@ -54,7 +54,7 @@ describe("the schema diagram's dialog", () => {
     const user = userEvent.setup();
     render(
       <>
-        <SchemaDiagramDialog schema={schema} dict={en} />
+        <SchemaDiagramDialog schema={schema} contestId="c1" dict={en} />
         <button type="button">outside</button>
       </>,
     );
@@ -77,7 +77,7 @@ describe("the schema diagram's dialog", () => {
 
   test("the corner button closes it", async () => {
     const user = userEvent.setup();
-    render(<SchemaDiagramDialog schema={schema} dict={en} />);
+    render(<SchemaDiagramDialog schema={schema} contestId="c1" dict={en} />);
 
     await user.click(opener());
     const dialog = await screen.findByRole("dialog", { name: t.title });
@@ -88,7 +88,7 @@ describe("the schema diagram's dialog", () => {
 
   test("an empty schema opens to the empty state", async () => {
     const user = userEvent.setup();
-    render(<SchemaDiagramDialog schema={{ truncated: false, tables: [] }} dict={en} />);
+    render(<SchemaDiagramDialog schema={{ truncated: false, tables: [] }} contestId="c1" dict={en} />);
 
     await user.click(opener());
 

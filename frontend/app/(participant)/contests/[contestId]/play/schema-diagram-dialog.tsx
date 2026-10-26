@@ -28,7 +28,16 @@ function preload() {
  * engine arrive when the view is first wanted. The dialog traps focus and
  * returns it to the button on close.
  */
-export function SchemaDiagramDialog({ schema, dict }: { schema: GameSchema; dict: PlayDictionary }) {
+export function SchemaDiagramDialog({
+  schema,
+  contestId,
+  dict,
+}: {
+  schema: GameSchema;
+  /** Keys where the participant's moved tables are remembered. */
+  contestId: string;
+  dict: PlayDictionary;
+}) {
   const t = dict.participant.play.schema.diagram;
   return (
     <Dialog>
@@ -52,7 +61,12 @@ export function SchemaDiagramDialog({ schema, dict }: { schema: GameSchema; dict
           <DialogDescription>{t.description}</DialogDescription>
         </DialogHeader>
         <Suspense fallback={<p className="font-mono text-data text-ink-3">{t.loading}</p>}>
-          <SchemaDiagram schema={schema} t={t} truncatedNote={dict.participant.play.schema.truncated} />
+          <SchemaDiagram
+            schema={schema}
+            contestId={contestId}
+            t={t}
+            truncatedNote={dict.participant.play.schema.truncated}
+          />
         </Suspense>
       </DialogContent>
     </Dialog>

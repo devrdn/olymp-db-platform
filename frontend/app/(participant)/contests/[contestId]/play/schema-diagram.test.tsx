@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import type { GameSchema, GameTable } from "@/lib/api/schema";
@@ -38,8 +38,31 @@ function hotel(): GameSchema {
   };
 }
 
+function diagram(schema: GameSchema = hotel()) {
+  return <SchemaDiagram schema={schema} contestId="c1" t={t} truncatedNote={en.participant.play.schema.truncated} />;
+}
+
 function draw(schema: GameSchema = hotel()) {
-  return render(<SchemaDiagram schema={schema} t={t} truncatedNote={en.participant.play.schema.truncated} />);
+  return render(diagram(schema));
+}
+
+/** Where a table's box is drawn, in diagram units, read from its transform. */
+function place(container: HTMLElement, name: string) {
+  const transform = container.querySelector(`[data-table="${name}"]`)?.getAttribute("transform") ?? "";
+  const [, x, y] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(transform) ?? [];
+  return { x: Number(x), y: Number(y) };
+}
+
+/** Where each arrow of a key starts, read from its paths. */
+function arrowStarts(container: HTMLElement, edge: string) {
+  return [...container.querySelectorAll(`[data-edge="${edge}"] path`)].map((path) => {
+    const [, x, y] = /^M ([-\d.]+) ([-\d.]+)/.exec(path.getAttribute("d") ?? "") ?? [];
+    return { x: Number(x), y: Number(y) };
+  });
+}
+
+function box(container: HTMLElement, name: string) {
+  return container.querySelector(`[data-table="${name}"]`) as SVGGElement;
 }
 
 /** The pan and zoom the drawing is shown at, read from its transform. */
@@ -52,6 +75,14 @@ function view(container: HTMLElement) {
 function canvas() {
   return screen.getByRole("application", { name: t.canvas });
 }
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("the schema diagram", () => {
   test("draws a box per table with its columns, marking primary and foreign keys", () => {
@@ -162,18 +193,123 @@ describe("the schema diagram", () => {
     expect(view(container)).toEqual(fitted);
   });
 
-  test("dragging pans and the wheel zooms", () => {
+  test("dragging the background pans and the wheel zooms", () => {
     const { container } = draw();
     const fitted = view(container);
+    const rooms = place(container, "rooms");
 
     fireEvent.pointerDown(canvas(), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
     fireEvent.pointerMove(canvas(), { clientX: 140, clientY: 70, pointerId: 1 });
     fireEvent.pointerUp(canvas(), { clientX: 140, clientY: 70, pointerId: 1 });
     expect(view(container).x).toBeCloseTo(fitted.x + 40);
     expect(view(container).y).toBeCloseTo(fitted.y - 30);
+    expect(place(container, "rooms")).toEqual(rooms);
 
     fireEvent.wheel(canvas(), { deltaY: -200, clientX: 10, clientY: 10 });
     expect(view(container).k).toBeGreaterThan(fitted.k);
+  });
+
+  describe("moving a table", () => {
+    test("dragging a table moves it, at the zoom it is shown at, and its arrows follow", () => {
+      const { container } = draw();
+      const fitted = view(container);
+      const rooms = place(container, "rooms");
+      const starts = arrowStarts(container, "rooms_on_a_floor");
+
+      fireEvent.pointerDown(box(container, "rooms"), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+
+      // Live, before the drop, and drawn over the other tables.
+      const [dx, dy] = [Math.round(60 / fitted.k), Math.round(30 / fitted.k)];
+      expect(place(container, "rooms")).toEqual({ x: rooms.x + dx, y: rooms.y + dy });
+      const viewport = container.querySelector("[data-viewport]")!;
+      expect(viewport.lastElementChild).toHaveAttribute("data-copy", "rooms");
+      expect(viewport.lastElementChild).toHaveAttribute("aria-hidden", "true");
+      expect(arrowStarts(container, "rooms_on_a_floor").map((p) => p.y)).toEqual(starts.map((p) => p.y + dy));
+
+      fireEvent.pointerUp(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+      expect(place(container, "rooms")).toEqual({ x: rooms.x + dx, y: rooms.y + dy });
+      expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
+      expect(view(container)).toEqual(fitted);
+    });
+
+    test("a focused table moves with the arrow keys, further with Shift, while the view stays", async () => {
+      const user = userEvent.setup();
+      const { container } = draw();
+      const fitted = view(container);
+      const rooms = place(container, "rooms");
+
+      box(container, "rooms").focus();
+      expect(box(container, "rooms")).toHaveFocus();
+      await user.keyboard("{ArrowRight}");
+      expect(place(container, "rooms")).toEqual({ x: rooms.x + 16, y: rooms.y });
+      await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+      expect(place(container, "rooms")).toEqual({ x: rooms.x + 16, y: rooms.y + 64 });
+      expect(view(container)).toEqual(fitted);
+    });
+
+    test("each table is reached with Tab and named for assistive technology", async () => {
+      const { container } = draw();
+
+      await userEvent.tab();
+      await userEvent.tab();
+      expect(box(container, "floors")).toHaveFocus();
+      expect(screen.getByRole("group", { name: "rooms" })).toHaveAttribute("aria-roledescription", t.table);
+    });
+
+    test("where tables were moved is remembered for the contest and this schema only", async () => {
+      const user = userEvent.setup();
+      const first = draw();
+      const rooms = place(first.container, "rooms");
+      box(first.container, "rooms").focus();
+      await user.keyboard("{ArrowRight}{ArrowRight}");
+      first.unmount();
+
+      const again = draw();
+      expect(place(again.container, "rooms")).toEqual({ x: rooms.x + 32, y: rooms.y });
+      again.unmount();
+
+      // A schema with another table is another drawing.
+      const other = hotel();
+      other.tables.push(table("guests", ["id"]));
+      const fresh = render(diagram(other));
+      const automatic = render(<SchemaDiagram schema={other} contestId="c2" t={t} truncatedNote="" />);
+      expect(place(fresh.container, "rooms")).toEqual(place(automatic.container, "rooms"));
+    });
+
+    test("Arrange puts every table back where the layout placed it and fits the drawing", async () => {
+      const user = userEvent.setup();
+      const { container, unmount } = draw();
+      const fitted = view(container);
+      const rooms = place(container, "rooms");
+      box(container, "rooms").focus();
+      await user.keyboard("{ArrowLeft}");
+      canvas().focus();
+      await user.keyboard("{ArrowRight}+");
+
+      await user.click(screen.getByRole("button", { name: t.arrange }));
+      expect(place(container, "rooms")).toEqual(rooms);
+      expect(view(container)).toEqual(fitted);
+
+      unmount();
+      expect(place(draw().container, "rooms")).toEqual(rooms);
+    });
+
+    test("works where storage is refused", async () => {
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("denied");
+      });
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new Error("denied");
+      });
+      const user = userEvent.setup();
+      const { container } = draw();
+      const rooms = place(container, "rooms");
+
+      box(container, "rooms").focus();
+      await user.keyboard("{ArrowDown}");
+      expect(place(container, "rooms")).toEqual({ x: rooms.x, y: rooms.y + 16 });
+    });
   });
 
   // The API's bound is 200 tables of 200 columns: forty thousand rows.
