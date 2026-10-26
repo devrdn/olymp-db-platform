@@ -109,6 +109,23 @@ describe("ContestPanel, question order and scoring", () => {
     expect(screen.getByText(dict.workspace.settings.shape.sequentialWarning)).toBeInTheDocument();
   });
 
+  test("says an attempt limit is optional once ICPC is picked with the order sequential", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest({ progression: "sequential" })} editable shapeOpen dict={dict} />);
+
+    expect(screen.getByText(dict.workspace.settings.shape.sequentialWarning)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: dict.workspace.scoring.icpc }));
+
+    expect(screen.queryByText(dict.workspace.settings.shape.sequentialWarning)).toBeNull();
+    expect(screen.getByText(dict.workspace.settings.shape.sequentialIcpcNote)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: dict.workspace.scoring.winner }));
+
+    expect(screen.getByText(dict.workspace.settings.shape.sequentialWarning)).toBeInTheDocument();
+    expect(screen.queryByText(dict.workspace.settings.shape.sequentialIcpcNote)).toBeNull();
+  });
+
   test("hints that an individual-timing contest with no end date never finishes on its own", async () => {
     const user = userEvent.setup();
     render(<ContestPanel contest={contest({ timing: "fixed" })} editable shapeOpen dict={dict} />);

@@ -23,7 +23,8 @@ const (
 	ProblemNoSchedule                 = "no_schedule"
 	// ProblemSequentialNeedsMaxAttempts names an uncapped question in a
 	// sequential contest (§6.1.1): a participant stuck on it could never
-	// reach the next one.
+	// reach the next one. ICPC scoring is exempt: a wrong attempt costs
+	// penalty time there, and staying on a question is the organizer's call.
 	ProblemSequentialNeedsMaxAttempts = "sequential_needs_max_attempts"
 	// ProblemSequentialHidesQuestion names a hidden question with another
 	// ordered after it in a sequential contest (§6.1.1). A participant never
@@ -41,12 +42,10 @@ const (
 	// the window opens, or one with no ends_at to be measured back from.
 	// Saving refuses the first already, but the window can move afterwards.
 	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
-	// ProblemICPCChoiceNeedsAttemptLimit names a choice question in ICPC
-	// scoring whose attempt cap is missing or above its choices less its
-	// correct choices, so it can be solved by trying options for penalty time.
-	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
-	// ProblemChoiceNeedsAttemptLimit is the same fault outside ICPC, where
-	// trying options wins the question's points.
+	// ProblemChoiceNeedsAttemptLimit names a choice question whose attempt cap
+	// is missing or above its choices less its correct choices, so it can be
+	// solved by trying options. Not raised under ICPC, where each try costs
+	// penalty time.
 	ProblemChoiceNeedsAttemptLimit = "choice_needs_attempt_limit"
 	// ProblemStaffRegistered names a registered participant whose account
 	// holds contest.admin_all (see ErrStaffCannotParticipate). Registration
@@ -171,12 +170,8 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		// With n options of which k are correct, attempt n-k+1 is sure to
 		// hit one, so the cap must be at most n-k. The rate limit is no
 		// obstacle to a handful of options.
-		if q.Kind == KindChoice && !choiceCapped(q) {
-			code := ProblemChoiceNeedsAttemptLimit
-			if c.Scoring == ScoringICPC {
-				code = ProblemICPCChoiceNeedsAttemptLimit
-			}
-			add(PublishProblem{Code: code, QuestionID: q.ID})
+		if q.Kind == KindChoice && c.Scoring != ScoringICPC && !choiceCapped(q) {
+			add(PublishProblem{Code: ProblemChoiceNeedsAttemptLimit, QuestionID: q.ID})
 		}
 		if q.IsBonus && !c.ScoresPoints() {
 			add(PublishProblem{Code: ProblemBonusNeedsPoints, QuestionID: q.ID})
@@ -185,7 +180,7 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 			add(PublishProblem{Code: ProblemWinnerFinalNeedsAttemptLimit, QuestionID: q.ID})
 		}
 		if c.Progression == ProgressionSequential {
-			if q.MaxAttempts == nil {
+			if q.MaxAttempts == nil && c.Scoring != ScoringICPC {
 				add(PublishProblem{Code: ProblemSequentialNeedsMaxAttempts, QuestionID: q.ID})
 			}
 			if !q.IsVisible && q.Ord < maxOrd {

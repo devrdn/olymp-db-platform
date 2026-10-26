@@ -265,9 +265,14 @@ function ShapeSection({
 
         {/* The publish gate refuses unlimited attempts under sequential
            progression (docs/ARCHITECTURE.md §6.1.1): a stuck participant
-           could not move on. */}
+           could not move on. ICPC is exempt, since a wrong attempt costs
+           penalty time there. */}
         {sequentialActive && unlimitedAttempts ? (
-          <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
+          scoring === "icpc" ? (
+            <p className="max-w-body text-small text-ink-3">{t.shape.sequentialIcpcUnlimited}</p>
+          ) : (
+            <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
+          )
         ) : null}
         {/* Likewise for winner scoring: a wrong final answer costs nothing, so
            the gate refuses unlimited attempts. */}

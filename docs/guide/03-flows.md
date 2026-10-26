@@ -372,7 +372,7 @@ and the scheduler. It reports every problem at once; the codes are constants in
 | A story, translated into every language | `no_story`, `missing_story_translation` |
 | At least one question; only one in single-question mode | `no_questions`, `single_mode_needs_one_question` |
 | Each question translated, with choice labels and a reference answer | `missing_question_translation`, `missing_choice_label`, `no_reference_answer` |
-| Attempt caps where guessing would otherwise win | `choice_needs_attempt_limit`, `icpc_choice_needs_attempt_limit`, `winner_final_needs_attempt_limit`, `sequential_needs_max_attempts` |
+| Attempt caps where guessing would otherwise win; none is asked under `icpc` scoring, where a wrong attempt costs penalty time | `choice_needs_attempt_limit`, `winner_final_needs_attempt_limit`, `sequential_needs_max_attempts` |
 | Winner scoring: at least one final question | `winner_needs_final` |
 | Bonus questions only under points scoring, and not every question a bonus | `bonus_needs_points`, `no_regular_question` |
 | Sequential progression: no hidden question before the last | `sequential_hides_question` |

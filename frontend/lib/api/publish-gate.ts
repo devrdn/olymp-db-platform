@@ -29,9 +29,8 @@ export const PUBLISH_PROBLEMS = {
   winnerFinalNeedsAttemptLimit: "winner_final_needs_attempt_limit",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
   // A choice question whose attempt limit is not below its option count can be
-  // guessed through; two codes because the cost differs (penalty time under
-  // ICPC, points otherwise).
-  icpcChoiceNeedsAttemptLimit: "icpc_choice_needs_attempt_limit",
+  // guessed through. Never raised under ICPC, where a wrong attempt costs
+  // penalty time.
   choiceNeedsAttemptLimit: "choice_needs_attempt_limit",
   // A roster member who administers every contest and so can read the
   // answers. The detail is their login.
