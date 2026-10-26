@@ -3,7 +3,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { GameSchema, GameTable } from "@/lib/api/schema";
 
-import { HEADER_HEIGHT, ROW_HEIGHT, layoutDiagram, linkPath, type DiagramNode } from "./schema-diagram-layout";
+import {
+  HEADER_HEIGHT,
+  ROW_HEIGHT,
+  layoutDiagram,
+  linkPath,
+  routeEdges,
+  type Diagram,
+  type DiagramNode,
+} from "./schema-diagram-layout";
 
 function table(name: string, columns: string[], extra: Partial<GameTable> = {}): GameTable {
   return {
@@ -129,6 +137,100 @@ function byName(nodes: DiagramNode[], name: string) {
   const node = nodes.find((n) => n.name === name);
   if (!node) throw new Error(`no node ${name}`);
   return node;
+}
+
+type Key = [column: string, to: string];
+
+/** Tables with an `id` primary key, their columns and their keys to other tables' `id`. */
+function schemaOf(specs: [name: string, columns: string[], keys?: Key[]][]): GameSchema {
+  return {
+    truncated: false,
+    tables: specs.map(([name, columns, keys = []]) =>
+      table(name, ["id", ...columns], {
+        primary_key: ["id"],
+        foreign_keys: keys.map(([column, to]) => ({
+          name: `${name}_${column}_fkey`,
+          columns: [column],
+          referenced_table: to,
+          referenced_columns: ["id"],
+        })),
+      }),
+    ),
+  };
+}
+
+/** Each table referencing the next: a chain of six. */
+function chain(): GameSchema {
+  return schemaOf([
+    ["residents", ["name", "born_at", "apartment_id"], [["apartment_id", "apartments"]]],
+    ["apartments", ["number", "floor", "building_id"], [["building_id", "buildings"]]],
+    ["buildings", ["address", "built_at", "street_id"], [["street_id", "streets"]]],
+    ["streets", ["name", "district_id"], [["district_id", "districts"]]],
+    ["districts", ["name", "city_id"], [["city_id", "cities"]]],
+    ["cities", ["name", "population"]],
+  ]);
+}
+
+/** One fact table referencing seven dimensions, of different widths. */
+function star(): GameSchema {
+  const dimensions = ["dates", "products", "stores", "customers", "promotions", "employees", "channels"];
+  return schemaOf([
+    ["sales", ["amount", ...dimensions.map((d) => `${d}_id`)], dimensions.map((d) => [`${d}_id`, d] as Key)],
+    ["dates", ["day", "month", "year", "weekday"]],
+    ["products", ["name", "brand", "price"]],
+    ["stores", ["name", "city", "opened_timestamp_with_zone"]],
+    ["customers", ["name", "email"]],
+    ["promotions", ["name", "discount"]],
+    ["employees", ["name"]],
+    ["channels", ["name"]],
+  ]);
+}
+
+/** A star whose dimensions have dimensions of their own, two sharing one. */
+function snowflake(): GameSchema {
+  return schemaOf([
+    ["sales", ["amount", "date_id", "product_id", "store_id", "customer_id"], [["date_id", "dates"], ["product_id", "products"], ["store_id", "stores"], ["customer_id", "customers"]]],
+    ["dates", ["day", "month", "year"]],
+    ["products", ["name", "category_id"], [["category_id", "categories"]]],
+    ["categories", ["name", "department_id"], [["department_id", "departments"]]],
+    ["departments", ["name"]],
+    ["stores", ["name", "city_id"], [["city_id", "cities"]]],
+    ["customers", ["name", "email", "city_id"], [["city_id", "cities"]]],
+    ["cities", ["name", "country_id"], [["country_id", "countries"]]],
+    ["countries", ["name", "code"]],
+  ]);
+}
+
+/** Arrows of different keys that cross each other, judged along their drawn paths. */
+function crossings({ edges }: Diagram): number {
+  const lines = edges.flatMap((edge) => edge.links.map((link) => ({ edge, points: pointsAlong(linkPath(link)) })));
+  const side = (p: Point, q: Point, r: Point) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  const cross = (a: Point, b: Point, c: Point, d: Point) => side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0;
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[i].edge === lines[j].edge) continue;
+      const [a, b] = [lines[i].points, lines[j].points];
+      if (a.some((p, m) => m > 0 && b.some((q, n) => n > 0 && cross(a[m - 1], p, b[n - 1], q)))) count++;
+    }
+  }
+  return count;
+}
+
+type Point = { x: number; y: number };
+
+function expectNoArrowThroughATable({ nodes, edges }: Diagram) {
+  for (const edge of edges) {
+    for (const link of edge.links) {
+      for (const node of nodes) {
+        if (node.name === edge.from || node.name === edge.to) continue;
+        const inside = pointsAlong(linkPath(link)).filter(
+          ({ x, y }) => x > node.x && x < node.x + node.width && y > node.y && y < node.y + node.height,
+        );
+        expect(inside, `${edge.name} passes through ${node.name}`).toEqual([]);
+      }
+    }
+  }
 }
 
 describe("the schema diagram's layout", () => {
@@ -301,6 +403,97 @@ describe("the schema diagram's layout", () => {
     const [column] = nodes[0].columns;
     expect(column.label).toBe(name);
     expect(column.typeLabel.endsWith("…")).toBe(true);
+  });
+
+  describe("on typical contest schemas", () => {
+    test.each([
+      ["a chain", chain],
+      ["a star", star],
+      ["a snowflake", snowflake],
+      ["the e2e features game", sightings],
+    ])("%s is drawn without overlaps or an arrow through a table", (_, schema) => {
+      const diagram = layoutDiagram(schema());
+
+      expectNoOverlaps(diagram.nodes);
+      expectNoArrowThroughATable(diagram);
+    });
+
+    // Six tables in one row fit a window only at a fraction of their size.
+    test("a chain folds into rows rather than one long row", () => {
+      const { width, height } = layoutDiagram(chain());
+
+      expect(width / height).toBeLessThan(3);
+    });
+
+    test("a star puts its dimensions on both sides of the fact, its arrows not crossing", () => {
+      const diagram = layoutDiagram(star());
+      const sales = byName(diagram.nodes, "sales");
+      const others = diagram.nodes.filter((n) => n !== sales);
+
+      expect(others.filter((n) => n.x + n.width <= sales.x).length).toBeGreaterThanOrEqual(3);
+      expect(others.filter((n) => n.x >= sales.x + sales.width).length).toBeGreaterThanOrEqual(3);
+      expect(diagram.width / diagram.height).toBeGreaterThan(1);
+      expect(crossings(diagram)).toBe(0);
+    });
+
+    test("a snowflake's arrows cross at most once", () => {
+      expect(crossings(layoutDiagram(snowflake()))).toBeLessThanOrEqual(1);
+    });
+
+    // A narrower table between wider ones: the arrow ends at its side, not
+    // past the column and back.
+    test("an arrow stays between the two sides it joins", () => {
+      const { edges } = layoutDiagram(star());
+
+      for (const link of edges.flatMap((e) => e.links)) {
+        const [left, right] = [Math.min(link.x1, link.x2), Math.max(link.x1, link.x2)];
+        for (const { x } of pointsAlong(linkPath(link))) {
+          expect(x).toBeGreaterThanOrEqual(left - 0.5);
+          expect(x).toBeLessThanOrEqual(right + 0.5);
+        }
+      }
+    });
+
+    // A game without keys is common: its tables are a block, not one long shelf.
+    test("tables no key joins fill a landscape block", () => {
+      const { nodes, width, height } = layoutDiagram(
+        schemaOf(Array.from({ length: 12 }, (_, i) => [`t${i}`, ["name", "created_at", "note"]])),
+      );
+
+      expectNoOverlaps(nodes);
+      expect(width / height).toBeGreaterThan(1);
+      expect(width / height).toBeLessThan(2.5);
+    });
+  });
+
+  test("routes the arrows again for tables moved elsewhere", () => {
+    const { nodes, edges } = layoutDiagram(hotel());
+    const moved = nodes.map((n) => (n.name === "rooms" ? { ...n, x: n.x + 1000, y: n.y + 400 } : n));
+
+    const [link] = routeEdges(edges, moved).find((e) => e.name === "rooms_on_a_floor")!.links;
+    const rooms = byName(moved, "rooms");
+    const floors = byName(moved, "floors");
+    expect(link.x1).toBe(rooms.x);
+    expect(link.y1).toBe(rowMiddle(rooms, "lvl"));
+    expect(link.x2).toBe(floors.x + floors.width);
+    expect(link.y2).toBe(rowMiddle(floors, "level"));
+  });
+
+  // Tables a participant placed nearly one above the other, a third between.
+  test("an arrow between tables moved almost into one column stays near them", () => {
+    const { nodes, edges } = layoutDiagram(hotel());
+    const at = (name: string, x: number, y: number) => ({ ...byName(nodes, name), x, y });
+    // floors ends four units left of where rooms starts; staff spans that gap.
+    const floors = byName(nodes, "floors");
+    const moved = [at("rooms", 953, 98), at("staff", 945, 270), at("floors", 949 - floors.width, 416)];
+
+    const [link] = routeEdges(edges, moved).find((e) => e.name === "rooms_on_a_floor")!.links;
+    for (const { x, y } of pointsAlong(linkPath(link))) {
+      expect(y).toBeGreaterThan(0);
+      expect(y).toBeLessThan(700);
+      expect(x).toBeGreaterThan(600);
+      expect(x).toBeLessThan(1300);
+    }
   });
 
   afterEach(() => {
