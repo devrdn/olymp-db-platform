@@ -219,7 +219,7 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 	ctx, cancel := context.WithTimeout(ctx, r.limits.Deadline)
 	defer cancel()
 
-	sess, tx, err := r.begin(ctx, req)
+	sess, tx, err := r.begin(ctx, req, statement.Writes)
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
 	}
@@ -280,12 +280,18 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 // A kept connection may have been severed while idle (database dropped WITH
 // (FORCE), server restarted). BEGIN finds out before anything has run, so the
 // query retries once on a new connection.
-func (r *Runner) begin(ctx context.Context, req Request) (*session, pgx.Tx, error) {
-	writes := req.Policy.Mode == sqlpolicy.ModeReadWrite
+//
+// The connection's role follows the policy (a read_write contest's
+// connections are the writer's, kept per database); the transaction's access
+// mode follows the statement. A read in a read_write contest runs READ ONLY,
+// which the server holds for the whole transaction, so a write the checker
+// failed to see in a read-shaped statement is still refused.
+func (r *Runner) begin(ctx context.Context, req Request, writes bool) (*session, pgx.Tx, error) {
+	writer := req.Policy.Mode == sqlpolicy.ModeReadWrite
 	budget := int64(r.limits.MaxBytes) + readSlack
-	options := pgx.TxOptions{AccessMode: accessMode(req.Policy)}
+	options := pgx.TxOptions{AccessMode: accessMode(writes)}
 
-	sess, err := r.conns.acquire(ctx, req.Database, writes, budget)
+	sess, err := r.conns.acquire(ctx, req.Database, writer, budget)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -298,7 +304,7 @@ func (r *Runner) begin(ctx context.Context, req Request) (*session, pgx.Tx, erro
 		return nil, nil, err
 	}
 
-	if sess, err = r.conns.acquire(ctx, req.Database, writes, budget); err != nil {
+	if sess, err = r.conns.acquire(ctx, req.Database, writer, budget); err != nil {
 		return nil, nil, err
 	}
 	if tx, err = sess.conn.BeginTx(ctx, options); err != nil {
@@ -323,8 +329,8 @@ func withinQuota(ctx context.Context, tx pgx.Tx, allowed int64) error {
 	return nil
 }
 
-func accessMode(p sqlpolicy.Policy) pgx.TxAccessMode {
-	if p.Mode == sqlpolicy.ModeReadWrite {
+func accessMode(writes bool) pgx.TxAccessMode {
+	if writes {
 		return pgx.ReadWrite
 	}
 	return pgx.ReadOnly
