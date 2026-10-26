@@ -427,11 +427,23 @@ test("the diagram draws the tables and their keys, pans and zooms, and gives foc
   await page.keyboard.press("Shift+ArrowRight");
   await expect.poll(async () => (await suspects.boundingBox())!.x).not.toBe(before.x);
 
-  const frame = (await canvas.boundingBox())!;
+  // Pressing on a table drags that table, so the pan starts on a point the
+  // page itself reports as bare canvas.
+  const background = await canvas.evaluate((frame) => {
+    const box = frame.getBoundingClientRect();
+    for (let y = box.top + 16; y < box.bottom - 16; y += 16) {
+      for (let x = box.left + 16; x < box.right - 16; x += 16) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && frame.contains(hit) && !hit.closest("[data-table]")) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(background, "a point of the canvas clear of every table").not.toBeNull();
   const moved = (await suspects.boundingBox())!;
-  await page.mouse.move(frame.x + frame.width / 2, frame.y + frame.height / 2);
+  await page.mouse.move(background!.x, background!.y);
   await page.mouse.down();
-  await page.mouse.move(frame.x + frame.width / 2 + 120, frame.y + frame.height / 2 + 40, { steps: 6 });
+  await page.mouse.move(background!.x + 120, background!.y + 40, { steps: 6 });
   await page.mouse.up();
   await expect.poll(async () => Math.round((await suspects.boundingBox())!.x - moved.x)).toBeGreaterThan(60);
 
