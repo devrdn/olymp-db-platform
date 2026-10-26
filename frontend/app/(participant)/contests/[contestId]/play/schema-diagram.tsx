@@ -305,6 +305,9 @@ function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string
         onPointerMove={onPointerMove}
         onPointerUp={(event) => onPointerEnd(event, true)}
         onPointerCancel={(event) => onPointerEnd(event, false)}
+        // A pointer can leave without an up or a cancel (the element losing
+        // capture); after an up the drag is already over and this does nothing.
+        onLostPointerCapture={(event) => onPointerEnd(event, false)}
         className="min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-bg select-none active:cursor-grabbing"
       >
         <svg className="block size-full">
