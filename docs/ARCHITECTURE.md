@@ -164,19 +164,21 @@ participant.
   section 6.4. It is not private: the contest's organiser sees it along with
   its edit history, and the screen tells the participant so (section 9.4).
 - **The schema browser** is a permanent panel on the left of the console: a
-  tree of tables and columns with their types and foreign keys, plus a
-  generated ER diagram of the game schema. Its source is a **cached
-  description of the schema**, built once when the template was built, so
-  clicking through the tree costs no query against an instance and none of the
-  student's rate limit. The "show me the data" button on a table is an
-  ordinary generated `SELECT * FROM t LIMIT 50` that goes through the same
-  pipeline under the same rules and limits — and appears in `query_log` like
-  any other query. The tree is built; the ER diagram and the button are not
-  (section 15, item 45). An organiser can turn the diagram off per contest
-  (`contests.schema_diagram`, on by default, changeable while the contest
-  runs; the participant's listing carries it). It removes a view and nothing
-  more: the foreign keys stay in the schema document and in the table list,
-  so it is a convenience for the screen and not a secret.
+  tree of tables and columns with their types and foreign keys, and a
+  **Diagram** button that opens a generated ER diagram of the game schema in a
+  large view. Its source is a **cached description of the schema**, built once
+  when the template was built, so clicking through the tree or the diagram
+  costs no query against an instance and none of the student's rate limit.
+  A click on a table's name writes a short `SELECT` on it into the editor for
+  the participant to run. The planned "show me the data" button, an ordinary
+  generated `SELECT * FROM t LIMIT 50` that runs through the same pipeline
+  under the same rules and limits and appears in `query_log` like any other
+  query, is not built (section 15, item 45). An organiser can turn the diagram
+  off per contest (`contests.schema_diagram`, on by default, changeable while
+  the contest runs; the participant's listing carries it, so an open play
+  screen follows a change at its next load). It removes a view and nothing
+  more: the foreign keys stay in the schema document and in the table list, so
+  it is a convenience for the screen and not a secret.
 
 Rendering: the App Router, with public pages server-rendered and the console a
 client component. Every read goes to the Core API; Next.js has no database
@@ -2619,12 +2621,12 @@ section 15's item 12 is about: take last year's olympiad and adjust it. It
 carries the declared languages with their default, titles and descriptions per
 language, the story per language, the questions in order (kind, points,
 attempts, penalty, visibility, options and their texts) with their **reference
-answers**, the contest's settings, the SQL policy and the game script. A setting added
-later is additive and leaves the format version alone; a package without the
-key reads as the setting's default (`schema_diagram` as on). It does
-not carry identifiers, status, the scheduling window, or anything at all from
-a past run — no roster, no answers, no log. It is not a backup, and pretending
-to be one is more dangerous than not being one.
+answers**, the contest's settings, the SQL policy and the game script. A
+setting added later is additive and leaves the format version alone; a package
+without the key reads as the setting's default (`schema_diagram` as on). It
+does not carry identifiers, status, the scheduling window, or anything at all
+from a past run — no roster, no answers, no log. It is not a backup, and
+pretending to be one is more dangerous than not being one.
 
 **Bounded rather than streamed** — the opposite choice from the CSV, for the
 opposite reason: a package is useful only whole, so
@@ -4589,13 +4591,12 @@ an item of the list below.
    query-log archival (39), the disk monitor (40), the nonce CSP (41),
    end-to-end tests (42) and the security audit plan (43). They protect the
    installation over months and years rather than any one contest.
-4. **Later:** the rest of the query-log panel (44), the ER diagram and "show
-   me the data" (45), the interface's side of account actions (9), the
-   accent (11), the `/design` showcase (48), high availability (46), and the
-   deferred items: team mode (10), a second visual language (14),
-   achievements (15) and several tasks in one contest (17). Each improves
-   something that already works, or waits for a need the installation does
-   not have yet.
+4. **Later:** the rest of the query-log panel (44), "show me the data" (45),
+   the interface's side of account actions (9), the accent (11), the `/design`
+   showcase (48), high availability (46), and the deferred items: team mode
+   (10), a second visual language (14), achievements (15) and several tasks in
+   one contest (17). Each improves something that already works, or waits for
+   a need the installation does not have yet.
 
 ### Decided
 
@@ -4919,11 +4920,11 @@ Product decisions the items below are built on.
   administrator, a substring search over every participant of a contest at
   once, NDJSON and XLSX export, and asynchronous export of a large selection.
   "Who touched `suspects`" is answered one participant at a time.
-- [ ] **45. The schema panel has no ER diagram and no "show me the data"**
-  (section 2.1). The panel lists tables, columns, types and foreign-key
-  targets from the cached schema description. The generated ER diagram and
-  the button that runs `SELECT * FROM t LIMIT 50` through the normal
-  pipeline do not exist.
+- [ ] **45. The schema panel has no "show me the data" button** (section 2.1).
+  The panel lists tables, columns, types and foreign-key targets from the
+  cached schema description, opens them as a diagram, and a click on a table's
+  name writes a `SELECT` into the editor. The button that runs
+  `SELECT * FROM t LIMIT 50` through the normal pipeline does not exist.
 - [ ] **46. One host, and nothing standing by** (section 12). Section 12 has
   the API and the Query Runner scale horizontally behind the proxy; the
   deployment is one host with one core cluster, one game cluster and one

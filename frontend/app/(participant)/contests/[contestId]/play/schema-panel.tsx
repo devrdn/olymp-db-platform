@@ -16,12 +16,18 @@ import { SchemaDiagramDialog } from "./schema-diagram-dialog";
  */
 export function SchemaPanel({
   schema,
+  diagram,
   hidden = false,
   onReveal,
   onQueryTable,
   dict,
 }: {
   schema: GameSchema;
+  /**
+   * Whether the contest offers the diagram. Off removes the button only: the
+   * tables, columns and foreign keys below stay.
+   */
+  diagram: boolean;
   /** Called with a table's name when it is clicked, to write a query on it. Must be stable: the panel is memoised. */
   onQueryTable: (table: string) => void;
   /**
@@ -93,7 +99,7 @@ export function SchemaPanel({
           {t.heading} · {t.language}
         </span>
         <span className="flex items-center gap-3">
-          <SchemaDiagramDialog schema={schema} dict={dict} />
+          {diagram ? <SchemaDiagramDialog schema={schema} dict={dict} /> : null}
           <span>{schema.tables.length}</span>
         </span>
       </header>

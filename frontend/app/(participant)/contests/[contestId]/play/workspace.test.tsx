@@ -118,6 +118,7 @@ function show(
     workspace?: typeof A_WORKSPACE | null;
     sqlMode?: "read_only" | "read_write";
     resultDownload?: boolean;
+    schemaDiagram?: boolean;
   } = {},
 ) {
   return render(
@@ -141,6 +142,7 @@ function show(
       schema={schema}
       sqlMode={overrides.sqlMode ?? "read_only"}
       resultDownload={overrides.resultDownload ?? true}
+      schemaDiagram={overrides.schemaDiagram ?? true}
       initialLog={freshInitialLog()}
       workspace={"workspace" in overrides ? (overrides.workspace ?? null) : A_WORKSPACE}
       locale="en"
@@ -427,6 +429,15 @@ describe("the schema column", () => {
     expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeInTheDocument();
     expect(screen.getByRole("button", tableName("guests"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.participant.play.schema.diagram.openLabel })).toBeInTheDocument();
+  });
+
+  test("keeps the tables but not the diagram in a contest that switched the diagram off", () => {
+    show(A_SCHEMA, { schemaDiagram: false });
+
+    expect(screen.getByRole("button", tableName("guests"))).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.participant.play.schema.diagram.openLabel }),
+    ).not.toBeInTheDocument();
   });
 
   test("is absent entirely in a contest that hides it, and so is the diagram", () => {
@@ -799,6 +810,7 @@ describe("collapsing a panel", () => {
           schema={schema}
           sqlMode="read_only"
           resultDownload
+          schemaDiagram
           initialLog={freshInitialLog()}
           workspace={A_WORKSPACE}
           locale="en"

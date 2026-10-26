@@ -268,7 +268,7 @@ choose their own password.
 
 | Tab | What to set for the beta |
 |---|---|
-| **Settings**, Who may enter, and from where | **Enrolment** by invitation; **Allowed networks** empty, since participants are remote; **Participants may download a result as CSV** on, the default, unless results should not leave the console as files |
+| **Settings**, Who may enter, and from where | **Enrolment** by invitation; **Allowed networks** empty, since participants are remote; **Participants may download a result as CSV** on, the default, unless results should not leave the console as files; **Participants may open the schema as a diagram** on, the default |
 | **Settings**, When it runs | **Starts** and **Ends**, both needed to publish |
 | **Settings**, SQL access | **reading and writing**, the writable tables, the disk quota factor |
 | **Story**, **Questions** | the content, in every declared language, with a reference answer per question |
@@ -279,8 +279,8 @@ The **Overview** tab's **Ready to publish** panel lists everything the
 publication gate still refuses, at once. Two of its refusals catch a beta
 setup in particular: `no_game` (the game is not built, still building, or
 failed) and `staff_registered` (a participant's account administers every
-contest). Content freezes at the start; the window, the network and the CSV
-download stay editable while the contest runs.
+contest). Content freezes at the start; the window, the network, the CSV
+download and the diagram stay editable while the contest runs.
 
 **9. Run the load test at the beta's size.** At a quiet time, never during
 somebody else's contest. `consoleload -profile beta` drives forty synthetic
@@ -439,6 +439,11 @@ Behaviour of the product that surprises people on the day:
   result is gone; the rows are still on screen, can be selected and copied,
   and an open row keeps **Copy row**. A change while the contest runs reaches
   a participant's open play screen when they reload it.
+- **The schema diagram is a setting, not a lock.** With **Participants may
+  open the schema as a diagram** off, the **Diagram** button in the play
+  screen's schema panel is gone; the tables, columns and foreign keys are
+  still listed in the panel. A change while the contest runs reaches a
+  participant's open play screen when they reload it.
 - **Late answers.** `DEADLINE_GRACE`, five seconds by default, absorbs a
   request already on its way at the deadline. It is not extra time.
 
