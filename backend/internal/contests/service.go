@@ -193,6 +193,8 @@ type CreateCommand struct {
 	ICPCPenaltyMin *int
 	// ResultDownload is nil for the default, on.
 	ResultDownload *bool
+	// SchemaDiagram is nil for the default, on.
+	SchemaDiagram *bool
 }
 
 // Create registers a contest and makes its author the owner.
@@ -216,6 +218,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesLogin),
 		ICPCPenaltyMin:       orDefaultValue(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
 		ResultDownload:       orDefaultValue(cmd.ResultDownload, true),
+		SchemaDiagram:        orDefaultValue(cmd.SchemaDiagram, true),
 	}
 	if err := c.Validate(); err != nil {
 		return Contest{}, err
@@ -301,6 +304,8 @@ type UpdateCommand struct {
 	ICPCPenaltyMin *int
 	// ResultDownload is nil to leave it alone, since false is a real setting.
 	ResultDownload *bool
+	// SchemaDiagram is nil to leave it alone, since false is a real setting.
+	SchemaDiagram *bool
 }
 
 // Update changes a contest's settings.
@@ -358,6 +363,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 	if cmd.ResultDownload != nil {
 		updated.ResultDownload = *cmd.ResultDownload
+	}
+	if cmd.SchemaDiagram != nil {
+		updated.SchemaDiagram = *cmd.SchemaDiagram
 	}
 
 	// A client cannot send "no duration", and a fixed contest with one does

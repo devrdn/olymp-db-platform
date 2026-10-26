@@ -172,7 +172,11 @@ participant.
   ordinary generated `SELECT * FROM t LIMIT 50` that goes through the same
   pipeline under the same rules and limits — and appears in `query_log` like
   any other query. The tree is built; the ER diagram and the button are not
-  (section 15, item 45).
+  (section 15, item 45). An organiser can turn the diagram off per contest
+  (`contests.schema_diagram`, on by default, changeable while the contest
+  runs; the participant's listing carries it). It removes a view and nothing
+  more: the foreign keys stay in the schema document and in the table list,
+  so it is a convenience for the screen and not a secret.
 
 Rendering: the App Router, with public pages server-rendered and the console a
 client component. Every read goes to the Core API; Next.js has no database
@@ -2615,7 +2619,9 @@ section 15's item 12 is about: take last year's olympiad and adjust it. It
 carries the declared languages with their default, titles and descriptions per
 language, the story per language, the questions in order (kind, points,
 attempts, penalty, visibility, options and their texts) with their **reference
-answers**, the contest's settings, the SQL policy and the game script. It does
+answers**, the contest's settings, the SQL policy and the game script. A setting added
+later is additive and leaves the format version alone; a package without the
+key reads as the setting's default (`schema_diagram` as on). It does
 not carry identifiers, status, the scheduling window, or anything at all from
 a past run — no roster, no answers, no log. It is not a backup, and pretending
 to be one is more dangerous than not being one.

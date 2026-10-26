@@ -156,6 +156,7 @@ type ContestResponse struct {
 	// even in other modes (§6.1.1).
 	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
 	ResultDownload bool                           `json:"result_download"`
+	SchemaDiagram  bool                           `json:"schema_diagram"`
 	PrizePlaces    PrizePlacesPayload             `json:"prize_places"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       SettingsResponse               `json:"settings"`
@@ -268,6 +269,9 @@ type ContestSummary struct {
 	// ResultDownload says whether the play screen offers a query result as a
 	// CSV file.
 	ResultDownload bool `json:"result_download"`
+	// SchemaDiagram says whether the play screen draws the schema as a
+	// diagram.
+	SchemaDiagram bool `json:"schema_diagram"`
 }
 
 func toContestResponse(c contests.Contest) ContestResponse {
@@ -284,6 +288,7 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		EndsAt:         formatTime(c.EndsAt),
 		ICPCPenaltyMin: c.ICPCPenaltyMin,
 		ResultDownload: c.ResultDownload,
+		SchemaDiagram:  c.SchemaDiagram,
 		PrizePlaces:    toPrizePlacesPayload(c.PrizePlaces),
 		AllowedCIDRs:   make([]string, 0, len(c.AllowedCIDRs)),
 		Settings: SettingsResponse{
@@ -333,6 +338,7 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 		CoverAttribution: c.CoverAttribution,
 		SQLMode:          c.SQLMode,
 		ResultDownload:   c.ResultDownload,
+		SchemaDiagram:    c.SchemaDiagram,
 	}
 }
 
@@ -459,12 +465,14 @@ type contestRequest struct {
 	// contests.DefaultICPCPenaltyMin on create.
 	ICPCPenaltyMin *int `json:"icpc_penalty_min"`
 	// ResultDownload: nil means "leave it" on update and true on create.
-	ResultDownload *bool                          `json:"result_download"`
-	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
-	Settings       *SettingsResponse              `json:"settings"`
-	Leaderboard    *leaderboardRequest            `json:"leaderboard"`
-	Languages      []LanguageResponse             `json:"languages"`
-	Translations   map[string]TranslationResponse `json:"translations"`
+	ResultDownload *bool `json:"result_download"`
+	// SchemaDiagram: nil means "leave it" on update and true on create.
+	SchemaDiagram *bool                          `json:"schema_diagram"`
+	AllowedCIDRs  []string                       `json:"allowed_cidrs"`
+	Settings      *SettingsResponse              `json:"settings"`
+	Leaderboard   *leaderboardRequest            `json:"leaderboard"`
+	Languages     []LanguageResponse             `json:"languages"`
+	Translations  map[string]TranslationResponse `json:"translations"`
 }
 
 func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -513,6 +521,7 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		EndsAt:               ends,
 		ICPCPenaltyMin:       req.ICPCPenaltyMin,
 		ResultDownload:       req.ResultDownload,
+		SchemaDiagram:        req.SchemaDiagram,
 		AllowedCIDRs:         cidrs,
 		Settings:             settings,
 		Languages:            toDomainLanguages(req.Languages),
@@ -588,6 +597,7 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 		EndsAt:         ends,
 		ICPCPenaltyMin: req.ICPCPenaltyMin,
 		ResultDownload: req.ResultDownload,
+		SchemaDiagram:  req.SchemaDiagram,
 		AllowedCIDRs:   cidrs,
 	}
 	if req.Settings != nil {

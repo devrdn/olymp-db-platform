@@ -118,6 +118,27 @@ func TestAContestStoredWithoutTheResultDownloadOffersIt(t *testing.T) {
 	})
 }
 
+// Every contest stored before the setting existed, and any row written
+// without it, shows the diagram it always showed.
+func TestAContestStoredWithoutTheSchemaDiagramShowsIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-schema-diagram")
+		var id uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author.ID).Scan(&id); err != nil {
+			t.Fatalf("insert = %v", err)
+		}
+
+		got, err := NewContests(testPool).ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if !got.SchemaDiagram {
+			t.Error("SchemaDiagram = false, want the column default, true")
+		}
+	})
+}
+
 // Every contest stored before the setting existed awards no prizes.
 func TestAContestStoredWithoutPrizePlacesHasNone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
