@@ -262,6 +262,7 @@ const en = {
         placeNotStarted: "This contest has not opened yet, so there is no table to place you on.",
         outsideTable: "This contest's published table does not carry your row, so there is no standing to show. What you did is below.",
         unplaced: "This contest gives a place to its winner and to nobody else.",
+        unanswered: "You did not answer any question, so the table gives you no place.",
         winner: "You won this contest.",
         truncated: "Counted among the first {n} rows of the table.",
         notStarted: "You never started the clock in this contest.",

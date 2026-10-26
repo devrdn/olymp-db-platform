@@ -3418,11 +3418,13 @@ than away from the people who sat it.
 "winner" mark on a report come from `leaderboard.Service.Own`, reading the
 same cached computation the contest's table does: `Public` when it is open
 (the final table, or a revealed freeze), otherwise `Live` with the place
-blanked before it is served. Two cases read identically on the wire
+blanked before it is served. Three cases read identically on the wire
 (`place: null`) and mean different things: a frozen table (`place_open:
-false` — "your place appears when the organiser opens the table") and an open
+false` — "your place appears when the organiser opens the table"); an open
 table in `winner` mode, where only the winner has a place (`place_open: true`,
-`place: null`, `winner: true` on the one row that won). `points` in ICPC is
+`place: null`, `winner: true` on the one row that won); and an open table in
+any other mode, where the reader has no answer counted for it (`place_open:
+true`, `place: null`, `winner: false`). `points` in ICPC is
 always zero — the server does not award any in that mode — and each question's
 contribution to the penalty comes from `leaderboard.Cell.Penalty`, the same
 cell that draws the leaderboard's grid, rather than being computed again.

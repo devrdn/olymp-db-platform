@@ -10,7 +10,8 @@ import type { ReportDict } from "./report-tabs";
  * the table is open. `placeOpen` is the server's decision
  * (`leaderboard.Decide`); showing a place past it would bypass the freeze. A
  * frozen table has no place yet; winner mode never places anyone but the
- * winner, so the sentences differ.
+ * winner, and any other table leaves a row with no answer unplaced, so the
+ * sentences differ.
  */
 export function ResultSummary({
   report,
@@ -101,7 +102,11 @@ function Standing({ result, t }: { result: ProfileReportResult | null; t: Report
     return <p className="max-w-body text-body text-ink-3">{said}</p>;
   }
   if (result.winner) return <p className="max-w-body text-body text-good">{t.result.winner}</p>;
-  if (result.place === null) return <p className="max-w-body text-body text-ink-3">{t.result.unplaced}</p>;
+  if (result.place === null) {
+    // Winner mode places the winner only; every other table places whoever has answered.
+    const said = result.scoring === "winner" ? t.result.unplaced : t.result.unanswered;
+    return <p className="max-w-body text-body text-ink-3">{said}</p>;
+  }
   if (result.truncated) {
     return (
       <p className="max-w-body text-small text-warn">

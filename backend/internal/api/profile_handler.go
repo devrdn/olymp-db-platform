@@ -216,7 +216,7 @@ type profileListResult struct {
 //
 // Place and Participants are null, not zero, when there is no place: the table
 // is not open, or gives this row none (in winner mode, everyone but the
-// winner).
+// winner; in any mode, a row with no answer counted for the table).
 type profileReportResult struct {
 	profileOwnNumbers
 	Place        *int `json:"place"`
