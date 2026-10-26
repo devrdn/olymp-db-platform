@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -231,6 +231,65 @@ describe("the schema diagram", () => {
       expect(place(container, "rooms")).toEqual({ x: rooms.x + dx, y: rooms.y + dy });
       expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
       expect(view(container)).toEqual(fitted);
+    });
+
+    // A browser can deliver the last move and the release before React renders
+    // the move; a single act holds both renders back the same way.
+    test("drops a table where the last move put it, even before that move is drawn", () => {
+      const { container } = draw();
+      const { k } = view(container);
+      const rooms = place(container, "rooms");
+
+      fireEvent.pointerDown(box(container, "rooms"), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(canvas(), { clientX: 120, clientY: 110, pointerId: 1 });
+      act(() => {
+        fireEvent.pointerMove(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+        fireEvent.pointerUp(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+      });
+
+      expect(place(container, "rooms")).toEqual({ x: rooms.x + Math.round(60 / k), y: rooms.y + Math.round(30 / k) });
+      expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
+    });
+
+    test("a drag of a single move, released before it is drawn, is not left hanging", async () => {
+      const user = userEvent.setup();
+      const { container } = draw();
+      const { k } = view(container);
+      const rooms = place(container, "rooms");
+
+      fireEvent.pointerDown(box(container, "rooms"), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+      act(() => {
+        fireEvent.pointerMove(canvas(), { clientX: 108, clientY: 100, pointerId: 1 });
+        fireEvent.pointerUp(canvas(), { clientX: 108, clientY: 100, pointerId: 1 });
+      });
+
+      const dropped = { x: rooms.x + Math.round(8 / k), y: rooms.y };
+      expect(place(container, "rooms")).toEqual(dropped);
+      expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
+      // The keys move it from there, not from a drag still held.
+      box(container, "rooms").focus();
+      await user.keyboard("{ArrowDown}");
+      expect(place(container, "rooms")).toEqual({ x: dropped.x, y: dropped.y + 16 });
+    });
+
+    test("a second finger neither takes over nor strands a table being dragged", () => {
+      const { container } = draw();
+      const fitted = view(container);
+      const rooms = place(container, "rooms");
+
+      fireEvent.pointerDown(box(container, "rooms"), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+      fireEvent.pointerDown(canvas(), { button: 0, clientX: 300, clientY: 300, pointerId: 2 });
+      fireEvent.pointerMove(canvas(), { clientX: 340, clientY: 300, pointerId: 2 });
+      fireEvent.pointerUp(canvas(), { clientX: 340, clientY: 300, pointerId: 2 });
+      expect(view(container)).toEqual(fitted);
+      fireEvent.pointerUp(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+
+      expect(place(container, "rooms")).toEqual({
+        x: rooms.x + Math.round(60 / fitted.k),
+        y: rooms.y + Math.round(30 / fitted.k),
+      });
+      expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
     });
 
     test("a focused table moves with the arrow keys, further with Shift, while the view stays", async () => {

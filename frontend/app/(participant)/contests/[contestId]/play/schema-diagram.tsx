@@ -84,7 +84,7 @@ export default function SchemaDiagram({
 
 type Drag =
   | { kind: "pan"; id: number; x: number; y: number }
-  | { kind: "table"; id: number; name: string; startX: number; startY: number; from: Position };
+  | { kind: "table"; id: number; name: string; startX: number; startY: number; from: Position; at: Position };
 
 function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string; t: DiagramDictionary }) {
   const frameRef = useRef<HTMLDivElement>(null);
@@ -208,7 +208,8 @@ function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string
   }
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
+    // One pointer at a time: a second finger would otherwise take over the drag.
+    if (event.button !== 0 || drag.current) return;
     const table = tableOf(event.target);
     const node = table ? byName.get(table) : undefined;
     if (table && node) {
@@ -219,6 +220,7 @@ function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string
         startX: event.clientX,
         startY: event.clientY,
         from: { x: node.x, y: node.y },
+        at: { x: node.x, y: node.y },
       };
       holdView();
     } else {
@@ -235,20 +237,24 @@ function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string
       pan(event.clientX - current.x, event.clientY - current.y);
       return;
     }
-    setDragged({
-      name: current.name,
+    const at = {
       x: Math.round(current.from.x + (event.clientX - current.startX) / shown.k),
       y: Math.round(current.from.y + (event.clientY - current.startY) / shown.k),
-    });
+    };
+    // The drop reads the position from here: the last move and the release
+    // can both arrive before React draws that move.
+    drag.current = { ...current, at };
+    setDragged({ name: current.name, ...at });
   }
 
-  function onPointerEnd(drop: boolean) {
+  function onPointerEnd(event: React.PointerEvent<HTMLDivElement>, drop: boolean) {
     const current = drag.current;
+    if (!current || current.id !== event.pointerId) return;
     drag.current = null;
-    if (current?.kind !== "table" || !dragged) return;
+    if (current.kind !== "table") return;
     setDragged(null);
-    if (drop && (dragged.x !== current.from.x || dragged.y !== current.from.y)) {
-      moveTable(dragged.name, { x: dragged.x, y: dragged.y });
+    if (drop && (current.at.x !== current.from.x || current.at.y !== current.from.y)) {
+      moveTable(current.name, current.at);
     }
   }
 
@@ -297,8 +303,8 @@ function Canvas({ diagram, contestId, t }: { diagram: Diagram; contestId: string
         onBlur={() => setFocused(null)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={() => onPointerEnd(true)}
-        onPointerCancel={() => onPointerEnd(false)}
+        onPointerUp={(event) => onPointerEnd(event, true)}
+        onPointerCancel={(event) => onPointerEnd(event, false)}
         className="min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-bg select-none active:cursor-grabbing"
       >
         <svg className="block size-full">
