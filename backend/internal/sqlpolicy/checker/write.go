@@ -30,6 +30,12 @@ func (c *Checker) writeAllowed(root *pg.Node, p sqlpolicy.Policy) error {
 		return createdTableAllowed(p, stmt.CreateStmt.GetRelation())
 
 	case *pg.Node_CreateTableAsStmt:
+		// A materialized view could be made but never dropped or refreshed
+		// (dropAllowed knows tables and views), so it would fill a quota with
+		// no way back but a reset.
+		if stmt.CreateTableAsStmt.GetObjtype() == pg.ObjectType_OBJECT_MATVIEW {
+			return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "CREATE MATERIALIZED VIEW"}
+		}
 		return createdTableAllowed(p, stmt.CreateTableAsStmt.GetInto().GetRel())
 
 	case *pg.Node_DropStmt:
