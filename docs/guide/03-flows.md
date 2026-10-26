@@ -586,7 +586,7 @@ returns*. The two talk over gRPC on the private network.
 ```mermaid
 sequenceDiagram
     participant B as Browser console
-    participant W as Next.js runQueryAction
+    participant W as runQuery in requests.ts, in the browser
     participant H as ConsoleHandler.run
     participant Q as queryproxy.Service.Run
     participant DB as Core DB
@@ -610,9 +610,11 @@ sequenceDiagram
     H-->>W: columns, column_types, rows, truncated, rows_affected, duration_micros
 ```
 
-- Frontend: `runQueryAction` in
-  [frontend/app/(participant)/contests/[contestId]/play/actions.ts](../../frontend/app/%28participant%29/contests/%5BcontestId%5D/play/actions.ts),
-  called from `console.tsx` in the same directory.
+- Frontend: `runQuery` in
+  [frontend/app/(participant)/contests/[contestId]/play/requests.ts](../../frontend/app/%28participant%29/contests/%5BcontestId%5D/play/requests.ts),
+  called from `console.tsx` in the same directory. It is a browser request
+  with the session cookie, not a server action, so a long query never holds
+  up the answer form or the log behind it.
 - Handler: `ConsoleHandler.run` in
   [backend/internal/api/console_handler.go](../../backend/internal/api/console_handler.go)
   (authentication only: taking part is a registration, not a permission). It
@@ -710,7 +712,7 @@ clock in the same statement that writes the attempt.
 ```mermaid
 sequenceDiagram
     participant B as Browser questions panel
-    participant W as Next.js submitAnswerAction
+    participant W as submitAnswer in requests.ts, in the browser
     participant H as ParticipantHandler.answer
     participant L as auth.Limiter
     participant S as contests.Service.Submit
@@ -727,7 +729,7 @@ sequenceDiagram
     S->>S: writeDeadline is Deadline plus deadline grace, grade once
     S->>DB: Submissions.Insert - attempt number, cap, now() before deadline, points minus penalty
     opt correct and worth points
-        S->>DB: AddScore, in the same transaction
+        S->>DB: RefreshScore - recount the total, in the same transaction
     end
     H-->>W: correct, points_awarded, attempts_remaining, closed
 ```
