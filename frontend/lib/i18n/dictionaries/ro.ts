@@ -1542,7 +1542,7 @@ const ro = {
           loading: "Se desenează diagrama…",
           empty: "Această bază de date nu are tabele de desenat.",
           canvas: "Diagrama schemei",
-          keys: "Trage fundalul sau folosește săgețile pentru a muta diagrama, rotița sau + și − pentru zoom, 0 pentru a o încadra în fereastră. Trage un tabel pentru a-l muta sau ajungi la el cu Tab și îl muți cu săgețile, mai departe cu Shift.",
+          keys: "Trage fundalul sau folosește săgețile pentru a muta diagrama, rotița sau + și − pentru zoom, 0 pentru a o încadra în fereastră. Trage un tabel pentru a-l muta sau ajunge la el cu Tab și mută-l cu săgețile, cu pași mai mari cu Shift.",
           table: "tabel",
           arrange: "Aranjează",
           arrangeHint: "Readu toate tabelele acolo unde le așază aranjarea automată",
