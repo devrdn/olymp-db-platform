@@ -78,6 +78,11 @@ export const contestSummarySchema = z
      * omits it; it offered the download to everybody.
      */
     result_download: z.boolean().default(true),
+    /**
+     * Whether the schema panel offers the diagram. An older server omits it;
+     * the diagram was there for everybody.
+     */
+    schema_diagram: z.boolean().default(true),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -97,6 +102,7 @@ export const contestSummarySchema = z
     coverAttribution: raw.cover_attribution,
     sqlMode: raw.sql_mode,
     resultDownload: raw.result_download,
+    schemaDiagram: raw.schema_diagram,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;
@@ -151,6 +157,7 @@ export const contestSchema = z
     icpc_penalty_min: z.number(),
     // Defaulted for an older server, as in the summary.
     result_download: z.boolean().default(true),
+    schema_diagram: z.boolean().default(true),
     // Defaulted to none for a server older than prize places.
     prize_places: z
       .object({ first: z.number(), second: z.number(), third: z.number() })
@@ -185,6 +192,7 @@ export const contestSchema = z
     scoring: raw.scoring,
     icpcPenaltyMin: raw.icpc_penalty_min,
     resultDownload: raw.result_download,
+    schemaDiagram: raw.schema_diagram,
     prizePlaces: raw.prize_places,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,

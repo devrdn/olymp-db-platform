@@ -24,6 +24,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     scoring: "points",
     icpcPenaltyMin: 20,
     resultDownload: true,
+    schemaDiagram: true,
     prizePlaces: { first: 0, second: 0, third: 0 },
     timing: "fixed",
     durationMin: undefined,
@@ -234,6 +235,67 @@ describe.each(["en", "ro", "ru"] as const)("the result download's rule in %s", (
     expect(hint).toMatch(words.on);
     expect(hint).toMatch(words.reload);
     expect(hint).toMatch(words.copy);
+  });
+});
+
+describe("ContestPanel, the schema diagram", () => {
+  test("offers the box ticked as the contest holds it, with its rule as its description", () => {
+    const t = dict.workspace.settings.access;
+    const { unmount } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const box = screen.getByRole("checkbox", { name: t.schemaDiagram });
+    expect(box).toBeChecked();
+    expect(box).toHaveAccessibleDescription(t.schemaDiagramHint);
+    unmount();
+
+    render(<ContestPanel contest={contest({ schemaDiagram: false })} editable shapeOpen dict={dict} />);
+    expect(screen.getByRole("checkbox", { name: t.schemaDiagram })).not.toBeChecked();
+  });
+
+  test("submits the box with the rest of the contest's fields", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const box = screen.getByRole("checkbox", { name: dict.workspace.settings.access.schemaDiagram });
+    const form = box.closest("form")!;
+    expect(new FormData(form).get("schemaDiagram")).toBe("on");
+
+    await user.click(box);
+    expect(new FormData(form).has("schemaDiagram")).toBe(false);
+  });
+
+  test("stays open while the contest runs, unlike the shape", () => {
+    render(
+      <ContestPanel contest={contest({ status: "running" })} editable shapeOpen={false} dict={dict} />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: dict.workspace.settings.access.schemaDiagram })).toBeEnabled();
+  });
+
+  test("closes with the other settings once the contest is over", () => {
+    render(
+      <ContestPanel contest={contest({ status: "finished" })} editable={false} shapeOpen={false} dict={dict} />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: dict.workspace.settings.access.schemaDiagram })).toBeDisabled();
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the schema diagram's rule in %s", (locale) => {
+  // The hint must carry what an organiser needs: the default, when a change
+  // reaches a page already open, and that the foreign keys stay listed.
+  const words = {
+    en: { on: /default/i, reload: /reload/i, keys: /foreign keys/i },
+    ro: { on: /implicit/i, reload: /reîncărc/i, keys: /cheile străine/i },
+    ru: { on: /умолчани/i, reload: /обнов/i, keys: /внешние ключи/i },
+  }[locale];
+
+  test("says it is on by default, applies at the next reload, and keeps the foreign keys listed", async () => {
+    const hint = (await getDictionary(locale)).workspace.settings.access.schemaDiagramHint;
+
+    expect(hint).toMatch(words.on);
+    expect(hint).toMatch(words.reload);
+    expect(hint).toMatch(words.keys);
   });
 });
 

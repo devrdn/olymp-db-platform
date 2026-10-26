@@ -25,6 +25,7 @@ const nightInTheArchive: ContestSummary = {
   coverAttribution: "",
   sqlMode: "read_only",
   resultDownload: true,
+  schemaDiagram: true,
 };
 
 let en: Dictionary;

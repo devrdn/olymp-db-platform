@@ -145,6 +145,25 @@ describe("contestListSchema", () => {
     // An older server omits it, and offered the download to everybody.
     expect(contestListSchema.parse({ items: [item], total: 1 }).items[0].resultDownload).toBe(true);
   });
+
+  test("carries whether the schema panel offers the diagram", () => {
+    const item = {
+      id: "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+      status: "running",
+      enrollment: "open",
+      question_mode: "multi",
+      lang: "ru",
+      title: "Ночь в архиве",
+      scoring: "points",
+      icpc_penalty_min: 20,
+    };
+
+    expect(
+      contestListSchema.parse({ items: [{ ...item, schema_diagram: false }], total: 1 }).items[0].schemaDiagram,
+    ).toBe(false);
+    // An older server omits it, and the diagram was there for everybody.
+    expect(contestListSchema.parse({ items: [item], total: 1 }).items[0].schemaDiagram).toBe(true);
+  });
 });
 
 const detail = {
@@ -156,6 +175,7 @@ const detail = {
   scoring: "points",
   icpc_penalty_min: 20,
   result_download: true,
+  schema_diagram: true,
   timing: "individual",
   duration_min: 90,
   starts_at: "2026-11-08T19:00:00Z",
@@ -225,6 +245,12 @@ describe("contestSchema", () => {
     expect(contestSchema.parse(detail).resultDownload).toBe(true);
     expect(contestSchema.parse({ ...detail, result_download: false }).resultDownload).toBe(false);
     expect(contestSchema.parse({ ...detail, result_download: undefined }).resultDownload).toBe(true);
+  });
+
+  test("reads whether the schema panel offers the diagram", () => {
+    expect(contestSchema.parse(detail).schemaDiagram).toBe(true);
+    expect(contestSchema.parse({ ...detail, schema_diagram: false }).schemaDiagram).toBe(false);
+    expect(contestSchema.parse({ ...detail, schema_diagram: undefined }).schemaDiagram).toBe(true);
   });
 
   // Go writes `null` for fixed timing; left as is, a number input would show "null".
