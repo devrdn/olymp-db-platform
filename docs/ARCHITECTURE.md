@@ -1210,10 +1210,9 @@ start. A place is decided by the number of questions solved and by penalty
 time: the minutes from the contest's start (`contests.starts_at`, or
 `registrations.started_at` under an individual clock) to the first correct
 answer, plus `contests.icpc_penalty_min` for every earlier wrong attempt. The
-publication gate refuses a multiple-choice question whose attempt limit is
-unset or larger than the number of options minus the number of correct ones,
-because otherwise the right option is reachable by exhaustion at the price of
-a penalty. A frozen ICPC table shows, in the cell of a question not yet
+publication gate asks for no attempt limit in this mode, on a multiple-choice
+question or in a sequential contest: trying options costs penalty minutes, and
+that is enough. `max_attempts` stays optional and is enforced when set. A frozen ICPC table shows, in the cell of a question not yet
 solved, how many attempts were submitted after the freeze without their
 outcome — the one deliberate exception to "nothing leaves the server after the
 freeze" (section 10). Where sequential progression is in force, attempts after
@@ -1295,7 +1294,9 @@ one is locked in for the rest of the olympiad: the competition is over for
 them while the clock runs. So the publication gate **refuses** the
 combination of `sequential` and a question without `max_attempts`: that is a
 contest capable of trapping a participant, and it would do so on the one day
-it costs the most.
+it costs the most. `icpc` scoring is the exception: a wrong attempt already
+costs penalty time there, so an uncapped question is allowed, and a participant
+who cannot solve it stays on it. That is the organiser's choice.
 
 The order is `questions.ord`, the same one used for display. Hidden questions
 (`is_visible = false`) count in the sequence like any other: hidden is not

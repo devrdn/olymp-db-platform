@@ -605,6 +605,38 @@ func TestSubmitRefusesOnceMaxAttemptsIsSpent(t *testing.T) {
 	}
 }
 
+// An ICPC contest asks for no attempt limit, but one that is set still holds.
+func TestSubmitRefusesOnceMaxAttemptsIsSpentInICPCMode(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(time.Hour)
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed, Scoring: contests.ScoringICPC,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 2
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindText, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "correct"}},
+	})
+
+	for i := 0; i < max; i++ {
+		if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+			Participant: p, Contest: c, QuestionID: q.ID, Value: "wrong",
+		}); err != nil {
+			t.Fatalf("attempt %d: Submit() = %v", i+1, err)
+		}
+	}
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "correct",
+	})
+	if !errors.Is(err, contests.ErrQuestionClosed) {
+		t.Fatalf("error = %v, want ErrQuestionClosed — every attempt was already spent", err)
+	}
+}
+
 // §8: the database's clock decides, not the application server's.
 func TestSubmitRefusesAfterTheDeadlineByTheDatabasesOwnClock(t *testing.T) {
 	f := conteststest.NewFixture()

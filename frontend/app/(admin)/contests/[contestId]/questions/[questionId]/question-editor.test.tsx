@@ -92,12 +92,52 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     expect(
       screen.getByText(dict.workspace.question.shape.sequentialNeedsAttempts),
     ).toBeInTheDocument();
+    expect(screen.queryByText(dict.workspace.question.shape.sequentialIcpcUnlimited)).toBeNull();
 
     await user.type(screen.getByLabelText(dict.workspace.question.shape.attempts), "3");
 
     expect(
       screen.queryByText(dict.workspace.question.shape.sequentialNeedsAttempts),
     ).toBeNull();
+  });
+
+  test("says an unlimited question is allowed under ICPC, and that publishing is not blocked", async () => {
+    const user = userEvent.setup();
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ maxAttempts: undefined })}
+        languages={["en"]}
+        editable
+        scoring="icpc"
+        sequentialActive
+        dict={dict}
+      />,
+    );
+
+    expect(screen.queryByText(dict.workspace.question.shape.sequentialNeedsAttempts)).toBeNull();
+    expect(screen.getByText(dict.workspace.question.shape.sequentialIcpcUnlimited)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(dict.workspace.question.shape.attempts), "3");
+
+    expect(screen.queryByText(dict.workspace.question.shape.sequentialIcpcUnlimited)).toBeNull();
+  });
+
+  test("says nothing about unlimited attempts under ICPC when the order is free", () => {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ maxAttempts: undefined })}
+        languages={["en"]}
+        editable
+        scoring="icpc"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.queryByText(dict.workspace.question.shape.sequentialIcpcUnlimited)).toBeNull();
+    expect(screen.queryByText(dict.workspace.question.shape.sequentialNeedsAttempts)).toBeNull();
   });
 
   test("warns about the winner-mode publish-gate refusal on an unlimited final question", async () => {

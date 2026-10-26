@@ -340,10 +340,14 @@ export function ContestPanel({
             onPick={setProgression}
           />
 
-          {/* The publish gate refuses this combination
-             (docs/ARCHITECTURE.md §6.1.1); say so here. */}
+          {/* The publish gate refuses this combination unless the scoring is
+             ICPC (docs/ARCHITECTURE.md §6.1.1); say so here. */}
           {progression === "sequential" ? (
-            <p className="max-w-body text-small text-warn">{t.shape.sequentialWarning}</p>
+            scoring === "icpc" ? (
+              <p className="max-w-body text-small text-ink-3">{t.shape.sequentialIcpcNote}</p>
+            ) : (
+              <p className="max-w-body text-small text-warn">{t.shape.sequentialWarning}</p>
+            )
           ) : null}
         </fieldset>
 

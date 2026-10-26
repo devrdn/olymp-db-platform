@@ -234,6 +234,29 @@ func TestGateRefusesSequentialWithAQuestionWithNoMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestGateRefusesSequentialWithAnUncappedQuestionInWinnerMode(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	c.Scoring = contests.ScoringWinner
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemSequentialNeedsMaxAttempts) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemSequentialNeedsMaxAttempts)
+	}
+}
+
+// A wrong ICPC attempt already costs penalty time, and a participant who
+// cannot solve a question stays on it: the organiser's choice.
+func TestGateAcceptsSequentialICPCWithAnUncappedQuestion(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	c.Scoring = contests.ScoringICPC
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
 func TestGateAcceptsSequentialOnceEveryQuestionHasMaxAttempts(t *testing.T) {
 	c, story, questions := publishable()
 	c.Progression = contests.ProgressionSequential
@@ -388,85 +411,32 @@ func withChoices(q contests.Question, ids []string, correct ...string) contests.
 	return q
 }
 
-// n options with k correct are always solved by attempt n-k+1, so the limit
-// is held to n-k.
-func TestGateHoldsAnICPCChoiceLimitBelowTheWrongChoicesPlusOne(t *testing.T) {
+// Trying options under ICPC costs penalty minutes, which is enough: no limit
+// is asked of a choice question, and one that is set is not judged.
+func TestGateAsksNoAttemptLimitOfAnICPCChoiceQuestion(t *testing.T) {
 	cases := []struct {
-		name    string
-		correct []string
-		limit   int
-		refused bool
+		name  string
+		limit *int
 	}{
-		{"one correct of four, limit 3", []string{"a"}, 3, false},
-		{"one correct of four, limit 4", []string{"a"}, 4, true},
-		{"two correct of four, limit 2", []string{"a", "c"}, 2, false},
-		{"two correct of four, limit 3", []string{"a", "c"}, 3, true},
-		// The same correct choice written twice is still one choice.
-		{"one correct of four written twice, limit 3", []string{"a", "a"}, 3, false},
-		{"every choice correct, limit 1", []string{"a", "b", "c", "d"}, 1, true},
+		{"no limit", nil},
+		{"limit equal to the choice count", new(3)},
+		{"limit below the choice count", new(2)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, story, questions := publishable()
 			c.Scoring = contests.ScoringICPC
-			questions[0] = withChoices(questions[0], []string{"a", "b", "c", "d"}, tc.correct...)
-			limit := tc.limit
-			questions[0].MaxAttempts = &limit
+			questions[0] = asChoiceQuestion(questions[0])
+			questions[0].MaxAttempts = tc.limit
 
-			err := contests.CheckPublishable(c, story, questions)
-			if tc.refused {
-				codes := problemCodes(t, err)
-				if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
-					t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
-				}
-				return
-			}
-			if err != nil {
+			if err := contests.CheckPublishable(c, story, questions); err != nil {
 				t.Errorf("contests.CheckPublishable() = %v, want nil", err)
 			}
 		})
 	}
 }
 
-func TestGateRefusesAnICPCChoiceQuestionWithNoAttemptLimit(t *testing.T) {
-	c, story, questions := publishable()
-	c.Scoring = contests.ScoringICPC
-	questions[0] = asChoiceQuestion(questions[0])
-	questions[0].MaxAttempts = nil
-
-	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
-	if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
-		t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
-	}
-}
-
-func TestGateRefusesAnICPCChoiceQuestionWithALimitEqualToTheChoiceCount(t *testing.T) {
-	c, story, questions := publishable()
-	c.Scoring = contests.ScoringICPC
-	questions[0] = asChoiceQuestion(questions[0])
-	limit := 3
-	questions[0].MaxAttempts = &limit
-
-	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
-	if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
-		t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
-	}
-}
-
-func TestGateAcceptsAnICPCChoiceQuestionWithALimitBelowTheChoiceCount(t *testing.T) {
-	c, story, questions := publishable()
-	c.Scoring = contests.ScoringICPC
-	questions[0] = asChoiceQuestion(questions[0])
-	limit := 2
-	questions[0].MaxAttempts = &limit
-
-	if err := contests.CheckPublishable(c, story, questions); err != nil {
-		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
-	}
-}
-
-// Outside ICPC brute force costs nothing at all, so it is refused too, with
-// its own problem code.
+// Outside ICPC brute force costs nothing at all, so it is refused.
 func TestGateRefusesAnUncappedChoiceQuestionOutsideICPCMode(t *testing.T) {
 	c, story, questions := publishable()
 	questions[0] = asChoiceQuestion(questions[0])
@@ -475,9 +445,6 @@ func TestGateRefusesAnUncappedChoiceQuestionOutsideICPCMode(t *testing.T) {
 	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
 	if !contains(codes, contests.ProblemChoiceNeedsAttemptLimit) {
 		t.Errorf("problems = %v, want %s", codes, contests.ProblemChoiceNeedsAttemptLimit)
-	}
-	if contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
-		t.Errorf("problems = %v, want the points-mode wording, not ICPC's", codes)
 	}
 }
 
@@ -533,6 +500,22 @@ func TestGateRefusesAnUncappedChoiceQuestionInPointsScoring(t *testing.T) {
 		"en": {BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener", "c": "The cook"}},
 		"ro": {BodyMD: "Cine a făcut-o?", Choices: map[string]string{"a": "Majordomul", "b": "Grădinarul", "c": "Bucătarul"}},
 	}
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemChoiceNeedsAttemptLimit)
+	}
+}
+
+func TestGateRefusesAnUncappedChoiceQuestionInWinnerMode(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	limit := 1
+	final := questions[0]
+	final.MaxAttempts = &limit
+	choice := asChoiceQuestion(final)
+	choice.ID, choice.Ord, choice.MaxAttempts = uuid.New(), 2, nil
+	questions = []contests.Question{final, choice}
 
 	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
 	if !contains(codes, contests.ProblemChoiceNeedsAttemptLimit) {
