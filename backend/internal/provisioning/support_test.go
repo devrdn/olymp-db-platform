@@ -1168,3 +1168,84 @@ func gamesOf(author authoring) (*provisioning.Games, *templateStore, *buildClust
 	cluster := &buildCluster{}
 	return provisioning.NewGames(store, cluster, author), store, cluster
 }
+
+// ownGame is the real repository with ClaimBuild kept to one contest's game.
+// ClaimBuild takes the oldest claimable game installation-wide, and packages
+// tested in parallel share the database, so a plain claim here can build
+// another package's game.
+type ownGame struct {
+	*postgres.GameInstances
+	contest uuid.UUID
+}
+
+func ownBuilds(contest uuid.UUID) *ownGame {
+	return &ownGame{GameInstances: postgres.NewGameInstances(testPool), contest: contest}
+}
+
+// ClaimBuild first ages this test's pending game by seven years, so the real
+// claim reaches it first: older than the five years anotherPackagesPendingGame
+// gives its game, younger than the ten the postgres claim tests give their own
+// rows. If another claim holds the game for a moment, a foreign game claimed
+// meanwhile is put back to pending (the only claimable status other packages
+// commit) and the claim is tried again.
+func (o *ownGame) ClaimBuild(ctx context.Context, stale time.Duration) (provisioning.Template, error) {
+	if _, err := testPool.Exec(ctx,
+		`UPDATE game_templates SET updated_at = now() - interval '7 years'
+		 WHERE contest_id = $1 AND status = 'pending'`, o.contest); err != nil {
+		return provisioning.Template{}, fmt.Errorf("age this test's game: %w", err)
+	}
+	for range 20 {
+		claimed, err := o.GameInstances.ClaimBuild(ctx, stale)
+		switch {
+		case errors.Is(err, provisioning.ErrNoGame):
+		case err != nil || claimed.ContestID == o.contest:
+			return claimed, err
+		default:
+			if _, err := testPool.Exec(ctx,
+				`UPDATE game_templates SET status = 'pending'
+				 WHERE contest_id = $1 AND version = $2 AND status = 'building'`,
+				claimed.ContestID, claimed.Version); err != nil {
+				return provisioning.Template{}, fmt.Errorf("put back another package's game: %w", err)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return provisioning.Template{}, fmt.Errorf("twenty claims did not reach contest %s's game", o.contest)
+}
+
+// The postgres package commits an aged pending game while this package runs
+// (anotherPackagesPendingGame). A build in these tests must still build the
+// test's own game, or it fails whenever that game's contest is deleted mid-build.
+func TestABuildInTheseTestsTakesItsOwnGameEvenWhenAnotherPackagesGameIsOlder(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 0)
+	other, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+	if _, err := repo.SaveScript(t.Context(), other.ID, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
+		t.Fatalf("save the other package's game: %v", err)
+	}
+	if _, err := testPool.Exec(t.Context(),
+		`UPDATE game_templates SET updated_at = now() - interval '5 years' WHERE contest_id = $1`, other.ID); err != nil {
+		t.Fatalf("age the other package's game: %v", err)
+	}
+
+	games := provisioning.NewGames(ownBuilds(contest.ID), &buildCluster{}, editableContest{})
+	if _, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `SELECT 1`); err != nil {
+		t.Fatalf("save this test's game: %v", err)
+	}
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.ContestID != contest.ID {
+		t.Fatalf("built contest %s's game, want this test's own (%s)", built.ContestID, contest.ID)
+	}
+	var status string
+	if err := testPool.QueryRow(t.Context(),
+		`SELECT status FROM game_templates WHERE contest_id = $1`, other.ID).Scan(&status); err != nil {
+		t.Fatalf("read the other package's game: %v", err)
+	}
+	if status != string(provisioning.TemplatePending) {
+		t.Fatalf("the other package's game is %q, want it left pending for its owner", status)
+	}
+}
