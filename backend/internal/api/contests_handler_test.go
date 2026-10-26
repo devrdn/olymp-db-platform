@@ -1080,6 +1080,73 @@ func TestListingCarriesWhetherAContestOffersTheResultDownload(t *testing.T) {
 	}
 }
 
+func TestCreatingAContestOffersTheSchemaDiagramByDefault(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+
+	rec := f.do(http.MethodPost, "/contests", `{}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["schema_diagram"]; got != true {
+		t.Errorf("schema_diagram = %v, want true when the request does not mention it", got)
+	}
+}
+
+// A pointer on the wire, so an update that never mentions it leaves a false
+// in place rather than turning the diagram back on.
+func TestTheSchemaDiagramStaysOffThroughAnUnrelatedUpdate(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"schema_diagram": false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["schema_diagram"]; got != false {
+		t.Errorf("schema_diagram = %v, want false", got)
+	}
+
+	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"enrollment": "open"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["schema_diagram"]; got != false {
+		t.Errorf("schema_diagram = %v, want false to survive an unrelated update", got)
+	}
+}
+
+// The play screen decides from the listing whether to offer the schema diagram.
+func TestListingCarriesWhetherAContestOffersTheSchemaDiagram(t *testing.T) {
+	f := newContestFixture(t)
+	_, cookie := f.asParticipant(t, "s.popescu")
+	offering := f.stores.SeedContest(contests.StatusPublished)
+	offering.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(offering)
+	withholding := f.stores.SeedContest(contests.StatusPublished)
+	withholding.Enrollment = contests.EnrollmentOpen
+	withholding.SchemaDiagram = false
+	f.stores.Contests.Put(withholding)
+
+	rec := f.asked(t, "/contests?scope=participant", cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	items, _ := decode(t, rec)["items"].([]any)
+	offered := map[any]any{}
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		offered[row["id"]] = row["schema_diagram"]
+	}
+	if got := offered[offering.ID.String()]; got != true {
+		t.Errorf("schema_diagram = %v for a contest offering it, want true", got)
+	}
+	if got := offered[withholding.ID.String()]; got != false {
+		t.Errorf("schema_diagram = %v for a contest withholding it, want false", got)
+	}
+}
+
 func prizePlacesOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	places, ok := decode(t, rec)["prize_places"].(map[string]any)

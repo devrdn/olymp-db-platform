@@ -168,6 +168,10 @@ type Contest struct {
 	// ResultDownload offers the participant a CSV file of a query result. A
 	// convenience, not a control: the rows are on their screen either way.
 	ResultDownload bool
+	// SchemaDiagram shows the participant the schema as a diagram. The
+	// relations stay in the schema document either way: this removes a view,
+	// it does not withhold anything.
+	SchemaDiagram bool
 	// PrizePlaces is how many places earn each prize on the standings.
 	// Service.SetPrizePlaces is its one writer; Service.Update leaves it alone.
 	PrizePlaces PrizePlaces
@@ -544,5 +548,6 @@ func (c Contest) auditFields() map[string]any {
 		"leaderboard_names":        c.LeaderboardNames,
 		"icpc_penalty_min":         c.ICPCPenaltyMin,
 		"result_download":          c.ResultDownload,
+		"schema_diagram":           c.SchemaDiagram,
 	}
 }

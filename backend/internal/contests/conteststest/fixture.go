@@ -223,6 +223,7 @@ func (f *Fixture) SeedContest(status string) contests.Contest {
 		},
 		CreatedBy:      uuid.New(),
 		ResultDownload: true,
+		SchemaDiagram:  true,
 	})
 }
 

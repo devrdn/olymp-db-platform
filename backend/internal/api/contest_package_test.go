@@ -168,6 +168,25 @@ func TestTheContestPackageCarriesWhetherTheResultDownloadIsOffered(t *testing.T)
 	}
 }
 
+// Configuration, so it travels; checked turned off, since true is also what
+// an importer would assume for a missing key.
+func TestTheContestPackageCarriesWhetherTheSchemaDiagramIsShown(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestAdminAll)
+	c := seedPackagedContest(t, f)
+	c.SchemaDiagram = false
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/export", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	contest, _ := decode(t, rec)["contest"].(map[string]any)
+	if got, present := contest["schema_diagram"]; !present || got != false {
+		t.Errorf("schema_diagram = %v (present: %v), want false", got, present)
+	}
+}
+
 // Additive to format 1: an older reader ignores the key, and a contest with
 // none writes the file it wrote before.
 func TestTheContestPackageCarriesTheSchemaNotes(t *testing.T) {

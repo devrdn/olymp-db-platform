@@ -1457,3 +1457,83 @@ func TestUpdateRefusesTheResultDownloadOnceFinished(t *testing.T) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
 	}
 }
+
+// Matches the column default, so a new contest behaves like one created
+// before the setting existed.
+func TestCreateOffersTheSchemaDiagramByDefault(t *testing.T) {
+	f := conteststest.NewFixture()
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if !created.SchemaDiagram {
+		t.Error("SchemaDiagram = false, want true when the command does not mention it")
+	}
+}
+
+func TestCreateHonoursASchemaDiagramTurnedOff(t *testing.T) {
+	f := conteststest.NewFixture()
+	off := false
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
+		ActorID: uuid.New(), SchemaDiagram: &off,
+	})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if created.SchemaDiagram {
+		t.Error("SchemaDiagram = true, want the false the command asked for")
+	}
+}
+
+// Only the view of the schema changes; nothing a participant has done depends on it.
+func TestUpdateTurnsTheSchemaDiagramOffWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	off := false
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, SchemaDiagram: &off,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.SchemaDiagram {
+		t.Error("SchemaDiagram = true, want it turned off")
+	}
+	change, ok := changesIn(t, f, audit.ActionContestUpdate)["schema_diagram"].(map[string]any)
+	if !ok || change["from"] != true || change["to"] != false {
+		t.Errorf("schema_diagram change = %v, want true → false recorded", change)
+	}
+}
+
+func TestUpdateLeavesTheSchemaDiagramAloneWhenNotMentioned(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	c.SchemaDiagram = false
+	f.Contests.Put(c)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.SchemaDiagram {
+		t.Error("SchemaDiagram = true, want false to survive an unrelated update")
+	}
+}
+
+func TestUpdateRefusesTheSchemaDiagramOnceFinished(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	off := false
+
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, SchemaDiagram: &off,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}

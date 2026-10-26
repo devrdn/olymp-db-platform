@@ -64,6 +64,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames: contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:   20,
 			ResultDownload:   true,
+			SchemaDiagram:    true,
 			CreatedBy:        author,
 		}
 	}
@@ -91,6 +92,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesFullName,
 			ICPCPenaltyMin:       45,
 			ResultDownload:       false,
+			SchemaDiagram:        false,
 			PrizePlaces:          contests.PrizePlaces{First: 1, Second: 2, Third: 3},
 			CreatedBy:            author,
 		}
@@ -117,6 +119,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			LeaderboardNames:     contests.LeaderboardNamesLogin,
 			ICPCPenaltyMin:       5,
 			ResultDownload:       true,
+			SchemaDiagram:        true,
 			PrizePlaces:          contests.PrizePlaces{First: 1000, Second: 0, Third: 7},
 			CreatedBy:            author,
 		}
@@ -282,6 +285,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		check("LeaderboardNames", got.LeaderboardNames == want.LeaderboardNames, got.LeaderboardNames, want.LeaderboardNames)
 		check("ICPCPenaltyMin", got.ICPCPenaltyMin == want.ICPCPenaltyMin, got.ICPCPenaltyMin, want.ICPCPenaltyMin)
 		check("ResultDownload", got.ResultDownload == want.ResultDownload, got.ResultDownload, want.ResultDownload)
+		check("SchemaDiagram", got.SchemaDiagram == want.SchemaDiagram, got.SchemaDiagram, want.SchemaDiagram)
 		check("PrizePlaces", got.PrizePlaces == want.PrizePlaces, got.PrizePlaces, want.PrizePlaces)
 		check("CreatedBy", got.CreatedBy == want.CreatedBy, got.CreatedBy, want.CreatedBy)
 		return wrong
@@ -501,6 +505,19 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			created := create(t, ctx, target, plain(author))
 			want := created
 			want.ResultDownload = false
+
+			update(t, ctx, target, want)
+
+			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	t.Run("Update turns the schema diagram off", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, plain(author))
+			want := created
+			want.SchemaDiagram = false
 
 			update(t, ctx, target, want)
 
