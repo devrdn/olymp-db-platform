@@ -31,6 +31,7 @@ A path through the project for your first days on it.
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why the system is built the way it is: every major decision, what was considered and rejected |
 | [research/implementation-gaps.md](research/implementation-gaps.md) | A dated snapshot: what the documents promise and the code does not do, checked against one commit. The plan built from it is in ARCHITECTURE.md section 15 |
+| [research/pre-olympiad-review-2026-10-26.md](research/pre-olympiad-review-2026-10-26.md) | The security and performance review before the 2 November olympiad: what was found, what was fixed, what stays open with its mitigation, and the checklist for the week before |
 | [backend/README.md](../backend/README.md) | The Core API: layout, configuration, endpoints, optional dependencies, observability, deployment, backups |
 | [frontend/README.md](../frontend/README.md) | The interface: the code map, which direction dependencies point, where a new thing goes |
 | [design/SPEC.md](design/SPEC.md) | The visual system: tokens, type, components, screens |
