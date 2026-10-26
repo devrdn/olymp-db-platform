@@ -1212,10 +1212,11 @@ time: the minutes from the contest's start (`contests.starts_at`, or
 answer, plus `contests.icpc_penalty_min` for every earlier wrong attempt. The
 publication gate asks for no attempt limit in this mode, on a multiple-choice
 question or in a sequential contest: trying options costs penalty minutes, and
-that is enough. `max_attempts` stays optional and is enforced when set. A frozen ICPC table shows, in the cell of a question not yet
-solved, how many attempts were submitted after the freeze without their
-outcome — the one deliberate exception to "nothing leaves the server after the
-freeze" (section 10). Where sequential progression is in force, attempts after
+that is enough. `max_attempts` stays optional and is enforced when set. A
+frozen ICPC table shows, in the cell of a question not yet solved, how many
+attempts were submitted after the freeze without their outcome — the one
+deliberate exception to "nothing leaves the server after the freeze"
+(section 10). Where sequential progression is in force, attempts after
 the freeze are not shown at all, because opening the next question would
 reveal that a correct answer was given after it.
 
@@ -4984,7 +4985,7 @@ Product decisions the items below are built on.
   `winner` mode.
 - [x] **3. Sequential progression** (section 6.1.1). `contests.progression`,
   checked in `Service.Submit` and when questions are served; the publication
-  gate refuses `sequential` without `max_attempts`.
+  gate refuses `sequential` without `max_attempts` outside `icpc` scoring.
 - [x] **4. One Save button on a question's page** (section 6.3).
 - [x] **5. The story editor** (section 6.3). WYSIWYG over Markdown on our own
   tokens, with images, LaTeX and the AI feature disabled. The reading side is
