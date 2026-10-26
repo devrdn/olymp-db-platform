@@ -1219,6 +1219,8 @@ const en = {
         rateHint: "SQL queries each participant may run per minute. 0 means the installation's limit; a value above that limit has no effect.",
         resultDownload: "Participants may download a result as CSV",
         resultDownloadHint: "On by default. A change reaches a page a participant already has open when they next reload it. Switching it off only hides the “Download CSV” button: the rows can still be selected and copied from the table.",
+        schemaDiagram: "Participants may open the schema as a diagram",
+        schemaDiagramHint: "On by default. A change reaches a page a participant already has open when they next reload it. Switching it off only removes the “Diagram” button: the tables, columns and foreign keys stay listed in the schema panel.",
       },
       languages: {
         heading: "Languages",

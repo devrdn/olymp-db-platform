@@ -115,6 +115,7 @@ export async function saveSettingsAction(
     // A cleared box submits nothing. It is disabled only when the whole form
     // is, so an absent value means off, not "unchanged".
     result_download: form.get("resultDownload") === "on",
+    schema_diagram: form.get("schemaDiagram") === "on",
     leaderboard,
     settings: {
       enrollment_deadline: moment(form.get("enrollmentDeadline")) ?? "",

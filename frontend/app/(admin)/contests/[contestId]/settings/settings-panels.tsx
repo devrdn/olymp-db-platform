@@ -204,6 +204,7 @@ export function ContestPanel({
   const freezeLegendId = useId();
   const namesLegendId = useId();
   const resultDownloadHintId = useId();
+  const schemaDiagramHintId = useId();
   const freezeInitial = freezeForForm(contest.leaderboard.freezeMin);
   const [freezeMode, setFreezeMode] = useState<string>(freezeInitial.mode);
   const [names, setNames] = useState<string>(contest.leaderboard.names);
@@ -495,6 +496,28 @@ export function ContestPanel({
           </label>
           <p id={resultDownloadHintId} className="max-w-body text-small text-ink-3">
             {t.access.resultDownloadHint}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label
+            className={cn(
+              "flex items-center gap-3 text-control",
+              editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
+            )}
+          >
+            <input
+              type="checkbox"
+              name="schemaDiagram"
+              defaultChecked={contest.schemaDiagram}
+              disabled={!editable}
+              aria-describedby={schemaDiagramHintId}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+            />
+            {t.access.schemaDiagram}
+          </label>
+          <p id={schemaDiagramHintId} className="max-w-body text-small text-ink-3">
+            {t.access.schemaDiagramHint}
           </p>
         </div>
 

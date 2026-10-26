@@ -134,6 +134,26 @@ describe("saveSettingsAction, the result download", () => {
   });
 });
 
+describe("saveSettingsAction, the schema diagram", () => {
+  test("offers the diagram when the box is ticked", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ schemaDiagram: "on" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.schema_diagram).toBe(true);
+  });
+
+  test("withdraws it when the box is cleared", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({}));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.schema_diagram).toBe(false);
+  });
+});
+
 describe("savePrizePlacesAction", () => {
   test("replaces the three counts on their own endpoint, a blank one as none", async () => {
     serverRequest.mockResolvedValueOnce({});
