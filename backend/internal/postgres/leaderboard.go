@@ -223,7 +223,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			LEFT JOIN waiting w ON w.registration_id = e.id AND w.question_id = v.id
 		), ranked AS (
 			SELECT e.id, e.login, e.full_name, e.account_deleted, e.disqualified,
-			       EXISTS (SELECT 1 FROM answer a WHERE a.registration_id = e.id)            AS answered,
+			       EXISTS (SELECT 1 FROM tried t WHERE t.registration_id = e.id)             AS answered,
 			       COUNT(c.solved_at)::int                                                   AS solved,
 			       COALESCE(SUM(c.minute + k.icpc_penalty_min * c.wrong)
 			                    FILTER (WHERE c.solved_at IS NOT NULL), 0)::int               AS penalty,

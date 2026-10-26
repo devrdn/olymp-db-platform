@@ -68,8 +68,8 @@ func (h *LeaderboardHandler) Mount(r chi.Router) {
 // leaderboardRow is one row as anybody outside the staff sees it: no
 // identifier, and one label, never both.
 type leaderboardRow struct {
-	// Place is null for a row with no answer yet, and in winner mode for
-	// everyone but the winner.
+	// Place is null for a row with no answer counted for the table, and in
+	// winner mode for everyone but the winner.
 	Place *int `json:"place"`
 	// Prize is the tier, 1 to 3, or null for a row without one.
 	Prize        *int   `json:"prize"`

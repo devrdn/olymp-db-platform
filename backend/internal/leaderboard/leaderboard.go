@@ -182,7 +182,8 @@ func QuestionLetter(position int) string {
 type Row struct {
 	Entry
 	// Place is 1-based and shared by equal results. Zero means unplaced: no
-	// answer yet, and in winner mode everyone but the winner.
+	// answer counted for the table (a frozen table hides those made after the
+	// freeze), and in winner mode everyone but the winner.
 	Place  int
 	Winner bool
 	// Prize is the tier the row earns, 1 to 3, or 0 for none (AwardPrizes).
