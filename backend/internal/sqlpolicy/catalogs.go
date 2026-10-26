@@ -47,6 +47,25 @@ var (
 		"pg_stat_subscription": {},
 		"pg_shdescription":     {},
 		"pg_shseclabel":        {},
+		// Cluster-wide: the shared catalogs and the server-wide statistics,
+		// which describe the installation rather than the game. Some exist
+		// only on newer servers; the REVOKE skips a name the server lacks.
+		"pg_group":                     {},
+		"pg_shdepend":                  {},
+		"pg_tablespace":                {},
+		"pg_subscription":              {},
+		"pg_replication_origin":        {},
+		"pg_replication_origin_status": {},
+		"pg_parameter_acl":             {},
+		"pg_user_mappings":             {},
+		"pg_stat_bgwriter":             {},
+		"pg_stat_checkpointer":         {},
+		"pg_stat_io":                   {},
+		"pg_stat_wal":                  {},
+		"pg_stat_slru":                 {},
+		"pg_stat_archiver":             {},
+		"pg_stat_recovery_prefetch":    {},
+		"pg_stat_subscription_stats":   {},
 	}
 
 	// Schemas whose contents are catalog rather than game data.
