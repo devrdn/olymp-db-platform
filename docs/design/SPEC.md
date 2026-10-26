@@ -142,13 +142,15 @@ hue as text on its own wash and on the page ground, in both themes.
 Rules that keep it a palette rather than decoration:
 
 - **Medals only for prizes.** The organiser sets how many places earn a first,
-  second and third prize, and the prize column shows the row's prize as a medal
-  with its numeral (I, II, III); a row without a prize shows a dash, and a
-  table in which nobody has a prize has no such column. The place is its own
-  first column, the number the row holds (ties share it) or a dash for a
-  participant who has not answered. A shared place shares the prize, so a tie
-  on a boundary takes the better medal; with no prize places set nobody has a medal, and in winner mode only
-  the winner holds the gold. The podium has one step per prize, at that
+  second and third prize. The place is the first column of every table: the
+  number the row holds (ties share it) or a dash for a participant who has not
+  answered. The prize is a medal with its numeral (I, II, III) in a column of
+  its own after it, with a dash for a row without a prize, and a table in which
+  nobody has a prize has no such column; the narrow play tab, which has no room
+  for a second column, draws the medal beside the number instead. A shared
+  place shares the prize, so a tie on a boundary takes the better medal; with
+  no prize places set nobody has a medal, and in winner mode only the winner
+  holds the gold. The podium has one step per prize, at that
   prize's height, naming its first holder and how many more share it, so
   equal prizes never look ranked. A medal has two
   colours on purpose: `--gold` is held to 4.5:1 as text on white, and a gold

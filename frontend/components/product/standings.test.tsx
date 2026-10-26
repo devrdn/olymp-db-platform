@@ -77,18 +77,18 @@ describe("the standings", () => {
     }
   });
 
-  test("show a dash, named as no prize, for a row without one, whatever its place", () => {
-    show(standings());
+  test("show a dash, named as no prize, for a row without one in the page's prize column, whatever its place", () => {
+    show(standings(), "page");
 
-    const cell = within(rowOf("delta")).getByTestId("prize");
+    const cell = within(tableRowOf("delta")).getByTestId("prize");
     expect(cell).not.toHaveAttribute("data-medal");
     expect(within(cell).getByText("—")).toHaveAttribute("aria-hidden");
     expect(within(cell).getByText(t.prizes.none)).toHaveClass("sr-only");
     expect(cell).not.toHaveTextContent("4");
   });
 
-  test("show the place first, as a number, in the row's accessible text", () => {
-    show(standings());
+  test("show the place first, then the prize, as numbers and words in the row's accessible text", () => {
+    show(standings(), "page");
 
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
     expect(headers.slice(0, 3)).toEqual([t.columns.place, t.columns.prize, t.columns.participant]);
@@ -98,10 +98,49 @@ describe("the standings", () => {
       ["gamma", "3"],
       ["delta", "4"],
     ]) {
-      const cell = within(rowOf(label)).getAllByRole("cell")[0];
+      const cell = within(tableRowOf(label)).getAllByRole("cell")[0];
       expect(within(cell).getByTestId("place")).toHaveTextContent(place);
       expect(within(cell).getByText(place)).not.toHaveAttribute("aria-hidden");
     }
+  });
+
+  test("in the narrow panel keep one place column and draw the medal beside the number", () => {
+    show(standings());
+
+    expect(screen.queryByRole("columnheader", { name: t.columns.prize })).not.toBeInTheDocument();
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers.slice(0, 2)).toEqual([t.columns.place, t.columns.participant]);
+
+    const cell = within(rowOf("beta")).getAllByRole("cell")[0];
+    expect(within(cell).getByTestId("place")).toHaveTextContent("2");
+    expect(within(cell).getByTestId("prize")).toHaveAttribute("data-medal", "silver");
+    expect(within(cell).getByText(t.prizes.second)).toHaveClass("sr-only");
+
+    const plain = within(rowOf("delta")).getAllByRole("cell")[0];
+    expect(within(plain).getByTestId("place")).toHaveTextContent("4");
+    expect(within(plain).queryByTestId("prize")).not.toBeInTheDocument();
+  });
+
+  test("in the narrow panel pin the fixed columns to 10 rem with a prize, so the name keeps its room", () => {
+    // The default side pane leaves the table about 13.75 rem: place (with the
+    // medal in it) 4 + points 6 leaves the name column room; a separate prize
+    // column would take it all.
+    show(standings());
+
+    const header = (name: string) => screen.getByRole("columnheader", { name });
+    expect(header(t.columns.place)).toHaveClass("w-16");
+    expect(header(t.columns.points)).toHaveClass("w-24");
+    expect(screen.getAllByRole("columnheader")).toHaveLength(3);
+  });
+
+  test("in the narrow ICPC panel fold the medal into the place column too", () => {
+    show(icpcStandings(), "panel");
+
+    expect(screen.queryByRole("columnheader", { name: t.columns.prize })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: t.columns.place })).toHaveClass("w-16");
+    expect(within(rowOf("alpha")).getAllByRole("cell")[0]).toContainElement(
+      within(rowOf("alpha")).getByTestId("prize"),
+    );
   });
 
   test("tied rows share their place and their tier, and the next place skips", () => {
@@ -131,13 +170,14 @@ describe("the standings", () => {
           row({ place: null, prize: null, label: "idle", points: 0, solved: 0 }),
         ],
       }),
+      "page",
     );
 
-    const cell = within(rowOf("idle")).getByTestId("place");
+    const cell = within(tableRowOf("idle")).getByTestId("place");
     expect(within(cell).getByText("—")).toHaveAttribute("aria-hidden");
     expect(within(cell).getByText(t.unplaced)).toHaveClass("sr-only");
     expect(cell).not.toHaveAttribute("data-medal");
-    expect(within(rowOf("idle")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+    expect(within(tableRowOf("idle")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
   });
 
   test("keep the rows in the order they were ranked", () => {
@@ -190,10 +230,11 @@ describe("the standings", () => {
           row({ place: 2, prize: 3, label: "beta" }),
         ],
       }),
+      "page",
     );
 
     expect(screen.getByRole("columnheader", { name: t.columns.prize })).toBeInTheDocument();
-    expect(within(rowOf("alpha")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+    expect(within(tableRowOf("alpha")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
   });
 
   test("tint a prize row and its edge by its tier", () => {
@@ -249,7 +290,7 @@ describe("the standings", () => {
     expect(within(sherlock).getByText(t.winner)).toBeInTheDocument();
     expect(within(sherlock).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
     expect(within(sherlock).getByText(t.prizes.first)).toHaveClass("sr-only");
-    expect(within(rowOf("watson")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+    expect(within(rowOf("watson")).queryByTestId("prize")).not.toBeInTheDocument();
     expect(within(sherlock).getByTestId("place")).toHaveTextContent("1");
     expect(within(rowOf("watson")).getByTestId("place")).toHaveTextContent(t.unplaced);
   });
