@@ -212,74 +212,75 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
   });
 });
 
-// ICPC (docs/ARCHITECTURE.md §6.1.1) has no per-question points or penalty. The
-// fields stay (the mode can be reverted) but are disabled, and a save must keep
-// their values.
-describe("QuestionEditor, ICPC scoring", () => {
-  test("disables the points and penalty fields, with the reason beside them", () => {
+// A mode shows only the fields it uses: ICPC has no per-question points or
+// penalty, first-to-solve has no penalty. The stored values stay in the form so
+// that switching the mode back before the start restores them.
+describe("QuestionEditor, fields the scoring mode does not use", () => {
+  function renderScored(scoring: "points" | "winner" | "icpc") {
     render(
       <QuestionEditor
         contestId="c1"
         question={question({ points: 10, penaltyPct: 20 })}
         languages={["en"]}
         editable
-        scoring="icpc"
+        scoring={scoring}
         sequentialActive={false}
         dict={dict}
       />,
     );
+    return dict.workspace.question.shape;
+  }
 
-    const t = dict.workspace.question.shape;
-    const points = screen.getByLabelText(t.points);
-    const penalty = screen.getByLabelText(t.penalty);
-
-    expect(points).toBeDisabled();
-    expect(points).toHaveValue(10);
-    expect(penalty).toBeDisabled();
-    expect(penalty).toHaveValue(20);
-    expect(screen.getAllByText(t.icpcDisabled).length).toBeGreaterThan(0);
-  });
-
-  test("says nothing about a wrong attempt's cost, since the penalty does not apply", () => {
-    render(
-      <QuestionEditor
-        contestId="c1"
-        question={question({ points: 10, penaltyPct: 20 })}
-        languages={["en"]}
-        editable
-        scoring="icpc"
-        sequentialActive={false}
-        dict={dict}
-      />,
-    );
-
-    expect(
-      screen.queryByText(dict.workspace.question.shape.penaltyPreview.replace("{n}", "2").replace("{points}", "10")),
-    ).toBeNull();
-  });
-
-  // Disabled inputs are not submitted; a wording-only save must not zero the
-  // points.
-  test("still submits the disabled fields' current values on save", async () => {
-    const user = userEvent.setup();
-    render(
-      <QuestionEditor
-        contestId="c1"
-        question={question({ points: 10, penaltyPct: 20 })}
-        languages={["en"]}
-        editable
-        scoring="icpc"
-        sequentialActive={false}
-        dict={dict}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
-
+  const savedForm = async () => {
+    await userEvent.setup().click(screen.getByRole("button", { name: dict.workspace.question.save }));
     expect(saveQuestionAction).toHaveBeenCalled();
-    const form = saveQuestionAction.mock.calls[0][1] as FormData;
+    return saveQuestionAction.mock.calls[0][1] as FormData;
+  };
+
+  test("under ICPC shows neither the points, the penalty nor the penalty preview", () => {
+    const t = renderScored("icpc");
+
+    expect(screen.queryByLabelText(t.points)).toBeNull();
+    expect(screen.queryByLabelText(t.penalty)).toBeNull();
+    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeNull();
+    expect(screen.getByLabelText(t.attempts)).toBeInTheDocument();
+  });
+
+  test("under ICPC a save still carries the stored points and penalty", async () => {
+    renderScored("icpc");
+
+    const form = await savedForm();
     expect(form.get("points")).toBe("10");
     expect(form.get("penaltyPct")).toBe("20");
+  });
+
+  test("under first to solve shows the points but not the penalty or its preview", () => {
+    const t = renderScored("winner");
+
+    expect(screen.getByLabelText(t.points)).toHaveValue(10);
+    expect(screen.queryByLabelText(t.penalty)).toBeNull();
+    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeNull();
+  });
+
+  test("under first to solve a save carries the edited points and the stored penalty", async () => {
+    const user = userEvent.setup();
+    const t = renderScored("winner");
+
+    await user.clear(screen.getByLabelText(t.points));
+    await user.type(screen.getByLabelText(t.points), "7");
+    await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+
+    const form = saveQuestionAction.mock.calls[0][1] as FormData;
+    expect(form.getAll("points")).toEqual(["7"]);
+    expect(form.getAll("penaltyPct")).toEqual(["20"]);
+  });
+
+  test("under points shows the points, the penalty and its preview", () => {
+    const t = renderScored("points");
+
+    expect(screen.getByLabelText(t.points)).toBeEnabled();
+    expect(screen.getByLabelText(t.penalty)).toBeEnabled();
+    expect(screen.getByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeInTheDocument();
   });
 });
 
