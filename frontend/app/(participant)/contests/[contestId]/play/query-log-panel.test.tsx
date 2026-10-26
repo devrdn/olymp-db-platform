@@ -148,8 +148,9 @@ describe("the query log panel", () => {
     );
   });
 
-  // The refresh replaces the list, so the page's cursor may no longer be the
-  // last row held; appending the page would leave a silent gap above it.
+  // A refresh may have replaced the list, so the page's cursor may no longer
+  // be the last row held; appending the page would leave a silent gap above
+  // it. The rows the refresh kept stay.
   test("a page of older rows is dropped when a refresh started while it loaded", async () => {
     const user = userEvent.setup();
     let resolvePage!: (value: QueryLogRefreshResult) => void;
@@ -157,8 +158,9 @@ describe("the query log panel", () => {
     fetchQueryLog
       .mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve; }))
       .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
-    const r1 = entry("SELECT r1");
+    // Newer rows carry higher ids, as the server pages by id: the oldest is made first.
     const r2 = entry("SELECT r2");
+    const r1 = entry("SELECT r1");
     const initial = { items: [r1, r2], total: 3, failed: false };
     const { rerender } = show({ active: false, initial });
 
@@ -174,7 +176,7 @@ describe("the query log panel", () => {
       expect(screen.queryByRole("button", { name: en.participant.play.workspace.log.loadingMore })).not.toBeInTheDocument(),
     );
     expect(screen.queryByText("SELECT r3")).not.toBeInTheDocument();
-    expect(screen.queryByText("SELECT r2")).not.toBeInTheDocument();
+    expect(screen.getByText("SELECT r2")).toBeInTheDocument();
   });
 
   test("a failed load more leaves the existing rows on screen, with a way to retry", async () => {
@@ -214,6 +216,56 @@ describe("the query log panel", () => {
     await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
     // At least a full page, even when fewer rows were loaded.
     expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
+  });
+
+  // Only the newest page is re-read; the older pages already loaded stay
+  // beneath it, so a long log is not re-read whole on every tab switch, and
+  // the server's cap on one read cannot cut the list shorter than it was.
+  test("a refresh keeps the older pages already loaded beneath the newest page", async () => {
+    // Newer rows carry higher ids, as the server pages by id: the oldest is made first.
+    const r3 = entry("SELECT r3");
+    const r2 = entry("SELECT r2");
+    const r1 = entry("SELECT r1");
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT n1"), r1], total: 4 });
+    const { rerender } = show({ active: false, initial: { items: [r1, r2, r3], total: 3, failed: false } });
+
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [r1, r2, r3], total: 3, failed: false }} active locale="en" dict={en} />);
+
+    await waitFor(() => expect(screen.getByText("SELECT n1")).toBeInTheDocument());
+    expect(fetchQueryLog).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
+    const shown = screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+    expect(shown[0]).toContain("SELECT n1");
+    expect(shown[1]).toContain("SELECT r1");
+    expect(shown[2]).toContain("SELECT r2");
+    expect(shown[3]).toContain("SELECT r3");
+  });
+
+  // More than a page of new rows: the rows held no longer touch the page, and
+  // keeping them would hide the gap between.
+  test("a refresh that no longer reaches the rows held replaces them", async () => {
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT n2"), entry("SELECT n1")], total: 3 });
+    const old = entry("SELECT old");
+    const { rerender } = show({ active: false, initial: { items: [old], total: 1, failed: false } });
+
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [old], total: 1, failed: false }} active locale="en" dict={en} />);
+
+    await waitFor(() => expect(screen.getByText("SELECT n2")).toBeInTheDocument());
+    expect(screen.getByText("SELECT n1")).toBeInTheDocument();
+    expect(screen.queryByText("SELECT old")).not.toBeInTheDocument();
+  });
+
+  // A row that was still running when first loaded has its outcome on the
+  // refreshed page.
+  test("a row the refresh repeats is taken from the page", async () => {
+    const running = entry("SELECT slow", { status: "running", durationMs: undefined, rowCount: undefined });
+    fetchQueryLog.mockResolvedValueOnce({ kind: "ok", items: [{ ...running, status: "ok", durationMs: 4321, rowCount: 1 }], total: 1 });
+    const { rerender } = show({ active: false, initial: { items: [running], total: 1, failed: false } });
+
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [running], total: 1, failed: false }} active locale="en" dict={en} />);
+
+    await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(2));
+    expect(screen.getByText("SELECT slow")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("row", { name: /SELECT slow/ })).toHaveTextContent("4"));
   });
 
   test("does not refetch again while it stays the active tab", async () => {
