@@ -48,6 +48,7 @@ function show(contestId = "c1") {
       schema={A_SCHEMA}
       sqlMode="read_only"
       resultDownload
+      schemaDiagram
       initialLog={{ items: [], total: 0, failed: false }}
       workspace={null}
       locale="en"
@@ -248,6 +249,7 @@ describe("the side column's width", () => {
           schema={A_SCHEMA}
           sqlMode="read_only"
           resultDownload
+          schemaDiagram
           initialLog={{ items: [], total: 0, failed: false }}
           workspace={null}
           locale="en"

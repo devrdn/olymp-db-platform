@@ -61,6 +61,7 @@ export function Workspace({
   schema: initialSchema,
   sqlMode,
   resultDownload,
+  schemaDiagram,
   initialLog,
   workspace,
   locale,
@@ -95,6 +96,8 @@ export function Workspace({
    * by the organiser reaches this screen at its next load.
    */
   resultDownload: boolean;
+  /** Whether the schema panel offers the diagram, as the page read it; a change reaches this screen at its next load. */
+  schemaDiagram: boolean;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   /** The participant's notes and SQL tabs, or null when the read failed; the notes then say they could not be loaded. */
   workspace: WorkspaceSnapshot | null;
@@ -255,6 +258,7 @@ export function Workspace({
             >
               <MemoSchemaPanel
                 schema={schema}
+                diagram={schemaDiagram}
                 hidden={!showSchema}
                 onReveal={revealSchema}
                 onQueryTable={queryTable}

@@ -153,6 +153,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
                 icpcPenaltyMin={contest.icpcPenaltyMin}
                 sqlMode={contest.sqlMode}
                 resultDownload={contest.resultDownload}
+                schemaDiagram={contest.schemaDiagram}
                 locale={locale}
                 dict={dict}
               />
@@ -178,6 +179,7 @@ async function PlayPanels({
   icpcPenaltyMin,
   sqlMode,
   resultDownload,
+  schemaDiagram,
   locale,
   dict,
 }: {
@@ -195,6 +197,8 @@ async function PlayPanels({
   /** The contest's SQL mode; only `read_write` offers the database reset. */
   sqlMode: ContestSummary["sqlMode"];
   resultDownload: boolean;
+  /** Whether the schema panel offers the diagram. */
+  schemaDiagram: boolean;
   locale: Locale;
   dict: PlayDictionary;
 }) {
@@ -348,6 +352,7 @@ async function PlayPanels({
         schema={schema}
         sqlMode={sqlMode}
         resultDownload={resultDownload}
+        schemaDiagram={schemaDiagram}
         initialLog={initialLog}
         workspace={workspace}
         locale={locale}

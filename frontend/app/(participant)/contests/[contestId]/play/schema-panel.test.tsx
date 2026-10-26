@@ -30,8 +30,8 @@ function schema(overrides: Partial<GameSchema> = {}): GameSchema {
 
 const t = en.participant.play.schema;
 
-function panel(value: GameSchema = schema(), onQueryTable = vi.fn()) {
-  return render(<SchemaPanel schema={value} onQueryTable={onQueryTable} dict={en} />);
+function panel(value: GameSchema = schema(), onQueryTable = vi.fn(), diagram = true) {
+  return render(<SchemaPanel schema={value} diagram={diagram} onQueryTable={onQueryTable} dict={en} />);
 }
 
 /** The button on a table's name, which writes a query on it. */
@@ -52,6 +52,15 @@ describe("the schema panel", () => {
     await userEvent.click(screen.getByRole("button", { name: t.diagram.openLabel }));
 
     expect(await screen.findByRole("dialog", { name: t.diagram.title })).toBeInTheDocument();
+  });
+
+  // The setting removes a view: the tables, columns and foreign keys stay in the list.
+  test("leaves the diagram out when the contest has switched it off", () => {
+    panel(schema(), vi.fn(), false);
+
+    expect(screen.queryByRole("button", { name: t.diagram.openLabel })).not.toBeInTheDocument();
+    expect(nameButton("guests")).toBeInTheDocument();
+    expect(screen.getAllByText("fk rooms").length).toBeGreaterThan(0);
   });
 
   test("shows the tables, their columns and the type of each", () => {
@@ -228,14 +237,14 @@ describe("the schema panel", () => {
     const user = userEvent.setup();
     const onReveal = vi.fn();
     const { rerender } = render(
-      <SchemaPanel schema={schema()} hidden onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />,
+      <SchemaPanel schema={schema()} diagram hidden onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />,
     );
 
     document.body.focus();
     await user.keyboard("{Meta>}k{/Meta}");
     expect(onReveal).toHaveBeenCalledTimes(1);
 
-    rerender(<SchemaPanel schema={schema()} hidden={false} onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />);
+    rerender(<SchemaPanel schema={schema()} diagram hidden={false} onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />);
 
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });
