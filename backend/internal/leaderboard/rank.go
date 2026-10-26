@@ -53,7 +53,7 @@ func Rank(scoring string, entries []Entry) []Row {
 		}
 		rows[i].Place = i + 1
 	}
-	unplaceSilent(rows)
+	unplaceUnanswered(rows)
 	return rows
 }
 
@@ -90,13 +90,14 @@ func RankICPC(entries []Entry, grid Grid) []Row {
 		}
 		rows[i].Place = i + 1
 	}
-	unplaceSilent(rows)
+	unplaceUnanswered(rows)
 	return rows
 }
 
-// unplaceSilent runs after places are given, so a silent row never lends its
-// place to the next one; silent rows sort after the answered ones they tie.
-func unplaceSilent(rows []Row) {
+// unplaceUnanswered clears the place of every row without an answer
+// (Entry.Answered). It runs after places are given, so such a row never lends
+// its place to the next one; those rows sort after the answered ones they tie.
+func unplaceUnanswered(rows []Row) {
 	for i := range rows {
 		if !rows[i].Answered {
 			rows[i].Place = 0

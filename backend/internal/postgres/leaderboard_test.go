@@ -239,6 +239,28 @@ func TestStandingsSayWhoHasAnsweredBeforeTheCutoff(t *testing.T) {
 	})
 }
 
+// A question hidden after it was answered leaves the grid but not the answer:
+// the participant still has one counted for the table, and so a place.
+func TestStandingsCountAnAnswerToAQuestionHiddenLater(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		answered := f.participant(t, "board-hidden-later", 0)
+		f.answer(t, answered, f.question, 1, false, 0, 5)
+		f.participant(t, "board-hidden-silent", 0)
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE questions SET is_visible = false WHERE id = $1`, f.question); err != nil {
+			t.Fatalf("hide question: %v", err)
+		}
+
+		if !f.row(t, "board-hidden-later", 60).Answered {
+			t.Error("a participant whose only answer is to a hidden question has Answered = false, want true")
+		}
+		if f.row(t, "board-hidden-silent", 60).Answered {
+			t.Error("a participant with no answer has Answered = true, want false")
+		}
+	})
+}
+
 // scored adds a question worth points to the fixture's contest, a bonus or
 // not, for the points total (§6.1.1).
 func (f boardFixture) scored(t *testing.T, points int, bonus bool) uuid.UUID {
@@ -722,6 +744,29 @@ func TestICPCStandingsSayWhoHasAnsweredBeforeTheCutoff(t *testing.T) {
 		cut, _ := f.table(t, leaderboard.Query{Cutoff: boardAt(60), Limit: 1})
 		if len(cut) != 1 || cut[0].Login != "icpc-wrong" {
 			t.Errorf("cut = %+v, want the row that answered", cut)
+		}
+	})
+}
+
+// A question hidden after it was answered leaves the grid but not the answer.
+func TestICPCStandingsCountAnAnswerToAQuestionHiddenLater(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		alice := f.participant(t, "icpc-hidden-later", 0)
+		f.answerAt(t, alice, f.a, 1, false, boardAt(5))
+		f.participant(t, "icpc-hidden-silent", 0)
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE questions SET is_visible = false WHERE id = $1`, f.a); err != nil {
+			t.Fatalf("hide question: %v", err)
+		}
+
+		entries, _ := f.table(t, leaderboard.Query{Cutoff: boardAt(60)})
+		got := byLogin(entries)
+		if !got["icpc-hidden-later"].Answered {
+			t.Error("a participant whose only answer is to a hidden question has Answered = false, want true")
+		}
+		if got["icpc-hidden-silent"].Answered {
+			t.Error("a participant with no answer has Answered = true, want false")
 		}
 	})
 }
