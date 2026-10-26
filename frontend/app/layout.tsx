@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Literata, Onest } from "next/font/google";
 
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
@@ -11,32 +10,14 @@ import { activeTheme } from "@/lib/theme/server";
 
 import "./globals.css";
 
-// Latin alone drops Cyrillic and Romanian comma-below letters to a fallback
-// face. The lists are literal because next/font reads them at build time.
-
-// Only the weights docs/design/SPEC.md §4 uses; no 700, since the system has
-// no bold.
-const onest = Onest({
-  variable: "--font-onest",
-  subsets: ["latin", "latin-ext", "cyrillic"],
-  weight: ["400", "500", "600"],
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin", "latin-ext", "cyrillic"],
-  weight: ["400", "500"],
-  display: "swap",
-});
-
+// Served from our own origin, so a build never fetches from Google. Each family
+// declares its Latin, Latin Extended and Cyrillic parts separately, and a browser
+// downloads only the parts a page's text uses (Romanian needs Latin Extended).
+// Variable files: the weights docs/design/SPEC.md §4 uses come from one file.
+import "@fontsource-variable/onest/wght.css";
+import "@fontsource-variable/jetbrains-mono/wght.css";
 // Narrative register only: the crime story, nowhere else.
-const literata = Literata({
-  variable: "--font-literata",
-  subsets: ["latin", "latin-ext", "cyrillic"],
-  weight: ["400"],
-  display: "swap",
-});
+import "@fontsource-variable/literata/wght.css";
 
 /**
  * The product mark, drawn by scripts/icons.mjs into public/. The ICO declares
@@ -90,7 +71,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html
       lang={locale}
       data-theme={themeAttribute(theme)}
-      className={`${onest.variable} ${jetbrainsMono.variable} ${literata.variable} antialiased`}
+      className="antialiased"
     >
       <body className="font-sans text-body">
         {/* At the root because `error.tsx` is a client boundary that cannot

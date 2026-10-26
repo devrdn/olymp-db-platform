@@ -125,9 +125,9 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --font-sans: var(--font-onest);
-  --font-mono: var(--font-jetbrains-mono);
-  --font-serif: var(--font-literata);
+  --font-sans: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --font-serif: "Literata Variable", ui-serif, Georgia, serif;
 
   --ease-standard: var(--curve);
 }
