@@ -40,7 +40,7 @@ const contentSecurityPolicy = [
    * `strict-dynamic` approach is described in frontend/README.md.
    */
   "script-src 'self' 'unsafe-inline'",
-  // Tailwind emits a stylesheet, but next/font inlines its @font-face rules.
+  // React renders style attributes (global-error, the pane widths).
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

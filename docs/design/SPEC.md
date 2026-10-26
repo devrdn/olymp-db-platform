@@ -223,6 +223,11 @@ cultural motif deserves to know it was tried.
 `Onest` — the interface. `JetBrains Mono` — SQL, every number, utility captions.
 `Literata` — the text of the crime story and nowhere else.
 
+All three are served from the product's own origin, from the Fontsource
+variable packages (`@fontsource-variable/onest`, `jetbrains-mono`, `literata`)
+under the SIL Open Font License 1.1; a page never asks a third-party host for
+a font, and a build never needs one.
+
 Coverage was checked empirically, by measuring glyph width against substitution:
 all three faces have their own `Ș ș Ț ț Ă ă` (comma below, as Romanian
 orthography requires, not cedilla) and full Cyrillic. The `latin-ext` subset

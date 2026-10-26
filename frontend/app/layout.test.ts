@@ -10,12 +10,6 @@ import type { Settings } from "@/lib/api/settings";
 
 import { generateMetadata } from "./layout";
 
-// next/font is compiled by Next; outside it the loaders only need a class name.
-vi.mock("next/font/google", () => {
-  const font = () => ({ variable: "font" });
-  return { Onest: font, JetBrains_Mono: font, Literata: font };
-});
-
 vi.mock("@/lib/api/branding", () => ({ branding: vi.fn() }));
 
 function installation(images: Settings["images"]) {
