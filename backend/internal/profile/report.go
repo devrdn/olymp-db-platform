@@ -27,8 +27,8 @@ type Result struct {
 	// PlaceOpen says the table is open. During a freeze it is false and
 	// everything below is zero.
 	PlaceOpen bool
-	// Place is zero for a row the table gives no place to; in winner mode
-	// only the winner has one.
+	// Place is zero for a row the table gives no place to: one with no
+	// answer, and in winner mode everyone but the winner.
 	Place        int
 	Participants int
 	// Winner marks the winner of a winner-mode contest, only on an open

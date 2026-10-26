@@ -16,7 +16,12 @@ func at(minute int) *time.Time {
 }
 
 func entry(login string, points int, last *time.Time) leaderboard.Entry {
-	return leaderboard.Entry{Registration: uuid.New(), Login: login, Points: points, LastScoredAt: last}
+	return leaderboard.Entry{Registration: uuid.New(), Login: login, Points: points, LastScoredAt: last, Answered: true}
+}
+
+func silent(e leaderboard.Entry) leaderboard.Entry {
+	e.Answered = false
+	return e
 }
 
 func summary(rows []leaderboard.Row) []string {
@@ -45,6 +50,55 @@ func TestRankByPointsBreaksTiesByWhenTheScoreWasReached(t *testing.T) {
 	}
 	if rows[3].Place != 4 || rows[4].Place != 4 {
 		t.Errorf("places of the two without points = %d, %d, want 4, 4", rows[3].Place, rows[4].Place)
+	}
+}
+
+func TestRankLeavesARowWithoutAnAnswerUnplaced(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		silent(entry("silent-a", 0, nil)),
+		entry("wrong-a", 0, nil),
+		entry("top", 20, at(1)),
+		silent(entry("silent-b", 0, nil)),
+		entry("wrong-b", 0, nil),
+	})
+
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r.Login] = r.Place
+	}
+	want := map[string]int{"top": 1, "wrong-a": 2, "wrong-b": 2, "silent-a": 0, "silent-b": 0}
+	for login, place := range want {
+		if got[login] != place {
+			t.Errorf("places = %v, want %v", got, want)
+			break
+		}
+	}
+	if rows[3].Answered || rows[4].Answered {
+		t.Errorf("order = %v, want the rows without an answer last", summary(rows))
+	}
+}
+
+func TestRankKeepsTheSharedPlaceOfTiedRowsThatAnswered(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 20, at(10)), entry("b", 20, at(10)), entry("c", 5, at(1)), silent(entry("d", 0, nil)),
+	})
+	if rows[0].Place != 1 || rows[1].Place != 1 || rows[2].Place != 3 || rows[3].Place != 0 {
+		t.Errorf("places = %v, want 1, 1, 3, 0", summary(rows))
+	}
+}
+
+func TestRankInWinnerModeKeepsOnlyTheWinnersPlace(t *testing.T) {
+	winner := entry("winner", 5, at(30))
+	winner.FinalAt = at(30)
+	rows := leaderboard.Rank(contests.ScoringWinner, []leaderboard.Entry{
+		silent(entry("silent", 0, nil)), entry("wrong", 0, nil), winner,
+	})
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r.Login] = r.Place
+	}
+	if got["winner"] != 1 || got["wrong"] != 0 || got["silent"] != 0 {
+		t.Errorf("places = %v, want only the winner placed", got)
 	}
 }
 
@@ -115,7 +169,7 @@ func TestLabelFollowsTheContestsChoiceAndHidesADeletedAccount(t *testing.T) {
 func icpcEntry(login string, solved, penalty int, last *time.Time, cells ...leaderboard.Cell) leaderboard.Entry {
 	return leaderboard.Entry{
 		Registration: uuid.New(), Login: login, Solved: solved, Penalty: penalty,
-		LastSolvedAt: last, Cells: cells,
+		LastSolvedAt: last, Cells: cells, Answered: true,
 	}
 }
 
@@ -166,6 +220,31 @@ func TestRankICPCSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("order = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestRankICPCLeavesARowWithoutAnAnswerUnplaced(t *testing.T) {
+	rows := leaderboard.RankICPC([]leaderboard.Entry{
+		silent(icpcEntry("silent-a", 0, 0, nil)),
+		icpcEntry("wrong-a", 0, 0, nil, leaderboard.Cell{Wrong: 2}),
+		icpcEntry("solver", 1, 10, at(10)),
+		silent(icpcEntry("silent-b", 0, 0, nil)),
+		icpcEntry("wrong-b", 0, 0, nil, leaderboard.Cell{Wrong: 1}),
+	}, grid())
+
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r.Login] = r.Place
+	}
+	want := map[string]int{"solver": 1, "wrong-a": 2, "wrong-b": 2, "silent-a": 0, "silent-b": 0}
+	for login, place := range want {
+		if got[login] != place {
+			t.Errorf("places = %v, want %v", got, want)
+			break
+		}
+	}
+	if rows[3].Answered || rows[4].Answered {
+		t.Errorf("order = %v, want the rows without an answer last", summary(rows))
 	}
 }
 
@@ -266,7 +345,7 @@ func TestNoPrizePlacesAwardNothing(t *testing.T) {
 // ICPC's places come from solved, then penalty, so a tie there is shared too.
 func TestPrizesFollowICPCPlaces(t *testing.T) {
 	solved := func(login string, n, penalty int) leaderboard.Entry {
-		return leaderboard.Entry{Registration: uuid.New(), Login: login, Solved: n, Penalty: penalty}
+		return leaderboard.Entry{Registration: uuid.New(), Login: login, Solved: n, Penalty: penalty, Answered: true}
 	}
 	rows := leaderboard.RankICPC([]leaderboard.Entry{
 		solved("slow", 3, 90), solved("fast", 3, 40), solved("tied", 3, 90), solved("two", 2, 10),
@@ -309,6 +388,16 @@ func TestWinnerModeWithoutAWinnerGivesNoPrize(t *testing.T) {
 	leaderboard.AwardPrizes(rows, contests.ScoringWinner, contests.PrizePlaces{First: 1})
 
 	samePrizes(t, rows, map[string]int{"rich": 0})
+}
+
+func TestARowWithoutAnAnswerChangesNoPrize(t *testing.T) {
+	rows := leaderboard.Rank(contests.ScoringPoints, []leaderboard.Entry{
+		entry("a", 30, at(1)), entry("b", 20, at(1)), entry("wrong", 0, nil), silent(entry("silent", 0, nil)),
+	})
+
+	leaderboard.AwardPrizes(rows, contests.ScoringPoints, contests.PrizePlaces{First: 1, Second: 1, Third: 5})
+
+	samePrizes(t, rows, map[string]int{"a": 1, "b": 2, "wrong": 0, "silent": 0})
 }
 
 func TestAnAllZeroTableAwardsNothing(t *testing.T) {

@@ -76,6 +76,9 @@ type Entry struct {
 	FullName       string
 	AccountDeleted bool
 	Disqualified   bool
+	// Answered says the registration has at least one answer, right or wrong,
+	// counted for the table's cutoff. A row without one has no place.
+	Answered bool
 	// Points is the points total: points_awarded summed, plus the bonus
 	// credit up to the penalty points (§6.1.1). Solved counts distinct
 	// questions answered correctly, bonus questions among them.
@@ -178,8 +181,8 @@ func QuestionLetter(position int) string {
 
 type Row struct {
 	Entry
-	// Place is 1-based and shared by equal results. Zero means unplaced (in
-	// winner mode, everyone but the winner).
+	// Place is 1-based and shared by equal results. Zero means unplaced: no
+	// answer yet, and in winner mode everyone but the winner.
 	Place  int
 	Winner bool
 	// Prize is the tier the row earns, 1 to 3, or 0 for none (AwardPrizes).

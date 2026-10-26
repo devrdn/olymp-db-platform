@@ -15,10 +15,10 @@ import (
 func ownEntries(caller uuid.UUID) []leaderboard.Entry {
 	scored := start.Add(time.Hour)
 	return []leaderboard.Entry{
-		{Registration: uuid.New(), Login: "ahead", Points: 30, Solved: 3, LastScoredAt: &scored},
-		{Registration: caller, Login: "caller", Points: 20, Solved: 2, LastScoredAt: &scored},
-		{Registration: uuid.New(), Login: "behind", Points: 10, Solved: 1, LastScoredAt: &scored},
-		{Registration: uuid.New(), Login: "excluded", Points: 40, Solved: 4, LastScoredAt: &scored, Disqualified: true},
+		{Registration: uuid.New(), Login: "ahead", Points: 30, Solved: 3, LastScoredAt: &scored, Answered: true},
+		{Registration: caller, Login: "caller", Points: 20, Solved: 2, LastScoredAt: &scored, Answered: true},
+		{Registration: uuid.New(), Login: "behind", Points: 10, Solved: 1, LastScoredAt: &scored, Answered: true},
+		{Registration: uuid.New(), Login: "excluded", Points: 40, Solved: 4, LastScoredAt: &scored, Answered: true, Disqualified: true},
 	}
 }
 
@@ -158,6 +158,25 @@ func TestOwnInWinnerModeReportsOnlyTheWinnersPlace(t *testing.T) {
 	}
 	if lost.Row.Points != 30 {
 		t.Errorf("a non-winner reads %+v, want their own numbers all the same", lost.Row)
+	}
+}
+
+func TestOwnHasNoPlaceOnAnOpenTableWithoutAnAnswer(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusFinished, nil)
+	caller := uuid.New()
+	scored := start.Add(time.Hour)
+	r.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "ahead", Points: 30, Solved: 3, LastScoredAt: &scored, Answered: true},
+		{Registration: caller, Login: "caller"},
+	}
+
+	own, err := r.service.Own(context.Background(), c.ID, caller)
+	if err != nil {
+		t.Fatalf("Own() = %v", err)
+	}
+	if !own.Open || own.Place != 0 || own.Participants != 2 {
+		t.Errorf("Own() = %+v, want an open table, no place, 2 rows", own)
 	}
 }
 

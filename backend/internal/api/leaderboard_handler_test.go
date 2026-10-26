@@ -28,7 +28,8 @@ import (
 )
 
 // boardStandings answers with the entries whose score was reached before the
-// cutoff, as the real aggregate does.
+// cutoff, as the real aggregate does. An entry that reached a score has
+// answered; one that never scored has answered only if the fixture says so.
 type boardStandings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
@@ -52,6 +53,7 @@ func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]le
 		if e.Disqualified && !q.IncludeDisqualified {
 			continue
 		}
+		e.Answered = e.Answered || e.LastScoredAt != nil
 		out = append(out, e)
 	}
 	return out, nil
@@ -137,6 +139,11 @@ func (b *icpcBoard) standings(q leaderboard.Query) ([]leaderboard.Entry, leaderb
 		}
 		if p.disqualified && !q.IncludeDisqualified {
 			continue
+		}
+		for _, a := range p.answers {
+			if a.at.Before(q.Cutoff) {
+				e.Answered = true
+			}
 		}
 		out = append(out, e)
 	}
@@ -471,7 +478,7 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	want := `{"state":"live","scoring":"points","title":"The Library Murder","ends_at":"2026-03-01T12:00:00Z",` +
 		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
 		`{"place":1,"prize":null,"label":"student","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
-		`{"place":2,"prize":null,"label":"idle","points":0,"solved":0}]}` + "\n"
+		`{"place":null,"prize":null,"label":"idle","points":0,"solved":0}]}` + "\n"
 	if got := public.Body.String(); got != want {
 		t.Errorf("public body =\n%s\nwant\n%s", got, want)
 	}
@@ -481,9 +488,83 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	want = `{"shown":{"state":"live"},"status":"running","scoring":"points","freeze_min":null,"names":"login",` +
 		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
 		`{"place":1,"prize":null,"login":"student","full_name":"","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
-		`{"place":2,"prize":null,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
+		`{"place":null,"prize":null,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
 	if got := live.Body.String(); got != want {
 		t.Errorf("live body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// placesIn reads each row's place, null as "none", keyed by the name field.
+func placesIn(t *testing.T, rec *httptest.ResponseRecorder, name string) map[string]string {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	rows, _ := decode(t, rec)["rows"].([]any)
+	out := map[string]string{}
+	for _, item := range rows {
+		row, _ := item.(map[string]any)
+		place, present := row["place"]
+		if !present {
+			t.Fatalf("row %v carries no place key", row)
+		}
+		out[row[name].(string)] = "none"
+		if place != nil {
+			out[row[name].(string)] = strconv.Itoa(int(place.(float64)))
+		}
+	}
+	return out
+}
+
+func samePlaces(t *testing.T, audience string, got, want map[string]string) {
+	t.Helper()
+	for label, place := range want {
+		if got[label] != place {
+			t.Errorf("%s places = %v, want %v", audience, got, want)
+			return
+		}
+	}
+}
+
+// A row with no answer has no place, in every audience: the key is there and
+// null, not zero. An answer that is wrong still earns the place.
+func TestARowWithoutAnAnswerHasANullPlaceInEveryAudience(t *testing.T) {
+	f := newBoardFixture(t)
+	c, me := f.contest(t, contests.StatusRunning, nil)
+	at := scoredAt(f.now.Add(-time.Minute))
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "first", Points: 50, LastScoredAt: at},
+		{Registration: me.ID, Login: "student", Points: 40, LastScoredAt: at},
+		{Registration: uuid.New(), Login: "wrong", Answered: true},
+		{Registration: uuid.New(), Login: "silent"},
+	}
+	want := map[string]string{"first": "1", "student": "2", "wrong": "3", "silent": "none"}
+
+	student, organizer := f.student.ID, f.organizer.ID
+	samePlaces(t, "public", placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"), want)
+	samePlaces(t, "participant", placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, ""), "label"), want)
+	samePlaces(t, "staff", placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, ""), "login"), want)
+}
+
+// Under ICPC the frozen table counts answers before the freeze only, so a
+// row that has only answered since has no place there; staff read it live.
+func TestAnICPCRowWithOnlyAnswersSinceTheFreezeHasANullPlaceUntilStaffReadIt(t *testing.T) {
+	f := newBoardFixture(t)
+	c, freezeAt := f.icpcContest(t)
+	f.standings.icpc.entrants = append(f.standings.icpc.entrants,
+		icpcEntrant{registration: uuid.New(), login: "silent"},
+		icpcEntrant{registration: uuid.New(), login: "wrong", answers: []icpcAnswer{{question: 2, at: freezeAt.Add(-5 * time.Minute)}}},
+		icpcEntrant{registration: uuid.New(), login: "since", answers: []icpcAnswer{{question: 2, at: freezeAt.Add(time.Minute), correct: true}}},
+	)
+
+	student, organizer := f.student.ID, f.organizer.ID
+	frozen := map[string]string{"student": "1", "rival": "2", "wrong": "3", "silent": "none", "since": "none"}
+	samePlaces(t, "public", placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""), "label"), frozen)
+	samePlaces(t, "participant", placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, ""), "label"), frozen)
+
+	live := placesIn(t, f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, ""), "login")
+	if live["silent"] != "none" || live["since"] == "none" || live["wrong"] == "none" {
+		t.Errorf("staff places = %v, want silent alone unplaced", live)
 	}
 }
 
