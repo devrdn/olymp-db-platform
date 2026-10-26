@@ -65,6 +65,10 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
 	}
 
+	if err := guardNesting(sql); err != nil {
+		return sqlpolicy.Statement{}, err
+	}
+
 	tree, err := pg.Parse(sql)
 	if err != nil {
 		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{
