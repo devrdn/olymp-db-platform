@@ -1701,7 +1701,12 @@ const en = {
           empty: "This database has no tables to draw.",
           /** Names the drawing for assistive technology; the keys are in `keys`. */
           canvas: "Schema diagram",
-          keys: "Drag or use the arrow keys to move the diagram, the wheel or + and − to zoom, 0 to fit it to the window.",
+          keys: "Drag the background or use the arrow keys to move the diagram, the wheel or + and − to zoom, 0 to fit it to the window. Drag a table to move it, or reach it with Tab and move it with the arrow keys, further with Shift.",
+          /** Says what a focused box in the drawing is, after its name: `rooms, table`. */
+          table: "table",
+          /** The button that undoes every table moved by hand. */
+          arrange: "Arrange",
+          arrangeHint: "Put every table back where the automatic layout places it",
           zoomIn: "Zoom in",
           zoomOut: "Zoom out",
           fit: "Fit to the window",

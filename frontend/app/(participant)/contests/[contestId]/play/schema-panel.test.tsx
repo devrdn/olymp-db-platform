@@ -31,7 +31,7 @@ function schema(overrides: Partial<GameSchema> = {}): GameSchema {
 const t = en.participant.play.schema;
 
 function panel(value: GameSchema = schema(), onQueryTable = vi.fn(), diagram = true) {
-  return render(<SchemaPanel schema={value} diagram={diagram} onQueryTable={onQueryTable} dict={en} />);
+  return render(<SchemaPanel schema={value} contestId="c1" diagram={diagram} onQueryTable={onQueryTable} dict={en} />);
 }
 
 /** The button on a table's name, which writes a query on it. */
@@ -237,14 +237,14 @@ describe("the schema panel", () => {
     const user = userEvent.setup();
     const onReveal = vi.fn();
     const { rerender } = render(
-      <SchemaPanel schema={schema()} diagram hidden onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />,
+      <SchemaPanel schema={schema()} contestId="c1" diagram hidden onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />,
     );
 
     document.body.focus();
     await user.keyboard("{Meta>}k{/Meta}");
     expect(onReveal).toHaveBeenCalledTimes(1);
 
-    rerender(<SchemaPanel schema={schema()} diagram hidden={false} onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />);
+    rerender(<SchemaPanel schema={schema()} contestId="c1" diagram hidden={false} onReveal={onReveal} onQueryTable={vi.fn()} dict={en} />);
 
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });

@@ -16,6 +16,7 @@ import { SchemaDiagramDialog } from "./schema-diagram-dialog";
  */
 export function SchemaPanel({
   schema,
+  contestId,
   diagram,
   hidden = false,
   onReveal,
@@ -23,6 +24,8 @@ export function SchemaPanel({
   dict,
 }: {
   schema: GameSchema;
+  /** Keys where the diagram remembers the tables a participant moved. */
+  contestId: string;
   /**
    * Whether the contest offers the diagram. Off removes the button only: the
    * tables, columns and foreign keys below stay.
@@ -99,7 +102,7 @@ export function SchemaPanel({
           {t.heading} · {t.language}
         </span>
         <span className="flex items-center gap-3">
-          {diagram ? <SchemaDiagramDialog schema={schema} dict={dict} /> : null}
+          {diagram ? <SchemaDiagramDialog schema={schema} contestId={contestId} dict={dict} /> : null}
           <span>{schema.tables.length}</span>
         </span>
       </header>
