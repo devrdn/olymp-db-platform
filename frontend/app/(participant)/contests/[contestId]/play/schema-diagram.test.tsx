@@ -292,6 +292,25 @@ describe("the schema diagram", () => {
       expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
     });
 
+    // Touch gives each new finger a new pointer id, so a drag that never
+    // ends would otherwise refuse every later one.
+    test("a drag whose pointer capture is lost ends there, unmoved, and the next pointer still pans", () => {
+      const { container } = draw();
+      const fitted = view(container);
+      const rooms = place(container, "rooms");
+
+      fireEvent.pointerDown(box(container, "rooms"), { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(canvas(), { clientX: 160, clientY: 130, pointerId: 1 });
+      fireEvent.lostPointerCapture(canvas(), { pointerId: 1 });
+      expect(place(container, "rooms")).toEqual(rooms);
+      expect(container.querySelector("[data-copy]")).not.toBeInTheDocument();
+
+      fireEvent.pointerDown(canvas(), { button: 0, clientX: 300, clientY: 300, pointerId: 2 });
+      fireEvent.pointerMove(canvas(), { clientX: 340, clientY: 300, pointerId: 2 });
+      fireEvent.pointerUp(canvas(), { clientX: 340, clientY: 300, pointerId: 2 });
+      expect(view(container).x).toBeCloseTo(fitted.x + 40);
+    });
+
     test("a focused table moves with the arrow keys, further with Shift, while the view stays", async () => {
       const user = userEvent.setup();
       const { container } = draw();
