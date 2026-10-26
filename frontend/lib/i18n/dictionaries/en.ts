@@ -1036,15 +1036,8 @@ const en = {
         sequentialNeedsAttempts: "This contest opens questions in order (Settings → Its shape). A question left unlimited here blocks publishing: a participant stuck on it would have nothing left to move on to.",
         winnerFinalNeedsAttempts: "Scoring is first to solve, and the first correct final answer wins outright while a wrong one costs nothing. A final question left unlimited here blocks publishing: it could be won by trying candidates one after another.",
         penalty: "Penalty per wrong attempt, %",
-        penaltyHelp: "Percent of this question's own points, lost for every wrong attempt already made on it. Never takes the question below zero, and never applies while the contest's scoring is set to first to solve.",
+        penaltyHelp: "Percent of this question's own points, lost for every wrong attempt already made on it. Never takes the question below zero.",
         penaltyPreview: "Right now, a wrong attempt costs {n} of {points} points.",
-        // ICPC scoring (Settings → Its shape) does not use a question's own
-        // points or percentage penalty at all — place is decided by how many
-        // questions are solved and, at a tie, by the contest's own penalty
-        // time. Said beside both fields rather than only in the gate, since
-        // the fields themselves stay in the form, disabled, with whatever
-        // they already held.
-        icpcDisabled: "Not used while the contest's scoring is ICPC.",
         choices: "Option identifiers",
         choicesHint: "Short, stable, language-independent — a, b, c.",
         choicesHelp: "The answer is one of these, never a label, which is what keeps checking independent of the language read.",

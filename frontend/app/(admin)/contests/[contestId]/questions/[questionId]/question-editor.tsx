@@ -174,9 +174,12 @@ function ShapeSection({
   onChoiceIds: (value: string[]) => void;
 }) {
   const t = dict.workspace.question;
-  // ICPC ignores points and penalty; the fields stay, disabled, since the mode
-  // can still be reverted before the start.
-  const icpc = scoring === "icpc";
+  // A field the mode ignores is not shown, but its stored value is still
+  // resubmitted (hidden input below), so reverting the mode before the start
+  // finds it unchanged: ICPC ignores points and penalty, first to solve the
+  // penalty.
+  const showPoints = scoring !== "icpc";
+  const showPenalty = scoring === "points";
 
   // Mirrored only for the live preview and warning; the inputs stay
   // uncontrolled so a save shows the server's copy.
@@ -187,9 +190,9 @@ function ShapeSection({
   // so it is not submitted and a save leaves the question regular, as shown.
   const bonusAllowed = scoring === "points";
   const [bonus, setBonus] = useState(question.isBonus && bonusAllowed);
-  // A wrong answer to a bonus question costs nothing, so the penalty is set
-  // aside like under ICPC: disabled, and its stored value resubmitted.
-  const penaltyUnused = icpc || bonus;
+  // A wrong answer to a bonus question costs nothing, so its penalty field is
+  // disabled and the stored value resubmitted.
+  const penaltyUnused = bonus;
 
   const penaltyPerAttempt = Math.floor((points * (penaltyPct ?? 0)) / 100);
   const bonusHintId = useId();
@@ -222,29 +225,29 @@ function ShapeSection({
         </fieldset>
 
         <div className="grid gap-6 narrow:grid-cols-2">
-          <Field
-            id="points"
-            label={t.shape.points}
-            help={t.shape.pointsHelp}
-            helpLabel={dict.chrome.helpLabel}
-            hint={icpc ? t.shape.icpcDisabled : undefined}
-          >
-            <Input
-              name={icpc ? undefined : "points"}
-              type="number"
-              min={0}
-              step={1}
-              defaultValue={question.points}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setPoints(Number.isFinite(value) && value >= 0 ? value : 0);
-              }}
-              disabled={!editable || icpc}
-            />
-          </Field>
-          {/* Disabled inputs are not submitted; without this a wording-only save
-             would zero the points under ICPC. */}
-          {icpc ? <input type="hidden" name="points" value={points} /> : null}
+          {showPoints ? (
+            <Field
+              id="points"
+              label={t.shape.points}
+              help={t.shape.pointsHelp}
+              helpLabel={dict.chrome.helpLabel}
+            >
+              <Input
+                name="points"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={question.points}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setPoints(Number.isFinite(value) && value >= 0 ? value : 0);
+                }}
+                disabled={!editable}
+              />
+            </Field>
+          ) : (
+            <input type="hidden" name="points" value={points} />
+          )}
 
           <Field id="maxAttempts" label={t.shape.attempts} hint={t.shape.attemptsHint}>
             <Input
@@ -272,47 +275,51 @@ function ShapeSection({
           <p className="max-w-body text-small text-warn">{t.shape.winnerFinalNeedsAttempts}</p>
         ) : null}
 
-        <Field
-          id="penaltyPct"
-          label={t.shape.penalty}
-          help={t.shape.penaltyHelp}
-          helpLabel={dict.chrome.helpLabel}
-          hint={icpc ? t.shape.icpcDisabled : bonus ? t.shape.bonusNoPenalty : undefined}
-        >
-          <Input
-            name={penaltyUnused ? undefined : "penaltyPct"}
-            type="number"
-            min={0}
-            max={100}
-            step={1}
-            defaultValue={question.penaltyPct}
-            onChange={(event) => {
-              const raw = event.target.value.trim();
-              if (raw === "") {
-                setPenaltyPct(null);
-                return;
-              }
-              const value = Number(raw);
-              setPenaltyPct(Number.isFinite(value) ? value : null);
-            }}
-            disabled={!editable || penaltyUnused}
-            className="max-w-40"
-          />
-        </Field>
-        {/* As with `points`: the visible field is disabled, so the stored
-           penalty is resubmitted here. */}
-        {penaltyUnused ? (
-          <input type="hidden" name="penaltyPct" value={penaltyPct ?? ""} />
-        ) : null}
+        {showPenalty ? (
+          <>
+            <Field
+              id="penaltyPct"
+              label={t.shape.penalty}
+              help={t.shape.penaltyHelp}
+              helpLabel={dict.chrome.helpLabel}
+              hint={bonus ? t.shape.bonusNoPenalty : undefined}
+            >
+              <Input
+                name={penaltyUnused ? undefined : "penaltyPct"}
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                defaultValue={question.penaltyPct}
+                onChange={(event) => {
+                  const raw = event.target.value.trim();
+                  if (raw === "") {
+                    setPenaltyPct(null);
+                    return;
+                  }
+                  const value = Number(raw);
+                  setPenaltyPct(Number.isFinite(value) ? value : null);
+                }}
+                disabled={!editable || penaltyUnused}
+                className="max-w-40"
+              />
+            </Field>
 
-        {/* The penalty worked out for this question (docs/ARCHITECTURE.md
-            §6.1.1); not used under ICPC or for a bonus. */}
-        {!penaltyUnused ? (
-          <p className="-mt-3 max-w-body text-small text-ink-3">
-            {t.shape.penaltyPreview
-              .replace("{n}", String(penaltyPerAttempt))
-              .replace("{points}", String(points))}
-          </p>
+            {/* The penalty worked out for this question
+               (docs/ARCHITECTURE.md §6.1.1); not used for a bonus. */}
+            {!penaltyUnused ? (
+              <p className="-mt-3 max-w-body text-small text-ink-3">
+                {t.shape.penaltyPreview
+                  .replace("{n}", String(penaltyPerAttempt))
+                  .replace("{points}", String(points))}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        {/* Disabled or absent inputs are not submitted; without this a save
+           would zero the stored penalty. */}
+        {!showPenalty || penaltyUnused ? (
+          <input type="hidden" name="penaltyPct" value={penaltyPct ?? ""} />
         ) : null}
 
         {/* The API refuses options on any other kind. */}
