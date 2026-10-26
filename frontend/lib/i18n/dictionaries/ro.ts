@@ -194,6 +194,7 @@ const ro = {
         placeNotStarted: "Olimpiada nu a început încă, așa că nu există un clasament pe care să aveți un loc.",
         outsideTable: "Clasamentul publicat al acestei olimpiade nu conține rândul dumneavoastră, așa că nu există un rezultat de arătat. Ce ați făcut se vede mai jos.",
         unplaced: "La această olimpiadă doar câștigătorul are un loc.",
+        unanswered: "Nu ați răspuns la nicio întrebare, așa că în clasament nu aveți un loc.",
         winner: "Ați câștigat această olimpiadă.",
         truncated: "Numărat printre primele {n} rânduri ale clasamentului.",
         notStarted: "Nu ați pornit cronometrul la această olimpiadă.",

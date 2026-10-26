@@ -266,6 +266,21 @@ describe("a contest with one winner", () => {
     expect(screen.getByText(t().result.unplaced)).toBeInTheDocument();
     expect(screen.queryByText(t().result.placePending)).not.toBeInTheDocument();
     expect(screen.queryByText(t().result.winner)).not.toBeInTheDocument();
+    expect(screen.queryByText(t().result.unanswered)).not.toBeInTheDocument();
+  });
+});
+
+describe("a participant who answered nothing", () => {
+  /** A table that ranks everyone gives such a row no place, and says that, not the winner-mode sentence. */
+  test.each(["points", "icpc"] as const)("is told the %s table gives no place", (scoring) => {
+    renderSummary(
+      report({
+        result: result({ scoring, points: 0, solved: 0, place: null, participants: null, winner: false }),
+      }),
+    );
+
+    expect(screen.getByText(t().result.unanswered)).toBeInTheDocument();
+    expect(screen.queryByText(t().result.unplaced)).not.toBeInTheDocument();
   });
 });
 

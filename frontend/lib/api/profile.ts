@@ -106,8 +106,8 @@ const reportResultSchema = z
     state: z.enum(TABLE_STATES),
     place_open: z.boolean(),
     /**
-     * Null, not zero, when the table is not open yet or places only its
-     * winner. `participants` travels with it.
+     * Null, not zero, when the table is not open yet, places only its winner,
+     * or counts no answer of this participant. `participants` travels with it.
      */
     place: z.number().nullish(),
     participants: z.number().nullish(),

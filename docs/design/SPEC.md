@@ -584,9 +584,10 @@ names.
   — solved or not, attempts, time of the first correct answer, and points or
   ICPC penalty, the penalty read from the same cell the standings grid
   computes rather than derived again. Place and participant count appear only
-  when the table is open; a frozen table says so instead, and an open table
+  when the table is open; a frozen table says so instead, an open table
   in winner mode says plainly that only the winner has a place, for the rows
-  that are not it. Two further sentences cover the rest: a contest whose
+  that are not it, and any other open table says a reader with no answer
+  counted for it has no place. Two further sentences cover the rest: a contest whose
   table has not opened at all, and a reader whose row is outside the
   published table — which happens only past the two thousand rows a table
   carries, and leaves the session's own figures in place. A disqualified
