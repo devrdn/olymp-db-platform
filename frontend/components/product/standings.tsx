@@ -87,11 +87,33 @@ function prizeName(prize: Prize | null, names: PrizeNames): string {
   }
 }
 
+/** Whether any row of the table holds a prize; only then does the table carry the column. */
+export function hasPrize(rows: readonly { prize: Prize | null }[]): boolean {
+  return rows.some((row) => row.prize !== null);
+}
+
 /**
- * A row's prize tier as a medal with its numeral, or a dash for none. The
- * place itself is not shown: rows keep their order, and the tier is what the
- * organiser awards.
+ * A row's place as a number, or a dash for a participant who has not answered.
+ * Ties share a number; the server decides both.
  */
+export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced: string }) {
+  return (
+    <span data-testid="place" className="inline-flex">
+      {place === null ? (
+        <>
+          <span aria-hidden className="font-mono text-data text-ink-3">
+            —
+          </span>
+          <span className="sr-only">{unplaced}</span>
+        </>
+      ) : (
+        <span className="font-mono text-data text-ink-2 tabular-nums">{place}</span>
+      )}
+    </span>
+  );
+}
+
+/** A row's prize tier as a medal with its numeral, or a dash for none. */
 export function PrizeBadge({ prize, names }: { prize: Prize | null; names: PrizeNames }) {
   return (
     <span data-testid="prize" data-medal={medalOf(prize)} className="inline-flex">
@@ -173,6 +195,7 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
 export const ICPC_COLUMN = {
   place: { className: "w-14", rem: 3.5 },
   placeWide: { className: "w-16", rem: 4 },
+  prize: { className: "w-18", rem: 4.5 },
   login: { className: "w-28", rem: 7 },
   solved: { className: "w-20", rem: 5 },
   penalty: { className: "w-20", rem: 5 },
@@ -316,8 +339,12 @@ export function StandingsView({
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
   // The grid only appears on `page`.
   const gridQuestions = variant === "page" && icpc ? standings.questions : undefined;
+  const prizes = hasPrize(rows);
   const gridWidth = gridTableWidth(
-    ICPC_COLUMN.place.rem + ICPC_COLUMN.solved.rem + ICPC_COLUMN.penalty.rem,
+    ICPC_COLUMN.place.rem +
+      (prizes ? ICPC_COLUMN.prize.rem : 0) +
+      ICPC_COLUMN.solved.rem +
+      ICPC_COLUMN.penalty.rem,
     gridQuestions?.length,
   );
 
@@ -349,8 +376,13 @@ export function StandingsView({
                     scope="col"
                     className={cn(ICPC_COLUMN.place.className, "py-2 pr-2 pl-3 text-left font-normal")}
                   >
-                    {t.columns.prize}
+                    {t.columns.place}
                   </th>
+                  {prizes ? (
+                    <th scope="col" className={cn(ICPC_COLUMN.prize.className, "px-2 py-2 text-left font-normal")}>
+                      {t.columns.prize}
+                    </th>
+                  ) : null}
                   <th scope="col" className="px-2 py-2 text-left font-normal">
                     {t.columns.participant}
                   </th>
@@ -407,6 +439,7 @@ export function StandingsView({
                     locale={locale}
                     variant={variant}
                     icpc={icpc}
+                    prizes={prizes}
                     questions={standings.questions}
                   />
                 ))}
@@ -431,6 +464,7 @@ function Row({
   locale,
   variant,
   icpc,
+  prizes,
   questions,
 }: {
   row: StandingsRow;
@@ -439,6 +473,7 @@ function Row({
   locale: string;
   variant: "panel" | "page";
   icpc: boolean;
+  prizes: boolean;
   questions?: string[];
 }) {
   const t = dict.leaderboard;
@@ -459,8 +494,13 @@ function Row({
       <td
         className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.prize))}
       >
-        <PrizeBadge prize={row.prize} names={t.prizes} />
+        <PlaceBadge place={row.place} unplaced={t.unplaced} />
       </td>
+      {prizes ? (
+        <td className="px-2 py-2.5 align-middle">
+          <PrizeBadge prize={row.prize} names={t.prizes} />
+        </td>
+      ) : null}
 
       <td className="px-2 py-2.5 align-middle">
         <div className="flex min-w-0 items-center gap-2.5">

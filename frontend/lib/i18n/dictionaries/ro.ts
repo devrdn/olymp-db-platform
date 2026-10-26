@@ -1929,6 +1929,7 @@ const ro = {
     notStarted: "Tabelul apare când începe olimpiada.",
     empty: "Nu este încă nimeni în tabel.",
     columns: {
+      place: "Loc",
       prize: "Premiu",
       participant: "Participant",
       points: "Puncte",
@@ -1947,6 +1948,7 @@ const ro = {
     you: "Dvs.",
     winner: "Câștigător",
     deleted: "Cont șters",
+    unplaced: "Fără loc",
     prizes: {
       first: "Premiul I",
       second: "Premiul al II-lea",

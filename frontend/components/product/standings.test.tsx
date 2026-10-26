@@ -10,7 +10,7 @@ import {
 } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 
-import { PrizeBadge, StandingsView } from "./standings";
+import { PlaceBadge, PrizeBadge, StandingsView } from "./standings";
 
 const t = en.leaderboard;
 
@@ -87,7 +87,24 @@ describe("the standings", () => {
     expect(cell).not.toHaveTextContent("4");
   });
 
-  test("show the tier, not the place: tied rows share it, and the place number appears nowhere", () => {
+  test("show the place first, as a number, in the row's accessible text", () => {
+    show(standings());
+
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers.slice(0, 3)).toEqual([t.columns.place, t.columns.prize, t.columns.participant]);
+    for (const [label, place] of [
+      ["alpha", "1"],
+      ["beta", "2"],
+      ["gamma", "3"],
+      ["delta", "4"],
+    ]) {
+      const cell = within(rowOf(label)).getAllByRole("cell")[0];
+      expect(within(cell).getByTestId("place")).toHaveTextContent(place);
+      expect(within(cell).getByText(place)).not.toHaveAttribute("aria-hidden");
+    }
+  });
+
+  test("tied rows share their place and their tier, and the next place skips", () => {
     show(
       standings({
         rows: [
@@ -98,11 +115,29 @@ describe("the standings", () => {
       }),
     );
 
+    expect(within(rowOf("alpha")).getByTestId("place")).toHaveTextContent("1");
+    expect(within(rowOf("beta")).getByTestId("place")).toHaveTextContent("1");
+    expect(within(rowOf("gamma")).getByTestId("place")).toHaveTextContent("3");
     expect(within(rowOf("alpha")).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
     expect(within(rowOf("beta")).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
-    const third = within(rowOf("gamma")).getByTestId("prize");
-    expect(third).toHaveAttribute("data-medal", "silver");
-    expect(third).not.toHaveTextContent("3");
+    expect(within(rowOf("gamma")).getByTestId("prize")).toHaveAttribute("data-medal", "silver");
+  });
+
+  test("show a dash, named as no place, for a row that has not answered, and keep its prize cell empty", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: 1, label: "alpha", points: 40 }),
+          row({ place: null, prize: null, label: "idle", points: 0, solved: 0 }),
+        ],
+      }),
+    );
+
+    const cell = within(rowOf("idle")).getByTestId("place");
+    expect(within(cell).getByText("—")).toHaveAttribute("aria-hidden");
+    expect(within(cell).getByText(t.unplaced)).toHaveClass("sr-only");
+    expect(cell).not.toHaveAttribute("data-medal");
+    expect(within(rowOf("idle")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
   });
 
   test("keep the rows in the order they were ranked", () => {
@@ -122,7 +157,7 @@ describe("the standings", () => {
     });
   });
 
-  test("give no medal anywhere when the contest has no prize places", () => {
+  test("give no medal and no prize column when the contest has no prize places", () => {
     show(
       standings({
         rows: [
@@ -133,13 +168,32 @@ describe("the standings", () => {
       "page",
     );
 
-    for (const label of ["alpha", "beta"]) {
+    expect(screen.queryByRole("columnheader", { name: t.columns.prize })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: t.columns.place })).toBeInTheDocument();
+    expect(screen.queryByTestId("prize")).not.toBeInTheDocument();
+    for (const [label, place] of [
+      ["alpha", "1"],
+      ["beta", "2"],
+    ]) {
       const tr = tableRowOf(label);
-      expect(within(tr).getByTestId("prize")).not.toHaveAttribute("data-medal");
-      expect(within(tr).getByText(t.prizes.none)).toBeInTheDocument();
+      expect(within(tr).getByTestId("place")).toHaveTextContent(place);
       expect(tr.className).not.toMatch(/gold|silver|bronze/);
     }
     expect(screen.queryByTestId("podium")).not.toBeInTheDocument();
+  });
+
+  test("show the prize column as soon as one row has a prize", () => {
+    show(
+      standings({
+        rows: [
+          row({ place: 1, prize: null, label: "alpha" }),
+          row({ place: 2, prize: 3, label: "beta" }),
+        ],
+      }),
+    );
+
+    expect(screen.getByRole("columnheader", { name: t.columns.prize })).toBeInTheDocument();
+    expect(within(rowOf("alpha")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
   });
 
   test("tint a prize row and its edge by its tier", () => {
@@ -196,6 +250,8 @@ describe("the standings", () => {
     expect(within(sherlock).getByTestId("prize")).toHaveAttribute("data-medal", "gold");
     expect(within(sherlock).getByText(t.prizes.first)).toHaveClass("sr-only");
     expect(within(rowOf("watson")).getByTestId("prize")).toHaveTextContent(t.prizes.none);
+    expect(within(sherlock).getByTestId("place")).toHaveTextContent("1");
+    expect(within(rowOf("watson")).getByTestId("place")).toHaveTextContent(t.unplaced);
   });
 
   test("stand the winner on the podium in winner mode", () => {
@@ -494,6 +550,27 @@ describe("the ICPC standings", () => {
     expect(table.style.minWidth).toBe("");
   });
 
+  test("adds the prize column's width to the table's minimum when a prize is shown", () => {
+    const questions = Array.from({ length: 12 }, (_, i) => String.fromCharCode(65 + i));
+    show(
+      icpcStandings({
+        questions,
+        rows: [
+          icpcRow({
+            label: "alpha",
+            prize: 1,
+            solved: 1,
+            penalty: 10,
+            cells: questions.map(() => ({ state: "untried" as const })),
+          }),
+        ],
+      }),
+      "page",
+    );
+
+    expect(screen.getByRole("table").style.getPropertyValue("--grid-min-width")).toBe("66rem");
+  });
+
   test("sets no grid-width variable or class in points mode, which has no grid", () => {
     show(standings(), "page");
 
@@ -526,5 +603,26 @@ describe.each(["en", "ro", "ru"] as const)("the prize badge in %s", (locale) => 
       unmount();
     }
     expect(new Set([names.first, names.second, names.third, names.none]).size).toBe(4);
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the place badge in %s", (locale) => {
+  test("shows the number, or a dash that a screen reader hears as no place", async () => {
+    const { unplaced } = (await getDictionary(locale)).leaderboard;
+
+    const { unmount } = render(<PlaceBadge place={7} unplaced={unplaced} />);
+    expect(screen.getByTestId("place")).toHaveTextContent("7");
+    expect(screen.queryByText(unplaced)).not.toBeInTheDocument();
+    unmount();
+
+    render(<PlaceBadge place={null} unplaced={unplaced} />);
+    expect(screen.getByText(unplaced)).toHaveClass("sr-only");
+    expect(screen.getByText("—")).toHaveAttribute("aria-hidden");
+  });
+
+  test("has a column header of its own, apart from the prize's", async () => {
+    const { columns } = (await getDictionary(locale)).leaderboard;
+    expect(columns.place).toBeTruthy();
+    expect(columns.place).not.toBe(columns.prize);
   });
 });

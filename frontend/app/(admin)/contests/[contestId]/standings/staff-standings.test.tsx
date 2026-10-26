@@ -69,19 +69,47 @@ describe("the staff table", () => {
     ).toBeInTheDocument();
   });
 
-  test("shows each row's prize tier, the disqualified with none, and names it in words", () => {
+  test("shows each row's place first, then its prize tier, and names the tier in words", () => {
     show(board(), "running");
 
-    const holmes = within(screen.getByText("Sherlock Holmes").closest("tr") as HTMLElement).getByTestId("prize");
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers.slice(0, 2)).toEqual([dict.leaderboard.columns.place, dict.leaderboard.columns.prize]);
+
+    const holmesRow = screen.getByText("Sherlock Holmes").closest("tr") as HTMLElement;
+    expect(within(holmesRow).getByTestId("place")).toHaveTextContent("1");
+    const holmes = within(holmesRow).getByTestId("prize");
     expect(holmes).toHaveAttribute("data-medal", "gold");
     expect(within(holmes).getByText("I")).toBeInTheDocument();
     expect(within(holmes).getByText(dict.leaderboard.prizes.first)).toHaveClass("sr-only");
 
-    const moriarty = within(screen.getByText("James Moriarty").closest("tr") as HTMLElement).getByTestId("prize");
+    const moriartyRow = screen.getByText("James Moriarty").closest("tr") as HTMLElement;
+    expect(within(moriartyRow).getByTestId("place")).toHaveTextContent("2");
+    const moriarty = within(moriartyRow).getByTestId("prize");
     expect(moriarty).not.toHaveAttribute("data-medal");
-    expect(moriarty).not.toHaveTextContent("2");
     expect(within(moriarty).getByText(dict.leaderboard.prizes.none)).toHaveClass("sr-only");
-    expect(screen.getByRole("columnheader", { name: dict.leaderboard.columns.prize })).toBeInTheDocument();
+  });
+
+  test("shows a dash for a row without a place, and no prize column when nobody has a prize", () => {
+    const [first, second] = board().rows;
+    show(
+      board({ rows: [{ ...first, prize: null }, { ...second, place: null, points: 0, solved: 0 }] }),
+      "running",
+    );
+
+    expect(screen.queryByRole("columnheader", { name: dict.leaderboard.columns.prize })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("prize")).not.toBeInTheDocument();
+    const idle = within(screen.getByText("James Moriarty").closest("tr") as HTMLElement).getByTestId("place");
+    expect(within(idle).getByText("—")).toHaveAttribute("aria-hidden");
+    expect(within(idle).getByText(dict.leaderboard.unplaced)).toHaveClass("sr-only");
+  });
+
+  test("gives tied rows the number they share", () => {
+    const [first, second] = board().rows;
+    show(board({ rows: [{ ...first, place: 1 }, { ...second, place: 1 }] }), "running");
+
+    for (const name of ["Sherlock Holmes", "James Moriarty"]) {
+      expect(within(screen.getByText(name).closest("tr") as HTMLElement).getByTestId("place")).toHaveTextContent("1");
+    }
   });
 
   test("links the public page", () => {

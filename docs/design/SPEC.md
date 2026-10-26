@@ -142,10 +142,12 @@ hue as text on its own wash and on the page ground, in both themes.
 Rules that keep it a palette rather than decoration:
 
 - **Medals only for prizes.** The organiser sets how many places earn a first,
-  second and third prize, and the badge shows the row's prize as a medal with
-  its numeral (I, II, III), not the place; a row without a prize shows a dash.
-  A shared place shares the prize, so a tie on a boundary takes the better
-  medal; with no prize places set nobody has a medal, and in winner mode only
+  second and third prize, and the prize column shows the row's prize as a medal
+  with its numeral (I, II, III); a row without a prize shows a dash, and a
+  table in which nobody has a prize has no such column. The place is its own
+  first column, the number the row holds (ties share it) or a dash for a
+  participant who has not answered. A shared place shares the prize, so a tie
+  on a boundary takes the better medal; with no prize places set nobody has a medal, and in winner mode only
   the winner holds the gold. The podium has one step per prize, at that
   prize's height, naming its first holder and how many more share it, so
   equal prizes never look ranked. A medal has two
