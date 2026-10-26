@@ -28,7 +28,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -115,7 +115,7 @@ func TestAScriptSavedInTheCoreDatabaseIsDescribedAsBuiltWhateverTheFirstParticip
 		VALUES ($1, 'read_write', '{evidence}', true)`, contest.ID); err != nil {
 		t.Fatalf("make the contest read_write: %v", err)
 	}
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -185,7 +185,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseDatabaseIsGoneIsFoundByTheTemplateChe
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -242,7 +242,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseTemplateIsGoneIsRebuiltWhileTheContes
 	}
 
 	contest, people := contestFor(t, t.Context(), 1)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -327,7 +327,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	// A wrong author password: pgx's *pgconn.ConnectError names the role, the
@@ -384,7 +384,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -442,7 +442,7 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -526,7 +526,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
@@ -645,7 +645,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	repo := postgres.NewGameInstances(testPool)
+	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
