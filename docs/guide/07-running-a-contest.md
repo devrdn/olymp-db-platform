@@ -462,7 +462,7 @@ ones you hear about, and what to do
 | `game_cluster_full` | "There is no room left on the game cluster…" | see [disk filling](#the-disk-is-filling) |
 | `query_service_down` | "The query service is not answering right now…" | the Query Runner is down |
 | `query_busy` | "The system is busy. Try again in a moment." | the Query Runner is full |
-| `query_too_often` | "You are sending queries too quickly. Wait a moment." | past `QUERY_PER_MINUTE` (60 by default) or the contest's lower **Queries per minute**; lifts within the minute |
+| `query_too_often` | "You are sending queries too quickly. Wait a moment." | past `QUERY_PER_MINUTE` (60 by default) or the contest's lower **Queries per minute**, or more than two `QUERY_DEADLINE`s of execution time in the last minute; lifts within the minute |
 | `play_read_too_often` | "Too many requests from this page. Wait a minute and try again." | past `PLAY_READ_PER_MINUTE` (120 by default), about twenty reloads in a minute; lifts within the minute, and a console already on screen keeps running queries |
 | `query_disk_full` | "Your database is at its size limit…" | their own copy hit its quota; they free it or reset |
 
@@ -576,6 +576,14 @@ depth: participants are told `busy` at once, and a query that waited past
 **Settings**, can be lowered while the contest runs. Zero there means the
 installation's `QUERY_PER_MINUTE` (60 by default), and a value above it
 changes nothing.
+
+A participant whose queries keep running to the deadline is held back on
+their own, whatever the rate: more than two `QUERY_DEADLINE`s of execution
+time in a minute answers `query_too_often` until the minute passes. Eight
+such participants would otherwise hold every slot for the rest of the
+contest, and lowering the rate would not free one — at ten queries a minute a
+five-second query still holds a slot five sixths of the time. No malice is
+needed: a Cartesian join is enough.
 
 The capacity itself is decided before the contest, not during it.
 `QUERY_CONCURRENT` plus `QUERY_QUEUE_DEPTH` should be at least the number of

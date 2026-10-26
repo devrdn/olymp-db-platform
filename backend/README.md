@@ -150,7 +150,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `20` | sign-in attempts through all of one account's trusted browsers together per 15 minutes, successes included |
 | `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |
 | `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
-| `QUERY_PER_MINUTE` | no | `60` | queries one participant may run a minute unless the contest sets a lower rate, which then applies (0 is no limit); must match the Query Runner's own value; past it a 429 `query_too_often` |
+| `QUERY_PER_MINUTE` | no | `60` | queries one participant may run a minute unless the contest sets a lower rate, which then applies (0 is no limit); must match the Query Runner's own value; past it a 429 `query_too_often`. The same answer meets a participant whose queries held an execution slot for more than two `QUERY_DEADLINE`s in the last minute, however few they were: a statement that runs to its deadline costs everybody else the slot, so the time is charged to whoever spent it |
 | `PLAY_READ_PER_MINUTE` | no | `120` | play-screen reads (story, questions, schema, query log, workspace, each events channel opened) one account may make a minute (30-600; one page load costs about six); a budget apart from the queries; past it a 429 `play_read_too_often` |
 | `ANSWER_RATE_PER_MINUTE` | no | `12` | answers one registration may submit a minute, refused ones included (1-60); past it a 429 `answer_too_often` |
 | `EXPORT_CONCURRENCY` | no | `5` | CSV downloads that may hold a core-database connection at once, across every export route (1-10, one fifth of `CORE_DB_POOL_MAX` by default); past it a 503 `too_many_exports` with `Retry-After` |
@@ -855,7 +855,7 @@ never declared. Every declared series is exported at zero from the start.
 | `outcome` | `reason` |
 |---|---|
 | `ok` | empty |
-| `rejected` | `rate_limited` (`QUERY_PER_MINUTE`), `busy` (every slot and the queue full), `already_running` (the participant's previous query is still running), `disk_full` (the database is at its quota), or the checker's refusal code (`parse_error`, `function_not_supported`, … — `sqlpolicy.Codes()`) |
+| `rejected` | `rate_limited` (`QUERY_PER_MINUTE`, or more than two `QUERY_DEADLINE`s of execution time in the last minute), `busy` (every slot and the queue full), `already_running` (the participant's previous query is still running), `disk_full` (the database is at its quota), or the checker's refusal code (`parse_error`, `function_not_supported`, … — `sqlpolicy.Codes()`) |
 | `timeout` | `queue` (waited past `QUERY_QUEUE_WAIT`), `deadline` (ran past `QUERY_DEADLINE`) |
 | `error` | `database` (PostgreSQL refused the query), `internal` (this service failed, including a connection it could not open), `cancelled` (the caller stopped waiting), `result_too_large` (see `socket` below) |
 

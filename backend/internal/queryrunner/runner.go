@@ -134,6 +134,7 @@ type Runner struct {
 	limits   Limits
 	gate     *gate
 	rate     *window
+	budget   *slotBudget
 	observer Observer
 }
 
@@ -145,6 +146,7 @@ func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 		limits:   limits,
 		gate:     newGate(limits.Concurrent, limits.QueueDepth),
 		rate:     newWindow(limits.PerMinute, time.Minute, nil),
+		budget:   newSlotBudget(slotBudgetPerMinute*limits.Deadline, time.Minute, nil),
 		observer: discard{},
 	}
 }
@@ -164,23 +166,28 @@ func (r *Runner) Admission() (running, waiting int) { return r.gate.load() }
 func (r *Runner) Close() { r.conns.close() }
 
 // Run checks the query, admits it, and executes it, in order of increasing
-// cost. The rate comes before the parser, which is C code reading adversarial
-// text, so a query the checker refuses still counts against the rate
-// (CLAUDE.md rule 13). Checking needs no connection, and admission comes
-// before one is opened.
+// cost. The rate and the slot budget come before the parser, which is C code
+// reading adversarial text, so a query the checker refuses still counts
+// against the rate (CLAUDE.md rule 13). Checking needs no connection, and
+// admission comes before one is opened.
 func (r *Runner) Run(ctx context.Context, req Request) (result *Result, err error) {
+	participant := req.Registration.String()
 	// Zero until the gate admits the query.
 	var admitted time.Time
 	defer func() {
 		outcome, reason := ending(err, !admitted.IsZero())
 		r.observer.Ended(outcome, reason)
 		if !admitted.IsZero() {
-			r.observer.Executed(outcome, time.Since(admitted))
+			held := time.Since(admitted)
+			r.observer.Executed(outcome, held)
+			r.budget.spend(participant, held)
 		}
 	}()
 
-	participant := req.Registration.String()
 	if err := r.rate.admit(participant); err != nil {
+		return nil, err
+	}
+	if err := r.budget.allow(participant); err != nil {
 		return nil, err
 	}
 
