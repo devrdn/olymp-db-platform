@@ -27,6 +27,9 @@ func (c *Checker) writeAllowed(root *pg.Node, p sqlpolicy.Policy) error {
 		return ownObject(stmt.ViewStmt.GetView(), "CREATE VIEW")
 
 	case *pg.Node_CreateStmt:
+		if err := standsAlone(stmt.CreateStmt); err != nil {
+			return err
+		}
 		return createdTableAllowed(p, stmt.CreateStmt.GetRelation())
 
 	case *pg.Node_CreateTableAsStmt:
@@ -118,6 +121,27 @@ func createdTableAllowed(p sqlpolicy.Policy, rel *pg.RangeVar) error {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "CREATE TABLE"}
 	}
 	return ownObject(rel, "CREATE TABLE")
+}
+
+// standsAlone refuses a table that would attach itself to what the
+// participant does not own: inheriting from or partitioning a game table, or
+// a tablespace of the cluster's. PostgreSQL refuses each by privilege as
+// well; the checker names the construct rather than surfacing a permission
+// error, and the grants stay the second layer. A foreign key into a game
+// table is not refused here: a constraint is not a write (see
+// TestAConstraintDoesNotWidenWhatMayBeWritten), and the writer role holds no
+// REFERENCES privilege, which is where it is refused.
+func standsAlone(stmt *pg.CreateStmt) error {
+	if len(stmt.GetInhRelations()) > 0 {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeConstructNotSupported, Subject: "INHERITS"}
+	}
+	if stmt.GetPartbound() != nil {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeConstructNotSupported, Subject: "PARTITION OF"}
+	}
+	if stmt.GetTablespacename() != "" {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeConstructNotSupported, Subject: "TABLESPACE"}
+	}
+	return nil
 }
 
 // dropAllowed covers removing what a participant made, and only that.

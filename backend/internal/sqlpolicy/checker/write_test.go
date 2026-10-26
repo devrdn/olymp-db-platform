@@ -245,3 +245,30 @@ func TestAMaterializedViewIsNotAnOwnTable(t *testing.T) {
 		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeStatementNotSupported)
 	}
 }
+
+// A table of the participant's own stands alone: it attaches itself to
+// nothing the participant does not own. PostgreSQL would refuse each by
+// privilege; the checker names the construct instead. A foreign key is a
+// constraint, not a write, and stays allowed (see above).
+func TestAnOwnTableAttachesToNothingElse(t *testing.T) {
+	for _, sql := range []string{
+		`CREATE TABLE work.t (id int) INHERITS (public.suspects)`,
+		`CREATE TABLE work.t PARTITION OF public.suspects FOR VALUES IN (1)`,
+		`CREATE TABLE work.t (id int) TABLESPACE pg_global`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			r := refusal(t, sql, notes())
+			if r.Code != sqlpolicy.CodeConstructNotSupported {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeConstructNotSupported)
+			}
+		})
+	}
+
+	for _, sql := range []string{
+		`CREATE TABLE work.t (id int REFERENCES work.u (id))`,
+		`CREATE TABLE work.t (id int, FOREIGN KEY (id) REFERENCES work.u (id))`,
+		`CREATE TABLE work.t (id int PRIMARY KEY, note text NOT NULL, CHECK (id > 0))`,
+	} {
+		t.Run(sql, func(t *testing.T) { allow(t, sql, notes()) })
+	}
+}
