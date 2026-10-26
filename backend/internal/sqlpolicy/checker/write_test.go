@@ -234,3 +234,14 @@ func TestTheCheckerSaysWhichStatementsCanOnlyFreeSpace(t *testing.T) {
 		})
 	}
 }
+
+// A materialized view is made like a table but, unlike one, could never be
+// dropped or refreshed here: a one-way door at the disk quota.
+func TestAMaterializedViewIsNotAnOwnTable(t *testing.T) {
+	allow(t, `CREATE TABLE work.notes AS SELECT name FROM suspects`, notes())
+
+	r := refusal(t, `CREATE MATERIALIZED VIEW work.notes AS SELECT name FROM suspects`, notes())
+	if r.Code != sqlpolicy.CodeStatementNotSupported {
+		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeStatementNotSupported)
+	}
+}
