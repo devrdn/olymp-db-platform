@@ -3685,9 +3685,12 @@ tab; and anybody at all without signing in, at
   tier as `prize` (1, 2, 3 or null) beside `place`. Every table, the
   organiser's, the participant's tab and the public page, opens with a place
   column showing that number (ties share it) or a dash for a row that has not
-  answered, whose `place` is null; the prize medal sits in its own column
-  after it, with a dash for everybody without a prize, and that column is left
-  out when no row of the table has a prize. A frozen table awards them by its frozen places. Winner mode ignores the
+  answered, whose `place` is null. On the organiser's table and the public
+  page the prize medal sits in its own column after it, with a dash for
+  everybody without a prize, and that column is left out when no row of the
+  table has a prize. The participant's tab is too narrow for a second column,
+  so there the medal sits beside the number in the place column. A
+  frozen table awards them by its frozen places. Winner mode ignores the
   counts: its one winner holds the first prize. They change only what is
   displayed, so they stay editable while the contest runs and after it
   finishes, through their own `PUT /contests/{id}/prize-places` rather than the

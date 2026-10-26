@@ -114,14 +114,24 @@ export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced
 }
 
 /** A row's prize tier as a medal with its numeral, or a dash for none. */
-export function PrizeBadge({ prize, names }: { prize: Prize | null; names: PrizeNames }) {
+export function PrizeBadge({
+  prize,
+  names,
+  compact = false,
+}: {
+  prize: Prize | null;
+  names: PrizeNames;
+  /** A smaller disc, for the narrow panel where it shares a cell with the place. */
+  compact?: boolean;
+}) {
   return (
     <span data-testid="prize" data-medal={medalOf(prize)} className="inline-flex">
       {prize !== null ? (
         <span
           aria-hidden
           className={cn(
-            "grid size-7 place-items-center rounded-full font-mono text-label font-medium ring-2 ring-offset-1 ring-offset-bg",
+            "grid place-items-center rounded-full font-mono text-label font-medium ring-2 ring-offset-1 ring-offset-bg",
+            compact ? "size-6" : "size-7",
             MEDAL_CLASSES[MEDALS[prize]].disc,
           )}
         >
@@ -196,6 +206,8 @@ export const ICPC_COLUMN = {
   place: { className: "w-14", rem: 3.5 },
   placeWide: { className: "w-16", rem: 4 },
   prize: { className: "w-18", rem: 4.5 },
+  /** The narrow panel's one column when a prize exists: the number with the medal beside it. */
+  placeMedal: { className: "w-16", rem: 4 },
   login: { className: "w-28", rem: 7 },
   solved: { className: "w-20", rem: 5 },
   penalty: { className: "w-20", rem: 5 },
@@ -339,9 +351,14 @@ export function StandingsView({
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
   // The grid only appears on `page`.
   const gridQuestions = variant === "page" && icpc ? standings.questions : undefined;
-  const prizes = hasPrize(rows);
+  // The page has room for a column of its own; the narrow panel has none to
+  // spare, so its medal sits beside the number in the place column.
+  const anyPrize = hasPrize(rows);
+  const prizes = anyPrize && variant === "page";
+  const medalInPlace = anyPrize && variant === "panel";
+  const placeColumn = medalInPlace ? ICPC_COLUMN.placeMedal : ICPC_COLUMN.place;
   const gridWidth = gridTableWidth(
-    ICPC_COLUMN.place.rem +
+    placeColumn.rem +
       (prizes ? ICPC_COLUMN.prize.rem : 0) +
       ICPC_COLUMN.solved.rem +
       ICPC_COLUMN.penalty.rem,
@@ -374,7 +391,11 @@ export function StandingsView({
                 <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
                   <th
                     scope="col"
-                    className={cn(ICPC_COLUMN.place.className, "py-2 pr-2 pl-3 text-left font-normal")}
+                    className={cn(
+                      placeColumn.className,
+                      "py-2 text-left font-normal",
+                      medalInPlace ? "pr-1 pl-2" : "pr-2 pl-3",
+                    )}
                   >
                     {t.columns.place}
                   </th>
@@ -440,6 +461,7 @@ export function StandingsView({
                     variant={variant}
                     icpc={icpc}
                     prizes={prizes}
+                    medalInPlace={medalInPlace}
                     questions={standings.questions}
                   />
                 ))}
@@ -465,6 +487,7 @@ function Row({
   variant,
   icpc,
   prizes,
+  medalInPlace,
   questions,
 }: {
   row: StandingsRow;
@@ -474,6 +497,7 @@ function Row({
   variant: "panel" | "page";
   icpc: boolean;
   prizes: boolean;
+  medalInPlace: boolean;
   questions?: string[];
 }) {
   const t = dict.leaderboard;
@@ -492,9 +516,20 @@ function Row({
       )}
     >
       <td
-        className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.prize))}
+        className={cn(
+          "border-l-3 py-2.5 align-middle",
+          medalInPlace ? "pr-1 pl-2" : "pr-2 pl-3",
+          medalEdge(row.prize),
+        )}
       >
-        <PlaceBadge place={row.place} unplaced={t.unplaced} />
+        {medalInPlace ? (
+          <div className="flex items-center gap-1">
+            <PlaceBadge place={row.place} unplaced={t.unplaced} />
+            {row.prize !== null ? <PrizeBadge prize={row.prize} names={t.prizes} compact /> : null}
+          </div>
+        ) : (
+          <PlaceBadge place={row.place} unplaced={t.unplaced} />
+        )}
       </td>
       {prizes ? (
         <td className="px-2 py-2.5 align-middle">
