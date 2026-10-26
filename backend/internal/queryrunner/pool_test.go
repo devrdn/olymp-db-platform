@@ -183,7 +183,10 @@ func TestTheRunnerKeepsNoMoreIdleConnectionsThanItsIdleBudget(t *testing.T) {
 	}
 }
 
-// Sampled from the server's side for the whole run.
+// Sampled from the server's side for the whole run. Only backends running a
+// statement count: a closed connection's backend stays listed, idle, until it
+// exits, which the pool's own bound already allows for (see pool), and
+// TestThePoolRefusesToGoPastItsBound proves the connection bound directly.
 func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 	limits := unlimited()
 	limits.Concurrent = 2
@@ -206,7 +209,7 @@ func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 			}
 			var n int64
 			if err := admin.QueryRow(context.Background(),
-				`SELECT count(*) FROM pg_stat_activity WHERE usename = $1 AND datname = ANY($2)`,
+				`SELECT count(*) FROM pg_stat_activity WHERE usename = $1 AND datname = ANY($2) AND state <> 'idle'`,
 				gamedb.RoleReader, databases).Scan(&n); err == nil && n > peak.Load() {
 				peak.Store(n)
 			}
@@ -234,10 +237,10 @@ func TestTheBoundHoldsWhileParticipantsAskAtOnce(t *testing.T) {
 	<-sampled
 
 	if got := peak.Load(); got > int64(limits.Concurrent) {
-		t.Fatalf("peak participant backends = %d, over the bound of %d", got, limits.Concurrent)
+		t.Fatalf("peak participant statements running = %d, over the bound of %d", got, limits.Concurrent)
 	}
 	if peak.Load() == 0 {
-		t.Fatal("the sampler never saw a participant backend: the test proves nothing")
+		t.Fatal("the sampler never saw a participant statement running: the test proves nothing")
 	}
 }
 
