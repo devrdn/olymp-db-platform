@@ -59,5 +59,7 @@ describe("the public standings", () => {
     expect(gamma).not.toHaveAttribute("data-medal");
     expect(within(gamma).getByText(en.leaderboard.prizes.none)).toHaveClass("sr-only");
     expect(screen.getByRole("columnheader", { name: en.leaderboard.columns.prize })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: en.leaderboard.columns.place })).toBeInTheDocument();
+    expect(within(tableRowOf("beta")).getByTestId("place")).toHaveTextContent("2");
   });
 });

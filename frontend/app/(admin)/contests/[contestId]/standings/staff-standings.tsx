@@ -5,7 +5,7 @@ import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, Initials, medalEdge, PrizeBadge } from "@/components/product/standings";
+import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, hasPrize, Initials, medalEdge, PlaceBadge, PrizeBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -122,8 +122,9 @@ export function StaffStandingsView({
   const revealable =
     (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
   const icpc = standings.scoring === "icpc";
+  const prizes = hasPrize(standings.rows);
   const gridWidth = gridTableWidth(
-    ICPC_COLUMN.placeWide.rem + ICPC_COLUMN.login.rem + ICPC_COLUMN.solved.rem + ICPC_COLUMN.penalty.rem,
+    ICPC_COLUMN.placeWide.rem + (prizes ? ICPC_COLUMN.prize.rem : 0) + ICPC_COLUMN.login.rem + ICPC_COLUMN.solved.rem + ICPC_COLUMN.penalty.rem,
     icpc ? standings.questions?.length : undefined,
   );
 
@@ -167,8 +168,13 @@ export function StaffStandingsView({
             <thead>
               <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
                 <th scope="col" className={cn(ICPC_COLUMN.placeWide.className, "py-2 pr-2 pl-3 text-left font-normal")}>
-                  {t.columns.prize}
+                  {t.columns.place}
                 </th>
+                {prizes ? (
+                  <th scope="col" className={cn(ICPC_COLUMN.prize.className, "px-2 py-2 text-left font-normal")}>
+                    {t.columns.prize}
+                  </th>
+                ) : null}
                 <th scope="col" className="px-2 py-2 text-left font-normal">
                   {t.staff.fullName}
                 </th>
@@ -207,8 +213,13 @@ export function StaffStandingsView({
               {standings.rows.map((row, index) => (
                 <tr key={index} className={cn("border-b border-line", row.disqualified && "bg-bad-wash")}>
                   <td className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.prize))}>
-                    <PrizeBadge prize={row.prize} names={t.prizes} />
+                    <PlaceBadge place={row.place} unplaced={t.unplaced} />
                   </td>
+                  {prizes ? (
+                    <td className="px-2 py-2.5 align-middle">
+                      <PrizeBadge prize={row.prize} names={t.prizes} />
+                    </td>
+                  ) : null}
                   <td className="px-2 py-2.5 align-middle">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <Initials label={row.login} deleted={row.deleted} />

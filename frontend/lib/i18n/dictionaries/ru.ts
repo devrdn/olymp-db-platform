@@ -1927,6 +1927,7 @@ const ru = {
     notStarted: "Таблица появится, когда олимпиада начнётся.",
     empty: "В таблице пока никого нет.",
     columns: {
+      place: "Место",
       prize: "Премия",
       participant: "Участник",
       points: "Баллы",
@@ -1945,6 +1946,7 @@ const ru = {
     you: "Вы",
     winner: "Победитель",
     deleted: "Удалённый аккаунт",
+    unplaced: "Без места",
     prizes: {
       first: "Первая премия",
       second: "Вторая премия",

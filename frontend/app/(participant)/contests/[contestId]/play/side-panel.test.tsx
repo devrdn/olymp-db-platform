@@ -484,6 +484,7 @@ describe("the side panel's table", () => {
     expect(screen.getByText(en.leaderboard.you)).toBeInTheDocument();
     expect(screen.getByTestId("prize")).toHaveAttribute("data-medal", "gold");
     expect(screen.getByText(en.leaderboard.prizes.first)).toHaveClass("sr-only");
+    expect(screen.getByTestId("place")).toHaveTextContent("1");
   });
 });
 

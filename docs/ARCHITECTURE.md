@@ -3682,9 +3682,12 @@ tab; and anybody at all without signing in, at
   points, or no ICPC solve) takes no prize whatever the counts. A disqualified
   row takes no prize and holds no place for one, so the organiser's table,
   which lists them, shows the prizes everybody else sees. Each row carries its
-  tier as `prize` (1, 2, 3 or null) beside `place`, and the interface draws the
-  tier, not the place, as the badge; everybody without a prize shows a dash. A
-  frozen table awards them by its frozen places. Winner mode ignores the
+  tier as `prize` (1, 2, 3 or null) beside `place`. Every table, the
+  organiser's, the participant's tab and the public page, opens with a place
+  column showing that number (ties share it) or a dash for a row that has not
+  answered, whose `place` is null; the prize medal sits in its own column
+  after it, with a dash for everybody without a prize, and that column is left
+  out when no row of the table has a prize. A frozen table awards them by its frozen places. Winner mode ignores the
   counts: its one winner holds the first prize. They change only what is
   displayed, so they stay editable while the contest runs and after it
   finishes, through their own `PUT /contests/{id}/prize-places` rather than the

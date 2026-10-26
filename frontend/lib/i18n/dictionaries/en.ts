@@ -2156,6 +2156,7 @@ const en = {
     notStarted: "The table appears once the contest starts.",
     empty: "Nobody is on the table yet.",
     columns: {
+      place: "Place",
       prize: "Prize",
       participant: "Participant",
       points: "Points",
@@ -2174,6 +2175,7 @@ const en = {
     you: "You",
     winner: "Winner",
     deleted: "Deleted account",
+    unplaced: "No place",
     prizes: {
       first: "First prize",
       second: "Second prize",
