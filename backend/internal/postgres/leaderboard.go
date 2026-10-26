@@ -96,6 +96,7 @@ func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]lea
 			FROM answer a
 		), scored AS (
 			SELECT e.id, e.login, e.full_name, e.account_deleted, e.disqualified,
+			       COUNT(a.id) > 0                                                  AS answered,
 			       COALESCE(MAX(a.total), 0)                                        AS points,
 			       (COUNT(DISTINCT a.question_id) FILTER (WHERE a.is_correct))::int AS solved,
 			       MAX(a.submitted_at) FILTER (WHERE a.raised)                      AS last_scored_at,
@@ -106,11 +107,11 @@ func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]lea
 		), winner AS (
 			SELECT id FROM scored WHERE final_at IS NOT NULL ORDER BY final_at, id LIMIT 1
 		)
-		SELECT s.id, s.login, s.full_name, s.account_deleted, s.disqualified,
+		SELECT s.id, s.login, s.full_name, s.account_deleted, s.disqualified, s.answered,
 		       s.points, s.solved, s.last_scored_at, s.final_at
 		FROM scored s
 		ORDER BY ($4 = 'winner' AND s.id IN (SELECT id FROM winner)) DESC,
-		         s.points DESC, s.last_scored_at ASC NULLS LAST, s.id
+		         s.points DESC, s.last_scored_at ASC NULLS LAST, s.answered DESC, s.id
 		LIMIT $5`,
 		q.ContestID, q.Cutoff, q.IncludeDisqualified, q.Scoring, q.Limit)
 	if err != nil {
@@ -121,7 +122,7 @@ func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]lea
 	var entries []leaderboard.Entry
 	for rows.Next() {
 		var e leaderboard.Entry
-		if err := rows.Scan(&e.Registration, &e.Login, &e.FullName, &e.AccountDeleted, &e.Disqualified,
+		if err := rows.Scan(&e.Registration, &e.Login, &e.FullName, &e.AccountDeleted, &e.Disqualified, &e.Answered,
 			&e.Points, &e.Solved, &e.LastScoredAt, &e.FinalAt); err != nil {
 			return nil, fmt.Errorf("scan standings: %w", err)
 		}
@@ -222,6 +223,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			LEFT JOIN waiting w ON w.registration_id = e.id AND w.question_id = v.id
 		), ranked AS (
 			SELECT e.id, e.login, e.full_name, e.account_deleted, e.disqualified,
+			       EXISTS (SELECT 1 FROM answer a WHERE a.registration_id = e.id)            AS answered,
 			       COUNT(c.solved_at)::int                                                   AS solved,
 			       COALESCE(SUM(c.minute + k.icpc_penalty_min * c.wrong)
 			                    FILTER (WHERE c.solved_at IS NOT NULL), 0)::int               AS penalty,
@@ -237,7 +239,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			GROUP BY e.id, e.login, e.full_name, e.account_deleted, e.disqualified
 		), page AS (
 			SELECT ranked.*,
-			       row_number() OVER (ORDER BY solved DESC, penalty ASC, last_solved_at ASC NULLS LAST, id) AS n
+			       row_number() OVER (ORDER BY solved DESC, penalty ASC, last_solved_at ASC NULLS LAST, answered DESC, id) AS n
 			FROM ranked
 			ORDER BY n
 			LIMIT $4
@@ -247,7 +249,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			        FROM visible v LEFT JOIN first_solve f ON f.question_id = v.id) AS first_solves
 		)
 		SELECT g.width, CASE WHEN p.n IS NULL OR p.n = 1 THEN g.first_solves END,
-		       p.id, p.login, p.full_name, p.account_deleted, p.disqualified, p.solved, p.penalty, p.last_solved_at,
+		       p.id, p.login, p.full_name, p.account_deleted, p.disqualified, p.answered, p.solved, p.penalty, p.last_solved_at,
 		       p.question_ids, p.solved_ats, p.minutes, p.wrongs, p.pendings
 		FROM grid g
 		LEFT JOIN page p ON true
@@ -270,13 +272,14 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			id                       *uuid.UUID
 			login, fullName          *string
 			deleted, disqualified    *bool
+			answered                 *bool
 			solved, penalty          *int
 			lastSolvedAt             *time.Time
 			questionIDs              []uuid.UUID
 			minutes, wrongs, pending []int
 		)
 		if err := rows.Scan(&width, &firstSolves, &id, &login, &fullName, &deleted, &disqualified,
-			&solved, &penalty, &lastSolvedAt, &questionIDs, &solvedAts, &minutes, &wrongs, &pending); err != nil {
+			&answered, &solved, &penalty, &lastSolvedAt, &questionIDs, &solvedAts, &minutes, &wrongs, &pending); err != nil {
 			return nil, leaderboard.Grid{}, fmt.Errorf("scan icpc standings: %w", err)
 		}
 		if first {
@@ -289,7 +292,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 		}
 		e := leaderboard.Entry{
 			Registration: *id, Login: *login, FullName: *fullName, AccountDeleted: *deleted, Disqualified: *disqualified,
-			Solved: *solved, Penalty: *penalty, LastSolvedAt: lastSolvedAt,
+			Answered: *answered, Solved: *solved, Penalty: *penalty, LastSolvedAt: lastSolvedAt,
 			Cells: make([]leaderboard.Cell, len(solvedAts)),
 		}
 		for i := range solvedAts {

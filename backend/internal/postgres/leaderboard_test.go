@@ -196,6 +196,49 @@ func TestStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 	})
 }
 
+// Answered counts any answer before the cutoff, right or wrong, and nothing at
+// or after it; a cut below the top keeps the rows that answered.
+func TestStandingsSayWhoHasAnsweredBeforeTheCutoff(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		wrong := f.participant(t, "board-wrong", 0)
+		f.answer(t, wrong, f.question, 1, false, 0, 5)
+		right := f.participant(t, "board-right", 0)
+		f.answer(t, right, f.question, 1, true, 5, 6)
+		late := f.participant(t, "board-late-answer", 0)
+		f.answer(t, late, f.question, 1, true, 5, 60)
+		for i := range 4 {
+			f.participant(t, fmt.Sprintf("board-silent-%d", i), 0)
+		}
+
+		repo := NewLeaderboard(testPool)
+		entries, err := repo.Standings(ctx, leaderboard.Query{
+			ContestID: f.contest, Cutoff: boardAt(60), Scoring: contests.ScoringPoints, Limit: 10,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := byLogin(entries)
+		for login, want := range map[string]bool{
+			"board-wrong": true, "board-right": true, "board-late-answer": false, "board-silent-0": false,
+		} {
+			if got[login].Answered != want {
+				t.Errorf("%s Answered = %v, want %v", login, got[login].Answered, want)
+			}
+		}
+
+		cut, err := repo.Standings(ctx, leaderboard.Query{
+			ContestID: f.contest, Cutoff: boardAt(60), Scoring: contests.ScoringPoints, Limit: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cut) != 2 || cut[0].Login != "board-right" || cut[1].Login != "board-wrong" {
+			t.Errorf("cut = %+v, want the two rows that answered", cut)
+		}
+	})
+}
+
 // scored adds a question worth points to the fixture's contest, a bonus or
 // not, for the points total (§6.1.1).
 func (f boardFixture) scored(t *testing.T, points int, bonus bool) uuid.UUID {
@@ -651,6 +694,34 @@ func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 		staff := f.standings(t, leaderboard.Query{Cutoff: boardAt(60), IncludeDisqualified: true})
 		if e, ok := staff["icpc-banned"]; !ok || !e.Disqualified || e.Solved != 2 {
 			t.Errorf("staff entry = %+v, %v, want the disqualified row with 2 solved", e, ok)
+		}
+	})
+}
+
+func TestICPCStandingsSayWhoHasAnsweredBeforeTheCutoff(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		wrong := f.participant(t, "icpc-wrong", 0)
+		f.answerAt(t, wrong, f.a, 1, false, boardAt(5))
+		late := f.participant(t, "icpc-late-answer", 0)
+		f.answerAt(t, late, f.a, 1, true, boardAt(60))
+		for i := range 4 {
+			f.participant(t, fmt.Sprintf("icpc-silent-%d", i), 0)
+		}
+
+		entries, _ := f.table(t, leaderboard.Query{Cutoff: boardAt(60)})
+		got := byLogin(entries)
+		for login, want := range map[string]bool{
+			"icpc-wrong": true, "icpc-late-answer": false, "icpc-silent-0": false,
+		} {
+			if got[login].Answered != want {
+				t.Errorf("%s Answered = %v, want %v", login, got[login].Answered, want)
+			}
+		}
+
+		cut, _ := f.table(t, leaderboard.Query{Cutoff: boardAt(60), Limit: 1})
+		if len(cut) != 1 || cut[0].Login != "icpc-wrong" {
+			t.Errorf("cut = %+v, want the row that answered", cut)
 		}
 	})
 }

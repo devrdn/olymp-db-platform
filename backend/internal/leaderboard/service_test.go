@@ -244,6 +244,72 @@ func TestAParticipantSeesTheSharedTableAndWhichRowIsTheirs(t *testing.T) {
 	}
 }
 
+func placesOf(rows []leaderboard.Row) map[string]int {
+	out := map[string]int{}
+	for _, r := range rows {
+		out[r.Login] = r.Place
+	}
+	return out
+}
+
+func samePlaces(t *testing.T, rows []leaderboard.Row, want map[string]int) {
+	t.Helper()
+	got := placesOf(rows)
+	for login, place := range want {
+		if got[login] != place {
+			t.Errorf("places = %v, want %v", got, want)
+			return
+		}
+	}
+}
+
+// Every audience reads the same rule: no answer, no place.
+func TestEveryAudienceLeavesARowWithoutAnAnswerUnplaced(t *testing.T) {
+	user := uuid.New()
+	for _, scoring := range []string{contests.ScoringPoints, contests.ScoringICPC} {
+		t.Run(scoring, func(t *testing.T) {
+			r := newRig(t)
+			c := contest(contests.StatusRunning, nil, nil)
+			c.Scoring = scoring
+			c = r.contests.Put(c)
+			if _, err := r.people.Add(context.Background(), c.ID, user); err != nil {
+				t.Fatal(err)
+			}
+			if scoring == contests.ScoringICPC {
+				r.standings.entries = []leaderboard.Entry{
+					silent(icpcEntry("silent", 0, 0, nil, leaderboard.Cell{})),
+					icpcEntry("wrong", 0, 0, nil, leaderboard.Cell{Wrong: 1}),
+					icpcEntry("solver", 1, 5, at(5), solvedCell(at(5))),
+				}
+				r.standings.grid = grid(at(5))
+			} else {
+				r.standings.entries = []leaderboard.Entry{
+					silent(entry("silent", 0, nil)), entry("wrong", 0, nil), entry("solver", 5, at(5)),
+				}
+			}
+			want := map[string]int{"solver": 1, "wrong": 2, "silent": 0}
+
+			public, err := r.service.Public(context.Background(), c.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samePlaces(t, public.Rows, want)
+
+			participant, _, err := r.service.ForParticipant(context.Background(), c.ID, user)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samePlaces(t, participant.Rows, want)
+
+			staff, err := r.service.Live(context.Background(), c.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samePlaces(t, staff.Rows, want)
+		})
+	}
+}
+
 func TestTheStaffTableIsLiveAndSaysWhatOthersSee(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, minutes(30))

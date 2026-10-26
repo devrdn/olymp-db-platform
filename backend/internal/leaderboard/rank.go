@@ -11,8 +11,8 @@ import (
 // Rank orders entries and gives them places under the contest's scoring mode.
 //
 // Points: more points first, then whoever reached their score earlier; the
-// same score at the same moment shares a place (1, 1, 3). All zero scores
-// share a place.
+// same score at the same moment shares a place (1, 1, 3). A row without an
+// answer (Entry.Answered) follows the rows that have one and has no place.
 //
 // Winner: one place, for the earliest correct final answer; everybody else
 // is listed in points order without a place.
@@ -53,12 +53,14 @@ func Rank(scoring string, entries []Entry) []Row {
 		}
 		rows[i].Place = i + 1
 	}
+	unplaceSilent(rows)
 	return rows
 }
 
 // RankICPC orders ICPC entries: more solved first, then less penalty, equal
-// rows sharing a place (1, 1, 3) and listed by last solve, then registration
-// id. Points are not read.
+// rows sharing a place (1, 1, 3) and listed by last solve, then rows with an
+// answer before rows without, then registration id. A row without an answer
+// has no place. Points are not read.
 //
 // A cell is marked first when its row is not disqualified and it was solved
 // at the grid's earliest solve for that question. That moment comes from
@@ -88,7 +90,18 @@ func RankICPC(entries []Entry, grid Grid) []Row {
 		}
 		rows[i].Place = i + 1
 	}
+	unplaceSilent(rows)
 	return rows
+}
+
+// unplaceSilent runs after places are given, so a silent row never lends its
+// place to the next one; silent rows sort after the answered ones they tie.
+func unplaceSilent(rows []Row) {
+	for i := range rows {
+		if !rows[i].Answered {
+			rows[i].Place = 0
+		}
+	}
 }
 
 // AwardPrizes sets each ranked row's prize tier from its place
@@ -139,6 +152,18 @@ func compareICPC(a, b Entry) int {
 	if c := compareTimes(a.LastSolvedAt, b.LastSolvedAt); c != 0 {
 		return c
 	}
+	return compareAnswered(a, b)
+}
+
+// compareAnswered puts a row with an answer before a row without one, then
+// falls back to the registration id.
+func compareAnswered(a, b Entry) int {
+	if a.Answered != b.Answered {
+		if a.Answered {
+			return -1
+		}
+		return 1
+	}
 	return bytes.Compare(a.Registration[:], b.Registration[:])
 }
 
@@ -158,7 +183,7 @@ func comparePoints(a, b Entry) int {
 	if c := compareTimes(a.LastScoredAt, b.LastScoredAt); c != 0 {
 		return c
 	}
-	return bytes.Compare(a.Registration[:], b.Registration[:])
+	return compareAnswered(a, b)
 }
 
 func sameResult(a, b Entry) bool {
