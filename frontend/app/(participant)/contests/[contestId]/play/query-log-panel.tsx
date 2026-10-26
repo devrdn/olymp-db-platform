@@ -31,6 +31,20 @@ import { fetchQueryLog, fetchQueryLogEntry } from "./requests";
  * long log is not hundreds of rows re-rendered per page. Each row opens to
  * its whole statement (`LogRow`).
  */
+/**
+ * The newest page laid over the rows already held, newest first. A row the
+ * page repeats is taken from the page, since it may have finished running
+ * meanwhile; the older rows are kept beneath only when the page reaches
+ * them, because otherwise what lies between is unknown and appending would
+ * hide the gap. A page that reaches none of them replaces the list.
+ */
+function mergeNewestPage(held: QueryLogEntry[], page: QueryLogEntry[]): QueryLogEntry[] {
+  const inPage = new Set(page.map((entry) => entry.id));
+  if (!held.some((entry) => inPage.has(entry.id))) return page;
+  const oldestInPage = page[page.length - 1].id;
+  return [...page, ...held.filter((entry) => entry.id < oldestInPage)];
+}
+
 export function QueryLogPanel({
   contestId,
   initial,
@@ -57,18 +71,19 @@ export function QueryLogPanel({
   // spending a read within `QUERY_LOG_REFRESH_MIN_INTERVAL_MS`; `retry` is
   // an explicit click and bypasses it.
   //
-  // `refresh` depends on `items.length` (the page size to re-read); a new
-  // identity re-runs the effect below, which calls nothing without a real
-  // transition.
+  // `refresh` reads one page, the newest rows, and keeps the older pages
+  // already loaded beneath it (mergeNewestPage): re-reading everything held
+  // would spend the same budget on up to the server's whole cap of rows, and
+  // the cap would then cut the list shorter than it was.
   const requestSeq = useRef(0);
   const lastRefreshAt = useRef(0);
   const refresh = useCallback(async () => {
     const requestId = ++requestSeq.current;
     lastRefreshAt.current = Date.now();
-    const result = await fetchQueryLog(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
+    const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, 0);
     if (requestId !== requestSeq.current) return; // superseded by a newer refresh
     if (result.kind === "ok") {
-      setItems(result.items);
+      setItems((prev) => mergeNewestPage(prev, result.items));
       setTotal(result.total);
       setFailed(false);
     } else {
@@ -76,7 +91,7 @@ export function QueryLogPanel({
       // shown.
       setFailed(true);
     }
-  }, [contestId, items.length]);
+  }, [contestId]);
 
   // Only on the transition into being shown. Seeded from the initial
   // `active`, so opening on this tab does not refetch what page.tsx fetched.
@@ -93,9 +108,9 @@ export function QueryLogPanel({
     setLoadingMore(true);
     const result = await fetchQueryLog(contestId, QUERY_LOG_PAGE_SIZE, 0, items.at(-1)?.id);
     setLoadingMore(false);
-    // A refresh started meanwhile replaces the list, and this page's cursor
-    // may no longer be its last row: appending could leave a silent gap. The
-    // next click pages from the right row.
+    // A refresh started meanwhile may have replaced the list, and this page's
+    // cursor may no longer be its last row: appending could leave a silent
+    // gap. The next click pages from the right row.
     if (startedAfter !== requestSeq.current) return;
     if (result.kind === "ok") {
       // Rows are keyed by id, so a row the list already holds is not added
