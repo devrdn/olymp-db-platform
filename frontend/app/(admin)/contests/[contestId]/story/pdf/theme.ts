@@ -113,11 +113,35 @@ export const COLOR = {
   ann: "#c5c6c7",
 } as const;
 
+/**
+ * The logo as the running header prints it on every page, far larger than the
+ * app bar's `h-5`: a printed page is read from arm's length, and the header
+ * carries the installation's identity on every sheet. An uploaded logo fits
+ * inside the box keeping its proportions; the product mark is an ink square of
+ * the box's height with the mark at the app bar's three fifths of it (`size-3`
+ * in `size-5`).
+ */
+export const LOGO = { height: 28, maxWidth: 180, mark: (28 * 3) / 5 } as const;
+
+const BOTTOM = pt(7.2);
+// The page number's top sits this far below the text block.
+const FOOTER = pt(3);
+
+/**
+ * The running header mirrors the footer: the logo's box stands as far from
+ * the sheet's top edge as the page number's line from its bottom edge.
+ */
+export const HEADER = {
+  top: BOTTOM - FOOTER - NATURAL[STEP.small.face] * STEP.small.size,
+  titleGap: pt(0.875), // gap-3.5, the app bar's gap between its groups
+  ruleGap: pt(0.875), // the app bar's room around its logo, (h-12 - h-5) / 2
+} as const;
+
 /** Paper's own margins, which the screen has no counterpart for. */
 export const PAGE = {
   side: (A4.width - MEASURE) / 2,
-  top: pt(7.2),
-  bottom: pt(7.2),
-  // The page number's baseline sits this far below the text block.
-  footer: pt(3),
+  // The header, its rule, and the footer's distance again before the text.
+  top: HEADER.top + LOGO.height + HEADER.ruleGap + SPACE.rule + FOOTER,
+  bottom: BOTTOM,
+  footer: FOOTER,
 } as const;
