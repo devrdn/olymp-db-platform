@@ -5,10 +5,10 @@ import { inflateSync } from "node:zlib";
 import { describe, expect, test, vi } from "vitest";
 
 import type { ReadFont } from "./fonts";
-import { fitTitle, makeStoryPdf, measureColumns, preparedLibrary, titleWidth, type StoryPdfOptions } from "./make-story-pdf";
+import { TITLE_SLACK, fitTitle, makeStoryPdf, measureColumns, preparedLibrary, titleWidth, type StoryPdfOptions } from "./make-story-pdf";
 import { titleSpace } from "./story-document";
-import { storyBlocks } from "./story-markdown";
-import { MEASURE } from "./theme";
+import { storyBlocks, type Node } from "./story-markdown";
+import { A4, MEASURE } from "./theme";
 
 const FONTS = join(process.cwd(), "public/fonts/pdf");
 const readFromDisk: ReadFont = async (source, file) => new Uint8Array(await readFile(join(source, file)));
@@ -25,10 +25,10 @@ const PIXEL =
 const STORY = [
   "# Убийство в оранжерее",
   "Дверь была заперта изнутри. **Свидетель** говорит, что *никого не видел*, а ***садовник*** молчит.",
-  "## Ștefan și țesătorul",
+  "## Ștefan și țesătorul…",
   "Au intrat în seră: într-o zi, în România, la Brașov. Au găsit-o încuiată din interior.",
   "```sql\n-- проверка: Ștefan\nSELECT имя FROM свидетели WHERE город = 'Brașov';\n```",
-  "| № | Имя | Oraș |\n|--:|-----|------|\n| 1 | Ștefan | Brașov |",
+  "| № | Имя | Oraș |\n|--:|-----|------|\n| 1 | Ștefan… | Brașov |",
 ].join("\n\n");
 
 const request = { title: "Убийство в оранжерее", language: "ru", markdown: STORY };
@@ -82,8 +82,8 @@ function missingGlyphs(pdf: Buffer): number {
 }
 
 describe("the story PDF's faces", () => {
-  test("the fixture uses the comma-below forms and no cedilla ones", () => {
-    for (const letter of ["ș", "ț"]) expect(STORY).toContain(letter);
+  test("the fixture uses the comma-below forms and no cedilla ones, and the ellipsis a cut title ends with", () => {
+    for (const letter of ["ș", "ț", "…"]) expect(STORY).toContain(letter);
     for (const letter of ["ş", "ţ", "Ş", "Ţ"]) expect(STORY).not.toContain(letter);
   });
 
@@ -134,6 +134,26 @@ describe("makeStoryPdf", () => {
 
     expect(drawLogo).not.toHaveBeenCalled();
     expect(pdf).not.toMatch(/\/Subtype\s*\/Image/);
+  });
+
+  test("prints the title cut to fit in the header, and keeps it whole as the document's title", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+    const createPdf = vi.spyOn(pdfMake, "createPdf");
+    const title = "Убийство в оранжерее: Ștefan și țesătorul la Brașov. ".repeat(6).slice(0, 300);
+
+    try {
+      await makeStoryPdf({ ...request, title }, options());
+      const definition = createPdf.mock.calls.at(-1)![0] as Node;
+      const header = (definition.header as (page: number, pages: number, size: typeof A4) => Node)(1, 1, A4);
+      const [row] = header.stack as Node[];
+      const [, cell] = row.columns as Node[];
+
+      expect((definition.info as { title: string }).title).toBe(title);
+      expect(cell.text).toMatch(/…$/);
+      expect(title.startsWith((cell.text as string).slice(0, -1))).toBe(true);
+    } finally {
+      createPdf.mockRestore();
+    }
   });
 
   test("a logo that cannot be drawn is left out and the file is still made", async () => {
@@ -192,11 +212,27 @@ describe("fitTitle", () => {
     expect(title).toHaveLength(300);
     expect(fitted.endsWith("…")).toBe(true);
     expect(title.startsWith(kept)).toBe(true);
-    expect(await titleWidth(pdfMake, fitted)).toBeLessThanOrEqual(space);
+    expect(await titleWidth(pdfMake, fitted)).toBeLessThanOrEqual(space - TITLE_SLACK);
     // One more letter and it would not.
     let more = kept.length + 1;
     while (title[more - 1] === " ") more += 1;
-    expect(await titleWidth(pdfMake, `${title.slice(0, more)}…`)).toBeGreaterThan(space);
+    expect(await titleWidth(pdfMake, `${title.slice(0, more)}…`)).toBeGreaterThan(space - TITLE_SLACK);
+  });
+
+  test("a title within half a point of the edge is cut, so rounding in the library's column cannot wrap it", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+    const title = "Убийство в оранжерее";
+    const width = await titleWidth(pdfMake, title);
+
+    expect(TITLE_SLACK).toBe(0.5);
+    expect(await fitTitle(pdfMake, title, width + TITLE_SLACK)).toBe(title);
+    expect(await fitTitle(pdfMake, title, width + 0.25)).toMatch(/…$/);
+  });
+
+  test("collapses line breaks and runs of spaces, which would otherwise break the header's one line", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+
+    expect(await fitTitle(pdfMake, "  Убийство\nв \t  оранжерее\r\n", titleSpace("mark"))).toBe("Убийство в оранжерее");
   });
 
   test("the cut never splits a letter from its combining accent", async () => {
