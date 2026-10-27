@@ -3,7 +3,7 @@ import type { PdfMake } from "pdfmake";
 import { FAMILIES, fetchFont, loadFonts, type ReadFont } from "./fonts";
 import { loadLogo, type LogoImage } from "./logo";
 import { fitColumns, type TableRef } from "./story-markdown";
-import { storyDocument } from "./story-document";
+import { HEADER_TITLE, storyDocument, titleSpace } from "./story-document";
 
 export type StoryPdfRequest = {
   title: string;
@@ -60,6 +60,33 @@ export async function measureColumns(pdfMake: PdfMake, tables: TableRef[]): Prom
   });
 }
 
+/** How wide `text` sets in the header's title, as the library measures it. */
+export async function titleWidth(pdfMake: PdfMake, text: string): Promise<number> {
+  const node = { ...HEADER_TITLE, text };
+  await pdfMake.createPdf({ pageSize: "A4", content: [node] }).getBuffer();
+  return (node as typeof node & Measured)._maxWidth;
+}
+
+/**
+ * The title as the header prints it: whole when it fits `width` on one line,
+ * else the longest start of it that fits followed by an ellipsis. It is cut
+ * between graphemes, so a letter keeps its accent.
+ */
+export async function fitTitle(pdfMake: PdfMake, title: string, width: number): Promise<string> {
+  if ((await titleWidth(pdfMake, title)) <= width) return title;
+  const graphemes = Array.from(new Intl.Segmenter().segment(title), ({ segment }) => segment);
+  const cut = (count: number) => `${graphemes.slice(0, count).join("").trimEnd()}…`;
+  // A binary search: `cut(fits)` fits, or is the bare ellipsis; `cut(over)` does not fit.
+  let fits = 0;
+  let over = graphemes.length;
+  while (over - fits > 1) {
+    const middle = Math.floor((fits + over) / 2);
+    if ((await titleWidth(pdfMake, cut(middle))) <= width) fits = middle;
+    else over = middle;
+  }
+  return cut(fits);
+}
+
 /**
  * The story as a PDF file. A logo that cannot be loaded or drawn is left out
  * rather than stopping the download. Anything else, such as a face that fails
@@ -75,8 +102,11 @@ export async function makeStoryPdf(
   ]);
 
   const input = { title: request.title, language: request.language, markdown: request.markdown, logo };
-  const columnWidths = await measureColumns(pdfMake, storyDocument(input).tables);
-  const { definition } = storyDocument({ ...input, columnWidths });
+  const [columnWidths, headerTitle] = await Promise.all([
+    measureColumns(pdfMake, storyDocument(input).tables),
+    fitTitle(pdfMake, request.title, titleSpace(logo)),
+  ]);
+  const { definition } = storyDocument({ ...input, columnWidths, headerTitle });
   const bytes = await pdfMake.createPdf(definition).getBuffer();
   return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "application/pdf" });
 }

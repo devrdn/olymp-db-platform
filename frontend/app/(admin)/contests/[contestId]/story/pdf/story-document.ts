@@ -1,13 +1,6 @@
 import type { LogoImage } from "./logo";
 import { storyBlocks, tracked, type Node } from "./story-markdown";
-import { COLOR, PAGE, SPACE, STEP, inset, lineHeight, pt } from "./theme";
-
-/**
- * The logo is the app bar's, set larger for a printed page: `h-8`, at most
- * `max-w-52` wide, or the product mark in an `h-8` ink square with the mark at
- * the app bar's three fifths of it.
- */
-const LOGO = { height: pt(2), maxWidth: pt(13), mark: pt(1.2) } as const;
+import { COLOR, HEADER, LOGO, MEASURE, NATURAL, PAGE, SPACE, STEP, inset, lineHeight } from "./theme";
 
 /** The product mark (`components/layout/mark.tsx`), on a 16-unit grid. */
 export const MARK_PATH = "M1 2h5.6v1.6H15V14H1V2Zm3 5.2h8v1.2H4V7.2Zm0 3h5.6v1.2H4v-1.2Z";
@@ -64,9 +57,43 @@ function productMark(): Node {
   };
 }
 
-function uploadedLogo(logo: LogoImage): Node {
+/** The logo's cell in the header's row, centred in the row's height. */
+function logoCell(logo: LogoImage | "mark"): Node & { width: number } {
+  if (logo === "mark") return { ...productMark(), width: LOGO.height };
   const scale = Math.min(LOGO.height / logo.height, LOGO.maxWidth / logo.width);
-  return { image: "logo", width: logo.width * scale, height: logo.height * scale };
+  const [width, height] = [logo.width * scale, logo.height * scale];
+  const room = (LOGO.height - height) / 2;
+  return { image: "logo", width, height, margin: [0, room, 0, room] };
+}
+
+/** The header's title, `text-small` in ink-2; `fitTitle` measures in it. */
+export const HEADER_TITLE = { font: STEP.small.face, fontSize: STEP.small.size, color: COLOR.ink2 } as const;
+
+/** The width the header leaves the title, beside the logo. */
+export function titleSpace(logo: StoryDocumentInput["logo"]): number {
+  return logo ? MEASURE - logoCell(logo).width - HEADER.titleGap : MEASURE;
+}
+
+/**
+ * The running header: the logo, the title on its right, and a rule below
+ * spanning the measure. Built afresh for each page, since the library
+ * consumes the nodes it lays out.
+ */
+function runningHeader(logo: StoryDocumentInput["logo"], title: string): Node {
+  // The title's line centred on the row, as `items-center` centres it.
+  const room = (LOGO.height - NATURAL[HEADER_TITLE.font] * HEADER_TITLE.fontSize) / 2;
+  const titleCell = { text: title, ...HEADER_TITLE, alignment: "right", width: "*", margin: [0, room, 0, room] };
+  const rule = SPACE.rule / 2;
+  return {
+    margin: [PAGE.side, HEADER.top, PAGE.side, 0],
+    stack: [
+      { columns: logo ? [logoCell(logo), titleCell] : [titleCell], columnGap: HEADER.titleGap },
+      {
+        canvas: [{ type: "line", x1: 0, y1: rule, x2: MEASURE, y2: rule, lineWidth: SPACE.rule, lineColor: COLOR.line }],
+        margin: [0, HEADER.ruleGap, 0, 0],
+      },
+    ],
+  };
 }
 
 export type StoryDocumentInput = {
@@ -78,19 +105,20 @@ export type StoryDocumentInput = {
   logo: LogoImage | "mark" | null;
   /** One list of column widths per table, from measuring them. */
   columnWidths?: number[][];
+  /** The title as the header prints it, cut by `fitTitle` to `titleSpace`; the whole title when absent. */
+  headerTitle?: string;
 };
 
 /**
- * The page: the logo, the contest's title in the story's `#` style, the story,
+ * The pages: a running header with the logo and the contest's title, the
+ * title again in the story's `#` style as the document's heading, the story,
  * and page numbers; nothing else of the contest is printed. Returns the
  * library's document definition and the story's tables, for the caller to
  * measure.
  */
-export function storyDocument({ title, language, markdown, logo, columnWidths }: StoryDocumentInput) {
+export function storyDocument({ title, language, markdown, logo, columnWidths, headerTitle = title }: StoryDocumentInput) {
   const story = storyBlocks(markdown, columnWidths);
   const titleStep = STEP.h2;
-
-  const logoNode = logo === "mark" ? productMark() : logo ? uploadedLogo(logo) : null;
   // Below the title, the larger of its own `mb-8` and the story's first margin, as on the screen.
   const storyGap = Math.max(SPACE.titleAfter, story.mt) + story.first - inset(titleStep);
 
@@ -101,8 +129,8 @@ export function storyDocument({ title, language, markdown, logo, columnWidths }:
     pageMargins: [PAGE.side, PAGE.top, PAGE.side, PAGE.bottom],
     defaultStyle: { font: "Literata", fontSize: STEP.narrative.size, color: COLOR.ink },
     images: logo && logo !== "mark" ? { logo: logo.src } : {},
+    header: () => runningHeader(logo, headerTitle),
     content: [
-      ...(logoNode ? [{ ...logoNode, margin: [0, 0, 0, SPACE.titleAfter] }] : []),
       {
         text: tracked({ text: title }, titleStep.tracking * titleStep.size),
         font: titleStep.face,

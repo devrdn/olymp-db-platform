@@ -5,7 +5,8 @@ import { inflateSync } from "node:zlib";
 import { describe, expect, test, vi } from "vitest";
 
 import type { ReadFont } from "./fonts";
-import { makeStoryPdf, measureColumns, preparedLibrary, type StoryPdfOptions } from "./make-story-pdf";
+import { fitTitle, makeStoryPdf, measureColumns, preparedLibrary, titleWidth, type StoryPdfOptions } from "./make-story-pdf";
+import { titleSpace } from "./story-document";
 import { storyBlocks } from "./story-markdown";
 import { MEASURE } from "./theme";
 
@@ -170,5 +171,42 @@ describe("measureColumns", () => {
     const pdfMake = await preparedLibrary(FONTS, readFromDisk);
 
     expect(await measureColumns(pdfMake, [])).toEqual([]);
+  });
+});
+
+describe("fitTitle", () => {
+  test("a title that fits the header is printed whole", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+
+    expect(await fitTitle(pdfMake, "Убийство в оранжерее", titleSpace("mark"))).toBe("Убийство в оранжерее");
+  });
+
+  test("a 300-character title is cut, with an ellipsis, to the longest start that fits one line beside the logo", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+    const title = "Убийство в оранжерее: Ștefan și țesătorul la Brașov. ".repeat(6).slice(0, 300);
+    const space = titleSpace({ src: PIXEL, width: 480, height: 140 });
+
+    const fitted = await fitTitle(pdfMake, title, space);
+    const kept = fitted.slice(0, -1);
+
+    expect(title).toHaveLength(300);
+    expect(fitted.endsWith("…")).toBe(true);
+    expect(title.startsWith(kept)).toBe(true);
+    expect(await titleWidth(pdfMake, fitted)).toBeLessThanOrEqual(space);
+    // One more letter and it would not.
+    let more = kept.length + 1;
+    while (title[more - 1] === " ") more += 1;
+    expect(await titleWidth(pdfMake, `${title.slice(0, more)}…`)).toBeGreaterThan(space);
+  });
+
+  test("the cut never splits a letter from its combining accent", async () => {
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+    // "ș" written as s and a combining comma below, many times over.
+    const title = "s\u0326".repeat(200);
+
+    const fitted = await fitTitle(pdfMake, title, titleSpace("mark"));
+
+    expect(fitted.endsWith("…")).toBe(true);
+    expect(fitted.slice(0, -1).length % 2).toBe(0);
   });
 });
