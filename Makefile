@@ -148,7 +148,7 @@ GOVULN  = $(GOBIN)/govulncheck
 GOSEC   = $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-stack-up e2e-stack-down
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-measure e2e-stack-up e2e-stack-down
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -482,6 +482,21 @@ e2e-smoke: front-install ## Run the browser smoke test against E2E_BASE_URL or E
 		exit 1; }
 	cd $(FRONTEND) && npx playwright install chromium && \
 		$(if $(E2E_ENV_FILE),E2E_ENV_FILE="$(abspath $(E2E_ENV_FILE))") npx playwright test
+
+# The play screen's performance in a real Chromium: keystroke latency, long
+# tasks, LCP and total blocking time, unthrottled and with the CPU slowed 4×
+# (frontend/e2e/play-measure.perf.ts). Same stack and variables as e2e-smoke;
+# on demand only, and not in CI. It takes about fifteen minutes, longer while
+# it waits for the load to drop. E2E_MEASURE_OUT names the JSON file the
+# numbers go to.
+e2e-measure: front-install ## Measure the play screen in a real browser against E2E_BASE_URL or E2E_ENV_FILE
+	@test -n "$(E2E_BASE_URL)$(E2E_ENV_FILE)" || { \
+		echo "name the stack to measure: E2E_BASE_URL=https://... or E2E_ENV_FILE=<smoke.env>"; \
+		echo "for a throwaway one: make e2e-stack-up"; \
+		exit 1; }
+	cd $(FRONTEND) && npx playwright install chromium && \
+		$(if $(E2E_ENV_FILE),E2E_ENV_FILE="$(abspath $(E2E_ENV_FILE))") \
+		npx playwright test -c playwright.perf.config.ts
 
 e2e-stack-up: ## Build and start a throwaway stack for the smoke test
 	$(FRONTEND)/e2e/stack.sh up
