@@ -3,10 +3,11 @@ import { storyBlocks, tracked, type Node } from "./story-markdown";
 import { COLOR, PAGE, SPACE, STEP, inset, lineHeight, pt } from "./theme";
 
 /**
- * The logo stands as the app bar shows it: `h-5`, at most `max-w-32` wide, or
- * the product mark in its `size-5` ink square with the mark `size-3` inside.
+ * The logo is the app bar's, set larger for a printed page: `h-8`, at most
+ * `max-w-52` wide, or the product mark in an `h-8` ink square with the mark at
+ * the app bar's three fifths of it.
  */
-const LOGO = { height: pt(1.25), maxWidth: pt(8), mark: pt(0.75) } as const;
+const LOGO = { height: pt(2), maxWidth: pt(13), mark: pt(1.2) } as const;
 
 /** The product mark (`components/layout/mark.tsx`), on a 16-unit grid. */
 export const MARK_PATH = "M1 2h5.6v1.6H15V14H1V2Zm3 5.2h8v1.2H4V7.2Zm0 3h5.6v1.2H4v-1.2Z";
