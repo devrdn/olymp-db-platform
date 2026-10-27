@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cleanEditorMarkdown } from "./markdown";
+import { cleanEditorMarkdown, safeUrl, storedMarkdown } from "./markdown";
 
 describe("cleanEditorMarkdown", () => {
   it("drops a paragraph that is only a line break", () => {
@@ -44,5 +44,36 @@ describe("cleanEditorMarkdown", () => {
 
   it("survives an empty document", () => {
     expect(cleanEditorMarkdown("")).toBe("");
+  });
+});
+
+describe("safeUrl", () => {
+  it.each(["https://example.org/a?b=c", "http://example.org", "mailto:a@example.org", "/relative/path", "#anchor"])(
+    "lets %s through",
+    (url) => expect(safeUrl(url)).toBe(url),
+  );
+
+  it.each(["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,<b>x</b>", "vbscript:x", "file:///etc/passwd"])(
+    "refuses %s",
+    (url) => expect(safeUrl(url)).toBe(""),
+  );
+});
+
+describe("storedMarkdown", () => {
+  it("drops the final newline the editor's serializer appends", () => {
+    expect(storedMarkdown("A paragraph.\n")).toBe("A paragraph.");
+  });
+
+  it("drops the empty paragraphs the editor writes as a break", () => {
+    expect(storedMarkdown("One.\n\n<br />\n\nTwo.\n")).toBe("One.\n\nTwo.");
+  });
+
+  it("is the same for what was saved and what the editor makes of it again", () => {
+    const saved = "# Title\n\n- one\n- two";
+    expect(storedMarkdown(`${saved}\n`)).toBe(storedMarkdown(saved));
+  });
+
+  it("is empty for a document with nothing in it", () => {
+    expect(storedMarkdown("\n<br />\n")).toBe("");
   });
 });

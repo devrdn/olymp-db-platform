@@ -859,6 +859,11 @@ const ro = {
       saving: "Se salvează",
       saved: "Salvat.",
       noLanguages: "Olimpiada nu declară încă nicio limbă. Alegeți una în Setări.",
+      pdf: "Descărcați PDF",
+      pdfMaking: "Se creează PDF-ul…",
+      pdfUnsaved: "Fișierul se face din textul salvat. Salvați mai întâi modificările.",
+      pdfEmpty: "În această limbă nu este încă nimic salvat.",
+      pdfFailed: "Nu s-a putut crea PDF-ul. Încercați din nou.",
     },
     // The table descriptions, edited on the story's page and shown to
     // participants on a tab of their own.

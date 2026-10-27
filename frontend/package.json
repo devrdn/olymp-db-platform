@@ -36,6 +36,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.34.0",
     "next": "16.4.2",
+    "pdfmake": "0.3.11",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",

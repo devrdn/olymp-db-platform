@@ -1,6 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
+
+// The listener the component hands the editor, so a test can make an edit happen.
+const { editing } = vi.hoisted(() => {
+  const editing: { listening: boolean; emit: (markdown: string) => void } = { listening: false, emit: () => {} };
+  return { editing };
+});
 
 // ProseMirror does not survive jsdom; this tests the shell around it.
 vi.mock("@milkdown/crepe", () => ({
@@ -13,7 +19,21 @@ vi.mock("@milkdown/crepe", () => ({
     };
     // The component adds its paste handler here before creating anything.
     editor = { use: () => this.editor };
-    on() {
+    loaded: string;
+    constructor({ defaultValue }: { defaultValue: string }) {
+      this.loaded = defaultValue;
+    }
+    // Milkdown writes a document back in its own form: emphasis with underscores.
+    getMarkdown() {
+      return `${this.loaded.replace(/\*([^*]+)\*/g, "_$1_")}\n`;
+    }
+    on(listen: (api: { markdownUpdated: (callback: (ctx: unknown, markdown: string) => void) => void }) => void) {
+      listen({
+        markdownUpdated: (callback) => {
+          editing.listening = true;
+          editing.emit = (markdown) => callback({}, markdown);
+        },
+      });
       return this;
     }
     create() {
@@ -44,6 +64,34 @@ describe("MarkdownEditor, the field it submits", () => {
 
     const field = container.querySelector('input[name="body.en"]');
     expect(field).toHaveValue("A body in the stacks.");
+  });
+});
+
+describe("MarkdownEditor, telling the caller", () => {
+  test("once built, reports its own Markdown for the document it loaded, and that document, once", async () => {
+    const onReady = vi.fn();
+    const { rerender } = render(
+      <MarkdownEditor name="body.en" defaultValue="The *gardener* lied." labels={labels} onReady={onReady} />,
+    );
+    // A new value after the editor was built does not change what it loaded.
+    rerender(<MarkdownEditor name="body.en" defaultValue="Something else." labels={labels} onReady={onReady} />);
+
+    await waitFor(() =>
+      expect(onReady).toHaveBeenCalledExactlyOnceWith("The _gardener_ lied.\n", "The *gardener* lied."),
+    );
+  });
+
+  test("reports the whole document after each edit", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MarkdownEditor name="body.en" defaultValue="one" labels={labels} onChange={onChange} />,
+    );
+    await waitFor(() => expect(editing.listening).toBe(true));
+
+    act(() => editing.emit("one two"));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("one two");
+    expect(container.querySelector('input[name="body.en"]')).toHaveValue("one two");
   });
 });
 
