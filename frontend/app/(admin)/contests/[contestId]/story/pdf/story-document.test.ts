@@ -51,23 +51,23 @@ describe("the product mark", () => {
     ]);
   });
 
-  test("stands as the app bar's: an ink square of h-5 with the card in paper and the rules in ink", () => {
+  test("is the app bar's mark set larger: an ink square of h-8 with the card in paper and the rules in ink", () => {
     const [mark] = content(storyDocument({ ...input, logo: "mark" }).definition);
     const [square, card, ...rules] = mark.canvas as Node[];
 
-    expect(square).toMatchObject({ type: "rect", w: 12.5, h: 12.5, color: COLOR.ink });
+    expect(square).toMatchObject({ type: "rect", w: 20, h: 20, color: COLOR.ink });
     expect(card).toMatchObject({ type: "polyline", closePath: true, color: COLOR.paper });
     expect(rules.map((rule) => rule.color)).toEqual([COLOR.ink, COLOR.ink]);
   });
 });
 
 describe("storyDocument", () => {
-  test("an uploaded logo is fitted into the app bar's box, h-5 high and at most max-w-32 wide", () => {
+  test("an uploaded logo is fitted into a box h-8 high and at most max-w-52 wide", () => {
     const tall = content(storyDocument({ ...input, logo: { src: "data:image/jpeg;base64,", width: 100, height: 200 } }).definition)[0];
     const wide = content(storyDocument({ ...input, logo: { src: "data:image/jpeg;base64,", width: 1000, height: 100 } }).definition)[0];
 
-    expect(tall).toMatchObject({ image: "logo", width: 6.25, height: 12.5 });
-    expect(wide).toMatchObject({ image: "logo", width: 80, height: 8 });
+    expect(tall).toMatchObject({ image: "logo", width: 10, height: 20 });
+    expect(wide).toMatchObject({ image: "logo", width: 130, height: 13 });
   });
 
   test("without a logo the page begins with the title", () => {
