@@ -964,6 +964,11 @@ const en = {
       saving: "Saving",
       saved: "Saved.",
       noLanguages: "This contest declares no language yet. Choose one in Settings first.",
+      pdf: "Download PDF",
+      pdfMaking: "Making the PDF…",
+      pdfUnsaved: "The file is made from the saved text. Save your changes first.",
+      pdfEmpty: "Nothing is saved in this language yet.",
+      pdfFailed: "The PDF could not be made. Try again.",
     },
     // The table descriptions, edited on the story's page and shown to
     // participants on a tab of their own.

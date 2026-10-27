@@ -246,7 +246,16 @@ straight to the API, same-origin through `/api/v1` (Caddy in production, the
 - the game database's chunked upload
   (`app/(admin)/contests/[contestId]/game/game-upload.tsx`), streamed from the
   file as a `rawBody` `Blob` without passing through the Next server;
-- the play screen's Server-Sent Events channel (section 6).
+- the play screen's Server-Sent Events channel (section 6);
+- the story PDF an administrator downloads from the story screen
+  (`app/(admin)/contests/[contestId]/story/pdf/`). It is made in the browser
+  from the saved text: the button loads `pdfmake` with a dynamic `import()` on
+  its first click, so no route's first load carries the library, and the faces
+  are fetched from `public/fonts/pdf/`. The library is plain JavaScript, so it
+  runs under the production content policy unchanged. The Markdown goes
+  through the same `react-markdown` pipeline as `StoryText`, and every
+  typographic value is `StoryText`'s, converted at 10 pt to the rem
+  (`pdf/theme.ts`, held to `globals.css` and `tokens.css` by its test).
 
 There are no `NEXT_PUBLIC_` variables. The browser never needs the API's
 address, because the API shares the page's origin.

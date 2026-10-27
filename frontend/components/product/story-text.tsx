@@ -1,7 +1,7 @@
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { cleanEditorMarkdown } from "@/lib/format/markdown";
+import { cleanEditorMarkdown, safeUrl } from "@/lib/format/markdown";
 
 import { cn } from "@/lib/utils";
 
@@ -14,21 +14,6 @@ import { cn } from "@/lib/utils";
  * `dangerouslySetInnerHTML` and no sanitiser; raw HTML is not parsed and shows
  * as text. GitHub-flavoured Markdown adds tables and strikethrough.
  */
-
-/** Protocols a link may use; anything else can run code. */
-const SAFE = new Set(["http:", "https:", "mailto:"]);
-
-/**
- * `react-markdown` already refuses dangerous protocols; this keeps the rule in
- * the repository rather than in a dependency's default.
- */
-function safeUrl(url: string): string {
-  try {
-    return SAFE.has(new URL(url, "https://placeholder.invalid").protocol) ? url : "";
-  } catch {
-    return "";
-  }
-}
 
 const components: Components = {
   // Opens in a new tab so a participant under a timer keeps the page;

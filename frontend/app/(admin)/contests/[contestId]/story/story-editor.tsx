@@ -11,6 +11,7 @@ export function StoryEditor({
   translations,
   editable,
   dict,
+  pdf,
 }: {
   contestId: string;
   languages: string[];
@@ -18,6 +19,8 @@ export function StoryEditor({
   translations: Record<string, string>;
   editable: boolean;
   dict: Dictionary;
+  /** The contest's title in each language and the installation's uploaded logo, for the PDF. */
+  pdf: { titles: Record<string, string>; logoHref?: string };
 }) {
   const t = dict.workspace.story;
   return (
@@ -40,6 +43,16 @@ export function StoryEditor({
         saved: t.saved,
       }}
       errors={dict.errors}
+      pdf={{
+        ...pdf,
+        labels: {
+          pdf: t.pdf,
+          pdfMaking: t.pdfMaking,
+          pdfUnsaved: t.pdfUnsaved,
+          pdfEmpty: t.pdfEmpty,
+          pdfFailed: t.pdfFailed,
+        },
+      }}
     />
   );
 }

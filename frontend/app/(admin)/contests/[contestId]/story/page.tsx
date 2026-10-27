@@ -1,6 +1,8 @@
 import { Tag } from "@/components/ui/tag";
 import { schemaNotesSchema, storySchema } from "@/lib/api/content";
-import { contentEditable, defaultLanguage } from "@/lib/api/contests";
+import { branding } from "@/lib/api/branding";
+import { contentEditable, defaultLanguage, titleIn } from "@/lib/api/contests";
+import { imageHref } from "@/lib/api/settings-terms";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
@@ -15,12 +17,13 @@ import { StoryEditor } from "./story-editor";
 export default async function StoryPage(props: PageProps<"/contests/[contestId]/story">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, story, schemaNotes] = await Promise.all([
+  const [contest, story, schemaNotes, brand] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/story", (payload) => storySchema.parse(payload), {
       notFoundIsEmpty: true,
     }),
     loadContestResource(contestId, "/schema-notes", (payload) => schemaNotesSchema.parse(payload)),
+    branding(),
   ]);
 
   const t = dict.workspace.story;
@@ -49,6 +52,10 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
             translations={story?.translations ?? {}}
             editable={editable}
             dict={dict}
+            pdf={{
+              titles: Object.fromEntries(languages.map((code) => [code, titleIn(contest, code)])),
+              logoHref: brand.images.logo ? imageHref("logo", brand.images.logo) : undefined,
+            }}
           />
           <SchemaNotesEditor
             contestId={contest.id}

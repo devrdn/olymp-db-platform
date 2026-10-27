@@ -26,10 +26,21 @@ export function MarkdownEditor({
   defaultValue,
   placeholder,
   labels,
+  onChange,
+  onReady,
 }: {
   name: string;
   defaultValue: string;
   placeholder?: string;
+  /** Called with the whole document after each edit, for a caller that must know whether it differs from what is saved. */
+  onChange?: (markdown: string) => void;
+  /**
+   * Called once the editor is built, with its own Markdown for the document it
+   * loaded and that document. The two can differ in form alone (`*em*` comes
+   * back as `_em_`), and the first is what an edit undone again returns to. The
+   * document is the `defaultValue` the editor was built with, not a later one.
+   */
+  onReady?: (markdown: string, loaded: string) => void;
   /** The expand toggle's two labels, and the message shown when the editor cannot load. */
   labels: { expand: string; collapse: string; unavailable: string };
 }) {
@@ -38,6 +49,14 @@ export function MarkdownEditor({
   // Held in state rather than read from the editor at submit, so the field is
   // right while the editor initialises or after it is torn down.
   const [markdown, setMarkdown] = useState(defaultValue);
+
+  // Read at the time of an edit, so the editor is built once whatever the caller passes.
+  const notify = useRef(onChange);
+  const ready = useRef(onReady);
+  useEffect(() => {
+    notify.current = onChange;
+    ready.current = onReady;
+  });
 
   // Captured once: rebuilding the editor on a prop change would tear it down
   // under the caret.
@@ -59,10 +78,14 @@ export function MarkdownEditor({
     void Promise.all([import("@milkdown/crepe"), import("./paste-as-markdown")])
       .then(([{ Crepe }, { pasteAsMarkdown }]) => {
         if (!live || !host.current) return;
-        started = build(Crepe, host.current, initial.current, pasteAsMarkdown, setMarkdown);
+        started = build(Crepe, host.current, initial.current, pasteAsMarkdown, (value) => {
+          setMarkdown(value);
+          notify.current?.(value);
+        });
         return started.create().then(() => {
-          if (!live) return void started?.destroy();
+          if (!live || !started) return void started?.destroy();
           editor.current = started;
+          ready.current?.(started.getMarkdown(), initial.current);
         });
       })
       .catch(() => {
@@ -139,6 +162,7 @@ export function MarkdownEditor({
             // The prop, not the ref: an uncontrolled textarea reads it once
             // anyway.
             defaultValue={defaultValue}
+            onChange={(event) => onChange?.(event.currentTarget.value)}
             placeholder={placeholder}
             spellCheck={false}
             className="min-h-40 w-full resize-y border border-edge bg-bg p-3 font-mono text-body text-ink outline-none focus-visible:border-accent narrow:h-[32rem]"

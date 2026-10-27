@@ -858,6 +858,11 @@ const ru = {
       saving: "Сохраняем",
       saved: "Сохранено.",
       noLanguages: "У олимпиады пока не объявлен ни один язык. Выберите его в настройках.",
+      pdf: "Скачать PDF",
+      pdfMaking: "Создаём PDF…",
+      pdfUnsaved: "Файл делается из сохранённого текста. Сначала сохраните изменения.",
+      pdfEmpty: "На этом языке пока ничего не сохранено.",
+      pdfFailed: "Не удалось создать PDF. Попробуйте ещё раз.",
     },
     // The table descriptions, edited on the story's page and shown to
     // participants on a tab of their own.

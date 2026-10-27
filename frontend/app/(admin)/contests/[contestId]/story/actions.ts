@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { failureCode } from "@/lib/api/client";
-import { cleanEditorMarkdown } from "@/lib/format/markdown";
+import { storedMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -22,7 +22,7 @@ function translationsFrom(form: FormData, prefix: string): Record<string, string
   const translations: Record<string, string> = {};
   for (const [key, value] of form.entries()) {
     if (!key.startsWith(`${prefix}.`)) continue;
-    const body = cleanEditorMarkdown(String(value)).trim();
+    const body = storedMarkdown(String(value));
     if (body) translations[key.slice(prefix.length + 1)] = body;
   }
   return translations;

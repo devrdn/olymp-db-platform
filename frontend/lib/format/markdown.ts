@@ -30,6 +30,16 @@ export function cleanEditorMarkdown(markdown: string): string {
   return kept.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
+/**
+ * What is stored for a document the editor produced: cleaned, and without the
+ * final newline the editor's serializer always appends. The save and anything
+ * that asks whether the editor differs from what is saved both go through
+ * here, so they cannot disagree about it.
+ */
+export function storedMarkdown(markdown: string): string {
+  return cleanEditorMarkdown(markdown).trim();
+}
+
 const ONLY_BREAK = /^\s*<br\s*\/?>\s*$/i;
 
 function isOnlyBreak(line: string): boolean {
@@ -49,4 +59,20 @@ function emptyBreakCells(line: string): string {
 function fenceMarker(line: string): string | null {
   const match = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
   return match ? match[1] : null;
+}
+
+/** Protocols a link may use; anything else can run code. */
+const SAFE = new Set(["http:", "https:", "mailto:"]);
+
+/**
+ * `react-markdown` already refuses dangerous protocols; this keeps the rule in
+ * the repository rather than in a dependency's default. Shared by the screen
+ * and the PDF, so neither can read a link the other refuses.
+ */
+export function safeUrl(url: string): string {
+  try {
+    return SAFE.has(new URL(url, "https://placeholder.invalid").protocol) ? url : "";
+  } catch {
+    return "";
+  }
 }
