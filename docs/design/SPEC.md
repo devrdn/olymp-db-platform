@@ -230,7 +230,12 @@ cultural motif deserves to know it was tried.
 All three are served from the product's own origin, from the Fontsource
 variable packages (`@fontsource-variable/onest`, `jetbrains-mono`, `literata`)
 under the SIL Open Font License 1.1; a page never asks a third-party host for
-a font, and a build never needs one.
+a font, and a build never needs one. The one exception to "variable packages"
+is the story PDF: its library embeds whole files, so static faces live in
+`frontend/public/fonts/pdf/`, each licence beside its fonts: Literata Regular,
+Italic, SemiBold and SemiBoldItalic and JetBrains Mono Regular from the
+families' own repositories, and Onest Regular and Medium cut from Google
+Fonts' variable Onest (NOTICE says how).
 
 Coverage was checked empirically, by measuring glyph width against substitution:
 all three faces have their own `Ș ș Ț ț Ă ă` (comma below, as Romanian

@@ -179,4 +179,6 @@ DB Contest is licensed under the [Apache License, Version 2.0](LICENSE). You
 may use, modify and run it, including for commercial purposes, provided you
 keep the license and the [NOTICE](NOTICE) with it and say what you changed.
 The fonts it serves (JetBrains Mono, Literata, Onest) are under the SIL Open
-Font License, and every dependency under its own license.
+Font License, and every dependency under its own license. The story PDF embeds
+whole static copies of Literata, Onest and JetBrains Mono, kept in
+`frontend/public/fonts/pdf/` with each family's licence beside it.
