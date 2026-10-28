@@ -99,9 +99,8 @@ export const MM = 72 / 25.4;
 const MARGIN = 20 * MM;
 
 /**
- * The text column. Paper sets its own measure rather than the screen's 58ch,
- * so that a story takes fewer sheets; the type and the spacing still come from
- * the screen.
+ * The text column. Paper sets its own measure, not the screen's, so that a
+ * story takes fewer sheets; the type and the spacing still come from the screen.
  */
 export const MEASURE = A4.width - 2 * MARGIN;
 

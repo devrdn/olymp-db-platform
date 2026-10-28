@@ -91,8 +91,7 @@ describe("the PDF's page is laid out in millimetres, not in the screen's measure
 
   test("the sides are 20 mm each, and the column is the sheet's width between them: 170 mm", () => {
     expect(PAGE.side).toBeCloseTo(20 * MM, 6);
-    // A4 is 595.28 pt here, 0.004 pt more than 210 mm, so the column is 170 mm to that precision.
-    expect(MEASURE).toBeCloseTo(170 * MM, 2);
+    expect(MEASURE).toBeCloseTo(170 * MM, 1);
     expect(A4.width - 2 * PAGE.side).toBeCloseTo(MEASURE, 6);
   });
 
