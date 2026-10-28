@@ -316,7 +316,9 @@ func TestActiveSessionIsExtendedOnUse(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 	repo := userstest.New()
 	user := repo.Add(users.User{Login: "ivanov", Status: users.StatusActive})
-	sessions := NewSessionStore(c, 80*time.Millisecond)
+	// Each sleep leaves 150ms of slack against the 400ms lifetime, so a loaded
+	// runner under the race detector cannot expire the session early.
+	sessions := NewSessionStore(c, 400*time.Millisecond)
 	token, _ := sessions.Create(context.Background(), Principal{UserID: user.ID, Login: user.Login})
 	mw := NewMiddleware(MiddlewareConfig{
 		Sessions:   sessions,
@@ -326,9 +328,9 @@ func TestActiveSessionIsExtendedOnUse(t *testing.T) {
 		Logger:     logging.New("error", io.Discard),
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(httptest.NewRecorder(), authed(token))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	if _, err := sessions.Get(context.Background(), token); err != nil {
 		t.Errorf("the session expired although it was used: %v", err)

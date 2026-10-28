@@ -193,11 +193,13 @@ func TestTouchLeavesARecentlyRefreshedSessionAlone(t *testing.T) {
 func TestTouchExtendsASessionThatIsDue(t *testing.T) {
 	c := cache.NewMemory(100)
 	t.Cleanup(func() { _ = c.Close() })
-	store := NewSessionStore(c, 80*time.Millisecond) // the interval is 8ms
+	// Each sleep leaves 150ms of slack against the 400ms lifetime: a loaded
+	// runner under the race detector overshot the 30ms this test once had.
+	store := NewSessionStore(c, 400*time.Millisecond) // the interval is 40ms
 	ctx := context.Background()
 	token, _ := store.Create(ctx, testPrincipal())
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	session, err := store.Get(ctx, token)
 	if err != nil {
 		t.Fatalf("Get() returned error: %v", err)
@@ -205,7 +207,7 @@ func TestTouchExtendsASessionThatIsDue(t *testing.T) {
 	if err := store.Touch(ctx, token, session); err != nil {
 		t.Fatalf("Touch() returned error: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	if _, err := store.Get(ctx, token); err != nil {
 		t.Errorf("session expired although it was touched: %v", err)
