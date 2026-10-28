@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
-import { ASCENDER, COLOR, NATURAL, PT_PER_REM, STEP, type Face } from "./theme";
+import { A4, ASCENDER, COLOR, MEASURE, MM, NATURAL, PAGE, PT_PER_REM, STEP, type Face } from "./theme";
 
 const globals = readFileSync(join(process.cwd(), "app/globals.css"), "utf8");
 const tokens = readFileSync(join(process.cwd(), "styles/tokens.css"), "utf8");
@@ -81,6 +81,24 @@ describe("the PDF's type scale is the screen's, converted at one ratio", () => {
     expect(STEP.row.medium).toBe(scale("row", "font-weight") === "500");
     expect(scale("narrative", "font-weight")).toBe("400");
     expect(STEP.h2.medium).toBe(false);
+  });
+});
+
+describe("the PDF's page is laid out in millimetres, not in the screen's measure", () => {
+  test("a millimetre is 72/25.4 pt", () => {
+    expect(MM).toBeCloseTo(2.834645669, 8);
+  });
+
+  test("the sides are 20 mm each, and the column is the sheet's width between them: 170 mm", () => {
+    expect(PAGE.side).toBeCloseTo(20 * MM, 6);
+    // A4 is 595.28 pt here, 0.004 pt more than 210 mm, so the column is 170 mm to that precision.
+    expect(MEASURE).toBeCloseTo(170 * MM, 2);
+    expect(A4.width - 2 * PAGE.side).toBeCloseTo(MEASURE, 6);
+  });
+
+  test("the bottom margin is 20 mm and the page number sits 20 pt below the text", () => {
+    expect(PAGE.bottom).toBeCloseTo(20 * MM, 6);
+    expect(PAGE.footer).toBe(20);
   });
 });
 
