@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import { MARK_PATH, markOutlines, storyDocument, titleSpace } from "./story-document";
 import type { Node } from "./story-markdown";
-import { A4, COLOR, HEADER, LOGO, MEASURE, NATURAL, PAGE, SPACE, STEP } from "./theme";
+import { A4, COLOR, HEADER, LOGO, MEASURE, MM, NATURAL, PAGE, SPACE, STEP } from "./theme";
 
 const input = { title: "Crima din seră", language: "ro", markdown: "Ștefan a venit." };
 
@@ -176,6 +176,19 @@ describe("the running header", () => {
   });
 });
 
+describe("the printable edge", () => {
+  test("the page number's line and the header's logo box each stand at least 8 mm from the sheet's edge, which printers do not reach", () => {
+    const { definition } = storyDocument({ ...input, logo: "mark" });
+    const footer = (definition.footer as (page: number, pages: number) => Node)(1, 1);
+    const [, belowText] = footer.margin as number[];
+    const numberLine = NATURAL.Onest * STEP.small.size;
+
+    // The footer starts at the bottom margin's top edge, and its line ends numberLine below its own margin.
+    expect(PAGE.bottom - belowText - numberLine).toBeGreaterThanOrEqual(8 * MM);
+    expect(HEADER.top).toBeGreaterThanOrEqual(8 * MM);
+  });
+});
+
 describe("storyDocument", () => {
   test("the body begins with the title in the story's # style, and no logo: the header carries it", () => {
     for (const logo of [uploaded(480, 140), "mark" as const, null]) {
@@ -192,7 +205,7 @@ describe("storyDocument", () => {
     expect((definition.info as { title: string }).title).toBe("Crima din seră");
   });
 
-  test("is A4, its column the narrative measure centred on the sheet, in the story's language", () => {
+  test("is A4, its column the measure centred on the sheet, in the story's language", () => {
     const { definition } = storyDocument({ ...input, logo: null });
     const [left, , right] = definition.pageMargins as number[];
 

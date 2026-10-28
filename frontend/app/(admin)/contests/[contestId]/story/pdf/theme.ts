@@ -92,12 +92,18 @@ export const SPACE = {
   titleAfter: pt(2), // mb-8 below the title, as the participant's print copy has it
 } as const;
 
+/** A millimetre in points. */
+export const MM = 72 / 25.4;
+
+/** The margin on each side of the text, and below it. */
+const MARGIN = 20 * MM;
+
 /**
- * The screen's narrative measure, `max-w-narrative` (58ch) as the
- * participant's print copy draws it: the `ch` of its own text (Onest at
- * `text-body`, a zero 0.665 em wide), less that copy's `px-6` on each side.
+ * The text column. Paper sets its own measure rather than the screen's 58ch,
+ * so that a story takes fewer sheets; the type and the spacing still come from
+ * the screen.
  */
-export const MEASURE = pt((58 * 0.665 * 1.0625) - 2 * 1.5);
+export const MEASURE = A4.width - 2 * MARGIN;
 
 /** The light theme: paper is white whatever theme the administrator uses. */
 export const COLOR = {
@@ -123,9 +129,9 @@ export const COLOR = {
  */
 export const LOGO = { height: 28, maxWidth: 180, mark: (28 * 3) / 5 } as const;
 
-const BOTTOM = pt(7.2);
+const BOTTOM = MARGIN;
 // The page number's top sits this far below the text block.
-const FOOTER = pt(3);
+const FOOTER = pt(2);
 
 /**
  * The running header mirrors the footer: the logo's box stands as far from
@@ -139,7 +145,7 @@ export const HEADER = {
 
 /** Paper's own margins, which the screen has no counterpart for. */
 export const PAGE = {
-  side: (A4.width - MEASURE) / 2,
+  side: MARGIN,
   // The header, its rule, and the footer's distance again before the text.
   top: HEADER.top + LOGO.height + HEADER.ruleGap + SPACE.rule + FOOTER,
   bottom: BOTTOM,
