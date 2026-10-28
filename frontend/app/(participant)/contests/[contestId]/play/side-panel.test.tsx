@@ -522,7 +522,9 @@ describe("the questions to the organisers tab", () => {
       show();
 
       const marked = await screen.findByRole("tab", { name: unread });
-      expect(scrollIntoView.mock.instances).toContain(marked);
+      // The marker is drawn in the commit and the scroll runs in the effect
+      // after it, so the find can resolve before the scroll has happened.
+      await waitFor(() => expect(scrollIntoView.mock.instances).toContain(marked));
       // The selected tab is not taken away from the participant.
       expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toHaveAttribute(
         "aria-selected",
