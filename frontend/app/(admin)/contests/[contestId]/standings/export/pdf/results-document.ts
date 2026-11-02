@@ -163,12 +163,12 @@ function titleBlock(title: string, input: ResultsPdfInput): Content[] {
 
 const PRIZE_MARK: Record<1 | 2 | 3, string> = { 1: "I", 2: "II", 3: "III" };
 
-/** The name the protocol and an identity cell fall back on: full name, else login, else email, else the deleted label. */
+/** The name the protocol lists a winner by: full name, else login, else email; with none, the deleted label for a deleted account and a dash for a live one. */
 function nameOf(row: ResultsRow, texts: ResultsPdfTexts): string {
   if (row.fullName) return row.fullName;
   if (row.login) return row.login;
   if (!row.deleted && row.email) return row.email;
-  return texts.deleted;
+  return row.deleted ? texts.deleted : "—";
 }
 
 const FIELD_VALUE: Record<ResultsField, (row: ResultsRow) => string | undefined> = {

@@ -330,6 +330,14 @@ describe("resultsProtocolDocument", () => {
     expect(sequence).toEqual([texts.winners, texts.prizes.first, "sturcanu"]);
   });
 
+  test("a live winner whose carried fields are empty is a dash, not a deleted account", () => {
+    const sequence = strings(
+      blockWith(resultsProtocolDocument({ ...input, report: { ...report, fields: ["email"], rows: [row("r1", { place: 1, prize: 1 })] } }), texts.winners),
+    );
+
+    expect(sequence).toEqual([texts.winners, texts.prizes.first, "—"]);
+  });
+
   test("the protocol prints the jury names typed on the page and a line for each", () => {
     const definition = resultsProtocolDocument({
       ...input,

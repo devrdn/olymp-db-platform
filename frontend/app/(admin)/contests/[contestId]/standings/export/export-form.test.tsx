@@ -336,6 +336,20 @@ describe("the export form", () => {
     ).toBeInTheDocument();
   });
 
+  test("a refresh that makes the report preliminary again falls back from the protocol to CSV", async () => {
+    fetchResultsAction.mockResolvedValue({ kind: "ok", report: report({ generatedAt: "2026-11-02T10:40:00Z" }) });
+    show(finished());
+
+    await userEvent.click(screen.getByRole("radio", { name: t().formats.protocol }));
+    expect(download("protocol", 3)).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: t().refresh }));
+
+    expect(await screen.findByText(t().protocolUnavailable)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: t().formats.protocol })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: t().formats.csv })).toBeChecked();
+    expect(download("csv", 3)).toBeEnabled();
+  });
+
   test("a refused refresh keeps the list and says why", async () => {
     fetchResultsAction.mockResolvedValue({ kind: "refused", code: "results_too_many_rows" });
     show();
