@@ -2565,9 +2565,10 @@ table. The staff interface gets a section of its own:
   per participant, the share that failed, the average time to a correct
   answer.
 
-**What exists today.** Of all that export, three things exist, and none is a
-staff panel: the two below, and monitoring's CSV of one participant's feed or
-a whole contest's (section 9.4).
+**What exists today.** Of all that export, four things exist, and none is a
+staff panel: the two below, monitoring's CSV of one participant's feed or
+a whole contest's (section 9.4), and the contest's results as a file
+(section 10).
 
 **A participant's own query log, as CSV.**
 `GET /api/v1/contests/{id}/play/log.csv`, beside the existing `/play/log`:
@@ -3658,11 +3659,12 @@ a participant's work, this is housekeeping.
 ## 10. Reporting
 
 Reporting is not one module. Three packages serve it today, all over the core
-database: `leaderboard` (the standings, below), `profile` (a participant's own
-report, section 9.5) and `monitor` (an organiser's reads of one contest and
-its CSV export, section 9.4). What reporting is meant to cover, of which the
-leaderboard and the participant's report exist and the staff reports and
-their export do not:
+database: `leaderboard` (the standings and the results export, below),
+`profile` (a participant's own report, section 9.5) and `monitor` (an
+organiser's reads of one contest and its CSV export, section 9.4). What
+reporting is meant to cover, of which the leaderboard, the participant's
+report and the results as a file exist, and the staff reports by question and
+the XLSX export do not:
 
 - **During a contest, for staff:** a live leaderboard, progress by question
   (how many participants are on which), the rate of failing queries, activity
@@ -3670,7 +3672,8 @@ their export do not:
 - **Afterwards:** the final table, a breakdown by question (the share who
   solved it, the average attempts and queries), and a participant's personal
   report, which they see in their profile (section 9.5).
-- **Export:** CSV and XLSX for the faculty office.
+- **Export:** CSV and XLSX for the faculty office. The CSV of the results
+  exists (the results export, below); XLSX does not.
 
 The intended implementation: SQL views, and materialised views refreshed on a
 schedule where needed; heavy reports are computed once a contest has finished
@@ -3743,6 +3746,111 @@ Without that, a computation that happened to be slow could write the frozen
 answer back into the cache **after** the reveal had explicitly removed it, and
 the organiser would see the "reveal results" button again for the cache's
 lifetime as though nothing had happened.
+
+**The results export** (implemented; the report is built by
+`leaderboard.Service.Export` and `Preview`, the routes are
+`api.ResultsHandler`). An organiser needs the results of a finished contest
+as a file, and for a running one a preliminary copy. The page is
+`/contests/{id}/standings/export`, reached by an **Export** button on the
+staff standings. It offers three files: a CSV for another system, a PDF of
+the table, and a PDF protocol, the official record with the rules, the
+places and prizes and the jury's signature lines. The organiser chooses whom
+the file lists (a place range and checkboxes together), whether a row is a
+summary or detailed, and which of full name, login and email it carries.
+
+**Two routes, one permission.** `GET /api/v1/contests/{id}/results` is the
+preview that fills the page's list: the summary report for every
+registration, with the status, `hidden_by_freeze` and whether the caller may
+export email. `POST /api/v1/contests/{id}/results/export` takes the chosen
+registrations (a POST, because a hand-picked list can hold 2000 ids) and
+answers `format: "csv"` with the file and `format: "json"` with the same
+report as JSON, which the browser turns into a PDF. Both need
+`contest.monitor`, as item 28 settled for staff reports; the owner, the
+managers and `contest.admin_all` hold it. The `email` field needs the global
+`users.manage` as well, because the address is masked for contest staff
+everywhere else (`contests/directory.go`), and a request for it without that
+is `results_email_forbidden`. The preview shows no email and is not audited:
+it shows what the staff table already shows.
+
+**The report has the place the public table gives.** `RankReport` ranks the
+non-disqualified rows with the same `Rank` and `RankICPC` tie rules and
+`AwardPrizes` as the standings, then appends the disqualified, with no place,
+no prize and no win. The staff table counts disqualified rows when it
+numbers, so a report is not read off it; filtering before ranking is also
+what lets winner mode hand the win to the earliest final answer that still
+counts. A tie shares its place (1, 1, 3), a row with no answer has none, and
+the rows chosen keep the places of the whole table rather than being
+renumbered. The report is cut off at the moment of the request, so the freeze
+hides nothing from the organiser: the file holds the real current results, and
+the report says `hidden_by_freeze` when the public table is frozen, so the
+page can warn before the download, as a CSV cannot carry a note. Its `status`
+is `preliminary` while the contest is a draft, published or running, `final`
+once it is finished (complete, but a disqualification or the prize counts can
+still change) and `archived` once nothing can. A draft has no table, so its
+report is preliminary and empty. The account of a deleted participant is
+gone, so its name, login and email are empty and the row, with its numbers,
+stays.
+
+**The detail adds up because it is read once.** A detailed report lists
+every question the totals count, in the contest's order: under ICPC the
+visible questions the grid shows, otherwise all of them, since a question
+hidden later keeps the points it gave. Questions are named by their
+position, `q1`, `q2`, in every mode, so ICPC's letter A is `q1`. Under ICPC
+a row's cells come from the grid. In the other modes the per-question points
+come from a contest-wide query (`ReportStore.PointsBreakdown`) read in the
+same read-only, repeatable-read transaction as the standings
+(`Snapshotter.ReadSnapshot`), because on a running contest two reads a moment
+apart would not agree. A bonus question awards nothing by itself, so its
+`points` are empty and the row's bonus credit, `LEAST(solved bonus face
+values, penalty points lost)` as `postgres.scoreTotal` adds it, is read, not
+derived, into `bonus_credit`: `points = Σ qN_points + bonus_credit`, a
+property the tests hold. An unsolved ICPC cell leaves `qN_minute` empty.
+
+**Bounded and refused.** A request names 1 to 2000 registrations
+(`leaderboard.MaxReportRegistrations`, the standings' own bound), unique, and
+at most the three known `fields`; the body is the usual 1 MiB, unknown keys
+refused. A contest with more than 2000 registrations
+(`leaderboard.DefaultMaxRows`) is refused with `results_too_many_rows`, not
+cut, because a cut file looks complete. An id that is not on this contest's
+table is `results_unknown_registration` (422).
+
+**The order of checks, and what a refusal costs.** Authenticate, then the
+permission, then `api.ExportGate`, which keeps an account to one results
+export at a time (`results_export_too_often`, 429; a concurrency gate and not
+a rate), then the body is decoded and validated, then `api.ExportSlots`, the
+service-wide count shared with every other export (`too_many_exports`, 503),
+then the report is built, the audit entry is written and the file is
+written. A refusal before the build reads nothing and records nothing. The
+slot is released as soon as the report is in memory and the connection is
+back in the pool, so a client that reads slowly holds nothing the whole
+service shares; the account's gate stays until the file is written. The
+audit entry, `contest.results_export` on the contest with the payload
+`{format, detail, fields, rows, status}` and never the ids or the data, is
+recorded before the first byte, and a report the trail cannot record is not
+returned. Section 9.2 keeps the rule that a privileged export is written to
+the trail.
+
+**The CSV is a published format.** Version 1 is written by `api.writeResultsCSV`
+and described in [`api/results-csv.md`](api/results-csv.md), which says what
+every column means, how to undo `spreadsheetSafe` on the three text columns,
+what the Excel flavour (a byte order mark and `;`, for opening by hand and not
+for import) is, and what changes the version. The response carries
+`X-Results-Format: 1` with the CSV only. A test reads the document's two
+examples and compares them with the writer byte for byte, so the document
+cannot drift from the code.
+
+**The PDFs are made in the browser.** The JSON report carries what a PDF
+needs: the contest's titles in every language and its default, the scoring
+mode, the ICPC penalty minutes, the prize counts, the dates, the questions'
+letters and titles, the status and the time it was generated, and a
+fingerprint, the first eight hex digits of the SHA-256 of the rows as sent,
+computed by the server so that two printouts can be compared. The page makes
+the table or the protocol with the story PDF's pdfmake and fonts, loaded by
+dynamic import on click and never part of a page bundle, in the language the
+organiser picks for the file. The protocol is offered only once the contest
+has ended, and the renderer throws on a `preliminary` report as well; until
+the archive a protocol says "results as of" with the time. Times in a PDF are
+the browser's, with the offset.
 
 ## 10.1 Installation settings
 
@@ -4529,8 +4637,8 @@ The existing step numbers do not move: other sections refer to "step 4" and
   - [ ] **6.3 The query-log panel and reports** — the panel of section 9.1
     across contests, with a search over a whole contest's queries and NDJSON
     and XLSX export; and the staff reports of section 10: progress by
-    question during a contest, a breakdown by question afterwards, the
-    results as a file.
+    question during a contest and a breakdown by question afterwards. The
+    results as a file, as CSV and PDF, exist (item 28, first half).
 - [ ] **7. Audit and load** — the security audit from section 11's plan, a
   load test (`cmd/consoleload`, which exists: the steady and burst scenarios
   through the participant's real path, and provisioning under either copy
@@ -4572,7 +4680,7 @@ an item of the list below.
    and 51 exist, an administrator resets a password and emails the new one,
    and a contest is announced by other means.
 2. **The organiser's workflow:** the start waiting until every copy is
-   current (23); the staff reports and the results as a file (28), and
+   current (23); the staff reports (28), and
    `reports.view` removed (29); a contest list for a manager without
    `contest.create` (30); screens for the endpoints that
    have none, the grace extension first (31); the readiness event (32); `Esc`
@@ -4795,12 +4903,12 @@ Product decisions the items below are built on.
   request waits for a copy at the start, all at once. Holding the start until
   `provisioning.Service.Ready` holds would move that wait before the clock.
 - [ ] **28. Staff reports and the results as a file** (section 10; section 14,
-  step 6.3). Staff have the standings screen and monitoring's per-participant
-  counters; there is no progress by question during a contest, no breakdown by
-  question afterwards (share solved, average attempts and queries) and no
-  route that exports the results. An organiser cannot hand the faculty office
-  a file of who placed where. CSV comes first, XLSX after it. The reports
-  are guarded by `contest.monitor`, as monitoring is.
+  step 6.3). The results as a file are done (see Done, "28, first half").
+  What remains: staff have the standings screen and monitoring's
+  per-participant counters, but there is no progress by question during a
+  contest, no breakdown by question afterwards (share solved, average
+  attempts and queries), and no XLSX export; the results leave as CSV and
+  PDF only. The reports are guarded by `contest.monitor`, as monitoring is.
 - [ ] **29. `reports.view` is granted and checked nowhere** (section 7). The
   permission is seeded and granted to contest owners, managers and
   administrators, and the interface uses it only to choose a landing page; no
@@ -5035,6 +5143,13 @@ Product decisions the items below are built on.
   and the cluster lacks, failing only for a contest still to be played; a
   running contest whose template is gone can be rebuilt through the build
   route.
+- [x] **28, first half. The results as a file** (section 10). The organiser's
+  page `/contests/{id}/standings/export`, `GET …/results` and
+  `POST …/results/export`, guarded by `contest.monitor` (email also by
+  `users.manage`): a CSV in a documented, versioned format
+  ([`api/results-csv.md`](api/results-csv.md)), a PDF table and a PDF
+  protocol, for chosen participants, summary or detailed, recorded as
+  `contest.results_export`. The second half stays in the list.
 - [x] **34. "Reset my database"** (section 4.1). `POST …/play/reset` and a
   button on the play screen for a `read_write` contest, behind the
   participation gate, limited to three resets per registration in ten
