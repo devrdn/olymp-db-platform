@@ -1,10 +1,11 @@
 // Package leaderboard answers "who is where" in a contest, as each audience
 // may see it: the table's state (live, frozen, final), its cutoff, and the
-// order and places of the rows.
+// order and places of the rows. It also builds the results report a file is
+// made from, for chosen registrations, and records each export.
 //
 // It does not record results (internal/contests fixes a submission's points
-// when it is answered) and does not decide who may call it; the HTTP layer
-// applies permissions and rate limits.
+// when it is answered), does not write files, and does not decide who may
+// call it; the HTTP layer applies permissions and rate limits.
 package leaderboard
 
 import (
