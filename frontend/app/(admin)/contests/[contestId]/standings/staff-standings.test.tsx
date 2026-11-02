@@ -118,6 +118,12 @@ describe("the staff table", () => {
     expect(screen.getByRole("link", { name: t().publicPage })).toHaveAttribute("href", `/contests/${ID}/leaderboard`);
   });
 
+  test("links the results export page", () => {
+    show(board(), "running");
+
+    expect(screen.getByRole("link", { name: t().export })).toHaveAttribute("href", `/contests/${ID}/standings/export`);
+  });
+
   test("offers the reveal only once a frozen contest has finished", () => {
     const { unmount } = show(board(), "running");
     expect(screen.queryByRole("button", { name: t().reveal })).not.toBeInTheDocument();
