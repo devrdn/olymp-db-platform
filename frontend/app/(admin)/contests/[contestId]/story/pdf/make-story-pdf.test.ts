@@ -1,17 +1,16 @@
 // @vitest-environment node
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { inflateSync } from "node:zlib";
 import { describe, expect, test, vi } from "vitest";
 
 import type { ReadFont } from "./fonts";
+import { embeddedFaces, missingGlyphs, namedFaces, readFromDisk } from "./pdf-test-support";
 import { TITLE_SLACK, fitTitle, makeStoryPdf, measureColumns, preparedLibrary, titleWidth, type StoryPdfOptions } from "./make-story-pdf";
 import { titleSpace } from "./story-document";
 import { storyBlocks, type Node } from "./story-markdown";
 import { A4, MEASURE } from "./theme";
 
 const FONTS = join(process.cwd(), "public/fonts/pdf");
-const readFromDisk: ReadFont = async (source, file) => new Uint8Array(await readFile(join(source, file)));
 
 /** A 2 x 2 JPEG, standing in for what the browser's canvas produces. */
 const PIXEL =
@@ -42,43 +41,6 @@ const options = (overrides: Partial<StoryPdfOptions> = {}): StoryPdfOptions => (
 
 async function bytes(blob: Blob): Promise<Buffer> {
   return Buffer.from(await blob.arrayBuffer());
-}
-
-/** The faces a PDF embeds, without their subset tag: `/BaseFont /ABCDEF+Literata-Regular`. */
-function embeddedFaces(pdf: Buffer): string[] {
-  const names = [...pdf.toString("latin1").matchAll(/\/BaseFont \/[A-Z]{6}\+([^\s/>[\]]+)/g)].map((match) => match[1]);
-  return [...new Set(names)].sort();
-}
-
-/** Every face named in the file, embedded or not: a standard face would appear here without a subset tag. */
-function namedFaces(pdf: Buffer): string[] {
-  return [...new Set([...pdf.toString("latin1").matchAll(/\/BaseFont \/([^\s/>[\]]+)/g)].map((match) => match[1]))];
-}
-
-/**
- * How many glyphs the pages draw with glyph 0, a face's missing-glyph box. The
- * library takes no other face when a letter is missing: it draws that box, so
- * a missing letter shows only here.
- */
-function missingGlyphs(pdf: Buffer): number {
-  const text = pdf.toString("latin1");
-  let count = 0;
-  for (const match of text.matchAll(/stream\r?\n/g)) {
-    const start = match.index + match[0].length;
-    const end = text.indexOf("endstream", start);
-    let content: string;
-    try {
-      content = inflateSync(pdf.subarray(start, end)).toString("latin1");
-    } catch {
-      continue;
-    }
-    for (const shown of content.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
-      for (const hex of shown[1].matchAll(/<([0-9a-fA-F]+)>/g)) {
-        count += (hex[1].match(/.{4}/g) ?? []).filter((glyph) => glyph === "0000").length;
-      }
-    }
-  }
-  return count;
 }
 
 describe("the story PDF's faces", () => {
