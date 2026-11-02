@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import ro from "@/lib/i18n/dictionaries/ro";
 import type { OpenPlayQuestion } from "@/lib/api/play";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
@@ -15,12 +16,14 @@ const answer = vi.hoisted(() => ({ current: { kind: "idle" } as AnswerState }));
 const refresh = vi.hoisted(() => ({
   current: { kind: "ok", items: [] } as QuestionsRefreshResult,
   calls: 0,
+  locale: "",
 }));
 
 vi.mock("./requests", () => ({
   submitAnswer: async () => answer.current,
-  refreshQuestions: async () => {
+  refreshQuestions: async (_contestId: string, locale: string) => {
     refresh.calls++;
+    refresh.locale = locale;
     return refresh.current;
   },
 }));
@@ -439,6 +442,92 @@ describe("the questions panel", () => {
 
     expect(await screen.findByText(en.participant.play.questions.refreshFailed)).toBeInTheDocument();
   });
+});
+
+// Switching the language re-renders the page on the server, which hands the
+// panel a fresh list rendered in the new language.
+describe("the questions panel after a language switch", () => {
+  const english = [
+    entry({ id: "q1", title: "The greenhouse", bodyMd: "Who was in the greenhouse?" }),
+    entry({ id: "q2", title: "The hour", bodyMd: "Name the hour." }, 2),
+  ];
+  const romanian = [
+    entry({ id: "q1", title: "Sera", bodyMd: "Cine era în seră?" }),
+    entry({ id: "q2", title: "Ora", bodyMd: "Numiți ora." }, 2),
+  ];
+
+  test("shows the fresh list in the new language, titles and wording alike", () => {
+    const { rerender } = render(<QuestionsPanel locale="en" contestId="c1" items={english} dict={en} />);
+
+    rerender(<QuestionsPanel locale="ro" contestId="c1" items={romanian} dict={ro} />);
+
+    expect(screen.getByRole("heading", { name: "Sera" })).toBeInTheDocument();
+    expect(screen.getByText("Cine era în seră?")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "The greenhouse" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Who was in the greenhouse?")).not.toBeInTheDocument();
+    expect(screen.queryByText("Name the hour.")).not.toBeInTheDocument();
+  });
+
+  test("a question closed afterwards re-reads the list in the new language and keeps its wording", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
+    refresh.current = {
+      kind: "ok",
+      items: [
+        question({ id: "q1", title: "Sera", bodyMd: "Cine era în seră?", closed: true, canAnswer: false, correct: true }),
+        question({ id: "q2", title: "Ora", bodyMd: "Numiți ora." }),
+      ],
+    };
+    refresh.calls = 0;
+    const { rerender } = render(<QuestionsPanel locale="en" contestId="c1" items={english} dict={en} />);
+    rerender(<QuestionsPanel locale="ro" contestId="c1" items={romanian} dict={ro} />);
+
+    await userEvent.type(screen.getAllByRole("textbox")[0], "the gardener");
+    await userEvent.click(screen.getAllByRole("button", { name: ro.participant.play.questions.submit })[0]);
+
+    await waitFor(() => expect(refresh.calls).toBe(1));
+    expect(refresh.locale).toBe("ro");
+    await waitFor(() => expect(screen.getAllByRole("textbox")).toHaveLength(1));
+    expect(screen.getByText("Numiți ora.")).toBeInTheDocument();
+    expect(screen.queryByText("Name the hour.")).not.toBeInTheDocument();
+  });
+
+  test("keeps an answer typed but not sent", async () => {
+    const { rerender } = render(<QuestionsPanel locale="en" contestId="c1" items={english} dict={en} />);
+    await userEvent.type(screen.getAllByRole("textbox")[1], "midnight");
+
+    rerender(<QuestionsPanel locale="ro" contestId="c1" items={romanian} dict={ro} />);
+
+    expect(screen.getAllByRole("textbox")[1]).toHaveValue("midnight");
+  });
+});
+
+// The wording a re-read brings can differ from the body on screen, for one
+// when the re-read was asked in another language than the page loaded in.
+test("a re-read whose wording differs renders the new wording rather than keeping the old body", async () => {
+  answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 0, closed: true } };
+  refresh.current = {
+    kind: "ok",
+    items: [
+      question({ id: "q1", closed: true, canAnswer: false, correct: true }),
+      question({ id: "q2", bodyMd: "Numiți ora." }),
+    ],
+  };
+  render(
+    <QuestionsPanel
+      locale="en"
+      contestId="c1"
+      items={[entry({ id: "q1" }), entry({ id: "q2", bodyMd: "Name the hour." }, 2)]}
+      dict={en}
+    />,
+  );
+
+  await userEvent.type(screen.getAllByRole("textbox")[0], "the gardener");
+  await userEvent.click(screen.getAllByRole("button", { name: en.participant.play.questions.submit })[0]);
+
+  expect(await screen.findByTestId("opened-body")).toHaveTextContent("Numiți ora.");
+  expect(screen.queryByText("Name the hour.")).not.toBeInTheDocument();
+  // The unchanged wording keeps the body the page loaded with.
+  expect(screen.getByText("Who was in the greenhouse?").tagName).toBe("SPAN");
 });
 
 /** Each question's state as a tag, so the current one is visible at a glance. */

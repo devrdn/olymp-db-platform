@@ -36,18 +36,20 @@ type OpenEntry = Extract<QuestionEntry, { question: OpenPlayQuestion }>;
 const LazyQuestionBody = lazy(() => import("./question-body").then((m) => ({ default: m.QuestionBody })));
 
 /**
- * The entries for a re-read list. A body already on screen is kept, so the
- * Markdown is not parsed again; a question that has just opened gets one
+ * The entries for a re-read list. A body already on screen for the same
+ * wording is kept, so the Markdown is not parsed again; a question that has
+ * just opened, or whose wording changed (another language), gets one
  * rendered here.
  */
 function entriesFrom(items: PlayQuestion[], previous: QuestionEntry[]): QuestionEntry[] {
-  const bodies = new Map<string, ReactNode>();
-  for (const entry of previous) {
-    if (!entry.question.locked) bodies.set(entry.question.id, entry.body);
+  const shown = new Map<string, { bodyMd: string; body: ReactNode }>();
+  for (const { question, body } of previous) {
+    if (!question.locked) shown.set(question.id, { bodyMd: question.bodyMd, body });
   }
   return items.map((question, i): QuestionEntry => {
     if (question.locked) return { question, index: question.position, body: null };
-    const body = bodies.has(question.id) ? bodies.get(question.id) : (
+    const kept = shown.get(question.id);
+    const body = kept?.bodyMd === question.bodyMd ? kept.body : (
       <Suspense fallback={<div aria-hidden="true" className="h-5 w-2/3 animate-pulse bg-sunk" />}>
         <LazyQuestionBody markdown={question.bodyMd} />
       </Suspense>
@@ -81,6 +83,14 @@ export function QuestionsPanel({
 }) {
   const t = dict.participant.play.questions;
   const [entries, setEntries] = useState(items);
+  // A fresh list from the server (a language switch revalidates the page)
+  // replaces the one held here. Adjusted during render rather than by a
+  // remount, so the drafts each card holds survive.
+  const [seenItems, setSeenItems] = useState(items);
+  if (items !== seenItems) {
+    setSeenItems(items);
+    setEntries(items);
+  }
   // Whether the last re-read was refused. A sequential contest needs it to
   // unlock the next question, so a failure is shown with a hint to reload.
   const [refreshFailed, setRefreshFailed] = useState(false);
