@@ -85,6 +85,11 @@ type Config struct {
 	MaxRows  int
 	// LiveCacheTTL defaults to DefaultLiveCacheTTL.
 	LiveCacheTTL time.Duration
+	// Reports, Questions and Snapshots serve Export, which refuses to run
+	// without any of them.
+	Reports   ReportStore
+	Questions QuestionLister
+	Snapshots Snapshotter
 }
 
 type View struct {
@@ -119,6 +124,9 @@ type Service struct {
 	ttl          time.Duration
 	liveTTL      time.Duration
 	maxRows      int
+	reports      ReportStore
+	questions    QuestionLister
+	snapshots    Snapshotter
 
 	mu    sync.Mutex
 	cache map[uuid.UUID]cached
@@ -148,6 +156,7 @@ func NewService(cfg Config) *Service {
 	s := &Service{
 		contests: cfg.Contests, participants: cfg.Participants, standings: cfg.Standings,
 		audit: cfg.Audit, uow: cfg.UnitOfWork, now: cfg.Now, ttl: cfg.CacheTTL, liveTTL: cfg.LiveCacheTTL, maxRows: cfg.MaxRows,
+		reports: cfg.Reports, questions: cfg.Questions, snapshots: cfg.Snapshots,
 		cache: make(map[uuid.UUID]cached), liveCache: make(map[uuid.UUID]cachedLive),
 		generations: make(map[uuid.UUID]uint64),
 	}
@@ -374,19 +383,27 @@ func (s *Service) rank(ctx context.Context, q Query, places contests.PrizePlaces
 	if err != nil {
 		return table{}, fmt.Errorf("read the icpc standings: %w", err)
 	}
-	// A grid that disagrees with its rows is refused, not served misaligned.
-	if len(grid.FirstSolves) != grid.Questions {
-		return table{}, fmt.Errorf("the icpc grid has %d questions and %d first solves", grid.Questions, len(grid.FirstSolves))
-	}
-	for _, e := range entries {
-		if len(e.Cells) != grid.Questions {
-			return table{}, fmt.Errorf("an icpc row has %d cells on a grid of %d questions", len(e.Cells), grid.Questions)
-		}
+	if err := checkGrid(entries, grid); err != nil {
+		return table{}, err
 	}
 	entries, truncated := s.cut(entries)
 	rows := RankICPC(entries, grid)
 	AwardPrizes(rows, q.Scoring, places)
 	return table{rows: rows, truncated: truncated, questions: grid.Questions}, nil
+}
+
+// checkGrid refuses a grid that disagrees with its rows, rather than serve
+// them misaligned.
+func checkGrid(entries []Entry, grid Grid) error {
+	if len(grid.FirstSolves) != grid.Questions {
+		return fmt.Errorf("the icpc grid has %d questions and %d first solves", grid.Questions, len(grid.FirstSolves))
+	}
+	for _, e := range entries {
+		if len(e.Cells) != grid.Questions {
+			return fmt.Errorf("an icpc row has %d cells on a grid of %d questions", len(e.Cells), grid.Questions)
+		}
+	}
+	return nil
 }
 
 func (s *Service) cut(entries []Entry) ([]Entry, bool) {
