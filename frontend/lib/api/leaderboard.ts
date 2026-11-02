@@ -49,7 +49,7 @@ export type StandingsCell = z.infer<typeof cellSchema>;
 export const PRIZES = [1, 2, 3] as const;
 export type Prize = (typeof PRIZES)[number];
 
-const prizeSchema = z
+export const prizeSchema = z
   .union([z.literal(1), z.literal(2), z.literal(3)])
   .nullish()
   .transform((prize): Prize | null => prize ?? null);
