@@ -4,6 +4,7 @@ import { FileDown } from "lucide-react";
 import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { saveBlob } from "@/lib/download";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { storyFileName } from "./pdf/file-name";
@@ -52,7 +53,7 @@ export function StoryPdfButton({
     try {
       const { makeStoryPdf } = await import("./pdf/make-story-pdf");
       const blob = await makeStoryPdf({ title, language, markdown, logoHref });
-      save(blob, storyFileName(title, language));
+      saveBlob(blob, storyFileName(title, language));
     } catch {
       setFailed(true);
     } finally {
@@ -90,19 +91,4 @@ export function StoryPdfButton({
       ) : null}
     </div>
   );
-}
-
-/** How long the address of a downloaded file stays valid; Safari and older Firefox can cancel a download whose address is revoked at once. */
-const REVOKE_AFTER_MS = 10_000;
-
-/** Hands the file to the browser as a download, then lets go of its memory. */
-function save(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
 }
