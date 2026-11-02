@@ -2128,6 +2128,7 @@ const en = {
       "contest.leaderboard_reveal": "Revealed the final standings",
       "contest.monitor_view": "Viewed participants' activity",
       "contest.monitor_export": "Exported participants' activity",
+      "contest.results_export": "Exported the results",
       "contest.clarification_answer": "Answered a participant's question privately",
       "contest.clarification_publish": "Published an answer to every participant",
       "contest.clarification_edit": "Edited an answer to a participant's question",

@@ -1901,6 +1901,7 @@ const ru = {
       "contest.leaderboard_reveal": "Открыл итоговую таблицу",
       "contest.monitor_view": "Просмотрел действия участников",
       "contest.monitor_export": "Выгрузил действия участников",
+      "contest.results_export": "Выгрузил результаты",
       "contest.clarification_answer": "Ответил участнику лично",
       "contest.clarification_publish": "Опубликовал ответ для всех участников",
       "contest.clarification_edit": "Изменил ответ на вопрос участника",
