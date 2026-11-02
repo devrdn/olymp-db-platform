@@ -678,9 +678,46 @@ The contest's id is the identifier in its workspace address,
 2. **Results.** The **Leaderboard** tab (`/contests/<id>/standings`) is the
    live table, disqualified participants included. If the leaderboard was
    frozen, **Reveal the results** shows everybody the final table; it cannot
-   be undone. The public page and **Copy link** share it. There is no export
-   of the standings; take them from the screen. **Monitoring**, Download,
-   exports everything the participants did as CSV.
+   be undone. The public page and **Copy link** share it. To take the results
+   away as a file, press **Export** on that tab, which opens
+   `/contests/<id>/standings/export`. It needs `contest.monitor`, which the
+   contest's owner and managers hold.
+   - **Whom.** Tick the participants the file lists: a place range with
+     **Tick**, **Prize winners**, **All** or **None**, a search by name or
+     login, and a checkbox per row, together. The list shows the places the
+     file will have, which are the public table's; the staff table counts
+     disqualified participants when it numbers, so its places can differ. A
+     disqualified participant is listed with no place and is not ticked until
+     you tick them. The list is read when the page opens, with its time;
+     **Refresh** reads it again and keeps your ticks.
+   - **What a row carries.** **Summary** is place, prize and the totals;
+     **Detailed** adds every question, solved or not, with the minute or the
+     points and the attempts. Choose which of full name, login and email the
+     file shows. Email is offered only to an account that also holds
+     `users.manage`.
+   - **Format.** **CSV** is for another system: a gradebook, a faculty
+     office's spreadsheet, a script. Its columns are fixed and described in
+     [api/results-csv.md](../api/results-csv.md). **For Excel** writes a
+     semicolon and a byte-order mark so a double click opens it correctly in
+     Excel; use it to read the file by hand, not to import it. **PDF table**
+     is the standings as they are, to print or attach. **Protocol** is the
+     official record: the rules, the table, the prize winners and signature
+     lines for the jury, whose names you type on the page each time; nothing
+     is stored. The PDFs are made in the browser, in the language you pick
+     (Romanian, Russian or English), with times in the browser's time zone.
+   - **While the contest runs** every file is marked **preliminary** and the
+     **Protocol** is not offered. Once the contest has finished it is, with
+     the words "results as of" and the time until the contest is archived,
+     because a disqualification or a change of the prize counts can still
+     move the places until then. Make it again after archiving if you need
+     the settled one.
+   - **During a freeze** the files hold the real results, the ones you see,
+     not the table participants see. The page says so; do not share a file
+     before you reveal the results.
+   - A contest with more than 2000 registrations is refused rather than cut.
+     Every export is written to the audit trail.
+
+   **Monitoring**, Download, exports everything the participants did as CSV.
 3. **Feedback.** Collect it from the form behind the feedback address. Empty
    **Feedback address** once you no longer want the link shown.
 4. **Participants' databases are dropped after the grace period**: the

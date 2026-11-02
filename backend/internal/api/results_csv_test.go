@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/csv"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -264,5 +266,104 @@ func TestAResultsCSVFileNameIsStampedInUTC(t *testing.T) {
 	report.GeneratedAt = time.Date(2026, 11, 2, 14, 10, 0, 0, time.FixedZone("EET", 2*3600))
 	if got, want := resultsFileName(report), "results-"+report.Contest.ID.String()+"-20261102T121000Z.csv"; got != want {
 		t.Fatalf("name = %q, want %q", got, want)
+	}
+}
+
+// documentedExample is a report whose file docs/api/results-csv.md shows.
+type documentedExample struct {
+	name   string
+	report leaderboard.Report
+}
+
+func documentedExamples() []documentedExample {
+	at := func(clock string) *time.Time {
+		t, err := time.Parse(time.RFC3339, "2026-11-02T"+clock+"Z")
+		if err != nil {
+			panic(err)
+		}
+		return &t
+	}
+	row := func(id, name, login string, place, prize, solved int) leaderboard.ReportRow {
+		var r leaderboard.ReportRow
+		r.Registration = uuid.MustParse(id)
+		r.FullName, r.Login = name, login
+		r.Place, r.Prize, r.Solved = place, prize, solved
+		return r
+	}
+
+	ana := row("0b6f4a1e-2d3c-4e5f-8a9b-0c1d2e3f4a51", "Popescu, Ana", "ana", 1, 1, 3)
+	ana.Penalty, ana.LastSolvedAt = 214, at("10:58:00")
+	ion := row("0b6f4a1e-2d3c-4e5f-8a9b-0c1d2e3f4a52", "Ion Rusu", "ion", 1, 1, 3)
+	ion.Penalty, ion.LastSolvedAt = 214, at("11:02:00")
+	maria := row("0b6f4a1e-2d3c-4e5f-8a9b-0c1d2e3f4a53", "Maria Ceban", "maria", 3, 3, 2)
+	maria.Penalty, maria.LastSolvedAt = 187, at("11:20:00")
+	vlad := row("0b6f4a1e-2d3c-4e5f-8a9b-0c1d2e3f4a54", "Vlad Lupu", "vlad", 0, 0, 0)
+	cezar := row("0b6f4a1e-2d3c-4e5f-8a9b-0c1d2e3f4a55", "Cezar Munteanu", "cezar", 0, 0, 4)
+	cezar.Disqualified, cezar.Penalty, cezar.LastSolvedAt = true, 120, at("10:30:00")
+
+	var icpcContest contests.Contest
+	icpcContest.ID = uuid.MustParse("5d1c0a7e-9b3f-4c2d-8e6a-1f2b3c4d5e60")
+	icpcContest.Scoring = contests.ScoringICPC
+	icpc := leaderboard.Report{
+		Contest: icpcContest, Status: leaderboard.ReportFinal, GeneratedAt: time.Date(2026, 11, 2, 12, 10, 0, 0, time.UTC),
+		Fields: []string{leaderboard.FieldFullName, leaderboard.FieldLogin},
+		Rows:   []leaderboard.ReportRow{ana, ion, maria, vlad, cezar},
+	}
+
+	first := row("1c7a5b2f-3e4d-4f60-9bac-1d2e3f4a5b61", "", "ana", 1, 1, 3)
+	first.Points, first.BonusCredit, first.LastSolvedAt = 10, 1, at("10:41:00")
+	first.Cells = []leaderboard.ReportCell{
+		{Solved: true, Points: intPtr(4), Attempts: 2},
+		{Solved: true, Points: intPtr(5), Attempts: 1},
+		{Solved: true, Attempts: 1},
+	}
+	second := row("1c7a5b2f-3e4d-4f60-9bac-1d2e3f4a5b62", "", "@dina", 2, 2, 1)
+	second.Points, second.LastSolvedAt = 5, at("10:12:00")
+	second.Cells = []leaderboard.ReportCell{
+		{Solved: true, Points: intPtr(5), Attempts: 1},
+		{Points: intPtr(0), Attempts: 2},
+		{},
+	}
+	third := row("1c7a5b2f-3e4d-4f60-9bac-1d2e3f4a5b63", "", "mihai", 0, 0, 0)
+	third.Cells = []leaderboard.ReportCell{{Points: intPtr(0)}, {Points: intPtr(0)}, {}}
+
+	var pointsContest contests.Contest
+	pointsContest.ID = uuid.MustParse("5d1c0a7e-9b3f-4c2d-8e6a-1f2b3c4d5e61")
+	pointsContest.Scoring = contests.ScoringPoints
+	points := leaderboard.Report{
+		Contest: pointsContest, Status: leaderboard.ReportPreliminary, GeneratedAt: time.Date(2026, 11, 2, 10, 45, 0, 0, time.UTC),
+		Fields: []string{leaderboard.FieldLogin}, Detailed: true, BonusCredit: true,
+		Questions: []leaderboard.ReportQuestion{{Position: 1}, {Position: 2}, {Position: 3, Bonus: true}},
+		Rows:      []leaderboard.ReportRow{first, second, third},
+	}
+	return []documentedExample{{"icpc-summary", icpc}, {"points-detailed", points}}
+}
+
+var exampleBlock = regexp.MustCompile("(?s)<!-- example: (\\S+) -->\\s*```csv\\n(.*?)```")
+
+// The document shows its lines ended by LF, and the file ends each in CRLF.
+func TestTheDocumentedExamplesAreWhatTheWriterWrites(t *testing.T) {
+	doc, err := os.ReadFile("../../../docs/api/results-csv.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]string{}
+	for _, m := range exampleBlock.FindAllStringSubmatch(strings.ReplaceAll(string(doc), "\r\n", "\n"), -1) {
+		documented[m[1]] = strings.ReplaceAll(m[2], "\n", "\r\n")
+	}
+
+	for _, example := range documentedExamples() {
+		t.Run(example.name, func(t *testing.T) {
+			want, ok := documented[example.name]
+			if !ok {
+				t.Fatalf("docs/api/results-csv.md has no example %q", example.name)
+			}
+			if got := string(writeCSV(t, example.report, false)); got != want {
+				t.Fatalf("the writer writes\n%q\nthe document shows\n%q", got, want)
+			}
+		})
+	}
+	if len(documented) != len(documentedExamples()) {
+		t.Fatalf("the document marks %d examples, the test builds %d", len(documented), len(documentedExamples()))
 	}
 }

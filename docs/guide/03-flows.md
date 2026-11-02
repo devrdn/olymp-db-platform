@@ -782,6 +782,14 @@ stateDiagram-v2
   [backend/internal/api/leaderboard_handler.go](../../backend/internal/api/leaderboard_handler.go).
   A frozen table cuts off at the freeze time, so answers after it are scored
   but not shown until the reveal.
+- The results as a file: `GET /contests/ID/results` (the preview of every
+  registration) and `POST /contests/ID/results/export` (the chosen ones as
+  CSV or as the JSON a PDF is made from), both `contest.monitor`, in
+  [backend/internal/api/results_handler.go](../../backend/internal/api/results_handler.go).
+  The report is ranked without the disqualified, so its places are the
+  public table's, and is read at the moment of the request, whatever the
+  freeze; [ARCHITECTURE.md §10](../ARCHITECTURE.md#10-reporting) has the rest
+  and [api/results-csv.md](../api/results-csv.md) the CSV.
 
 Rules that matter:
 
