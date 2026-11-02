@@ -116,7 +116,8 @@ type ErrorEnvelope = {
   position?: number;
 };
 
-export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
+/** Sends the request and returns the response when it succeeded; any failure is thrown as an `ApiError`. */
+async function send(path: string, options: RequestOptions): Promise<Response> {
   const { method, body, rawBody, origin = "", headers = {}, signal, keepalive, credentials, fetchImpl = fetch } =
     options;
 
@@ -144,11 +145,34 @@ export async function request(path: string, options: RequestOptions = {}): Promi
   if (!response.ok) {
     throw await toApiError(response);
   }
+  return response;
+}
+
+export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
+  const response = await send(path, options);
 
   // Most constructor endpoints answer 204: asking for a body would throw.
   if (response.status === 204) return undefined;
 
   return response.json();
+}
+
+/**
+ * For an endpoint that answers a file rather than JSON. `fileName` is the
+ * `filename` the server put in `Content-Disposition`, or `null` when it sent
+ * none.
+ */
+export async function requestDownload(
+  path: string,
+  options: RequestOptions = {},
+): Promise<{ blob: Blob; fileName: string | null }> {
+  const response = await send(path, options);
+  return { blob: await response.blob(), fileName: fileNameOf(response) };
+}
+
+function fileNameOf(response: Response): string | null {
+  const match = /filename="([^"]*)"/i.exec(response.headers.get("content-disposition") ?? "");
+  return match ? match[1] : null;
 }
 
 /**

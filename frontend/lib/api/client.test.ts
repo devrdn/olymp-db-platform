@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { ApiError, request } from "./client";
+import { ApiError, request, requestDownload } from "./client";
 
 function respondWith(body: unknown, status: number): typeof fetch {
   return async () =>
@@ -230,5 +230,73 @@ describe("when to ask again", () => {
     await expect(request("/x", { fetchImpl: refusedWith("soon") })).rejects.toMatchObject({
       retryAfterSeconds: undefined,
     });
+  });
+});
+
+describe("requestDownload", () => {
+  test("returns the body as a blob and the file name the server gave", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response("place,prize\r\n1,\r\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": 'attachment; filename="results-7d6b-20261102T120000Z.csv"',
+        },
+      });
+
+    const { blob, fileName } = await requestDownload("/contests/7d6b/results/export", {
+      method: "POST",
+      body: { format: "csv" },
+      fetchImpl,
+    });
+
+    expect(await blob.text()).toBe("place,prize\r\n1,\r\n");
+    expect(blob.type).toContain("text/csv");
+    expect(fileName).toBe("results-7d6b-20261102T120000Z.csv");
+  });
+
+  test("has no file name when the server gave none", async () => {
+    const fetchImpl: typeof fetch = async () => new Response("{}", { status: 200 });
+
+    const { fileName } = await requestDownload("/x", { fetchImpl });
+
+    expect(fileName).toBeNull();
+  });
+
+  test("turns an API error envelope into ApiError with its code", async () => {
+    const fetchImpl = respondWith(
+      { error: { code: "results_too_many_rows", message: "too many", request_id: "req-9" } },
+      409,
+    );
+
+    const failure = await requestDownload("/contests/7d6b/results/export", {
+      method: "POST",
+      body: {},
+      fetchImpl,
+    }).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).toMatchObject({ code: "results_too_many_rows", status: 409, requestId: "req-9" });
+  });
+
+  test("sends the JSON body with its content type and the given credentials", async () => {
+    let seen: { url: string; init?: RequestInit } | undefined;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      seen = { url: String(url), init };
+      return new Response("x", { status: 200 });
+    };
+
+    await requestDownload("/contests/7d6b/results/export", {
+      method: "POST",
+      body: { format: "json" },
+      credentials: "same-origin",
+      fetchImpl,
+    });
+
+    expect(seen?.url).toBe("/api/v1/contests/7d6b/results/export");
+    expect(seen?.init?.method).toBe("POST");
+    expect(seen?.init?.headers).toMatchObject({ "content-type": "application/json" });
+    expect(seen?.init?.body).toBe('{"format":"json"}');
+    expect(seen?.init?.credentials).toBe("same-origin");
   });
 });
