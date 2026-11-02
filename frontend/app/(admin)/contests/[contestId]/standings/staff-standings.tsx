@@ -141,6 +141,12 @@ export function StaffStandingsView({
           >
             {t.staff.publicPage}
           </Link>
+          <Link
+            href={`/contests/${contestId}/standings/export`}
+            className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+          >
+            {t.staff.export}
+          </Link>
           <CopyLink contestId={contestId} dict={dict} />
           {revealable ? <Reveal contestId={contestId} dict={dict} /> : null}
         </div>
