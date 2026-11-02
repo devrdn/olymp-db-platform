@@ -2287,7 +2287,7 @@ const en = {
       },
       preparing: "Preparing the file",
       tickOne: "Tick at least one participant",
-      failed: "The PDF could not be made. Try again.",
+      failed: "The file could not be made. Try again.",
       // The results PDFs, printed in the language chosen for them rather than the interface's.
       pdf: {
         table: "Results",

@@ -145,6 +145,13 @@ describe("the participant list", () => {
     expect(screen.getByText(t().noMatch)).toBeInTheDocument();
   });
 
+  test("keeps a focused row clear of the fixed download bar", () => {
+    show(new Set());
+
+    // Scrolled into view by the keyboard, a row stops above the bar the form pins while it is one column.
+    expect(screen.getByRole("checkbox", { name: "Ana Pop" }).className).toContain("@max-3xl/export:scroll-mb-36");
+  });
+
   test("shows points rather than penalty outside ICPC", () => {
     render(
       <ParticipantList

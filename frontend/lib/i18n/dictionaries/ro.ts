@@ -2058,7 +2058,7 @@ const ro = {
       },
       preparing: "Se pregătește fișierul",
       tickOne: "Bifați cel puțin un participant",
-      failed: "PDF-ul nu a putut fi creat. Încercați din nou.",
+      failed: "Fișierul nu a putut fi creat. Încercați din nou.",
       pdf: {
         table: "Rezultate",
         protocol: "Proces-verbal al rezultatelor",

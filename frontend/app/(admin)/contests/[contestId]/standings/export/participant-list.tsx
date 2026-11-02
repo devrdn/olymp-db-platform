@@ -211,7 +211,13 @@ const ParticipantRow = memo(function ParticipantRow({
           row.disqualified && "text-ink-3",
         )}
       >
-        <Checkbox checked={checked} onCheckedChange={() => onToggle(row.id)} aria-labelledby={nameId} />
+        {/* Focused from the keyboard, a row stops above the download bar the form pins while it is one column. */}
+        <Checkbox
+          checked={checked}
+          onCheckedChange={() => onToggle(row.id)}
+          aria-labelledby={nameId}
+          className="@max-3xl/export:scroll-mb-36"
+        />
         <span className="w-12 shrink-0 @max-md:w-7">
           <PlaceBadge place={row.disqualified ? null : row.place} unplaced={l.unplaced} />
         </span>
