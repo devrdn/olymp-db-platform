@@ -11,6 +11,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -243,6 +244,23 @@ var monitorErrors = errorTable{
 	// by speed, so the collector should drop the batch rather than retry
 	// (docs/ARCHITECTURE.md §9.4).
 	{err: monitor.ErrTooManyEvents, status: http.StatusConflict, code: codeSignalsTooManyStored},
+}
+
+// leaderboardErrors answers every error in leaderboard.Errors() (walked by
+// TestEveryLeaderboardErrorHasItsAnswer), for the tables and the results
+// export alike.
+var leaderboardErrors = errorTable{
+	{err: leaderboard.ErrNotFound, status: http.StatusNotFound, code: codeNotFound,
+		message: "Resource not found"},
+	{err: leaderboard.ErrNotAParticipant, status: http.StatusForbidden, code: codeNotAParticipant,
+		message: "The caller is not taking part in this contest"},
+	{err: leaderboard.ErrNotRevealable, status: http.StatusConflict, code: codeLeaderboardNotRevealable},
+	{err: leaderboard.ErrInvalidReport, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: leaderboard.ErrUnknownRegistration, status: http.StatusUnprocessableEntity, code: codeResultsUnknownRegistration,
+		message: "A registration in the list is not on this contest's table"},
+	{err: leaderboard.ErrEmailForbidden, status: http.StatusForbidden, code: codeResultsEmailForbidden,
+		message: "Email addresses are exported only by an account holding users.manage"},
+	{err: leaderboard.ErrTooManyRows, status: http.StatusConflict, code: codeResultsTooManyRows},
 }
 
 // clarificationsErrors answers every error in clarifications.Errors() (walked

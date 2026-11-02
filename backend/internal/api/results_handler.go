@@ -191,6 +191,10 @@ func (h *ResultsHandler) export(w http.ResponseWriter, r *http.Request) {
 	ctx, stop := context.WithTimeout(r.Context(), exportDeadline)
 	defer stop()
 	report, err := h.results.Export(ctx, identity.UserID, req)
+	// The report is in memory and the connection back in the pool, so a client
+	// that reads slowly holds no slot the whole service shares; the account's
+	// gate stays held until the file is written.
+	releaseSlot()
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -312,19 +316,10 @@ func toResultsRow(report leaderboard.Report, row leaderboard.ReportRow) resultsR
 }
 
 func (h *ResultsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if leaderboardErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, leaderboard.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Resource not found")
-	case errors.Is(err, leaderboard.ErrInvalidReport):
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-	case errors.Is(err, leaderboard.ErrUnknownRegistration):
-		httpx.Error(w, r, http.StatusUnprocessableEntity, codeResultsUnknownRegistration,
-			"A registration in the list is not on this contest's table")
-	case errors.Is(err, leaderboard.ErrEmailForbidden):
-		httpx.Error(w, r, http.StatusForbidden, codeResultsEmailForbidden,
-			"Email addresses are exported only by an account holding users.manage")
-	case errors.Is(err, leaderboard.ErrTooManyRows):
-		httpx.Error(w, r, http.StatusConflict, codeResultsTooManyRows, err.Error())
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
 	default:

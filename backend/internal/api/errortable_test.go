@@ -12,6 +12,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -320,6 +321,54 @@ func TestEveryMonitorErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 			wrapped, ok := answer(t, monitorErrors, fmt.Errorf("%w: while reading", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+func TestEveryLeaderboardErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		leaderboard.ErrNotFound: {status: http.StatusNotFound, code: "not_found",
+			message: "Resource not found"},
+		leaderboard.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
+			message: "The caller is not taking part in this contest"},
+		leaderboard.ErrNotRevealable: {status: http.StatusConflict, code: "leaderboard_not_revealable",
+			message: "the leaderboard cannot be revealed"},
+		leaderboard.ErrInvalidReport: {status: http.StatusBadRequest, code: "invalid_request",
+			message: "the report request is not acceptable"},
+		leaderboard.ErrUnknownRegistration: {status: http.StatusUnprocessableEntity, code: "results_unknown_registration",
+			message: "A registration in the list is not on this contest's table"},
+		leaderboard.ErrEmailForbidden: {status: http.StatusForbidden, code: "results_email_forbidden",
+			message: "Email addresses are exported only by an account holding users.manage"},
+		leaderboard.ErrTooManyRows: {status: http.StatusConflict, code: "results_too_many_rows",
+			message: "the contest has more registrations than one report carries"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range leaderboard.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, leaderboardErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, leaderboardErrors, fmt.Errorf("%w: while reading", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
 					wrapped, ok, expected.status, expected.code)
