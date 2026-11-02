@@ -287,6 +287,29 @@ describe("the export form", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(t().failed);
   });
 
+  test("a CSV that cannot be saved says the file failed, not the PDF", async () => {
+    downloadResultsCsv.mockResolvedValue({ kind: "ok", blob: new Blob(["x"]), fileName: "results.csv" });
+    saveBlob.mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    show();
+
+    await userEvent.click(download("csv", 3));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(t().failed);
+    expect(t().failed).not.toMatch(/PDF/);
+  });
+
+  test("pins the download bar to the viewport whenever the form is one column, not only on a phone", () => {
+    show();
+
+    // The same container condition that puts the form in one column.
+    const bar = download("csv", 3).parentElement as HTMLElement;
+    expect(bar.className).toContain("@max-3xl/export:fixed");
+    expect(bar.className).not.toContain("max-narrow:fixed");
+    expect(bar.closest(".\\@container\\/export")).not.toBeNull();
+  });
+
   test("refresh keeps the ticks of rows still listed", async () => {
     const later = report({
       generatedAt: "2026-11-02T10:40:00Z",

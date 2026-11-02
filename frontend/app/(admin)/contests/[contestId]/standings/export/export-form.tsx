@@ -152,7 +152,7 @@ export function ExportForm({
   const downloadLabel = busy === "download" ? t.preparing : t.download[kind].replace("{n}", String(count));
 
   return (
-    <div className="flex flex-col gap-6 max-narrow:pb-36">
+    <div className="flex flex-col gap-6">
       <Warnings report={report} t={t} />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -168,11 +168,15 @@ export function ExportForm({
         ) : null}
       </div>
 
-      {/* The options come first in reading order, which a phone shows as one
-          column; a wide form puts the list on the left as the mockup does. */}
-      <div className="@container">
-        <div className="grid grid-cols-1 gap-8 @3xl:grid-cols-[minmax(0,1fr)_20rem] @3xl:gap-10">
-          <div className="flex min-w-0 flex-col gap-5 @3xl:sticky @3xl:top-6 @3xl:col-start-2 @3xl:row-start-1 @3xl:self-start">
+      {/* The options come first in reading order, which a one-column form
+          shows first; a wide form puts the list on the left as the mockup does.
+          The form's own width decides, since the contest's sections take part
+          of the viewport. While it is one column the download bar is pinned to
+          the viewport, and the bottom padding keeps the list's end clear of
+          it; the padding sits inside the container, which cannot query itself. */}
+      <div className="@container/export">
+        <div className="grid grid-cols-1 gap-8 @max-3xl/export:pb-36 @3xl/export:grid-cols-[minmax(0,1fr)_20rem] @3xl/export:gap-10">
+          <div className="flex min-w-0 flex-col gap-5 @3xl/export:sticky @3xl/export:top-6 @3xl/export:col-start-2 @3xl/export:row-start-1 @3xl/export:self-start">
             <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="mb-2 font-mono text-label text-ink-3 uppercase">{t.format}</legend>
               <Segments>
@@ -302,14 +306,15 @@ export function ExportForm({
               </fieldset>
             ) : null}
 
-            {/* On a phone the button is a bar on the viewport's bottom edge, so
-                it is reachable without scrolling past the list; the form's
-                bottom padding keeps the list's end clear of it. */}
+            {/* One column, the button is a bar on the viewport's bottom edge, so
+                it is reachable without scrolling back past the list. */}
             <div
               className={cn(
                 "flex flex-col gap-2 border-t border-line-2 pt-4",
-                "max-narrow:fixed max-narrow:inset-x-0 max-narrow:bottom-0 max-narrow:z-10 max-narrow:bg-bg",
-                "max-narrow:px-4.5 max-narrow:pt-3 max-narrow:pb-[max(0.75rem,env(safe-area-inset-bottom))]",
+                "@max-3xl/export:fixed @max-3xl/export:inset-x-0 @max-3xl/export:bottom-0 @max-3xl/export:z-10 @max-3xl/export:bg-bg",
+                "@max-3xl/export:px-4.5 @max-3xl/export:pt-3 @max-3xl/export:pb-[max(0.75rem,env(safe-area-inset-bottom))]",
+                // Wider than a phone, the bar is a strip with the button at its end rather than a slab across the screen.
+                "@max-3xl/export:narrow:flex-row @max-3xl/export:narrow:items-center @max-3xl/export:narrow:justify-end @max-3xl/export:narrow:gap-4 @max-3xl/export:narrow:px-10",
               )}
             >
               {failure?.where === "download" ? (
@@ -328,7 +333,7 @@ export function ExportForm({
                 disabled={count === 0 || busy !== null}
                 aria-busy={busy === "download"}
                 aria-describedby={count === 0 ? downloadHint : undefined}
-                className="w-full"
+                className="w-full @max-3xl/export:narrow:w-auto"
               >
                 <FileDown strokeWidth={1.75} aria-hidden />
                 {downloadLabel}
@@ -336,7 +341,7 @@ export function ExportForm({
             </div>
           </div>
 
-          <div className="min-w-0 @3xl:col-start-1 @3xl:row-start-1">
+          <div className="min-w-0 @3xl/export:col-start-1 @3xl/export:row-start-1">
             <ParticipantList
               rows={report.rows}
               scoring={report.contest.scoring}
