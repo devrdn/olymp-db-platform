@@ -1903,6 +1903,7 @@ const ro = {
       "contest.leaderboard_reveal": "A dezvăluit clasamentul final",
       "contest.monitor_view": "A vizualizat activitatea participanților",
       "contest.monitor_export": "A exportat activitatea participanților",
+      "contest.results_export": "A exportat rezultatele",
       "contest.clarification_answer": "A răspuns în privat la întrebarea unui participant",
       "contest.clarification_publish": "A publicat un răspuns pentru toți participanții",
       "contest.clarification_edit": "A modificat răspunsul la întrebarea unui participant",

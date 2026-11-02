@@ -81,6 +81,9 @@ const (
 	ActionContestMonitorView = "contest.monitor_view"
 	// ActionContestMonitorExport is recorded on every export, unthrottled.
 	ActionContestMonitorExport = "contest.monitor_export"
+	// ActionContestResultsExport is recorded on every results export, with
+	// its shape and row count, never its rows.
+	ActionContestResultsExport = "contest.results_export"
 	// ActionClarificationAnswer records a private answer to a participant's
 	// question; ActionClarificationPublish an answer shown to every
 	// participant, with the question it answers, whether published at once or
@@ -166,7 +169,7 @@ var actions = []string{
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
 	ActionContestSchemaNotesChange,
 	ActionContestPackageExport, ActionContestLeaderboardReveal,
-	ActionContestMonitorView, ActionContestMonitorExport,
+	ActionContestMonitorView, ActionContestMonitorExport, ActionContestResultsExport,
 	ActionClarificationAnswer, ActionClarificationPublish, ActionClarificationEdit,
 	ActionAnnouncementCreate,
 
