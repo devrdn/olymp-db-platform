@@ -94,3 +94,23 @@ func (u *PgxUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) 
 	}
 	return nil
 }
+
+// ReadSnapshot runs fn in a read-only repeatable-read transaction, so every
+// statement fn's repositories run sees the database as of the first one and
+// none of them can write. Nested inside an open transaction it joins it, as
+// Do does, and sees what that transaction sees instead.
+func (u *PgxUnitOfWork) ReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
+	if _, nested := ctx.Value(txKey{}).(Querier); nested {
+		return fn(ctx)
+	}
+
+	tx, err := u.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("begin snapshot: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	return fn(withQuerier(ctx, tx))
+}

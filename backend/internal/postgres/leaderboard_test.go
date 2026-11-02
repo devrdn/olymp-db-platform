@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -416,6 +417,125 @@ func TestStandingsTimeTheLastScoreByTheAnswerThatRaisedTheTotal(t *testing.T) {
 			if got.Points != c.points || scoredAt(got) != c.scored {
 				t.Errorf("%s: %d points, scored %s; want %d, %s", c.login, got.Points, scoredAt(got), c.points, c.scored)
 			}
+		}
+	})
+}
+
+func (f boardFixture) breakdown(t *testing.T, cutoff int) map[uuid.UUID]leaderboard.Breakdown {
+	t.Helper()
+	got, err := NewLeaderboard(testPool).PointsBreakdown(f.ctx, f.contest, boardAt(cutoff))
+	if err != nil {
+		t.Fatalf("PointsBreakdown() = %v", err)
+	}
+	return got
+}
+
+func TestPointsBreakdownAddsUpToTheStandingsRow(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		penalised, clean := f.scored(t, 10, false), f.scored(t, 8, false)
+		small, large, missed := f.scored(t, 3, true), f.scored(t, 4, true), f.scored(t, 7, true)
+		alice := f.participant(t, "board-alice", 0)
+		f.answer(t, alice, penalised, 1, false, 0, 5)
+		f.answer(t, alice, penalised, 2, true, 5, 10)
+		f.answer(t, alice, clean, 1, true, 8, 12)
+		f.answer(t, alice, small, 1, true, 0, 20)
+		f.answer(t, alice, missed, 1, false, 0, 22)
+		f.answer(t, alice, large, 1, true, 0, 25)
+
+		got := f.breakdown(t, 60)[alice]
+		want := map[uuid.UUID]leaderboard.QuestionScore{
+			penalised: {Solved: true, Points: 5, Attempts: 2},
+			clean:     {Solved: true, Points: 8, Attempts: 1},
+			small:     {Solved: true, Points: 0, Attempts: 1},
+			missed:    {Solved: false, Points: 0, Attempts: 1},
+			large:     {Solved: true, Points: 0, Attempts: 1},
+		}
+		if !maps.Equal(got.Questions, want) {
+			t.Errorf("questions = %+v, want %+v (the untried ones absent)", got.Questions, want)
+		}
+		if got.BonusCredit != 5 {
+			t.Errorf("BonusCredit = %d, want 5 (the penalty points, not the 7 the bonuses are worth)", got.BonusCredit)
+		}
+
+		row := f.row(t, "board-alice", 60)
+		points, solved := got.BonusCredit, 0
+		for _, score := range got.Questions {
+			points += score.Points
+			if score.Solved {
+				solved++
+			}
+		}
+		if points != row.Points || solved != row.Solved {
+			t.Errorf("breakdown adds up to %d points, %d solved; the standings row has %d, %d", points, solved, row.Points, row.Solved)
+		}
+	})
+}
+
+func TestPointsBreakdownCountsOnlyAnswersBeforeTheCutoff(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		regular, bonus := f.scored(t, 10, false), f.scored(t, 3, true)
+		late := f.participant(t, "board-late-bonus", 0)
+		f.answer(t, late, regular, 1, false, 0, 5)
+		f.answer(t, late, regular, 2, true, 5, 10)
+		f.answer(t, late, bonus, 1, true, 0, 60)
+		early := f.participant(t, "board-late-penalty", 0)
+		f.answer(t, early, bonus, 1, true, 0, 10)
+		f.answer(t, early, regular, 1, false, 0, 65)
+		f.answer(t, early, regular, 2, true, 5, 70)
+
+		frozen := f.breakdown(t, 60)
+		if got, want := frozen[late], (leaderboard.Breakdown{Questions: map[uuid.UUID]leaderboard.QuestionScore{
+			regular: {Solved: true, Points: 5, Attempts: 2},
+		}}); got.BonusCredit != want.BonusCredit || !maps.Equal(got.Questions, want.Questions) {
+			t.Errorf("frozen breakdown with a bonus at the cutoff = %+v, want %+v", got, want)
+		}
+		if got, want := frozen[early], (leaderboard.Breakdown{Questions: map[uuid.UUID]leaderboard.QuestionScore{
+			bonus: {Solved: true, Points: 0, Attempts: 1},
+		}}); got.BonusCredit != want.BonusCredit || !maps.Equal(got.Questions, want.Questions) {
+			t.Errorf("frozen breakdown with a later penalty = %+v, want %+v", got, want)
+		}
+
+		live := f.breakdown(t, 90)
+		if got := live[late].BonusCredit; got != 3 {
+			t.Errorf("live BonusCredit with the bonus = %d, want 3", got)
+		}
+		if got := live[early]; got.BonusCredit != 3 || got.Questions[regular] != (leaderboard.QuestionScore{Solved: true, Points: 5, Attempts: 2}) {
+			t.Errorf("live breakdown with the penalty = %+v, want the regular question at 5 points in 2 attempts and 3 bonus credit", got)
+		}
+	})
+}
+
+func TestPointsBreakdownCoversTheDisqualified(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		regular := f.scored(t, 10, false)
+		banned := f.participant(t, "board-banned", 0)
+		f.answer(t, banned, regular, 1, true, 10, 5)
+		exec(t, ctx, `UPDATE registrations SET status = 'disqualified' WHERE id = $1`, banned)
+
+		got, ok := f.breakdown(t, 60)[banned]
+		if !ok || got.Questions[regular] != (leaderboard.QuestionScore{Solved: true, Points: 10, Attempts: 1}) {
+			t.Errorf("disqualified breakdown = %+v, %v; want its answer counted", got, ok)
+		}
+	})
+}
+
+// A registration after the cutoff would reveal that somebody joined during
+// the freeze, as on the table.
+func TestPointsBreakdownLeavesOutARegistrationAfterTheCutoff(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		early := f.participant(t, "board-early", 0)
+		late := f.participant(t, "board-late", 61)
+
+		got := f.breakdown(t, 60)
+		if b, ok := got[early]; !ok || len(b.Questions) != 0 || b.BonusCredit != 0 {
+			t.Errorf("breakdown of a registration with no answers = %+v, %v; want present and empty", b, ok)
+		}
+		if _, ok := got[late]; ok {
+			t.Error("a registration after the cutoff has a breakdown")
 		}
 	})
 }
@@ -848,4 +968,104 @@ func TestMarkRevealedWritesOnceAndLeavesUpdatedAtAlone(t *testing.T) {
 			t.Errorf("MarkRevealed(missing) = %v, want contests.ErrNotFound", err)
 		}
 	})
+}
+
+func TestEmailsAreReadOnlyForTheContestsOwnRegistrations(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newBoardFixture(t, ctx)
+		mailed := f.participant(t, "board-mailed", 0)
+		exec(t, ctx, `UPDATE users SET email = 'mailed@example.test' WHERE login = 'board-mailed'`)
+		silent := f.participant(t, "board-silent", 0)
+		other := makeContest(t, ctx, makeUser(t, ctx, "board-other-author").ID)
+		stranger := makeRegistration(t, ctx, other, makeUser(t, ctx, "board-stranger").ID)
+		exec(t, ctx, `UPDATE users SET email = 'stranger@example.test' WHERE login = 'board-stranger'`)
+
+		got, err := NewLeaderboard(testPool).Emails(ctx, f.contest, []uuid.UUID{mailed, silent, stranger})
+		if err != nil {
+			t.Fatalf("Emails() = %v", err)
+		}
+		want := map[uuid.UUID]string{mailed: "mailed@example.test", silent: ""}
+		if !maps.Equal(got, want) {
+			t.Errorf("Emails() = %v, want %v (another contest's registration absent)", got, want)
+		}
+	})
+}
+
+// Every read the results export makes inside one ReadSnapshot sees the moment
+// of the first, which holds only if each repository runs its statement on the
+// snapshot's transaction rather than on the pool. The rows are committed,
+// since the change to hide is another connection's.
+func TestTheExportsReadsJoinOneSnapshot(t *testing.T) {
+	ctx := t.Context()
+	contest := contestRow(t, ctx)
+	var user, registration, question uuid.UUID
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO users (login, full_name, password_hash, email) VALUES ($1, 'Snap', 'x', $2) RETURNING id`,
+		"board-snap-"+uuid.NewString()[:8], "before@example.test").Scan(&user); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, user) })
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO registrations (contest_id, user_id, created_at) VALUES ($1, $2, $3) RETURNING id`,
+		contest, user, boardAt(0)).Scan(&registration); err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO questions (contest_id, ord, kind, points, is_visible) VALUES ($1, 1, 'text', 10, true) RETURNING id`,
+		contest).Scan(&question); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+
+	contestRepo, board, questions := NewContests(testPool), NewLeaderboard(testPool), NewQuestions(testPool)
+	query := leaderboard.Query{ContestID: contest, Cutoff: boardAt(60), IncludeDisqualified: true, Limit: 10}
+	points, icpc := query, query
+	points.Scoring, icpc.Scoring = contests.ScoringPoints, contests.ScoringICPC
+
+	err := storage.NewUnitOfWork(testPool).ReadSnapshot(ctx, func(ctx context.Context) error {
+		if _, err := contestRepo.ByID(ctx, contest); err != nil {
+			return err
+		}
+		// Another connection commits a change to everything read below.
+		for _, change := range []struct {
+			sql  string
+			args []any
+		}{
+			{`UPDATE contests SET starts_at = $2 WHERE id = $1`, []any{contest, boardAt(0)}},
+			{`INSERT INTO questions (contest_id, ord, kind, points, is_visible) VALUES ($1, 2, 'text', 10, true)`, []any{contest}},
+			{`INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
+			  VALUES ($1, $2, 1, 'an answer', true, 10, $3)`, []any{registration, question, boardAt(5)}},
+			{`UPDATE users SET email = 'after@example.test' WHERE id = $1`, []any{user}},
+		} {
+			if _, err := testPool.Exec(context.Background(), change.sql, change.args...); err != nil {
+				return fmt.Errorf("commit a change: %w", err)
+			}
+		}
+
+		if c, err := contestRepo.ByID(ctx, contest); err != nil || c.StartsAt != nil {
+			t.Errorf("Contests.ByID = starts_at %v, %v; want the snapshot's none", c.StartsAt, err)
+		}
+		if entries, err := board.Standings(ctx, points); err != nil || len(entries) != 1 || entries[0].Points != 0 {
+			t.Errorf("Standings = %+v, %v; want one row with no points", entries, err)
+		}
+		if entries, grid, err := board.ICPCStandings(ctx, icpc); err != nil || grid.Questions != 1 || len(entries) != 1 || entries[0].Solved != 0 {
+			t.Errorf("ICPCStandings = %+v, grid %+v, %v; want one question and nothing solved", entries, grid, err)
+		}
+		if list, err := questions.List(ctx, contest); err != nil || len(list) != 1 {
+			t.Errorf("Questions.List = %d questions, %v; want the snapshot's 1", len(list), err)
+		}
+		if got, err := board.PointsBreakdown(ctx, contest, boardAt(60)); err != nil || len(got[registration].Questions) != 0 {
+			t.Errorf("PointsBreakdown = %+v, %v; want no answers", got, err)
+		}
+		if got, err := board.Emails(ctx, contest, []uuid.UUID{registration}); err != nil || got[registration] != "before@example.test" {
+			t.Errorf("Emails = %v, %v; want the snapshot's address", got, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadSnapshot() = %v", err)
+	}
+
+	if list, err := questions.List(ctx, contest); err != nil || len(list) != 2 {
+		t.Errorf("after the snapshot Questions.List = %d questions, %v; want the committed 2", len(list), err)
+	}
 }

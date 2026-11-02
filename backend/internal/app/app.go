@@ -419,12 +419,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	// One leaderboard service for the table and the profile, so a report and
 	// the table can never disagree.
+	board := postgres.NewLeaderboard(pool)
 	standings := leaderboard.NewService(leaderboard.Config{
 		Contests:     postgres.NewContests(pool),
 		Participants: postgres.NewRegistrations(pool),
-		Standings:    postgres.NewLeaderboard(pool),
+		Standings:    board,
 		Audit:        auditRecorder,
 		UnitOfWork:   storage.NewUnitOfWork(pool),
+		Reports:      board,
+		Questions:    postgres.NewQuestions(pool),
+		Snapshots:    storage.NewUnitOfWork(pool),
 	})
 	// One WatchService for staff monitoring and the participant's profile.
 	watch := monitor.NewWatchService(monitor.WatchConfig{
