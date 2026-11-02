@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,9 +35,13 @@ type boardStandings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
 	icpc     *icpcBoard
+	// reads counts the tables asked for, so a test can prove a refusal read
+	// none.
+	reads atomic.Int64
 }
 
 func (s *boardStandings) ICPCStandings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
+	s.reads.Add(1)
 	if s.icpc == nil {
 		return nil, leaderboard.Grid{}, nil
 	}
@@ -45,6 +50,7 @@ func (s *boardStandings) ICPCStandings(_ context.Context, q leaderboard.Query) (
 }
 
 func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+	s.reads.Add(1)
 	var out []leaderboard.Entry
 	for _, e := range s.entries {
 		if e.LastScoredAt != nil && !e.LastScoredAt.Before(q.Cutoff) {
@@ -77,7 +83,10 @@ func (s *boardStandings) MarkRevealed(ctx context.Context, contestID uuid.UUID, 
 // when asked and only on a question unsolved by the cutoff, and each question's
 // earliest solve among entrants not disqualified.
 type icpcBoard struct {
-	questions  int
+	questions int
+	// ids name the questions' cells, as a report needs; nil leaves them
+	// unnamed.
+	ids        []uuid.UUID
 	start      time.Time
 	penaltyMin int
 	entrants   []icpcEntrant
@@ -108,6 +117,9 @@ func (b *icpcBoard) standings(q leaderboard.Query) ([]leaderboard.Entry, leaderb
 			Cells: make([]leaderboard.Cell, b.questions)}
 		for i := range e.Cells {
 			cell := &e.Cells[i]
+			if b.ids != nil {
+				cell.QuestionID = b.ids[i]
+			}
 			for _, a := range p.answers {
 				if a.question == i && a.correct && a.at.Before(q.Cutoff) && (cell.SolvedAt == nil || a.at.Before(*cell.SolvedAt)) {
 					solved := a.at

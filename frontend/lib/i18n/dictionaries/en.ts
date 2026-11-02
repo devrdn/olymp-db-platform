@@ -2475,6 +2475,10 @@ const en = {
       "You already have as many live connections to this contest as this installation allows. Close another tab and try again.",
     too_many_exports:
       "As many downloads are being prepared at once as this installation allows. Nothing was downloaded — try again in a minute.",
+    results_unknown_registration: "Someone in the selection is no longer in this contest. Refresh the list and try again.",
+    results_email_forbidden: "Only account administrators can export email addresses.",
+    results_too_many_rows: "This contest has more than 2000 participants, too many to export at once.",
+    results_export_too_often: "Your previous export is still being prepared. Wait for it to finish.",
     query_database_error: "The database refused that query:",
     leaderboard_too_often: "The table is being refreshed too often. It will update again in a moment.",
     leaderboard_not_revealable: "The results cannot be revealed yet: the contest has not finished, or it was never frozen.",

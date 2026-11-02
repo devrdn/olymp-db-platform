@@ -658,6 +658,22 @@
       "meaning": "This participant has reset their database as often as the installation allows in a sliding window, refused presses included. Each reset drops the database and copies the template again, so it is bounded; nothing was copied, and `Retry-After` says how long to wait at most."
     },
     {
+      "code": "results_email_forbidden",
+      "meaning": "Email addresses were asked for by an account without `users.manage`; contest staff see them masked everywhere else. Nothing was exported or recorded."
+    },
+    {
+      "code": "results_export_too_often",
+      "meaning": "A results export of this account is still being written; one at a time."
+    },
+    {
+      "code": "results_too_many_rows",
+      "meaning": "The contest has more registrations than one report carries (2000); the export is refused rather than cut."
+    },
+    {
+      "code": "results_unknown_registration",
+      "meaning": "A registration in the list is not on this contest's table: it belongs to another contest or no longer exists. Nothing was exported or recorded."
+    },
+    {
       "code": "same_password",
       "meaning": "The new password is the one already in use."
     },
