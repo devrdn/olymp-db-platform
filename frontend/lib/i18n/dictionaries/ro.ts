@@ -2246,6 +2246,10 @@ const ro = {
       "Aveți deja atâtea conexiuni active la această olimpiadă câte permite această instalare. Închideți altă filă și încercați din nou.",
     too_many_exports:
       "Se pregătesc simultan atâtea descărcări câte permite această instalare. Nu s-a descărcat nimic — încercați peste un minut.",
+    results_unknown_registration: "Cineva din selecție nu mai participă la această olimpiadă. Reîncărcați lista și încercați din nou.",
+    results_email_forbidden: "Doar administratorii de conturi pot exporta adresele de e-mail.",
+    results_too_many_rows: "Această olimpiadă are peste 2000 de participanți, prea mulți pentru un singur export.",
+    results_export_too_often: "Exportul anterior încă se pregătește. Așteptați să se termine.",
     query_database_error: "Baza de date a refuzat interogarea:",
     leaderboard_too_often: "Tabelul este reîmprospătat prea des. Se va actualiza într-o clipă.",
     leaderboard_not_revealable: "Rezultatele nu pot fi încă dezvăluite: olimpiada nu s-a încheiat sau tabelul nu a fost înghețat.",

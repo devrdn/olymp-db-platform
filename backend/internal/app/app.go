@@ -455,6 +455,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			userService, authMiddleware, log),
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 		api.NewLeaderboardHandler(standings, limiter, authMiddleware, log, cfg.DefaultLocale),
+		api.NewResultsHandler(standings, authMiddleware, log).WithExportSlots(exportSlots),
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
 		api.NewMonitorHandler(watch, limiter, authMiddleware, log).WithExportSlots(exportSlots),
 	}

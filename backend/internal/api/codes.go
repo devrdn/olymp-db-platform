@@ -344,6 +344,18 @@ var (
 	codeTooManyExports = httpx.NewCode("too_many_exports",
 		"As many downloads are being written at once as this installation allows, and this one was not started: nothing was read and nothing was recorded. A statement about the service's load rather than about the caller, who is inside every budget of their own — `Retry-After` is the longest a download in progress may still run, so a client that waits it out finds a place free.")
 
+	// --- Results export -------------------------------------------------------
+	// One code per leaderboard report refusal (CLAUDE.md rule 1), plus the
+	// account's one-at-a-time gate.
+	codeResultsUnknownRegistration = httpx.NewCode("results_unknown_registration",
+		"A registration in the list is not on this contest's table: it belongs to another contest or no longer exists. Nothing was exported or recorded.")
+	codeResultsEmailForbidden = httpx.NewCode("results_email_forbidden",
+		"Email addresses were asked for by an account without `users.manage`; contest staff see them masked everywhere else. Nothing was exported or recorded.")
+	codeResultsTooManyRows = httpx.NewCode("results_too_many_rows",
+		"The contest has more registrations than one report carries (2000); the export is refused rather than cut.")
+	codeResultsExportTooOften = httpx.NewCode("results_export_too_often",
+		"A results export of this account is still being written; one at a time.")
+
 	// --- Answering a question ------------------------------------------------
 
 	codeAnswerTooLong = httpx.NewCode("answer_too_long",
