@@ -15,9 +15,13 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
 
-var _ leaderboard.Repository = (*Leaderboard)(nil)
+var (
+	_ leaderboard.Repository  = (*Leaderboard)(nil)
+	_ leaderboard.ReportStore = (*Leaderboard)(nil)
+)
 
-// Leaderboard reads a contest's standings and records a reveal.
+// Leaderboard reads a contest's standings and what a results report adds to
+// them, and records a reveal.
 type Leaderboard struct {
 	pool *pgxpool.Pool
 }
@@ -32,11 +36,9 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 }
 
 // scoreTotal is a points total (§6.1.1) aggregated over submissions s joined
-// with their questions q: the points awarded, plus the bonus credit of the
-// solved bonus questions, never more than the penalty points, which are each
-// solved regular question's face value less what it awarded. A bonus answer
-// awards nothing itself (contests.awardablePoints). over is appended to every
-// aggregate, so Standings can run the same total as a window.
+// with their questions q: the points awarded plus bonusCredit. over is
+// appended to every aggregate, so Standings can run the same total as a
+// window.
 //
 // Registrations.RefreshScore, Standings and Profile all read it, so
 // total_score, the table and the profile cannot disagree.
@@ -46,7 +48,15 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 // contest runs (Contest.ContentEditable); relaxing that would re-score P.
 func scoreTotal(over string) string {
 	return `COALESCE(SUM(s.points_awarded)` + over + `, 0)
-	      + LEAST(COALESCE(SUM(q.points) FILTER (WHERE s.is_correct AND q.is_bonus)` + over + `, 0),
+	      + ` + bonusCredit(over)
+}
+
+// bonusCredit is the part of scoreTotal the solved bonus questions add: their
+// points, never more than the penalty points, which are each solved regular
+// question's face value less what it awarded. A bonus answer awards nothing
+// itself (contests.awardablePoints).
+func bonusCredit(over string) string {
+	return `LEAST(COALESCE(SUM(q.points) FILTER (WHERE s.is_correct AND q.is_bonus)` + over + `, 0),
 	              COALESCE(SUM(GREATEST(0, q.points - s.points_awarded))
 	                       FILTER (WHERE s.is_correct AND NOT q.is_bonus)` + over + `, 0))`
 }
@@ -333,4 +343,106 @@ func (r *Leaderboard) MarkRevealed(ctx context.Context, contestID uuid.UUID, at 
 		return time.Time{}, false, fmt.Errorf("mark the leaderboard revealed: %w", err)
 	}
 	return revealedAt, newly, nil
+}
+
+// PointsBreakdown reads, for every registration created before the cutoff
+// (the disqualified included), each question it answered before the cutoff
+// and its bonusCredit over those answers, so a report's cells and bonus
+// column add up to the Standings total at the same cutoff. A registration
+// with no answers maps to an empty breakdown.
+//
+// registrations_contest_score_idx finds the contest's registrations;
+// submissions_registration_submitted_idx serves the join and the cutoff and
+// carries the columns read from submissions, as in Standings.
+func (r *Leaderboard) PointsBreakdown(ctx context.Context, contestID uuid.UUID, cutoff time.Time) (map[uuid.UUID]leaderboard.Breakdown, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		WITH entrant AS (
+			SELECT r.id FROM registrations r WHERE r.contest_id = $1 AND r.created_at < $2
+		), answer AS (
+			SELECT s.registration_id, s.question_id, s.is_correct, s.points_awarded
+			FROM entrant e
+			JOIN submissions s ON s.registration_id = e.id AND s.submitted_at < $2
+		), tried AS (
+			SELECT registration_id, question_id, bool_or(is_correct) AS solved,
+			       SUM(points_awarded)::int AS points, COUNT(*)::int AS attempts
+			FROM answer
+			GROUP BY registration_id, question_id
+		), credit AS (
+			SELECT s.registration_id, (`+bonusCredit("")+`)::int AS bonus_credit
+			FROM answer s
+			JOIN questions q ON q.id = s.question_id
+			GROUP BY s.registration_id
+		)
+		SELECT e.id, COALESCE(c.bonus_credit, 0), t.question_id, t.solved, t.points, t.attempts
+		FROM entrant e
+		LEFT JOIN credit c ON c.registration_id = e.id
+		LEFT JOIN tried t ON t.registration_id = e.id`,
+		contestID, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("read the points breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]leaderboard.Breakdown)
+	for rows.Next() {
+		var (
+			registration uuid.UUID
+			credit       int
+			question     *uuid.UUID
+			solved       *bool
+			points       *int
+			attempts     *int
+		)
+		if err := rows.Scan(&registration, &credit, &question, &solved, &points, &attempts); err != nil {
+			return nil, fmt.Errorf("scan the points breakdown: %w", err)
+		}
+		b, ok := out[registration]
+		if !ok {
+			b = leaderboard.Breakdown{BonusCredit: credit, Questions: make(map[uuid.UUID]leaderboard.QuestionScore)}
+			out[registration] = b
+		}
+		if question != nil {
+			b.Questions[*question] = leaderboard.QuestionScore{Solved: *solved, Points: *points, Attempts: *attempts}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the points breakdown: %w", err)
+	}
+	return out, nil
+}
+
+// Emails maps each of the listed registrations that belongs to the contest
+// to its account's address, empty when the account has none; another
+// contest's registration is absent. The caller bounds the list.
+//
+// registrations_id_contest_key finds a short list's rows and
+// registrations_contest_score_idx a list as long as the table; users_pkey
+// finds their accounts.
+func (r *Leaderboard) Emails(ctx context.Context, contestID uuid.UUID, registrations []uuid.UUID) (map[uuid.UUID]string, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT r.id, COALESCE(u.email, '')
+		FROM registrations r
+		JOIN users u ON u.id = r.user_id
+		WHERE r.contest_id = $1 AND r.id = ANY($2)`,
+		contestID, registrations)
+	if err != nil {
+		return nil, fmt.Errorf("read the email addresses: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]string, len(registrations))
+	for rows.Next() {
+		var (
+			id    uuid.UUID
+			email string
+		)
+		if err := rows.Scan(&id, &email); err != nil {
+			return nil, fmt.Errorf("scan the email addresses: %w", err)
+		}
+		out[id] = email
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the email addresses: %w", err)
+	}
+	return out, nil
 }
