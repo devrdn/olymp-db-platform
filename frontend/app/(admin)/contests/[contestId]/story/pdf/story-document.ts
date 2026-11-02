@@ -69,9 +69,9 @@ function logoCell(logo: LogoImage | "mark"): Node & { width: number } {
 /** The header's title, `text-small` in ink-2; `fitTitle` measures in it. */
 export const HEADER_TITLE = { font: STEP.small.face, fontSize: STEP.small.size, color: COLOR.ink2 } as const;
 
-/** The width the header leaves the title, beside the logo. */
-export function titleSpace(logo: StoryDocumentInput["logo"]): number {
-  return logo ? MEASURE - logoCell(logo).width - HEADER.titleGap : MEASURE;
+/** The width the header leaves the title, beside the logo, on a text column `width` wide. */
+export function titleSpace(logo: StoryDocumentInput["logo"], width: number = MEASURE): number {
+  return logo ? width - logoCell(logo).width - HEADER.titleGap : width;
 }
 
 /**
@@ -90,10 +90,10 @@ function running(node: Node): Node {
 
 /**
  * The running header: the logo, the title on its right, and a rule below
- * spanning the measure. Built afresh for each page, since the library
- * consumes the nodes it lays out.
+ * spanning the text column, `width` wide. Built afresh for each page, since
+ * the library consumes the nodes it lays out.
  */
-function runningHeader(logo: StoryDocumentInput["logo"], title: string): Node {
+export function runningHeader(logo: StoryDocumentInput["logo"], title: string, width: number = MEASURE): Node {
   // The title's line centred on the row, as `items-center` centres it.
   const room = (LOGO.height - NATURAL[HEADER_TITLE.font] * HEADER_TITLE.fontSize) / 2;
   const titleCell = { text: title, ...HEADER_TITLE, alignment: "right", width: "*", margin: [0, room, 0, room] };
@@ -103,7 +103,7 @@ function runningHeader(logo: StoryDocumentInput["logo"], title: string): Node {
     stack: [
       { columns: logo ? [logoCell(logo), titleCell] : [titleCell], columnGap: HEADER.titleGap },
       {
-        canvas: [{ type: "line", x1: 0, y1: rule, x2: MEASURE, y2: rule, lineWidth: SPACE.rule, lineColor: COLOR.line }],
+        canvas: [{ type: "line", x1: 0, y1: rule, x2: width, y2: rule, lineWidth: SPACE.rule, lineColor: COLOR.line }],
         margin: [0, HEADER.ruleGap, 0, 0],
       },
     ],
