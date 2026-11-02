@@ -92,10 +92,11 @@ interface shows it in the reader's language.
 | 401 | `unauthenticated` | No valid session. |
 | 403 | `forbidden` | The account lacks `contest.monitor` on this contest. |
 | 403 | `results_email_forbidden` | `email` was asked for by an account without `users.manage`. |
-| 404 | `not_found` | The contest does not exist. |
+| 404 | `not_found` | The contest does not exist. Only an account holding `contest.admin_all` can be told so: for anyone else the permission check answers first, with 403 `forbidden`. |
 | 409 | `results_too_many_rows` | The contest has more than 2000 registrations. The export is refused, never cut: a cut file would look complete. |
 | 422 | `results_unknown_registration` | A listed registration is not on this contest's table. A draft contest has no table, so every list names unknown registrations. |
 | 429 | `results_export_too_often` | This account's previous results export is still being written. One at a time; try again when it has finished. |
+| 500 | `internal_error` | The report could not be built (a read failed, or the export's one-minute deadline passed) or could not be recorded in the audit trail. Nothing was exported: the headers are written only after the build and the audit. |
 | 503 | `too_many_exports` | As many downloads are being written at once as the installation allows. `Retry-After` says how long to wait at most. |
 
 ## The response
@@ -131,7 +132,7 @@ and always in the order `full_name`, `login`, `email`.
 
 | Column | Meaning |
 |---|---|
-| `place` | The place on the public table, shared on a tie (1, 1, 3). Empty for a disqualified row and for a row with no answer. It is not renumbered for the rows chosen: a file of the second and fourth rows says 2 and 4. |
+| `place` | The place on the public table, shared on a tie (1, 1, 3). Empty for a disqualified row and for a row with no answer. In winner mode only the winner has a place, `1`; every other row is empty, answers or not. It is not renumbered for the rows chosen: a file of the second and fourth rows says 2 and 4. |
 | `prize` | `1`, `2` or `3`, the prize tier the place wins under the contest's prize counts. Empty for no prize. In winner mode, `1` for the winner alone. |
 | `registration_id` | The stable key of the participant on this contest. |
 | `full_name` | If requested. The account's full name. |
@@ -199,6 +200,9 @@ is why it is a column of its own and not part of any question.
   table: the participants with a place, by place with ties adjacent, then the
   rest of the participants who are not disqualified, then the disqualified.
   Rely on `place` for the ranking, not on the position of a line.
+- In winner mode only the winner has a place, `1`, and is listed first.
+  Everyone else follows in points order with an empty `place`, even with
+  answers; that order is not a ranking the contest gives.
 - A tie shares its place and each row keeps its own numbers.
 - A disqualified participant is listed with `disqualified` `1`, no place and
   no prize, and is not counted when the places of the others are given: the

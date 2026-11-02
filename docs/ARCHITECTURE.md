@@ -2614,7 +2614,7 @@ pool of 25 is sign-in stopped for everybody else. A fourth limit is per service 
 than per account: `api.ExportSlots` (`EXPORT_CONCURRENCY`, five by default, a
 fifth of the pool) caps how many exports run at once across **every** export
 route together, because "one per account" is not a bound at three hundred
-accounts. Overflow is a `503 exports_busy` with `Retry-After` rather than a
+accounts. Overflow is a `503 too_many_exports` with `Retry-After` rather than a
 queue: a waiting request occupies a slot too. The value is checked at startup
 against `CORE_DB_POOL_MAX` — each looks reasonable alone, and together they
 can ask for more connections than the pool holds.
@@ -3304,7 +3304,7 @@ the export, and a read failure or an expired deadline gives an `incomplete`
 row; one export per account at a time, and no more than
 `EXPORT_CONCURRENCY` (five by default) across the whole service, shared with
 every other export route (section 9.1), with overflow answering
-`503 exports_busy`. A contest with more than 2,000 registrations is not
+`503 too_many_exports`. A contest with more than 2,000 registrations is not
 exported whole — a single `too_large` row advises exporting participants one
 at a time. Cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return
 get a leading apostrophe.
@@ -3787,7 +3787,8 @@ page can warn before the download, as a CSV cannot carry a note. Its `status`
 is `preliminary` while the contest is a draft, published or running, `final`
 once it is finished (complete, but a disqualification or the prize counts can
 still change) and `archived` once nothing can. A draft has no table, so its
-report is preliminary and empty. The account of a deleted participant is
+preview is preliminary and empty, and an export of it is refused with
+`results_unknown_registration` (422), as every id it names is unknown. The account of a deleted participant is
 gone, so its name, login and email are empty and the row, with its numbers,
 stays.
 
@@ -3827,8 +3828,9 @@ service shares; the account's gate stays until the file is written. The
 audit entry, `contest.results_export` on the contest with the payload
 `{format, detail, fields, rows, status}` and never the ids or the data, is
 recorded before the first byte, and a report the trail cannot record is not
-returned. Section 9.2 keeps the rule that a privileged export is written to
-the trail.
+returned. The rule is section 7.2's, that a privileged action whose audit
+entry cannot be written fails, applied to section 9.1's, that every export is
+recorded.
 
 **The CSV is a published format.** Version 1 is written by `api.writeResultsCSV`
 and described in [`api/results-csv.md`](api/results-csv.md), which says what
