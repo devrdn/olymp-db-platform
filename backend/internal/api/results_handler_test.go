@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -303,8 +304,14 @@ func TestThePreviewListsEveryRegistrationWithExportPlaces(t *testing.T) {
 		t.Errorf("may_export_email = %v for the owner, want false", body["may_export_email"])
 	}
 
-	if got := decode(t, f.preview(c, f.admin.ID))["may_export_email"]; got != true {
-		t.Errorf("may_export_email = %v for an account administrator, want true", got)
+	adminView := decode(t, f.preview(c, f.admin.ID))
+	if adminView["may_export_email"] != true {
+		t.Errorf("may_export_email = %v for an account administrator, want true", adminView["may_export_email"])
+	}
+	for i, row := range adminView["rows"].([]any) {
+		if _, ok := row.(map[string]any)["email"]; ok {
+			t.Errorf("row %d of an account administrator's preview carries an email: %v", i, row)
+		}
 	}
 }
 
@@ -351,10 +358,13 @@ func TestAnExcelExportStartsWithABOM(t *testing.T) {
 	c, me := f.contest(t, contests.StatusFinished)
 	ids := f.table(me)
 
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"format": "csv", "detail": "summary", "registrations": ids, "fields": []string{"login"},
 		"csv": map[string]any{"excel": true},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	rec := f.export(c, f.owner.ID, string(body))
 	wantStatus(t, rec, http.StatusOK, "")
 	if !bytes.HasPrefix(rec.Body.Bytes(), []byte("\xEF\xBB\xBFplace;prize;registration_id;login;")) {
@@ -536,7 +546,10 @@ func TestAnExportRefusesAContestOverTheRowBound(t *testing.T) {
 func (f *resultsFixture) holdExport(t *testing.T, c contests.Contest, who uuid.UUID, body string) (release func() *httptest.ResponseRecorder) {
 	t.Helper()
 	f.reports.started, f.reports.hold = make(chan struct{}, 1), make(chan struct{})
-	done := make(chan *httptest.ResponseRecorder)
+	var once sync.Once
+	open := func() { once.Do(func() { close(f.reports.hold) }) }
+	t.Cleanup(open)
+	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.export(c, who, body) }()
 	select {
 	case <-f.reports.started:
@@ -544,8 +557,56 @@ func (f *resultsFixture) holdExport(t *testing.T, c contests.Contest, who uuid.U
 		t.Fatal("the first export never reached its reads")
 	}
 	return func() *httptest.ResponseRecorder {
-		close(f.reports.hold)
+		open()
 		return <-done
+	}
+}
+
+// stalledReader is a client that stops reading: its first body write signals
+// started and waits on hold.
+type stalledReader struct {
+	*httptest.ResponseRecorder
+	started chan struct{}
+	hold    chan struct{}
+	once    sync.Once
+}
+
+func (w *stalledReader) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.hold
+	return w.ResponseRecorder.Write(p)
+}
+
+func TestAResultsExportFreesItsSlotBeforeWriting(t *testing.T) {
+	f := newResultsFixtureWith(t, resultsOptions{slots: api.NewExportSlots(1)})
+	c, me := f.contest(t, contests.StatusFinished)
+	body := exportBody(t, "csv", "summary", f.table(me), "login")
+
+	req := httptest.NewRequest(http.MethodPost, "/contests/"+c.ID.String()+"/results/export", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(f.cookies[f.owner.ID])
+	stalled := &stalledReader{ResponseRecorder: httptest.NewRecorder(), started: make(chan struct{}), hold: make(chan struct{})}
+	var once sync.Once
+	unstall := func() { once.Do(func() { close(stalled.hold) }) }
+	t.Cleanup(unstall)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(stalled, req)
+	}()
+	select {
+	case <-stalled.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first export never began writing")
+	}
+
+	wantStatus(t, f.export(c, f.admin.ID, body), http.StatusOK, "")
+	wantStatus(t, f.export(c, f.owner.ID, body), http.StatusTooManyRequests, "results_export_too_often")
+
+	unstall()
+	<-done
+	if stalled.Code != http.StatusOK {
+		t.Errorf("the stalled export = %d, want 200", stalled.Code)
 	}
 }
 

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -361,15 +360,9 @@ func (h *LeaderboardHandler) notFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LeaderboardHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, leaderboard.ErrNotFound):
-		h.notFound(w, r)
-	case errors.Is(err, leaderboard.ErrNotAParticipant):
-		httpx.Error(w, r, http.StatusForbidden, codeNotAParticipant, "The caller is not taking part in this contest")
-	case errors.Is(err, leaderboard.ErrNotRevealable):
-		httpx.Error(w, r, http.StatusConflict, codeLeaderboardNotRevealable, err.Error())
-	default:
-		h.log.ErrorContext(r.Context(), "the leaderboard could not be served", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+	if leaderboardErrors.answer(w, r, h.log, err) {
+		return
 	}
+	h.log.ErrorContext(r.Context(), "the leaderboard could not be served", "error", err)
+	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
