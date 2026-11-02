@@ -62,7 +62,7 @@ export function ExportForm({
   const ids = useId();
   const [report, setReport] = useState(loaded);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => initialSelection(loaded.rows));
-  const [kind, setKind] = useState<ExportKind>("csv");
+  const [pickedKind, setKind] = useState<ExportKind>("csv");
   const [detail, setDetail] = useState<ResultsDetail>("summary");
   const [fields, setFields] = useState<ReadonlySet<ResultsField>>(() => new Set(["full_name", "login"]));
   const [excel, setExcel] = useState(false);
@@ -75,8 +75,10 @@ export function ExportForm({
   const offered = RESULTS_FIELDS.filter((field) => field !== "email" || report.mayExportEmail);
   const chosen = new Set(offered.filter((field) => fields.has(field)));
   const count = selectedInOrder(selected, report.rows).length;
-  const pdf = kind !== "csv";
   const protocolOffered = protocolAvailable(report.status);
+  // A refresh can make the report preliminary again under a picked protocol.
+  const kind: ExportKind = pickedKind === "protocol" && !protocolOffered ? "csv" : pickedKind;
+  const pdf = kind !== "csv";
 
   async function refresh() {
     setBusy("refresh");

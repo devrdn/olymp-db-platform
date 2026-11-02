@@ -2232,7 +2232,7 @@ const en = {
       asOf: "Data as of {time}",
       refresh: "Refresh",
       refreshing: "Refreshing",
-      preliminary: "The contest is running: files are marked preliminary; the protocol is available after the end",
+      preliminary: "The contest has not ended: files are marked preliminary; the protocol is available after the end",
       notArchived: "Results can still change until the contest is archived",
       hiddenByFreeze: "The files contain results not yet shown to participants. Do not share them before the reveal.",
       whom: "Whom",

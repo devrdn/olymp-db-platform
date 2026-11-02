@@ -2003,7 +2003,7 @@ const ro = {
       asOf: "Date la {time}",
       refresh: "Reîmprospătați",
       refreshing: "Se reîmprospătează",
-      preliminary: "Olimpiada este în desfășurare: fișierele sunt marcate ca preliminare; procesul-verbal este disponibil după încheiere",
+      preliminary: "Olimpiada nu s-a terminat: fișierele sunt marcate ca preliminare; procesul-verbal este disponibil după încheiere",
       notArchived: "Rezultatele se mai pot schimba până la arhivarea olimpiadei",
       hiddenByFreeze: "Fișierele conțin rezultate care nu au fost încă arătate participanților. Nu le distribuiți înainte de dezvăluire.",
       whom: "Pe cine",

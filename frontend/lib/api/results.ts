@@ -19,9 +19,6 @@ export type ResultsField = (typeof RESULTS_FIELDS)[number];
 export const RESULTS_DETAILS = ["summary", "detailed"] as const;
 export type ResultsDetail = (typeof RESULTS_DETAILS)[number];
 
-/** The most registrations one export takes; the API refuses more. */
-export const MAX_RESULTS_REGISTRATIONS = 2000;
-
 const contestSchema = z
   .object({
     id: z.string(),
