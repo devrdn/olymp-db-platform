@@ -75,6 +75,19 @@ export function titleSpace(logo: StoryDocumentInput["logo"]): number {
 }
 
 /**
+ * The style every node of the running header and footer carries. It names no
+ * style, so it changes nothing drawn; it tells them apart from the story in
+ * `pageBreakBefore`, since the library lists them among a page's nodes.
+ */
+const RUNNING = "running";
+
+function running(node: Node): Node {
+  const marked: Node = { ...node, style: RUNNING };
+  for (const key of ["stack", "columns"]) if (Array.isArray(node[key])) marked[key] = (node[key] as Node[]).map(running);
+  return marked;
+}
+
+/**
  * The running header: the logo, the title on its right, and a rule below
  * spanning the measure. Built afresh for each page, since the library
  * consumes the nodes it lays out.
@@ -95,6 +108,14 @@ function runningHeader(logo: StoryDocumentInput["logo"], title: string): Node {
     ],
   };
 }
+
+/** What the library tells `pageBreakBefore` of a laid-out node. */
+type NodeInfo = { headlineLevel?: number; style?: unknown };
+
+/** The nodes around the one `pageBreakBefore` is asked about, in document order. */
+type PageNodes = { getFollowingNodesOnPage(): NodeInfo[]; getNodesOnNextPage(): NodeInfo[] };
+
+const ofStory = (node: NodeInfo) => node.style !== RUNNING;
 
 export type StoryDocumentInput = {
   title: string;
@@ -129,7 +150,7 @@ export function storyDocument({ title, language, markdown, logo, columnWidths, h
     pageMargins: [PAGE.side, PAGE.top, PAGE.side, PAGE.bottom],
     defaultStyle: { font: "Literata", fontSize: STEP.narrative.size, color: COLOR.ink },
     images: logo && logo !== "mark" ? { logo: logo.src } : {},
-    header: () => runningHeader(logo, headerTitle),
+    header: () => running(runningHeader(logo, headerTitle)),
     content: [
       {
         text: tracked({ text: title }, titleStep.tracking * titleStep.size),
@@ -142,17 +163,18 @@ export function storyDocument({ title, language, markdown, logo, columnWidths, h
       },
       { stack: story.content, margin: [0, storyGap, 0, 0] },
     ],
-    footer: (page: number, pages: number) => ({
-      text: `${page} / ${pages}`,
-      alignment: "center",
-      font: STEP.small.face,
-      fontSize: STEP.small.size,
-      color: COLOR.ink3,
-      margin: [PAGE.side, PAGE.footer, PAGE.side, 0],
-    }),
+    footer: (page: number, pages: number) =>
+      running({
+        text: `${page} / ${pages}`,
+        alignment: "center",
+        font: STEP.small.face,
+        fontSize: STEP.small.size,
+        color: COLOR.ink3,
+        margin: [PAGE.side, PAGE.footer, PAGE.side, 0],
+      }),
     // A heading is never the last thing on a page, apart from what it heads.
-    pageBreakBefore: (node: { headlineLevel?: number }, nodes: { getFollowingNodesOnPage(): unknown[] }) =>
-      Boolean(node.headlineLevel) && nodes.getFollowingNodesOnPage().length === 0,
+    pageBreakBefore: (node: NodeInfo, nodes: PageNodes) =>
+      Boolean(node.headlineLevel) && !nodes.getFollowingNodesOnPage().some(ofStory) && nodes.getNodesOnNextPage().some(ofStory),
   };
   return { definition, tables: story.tables };
 }

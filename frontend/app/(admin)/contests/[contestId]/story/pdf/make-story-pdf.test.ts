@@ -175,6 +175,33 @@ describe("makeStoryPdf", () => {
   });
 });
 
+describe("the story PDF's page breaks", () => {
+  /** The pages a laid-out node is drawn on; the library leaves its positions on the node. */
+  const pagesOf = (node: Node) => [...new Set((node.positions as { pageNumber: number }[]).map((position) => position.pageNumber))];
+
+  test("a heading that would end a page starts the next one, with its first paragraph", async () => {
+    // Sections of growing length, so that across the pages some heading falls at a page's foot.
+    const markdown = Array.from({ length: 30 }, (_, k) => `## Раздел ${k + 1}\n\n${"Au găsit-o încuiată. ".repeat(4 + k * 3)}`).join("\n\n");
+    const pdfMake = await preparedLibrary(FONTS, readFromDisk);
+    const createPdf = vi.spyOn(pdfMake, "createPdf");
+
+    try {
+      const pdf = await bytes(await makeStoryPdf({ ...request, markdown }, options()));
+      const definition = createPdf.mock.calls.at(-1)![0] as Node;
+      const story = ((definition.content as Node[])[1].stack as Node[]).map((node) => ({ heading: Boolean(node.headlineLevel), pages: pagesOf(node) }));
+      const headings = story.flatMap((node, index) => (node.heading ? [{ node, before: story[index - 1], after: story[index + 1] }] : []));
+
+      expect(headings).toHaveLength(30);
+      for (const { node, after } of headings) expect(after.pages[0]).toBe(node.pages[0]);
+      // The fixture does put a heading at a page's foot: one now opens its page.
+      expect(headings.some(({ node, before }) => before && before.pages.at(-1)! < node.pages[0])).toBe(true);
+      expect(missingGlyphs(pdf)).toBe(0);
+    } finally {
+      createPdf.mockRestore();
+    }
+  });
+});
+
 describe("measureColumns", () => {
   test("columns fill the text column in proportion to their widest content, as the screen lays a table out", async () => {
     const pdfMake = await preparedLibrary(FONTS, readFromDisk);

@@ -220,16 +220,24 @@ describe("storyDocument", () => {
     expect(footer(2, 5)).toMatchObject({ text: "2 / 5", font: "Onest", fontSize: STEP.small.size, color: COLOR.ink3, margin: [PAGE.side, PAGE.footer, PAGE.side, 0] });
   });
 
-  test("never leaves a heading as the last thing on a page", () => {
-    const breakBefore = storyDocument({ ...input, logo: null }).definition.pageBreakBefore as (
-      node: { headlineLevel?: number },
-      nodes: { getFollowingNodesOnPage(): unknown[] },
-    ) => boolean;
-    const followedBy = (count: number) => ({ getFollowingNodesOnPage: () => Array.from({ length: count }) });
+  test("never leaves a heading as the last thing on a page, though the header and footer follow it there", () => {
+    const { definition } = storyDocument({ ...input, logo: "mark" });
+    const breakBefore = definition.pageBreakBefore as (node: Node, nodes: { getFollowingNodesOnPage(): Node[]; getNodesOnNextPage(): Node[] }) => boolean;
+    // Every node of a page's header and footer, as the library lists them after the story's.
+    const flat = (node: Node): Node[] => [node, ...[...((node.stack as Node[]) ?? []), ...((node.columns as Node[]) ?? [])].flatMap(flat)];
+    const running = (page: number) => [
+      ...flat((definition.header as (page: number) => Node)(page)),
+      ...flat((definition.footer as (page: number, pages: number) => Node)(page, 2)),
+    ];
+    const paragraph = { text: "Ștefan a venit." };
+    const nodes = (following: Node[], next: Node[]) => ({ getFollowingNodesOnPage: () => following, getNodesOnNextPage: () => next });
 
-    expect(breakBefore({ headlineLevel: 2 }, followedBy(0))).toBe(true);
-    expect(breakBefore({ headlineLevel: 2 }, followedBy(1))).toBe(false);
-    expect(breakBefore({}, followedBy(0))).toBe(false);
+    expect(running(1).length).toBeGreaterThan(2);
+    expect(breakBefore({ headlineLevel: 2 }, nodes(running(1), [paragraph, ...running(2)]))).toBe(true);
+    expect(breakBefore({ headlineLevel: 2 }, nodes([paragraph, ...running(1)], running(2)))).toBe(false);
+    expect(breakBefore({}, nodes(running(1), [paragraph, ...running(2)]))).toBe(false);
+    // A heading that ends the story heads nothing, and stays where it is.
+    expect(breakBefore({ headlineLevel: 2 }, nodes(running(1), []))).toBe(false);
   });
 
   test("reports the story's tables for measuring", () => {
