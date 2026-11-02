@@ -81,6 +81,7 @@ export function titleSpace(logo: StoryDocumentInput["logo"]): number {
  */
 const RUNNING = "running";
 
+/** Marks a node and its `stack` and `columns` children; a header or footer built with another container needs it here too. */
 function running(node: Node): Node {
   const marked: Node = { ...node, style: RUNNING };
   for (const key of ["stack", "columns"]) if (Array.isArray(node[key])) marked[key] = (node[key] as Node[]).map(running);
@@ -116,6 +117,13 @@ type NodeInfo = { headlineLevel?: number; style?: unknown };
 type PageNodes = { getFollowingNodesOnPage(): NodeInfo[]; getNodesOnNextPage(): NodeInfo[] };
 
 const ofStory = (node: NodeInfo) => node.style !== RUNNING;
+
+/**
+ * What a heading must share its page with: the story's text, not another
+ * heading. The library asks about each node once, in order, so a run of
+ * headings at a page's foot has to move at its first heading.
+ */
+const text = (node: NodeInfo) => ofStory(node) && !node.headlineLevel;
 
 export type StoryDocumentInput = {
   title: string;
@@ -174,7 +182,7 @@ export function storyDocument({ title, language, markdown, logo, columnWidths, h
       }),
     // A heading is never the last thing on a page, apart from what it heads.
     pageBreakBefore: (node: NodeInfo, nodes: PageNodes) =>
-      Boolean(node.headlineLevel) && !nodes.getFollowingNodesOnPage().some(ofStory) && nodes.getNodesOnNextPage().some(ofStory),
+      Boolean(node.headlineLevel) && !nodes.getFollowingNodesOnPage().some(text) && nodes.getNodesOnNextPage().some(ofStory),
   };
   return { definition, tables: story.tables };
 }
