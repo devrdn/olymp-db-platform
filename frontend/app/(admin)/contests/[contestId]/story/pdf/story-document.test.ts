@@ -236,6 +236,8 @@ describe("storyDocument", () => {
     expect(breakBefore({ headlineLevel: 2 }, nodes(running(1), [paragraph, ...running(2)]))).toBe(true);
     expect(breakBefore({ headlineLevel: 2 }, nodes([paragraph, ...running(1)], running(2)))).toBe(false);
     expect(breakBefore({}, nodes(running(1), [paragraph, ...running(2)]))).toBe(false);
+    // A heading followed on its page only by another heading moves, and the run moves with it.
+    expect(breakBefore({ headlineLevel: 1 }, nodes([{ headlineLevel: 2 }, ...running(1)], [paragraph, ...running(2)]))).toBe(true);
     // A heading that ends the story heads nothing, and stays where it is.
     expect(breakBefore({ headlineLevel: 2 }, nodes(running(1), []))).toBe(false);
   });
