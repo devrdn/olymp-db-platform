@@ -166,7 +166,7 @@ func inSnapshot(ctx context.Context) bool {
 	return in
 }
 
-// witness remembers every read made outside the snapshot.
+// witness records every read, and separately those made outside the snapshot.
 type witness struct {
 	mu      sync.Mutex
 	reads   []string
