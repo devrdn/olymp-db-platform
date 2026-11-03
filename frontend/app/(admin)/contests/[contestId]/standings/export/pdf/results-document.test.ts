@@ -7,6 +7,7 @@ import en from "@/lib/i18n/dictionaries/en";
 import { A4, MM } from "../../../story/pdf/theme";
 import {
   contestTitle,
+  offsetLabel,
   pdfMoment,
   resultsProtocolDocument,
   resultsTableDocument,
@@ -417,5 +418,19 @@ describe("pdfMoment", () => {
     expect(pdfMoment("2026-11-02T12:10:00Z", "Asia/Kolkata")).toBe("02.11.2026 17:40 (UTC+5:30)");
     expect(pdfMoment("2026-11-02T12:10:00Z", "UTC")).toBe("02.11.2026 12:10 (UTC)");
     expect(pdfMoment("2026-11-02T23:30:00Z", "America/St_Johns")).toBe("02.11.2026 20:00 (UTC-3:30)");
+  });
+});
+
+describe("offsetLabel", () => {
+  test("offsetLabel names a zero offset UTC however the engine writes it", () => {
+    expect(offsetLabel("GMT")).toBe("UTC");
+    expect(offsetLabel("GMT+00:00")).toBe("UTC");
+    expect(offsetLabel("GMT-00:00")).toBe("UTC");
+  });
+
+  test("offsetLabel drops zero minutes and keeps the others", () => {
+    expect(offsetLabel("GMT+02:00")).toBe("UTC+2");
+    expect(offsetLabel("GMT+05:30")).toBe("UTC+5:30");
+    expect(offsetLabel("GMT\u221203:30")).toBe("UTC-3:30");
   });
 });

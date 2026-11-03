@@ -72,12 +72,19 @@ export function pdfMoment(iso: string, timeZone: string): string {
       .formatToParts(new Date(iso))
       .map((part) => [part.type, part.value]),
   );
-  // "GMT+05:30", or a bare "GMT" at zero; some engines write the minus as U+2212.
-  const offset = /GMT([+\-−])(\d{2}):(\d{2})/.exec(parts.timeZoneName ?? "");
-  const zone = offset
-    ? `UTC${offset[1] === "+" ? "+" : "-"}${Number(offset[2])}${offset[3] === "00" ? "" : `:${offset[3]}`}`
-    : "UTC";
-  return `${parts.day}.${parts.month}.${parts.year} ${parts.hour}:${parts.minute} (${zone})`;
+  return `${parts.day}.${parts.month}.${parts.year} ${parts.hour}:${parts.minute} (${offsetLabel(parts.timeZoneName ?? "")})`;
+}
+
+/**
+ * `UTC+2`, `UTC+5:30`, `UTC-3:30` or `UTC` from a `longOffset` zone name. Engines differ at zero
+ * (a bare "GMT" on older ICU, "GMT+00:00" on newer) and some write the minus as U+2212.
+ */
+export function offsetLabel(longOffset: string): string {
+  const offset = /GMT([+\-−])(\d{2}):(\d{2})/.exec(longOffset);
+  if (!offset || (offset[2] === "00" && offset[3] === "00")) return "UTC";
+  const sign = offset[1] === "+" ? "+" : "-";
+  const minutes = offset[3] === "00" ? "" : `:${offset[3]}`;
+  return `UTC${sign}${Number(offset[2])}${minutes}`;
 }
 
 /** The contest's title in `language`, else in its default language, else nothing. */
