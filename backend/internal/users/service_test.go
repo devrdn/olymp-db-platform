@@ -1227,6 +1227,25 @@ func TestChangePasswordReportsBusyHashingRatherThanAWrongPassword(t *testing.T) 
 	}
 }
 
+// A self-service account is issued at a public form, which must not hold the
+// shared slots for the administrative wait.
+func TestASelfServiceCreateWaitsOnlyTheSignInWait(t *testing.T) {
+	f := newFixture(t)
+	service, _, _ := busyService(t, f.repo)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+
+	_, err := service.Create(ctx, users.CreateCommand{Login: "petrov", FullName: "Pyotr Petrov", SelfService: true})
+
+	if !errors.Is(err, password.ErrBusy) {
+		t.Errorf("err = %v, want password.ErrBusy", err)
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Errorf("waited %v for a slot, want the sign-in wait", waited)
+	}
+}
+
 func TestCreateReportsBusyHashingWhenNoSlotComesFree(t *testing.T) {
 	f := newFixture(t)
 	service, _, _ := busyService(t, f.repo)

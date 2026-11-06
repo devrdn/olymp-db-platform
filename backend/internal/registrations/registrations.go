@@ -16,16 +16,20 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
 const (
 	// MaxNameRunes bounds a first or a last name.
 	MaxNameRunes = 100
-	// MaxEmailBytes bounds the address. It is lower than an address may be
-	// because the lowercased address becomes the account's login, which
-	// users.MaxLoginLength bounds at 100.
-	MaxEmailBytes = 100
+	// MaxFullNameBytes bounds the two names with the space between them,
+	// which become the account's full name.
+	MaxFullNameBytes = users.MaxFullNameLength
+	// MaxEmailBytes bounds the address, typed and lowercased. It is lower
+	// than an address may be because the lowercased address becomes the
+	// account's login.
+	MaxEmailBytes = users.MaxLoginLength
 	// Capacity is how many registrations the event holds; a repeat of one
 	// already held is still answered once it is full.
 	Capacity = 5000
@@ -35,7 +39,7 @@ const (
 )
 
 var (
-	ErrInvalidName  = errors.New("a name must be 1 to 100 characters with no control characters")
+	ErrInvalidName  = errors.New("a name must be 1 to 100 letters, spaces, hyphens, apostrophes or periods, and the two at most 200 bytes together")
 	ErrInvalidEmail = errors.New("the email must be one address of at most 100 characters, without a name")
 	ErrFull         = errors.New("the event has reached its 5000 registrations")
 	ErrNotFound     = errors.New("no such registration")
@@ -66,19 +70,34 @@ func Parse(firstName, lastName, email string) (Applicant, error) {
 		LastName:  strings.TrimSpace(lastName),
 		Email:     strings.TrimSpace(email),
 	}
-	if !validName(a.FirstName) || !validName(a.LastName) {
+	if !validName(a.FirstName) || !validName(a.LastName) || len(a.FullName()) > MaxFullNameBytes {
 		return Applicant{}, ErrInvalidName
 	}
 	if !validEmail(a.Email) {
 		return Applicant{}, ErrInvalidEmail
 	}
+	// Lowercasing can lengthen a letter in bytes.
 	a.EmailKey = strings.ToLower(a.Email)
+	if len(a.EmailKey) > MaxEmailBytes {
+		return Applicant{}, ErrInvalidEmail
+	}
 	return a, nil
 }
 
+// validName takes only what a name is written with: the names greet the
+// reader of two messages sent to any address, and must not carry a link or a
+// pitch.
 func validName(s string) bool {
 	n := utf8.RuneCountInString(s)
-	return n >= 1 && n <= MaxNameRunes && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+	return n >= 1 && n <= MaxNameRunes && utf8.ValidString(s) && !strings.ContainsFunc(s, notOfAName)
+}
+
+func notOfAName(r rune) bool {
+	switch r {
+	case ' ', '-', '\'', '’', '.':
+		return false
+	}
+	return !unicode.IsLetter(r) && !unicode.IsMark(r)
 }
 
 // validEmail wants the address to parse back to itself: net/mail also accepts

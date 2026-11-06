@@ -581,7 +581,7 @@ func TestEveryClarificationsErrorHasItsAnswer(t *testing.T) {
 func TestEveryRegistrationsErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		registrations.ErrInvalidName: {status: http.StatusBadRequest, code: "registration_invalid_name",
-			message: "a name must be 1 to 100 characters with no control characters"},
+			message: "a name must be 1 to 100 letters, spaces, hyphens, apostrophes or periods, and the two at most 200 bytes together"},
 		registrations.ErrInvalidEmail: {status: http.StatusBadRequest, code: "registration_invalid_email",
 			message: "the email must be one address of at most 100 characters, without a name"},
 		registrations.ErrFull: {status: http.StatusConflict, code: "registration_full",

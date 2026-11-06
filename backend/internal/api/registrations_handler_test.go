@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/registrations/registrationstest"
@@ -335,5 +336,19 @@ func TestCheckInAnswersItsRefusals(t *testing.T) {
 	}
 	if rec := f.staff(http.MethodPut, "/registrations/"+ana.ID.String()+"/check-in", `{}`); rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
 		t.Errorf("no checked_in = %d %q, want 400 invalid_request", rec.Code, errorCode(t, rec))
+	}
+}
+
+func TestARegistrationWithNoHashingSlotIsBusyNotAFailure(t *testing.T) {
+	f := newRegistrationsFixture(t)
+	f.Accounts.Err = fmt.Errorf("create the account: %w", password.ErrBusy)
+
+	rec := f.register("192.0.2.1", "Ana", "Popescu", "ana@example.com")
+
+	if rec.Code != http.StatusServiceUnavailable || errorCode(t, rec) != "sign_in_busy" {
+		t.Errorf("= %d %q, want 503 sign_in_busy", rec.Code, errorCode(t, rec))
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("no Retry-After on a refusal for load")
 	}
 }

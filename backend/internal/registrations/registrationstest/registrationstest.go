@@ -26,6 +26,9 @@ type Store struct {
 	now    time.Time
 	// Writes counts the calls that would reach the database.
 	Writes int
+	// BeforeInsert, when set, runs as Insert begins, without the store's
+	// lock, so a test can store a competing registration.
+	BeforeInsert func(r registrations.Registration)
 }
 
 var _ registrations.Store = (*Store)(nil)
@@ -54,6 +57,15 @@ func (s *Store) Fill(n int) {
 	}
 }
 
+// Put stores r as given, with a fresh id.
+func (s *Store) Put(r registrations.Registration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.ID = uuid.New()
+	r.CreatedAt = s.now
+	s.rows = append(s.rows, r)
+}
+
 func (s *Store) Rows() []registrations.Registration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,6 +92,9 @@ func (s *Store) Count(context.Context) (int, error) {
 }
 
 func (s *Store) Insert(_ context.Context, r registrations.Registration, capacity int, sent bool) (registrations.Registration, error) {
+	if s.BeforeInsert != nil {
+		s.BeforeInsert(r)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Writes++
@@ -104,6 +119,19 @@ func (s *Store) Insert(_ context.Context, r registrations.Registration, capacity
 	}
 	s.rows = append(s.rows, r)
 	return s.withLogin(r), nil
+}
+
+func (s *Store) AttachAccount(_ context.Context, emailKey string, userID uuid.UUID) (registrations.Registration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Writes++
+	for i, r := range s.rows {
+		if r.EmailKey == emailKey && r.UserID == nil {
+			s.rows[i].UserID = &userID
+			return s.withLogin(s.rows[i]), nil
+		}
+	}
+	return registrations.Registration{}, registrations.ErrNotFound
 }
 
 func (s *Store) ClaimResend(_ context.Context, id uuid.UUID, cooldown time.Duration) (bool, error) {
@@ -167,6 +195,8 @@ type Accounts struct {
 	mu      sync.Mutex
 	Taken   map[string]bool
 	Created []registrations.NewAccount
+	// Err, when set, is every Create's answer.
+	Err error
 	// Store, when set, learns each created account's login for its join.
 	Store *Store
 }
@@ -176,6 +206,9 @@ var _ registrations.Accounts = (*Accounts)(nil)
 func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (registrations.Account, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.Err != nil {
+		return registrations.Account{}, a.Err
+	}
 	if a.Taken[n.Login] {
 		return registrations.Account{Existing: true}, nil
 	}
@@ -229,10 +262,13 @@ func (o *Outbox) Queued() []mailing.Message {
 	return slices.Clone(o.Messages)
 }
 
-// Settings answers with Values.
-type Settings struct{ Values settings.Values }
+// Settings answers with Values, or Err when set.
+type Settings struct {
+	Values settings.Values
+	Err    error
+}
 
-func (s Settings) All(context.Context) (settings.Values, error) { return s.Values, nil }
+func (s Settings) All(context.Context) (settings.Values, error) { return s.Values, s.Err }
 
 // UnitOfWork runs fn without a transaction.
 type UnitOfWork struct{}
