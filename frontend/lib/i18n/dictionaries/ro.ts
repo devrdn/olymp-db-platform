@@ -2488,7 +2488,7 @@ const ro = {
     profile_invalid_cursor: "Lista nu a putut fi continuată. Reîncărcați pagina.",
     profile_invalid_filter: "Un filtru nu este valid. Verificați starea și textul căutat.",
     public_too_often: "Pagina principală este încărcată prea des. Așteptați un minut și încercați din nou.",
-    registration_invalid_name: "Prenumele și numele pot conține doar litere, spații, cratime, apostrofuri și puncte, cel mult 100 de caractere fiecare.",
+    registration_invalid_name: "Folosiți litere, spații, cratime, apostrofuri și puncte (lăsați un spațiu după punct), cel mult 100 de caractere fiecare.",
     registration_invalid_email: "Introduceți o adresă de e-mail validă, de exemplu nume@example.com.",
     registration_full: "Locurile s-au ocupat. Adresați-vă organizatorilor la intrare.",
     registration_not_found: "Această înregistrare nu mai există. Reîncărcați pagina.",
