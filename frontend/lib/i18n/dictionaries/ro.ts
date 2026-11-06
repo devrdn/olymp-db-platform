@@ -2148,7 +2148,7 @@ const ro = {
       title: "Sunteți deja înregistrat",
       emailSent: "V-am trimis din nou codul la {email}.",
       emailNotSent:
-        "Codul este în e-mailul trimis mai devreme la {email}. Dacă nu îl găsiți, organizatorii vă vor găsi după nume la intrare.",
+        "V-ați înregistrat cu {email}. Dacă nu găsiți e-mailul nostru, organizatorii vă vor găsi după nume la intrare.",
     },
     desk: {
       heading: "Înregistrări",

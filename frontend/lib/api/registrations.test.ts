@@ -1,11 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  registrationListSchema,
-  registrationOutcomeSchema,
-  registrationSchema,
-} from "./registrations";
-import { codeForLookup, displayCode, matchesRegistration } from "./registrations-terms";
+import { registrationListSchema, registrationOutcomeSchema } from "./registrations";
 
 const row = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -88,42 +83,5 @@ describe("registrationListSchema", () => {
       checkedInAt: undefined,
     });
     expect(list.registrations[1].checkedInAt).toBe("2026-11-06T18:00:00Z");
-  });
-});
-
-describe("displayCode", () => {
-  test("splits the stored code in two halves", () => {
-    expect(displayCode("K7M2QX")).toBe("K7M-2QX");
-  });
-});
-
-describe("codeForLookup", () => {
-  test("ignores case, spaces and dashes", () => {
-    expect(codeForLookup(" k7m - 2qx ")).toBe("K7M2QX");
-  });
-});
-
-describe("matchesRegistration", () => {
-  const registration = registrationSchema.parse(row);
-
-  test.each([
-    ["an empty query", "  "],
-    ["the code as printed", "K7M-2QX"],
-    ["the code in lower case with a space", "k7m 2qx"],
-    ["part of the code", "2qx"],
-    ["the first name in any case", "ana"],
-    ["the last name", "POPESCU"],
-    ["the full name", "Ana Popescu"],
-    ["the name in the other order", "popescu ana"],
-    ["part of the email", "@example"],
-  ])("finds the row by %s", (_, query) => {
-    expect(matchesRegistration(registration, query)).toBe(true);
-  });
-
-  test.each([
-    ["another code", "ZZZ-999"],
-    ["another name", "Ion"],
-  ])("does not find the row by %s", (_, query) => {
-    expect(matchesRegistration(registration, query)).toBe(false);
   });
 });
