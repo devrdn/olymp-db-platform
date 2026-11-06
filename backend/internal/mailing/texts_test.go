@@ -276,3 +276,82 @@ func checkRendered(t *testing.T, text mailing.Text) {
 		}
 	}
 }
+
+func eventRegistrationData() mailing.EventRegistrationData {
+	return mailing.EventRegistrationData{
+		Installation: "Olimpiada USM & Co",
+		FullName:     "Ana-Maria O'Neil",
+		Code:         "K7M-2QX",
+		Login:        "ana@example.com",
+		NewAccount:   true,
+	}
+}
+
+func TestTheEventRegistrationNamesItsCodeAndLoginInEveryLanguage(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	data := eventRegistrationData()
+
+	for _, lang := range mailing.Languages() {
+		text, err := texts.EventRegistration(lang, data)
+		if err != nil {
+			t.Fatalf("%s: EventRegistration() = %v", lang, err)
+		}
+		if !strings.Contains(text.Subject, data.Installation) {
+			t.Errorf("%s: subject %q does not name the installation", lang, text.Subject)
+		}
+		for _, s := range []string{data.Installation, data.FullName, data.Code, data.Login} {
+			if !strings.Contains(text.Body, s) {
+				t.Errorf("%s: body does not hold %q:\n%s", lang, s, text.Body)
+			}
+		}
+		checkRendered(t, text)
+	}
+}
+
+// A first registration's password comes in its own message; a repeat issues
+// none, so it sends the reader to the organizers instead.
+func TestTheEventRegistrationSaysWhereThePasswordIs(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	phrases := map[mailing.Language]struct{ separate, organizers string }{
+		mailing.English:  {"separate message", "lost your password"},
+		mailing.Romanian: {"mesaj separat", "pierdut parola"},
+		mailing.Russian:  {"отдельным письмом", "потеряли пароль"},
+	}
+
+	for _, lang := range mailing.Languages() {
+		want := phrases[lang]
+		if want.separate == "" {
+			t.Fatalf("%s: no phrases to look for; add them here", lang)
+		}
+
+		first, err := texts.EventRegistration(lang, eventRegistrationData())
+		if err != nil {
+			t.Fatalf("%s: EventRegistration() = %v", lang, err)
+		}
+		if !strings.Contains(first.Body, want.separate) || strings.Contains(first.Body, want.organizers) {
+			t.Errorf("%s: a first registration's body should point to the separate message only:\n%s", lang, first.Body)
+		}
+
+		data := eventRegistrationData()
+		data.NewAccount = false
+		data.Login = ""
+		repeat, err := texts.EventRegistration(lang, data)
+		if err != nil {
+			t.Fatalf("%s: EventRegistration() = %v", lang, err)
+		}
+		if !strings.Contains(repeat.Body, want.organizers) || strings.Contains(repeat.Body, want.separate) {
+			t.Errorf("%s: a repeat's body should send the reader to the organizers only:\n%s", lang, repeat.Body)
+		}
+		checkRendered(t, repeat)
+	}
+}
+
+func TestAnEventRegistrationWithoutItsCodeIsRefused(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	data := eventRegistrationData()
+	data.Code = " "
+
+	if _, err := texts.EventRegistration(mailing.English, data); !errors.Is(err, mailing.ErrIncompleteMessage) {
+		t.Errorf("EventRegistration() = %v, want ErrIncompleteMessage", err)
+	}
+}

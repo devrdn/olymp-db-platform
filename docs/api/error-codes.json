@@ -650,6 +650,22 @@
       "meaning": "Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later."
     },
     {
+      "code": "registration_full",
+      "meaning": "The event holds its 5000 registrations, so a new email is refused. An email already registered is still answered, as a repeat."
+    },
+    {
+      "code": "registration_invalid_email",
+      "meaning": "The email on the event registration form is not one bare address (no display name, exactly one @) of at most 100 bytes; the address becomes the account's login, which is bounded at 100. Nothing was stored."
+    },
+    {
+      "code": "registration_invalid_name",
+      "meaning": "A first or last name on the event registration form is empty, longer than 100 characters, or holds a control character. Nothing was stored."
+    },
+    {
+      "code": "registration_not_found",
+      "meaning": "No event registration with that identifier."
+    },
+    {
       "code": "reset_read_only",
       "meaning": "The participant asked for their database back as the contest started it, and this contest is read-only: nothing they run can change it, so there is nothing to reset. A rule of the contest, not a fault; nothing was copied."
     },
@@ -715,7 +731,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Also the event registration form's limit, per address and per email, refused attempts included. Try again later."
     },
     {
       "code": "too_many_connections",

@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
@@ -566,6 +567,48 @@ func TestEveryClarificationsErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 			wrapped, ok := answer(t, clarificationsErrors, fmt.Errorf("%w: while answering", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+func TestEveryRegistrationsErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		registrations.ErrInvalidName: {status: http.StatusBadRequest, code: "registration_invalid_name",
+			message: "a name must be 1 to 100 characters with no control characters"},
+		registrations.ErrInvalidEmail: {status: http.StatusBadRequest, code: "registration_invalid_email",
+			message: "the email must be one address of at most 100 characters, without a name"},
+		registrations.ErrFull: {status: http.StatusConflict, code: "registration_full",
+			message: "the event has reached its 5000 registrations"},
+		registrations.ErrNotFound: {status: http.StatusNotFound, code: "registration_not_found",
+			message: "no such registration"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range registrations.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, registrationsErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, registrationsErrors, fmt.Errorf("%w: while registering", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
 					wrapped, ok, expected.status, expected.code)

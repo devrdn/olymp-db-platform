@@ -1,0 +1,15 @@
+Subject: Your registration code for {{.Installation}}
+
+Hello {{.FullName}},
+
+You are registered for the event at {{.Installation}}.
+
+Your code: {{.Code}}
+
+Show this code to the organizers at the entrance.
+
+{{if .Login}}Login: {{.Login}}
+Sign-in page: {{.SignInURL}}{{else}}Sign in at {{.SignInURL}} with the account you already have.{{end}}
+{{if .NewAccount}}Your one-time password arrives in a separate message.{{else}}If you have lost your password, ask the organizers.{{end}}
+
+This is an automated message; please do not reply.

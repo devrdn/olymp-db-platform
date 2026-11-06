@@ -256,7 +256,7 @@ var (
 	codeAccountBlocked = httpx.NewCode("account_blocked",
 		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
-		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later.")
+		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Also the event registration form's limit, per address and per email, refused attempts included. Try again later.")
 	codeSignInBusy = httpx.NewCode("sign_in_busy",
 		"The service is already checking as many passwords as it will at once, and none came free in time, or this address already has as many sign-ins waiting as it may. The password was not evaluated — neither accepted nor judged wrong. A sign-in attempt refused this way has spent the budget it pays before waiting (its address's, or a trusted browser's own) but nothing of the account's own attempt limits, so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
@@ -474,4 +474,16 @@ var (
 		"The cursor is not one this service issued. Start again from the newest page.")
 	codeProfileInvalidFilter = httpx.NewCode("profile_invalid_filter",
 		"A filter on the caller's own queries is not acceptable: an unknown query status, a search longer than 200 characters, or a cursor of another kind. The message names which.")
+
+	// --- Event registration -------------------------------------------------
+	// One code per registrations.Service refusal (CLAUDE.md rule 1). The
+	// public form's rate limit answers too_many_attempts.
+	codeRegistrationInvalidName = httpx.NewCode("registration_invalid_name",
+		"A first or last name on the event registration form is empty, longer than 100 characters, or holds a control character. Nothing was stored.")
+	codeRegistrationInvalidEmail = httpx.NewCode("registration_invalid_email",
+		"The email on the event registration form is not one bare address (no display name, exactly one @) of at most 100 bytes; the address becomes the account's login, which is bounded at 100. Nothing was stored.")
+	codeRegistrationFull = httpx.NewCode("registration_full",
+		"The event holds its 5000 registrations, so a new email is refused. An email already registered is still answered, as a repeat.")
+	codeRegistrationNotFound = httpx.NewCode("registration_not_found",
+		"No event registration with that identifier.")
 )

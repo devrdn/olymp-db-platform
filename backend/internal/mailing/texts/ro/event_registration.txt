@@ -1,0 +1,15 @@
+Subject: Codul de înregistrare pentru {{.Installation}}
+
+Bună ziua, {{.FullName}},
+
+Sunteți înregistrat(ă) la evenimentul {{.Installation}}.
+
+Codul dumneavoastră: {{.Code}}
+
+Prezentați acest cod organizatorilor la intrare.
+
+{{if .Login}}Utilizator: {{.Login}}
+Pagina de autentificare: {{.SignInURL}}{{else}}Autentificați-vă la {{.SignInURL}} cu contul pe care îl aveți deja.{{end}}
+{{if .NewAccount}}Parola temporară vine într-un mesaj separat.{{else}}Dacă ați pierdut parola, adresați-vă organizatorilor.{{end}}
+
+Acesta este un mesaj automat; vă rugăm să nu răspundeți.
