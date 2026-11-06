@@ -254,3 +254,64 @@ func TestCheckInMarksAndClearsTheArrival(t *testing.T) {
 		t.Errorf("unknown id: SetCheckedIn() = %v, want ErrNotFound", err)
 	}
 }
+
+// Two submits of one new email at once: both make the account's attempt, the
+// one whose account was taken wins the insert, and the one that made the
+// account must still hand its password over.
+func TestADoubleSubmitKeepsTheNewAccountsPassword(t *testing.T) {
+	f := registrationstest.NewFixture(nil)
+	f.Store.BeforeInsert = func(r registrations.Registration) {
+		f.Store.BeforeInsert = nil
+		r.Code = "WWWWWW"
+		r.UserID = nil
+		f.Store.Put(r)
+	}
+
+	out, err := f.Service.Register(t.Context(), applicant(t, "ana@example.com"))
+	if err != nil {
+		t.Fatalf("Register() = %v", err)
+	}
+
+	if out.Status != registrations.StatusCreated || out.Account.OneTimePassword == "" || out.Account.Existing {
+		t.Errorf("outcome = %+v, want created with this request's account and password", out)
+	}
+	if out.Registration.Code != "WWWWWW" {
+		t.Errorf("code = %q, want the winner's", out.Registration.Code)
+	}
+	rows := f.Store.Rows()
+	if len(rows) != 1 || rows[0].UserID == nil || *rows[0].UserID != out.Account.ID {
+		t.Errorf("rows = %+v, want the one registration linked to the new account", rows)
+	}
+}
+
+func TestADoubleSubmitWhoseRegistrationHasAnAccountAnswersAsARepeat(t *testing.T) {
+	f := registrationstest.NewFixture(nil)
+	other := uuid.New()
+	f.Store.BeforeInsert = func(r registrations.Registration) {
+		f.Store.BeforeInsert = nil
+		r.Code = "WWWWWW"
+		r.UserID = &other
+		f.Store.Put(r)
+	}
+
+	out, err := f.Service.Register(t.Context(), applicant(t, "ana@example.com"))
+	if err != nil {
+		t.Fatalf("Register() = %v", err)
+	}
+	if out.Status != registrations.StatusExisting {
+		t.Errorf("outcome = %+v, want existing", out)
+	}
+}
+
+func TestASettingsFailureMakesNoAccount(t *testing.T) {
+	f := registrationstest.NewFixture(func(c *registrations.Config) {
+		c.Settings = registrationstest.Settings{Err: errors.New("settings are down")}
+	})
+
+	if _, err := f.Service.Register(t.Context(), applicant(t, "ana@example.com")); err == nil {
+		t.Fatal("Register() = nil, want the settings failure")
+	}
+	if len(f.Accounts.Created) != 0 || len(f.Store.Rows()) != 0 {
+		t.Errorf("%d accounts, %d rows; want neither", len(f.Accounts.Created), len(f.Store.Rows()))
+	}
+}

@@ -24,11 +24,12 @@ var _ registrations.Accounts = registrationAccounts{}
 // records a nil actor for it.
 func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAccount) (registrations.Account, error) {
 	created, err := a.users.Create(ctx, users.CreateCommand{
-		Login:    n.Login,
-		Email:    n.Email,
-		FullName: n.FullName,
-		Roles:    []string{registrationRole},
-		Delivery: users.Delivery{ByEmail: n.ByEmail},
+		Login:       n.Login,
+		Email:       n.Email,
+		FullName:    n.FullName,
+		Roles:       []string{registrationRole},
+		Delivery:    users.Delivery{ByEmail: n.ByEmail},
+		SelfService: true,
 	})
 	if errors.Is(err, users.ErrLoginTaken) || errors.Is(err, users.ErrEmailTaken) {
 		return registrations.Account{Existing: true}, nil

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 )
@@ -216,6 +218,11 @@ func (h *RegistrationsHandler) admit(w http.ResponseWriter, r *http.Request, sub
 
 func (h *RegistrationsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if registrationsErrors.answer(w, r, h.log, err) {
+		return
+	}
+	// The account's password found no hashing slot in the sign-in wait.
+	if errors.Is(err, password.ErrBusy) {
+		busy(w, r)
 		return
 	}
 	h.log.ErrorContext(r.Context(), "the event registration request failed", "error", err)

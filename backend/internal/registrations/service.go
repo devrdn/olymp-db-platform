@@ -22,9 +22,12 @@ type Store interface {
 	Count(ctx context.Context) (int, error)
 	// Insert stores r with a fresh id, refusing ErrAlreadyRegistered for a
 	// held email, ErrFull once capacity rows exist and ErrCodeTaken for a
-	// held code. sent stamps last_sent_at. A refused code aborts the
-	// transaction, so Insert runs in one of its own.
+	// held code. sent stamps last_sent_at. No refusal aborts the
+	// transaction in ctx.
 	Insert(ctx context.Context, r Registration, capacity int, sent bool) (Registration, error)
+	// AttachAccount links the email's registration to userID unless it
+	// already has an account; ErrNotFound when no registration was linked.
+	AttachAccount(ctx context.Context, emailKey string, userID uuid.UUID) (Registration, error)
 	// ClaimResend stamps last_sent_at and reports true unless the code was
 	// mailed within cooldown.
 	ClaimResend(ctx context.Context, id uuid.UUID, cooldown time.Duration) (bool, error)
@@ -148,7 +151,15 @@ func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
 		return Outcome{}, ErrFull
 	}
 
+	// Read before the account is made, so a settings failure leaves none.
 	mailOn := s.cfg.Outbox.Enabled()
+	var lang mailing.Language
+	var installation string
+	if mailOn {
+		if lang, installation, err = s.letterhead(ctx); err != nil {
+			return Outcome{}, err
+		}
+	}
 	account, err := s.cfg.Accounts.Create(ctx, NewAccount{
 		Login: a.EmailKey, Email: a.Email, FullName: a.FullName(), ByEmail: mailOn,
 	})
@@ -160,13 +171,6 @@ func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
 	if !account.Existing {
 		r.UserID = &account.ID
 		r.Login = account.Login
-	}
-	var lang mailing.Language
-	var installation string
-	if mailOn {
-		if lang, installation, err = s.letterhead(ctx); err != nil {
-			return Outcome{}, err
-		}
 	}
 
 	for range codeAttempts {
@@ -194,12 +198,7 @@ func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
 		case errors.Is(err, ErrCodeTaken):
 			continue
 		case errors.Is(err, ErrAlreadyRegistered):
-			// The same email, submitted twice at once: the other request won.
-			existing, err := s.cfg.Store.ByEmailKey(ctx, a.EmailKey)
-			if err != nil {
-				return Outcome{}, err
-			}
-			return s.resend(ctx, existing)
+			return s.lostTheRace(ctx, a, account)
 		case err != nil:
 			return Outcome{}, err
 		}
@@ -210,6 +209,31 @@ func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
 		return Outcome{Status: StatusCreated, Registration: stored, Account: account, EmailSent: message != nil}, nil
 	}
 	return Outcome{}, fmt.Errorf("draw a free code in %d attempts: %w", codeAttempts, err)
+}
+
+// lostTheRace answers a registration another request of the same email
+// stored first. When this request made the account, the other one found it
+// taken and stored no account, so the account is attached and its password,
+// shown nowhere else, is answered here.
+func (s *Service) lostTheRace(ctx context.Context, a Applicant, account Account) (Outcome, error) {
+	if !account.Existing {
+		attached, err := s.cfg.Store.AttachAccount(ctx, a.EmailKey, account.ID)
+		if err == nil {
+			attached.Login = account.Login
+			return Outcome{
+				Status: StatusCreated, Registration: attached, Account: account,
+				EmailSent: s.cfg.Outbox.Enabled() && attached.LastSentAt != nil,
+			}, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return Outcome{}, err
+		}
+	}
+	existing, err := s.cfg.Store.ByEmailKey(ctx, a.EmailKey)
+	if err != nil {
+		return Outcome{}, err
+	}
+	return s.resend(ctx, existing)
 }
 
 // resend mails r's code again unless mail is off or the cooldown holds it.

@@ -2,9 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -64,5 +68,56 @@ func TestATakenLoginOrEmailIsAnExistingAccount(t *testing.T) {
 	})
 	if err != nil || !got.Existing || got.OneTimePassword != "" {
 		t.Errorf("a taken email: Create() = %+v, %v; want the existing account and no password", got, err)
+	}
+}
+
+// Parse's bounds are the account's: whatever it takes, users.Service takes,
+// and a byte more is what users.Service would refuse as a 500.
+func TestWhatParseTakesAtItsBoundsMakesAnAccount(t *testing.T) {
+	accounts, _ := newRegistrationAccounts(t)
+	local := strings.Repeat("a", registrations.MaxEmailBytes-len("@example.com"))
+	a, err := registrations.Parse(strings.Repeat("ș", 50), strings.Repeat("ș", 49)+"a", local+"@Example.com")
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if len(a.FullName()) != registrations.MaxFullNameBytes || len(a.EmailKey) != registrations.MaxEmailBytes {
+		t.Fatalf("full name %d bytes, key %d bytes; want both at the bound", len(a.FullName()), len(a.EmailKey))
+	}
+
+	got, err := accounts.Create(t.Context(), registrations.NewAccount{Login: a.EmailKey, Email: a.Email, FullName: a.FullName()})
+	if err != nil || got.Existing {
+		t.Fatalf("Create() = %+v, %v; want the account made", got, err)
+	}
+
+	_, err = accounts.Create(t.Context(), registrations.NewAccount{
+		Login: "bob@example.com", Email: "bob@example.com", FullName: a.FullName() + "a",
+	})
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("a full name a byte longer: Create() = %v, want users.ErrInvalidAccount", err)
+	}
+	_, err = accounts.Create(t.Context(), registrations.NewAccount{
+		Login: "a" + a.EmailKey, Email: "a" + a.Email, FullName: "Bob Ionescu",
+	})
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("a login a byte longer: Create() = %v, want users.ErrInvalidAccount", err)
+	}
+}
+
+func TestARegistrationsPasswordWaitsOnlyTheSignInWait(t *testing.T) {
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	slot, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() = %v", err)
+	}
+	t.Cleanup(slot.Release)
+	repo := userstest.New()
+	repo.GrantRole("student")
+	accounts := registrationAccounts{users: users.NewService(repo, audit.New(discardAudit{}), &userstest.SpyUnitOfWork{}, hasher)}
+	started := time.Now()
+
+	_, err = accounts.Create(t.Context(), registrations.NewAccount{Login: "ana@example.com", FullName: "Ana Popescu"})
+
+	if !errors.Is(err, password.ErrBusy) || time.Since(started) > time.Second {
+		t.Errorf("Create() = %v after %v, want password.ErrBusy after the sign-in wait", err, time.Since(started))
 	}
 }

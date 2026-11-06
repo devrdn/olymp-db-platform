@@ -112,6 +112,23 @@ func (r *EventRegistrations) Insert(ctx context.Context, reg registrations.Regis
 	return stored, nil
 }
 
+func (r *EventRegistrations) AttachAccount(ctx context.Context, emailKey string, userID uuid.UUID) (registrations.Registration, error) {
+	attached, err := scanEventRegistration(storage.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
+		WITH e AS (
+			UPDATE event_registrations SET user_id = $2
+			WHERE email_key = $1 AND user_id IS NULL
+			RETURNING *
+		)
+		SELECT `+eventRegistrationColumns+` FROM e LEFT JOIN users u ON u.id = e.user_id`, emailKey, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return registrations.Registration{}, registrations.ErrNotFound
+	}
+	if err != nil {
+		return registrations.Registration{}, fmt.Errorf("attach the account: %w", err)
+	}
+	return attached, nil
+}
+
 func (r *EventRegistrations) ClaimResend(ctx context.Context, id uuid.UUID, cooldown time.Duration) (bool, error) {
 	tag, err := storage.QuerierFrom(ctx, r.pool).Exec(ctx, `
 		UPDATE event_registrations SET last_sent_at = now()

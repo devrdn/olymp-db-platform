@@ -104,6 +104,10 @@ type CreateCommand struct {
 	FullName string
 	Roles    []string
 	Delivery Delivery
+	// SelfService is an account its owner asked for at a public form: its
+	// password waits only the sign-in wait for a hashing slot, so a burst of
+	// visitors cannot hold the shared slots for the administrative one.
+	SelfService bool
 }
 
 type CreateResult struct {
@@ -160,7 +164,11 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letter
 	if err != nil {
 		return CreateResult{}, err
 	}
-	hash, err := s.issuing.Hash(ctx, oneTime)
+	hasher := s.issuing
+	if cmd.SelfService {
+		hasher = s.passwords
+	}
+	hash, err := hasher.Hash(ctx, oneTime)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("hash password: %w", err)
 	}

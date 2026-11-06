@@ -143,3 +143,25 @@ func TestEventRegistrationsListNewestFirstAndCheckIn(t *testing.T) {
 		}
 	})
 }
+
+func TestEventRegistrationsAttachAnAccountOnlyToOneWithout(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewEventRegistrations(testPool)
+		if _, err := repo.Insert(ctx, eventRegistration("ana@example.com", "AAAAAA"), registrations.Capacity, false); err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+		first := makeUser(t, ctx, "ana-first@example.com")
+		second := makeUser(t, ctx, "ana-second@example.com")
+
+		attached, err := repo.AttachAccount(ctx, "ana@example.com", first.ID)
+		if err != nil || attached.UserID == nil || *attached.UserID != first.ID || attached.Login != first.Login {
+			t.Fatalf("AttachAccount() = %+v, %v; want the account linked", attached, err)
+		}
+		if _, err := repo.AttachAccount(ctx, "ana@example.com", second.ID); !errors.Is(err, registrations.ErrNotFound) {
+			t.Errorf("already linked: AttachAccount() = %v, want ErrNotFound", err)
+		}
+		if _, err := repo.AttachAccount(ctx, "bob@example.com", second.ID); !errors.Is(err, registrations.ErrNotFound) {
+			t.Errorf("unknown email: AttachAccount() = %v, want ErrNotFound", err)
+		}
+	})
+}
