@@ -35,8 +35,12 @@ type Kind string
 // KindSignInDetails carries an account's login and one-time password.
 const KindSignInDetails Kind = "sign_in_details"
 
+// KindEventRegistration carries an event registration's entrance code. It is
+// sent to an address, not an account, so its UserID is uuid.Nil.
+const KindEventRegistration Kind = "event_registration"
+
 // Kinds is every kind the outbox accepts.
-func Kinds() []Kind { return []Kind{KindSignInDetails} }
+func Kinds() []Kind { return []Kind{KindSignInDetails, KindEventRegistration} }
 
 // KindNames is Kinds as label values.
 func KindNames() []string {

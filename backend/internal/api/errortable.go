@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
@@ -287,6 +288,15 @@ var clarificationsErrors = errorTable{
 	{err: clarifications.ErrAlreadyAnswered, status: http.StatusConflict, code: codeClarificationAlreadyAnswered},
 	{err: clarifications.ErrNotAnswered, status: http.StatusConflict, code: codeClarificationNotAnswered},
 	{err: clarifications.ErrClosed, status: http.StatusConflict, code: codeClarificationsClosed},
+}
+
+// registrationsErrors answers every error in registrations.Errors() (walked
+// by TestEveryRegistrationsErrorHasItsAnswer).
+var registrationsErrors = errorTable{
+	{err: registrations.ErrInvalidName, status: http.StatusBadRequest, code: codeRegistrationInvalidName},
+	{err: registrations.ErrInvalidEmail, status: http.StatusBadRequest, code: codeRegistrationInvalidEmail},
+	{err: registrations.ErrFull, status: http.StatusConflict, code: codeRegistrationFull},
+	{err: registrations.ErrNotFound, status: http.StatusNotFound, code: codeRegistrationNotFound},
 }
 
 // contestsErrors answers every error in contests.Errors() (walked by

@@ -53,6 +53,22 @@ type SignInData struct {
 	Contact string
 }
 
+// EventRegistrationData is what a person registered for the event needs at
+// the entrance: their code, and how to sign in afterwards.
+type EventRegistrationData struct {
+	Installation string
+	FullName     string
+	// Code is in its display form, K7M-2QX.
+	Code string
+	// Login is empty when the account existed before the registration and
+	// its login is not known.
+	Login string
+	// NewAccount says the account was created with this registration, so its
+	// one-time password arrives in a message of its own; otherwise the reader
+	// is told to ask the organizers if the password is lost.
+	NewAccount bool
+}
+
 // signInPath is the interface's sign-in route (frontend/app/(public)/login).
 const signInPath = "/login"
 
@@ -99,6 +115,24 @@ func (t *Texts) SignInDetails(lang Language, data SignInData) (Text, error) {
 	}{data, t.publicURL + signInPath})
 }
 
+// EventRegistration writes the message carrying an event registration's code,
+// or refuses it with ErrUnknownLanguage for a language with no texts and
+// ErrIncompleteMessage when the installation, the name or the code, or the
+// public address, is empty.
+func (t *Texts) EventRegistration(lang Language, data EventRegistrationData) (Text, error) {
+	if err := t.require(
+		detail{"installation", data.Installation},
+		detail{"full name", data.FullName},
+		detail{"code", data.Code},
+	); err != nil {
+		return Text{}, err
+	}
+	return render(lang, messageEventRegistration, struct {
+		EventRegistrationData
+		SignInURL string
+	}{data, t.publicURL + signInPath})
+}
+
 type detail struct{ name, value string }
 
 // require refuses a blank detail by its name, never its value, which may be
@@ -119,8 +153,9 @@ func (t *Texts) require(details ...detail) error {
 // texts/<language>/<message>.txt. A file's first line is "Subject: " and the
 // subject's template; an empty line separates it from the body's.
 const (
-	messageTest          = "test"
-	messageSignInDetails = "sign_in_details"
+	messageTest              = "test"
+	messageSignInDetails     = "sign_in_details"
+	messageEventRegistration = "event_registration"
 )
 
 //go:embed texts
@@ -138,7 +173,7 @@ func parseAll() map[Language]map[string]compiled {
 	all := make(map[Language]map[string]compiled, len(Languages()))
 	for _, lang := range Languages() {
 		all[lang] = make(map[string]compiled)
-		for _, message := range []string{messageTest, messageSignInDetails} {
+		for _, message := range []string{messageTest, messageSignInDetails, messageEventRegistration} {
 			all[lang][message] = parse(path.Join("texts", string(lang), message+".txt"))
 		}
 	}

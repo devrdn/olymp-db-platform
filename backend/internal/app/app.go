@@ -42,6 +42,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/showcase"
@@ -543,6 +544,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	modules = append(modules, api.NewPublicHandler(
 		showcase.NewService(showcase.Config{Repository: postgres.NewShowcase(pool)}),
 		limiter, log, cfg.DefaultLocale))
+	// The evening event's registration form and its organizers' list.
+	modules = append(modules, api.NewRegistrationsHandler(registrations.NewService(registrations.Config{
+		Store:      postgres.NewEventRegistrations(pool),
+		Accounts:   registrationAccounts{users: userService},
+		Outbox:     outbox,
+		Texts:      texts,
+		Settings:   installation,
+		UnitOfWork: storage.NewUnitOfWork(pool),
+	}), limiter, authMiddleware, log))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only
