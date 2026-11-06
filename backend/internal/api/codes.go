@@ -479,7 +479,7 @@ var (
 	// One code per registrations.Service refusal (CLAUDE.md rule 1). The
 	// public form's rate limit answers too_many_attempts.
 	codeRegistrationInvalidName = httpx.NewCode("registration_invalid_name",
-		"A first or last name on the event registration form is empty or longer than 100 characters, the two together exceed 200 bytes, or a name holds anything but letters, combining marks, spaces, hyphens, apostrophes and periods. Nothing was stored.")
+		"A first or last name on the event registration form is empty or longer than 100 characters, the two together exceed 200 bytes, or a name holds anything but letters, combining marks, spaces, hyphens, apostrophes and periods (a period may not be followed directly by a letter). Nothing was stored.")
 	codeRegistrationInvalidEmail = httpx.NewCode("registration_invalid_email",
 		"The email on the event registration form is not one bare address (no display name, exactly one @) of at most 100 bytes, typed and lowercased; the lowercased address becomes the account's login, which is bounded at 100. Nothing was stored.")
 	codeRegistrationFull = httpx.NewCode("registration_full",

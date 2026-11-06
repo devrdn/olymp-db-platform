@@ -86,10 +86,22 @@ func Parse(firstName, lastName, email string) (Applicant, error) {
 
 // validName takes only what a name is written with: the names greet the
 // reader of two messages sent to any address, and must not carry a link or a
-// pitch.
+// pitch. A period directly followed by a letter is refused too, since mail
+// clients turn "evil.com" into a link; "Jr." and "J. R. R." stay.
 func validName(s string) bool {
 	n := utf8.RuneCountInString(s)
-	return n >= 1 && n <= MaxNameRunes && utf8.ValidString(s) && !strings.ContainsFunc(s, notOfAName)
+	return n >= 1 && n <= MaxNameRunes && utf8.ValidString(s) && !strings.ContainsFunc(s, notOfAName) && !periodBeforeLetter(s)
+}
+
+func periodBeforeLetter(s string) bool {
+	afterPeriod := false
+	for _, r := range s {
+		if afterPeriod && unicode.IsLetter(r) {
+			return true
+		}
+		afterPeriod = r == '.'
+	}
+	return false
 }
 
 func notOfAName(r rune) bool {
