@@ -44,4 +44,31 @@ describe("matchesRegistration", () => {
   ])("does not find the row by %s", (_, query) => {
     expect(matchesRegistration(registration, query)).toBe(false);
   });
+
+  describe("ignores diacritics on both sides", () => {
+    const romanian: Registration = {
+      ...registration,
+      firstName: "Ștefan",
+      lastName: "Țurcanu",
+      email: "ștefan.țurcanu@exemplu.md",
+    };
+
+    test.each([
+      ["a plain query for accented names", romanian, "stefan turcanu"],
+      ["a plain query for the other order", romanian, "turcanu stefan"],
+      ["an accented query for plain names", { ...registration, firstName: "Stefan", lastName: "Turcanu" }, "Ștefan Țurcanu"],
+      ["ă, â and î against plain letters", { ...registration, firstName: "Ioana", lastName: "Mărgărit" }, "margarit"],
+      ["â against plain a", { ...registration, firstName: "Radu", lastName: "Pâslaru" }, "paslaru"],
+      ["î against plain i", { ...registration, firstName: "Mircea", lastName: "Înălțime" }, "inaltime"],
+      ["plain letters against ă, â and î", { ...registration, firstName: "Ioana", lastName: "Margarit" }, "MĂRGĂRIT"],
+      ["the email, plain query", romanian, "stefan.turcanu@"],
+      ["the email, accented query", { ...registration, email: "stefan.turcanu@exemplu.md" }, "ștefan.țurcanu"],
+    ])("finds the row by %s", (_, row, query) => {
+      expect(matchesRegistration(row, query)).toBe(true);
+    });
+
+    test("still tells different letters apart", () => {
+      expect(matchesRegistration(romanian, "stefan turcan0")).toBe(false);
+    });
+  });
 });
