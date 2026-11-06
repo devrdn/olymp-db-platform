@@ -2378,7 +2378,7 @@ const en = {
       title: "You are already registered",
       emailSent: "We sent your code to {email} again.",
       emailNotSent:
-        "Your code is in the email we sent to {email} earlier. If you cannot find it, the organisers will find you by name at the entrance.",
+        "You registered with {email}. If you cannot find our email, the organisers will find you by name at the entrance.",
     },
     desk: {
       heading: "Registrations",
