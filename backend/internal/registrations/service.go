@@ -126,8 +126,8 @@ type Outcome struct {
 }
 
 // codeAttempts is how many codes a registration draws before giving up. With
-// 31^6 codes and at most Capacity held, a second collision in a row is
-// already a one-in-a-hundred-million event.
+// 31^6 codes and at most Capacity held, even two collisions in a row have a
+// probability near 3e-11.
 const codeAttempts = 5
 
 // Register records a, or mails the code again for an email already

@@ -18,9 +18,9 @@ import (
 
 // The public form's budget, refusals included (CLAUDE.md rule 13).
 const (
-	// RegistrationsPerAddress is per address in registrationAddressWindow; an
-	// event room shares one address, so it is not lower.
-	RegistrationsPerAddress   = 30
+	// RegistrationsPerAddress is per address in registrationAddressWindow;
+	// guests register at the venue behind one Wi-Fi address, so it is generous.
+	RegistrationsPerAddress   = 120
 	registrationAddressWindow = 10 * time.Minute
 	// RegistrationsPerEmail is per lowercased email in an hour, so the form
 	// cannot be used to flood one inbox from many addresses.

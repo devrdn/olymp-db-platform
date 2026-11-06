@@ -65,7 +65,7 @@ func TestParseBoundsTheFullNameInBytes(t *testing.T) {
 // The names are the greeting of two messages sent to any address, so they
 // may carry nothing a link or a pitch needs.
 func TestParseTakesOnlyTheCharactersOfAName(t *testing.T) {
-	for _, taken := range []string{"Ana-Maria", "O'Neil", "D’Artagnan", "Jr.", "Ștefan Țurcan", "Алёна", "Zoë", "René"} {
+	for _, taken := range []string{"Ana-Maria", "O'Neil", "D’Artagnan", "Jr.", "J. R. R.", "Ștefan Țurcan", "Алёна", "Zoë", "René"} {
 		if _, err := registrations.Parse(taken, "Popescu", "ana@example.com"); err != nil {
 			t.Errorf("Parse(%q) = %v, want it taken", taken, err)
 		}
