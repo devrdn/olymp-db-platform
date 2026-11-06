@@ -73,6 +73,7 @@ func TestParseTakesOnlyTheCharactersOfAName(t *testing.T) {
 	for _, refused := range []string{
 		"https://evil.example", "click here!", "win $100", "Ana2", "a/b", "Ana<b>", "Ana:", "Ana@x", "Ana_B",
 		"Ana B", "Ana\tB",
+		"evil.com", "Ștefan.Țurcan", "J.R.",
 	} {
 		if _, err := registrations.Parse("Ana", refused, "ana@example.com"); !errors.Is(err, registrations.ErrInvalidName) {
 			t.Errorf("Parse(%q) = %v, want ErrInvalidName", refused, err)
