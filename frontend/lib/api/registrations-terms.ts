@@ -6,8 +6,8 @@
 /** The API's bound on each of the two names, in characters. */
 export const NAME_MAX_CHARS = 100;
 
-/** The API's bound on the email, in bytes (one character each for an ASCII address). */
-export const EMAIL_MAX_CHARS = 254;
+/** The API's bound on the email, in bytes: it becomes the account's login. */
+export const EMAIL_MAX_CHARS = 100;
 
 /** A registration as the admin screen reads it. */
 export type Registration = {
@@ -32,22 +32,27 @@ export function codeForLookup(query: string): string {
   return query.toUpperCase().replace(/[\s-]+/g, "");
 }
 
+/** Lower case without diacritics, so "stefan turcanu" finds "Ștefan Țurcanu" and the reverse. */
+function fold(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 /**
  * Whether a registration answers the organiser's search, by code, name (in
- * either order) or email. An empty query matches every row.
+ * either order) or email, ignoring case and diacritics. An empty query matches every row.
  */
 export function matchesRegistration(registration: Registration, query: string): boolean {
-  const text = query.trim().toLowerCase();
+  const text = fold(query.trim());
   if (text === "") return true;
 
   const code = codeForLookup(text);
   if (code !== "" && registration.code.includes(code)) return true;
 
-  const first = registration.firstName.toLowerCase();
-  const last = registration.lastName.toLowerCase();
+  const first = fold(registration.firstName);
+  const last = fold(registration.lastName);
   return (
     `${first} ${last}`.includes(text) ||
     `${last} ${first}`.includes(text) ||
-    registration.email.toLowerCase().includes(text)
+    fold(registration.email).includes(text)
   );
 }

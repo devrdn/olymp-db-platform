@@ -2715,7 +2715,7 @@ const en = {
     profile_invalid_cursor: "The list could not be continued. Reload the page.",
     profile_invalid_filter: "A filter is not valid. Check the status and the search text.",
     public_too_often: "The home page is being loaded too often. Wait a minute and try again.",
-    registration_invalid_name: "Enter your first and last name, up to 100 characters each.",
+    registration_invalid_name: "Names can contain only letters, spaces, hyphens, apostrophes and periods, up to 100 characters each.",
     registration_invalid_email: "Enter a valid email address, such as name@example.com.",
     registration_full: "Registration is full. Ask the organisers at the entrance.",
     registration_not_found: "This registration no longer exists. Reload the page.",
