@@ -501,17 +501,34 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 	ctx := context.Background()
 
 	for range maxPasswordChangeAttempts {
-		if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
+		if err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.1"); err != nil {
 			t.Fatalf("AllowPasswordChange() refused within the limit: %v", err)
 		}
 	}
-	if err := f.service.AllowPasswordChange(ctx, f.user.ID); !errors.Is(err, ErrTooManyAttempts) {
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.2"); !errors.Is(err, ErrTooManyAttempts) {
 		t.Errorf("err = %v, want ErrTooManyAttempts once the window is spent", err)
 	}
 
 	f.service.ClearPasswordChangeThrottle(ctx, f.user.ID)
-	if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.1"); err != nil {
 		t.Errorf("AllowPasswordChange() after a reset = %v, want nil", err)
+	}
+}
+
+func TestPasswordChangesFromOneAddressAreThrottledAcrossAccounts(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 3})
+	ctx := context.Background()
+
+	for i := range 3 {
+		if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.1"); err != nil {
+			t.Fatalf("account %d's change within the address window = %v, want nil", i+1, err)
+		}
+	}
+	if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.1"); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("a fourth account's change from the same address = %v, want ErrTooManyAttempts", err)
+	}
+	if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.2"); err != nil {
+		t.Errorf("a change from another address = %v, want nil", err)
 	}
 }
 

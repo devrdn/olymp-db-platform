@@ -555,22 +555,33 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 }
 
 // AllowPasswordChange counts one attempt to change the account's own password
-// and reports ErrTooManyAttempts once the window is spent (CLAUDE.md rule 4).
-// It is keyed by the account: it guards against a second person holding the
-// session.
-func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID) error {
-	allowed, err := s.limiter.Allow(ctx, passwordChangeSubject(userID), maxPasswordChangeAttempts, loginAttemptWindow)
-	if err != nil {
-		return err
-	}
-	if !allowed {
-		return ErrTooManyAttempts
+// and reports ErrTooManyAttempts once a window is spent (CLAUDE.md rule 4).
+// address is the caller's httpx.ClientSubject. Its window, the address
+// budget's size and spent first (CLAUDE.md rule 5), bounds one machine
+// holding sessions for many accounts; the account's window guards against a
+// second person holding the session.
+func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID, address string) error {
+	for _, window := range []struct {
+		subject string
+		limit   int
+	}{
+		{"pwchange-from:" + address, s.maxPerAddress},
+		{passwordChangeSubject(userID), maxPasswordChangeAttempts},
+	} {
+		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrTooManyAttempts
+		}
 	}
 	return nil
 }
 
 // ClearPasswordChangeThrottle forgets the account's attempts after a
-// successful change.
+// successful change. The address window stays, as the address budget does,
+// or a caller could reset it by changing their own password.
 func (s *Service) ClearPasswordChangeThrottle(ctx context.Context, userID uuid.UUID) {
 	if err := s.limiter.Reset(ctx, passwordChangeSubject(userID)); err != nil {
 		s.log.WarnContext(ctx, "could not reset the password-change throttle", "error", err)

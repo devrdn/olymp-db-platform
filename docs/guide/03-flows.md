@@ -189,7 +189,8 @@ Rules that matter:
   the answer nor its timing reveals which accounts exist
   ([ARCHITECTURE.md §7.2](../ARCHITECTURE.md#72-authentication-as-implemented)).
   Changing a password verifies the current one and is throttled too
-  (`AllowPasswordChange`, CLAUDE.md security rule 4).
+  (`AllowPasswordChange`, CLAUDE.md security rule 4): per address
+  (`pwchange-from:`, as large as the address budget) and then per account.
 
 ### An authenticated request, and sign-out
 

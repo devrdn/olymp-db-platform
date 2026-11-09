@@ -216,7 +216,7 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	// Throttled like a sign-in because it verifies a password (CLAUDE.md rule
 	// 4): a session proves possession of a browser, not knowledge of the
 	// password.
-	switch err := h.service.AllowPasswordChange(r.Context(), identity.UserID); {
+	switch err := h.service.AllowPasswordChange(r.Context(), identity.UserID, httpx.ClientSubject(r)); {
 	case err == nil:
 	case errors.Is(err, auth.ErrTooManyAttempts):
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,

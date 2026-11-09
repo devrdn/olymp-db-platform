@@ -731,7 +731,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Also the event registration form's limit, per address and per email, refused attempts included. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the event registration form's limit, per address and per email, refused attempts included. Try again later."
     },
     {
       "code": "too_many_connections",
