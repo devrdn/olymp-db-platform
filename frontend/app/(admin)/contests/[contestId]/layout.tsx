@@ -22,9 +22,9 @@ export async function generateMetadata(props: LayoutProps<"/contests/[contestId]
 
 /**
  * The frame of one contest's screens: the contest, its state, what it still
- * owes, and the sections. Loaded here so the heading and the page come from one
- * deduplicated pass and describe the same revision. The publish gate marks each
- * section that holds blocking work.
+ * owes, and the sections. The heading and the page read the contest through
+ * `loadContest`, whose per-render memo gives them one request and the same
+ * revision. The publish gate marks each section that holds blocking work.
  */
 export default async function ContestLayout(props: LayoutProps<"/contests/[contestId]">) {
   const [{ contestId }, locale, dict] = await Promise.all([
@@ -33,8 +33,8 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
     activeDictionary(),
   ]);
 
-  // Independent requests, run concurrently; the overview's own gate request is
-  // memoised into this one.
+  // Independent requests, run concurrently; the overview's own gate request
+  // shares this one through `loadContestResource`'s memo.
   const [contest, check] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/publish-check", (payload) =>
