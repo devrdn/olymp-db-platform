@@ -5,8 +5,8 @@
 //
 // # What actually holds
 //
-//   - Privileges and catalog REVOKEs are real boundaries, and both survive
-//     CREATE DATABASE … TEMPLATE.
+//   - Privileges and the catalog and function REVOKEs are real boundaries, and
+//     all of them survive CREATE DATABASE … TEMPLATE.
 //   - temp_file_limit is a real boundary: it is not USERSET.
 //   - statement_timeout and default_transaction_read_only are not: both are
 //     USERSET, so a session can `SET` them off. They are defaults for the
@@ -67,8 +67,8 @@ type Conn interface {
 type Cluster interface {
 	Conn
 	Begin(ctx context.Context) (pgx.Tx, error)
-	// Query reads only the cluster's own catalogue (Provisioner.DatabaseSizes
-	// and MissingDatabases), never a participant's data.
+	// Query reads only the cluster's own catalogue (Provisioner.Databases,
+	// DatabaseSizes and MissingDatabases), never a participant's data.
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 

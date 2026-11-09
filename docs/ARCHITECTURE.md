@@ -469,7 +469,7 @@ difference is invisible in the SQL itself:
 | Mechanism | Does it hold against SQL that got past the validator? |
 |---|---|
 | Privileges — a `GRANT`, or its absence | **Yes.** A role without `INSERT` does not insert, and no session setting changes that. This is what stops **every** write |
-| `REVOKE` on the sensitive catalogues | **Yes.** And it is inherited by `CREATE DATABASE … TEMPLATE`, or it would never reach the participant at all |
+| `REVOKE` on the sensitive catalogues and built-in functions | **Yes.** And it is inherited by `CREATE DATABASE … TEMPLATE`, or it would never reach the participant at all. The functions matter as much as the catalogues: PostgreSQL reads `x.f` as `f(x)`, a call the validator's allow-list has no function node to see |
 | `temp_file_limit` | **Yes.** Not a `USERSET` parameter; a session cannot raise it |
 | `statement_timeout` | **No.** `USERSET` — `SET statement_timeout = 0` removes it in one line |
 | `default_transaction_read_only` | **No.** `USERSET`, removed the same way |

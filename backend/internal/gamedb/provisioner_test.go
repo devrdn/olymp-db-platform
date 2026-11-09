@@ -628,6 +628,59 @@ func instanceExists(t *testing.T, name string) bool {
 	return exists
 }
 
+// template0 refuses connections, so there is nothing to harden it over.
+func TestDatabasesListsWhatAcceptsConnections(t *testing.T) {
+	scratch := scratchDatabase(t)
+
+	names, err := provisioner(t).Databases(t.Context())
+	if err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+	for _, want := range []string{scratch, "template1"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("%s is missing from %v", want, names)
+		}
+	}
+	if slices.Contains(names, "template0") {
+		t.Errorf("template0 is listed in %v", names)
+	}
+}
+
+// Function privileges live in each database, so one built before a
+// restriction existed has to be visited to receive it. A copy of template0
+// stands in for it: nothing ever hardens template0.
+func TestHardenReachesADatabaseBuiltBeforeARestriction(t *testing.T) {
+	p := provisioner(t)
+
+	old := named(t, "old")
+	if _, err := admin(t).Exec(t.Context(),
+		`CREATE DATABASE `+sqlpolicy.QuoteIdentifier(old)+` TEMPLATE template0`); err != nil {
+		t.Fatalf("creating %s: %v", old, err)
+	}
+	reader := connectAs(t, roleReader, testReaderPassword(t), old)
+	if _, err := reader.Exec(t.Context(), `SELECT pg_sleep(0)`); err != nil {
+		t.Fatalf("the database is hardened before the test hardens it: %v", err)
+	}
+
+	if err := p.Harden(t.Context(), old); err != nil {
+		t.Fatalf("Harden: %v", err)
+	}
+
+	err := refused(t, reader, `SELECT pg_sleep(0)`)
+	if !strings.Contains(err.Error(), "permission denied for function") {
+		t.Fatalf("refused, but not by privileges: %v", err)
+	}
+	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
+}
+
+// A participant's reset can drop a database between the listing and the
+// visit; the deploy must not fail over it.
+func TestHardenPassesOverADatabaseThatIsGone(t *testing.T) {
+	if err := provisioner(t).Harden(t.Context(), named(t, "ghost")); err != nil {
+		t.Fatalf("hardening a database that does not exist: %v", err)
+	}
+}
+
 func TestDatabaseSizesMeasuresAWholeListAtOnce(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
@@ -893,6 +946,24 @@ func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
 	}
 }
 
+// pg_dump opens every dump with set_config, and a template starts as a copy
+// of template1, where the deploy has taken that function away from PUBLIC.
+func TestADumpStillBuildsOnAHardenedCluster(t *testing.T) {
+	const script = `
+		SELECT pg_catalog.set_config('search_path', '', false);
+		CREATE TABLE public.evidence (id int PRIMARY KEY, note text);
+	`
+
+	p := provisioner(t)
+	if err := p.Harden(t.Context(), "template1"); err != nil {
+		t.Fatalf("hardening template1: %v", err)
+	}
+
+	if err := buildTemplateString(p, t.Context(), named(t, "tpl"), script, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("a dump's preamble no longer builds: %v", err)
+	}
+}
+
 // What game_author was lent for the build is taken back before the
 // template ships.
 func TestAnInstanceLendsTheAuthorRoleNothing(t *testing.T) {
@@ -906,6 +977,7 @@ func TestAnInstanceLendsTheAuthorRoleNothing(t *testing.T) {
 	author := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), instance)
 	refused(t, author, `CREATE TABLE public.planted (x int)`)
 	refused(t, author, `CREATE SCHEMA planted`)
+	refused(t, author, `SELECT set_config('search_path', 'public', false)`)
 }
 
 // Without a game_author credential the build is refused rather than run

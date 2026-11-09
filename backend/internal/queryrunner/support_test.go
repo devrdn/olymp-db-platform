@@ -53,6 +53,9 @@ func seed(t *testing.T, database string) {
 		// grants; write access to game tables is granted by the write tests.
 		`CREATE SCHEMA work`,
 		`GRANT USAGE, CREATE ON SCHEMA work TO `+gamedb.RoleWriter,
+		// How these tests hold a slot or outlast a deadline for a known time;
+		// a hardened database refuses it to participants.
+		`GRANT EXECUTE ON FUNCTION pg_sleep(double precision) TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
 	)
 }
 

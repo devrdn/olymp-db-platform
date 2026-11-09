@@ -479,6 +479,44 @@ func (p *Provisioner) DropIdle(ctx context.Context, name string) (dropped bool, 
 	return false, fmt.Errorf("drop %s: %w", name, err)
 }
 
+// Databases lists every database on the cluster that accepts connections:
+// what Harden can be applied to.
+func (p *Provisioner) Databases(ctx context.Context) ([]string, error) {
+	rows, err := p.admin.Query(ctx, `SELECT datname FROM pg_database WHERE datallowconn ORDER BY datname`)
+	if err != nil {
+		return nil, fmt.Errorf("list the databases: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list the databases: %w", err)
+	}
+	return names, nil
+}
+
+// Harden applies HardenDatabase to one database over a connection of its own,
+// closed before it returns. Catalog and function privileges live in each
+// database, so this is how a restriction added to HardenDatabase reaches a
+// template or an instance built before it.
+//
+// A database that no longer exists is passed over: on a live cluster a
+// participant's reset can drop one between Databases and this call.
+func (p *Provisioner) Harden(ctx context.Context, name string) error {
+	conn, err := p.connect(ctx, p.base.User, name)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "3D000" {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	if err := HardenDatabase(ctx, conn); err != nil {
+		return fmt.Errorf("harden %s: %w", name, err)
+	}
+	return nil
+}
+
 // connect opens one connection to a database on this cluster as the given
 // role. Host, port and TLS settings come from the provisioning DSN.
 func (p *Provisioner) connect(ctx context.Context, as *url.Userinfo, database string) (*pgx.Conn, error) {

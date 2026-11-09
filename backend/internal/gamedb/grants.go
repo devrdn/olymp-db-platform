@@ -78,16 +78,21 @@ func lendTemplateToTheAuthor(ctx context.Context, conn Conn, database string) er
 		// The author must own the game's objects: views and SECURITY DEFINER
 		// functions execute as their owner.
 		`GRANT USAGE, CREATE ON SCHEMA public TO ` + RoleAuthor,
+		// pg_dump opens every dump by clearing search_path through set_config,
+		// which a hardened database's PUBLIC no longer holds.
+		`GRANT EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) TO ` + RoleAuthor,
 	})
 }
 
-// takeTheTemplateBackFromTheAuthor withdraws both grants before the template
-// is copied. The schema ACL is copied by CREATE DATABASE … TEMPLATE, so without
-// its REVOKE every instance would let the author create objects in `public`.
-// The database ACL is not copied, so its REVOKE closes only this template.
+// takeTheTemplateBackFromTheAuthor withdraws the grants before the template
+// is copied. The schema and function ACLs are copied by CREATE DATABASE …
+// TEMPLATE, so without their REVOKEs every instance would let the author
+// create objects in `public` and change settings. The database ACL is not
+// copied, so its REVOKE closes only this template.
 func takeTheTemplateBackFromTheAuthor(ctx context.Context, conn Conn, database string) error {
 	return runAll(ctx, conn, []string{
 		`REVOKE ALL ON SCHEMA public FROM ` + RoleAuthor,
+		`REVOKE ALL ON FUNCTION pg_catalog.set_config(text, text, boolean) FROM ` + RoleAuthor,
 		`REVOKE ALL ON DATABASE ` + sqlpolicy.QuoteIdentifier(database) + ` FROM ` + RoleAuthor,
 	})
 }

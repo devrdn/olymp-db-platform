@@ -1,24 +1,24 @@
 // Command gamedb prepares the game cluster: the participant roles, the game
-// script role, their session defaults, and the databases they may not reach.
+// script role, their session defaults, the databases they may not reach, and
+// the catalogs and functions revoked inside every database.
 //
 // It runs idempotently on every deploy, before the Query Runner. An init
 // script would run only when the data directory is created, so later
 // restrictions would never reach an existing cluster. It ships in the Query
-// Runner's image to share the validator's sensitive catalog list (cgo).
+// Runner's image to share the validator's sensitive catalog and function
+// lists (cgo).
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -73,12 +73,12 @@ func run() error {
 	if err := verifyMemory(ctx, pool); err != nil {
 		return err
 	}
-	if err := hardenTheDefault(ctx, dsn); err != nil {
+	if err := hardenEveryDatabase(ctx, pool, dsn); err != nil {
 		return err
 	}
 
 	fmt.Println("game cluster prepared: roles, session defaults, connect privileges " +
-		"and the catalogue revocations every new database inherits")
+		"and the catalogue and function revocations in every database")
 	return nil
 }
 
@@ -161,25 +161,25 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// hardenTheDefault applies the catalogue revocations to template1, which every
-// database without an explicit TEMPLATE copies, so a forgotten instance is
-// hardened anyway. The connection is closed before returning, because CREATE
-// DATABASE refuses while its source has connections.
-func hardenTheDefault(ctx context.Context, adminDSN string) error {
-	target, err := url.Parse(adminDSN)
+// hardenEveryDatabase applies the catalogue and function revocations to every
+// database the cluster holds. The privileges live in each database and are
+// copied with it, so a restriction added since a template or an instance was
+// built reaches it only here. template1 is among them: every database without
+// an explicit TEMPLATE copies it, so a forgotten instance is hardened anyway.
+func hardenEveryDatabase(ctx context.Context, pool *pgxpool.Pool, adminDSN string) error {
+	// No author credential: this provisioner builds nothing.
+	provisioner, err := gamedb.NewProvisioner(pool, adminDSN, "")
 	if err != nil {
-		return fmt.Errorf("GAME_DB_ADMIN_DSN is not a URL: %w", err)
+		return fmt.Errorf("GAME_DB_ADMIN_DSN: %w", err)
 	}
-	target.Path = "/template1"
-
-	conn, err := pgx.Connect(ctx, target.String())
+	databases, err := provisioner.Databases(ctx)
 	if err != nil {
-		return fmt.Errorf("connect to template1: %w", err)
+		return err
 	}
-	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
-
-	if err := gamedb.HardenDatabase(ctx, conn); err != nil {
-		return fmt.Errorf("harden template1: %w", err)
+	for _, database := range databases {
+		if err := provisioner.Harden(ctx, database); err != nil {
+			return err
+		}
 	}
 	return nil
 }

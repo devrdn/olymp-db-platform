@@ -202,6 +202,64 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 	}
 }
 
+// Each statement reaches the server as written, as it would if the validator
+// missed it, so the privilege is what has to refuse it.
+func TestTheSensitiveFunctionsAreRefusedByTheDatabaseItself(t *testing.T) {
+	reader, _ := setupGame(t)
+
+	for family, statement := range map[string]string{
+		"the sessions of the shared role":  `SELECT count(*) FROM pg_stat_get_activity(NULL)`,
+		"one backend's query":              `SELECT pg_stat_get_backend_activity(1)`,
+		"every session's locks":            `SELECT count(*) FROM pg_lock_status()`,
+		"signalling a session":             `SELECT pg_cancel_backend(0)`,
+		"SQL text":                         `SELECT count(*) FROM ts_stat('SELECT ''a''::tsvector')`,
+		"SQL text returned as XML":         `SELECT query_to_xml('SELECT 1', true, false, '')`,
+		"reading a setting":                `SELECT current_setting('port')`,
+		"changing a setting":               `SELECT set_config('statement_timeout', '0', false)`,
+		"sleeping":                         `SELECT pg_sleep(1)`,
+		"sleeping through field selection": `SELECT (1).pg_sleep`,
+		"an advisory lock":                 `SELECT pg_try_advisory_lock(1)`,
+		"a large object":                   `SELECT lo_get(1)`,
+		"a notification":                   `SELECT pg_notify('channel', 'payload')`,
+	} {
+		t.Run(family, func(t *testing.T) {
+			err := refused(t, reader, statement)
+			if !strings.Contains(err.Error(), "permission denied for function") {
+				t.Fatalf("refused, but not by privileges: %v", err)
+			}
+		})
+	}
+}
+
+// The table above provokes one function per family; this asks the database,
+// as the reader, about every overload of every name.
+func TestEverySensitiveFunctionIsRevoked(t *testing.T) {
+	reader, _ := setupGame(t)
+
+	names := sqlpolicy.SensitiveFunctions()
+	if len(names) == 0 {
+		t.Fatal("the shared list is empty")
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			var overloads, executable int
+			if err := reader.QueryRow(t.Context(),
+				`SELECT count(*), count(*) FILTER (WHERE has_function_privilege(oid, 'EXECUTE'))
+				 FROM pg_proc
+				 WHERE pronamespace = 'pg_catalog'::regnamespace AND proname = $1`, name).Scan(&overloads, &executable); err != nil {
+				t.Fatalf("looking for the function: %v", err)
+			}
+			if overloads == 0 {
+				t.Fatalf("pg_catalog.%s does not exist on this server; a misspelt name revokes nothing", name)
+			}
+			if executable != 0 {
+				t.Fatalf("the reader may still execute %d of the %d overloads", executable, overloads)
+			}
+		})
+	}
+}
+
 // A database created without a TEMPLATE clause copies template1, so hardening
 // template1 covers a database nobody remembered to harden.
 func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {

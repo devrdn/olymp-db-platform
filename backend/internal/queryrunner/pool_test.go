@@ -53,6 +53,11 @@ func TestSessionStateDoesNotOutliveTheQueryThatLeftIt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			runner, database := setupWith(t, unlimited(), anything{})
+			// A hardened database refuses advisory locks; granted back here,
+			// the reset is still proved on its own.
+			gamedbtest.Run(t, database,
+				`GRANT EXECUTE ON FUNCTION pg_try_advisory_lock(bigint), pg_advisory_unlock(bigint),
+					pg_advisory_lock_shared(bigint), pg_advisory_unlock_shared(bigint) TO `+gamedb.RoleReader)
 
 			first := backend(t, runner, database)
 			if _, err := runner.Run(t.Context(), request(database, tc.leave)); err != nil {

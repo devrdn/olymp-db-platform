@@ -76,6 +76,66 @@ var (
 	}
 )
 
+// sensitiveFunctions are the built-in functions PostgreSQL lets every role
+// execute that reach past a participant's own data or hold the cluster up.
+// The checker's allow-list already leaves them out; the template REVOKEs them
+// as well, because PostgreSQL reads `x.f` as `f(x)` when f is no column, and
+// such a call has no function node for the allow-list to see. A whole family
+// is listed even where one member is harmless without another.
+var sensitiveFunctions = []string{
+	// What the other sessions are doing: the functions the sensitive session
+	// catalogs are views over, and the lock-wait questions that take a pid.
+	// Every participant connects as the same role, and PostgreSQL shows a role
+	// the queries of its own sessions.
+	"pg_stat_get_activity",
+	"pg_stat_get_backend_activity", "pg_stat_get_backend_activity_start",
+	"pg_stat_get_backend_client_addr", "pg_stat_get_backend_client_port",
+	"pg_stat_get_backend_dbid", "pg_stat_get_backend_idset",
+	"pg_stat_get_backend_pid", "pg_stat_get_backend_start",
+	"pg_stat_get_backend_subxact", "pg_stat_get_backend_userid",
+	"pg_stat_get_backend_wait_event", "pg_stat_get_backend_wait_event_type",
+	"pg_stat_get_backend_xact_start",
+	"pg_stat_get_progress_info", "pg_lock_status", "pg_prepared_xact",
+	"pg_blocking_pids", "pg_safe_snapshot_blocking_pids",
+	"pg_isolation_test_session_is_blocked",
+
+	// Interrupting them: a role may signal its own sessions, and the role is
+	// shared.
+	"pg_cancel_backend", "pg_terminate_backend",
+
+	// Running SQL handed over as text or as a relation's name, which no
+	// checker rule reads.
+	"ts_stat", "ts_rewrite",
+	"query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
+	"cursor_to_xml", "cursor_to_xmlschema",
+	"table_to_xml", "table_to_xmlschema", "table_to_xml_and_xmlschema",
+	"schema_to_xml", "schema_to_xmlschema", "schema_to_xml_and_xmlschema",
+	"database_to_xml", "database_to_xmlschema", "database_to_xml_and_xmlschema",
+
+	// Reading and changing settings: what pg_settings is a view over.
+	"current_setting", "set_config", "pg_show_all_settings",
+
+	// Holding one of the few running slots for the whole timeout.
+	"pg_sleep", "pg_sleep_for", "pg_sleep_until",
+
+	// Advisory locks: each takes an entry in the lock table every database
+	// shares, and a full table refuses locks to everybody.
+	"pg_advisory_lock", "pg_advisory_lock_shared",
+	"pg_advisory_xact_lock", "pg_advisory_xact_lock_shared",
+	"pg_try_advisory_lock", "pg_try_advisory_lock_shared",
+	"pg_try_advisory_xact_lock", "pg_try_advisory_xact_lock_shared",
+	"pg_advisory_unlock", "pg_advisory_unlock_shared", "pg_advisory_unlock_all",
+
+	// Large objects: storage any role may create, which no table grant covers.
+	"lo_creat", "lo_create", "lo_from_bytea", "lo_open", "lo_close",
+	"lo_get", "lo_put", "lo_unlink", "loread", "lowrite",
+	"lo_lseek", "lo_lseek64", "lo_tell", "lo_tell64",
+	"lo_truncate", "lo_truncate64",
+
+	// The notification queue is one for the whole cluster.
+	"pg_notify",
+}
+
 // ClassifyRelation decides what a table reference in the query is. The bare
 // name is checked as well as the schema, because pg_catalog is implicitly on
 // the search path and an unqualified `pg_database` is the same table.
@@ -104,6 +164,15 @@ func SensitiveCatalogs() []string {
 	for name := range sensitiveCatalogs {
 		out = append(out, name)
 	}
+	slices.Sort(out)
+	return out
+}
+
+// SensitiveFunctions names the pg_catalog functions no participant may
+// execute, sorted. internal/gamedb REVOKEs every overload of each; a checker
+// test asserts none of them is on the function allow-list.
+func SensitiveFunctions() []string {
+	out := slices.Clone(sensitiveFunctions)
 	slices.Sort(out)
 	return out
 }

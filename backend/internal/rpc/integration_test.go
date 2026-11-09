@@ -32,6 +32,9 @@ func serving(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) 
 		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
 		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
 		`GRANT INSERT ON evidence TO `+gamedb.RoleWriter,
+		// How these tests hold a slot or outlast a deadline for a known time;
+		// a hardened database refuses it to participants.
+		`GRANT EXECUTE ON FUNCTION pg_sleep(double precision) TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
 	)
 
 	cluster, err := queryrunner.NewCluster(

@@ -457,7 +457,7 @@ Which process does what:
 
 | Process or package | Part in the build |
 |---|---|
-| `cmd/gamedb` (compose service `game-prepare`) | Runs on every deploy before the Query Runner. `gamedb.PrepareCluster` creates the roles `game_reader`, `game_writer` and `game_author`, their session defaults (`statement_timeout` 5s for participants, 0 for the author) and what they may not reach. |
+| `cmd/gamedb` (compose service `game-prepare`) | Runs on every deploy before the Query Runner. `gamedb.PrepareCluster` creates the roles `game_reader`, `game_writer` and `game_author`, their session defaults (`statement_timeout` 5s for participants, 0 for the author) and what they may not reach. It then applies `gamedb.HardenDatabase` to every database on the cluster, so a revocation added since a template or an instance was built still reaches it. |
 | Core API, `internal/api` | `GameHandler` in [game_handler.go](../../backend/internal/api/game_handler.go): reads need `contest.view`, writes `contest.edit`. |
 | Core API, `internal/provisioning` | `Games` stores the description, queues it, and runs `Build` from the `game-build` task. Replacing or rebuilding the game is refused once the contest has started (`requireEditable`, `ErrGameNotEditable`), except a rebuild of a running contest whose template is missing from the game cluster (`RequestBuild`, `recoverable`). |
 | Core API, `internal/gamedb` | `Provisioner` connects with `GAME_PROVISIONER_DSN` on a maintenance pool with a 10-minute statement timeout, and runs the organiser's SQL only as `game_author` with `GAME_AUTHOR_PASSWORD`. |
@@ -479,9 +479,9 @@ Which process does what:
 Rules that matter:
 
 - The organiser's script never runs with the provisioner's privileges: the
-  contest's privileges (`grantPolicy`) and catalogue revocations
-  (`HardenDatabase`) are applied after the author's access is withdrawn, and
-  they survive `CREATE DATABASE … TEMPLATE`
+  contest's privileges (`grantPolicy`) and the catalogue and function
+  revocations (`HardenDatabase`) are applied after the author's access is
+  withdrawn, and they survive `CREATE DATABASE … TEMPLATE`
   ([ARCHITECTURE.md §4](../ARCHITECTURE.md#4-isolating-the-game-databases),
   [§4.1](../ARCHITECTURE.md#41-a-contests-sql-policy)).
 - `CREATE DATABASE … TEMPLATE` outlasts the core API's 10-second statement

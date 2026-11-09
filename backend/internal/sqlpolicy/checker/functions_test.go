@@ -46,6 +46,24 @@ func TestTheFunctionsThatAreNotOnTheList(t *testing.T) {
 	}
 }
 
+// The game cluster revokes these from every participant, so a name on both
+// lists would pass the checker and then fail in the database.
+func TestNoFunctionTheDatabaseRevokesIsOnTheList(t *testing.T) {
+	names := sqlpolicy.SensitiveFunctions()
+	if len(names) == 0 {
+		t.Fatal("the shared list is empty")
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			r := refusal(t, `SELECT `+name+`()`, sqlpolicy.ReadOnly())
+			if r.Code != sqlpolicy.CodeFunctionNotSupported {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeFunctionNotSupported)
+			}
+		})
+	}
+}
+
 // The operator needs the name to decide whether it belongs on the list.
 func TestARefusalNamesTheFunction(t *testing.T) {
 	r := refusal(t, `SELECT pg_sleep(1)`, sqlpolicy.ReadOnly())
