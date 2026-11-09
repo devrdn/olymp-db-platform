@@ -4,7 +4,7 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 // A Server Component: the loaders are faked and the view only records its props.
 const { loadContest, loadContestResource, view } = vi.hoisted(() => ({
-  loadContest: vi.fn(async (id: string) => ({ id })),
+  loadContest: vi.fn(async (id: string) => ({ id, status: "running" })),
   loadContestResource: vi.fn(async () => null),
   view: vi.fn(() => null),
 }));
@@ -39,6 +39,16 @@ describe("the monitoring page", () => {
 
     expect(Object.keys(props.dict as object)).toEqual(["workspace"]);
     expect((props.dict as Dictionary).workspace).toBe(dict.workspace);
+  });
+
+  // Opened before the start, the screen must begin watching when the contest does.
+  test.each([
+    { status: "published", changing: true },
+    { status: "running", changing: true },
+    { status: "finished", changing: false },
+  ])("lets the screen poll a $status contest: $changing", async ({ status, changing }) => {
+    loadContest.mockResolvedValueOnce({ id: CONTEST, status });
+    expect((await renderedProps()).changing).toBe(changing);
   });
 
   test("starts from an empty table and feed when the first reads find nothing", async () => {

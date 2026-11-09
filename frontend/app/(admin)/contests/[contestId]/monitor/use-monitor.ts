@@ -72,11 +72,14 @@ function rangeParams(range: FeedRange): FeedRange {
  * previous answer, so they never overlap. A 429 waits out `Retry-After`
  * (visibility does not cut it short); a 403 stops the chain. Quiet polls change
  * no state (`mergeRoster`). After the feed, at most one read refreshes one
- * participant's running queries.
+ * participant's running queries. `changing: false`, for a contest that is
+ * neither published nor running, schedules no polls: its table and feed
+ * hold still.
  */
 export function useMonitor({
   contestId,
   participant,
+  changing = true,
   roster: initialRoster,
   feed: initialPage,
   kinds: initialKinds = NO_KINDS,
@@ -84,6 +87,7 @@ export function useMonitor({
   contestId: string;
   /** One participant's registration; the feed becomes their timeline. */
   participant?: string;
+  changing?: boolean;
   /** The table to keep current; absent, none is read. */
   roster?: Roster;
   feed: FeedPage;
@@ -340,15 +344,17 @@ export function useMonitor({
       schedule(Math.max(wait, quietUntilRef.current - Date.now()));
     };
 
-    document.addEventListener("visibilitychange", onVisibility);
-    schedule(MONITOR_POLL_MS);
+    if (changing) {
+      document.addEventListener("visibilitychange", onVisibility);
+      schedule(MONITOR_POLL_MS);
+    }
     return () => {
       cancelled = true;
       controller.abort();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [contestId, participant]);
+  }, [contestId, participant, changing]);
 
   /** Reads the newest page, for a new filter or a jump to the latest. */
   const restart = useCallback(

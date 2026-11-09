@@ -16,19 +16,21 @@ import { useMonitor, type MonitorProblem } from "./use-monitor";
  */
 export function MonitorView({
   contestId,
+  changing,
   roster,
   feed: initialFeed,
   dict,
   locale,
 }: {
   contestId: string;
+  changing: boolean;
   roster: Roster;
   feed: FeedPage;
   dict: Pick<Dictionary, "workspace">;
   locale: string;
 }) {
   const t = dict.workspace.monitor;
-  const monitor = useMonitor({ contestId, roster, feed: initialFeed });
+  const monitor = useMonitor({ contestId, changing, roster, feed: initialFeed });
 
   return (
     // This gap and `Problem`'s `empty:-mt-8` must stay equal.

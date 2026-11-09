@@ -35,8 +35,8 @@ function setVisibility(state: "visible" | "hidden") {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
-function mount(initial: FeedPage = page([feedItem("c1")])) {
-  return renderHook(() => useMonitor({ contestId: CONTEST, roster, feed: initial }));
+function mount(initial: FeedPage = page([feedItem("c1")]), changing = true) {
+  return renderHook(() => useMonitor({ contestId: CONTEST, roster, feed: initial, changing }));
 }
 
 beforeEach(() => {
@@ -83,6 +83,18 @@ describe("the polling cadence", () => {
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(fetchRoster).toHaveBeenCalledTimes(2);
+  });
+
+  test("reads nothing while the contest can no longer change, even when the tab comes back", async () => {
+    mount(undefined, false);
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS * 3));
+    await act(async () => setVisibility("hidden"));
+    await act(async () => setVisibility("visible"));
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS * 3));
+
+    expect(fetchRoster).not.toHaveBeenCalled();
+    expect(fetchFeed).not.toHaveBeenCalled();
   });
 
   test("a page that says there is more asks again sooner", async () => {

@@ -22,6 +22,7 @@ export default async function MonitorPage(props: PageProps<"/contests/[contestId
   return (
     <MonitorView
       contestId={contest.id}
+      changing={contest.status === "published" || contest.status === "running"}
       roster={roster ?? { generatedAt: "", truncated: false, rows: [] }}
       feed={feed ?? { items: [], more: false }}
       // Every prop of a client component is serialised into the page; the

@@ -56,9 +56,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderView() {
+function renderView(changing = true) {
   return render(
-    <MonitorView contestId={CONTEST} roster={roster()} feed={page([feedItem("c1")])} dict={dict} locale="en" />,
+    <MonitorView
+      contestId={CONTEST}
+      changing={changing}
+      roster={roster()}
+      feed={page([feedItem("c1")])}
+      dict={dict}
+      locale="en"
+    />,
   );
 }
 
@@ -90,6 +97,15 @@ describe("the monitoring screen", () => {
 
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     expect(readableDuration).not.toHaveBeenCalled();
+  });
+
+  test("reads nothing after the first render once the contest can no longer change", async () => {
+    renderView(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS * 3));
+
+    expect(fetchRoster).not.toHaveBeenCalled();
+    expect(fetchFeed).not.toHaveBeenCalled();
   });
 
   test("renders only the row that changed", async () => {
