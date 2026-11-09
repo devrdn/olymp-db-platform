@@ -31,8 +31,10 @@ func indirectionAllowed(ind *pg.A_Indirection) error {
 // in the statement, unless f is a column g's alias declares. It must run after
 // the walk, which is what bounds the depth this recursion reaches.
 //
-// Names are matched across the whole statement rather than by scope, so a
-// table in a subquery that reuses a function's alias is held to the same rule.
+// Names are matched across the whole statement rather than by scope, and both
+// simplifications refuse more, never less: a table in a subquery that reuses a
+// function's alias is held to the function's rule, and when two functions
+// answer to one name a field passes only if both declare it.
 func functionFieldsAllowed(root *pg.Node) error {
 	var found functionReferences
 	found.collect(root.ProtoReflect())
@@ -58,8 +60,9 @@ func fieldSelectionRefused(qualifier, field string) error {
 
 // functionReferences is what one statement says about its functions in FROM.
 type functionReferences struct {
-	// declared maps the name each function answers to onto the columns its
-	// alias declares.
+	// declared maps the name a function answers to onto the columns its alias
+	// declares: for a name several functions share, the columns all of them
+	// declare.
 	declared map[string][]string
 	// qualified holds every two-part column reference, as qualifier and field.
 	qualified [][2]string
@@ -114,7 +117,10 @@ func (f *functionReferences) declare(fn *pg.RangeFunction) {
 	if f.declared == nil {
 		f.declared = make(map[string][]string)
 	}
-	f.declared[name] = append(f.declared[name], columns...)
+	if others, shared := f.declared[name]; shared {
+		columns = slices.DeleteFunc(columns, func(column string) bool { return !slices.Contains(others, column) })
+	}
+	f.declared[name] = columns
 }
 
 // functionAlias is the name a function in FROM answers to: its alias, or the

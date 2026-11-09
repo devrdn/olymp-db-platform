@@ -31,6 +31,14 @@ func TestFieldSelectionCannotStandInForACall(t *testing.T) {
 		"from a subquery under the alias":  `SELECT (SELECT g.pg_sleep) FROM generate_series(1, 1) g`,
 		"from a function inside a join":    `SELECT g.pg_sleep FROM suspects s JOIN generate_series(1, 1) g ON true`,
 		"from an expression used as a set": `SELECT "coalesce".pg_sleep FROM coalesce(1)`,
+		// Another function under the same alias, in a scope of its own, does
+		// not make the field a column of this one.
+		"declared by a namesake in a subquery": `SELECT g.pg_sleep FROM generate_series(1, 1) g
+			WHERE EXISTS (SELECT 1 FROM unnest(ARRAY[1]) AS g(pg_sleep))`,
+		"declared by a namesake in a UNION arm": `SELECT g.pg_sleep FROM generate_series(1, 1) g
+			UNION ALL SELECT 1 FROM unnest(ARRAY[1]) AS g(pg_sleep)`,
+		"declared by a namesake in an unused CTE": `WITH spare AS (SELECT 1 FROM unnest(ARRAY[1]) AS g(pg_sleep))
+			SELECT g.pg_sleep FROM generate_series(1, 1) g`,
 	} {
 		for policyName, policy := range map[string]sqlpolicy.Policy{
 			"read-only":     sqlpolicy.ReadOnly(),
@@ -88,6 +96,7 @@ func TestWhatLooksLikeFieldSelectionAndIsNot(t *testing.T) {
 		"a function's alias on its own":       `SELECT g FROM generate_series(1, 2) g`,
 		"a function's column unqualified":     `SELECT key, value FROM json_each('{"a": 1}') e`,
 		"an expression used as a set, named":  `SELECT c FROM coalesce(1) AS c`,
+		"a column two namesakes both declare": `SELECT t.x FROM unnest(ARRAY[1]) AS t(x) UNION ALL SELECT t.x FROM unnest(ARRAY[2]) AS t(x, n)`,
 	} {
 		for policyName, policy := range map[string]sqlpolicy.Policy{
 			"read-only":     sqlpolicy.ReadOnly(),
