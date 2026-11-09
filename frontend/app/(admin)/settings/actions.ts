@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { forgetBranding } from "@/lib/api/branding";
 import { ApiError, failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
 import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
@@ -34,6 +35,7 @@ export async function saveSettingsAction(
   }
 
   // The name is in every screen's bar.
+  forgetBranding();
   revalidatePath("/", "layout");
   return { saved: true };
 }
@@ -64,6 +66,7 @@ export async function uploadImageAction(
     return { code: failureCode(failure) };
   }
 
+  forgetBranding();
   revalidatePath("/", "layout");
   return { saved: true };
 }
@@ -84,6 +87,7 @@ export async function removeImageAction(
     return { code: failureCode(failure) };
   }
 
+  forgetBranding();
   revalidatePath("/", "layout");
   return { saved: true };
 }

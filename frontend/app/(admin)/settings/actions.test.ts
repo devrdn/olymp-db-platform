@@ -7,9 +7,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
 vi.mock("next/cache", () => ({ revalidatePath }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
+import { branding, forgetBranding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
 
-import { saveSettingsAction, sendTestMailAction } from "./actions";
+import { removeImageAction, saveSettingsAction, sendTestMailAction, uploadImageAction } from "./actions";
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();
@@ -66,6 +67,32 @@ describe("saveSettingsAction", () => {
     const state = await saveSettingsAction({}, form({ name: "USM", contact: "", feedback: "https://forms.gle/beta" }));
 
     expect(state).toEqual({ code: "invalid_feedback_url" });
+  });
+});
+
+describe("a change to the installation's frame", () => {
+  const withFile = () => {
+    const data = form({ kind: "logo" });
+    data.set("file", new File([new Uint8Array([1])], "logo.png", { type: "image/png" }));
+    return data;
+  };
+
+  // The frame keeps the settings it read for a while; the screen after a
+  // save must not show the old ones.
+  test.each([
+    ["saving the settings", () => saveSettingsAction({}, form({ name: "USM Chișinău", contact: "", feedback: "" }))],
+    ["replacing a mark", () => uploadImageAction({}, withFile())],
+    ["removing a mark", () => removeImageAction({}, form({ kind: "logo" }))],
+  ])("shows on the next screen after %s", async (_, act) => {
+    forgetBranding();
+    serverRequest.mockResolvedValueOnce({ values: { "installation.name": "USM" } });
+    await branding();
+
+    serverRequest.mockResolvedValueOnce(undefined);
+    expect(await act()).toEqual({ saved: true });
+
+    serverRequest.mockResolvedValueOnce({ values: { "installation.name": "USM Chișinău" } });
+    expect((await branding()).name).toBe("USM Chișinău");
   });
 });
 
