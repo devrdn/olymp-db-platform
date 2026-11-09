@@ -102,6 +102,9 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 	if err != nil {
 		return sqlpolicy.Statement{}, err
 	}
+	if err := functionFieldsAllowed(plan.node); err != nil {
+		return sqlpolicy.Statement{}, err
+	}
 	return sqlpolicy.Statement{
 		Text:    statementText(sql, raw),
 		Explain: plan.explain,
@@ -265,6 +268,8 @@ func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 		return selectAllowed(n.SelectStmt)
 	case *pg.Node_FuncCall:
 		return c.functionAllowed(n.FuncCall)
+	case *pg.Node_AIndirection:
+		return indirectionAllowed(n.AIndirection)
 	case *pg.Node_RangeVar:
 		return relationAllowed(n.RangeVar, p)
 	case *pg.Node_SqlvalueFunction:
