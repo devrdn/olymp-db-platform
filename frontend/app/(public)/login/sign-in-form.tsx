@@ -19,7 +19,7 @@ const FAILURE_ID = "sign-in-failure";
  * (`invalid_credentials`), so logins cannot be probed; one message is shown and
  * both fields point at it as invalid.
  */
-export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) {
+export function SignInForm({ dict, next }: { dict: Pick<Dictionary, "auth" | "errors">; next?: string }) {
   const t = dict.auth.signIn;
   const [state, formAction, pending] = useActionState<SignInState, FormData>(signInAction, {});
 

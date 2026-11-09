@@ -156,7 +156,10 @@ export function ParticipantRegister({
                   <td className={CELL}>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       {canOfferToJoin(contest) ? (
-                        <EnrollButton contestId={contest.id} dict={dict} />
+                        <EnrollButton
+                          contestId={contest.id}
+                          dict={{ participant: dict.participant, errors: dict.errors }}
+                        />
                       ) : canOpen(contest) ? (
                         /* The one row with something to do now; it outranks "you are
                            enrolled", which is a state, not a step. */

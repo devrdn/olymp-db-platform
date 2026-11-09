@@ -87,7 +87,7 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
             <TitleEditor
               contest={contest}
               editable={contentEditable(contest.status)}
-              dict={dict}
+              dict={{ workspace: dict.workspace, chrome: dict.chrome, errors: dict.errors }}
             />
           </div>
 

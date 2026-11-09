@@ -56,7 +56,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
             </p>
           ) : null}
 
-          <SignInForm dict={dict} next={next} />
+          <SignInForm dict={{ auth: dict.auth, errors: dict.errors }} next={next} />
         </div>
       </div>
     </Band>

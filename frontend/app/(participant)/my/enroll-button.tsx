@@ -14,7 +14,7 @@ import { messageForCode } from "@/lib/i18n/errors";
  * shows on its own row. The outcome replaces the button, so a live "Join"
  * never invites a second click.
  */
-export function EnrollButton({ contestId, dict }: { contestId: string; dict: Dictionary }) {
+export function EnrollButton({ contestId, dict }: { contestId: string; dict: Pick<Dictionary, "participant" | "errors"> }) {
   const t = dict.participant;
   const [state, formAction, pending] = useActionState<EnrollState, FormData>(enrollAction, {});
 

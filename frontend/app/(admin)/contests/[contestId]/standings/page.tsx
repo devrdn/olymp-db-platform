@@ -28,7 +28,7 @@ export default async function StandingsPage(props: PageProps<"/contests/[contest
           contestId={contest.id}
           status={contest.status}
           standings={standings}
-          dict={dict}
+          dict={{ leaderboard: dict.leaderboard, errors: dict.errors }}
           locale={locale}
         />
       ) : null}

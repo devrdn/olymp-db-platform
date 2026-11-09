@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 import { fetchStaffStandingsAction, revealStandingsAction, type RevealState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
+type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
+
 /** Poll interval for a running contest's staff table. */
 export const STAFF_REFRESH_MS = 15_000;
 
@@ -42,7 +44,7 @@ export function StaffStandingsView({
   contestId: string;
   status: ContestStatus;
   standings: StaffStandings;
-  dict: Dictionary;
+  dict: StaffStandingsDictionary;
   locale: string;
 }) {
   const t = dict.leaderboard;
@@ -288,7 +290,7 @@ export function StaffStandingsView({
 }
 
 /** What non-staff see, in the state's colour. */
-function Shown({ standings, dict, locale }: { standings: StaffStandings; dict: Dictionary; locale: string }) {
+function Shown({ standings, dict, locale }: { standings: StaffStandings; dict: StaffStandingsDictionary; locale: string }) {
   const t = dict.leaderboard.staff;
   switch (standings.shown.state) {
     case "live":
@@ -306,7 +308,7 @@ function Shown({ standings, dict, locale }: { standings: StaffStandings; dict: D
   }
 }
 
-function CopyLink({ contestId, dict }: { contestId: string; dict: Dictionary }) {
+function CopyLink({ contestId, dict }: { contestId: string; dict: StaffStandingsDictionary }) {
   const t = dict.leaderboard.staff;
   const [copied, setCopied] = useState(false);
 
@@ -327,7 +329,7 @@ function CopyLink({ contestId, dict }: { contestId: string; dict: Dictionary }) 
 }
 
 /** The irreversible reveal, behind a confirmation. */
-function Reveal({ contestId, dict }: { contestId: string; dict: Dictionary }) {
+function Reveal({ contestId, dict }: { contestId: string; dict: StaffStandingsDictionary }) {
   const t = dict.leaderboard.staff;
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState<RevealState, FormData>(revealStandingsAction, {});

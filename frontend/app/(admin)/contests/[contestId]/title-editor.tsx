@@ -19,6 +19,8 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { saveTranslationsAction, type TitleState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
 
+type TitleDictionary = Pick<Dictionary, "workspace" | "chrome" | "errors">;
+
 /**
  * One open field for the default language, the others behind a native
  * `<details>`. Collapsed inputs are still submitted, so a save without opening
@@ -31,7 +33,7 @@ function TitleForm({
   reportDismissible,
 }: {
   contest: Contest;
-  dict: Dictionary;
+  dict: TitleDictionary;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
 }) {
@@ -154,7 +156,7 @@ export function TitleEditor({
 }: {
   contest: Contest;
   editable: boolean;
-  dict: Dictionary;
+  dict: TitleDictionary;
 }) {
   const [open, setOpen] = useState(false);
   const [dismissible, setDismissible] = useState(true);
