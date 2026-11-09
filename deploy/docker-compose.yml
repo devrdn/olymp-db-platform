@@ -738,6 +738,14 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Ample for one Next process. It is here so that a flood of request bodies
+    # ends in web restarting, not in the kernel choosing a PostgreSQL backend
+    # on the same host to kill; queries and answers go to the API directly and
+    # survive the restart.
+    deploy:
+      resources:
+        limits:
+          memory: "1073741824"
     # Liveness from Next alone (frontend/app/healthz/route.ts). Not a page:
     # rendering one asks the API for the site's settings, so probing /login
     # sent the API four requests a minute to learn whether web was up. A

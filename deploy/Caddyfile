@@ -78,7 +78,15 @@
 	# value a client sent: a request that reached the interface any other way
 	# cannot name its own address (frontend/lib/api/forwarded.ts). The same
 	# value is given to the web service.
+	#
+	# The interface holds a request's whole body before routing it, so its
+	# bound has to be here. The cap is the largest body the interface accepts:
+	# the Server Action limit, Next's 1 MiB default, which
+	# frontend/next.config.ts leaves alone. Raise the two together.
 	handle {
+		request_body {
+			max_size 1MiB
+		}
 		reverse_proxy web:3000 {
 			header_up X-Forwarded-For {client_ip}
 			header_up X-Ingress-Secret {env.INGRESS_SECRET}

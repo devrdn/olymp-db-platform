@@ -20,7 +20,10 @@
 #   - /api/* reaches the API itself, not the interface, with the browser's
 #     Host — the API compares the Origin against it;
 #   - X-Ingress-Secret never reaches the API, and the interface receives the
-#     configured value, never the client's.
+#     configured value, never the client's;
+#   - a body over the interface's cap is refused by Caddy before it reaches
+#     the interface, while a body of the cap itself, and the same oversized
+#     body sent to /api/*, still get through.
 #
 # Usage: deploy/edge-check.sh   (or `make edge-check`). Needs Docker.
 set -euo pipefail
@@ -98,6 +101,13 @@ ask() { # from-address, path, then extra headers
 		wget -qO- "${headers[@]}" "http://$CADDY_IP$path"
 }
 
+# BusyBox wget posts a file as a C string, so the body must hold no NUL byte.
+send() { # path, body size in bytes; prints the answer, or wget's error line
+	docker run --rm --network "$RUN" --ip "$STRANGER_IP" "$IMAGE" sh -c \
+		'head -c "$1" /dev/zero | tr "\0" a >/tmp/body && wget -qO- --header "Host: edge.test" --post-file /tmp/body "$2" 2>&1' \
+		send "$2" "http://$CADDY_IP$1" || true
+}
+
 echo "Caddy configuration"
 if validate ""; then pass "validates with EDGE_TRUSTED_PROXIES unset"; else fail "validates with EDGE_TRUSTED_PROXIES unset" "rejected"; fi
 if validate "192.0.2.10/32 2001:db8::10/128"; then pass "validates with EDGE_TRUSTED_PROXIES set"; else fail "validates with EDGE_TRUSTED_PROXIES set" "rejected"; fi
@@ -125,6 +135,14 @@ expect "an edge request with no chain is the edge itself" \
 	"$(ask "$EDGE_IP" /api/v1/ping)" "api host=[edge.test] xff=[$EDGE_IP] proto=[http] secret=[]"
 expect "any other address is still not believed" \
 	"$(ask "$STRANGER_IP" /api/v1/ping "${spoofed[@]}")" "api host=[edge.test] xff=[$STRANGER_IP] proto=[http] secret=[]"
+
+echo "Request bodies"
+expect "a body of the interface's cap still reaches the interface" \
+	"$(send /login 1048576)" "web host=[edge.test] xff=[$STRANGER_IP] proto=[http] secret=[$SECRET]"
+expect "a body over the cap is refused by Caddy and never reaches the interface" \
+	"$(send /login 2097152)" "wget: server returned error: HTTP/1.1 413 Request Entity Too Large"
+expect "the same body to /api/* still reaches the API" \
+	"$(send /api/v1/ping 2097152)" "api host=[edge.test] xff=[$STRANGER_IP] proto=[http] secret=[]"
 
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed"
