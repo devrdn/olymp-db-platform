@@ -114,6 +114,27 @@ describe("saveSettingsAction, an open shape", () => {
   });
 });
 
+describe("saveSettingsAction, the leaderboard's names", () => {
+  test("keeps the choice the form carried", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ leaderboardNames: "login" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
+    expect(init.body.leaderboard.names).toBe("login");
+  });
+
+  // The table is public and a self-registered login is an email address.
+  test("shows full names when the form carries no readable choice", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ leaderboardNames: "nickname" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
+    expect(init.body.leaderboard.names).toBe("full_name");
+  });
+});
+
 describe("saveSettingsAction, the result download", () => {
   test("offers the CSV file when the box is ticked", async () => {
     serverRequest.mockResolvedValueOnce({});

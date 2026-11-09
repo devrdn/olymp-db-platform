@@ -88,7 +88,7 @@ export async function saveSettingsAction(
   );
   if (!freeze.ok) return { code: "invalid_request" };
   const leaderboard: { names: string; freeze_min?: number | null } = {
-    names: enumFromForm(form.get("leaderboardNames"), ["login", "full_name"] as const) ?? "login",
+    names: enumFromForm(form.get("leaderboardNames"), ["login", "full_name"] as const) ?? "full_name",
   };
   if (freeze.value !== undefined) leaderboard.freeze_min = freeze.value;
 
