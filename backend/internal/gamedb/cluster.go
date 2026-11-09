@@ -72,10 +72,10 @@ type Cluster interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// prepareLock is the advisory lock every run of PrepareCluster takes; no other
-// advisory lock may use this number. Two sessions altering the same role at
-// once fail with `tuple concurrently updated` (XX000), so concurrent deploys
-// must queue instead.
+// prepareLock is the advisory lock every deploy (PrepareCluster) and every
+// build (restateAuthor) takes; no other advisory lock may use this number. Two
+// sessions altering the same role at once fail with `tuple concurrently
+// updated` (XX000), so they must queue instead.
 const prepareLock = 8_531_204_477_119_003_1
 
 // sessionDefaults are applied to both participant roles with ALTER ROLE … SET.
@@ -136,19 +136,19 @@ func restateAuthor(ctx context.Context, cluster Cluster, password string) error 
 func underPrepareLock(ctx context.Context, cluster Cluster, work func(Conn) error) error {
 	tx, err := cluster.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin preparing the cluster: %w", err)
+		return fmt.Errorf("begin stating the roles: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(prepareLock)); err != nil {
-		return fmt.Errorf("wait for another run to finish: %w", err)
+		return fmt.Errorf("wait for another session stating the roles: %w", err)
 	}
 
 	if err := work(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("finish preparing the cluster: %w", err)
+		return fmt.Errorf("commit the roles: %w", err)
 	}
 	return nil
 }
