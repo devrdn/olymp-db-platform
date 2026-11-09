@@ -1,6 +1,31 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { identityFrom } from "./session";
+// Both read the current request, which does not exist here.
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "abc" }) }) }));
+vi.mock("@/lib/api/caller", () => ({ callerHeaders: async () => ({}) }));
+
+import { fetchIdentity, identityFrom } from "./session";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("fetchIdentity", () => {
+  // Every signed-in layout waits on it, so a stalled API must not hold a
+  // render for minutes.
+  test("bounds how long the API may take to say who the caller is", async () => {
+    let seen: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      seen = init;
+      return new Response(JSON.stringify({ id: "u1", login: "ivanov" }), { status: 200 });
+    });
+
+    await fetchIdentity();
+
+    expect(seen?.signal).toBeInstanceOf(AbortSignal);
+    expect(seen?.signal?.aborted).toBe(false);
+  });
+});
 
 describe("identityFrom", () => {
   test("reports who the caller is when the server says so", async () => {

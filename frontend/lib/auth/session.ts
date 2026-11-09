@@ -4,6 +4,7 @@ import { cache } from "react";
 import { callerHeaders } from "@/lib/api/caller";
 import { API_PREFIX } from "@/lib/api/client";
 import { apiOrigin } from "@/lib/api/config";
+import { SERVER_REQUEST_TIMEOUT_MS } from "@/lib/api/server";
 
 /** Must match `auth.SessionCookieName` in the Go service. Defined only here on this side. */
 export const SESSION_COOKIE = "dbcontest_session";
@@ -59,6 +60,7 @@ export const fetchIdentity = cache(async (): Promise<CurrentIdentity | null> => 
   const response = await fetch(`${apiOrigin()}${API_PREFIX}/auth/me`, {
     headers: { ...(await callerHeaders()), ...header },
     cache: "no-store",
+    signal: AbortSignal.timeout(SERVER_REQUEST_TIMEOUT_MS),
   }).catch(() => null);
 
   return identityFrom(response);
