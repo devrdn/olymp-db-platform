@@ -387,6 +387,28 @@ func TestCookieSecurityCanBeOverridden(t *testing.T) {
 	}
 }
 
+func TestTheEventRegistrationFormIsClosedUnlessTheDeploymentOpensIt(t *testing.T) {
+	setRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.EventRegistrationEnabled {
+		t.Error("EventRegistrationEnabled = true with nothing set, want the form closed")
+	}
+
+	t.Setenv("EVENT_REGISTRATION_ENABLED", "true")
+	if cfg, err = Load(); err != nil || !cfg.EventRegistrationEnabled {
+		t.Errorf("EVENT_REGISTRATION_ENABLED=true: enabled=%v err=%v, want the form open", cfg.EventRegistrationEnabled, err)
+	}
+
+	t.Setenv("EVENT_REGISTRATION_ENABLED", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted EVENT_REGISTRATION_ENABLED=sometimes")
+	}
+}
+
 func TestTrustedProxiesDefaultToNone(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 

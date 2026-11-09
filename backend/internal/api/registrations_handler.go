@@ -33,20 +33,30 @@ const eventRegistrationIDParam = "registrationID"
 // RegistrationsHandler serves the event's public registration form and the
 // organizers' list with its arrival mark.
 type RegistrationsHandler struct {
-	service *registrations.Service
-	limiter *auth.Limiter
-	mw      *auth.Middleware
-	log     *slog.Logger
+	service  *registrations.Service
+	limiter  *auth.Limiter
+	mw       *auth.Middleware
+	log      *slog.Logger
+	formOpen bool
 }
 
 func NewRegistrationsHandler(service *registrations.Service, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *RegistrationsHandler {
 	return &RegistrationsHandler{service: service, limiter: limiter, mw: mw, log: log}
 }
 
-// Mount registers the form under /public/, which needs no session, and the
-// list under /registrations for whoever manages accounts.
+// WithPublicForm mounts the public form; without it only the organizers'
+// routes exist.
+func (h *RegistrationsHandler) WithPublicForm() *RegistrationsHandler {
+	h.formOpen = true
+	return h
+}
+
+// Mount registers the form, when open, under /public/, which needs no
+// session, and the list under /registrations for whoever manages accounts.
 func (h *RegistrationsHandler) Mount(r chi.Router) {
-	r.Post("/public/registrations", h.register)
+	if h.formOpen {
+		r.Post("/public/registrations", h.register)
+	}
 	r.Route("/registrations", func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionUsersManage))
 		r.Get("/", h.list)

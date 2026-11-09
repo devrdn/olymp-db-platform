@@ -168,6 +168,9 @@ type Config struct {
 	// CookieSecure marks the session cookie Secure. It defaults to true
 	// outside development; a local stack without TLS needs it off.
 	CookieSecure bool
+	// EventRegistrationEnabled opens the event's public registration form.
+	// Off by default, so a deployment with no event on serves no form.
+	EventRegistrationEnabled bool
 	// TrustedProxies lists the CIDRs (or bare addresses) whose forwarded
 	// headers are believed (CLAUDE.md rule 9). Empty means the TCP peer is
 	// always the client, the safe default.
@@ -376,6 +379,9 @@ func Load() (Config, error) {
 			cfg.SessionAccountCacheTTL, maxSessionAccountCacheTTL)
 	}
 	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
+		return Config{}, err
+	}
+	if cfg.EventRegistrationEnabled, err = boolEnv("EVENT_REGISTRATION_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.DeviceCookieSecret, err = deviceCookieSecret(cfg.Env); err != nil {

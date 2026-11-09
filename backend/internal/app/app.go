@@ -544,15 +544,20 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	modules = append(modules, api.NewPublicHandler(
 		showcase.NewService(showcase.Config{Repository: postgres.NewShowcase(pool)}),
 		limiter, log, cfg.DefaultLocale))
-	// The evening event's registration form and its organizers' list.
-	modules = append(modules, api.NewRegistrationsHandler(registrations.NewService(registrations.Config{
+	// The evening event's organizers' list, and its registration form only
+	// while the deployment says the event is on.
+	registrationsHandler := api.NewRegistrationsHandler(registrations.NewService(registrations.Config{
 		Store:      postgres.NewEventRegistrations(pool),
 		Accounts:   registrationAccounts{users: userService},
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,
 		UnitOfWork: storage.NewUnitOfWork(pool),
-	}), limiter, authMiddleware, log))
+	}), limiter, authMiddleware, log)
+	if cfg.EventRegistrationEnabled {
+		registrationsHandler = registrationsHandler.WithPublicForm()
+	}
+	modules = append(modules, registrationsHandler)
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only

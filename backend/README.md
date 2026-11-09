@@ -158,6 +158,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `QUERY_RUNNER_TOKEN` | outside `development`, when `QUERY_RUNNER_ADDR` is set | — | secret presented on every call to the Query Runner (32-512 printable ASCII bytes); the runner requires the same value |
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
+| `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
 
 ### The mail relay
 

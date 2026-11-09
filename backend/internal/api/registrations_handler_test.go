@@ -31,9 +31,14 @@ type registrationsFixture struct {
 	cookie *http.Cookie
 }
 
-// newRegistrationsFixture mounts the routes, with the signed-in account
-// holding permissions.
+// newRegistrationsFixture mounts the routes with the public form open, with
+// the signed-in account holding permissions.
 func newRegistrationsFixture(t *testing.T, permissions ...string) *registrationsFixture {
+	t.Helper()
+	return mountRegistrations(t, true, permissions...)
+}
+
+func mountRegistrations(t *testing.T, formOpen bool, permissions ...string) *registrationsFixture {
 	t.Helper()
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
@@ -54,7 +59,11 @@ func newRegistrationsFixture(t *testing.T, permissions ...string) *registrations
 
 	f := &registrationsFixture{Fixture: registrationstest.NewFixture(nil)}
 	router := chi.NewRouter()
-	api.NewRegistrationsHandler(f.Service, auth.NewLimiter(c), mw, log).Mount(router)
+	handler := api.NewRegistrationsHandler(f.Service, auth.NewLimiter(c), mw, log)
+	if formOpen {
+		handler = handler.WithPublicForm()
+	}
+	handler.Mount(router)
 	f.router = router
 	f.cookie = &http.Cookie{Name: auth.SessionCookieName, Value: token}
 	return f
@@ -90,6 +99,32 @@ func jsonFields(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 		t.Fatalf("body is not a JSON object: %v (%s)", err, rec.Body.String())
 	}
 	return out
+}
+
+func TestThePublicFormIsMountedOnlyWhenOpenedAndTheStaffRoutesAlways(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		open     bool
+		wantForm int
+	}{
+		{"closed", false, http.StatusNotFound},
+		{"open", true, http.StatusCreated},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := mountRegistrations(t, c.open, rbac.PermissionUsersManage)
+
+			if rec := f.register("192.0.2.1", "Ana", "Popescu", "ana@example.com"); rec.Code != c.wantForm {
+				t.Errorf("POST /public/registrations = %d, want %d", rec.Code, c.wantForm)
+			}
+			if rec := f.staff(http.MethodGet, "/registrations", ""); rec.Code != http.StatusOK {
+				t.Errorf("GET /registrations = %d, want 200", rec.Code)
+			}
+			rec := f.staff(http.MethodPut, "/registrations/"+uuid.NewString()+"/check-in", `{"checked_in":true}`)
+			if rec.Code != http.StatusNotFound || errorCode(t, rec) != "registration_not_found" {
+				t.Errorf("PUT check-in = %d %q, want the handler's 404 registration_not_found", rec.Code, errorCode(t, rec))
+			}
+		})
+	}
 }
 
 func TestAFirstRegistrationAnswersTheCodeAndTheAccount(t *testing.T) {

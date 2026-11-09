@@ -4,8 +4,8 @@
 // emails the code through the outbox.
 //
 // It does not enroll anyone in a contest, which the contest's open enrollment
-// does, and it has no open or closed switch: the feature is removed by a later
-// release.
+// does, and it does not decide whether the form is open: the deployment does,
+// with EVENT_REGISTRATION_ENABLED.
 package registrations
 
 import (
