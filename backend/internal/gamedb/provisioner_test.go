@@ -681,6 +681,66 @@ func TestHardenPassesOverADatabaseThatIsGone(t *testing.T) {
 	}
 }
 
+// An interrupted DROP DATABASE leaves the database listed and refusing every
+// connection until somebody drops it; it must not fail each deploy meanwhile.
+func TestDatabasesLeavesOutOneADropLeftInvalid(t *testing.T) {
+	p := provisioner(t)
+
+	invalid := named(t, "invalid")
+	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(invalid)); err != nil {
+		t.Fatalf("creating %s: %v", invalid, err)
+	}
+	// What the server itself writes when a drop is interrupted.
+	if _, err := admin(t).Exec(t.Context(),
+		`UPDATE pg_database SET datconnlimit = -2 WHERE datname = $1`, invalid); err != nil {
+		t.Fatalf("marking %s invalid: %v", invalid, err)
+	}
+
+	names, err := p.Databases(t.Context())
+	if err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+	if slices.Contains(names, invalid) {
+		t.Fatalf("the invalid database is listed in %v", names)
+	}
+}
+
+// One database that cannot be hardened must not keep the old grants on those
+// visited after it. The first here is gone, the second has no public schema
+// to revoke CREATE on, and the third is the one that matters.
+func TestHardenReachesTheDatabasesAfterOneItCouldNot(t *testing.T) {
+	p := provisioner(t)
+
+	gone := named(t, "a_gone")
+	broken := named(t, "b_broken")
+	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(broken)); err != nil {
+		t.Fatalf("creating %s: %v", broken, err)
+	}
+	asOwner(t, broken, `DROP SCHEMA public`)
+	old := named(t, "c_old")
+	if _, err := admin(t).Exec(t.Context(),
+		`CREATE DATABASE `+sqlpolicy.QuoteIdentifier(old)+` TEMPLATE template0`); err != nil {
+		t.Fatalf("creating %s: %v", old, err)
+	}
+
+	err := p.Harden(t.Context(), gone, broken, old)
+	if err == nil {
+		t.Fatal("a database that could not be hardened was not reported")
+	}
+	if !strings.Contains(err.Error(), broken) {
+		t.Fatalf("the error does not name the database it failed on: %v", err)
+	}
+	if strings.Contains(err.Error(), gone) {
+		t.Fatalf("a database that is gone was reported as a failure: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword(t), old)
+	refusal := refused(t, reader, `SELECT pg_sleep(0)`)
+	if !strings.Contains(refusal.Error(), "permission denied for function") {
+		t.Fatalf("refused, but not by privileges: %v", refusal)
+	}
+}
+
 func TestDatabaseSizesMeasuresAWholeListAtOnce(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 

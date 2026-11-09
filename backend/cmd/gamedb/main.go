@@ -176,12 +176,7 @@ func hardenEveryDatabase(ctx context.Context, pool *pgxpool.Pool, adminDSN strin
 	if err != nil {
 		return err
 	}
-	for _, database := range databases {
-		if err := provisioner.Harden(ctx, database); err != nil {
-			return err
-		}
-	}
-	return nil
+	return provisioner.Harden(ctx, databases...)
 }
 
 func required(key string) (string, error) {

@@ -426,9 +426,13 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 		return p.settleInstance(ctx, instance, policy)
 	}
 
-	// 55006: the template has a connection. Nothing should be connected to a
-	// template, so it is a forgotten session, not a race: cleared once and
-	// retried, and a second failure is reported.
+	// 55006: a session stayed on the template through the five seconds
+	// PostgreSQL waits for one to leave. Nothing should stay that long (the
+	// deploy's Harden visits a template for a moment), so it is a forgotten
+	// session: cleared once and retried, and a second failure is reported.
+	// The clearing ends every session on the template, a Harden visit
+	// included; that visit fails, is reported, and is made again on the next
+	// deploy.
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "55006" {
 		return fmt.Errorf("copy the template: %w", err)
@@ -480,9 +484,12 @@ func (p *Provisioner) DropIdle(ctx context.Context, name string) (dropped bool, 
 }
 
 // Databases lists every database on the cluster that accepts connections:
-// what Harden can be applied to.
+// what Harden can be applied to. A connection limit of -2 is how PostgreSQL
+// marks a database an interrupted DROP DATABASE left invalid; it refuses every
+// connection until it is dropped.
 func (p *Provisioner) Databases(ctx context.Context) ([]string, error) {
-	rows, err := p.admin.Query(ctx, `SELECT datname FROM pg_database WHERE datallowconn ORDER BY datname`)
+	rows, err := p.admin.Query(ctx,
+		`SELECT datname FROM pg_database WHERE datallowconn AND datconnlimit <> -2 ORDER BY datname`)
 	if err != nil {
 		return nil, fmt.Errorf("list the databases: %w", err)
 	}
@@ -493,14 +500,26 @@ func (p *Provisioner) Databases(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// Harden applies HardenDatabase to one database over a connection of its own,
-// closed before it returns. Catalog and function privileges live in each
-// database, so this is how a restriction added to HardenDatabase reaches a
-// template or an instance built before it.
+// Harden applies HardenDatabase to each database named, over a connection of
+// its own that is closed before the next. Catalog and function privileges live
+// in each database, so this is how a restriction added to HardenDatabase
+// reaches a template or an instance built before it.
 //
-// A database that no longer exists is passed over: on a live cluster a
-// participant's reset can drop one between Databases and this call.
-func (p *Provisioner) Harden(ctx context.Context, name string) error {
+// It runs against a live cluster, where a participant's reset or a template
+// rebuild can drop a database, with its sessions, at any moment. One that no
+// longer exists is passed over, and a failure on one does not stop the visits
+// to the rest: every failure is returned, joined, after the last.
+func (p *Provisioner) Harden(ctx context.Context, names ...string) error {
+	var failed []error
+	for _, name := range names {
+		if err := p.harden(ctx, name); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return errors.Join(failed...)
+}
+
+func (p *Provisioner) harden(ctx context.Context, name string) error {
 	conn, err := p.connect(ctx, p.base.User, name)
 	if err != nil {
 		var pgErr *pgconn.PgError
