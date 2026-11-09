@@ -172,9 +172,10 @@ account ceiling), so an owner who signs in every day is not locked out by
 their own typos.
 
 A browser holding a valid device cookie (`dbcontest_device`) is *trusted*: it
-spends `spendTrusted` instead: a trusted window per address (as large as the
-address budget, `trusted-from:`), then per device (10) and per account across
-its trusted browsers (20). It skips the address's share of the hashing queue.
+spends `spendTrusted` instead: per device (10), per account across its
+trusted browsers (20) and, last, a trusted window per address (as large as the
+address budget, `trusted-from:`). It skips the address's share of the hashing
+queue.
 Past those limits the attempt is not refused; it continues untrusted and pays
 the three ordinary limits, so a copied cookie cannot lock the owner out. A
 cookie that no longer vouches (password changed, account blocked) is found

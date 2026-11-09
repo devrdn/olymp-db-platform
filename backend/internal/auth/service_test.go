@@ -1026,10 +1026,10 @@ func TestGuessingThroughAStolenCookieIsBoundedByTheOrdinaryLimitsPastTheDevices(
 func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
 	// With the address budget spent, only a cleared device limit lets the
 	// owner's browser in.
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 4})
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 3})
 	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
-	for range 4 {
+	for range 3 {
 		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a rival's guess", IP: "10.0.0.1"})
 	}
 	for range 2 {
@@ -1219,6 +1219,29 @@ func TestTrustedAttemptsFromOneAddressPayTheAddressBudget(t *testing.T) {
 
 	if got := len(f.sink.entries); got != rowsAtRefusal {
 		t.Errorf("the trail grew from %d to %d rows past the address budget, want no further rows", rowsAtRefusal, got)
+	}
+}
+
+func TestARivalsOwnCookiePastItsDeviceLimitLeavesTheOwnersTrustedBrowserIn(t *testing.T) {
+	const budget = 30
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: budget})
+	ctx := context.Background()
+	owner := f.trustedBrowser(t, "10.0.0.9")
+	f.repo.Add(users.User{
+		Login: "petrov", FullName: "Pyotr Petrov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	rival, err := f.service.Login(ctx, LoginCommand{Login: "petrov", Password: testPassword, IP: "10.0.0.8"})
+	if err != nil {
+		t.Fatalf("the rival's sign-in = %v, want a session", err)
+	}
+
+	for range budget + 10 {
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "petrov", Password: "a guess", IP: "10.0.0.1", DeviceToken: rival.DeviceToken})
+	}
+
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: owner}); err != nil {
+		t.Errorf("the owner's trusted browser at the rival's address = %v, want a session", err)
 	}
 }
 

@@ -199,10 +199,11 @@ type LoginResult struct {
 // oracle. password.ErrBusy means the attempt spent its step-1 budget but was
 // not evaluated.
 func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
-	// A trusted browser skips the address and account limits, which a rival
-	// at the next desk could spend, and spends limits only cookie holders can
-	// (spendTrusted). The cookie is checked only within the length bounds,
-	// since checking it hashes the login.
+	// A trusted browser skips the ordinary address and account limits, which
+	// a rival at the next desk could spend, and spends its own (spendTrusted),
+	// where only attempts its device and account admitted reach the address's
+	// window. The cookie is checked only within the length bounds, since
+	// checking it hashes the login.
 	var (
 		device  Device
 		trusted bool
@@ -440,9 +441,10 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 //     then the ceiling. Only attempts the guessing limit passed reach the
 //     ceiling, so one address cannot shut the owner out everywhere.
 //
-// spendTrusted replaces all three for a trusted browser. It too spends an
-// address-keyed window first: its other keys come from a signed cookie and
-// cannot be invented, but cookies for many accounts can be collected.
+// spendTrusted replaces all three for a trusted browser. Its device and
+// account keys come from a signed cookie and cannot be invented, so they are
+// spent first; its address window comes last, like the ceiling above, so a
+// rival's own cookie cannot spend what the owner's browser needs.
 
 // withinLengths reports whether the login and password are short enough to
 // belong to a real account (users.MaxLoginLength, password.MaxLength).
@@ -450,20 +452,21 @@ func withinLengths(cmd LoginCommand) bool {
 	return len(cmd.Login) <= users.MaxLoginLength && len(cmd.Password) <= password.MaxLength
 }
 
-// spendTrusted spends the address's trusted window, then a trusted browser's
-// limit, then the account's trusted budget, and reports whether any was
+// spendTrusted spends a trusted browser's limit, then the account's trusted
+// budget, then the address's trusted window, and reports whether any was
 // spent. It records nothing.
 //
-// All three count successes too and reset only with their window. The last
+// All three count successes too and reset only with their window. The first
 // two are under the account's throttle generation, so an unlock clears them;
 // the address's window outlives it, as the address budget does. An attempt
 // one window refused does not spend the next, so one copied cookie cannot use
 // up what the owner's other browsers share.
 //
 // The address's window is the address budget's size, so collected cookies do
-// not multiply what one address may have hashed. Accepted cost: about fifteen
-// accounts' cookies from one hall spend that hall's trusted window, after
-// which their sign-ins pay the ordinary address budget.
+// not multiply what one address may have hashed. Each account adds at most
+// its trusted budget to it, so at the defaults (20 of 300) about fifteen
+// accounts' cookies spend a hall's window, after which its sign-ins pay the
+// ordinary address budget.
 func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Device) (bool, error) {
 	gen, err := s.limiter.Generation(ctx, accountFamily(cmd.Login))
 	if err != nil {
@@ -473,9 +476,9 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 		subject string
 		limit   int
 	}{
-		{"trusted-from:" + httpx.AddressSubject(cmd.IP), s.maxPerAddress},
 		{deviceSubject(device.ID, gen), s.maxPerDevice},
 		{trustedSubject(cmd.Login, gen), s.maxTrusted},
+		{"trusted-from:" + httpx.AddressSubject(cmd.IP), s.maxPerAddress},
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {

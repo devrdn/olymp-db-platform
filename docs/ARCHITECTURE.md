@@ -2060,24 +2060,26 @@ per laboratory computer for a month, and revocation is free anyway — a
 password change moves the generation, and blocking, deletion and restoration
 move the status moment, and the cookie stops fitting. An attempt carrying a
 valid cookie spends neither the address limit, nor the pair, nor the ceiling;
-instead it is bounded by a trusted window per address, as large as the
-address limit, then by that device's counter
-(`MAX_LOGIN_ATTEMPTS_PER_DEVICE`, ten per fifteen minutes) and by the
-account's overall trusted budget across all of its devices
-(`MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, twenty). All three count successes
+instead it is bounded by that device's counter
+(`MAX_LOGIN_ATTEMPTS_PER_DEVICE`, ten per fifteen minutes), by the account's
+overall trusted budget across all of its devices
+(`MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, twenty) and, last, by a trusted
+window per address as large as the address limit. All three count successes
 and none resets on one — otherwise an account's own cookie would sign in
 without limit, and every sign-in would take a hashing slot, a session and a
 journal row; the shared budget stops the limit being multiplied by collecting
 cookies in advance, and the address's window stops it being multiplied by
-collecting cookies for many accounts. Its price: about fifteen accounts'
-cookies from one hall spend that hall's trusted window, after which their
-sign-ins pay the ordinary address limit. An exhausted trusted limit is not a
-refusal: the attempt continues as an ordinary one, without the cookie, and
-pays the address limit, the pair and the ceiling. Otherwise whoever obtained a
-copy of the cookie would exhaust the owner's trusted limits and close them out
-— the very lockout the cookie exists to prevent. A trusted sign-in past half
-the cookie's lifetime renews it under the same device identifier; renewal only
-ever follows a correct password, and the counters are not reset by it.
+collecting cookies for many accounts. The address's window comes last, so only
+attempts the device and account admitted reach it: a rival's own account adds
+at most twenty, and about fifteen accounts' cookies from one hall spend that
+hall's trusted window, after which their sign-ins pay the ordinary address
+limit. An exhausted trusted limit is not a refusal: the attempt continues as
+an ordinary one, without the cookie, and pays the address limit, the pair and
+the ceiling. Otherwise whoever obtained a copy of the cookie would exhaust the
+owner's trusted limits and close them out — the very lockout the cookie exists
+to prevent. A trusted sign-in past half the cookie's lifetime renews it under
+the same device identifier; renewal only ever follows a correct password, and
+the counters are not reset by it.
 
 **An administrator lifts a sign-in lockout.** A rival at the same laboratory
 address, or guessing from many addresses, can still close an account for a

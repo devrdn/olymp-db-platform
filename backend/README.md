@@ -142,11 +142,11 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
 | `SESSION_MAX_LIFETIME` | no | `12h` | absolute lifetime of a session from sign-in, 5m to 168h; activity does not extend it |
 | `SESSION_ACCOUNT_CACHE_TTL` | no | `5s` | how long authentication may use a cached copy of the account, 0s to 30s (0s reads it every request); changes made in the application invalidate it at once, a change made directly in the database applies within this long |
-| `MAX_LOGIN_ATTEMPTS_PER_ADDRESS` | no | `300` | sign-in attempts from one address per 15 minutes, successes included; trusted browsers at one address share a window of the same size before it |
+| `MAX_LOGIN_ATTEMPTS_PER_ADDRESS` | no | `300` | sign-in attempts from one address per 15 minutes, successes included; trusted browsers at one address share a window of the same size, spent after their device and account limits |
 | `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `100` | sign-in attempts at one account from all addresses per 15 minutes; the guessing limit itself is 10 per account and address |
 | `DEVICE_COOKIE_SECRET` | outside `development` | generated per start in development | HMAC key (at least 32 bytes) of the cookie marking a browser the owner signed in from |
 | `DEVICE_COOKIE_TTL` | no | `720h` | lifetime of that cookie, 1h to 2160h |
-| `MAX_LOGIN_ATTEMPTS_PER_DEVICE` | no | `10` | sign-in attempts through one trusted browser per 15 minutes, successes included, instead of the address and account limits |
+| `MAX_LOGIN_ATTEMPTS_PER_DEVICE` | no | `10` | sign-in attempts through one trusted browser per 15 minutes, successes included, instead of the ordinary address and account limits |
 | `MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `20` | sign-in attempts through all of one account's trusted browsers together per 15 minutes, successes included |
 | `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |
 | `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
