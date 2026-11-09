@@ -1,10 +1,12 @@
 package gamedb_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
@@ -425,27 +427,36 @@ func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
 }
 
 // pgx reports a refused login as a ConnectError wrapping a PgError, which
-// names the role and the host. It must not become a ScriptError.
+// names the role and the host. It must not become a ScriptError. The refusal
+// provoked is the role's connection limit, which a build restating the role
+// cannot lift, unlike a wrong password.
 func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
-	requireCluster(t)
+	p := provisioner(t)
 
-	user, password := gamedbtest.AdminCredentials(t)
-	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"),
-		"not-the-author-password")
-	if err != nil {
-		t.Fatalf("building the provisioner: %v", err)
+	var limit int
+	if err := admin(t).QueryRow(t.Context(),
+		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&limit); err != nil {
+		t.Fatalf("reading the author role's connection limit: %v", err)
+	}
+	busy := scratchDatabase(t)
+	for range limit {
+		connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), busy)
 	}
 
 	template := named(t, "tpl")
-	err = buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	err := buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
 	if err == nil {
 		t.Fatal("a build ran the script over a connection that could not be made")
 	}
 
-	// The premise: a PgError really is inside.
+	// The premise: a PgError really is inside, and it is the limit's (53300
+	// too_many_connections).
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("a refused login came back without PostgreSQL's own error inside it: %v", err)
+	}
+	if pgErr.Code != "53300" {
+		t.Fatalf("the login was refused with SQLSTATE %s, not by the connection limit: %v", pgErr.Code, err)
 	}
 	var refused *gamedb.ScriptError
 	if errors.As(err, &refused) {
@@ -922,6 +933,42 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 	// The error alone does not show the sibling survived.
 	if !instanceExists(t, sibling) {
 		t.Fatal("another contest's template was removed by a script in a different database")
+	}
+}
+
+// Every contest's build runs as game_author, and PostgreSQL lets a role change
+// its own password and session defaults. A script may do either; the next
+// build, whoever's it is, must not inherit it.
+func TestAGameScriptCannotChangeTheAuthorRoleForTheNextBuild(t *testing.T) {
+	pool := admin(t)
+	roles := gamedb.Roles{
+		ReaderPassword: gamedbtest.ReaderPassword(t),
+		WriterPassword: gamedbtest.WriterPassword(t),
+		AuthorPassword: gamedbtest.AuthorPassword(t),
+	}
+
+	for _, change := range []struct{ name, script string }{
+		{"its own password", `ALTER ROLE ` + gamedb.RoleAuthor + ` PASSWORD 'set by a game script';`},
+		{"a session default of its own", `ALTER ROLE ` + gamedb.RoleAuthor + ` SET default_transaction_read_only = on;`},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			// Undone by hand as well: should the restating regress, a role left
+			// this way would fail every later build on the shared cluster.
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, _ = pool.Exec(ctx, `ALTER ROLE `+gamedb.RoleAuthor+` RESET default_transaction_read_only`)
+				_ = gamedb.PrepareCluster(ctx, pool, roles)
+			})
+
+			p := provisioner(t)
+			if err := buildTemplateString(p, t.Context(), named(t, "tpl"), change.script, sqlpolicy.ReadOnly()); err != nil {
+				t.Fatalf("the build that changes the role: %v", err)
+			}
+			if err := buildTemplateString(p, t.Context(), named(t, "next"), detectiveScript, sqlpolicy.ReadOnly()); err != nil {
+				t.Fatalf("the next build inherited what the script did to %s: %v", gamedb.RoleAuthor, err)
+			}
+		})
 	}
 }
 

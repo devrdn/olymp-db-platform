@@ -208,7 +208,8 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name string, script io.
 // Two connections for two roles: the provisioning one lends the template to
 // game_author, takes it back, and does the superuser-only work (revoking
 // SELECT on the catalogues); the game_author one is the only place the
-// uploaded SQL runs.
+// uploaded SQL runs. The role itself is restated over the provisioning pool
+// before its connection opens.
 func (p *Provisioner) fill(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
 	admin, err := p.connect(ctx, p.base.User, name)
 	if err != nil {
@@ -218,6 +219,9 @@ func (p *Provisioner) fill(ctx context.Context, name string, script io.Reader, p
 
 	if err := lendTemplateToTheAuthor(ctx, admin, name); err != nil {
 		return err
+	}
+	if err := restateAuthor(ctx, p.admin, p.authorPassword); err != nil {
+		return fmt.Errorf("restate %s: %w", RoleAuthor, err)
 	}
 	if err := p.runScript(ctx, name, script); err != nil {
 		return err

@@ -330,12 +330,22 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	repo := ownBuilds(contest.ID)
 
 	user, password := gamedbtest.AdminCredentials(t)
-	// A wrong author password: pgx's *pgconn.ConnectError names the role, the
-	// addresses and the database, with 28P01 nested inside it.
 	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
-		"not-the-author-password")
+		gamedbtest.AuthorPassword(t))
 	if err != nil {
 		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	// The author role at its connection limit: pgx's *pgconn.ConnectError names
+	// the role, the addresses and the database, with 53300 nested inside it.
+	var limit int
+	if err := gamedbtest.Admin(t).QueryRow(t.Context(),
+		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&limit); err != nil {
+		t.Fatalf("read the author role's connection limit: %v", err)
+	}
+	busy := gamedbtest.Scratch(t)
+	for range limit {
+		gamedbtest.Connect(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), busy)
 	}
 
 	games := provisioning.NewGames(repo, cluster, editableContest{})
@@ -361,7 +371,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	if stored.BuildError != provisioning.BuildFailedInternally {
 		t.Fatalf("the stored build error is %q, want the fixed sentence", stored.BuildError)
 	}
-	for _, ours := range []string{gamedb.RoleAuthor, "28P01", "failed to connect", "password"} {
+	for _, ours := range []string{gamedb.RoleAuthor, "53300", "failed to connect", "too many connections"} {
 		if strings.Contains(stored.BuildError, ours) {
 			t.Fatalf("the stored build error names %q: %q", ours, stored.BuildError)
 		}

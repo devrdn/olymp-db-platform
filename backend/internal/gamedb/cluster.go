@@ -104,7 +104,7 @@ var sessionDefaults = [][2]string{
 // authorDefaults are the game-script role's. A build can take longer than a
 // participant's five seconds; its bound is the caller's context deadline
 // (provisioning.Games.Build), which the script cannot `SET` away. The explicit
-// 0 resets any value set by hand on the next deploy.
+// 0 overrides any statement_timeout the cluster's own configuration sets.
 var authorDefaults = [][2]string{
 	{"statement_timeout", "0"},
 	{"idle_in_transaction_session_timeout", "30s"},
@@ -114,9 +114,26 @@ var authorDefaults = [][2]string{
 // on every deploy, so it is idempotent, and it is the only place the roles are
 // defined: rerunning it is how a new restriction reaches an existing cluster.
 func PrepareCluster(ctx context.Context, cluster Cluster, roles Roles) error {
-	// One transaction, so a failed run leaves the cluster as it was. The lock
-	// is transaction-scoped because a session lock over a pool could be
-	// released on another connection, or never.
+	return underPrepareLock(ctx, cluster, func(conn Conn) error { return prepare(ctx, conn, roles) })
+}
+
+// restateAuthor states game_author as the deploy does. A role may change its
+// own password and session defaults, and every contest's build runs as this
+// one, so each build restates it before connecting.
+//
+// cluster must be connected to the provisioning database: an advisory lock
+// belongs to one database, and PrepareCluster takes prepareLock there.
+func restateAuthor(ctx context.Context, cluster Cluster, password string) error {
+	return underPrepareLock(ctx, cluster, func(conn Conn) error {
+		return prepareRole(ctx, conn, authorRole(password))
+	})
+}
+
+// underPrepareLock runs work in one transaction holding prepareLock, so a
+// failed run leaves the roles as they were. The lock is transaction-scoped
+// because a session lock over a pool could be released on another connection,
+// or never.
+func underPrepareLock(ctx context.Context, cluster Cluster, work func(Conn) error) error {
 	tx, err := cluster.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin preparing the cluster: %w", err)
@@ -127,7 +144,7 @@ func PrepareCluster(ctx context.Context, cluster Cluster, roles Roles) error {
 		return fmt.Errorf("wait for another run to finish: %w", err)
 	}
 
-	if err := prepare(ctx, tx, roles); err != nil {
+	if err := work(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -153,7 +170,7 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 	for _, role := range []roleSpec{
 		{RoleReader, roles.ReaderPassword, RoleConnectionLimit, readerDefaults},
 		{RoleWriter, roles.WriterPassword, RoleConnectionLimit, sessionDefaults},
-		{RoleAuthor, roles.AuthorPassword, authorConnectionLimit, authorDefaults},
+		authorRole(roles.AuthorPassword),
 	} {
 		if err := prepareRole(ctx, conn, role); err != nil {
 			return fmt.Errorf("preparing %s: %w", role.name, err)
@@ -162,9 +179,14 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 	return keepRolesOutOfMaintenanceDatabases(ctx, conn)
 }
 
+func authorRole(password string) roleSpec {
+	return roleSpec{RoleAuthor, password, authorConnectionLimit, authorDefaults}
+}
+
 // prepareRole creates the role if missing and then states every attribute,
-// including the negative ones, so a hand-edited role (say, granted CREATEDB
-// during a contest) is put back by the next deploy.
+// including the negative ones, and its session defaults after clearing every
+// other, so a hand-edited role (say, granted CREATEDB during a contest) or a
+// default a game script set is put back by the next deploy.
 func prepareRole(ctx context.Context, conn Conn, role roleSpec) error {
 	name := role.name
 
@@ -199,6 +221,13 @@ func prepareRole(ctx context.Context, conn Conn, role roleSpec) error {
 		return err
 	}
 
+	reset, err := formatted(ctx, conn, `SELECT format('ALTER ROLE %I RESET ALL', $1::text)`, name)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, reset); err != nil {
+		return fmt.Errorf("clearing the role's settings: %w", err)
+	}
 	for _, setting := range role.defaults {
 		// The setting's name is a package constant, never input.
 		statement, err := formatted(ctx, conn,
