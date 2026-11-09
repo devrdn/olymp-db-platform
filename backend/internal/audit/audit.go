@@ -143,6 +143,11 @@ const (
 	// ActionGameTableDataRowDelete records one row tombstoned.
 	ActionGameTableDataRowDelete = "contest.table_data_row_delete"
 
+	// ActionEventRegistrationCheckIn records a guest's arrival marked or
+	// cleared, with the new state: the row keeps only the first arrival, so
+	// the trail is the mark's only history.
+	ActionEventRegistrationCheckIn = "event_registration.check_in"
+
 	// ActionSettingsChange is entity "settings" with no identifier: there is
 	// one of it.
 	ActionSettingsChange = "settings.change"
@@ -181,6 +186,8 @@ var actions = []string{
 	ActionGameUploadComplete, ActionGameUploadAbort,
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
 	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,
+
+	ActionEventRegistrationCheckIn,
 
 	ActionSettingsChange, ActionSettingsMailTest,
 }

@@ -63,6 +63,7 @@
     "contest.table_data_upload_abort",
     "contest.table_data_row_add",
     "contest.table_data_row_delete",
+    "event_registration.check_in",
     "settings.change",
     "settings.mail_test"
   ]

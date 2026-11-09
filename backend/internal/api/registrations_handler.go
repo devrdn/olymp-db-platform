@@ -203,7 +203,8 @@ func (h *RegistrationsHandler) checkIn(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "checked_in is required")
 		return
 	}
-	updated, err := h.service.SetCheckedIn(r.Context(), id, *req.CheckedIn)
+	identity, _ := auth.IdentityFrom(r.Context())
+	updated, err := h.service.SetCheckedIn(r.Context(), identity.UserID, id, *req.CheckedIn)
 	if err != nil {
 		h.fail(w, r, err)
 		return

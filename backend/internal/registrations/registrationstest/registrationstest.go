@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/settings"
@@ -270,10 +271,42 @@ type Settings struct {
 
 func (s Settings) All(context.Context) (settings.Values, error) { return s.Values, s.Err }
 
-// UnitOfWork runs fn without a transaction.
+// UnitOfWork runs fn without a transaction, marking its context as inside
+// one.
 type UnitOfWork struct{}
 
-func (UnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+func (UnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
+	return fn(context.WithValue(ctx, txKey{}, true))
+}
+
+type txKey struct{}
+
+// Sink collects audit entries, noting which were written outside a unit of
+// work.
+type Sink struct {
+	mu      sync.Mutex
+	Entries []audit.Entry
+	Loose   []audit.Entry
+}
+
+func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Entries = append(s.Entries, e)
+	if inTx, _ := ctx.Value(txKey{}).(bool); !inTx {
+		s.Loose = append(s.Loose, e)
+	}
+	return nil
+}
+
+func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	for _, e := range entries {
+		if err := s.Append(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Fixture is a service over fresh stand-ins, with mail on.
 type Fixture struct {
@@ -281,12 +314,13 @@ type Fixture struct {
 	Store    *Store
 	Accounts *Accounts
 	Outbox   *Outbox
+	Audit    *Sink
 }
 
 // NewFixture builds the service; configure, when given, adjusts the config
 // before the service is made.
 func NewFixture(configure func(*registrations.Config)) *Fixture {
-	f := &Fixture{Store: NewStore(), Outbox: &Outbox{}}
+	f := &Fixture{Store: NewStore(), Outbox: &Outbox{}, Audit: &Sink{}}
 	f.Accounts = &Accounts{Store: f.Store}
 	cfg := registrations.Config{
 		Store: f.Store, Accounts: f.Accounts, Outbox: f.Outbox,
@@ -294,6 +328,7 @@ func NewFixture(configure func(*registrations.Config)) *Fixture {
 		Settings: Settings{Values: settings.Values{
 			settings.KeyName: "Olimpiada USM", settings.KeyMailLanguage: string(mailing.English),
 		}},
+		Audit:      audit.New(f.Audit),
 		UnitOfWork: UnitOfWork{},
 	}
 	if configure != nil {

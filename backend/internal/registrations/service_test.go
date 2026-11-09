@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/registrations/registrationstest"
@@ -242,16 +243,34 @@ func TestCheckInMarksAndClearsTheArrival(t *testing.T) {
 		t.Fatalf("Register() = %v", err)
 	}
 
-	in, err := f.Service.SetCheckedIn(t.Context(), out.Registration.ID, true)
+	staff := uuid.New()
+
+	in, err := f.Service.SetCheckedIn(t.Context(), staff, out.Registration.ID, true)
 	if err != nil || in.CheckedInAt == nil {
 		t.Fatalf("SetCheckedIn(true) = %+v, %v", in, err)
 	}
-	cleared, err := f.Service.SetCheckedIn(t.Context(), out.Registration.ID, false)
+	cleared, err := f.Service.SetCheckedIn(t.Context(), staff, out.Registration.ID, false)
 	if err != nil || cleared.CheckedInAt != nil {
 		t.Errorf("SetCheckedIn(false) = %+v, %v", cleared, err)
 	}
-	if _, err := f.Service.SetCheckedIn(t.Context(), uuid.New(), true); !errors.Is(err, registrations.ErrNotFound) {
+	if _, err := f.Service.SetCheckedIn(t.Context(), staff, uuid.New(), true); !errors.Is(err, registrations.ErrNotFound) {
 		t.Errorf("unknown id: SetCheckedIn() = %v, want ErrNotFound", err)
+	}
+
+	entries := f.Audit.Entries
+	if len(entries) != 2 {
+		t.Fatalf("audit entries = %+v, want one for the check-in and one for its reversal", entries)
+	}
+	for i, wantCheckedIn := range []bool{true, false} {
+		e := entries[i]
+		if e.Action != audit.ActionEventRegistrationCheckIn || e.ActorID == nil || *e.ActorID != staff ||
+			e.Entity != "event_registration" || e.EntityID != out.Registration.ID.String() ||
+			e.Payload["checked_in"] != wantCheckedIn {
+			t.Errorf("entry %d = %+v, want the staff member setting checked_in=%v on the registration", i, e, wantCheckedIn)
+		}
+	}
+	if len(f.Audit.Loose) != 0 {
+		t.Errorf("entries written outside the update's unit of work: %+v", f.Audit.Loose)
 	}
 }
 

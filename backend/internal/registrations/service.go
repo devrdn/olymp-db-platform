@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/settings"
@@ -87,6 +88,7 @@ type Config struct {
 	Outbox     Outbox
 	Texts      Texts
 	Settings   Settings
+	Audit      *audit.Recorder
 	UnitOfWork storage.UnitOfWork
 	// Random draws the codes; nil is crypto/rand.
 	Random io.Reader
@@ -99,7 +101,7 @@ type Service struct {
 // NewService panics on a missing part, so a wiring fault stops the boot.
 func NewService(cfg Config) *Service {
 	if cfg.Store == nil || cfg.Accounts == nil || cfg.Outbox == nil || cfg.Texts == nil ||
-		cfg.Settings == nil || cfg.UnitOfWork == nil {
+		cfg.Settings == nil || cfg.Audit == nil || cfg.UnitOfWork == nil {
 		panic("registrations: NewService needs every part of its Config")
 	}
 	if cfg.Random == nil {
@@ -315,6 +317,21 @@ func (s *Service) List(ctx context.Context) ([]Registration, error) {
 	return s.cfg.Store.List(ctx)
 }
 
-func (s *Service) SetCheckedIn(ctx context.Context, id uuid.UUID, checkedIn bool) (Registration, error) {
-	return s.cfg.Store.SetCheckedIn(ctx, id, checkedIn)
+func (s *Service) SetCheckedIn(ctx context.Context, actor, id uuid.UUID, checkedIn bool) (Registration, error) {
+	var updated Registration
+	err := s.cfg.UnitOfWork.Do(ctx, func(ctx context.Context) error {
+		var err error
+		if updated, err = s.cfg.Store.SetCheckedIn(ctx, id, checkedIn); err != nil {
+			return err
+		}
+		return s.cfg.Audit.Record(ctx, audit.Entry{
+			ActorID: &actor, Action: audit.ActionEventRegistrationCheckIn,
+			Entity: "event_registration", EntityID: id.String(),
+			Payload: map[string]any{"checked_in": checkedIn},
+		})
+	})
+	if err != nil {
+		return Registration{}, err
+	}
+	return updated, nil
 }

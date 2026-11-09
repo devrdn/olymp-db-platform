@@ -27,8 +27,9 @@ import (
 
 type registrationsFixture struct {
 	*registrationstest.Fixture
-	router http.Handler
-	cookie *http.Cookie
+	router  http.Handler
+	cookie  *http.Cookie
+	staffID uuid.UUID
 }
 
 // newRegistrationsFixture mounts the routes with the public form open, with
@@ -66,6 +67,7 @@ func mountRegistrations(t *testing.T, formOpen bool, permissions ...string) *reg
 	handler.Mount(router)
 	f.router = router
 	f.cookie = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	f.staffID = staff.ID
 	return f
 }
 
@@ -329,6 +331,9 @@ func TestStaffListAndCheckInRegistrations(t *testing.T) {
 	}
 	if checked.ID != ana.ID.String() || checked.CheckedInAt == nil || checked.Code != ana.Code {
 		t.Errorf("check-in answered %+v, want Ana arrived", checked)
+	}
+	if e := f.Audit.Entries; len(e) != 1 || e[0].ActorID == nil || *e[0].ActorID != f.staffID {
+		t.Errorf("audit entries = %+v, want one by the signed-in staff member", e)
 	}
 
 	rec = f.staff(http.MethodGet, "/registrations", "")

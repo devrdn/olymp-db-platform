@@ -1923,6 +1923,7 @@ const ro = {
       "contest.instance_dropped": "A șters baza unui participant la cererea unui organizator",
       "contest.instance_reset": "Și-a readus propria bază la starea de început a olimpiadei",
       "contest.instance_reset_failed": "A cerut readucerea propriei baze, dar copierea a eșuat; următoarea sa acțiune creează una nouă",
+      "event_registration.check_in": "A marcat sau a anulat sosirea unei persoane înregistrate",
       "settings.change": "A schimbat setările instalării",
       "settings.mail_test": "Și-a trimis un e-mail de test",
     },

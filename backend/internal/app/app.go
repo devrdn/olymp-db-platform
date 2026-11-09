@@ -552,6 +552,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,
+		Audit:      auditRecorder,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 	}), limiter, authMiddleware, log)
 	if cfg.EventRegistrationEnabled {
