@@ -1,0 +1,6 @@
+-- Nothing to undo, and deliberately nothing invented.
+--
+-- The up migration changes no structure, and which contests it switched to
+-- full names is not recorded anywhere, so a down migration could only guess;
+-- guessing wrong would publish email addresses again. Rolling back to
+-- migration 51 leaves every contest's label as it stands.

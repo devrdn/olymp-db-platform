@@ -454,3 +454,105 @@ func TestTheClarificationsMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("after applying 000049 = %+v, want %+v", up, want)
 	}
 }
+
+// A contest showing logins switches to full names when one of its
+// participants' logins is their email address; nothing else changes, and the
+// reclaim sweep's clock (updated_at) does not move.
+func TestTheLeaderboardNamesMigrationStopsShowingEmailLogins(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(51); err != nil {
+		t.Fatalf("migrate to 51: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	account := func(login string, email *string, status string) string {
+		t.Helper()
+		var id string
+		if err := conn.QueryRow(ctx, `
+			INSERT INTO users (login, email, password_hash, full_name, status)
+			VALUES ($1, $2, 'x', 'A Person', $3) RETURNING id`, login, email, status).Scan(&id); err != nil {
+			t.Fatalf("create account %s: %v", login, err)
+		}
+		return id
+	}
+	address := func(s string) *string { return &s }
+	author := account("author", nil, "active")
+	selfRegistered := account("maria.rusu@example.org", address("Maria.Rusu@Example.org"), "active")
+	cardHolder := account("20240017", address("ion.popa@example.org"), "active")
+	noEmail := account("ivanov", nil, "active")
+	deleted := account("gone@example.org", address("gone@example.org"), "deleted")
+
+	const stamp = "2026-01-01T00:00:00Z"
+	contest := func(status, names string, participants ...string) string {
+		t.Helper()
+		var id string
+		if err := conn.QueryRow(ctx, `
+			INSERT INTO contests (created_by, status, leaderboard_names, updated_at)
+			VALUES ($1, $2, $3, $4) RETURNING id`, author, status, names, stamp).Scan(&id); err != nil {
+			t.Fatalf("create contest: %v", err)
+		}
+		for _, user := range participants {
+			if _, err := conn.Exec(ctx, `INSERT INTO registrations (contest_id, user_id) VALUES ($1, $2)`, id, user); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+		}
+		return id
+	}
+	cases := []struct {
+		name, id, want string
+	}{
+		{"logins with a self-registered participant", contest("finished", "login", cardHolder, selfRegistered), "full_name"},
+		{"logins of card holders and accounts without email", contest("running", "login", cardHolder, noEmail), "login"},
+		{"an archived contest", contest("archived", "login", selfRegistered), "login"},
+		{"full names already", contest("published", "full_name", selfRegistered), "full_name"},
+		{"only a deleted account's registration", contest("draft", "login", deleted), "login"},
+	}
+
+	if err := m.Migrate(52); err != nil {
+		t.Fatalf("migrate to 52: %v", err)
+	}
+	for _, c := range cases {
+		var names string
+		var untouched bool
+		if err := conn.QueryRow(ctx, `
+			SELECT leaderboard_names, updated_at = $2::timestamptz
+			FROM contests WHERE id = $1`, c.id, stamp).Scan(&names, &untouched); err != nil {
+			t.Fatalf("%s: read the contest: %v", c.name, err)
+		}
+		if names != c.want {
+			t.Errorf("%s: leaderboard_names = %q, want %q", c.name, names, c.want)
+		}
+		if !untouched {
+			t.Errorf("%s: updated_at moved; the reclaim sweep measures a finished contest's grace from it", c.name)
+		}
+	}
+
+	// Which contests showed logins is not recorded once they show names, so
+	// rolling back leaves them as they are.
+	if err := m.Migrate(51); err != nil {
+		t.Fatalf("migrate to 51: %v", err)
+	}
+	var names string
+	if err := conn.QueryRow(ctx, `SELECT leaderboard_names FROM contests WHERE id = $1`, cases[0].id).Scan(&names); err != nil {
+		t.Fatalf("read the contest: %v", err)
+	}
+	if names != "full_name" {
+		t.Errorf("after rolling back 000052 leaderboard_names = %q, want full_name kept", names)
+	}
+}
