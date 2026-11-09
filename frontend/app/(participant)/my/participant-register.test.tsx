@@ -127,12 +127,12 @@ describe("the register itself", () => {
 });
 
 describe("a contest the visitor is already on", () => {
-  test("says so instead of offering to join it again", () => {
-    // The catalogue lists joined contests too, so the row must say so rather
-    // than offer a button that answers `already_enrolled`.
+  test("leads on instead of offering to join it again", () => {
+    // The catalogue lists joined contests too, so the row must not offer a
+    // button that answers `already_enrolled`.
     render_([contest({ enrolled: true })]);
 
-    expect(screen.getByText(en.participant.enrolled)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.participant.waitingRoom })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: en.participant.join }),
     ).not.toBeInTheDocument();
@@ -177,6 +177,31 @@ describe("the way into a running contest", () => {
     render_([contest({ id: "c1", status: "running", enrolled: false })]);
 
     expect(screen.queryByRole("link", { name: en.participant.openConsole })).not.toBeInTheDocument();
+  });
+});
+
+describe("the way into a contest still to come", () => {
+  // The play route holds a waiting room that turns into the console at the
+  // start, so nobody has to reload this list to find out.
+  test("leads an enrolled participant to the waiting room", () => {
+    render_([contest({ id: "c1", status: "published", enrolled: true })]);
+
+    expect(screen.getByRole("link", { name: en.participant.waitingRoom })).toHaveAttribute(
+      "href",
+      "/contests/c1/play",
+    );
+  });
+
+  test("is not offered to somebody who is not on it", () => {
+    render_([contest({ id: "c1", status: "published", enrolled: false })]);
+
+    expect(screen.queryByRole("link", { name: en.participant.waitingRoom })).not.toBeInTheDocument();
+  });
+
+  test.each(["running", "finished"] as const)("is not offered once the contest is %s", (status) => {
+    render_([contest({ id: "c1", status, enrolled: true })]);
+
+    expect(screen.queryByRole("link", { name: en.participant.waitingRoom })).not.toBeInTheDocument();
   });
 });
 

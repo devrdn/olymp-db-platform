@@ -1807,6 +1807,7 @@ const ru = {
     joining: "Записываем",
     joined: "Вы записаны.",
     openConsole: "Открыть",
+    waitingRoom: "Дождаться начала",
     enrolled: "Вы записаны",
     byInvitation: "По приглашению",
     noAction: "Пока ничего не требуется",

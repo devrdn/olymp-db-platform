@@ -1809,6 +1809,7 @@ const ro = {
     joining: "Se înscrie",
     joined: "Sunteți înscris.",
     openConsole: "Deschideți",
+    waitingRoom: "Așteptați începutul",
     enrolled: "Sunteți înscris",
     byInvitation: "Pe bază de invitație",
     noAction: "Nimic de făcut deocamdată",

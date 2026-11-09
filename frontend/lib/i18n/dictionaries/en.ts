@@ -2033,6 +2033,7 @@ const en = {
     joining: "Joining",
     joined: "You are enrolled.",
     openConsole: "Open",
+    waitingRoom: "Wait for the start",
     enrolled: "You are in",
     byInvitation: "By invitation",
     noAction: "Nothing to do yet",

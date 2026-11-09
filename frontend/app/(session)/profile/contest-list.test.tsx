@@ -233,23 +233,38 @@ describe("a contest that is running", () => {
 });
 
 describe("a contest still to come", () => {
-  test("says when it starts, and offers nothing to press", () => {
-    render_(
-      list([
-        finished({
-          contestId: "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d03",
-          title: "Autumn qualifier",
-          status: "published",
-          registrationStatus: "registered",
-          over: false,
-          result: undefined,
-        }),
-      ]),
-    );
+  const upcoming = finished({
+    contestId: "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d03",
+    title: "Autumn qualifier",
+    status: "published",
+    registrationStatus: "registered",
+    over: false,
+    result: undefined,
+  });
+
+  // The waiting room turns into the contest at the start, so nobody has to
+  // reload the profile to find out.
+  test("says when it starts and leads to the waiting room", () => {
+    render_(list([upcoming]));
 
     const row = screen.getByRole("listitem");
     expect(within(row).getByText(/Starts/)).toBeInTheDocument();
-    expect(within(row).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: en.participant.waitingRoom })).toHaveAttribute(
+      "href",
+      "/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d03/play",
+    );
+  });
+
+  test("offers no waiting room once the contest is over for this reader", () => {
+    render_(list([{ ...upcoming, registrationStatus: "disqualified", over: true }]));
+
+    expect(screen.queryByRole("link", { name: en.participant.waitingRoom })).not.toBeInTheDocument();
+  });
+
+  test.each(["running", "finished"] as const)("offers no waiting room once the contest is %s", (status) => {
+    render_(list([{ ...upcoming, status }]));
+
+    expect(screen.queryByRole("link", { name: en.participant.waitingRoom })).not.toBeInTheDocument();
   });
 });
 

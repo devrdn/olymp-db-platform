@@ -43,6 +43,15 @@ function canOpen(contest: ContestSummary): boolean {
 }
 
 /**
+ * Whether there is a waiting room to sit in: enrolled in a contest that has
+ * not started. The play route turns it into the console at the start, so
+ * nobody has to reload this list to find out.
+ */
+function canWait(contest: ContestSummary): boolean {
+  return contest.enrolled && contest.status === "published";
+}
+
+/**
  * Whether the contest has a standings table worth opening: from the moment
  * it runs, and after. Public, so offered whether enrolled or not.
  */
@@ -156,6 +165,13 @@ export function ParticipantRegister({
                           className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
                         >
                           {t.openConsole}
+                        </Link>
+                      ) : canWait(contest) ? (
+                        <Link
+                          href={`/contests/${contest.id}/play`}
+                          className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+                        >
+                          {t.waitingRoom}
                         </Link>
                       ) : contest.enrolled ? (
                         /* Before the invitation note: "by invitation" on a contest one is

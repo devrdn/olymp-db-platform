@@ -149,12 +149,24 @@ function Row({
             {t.enter}
           </Link>
         ) : (
-          <p className="font-mono text-data text-ink-2">
-            {t.starts.replace(
-              "{when}",
-              contest.startsAt ? formatMoment(contest.startsAt, { locale }) : shared.unscheduled,
-            )}
-          </p>
+          <>
+            <p className="font-mono text-data text-ink-2">
+              {t.starts.replace(
+                "{when}",
+                contest.startsAt ? formatMoment(contest.startsAt, { locale }) : shared.unscheduled,
+              )}
+            </p>
+            {/* The waiting room turns into the contest at the start, so nobody
+               has to reload this page to find out. */}
+            {contest.status === "published" ? (
+              <Link
+                href={`/contests/${contest.contestId}/play`}
+                className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+              >
+                {dict.participant.waitingRoom}
+              </Link>
+            ) : null}
+          </>
         )}
       </div>
     </li>
