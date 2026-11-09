@@ -559,17 +559,17 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 
 // AllowPasswordChange counts one attempt to change the account's own password
 // and reports ErrTooManyAttempts once a window is spent (CLAUDE.md rule 4).
-// address is the caller's httpx.ClientSubject. Its window, the address
-// budget's size and spent first (CLAUDE.md rule 5), bounds one machine
-// holding sessions for many accounts; the account's window guards against a
-// second person holding the session.
+// address is the caller's httpx.ClientSubject. The account's window guards
+// against a second person holding the session; the address's, the address
+// budget's size, bounds one machine holding sessions for many accounts. It is
+// spent last, so one session adds at most its own window to it.
 func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID, address string) error {
 	for _, window := range []struct {
 		subject string
 		limit   int
 	}{
-		{"pwchange-from:" + address, s.maxPerAddress},
 		{passwordChangeSubject(userID), maxPasswordChangeAttempts},
+		{"pwchange-from:" + address, s.maxPerAddress},
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {

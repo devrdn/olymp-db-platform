@@ -532,6 +532,21 @@ func TestPasswordChangesFromOneAddressAreThrottledAcrossAccounts(t *testing.T) {
 	}
 }
 
+func TestOneSessionPastItsOwnWindowLeavesOthersAtItsAddressFreeToChange(t *testing.T) {
+	const budget = 15
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: budget})
+	ctx := context.Background()
+	rival := uuid.New()
+
+	for range budget + 10 {
+		_ = f.service.AllowPasswordChange(ctx, rival, "10.0.0.1")
+	}
+
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.1"); err != nil {
+		t.Errorf("another account's change from the rival's address = %v, want nil", err)
+	}
+}
+
 func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) {
 	// A busy refusal has already spent the address budget, so it is not
 	// free to retry.
