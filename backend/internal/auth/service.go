@@ -34,7 +34,7 @@ const (
 	DefaultMaxLoginAttemptsPerAccount = 100
 
 	// DefaultMaxLoginAttemptsPerDevice is the guessing limit for a trusted
-	// browser, which skips the address and account limits, so a copied
+	// browser, which skips the ordinary address and account limits, so a copied
 	// device cookie still has a limit.
 	DefaultMaxLoginAttemptsPerDevice = 10
 
@@ -440,8 +440,9 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 //     then the ceiling. Only attempts the guessing limit passed reach the
 //     ceiling, so one address cannot shut the owner out everywhere.
 //
-// spendTrusted replaces all three for a trusted browser. Its keys come from a
-// signed cookie and cannot be invented, so it needs no address-first guard.
+// spendTrusted replaces all three for a trusted browser. It too spends an
+// address-keyed window first: its other keys come from a signed cookie and
+// cannot be invented, but cookies for many accounts can be collected.
 
 // withinLengths reports whether the login and password are short enough to
 // belong to a real account (users.MaxLoginLength, password.MaxLength).
@@ -449,13 +450,20 @@ func withinLengths(cmd LoginCommand) bool {
 	return len(cmd.Login) <= users.MaxLoginLength && len(cmd.Password) <= password.MaxLength
 }
 
-// spendTrusted spends a trusted browser's limit and then the account's
-// trusted budget, under the account's throttle generation so an unlock
-// clears them, and reports whether either was spent. It records nothing.
+// spendTrusted spends the address's trusted window, then a trusted browser's
+// limit, then the account's trusted budget, and reports whether any was
+// spent. It records nothing.
 //
-// Both count successes too and reset only with their window or an unlock. An
-// attempt the device limit refused does not spend the trusted budget, so one
-// copied cookie cannot use up what the owner's other browsers share.
+// All three count successes too and reset only with their window. The last
+// two are under the account's throttle generation, so an unlock clears them;
+// the address's window outlives it, as the address budget does. An attempt
+// one window refused does not spend the next, so one copied cookie cannot use
+// up what the owner's other browsers share.
+//
+// The address's window is the address budget's size, so collected cookies do
+// not multiply what one address may have hashed. Accepted cost: about fifteen
+// accounts' cookies from one hall spend that hall's trusted window, after
+// which their sign-ins pay the ordinary address budget.
 func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Device) (bool, error) {
 	gen, err := s.limiter.Generation(ctx, accountFamily(cmd.Login))
 	if err != nil {
@@ -465,6 +473,7 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 		subject string
 		limit   int
 	}{
+		{"trusted-from:" + httpx.AddressSubject(cmd.IP), s.maxPerAddress},
 		{deviceSubject(device.ID, gen), s.maxPerDevice},
 		{trustedSubject(cmd.Login, gen), s.maxTrusted},
 	} {

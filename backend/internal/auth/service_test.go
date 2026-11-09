@@ -1009,10 +1009,10 @@ func TestGuessingThroughAStolenCookieIsBoundedByTheOrdinaryLimitsPastTheDevices(
 func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
 	// With the address budget spent, only a cleared device limit lets the
 	// owner's browser in.
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 3})
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 4})
 	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
-	for range 3 {
+	for range 4 {
 		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a rival's guess", IP: "10.0.0.1"})
 	}
 	for range 2 {
@@ -1042,11 +1042,11 @@ func (f *unlockFixture) tooManyAttemptRows() int {
 }
 
 func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 2})
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 3})
 	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
 
-	for i := range DefaultMaxLoginAttemptsPerDevice + 2 {
+	for i := range 2 + 3 {
 		if _, err := f.service.Login(ctx, LoginCommand{
 			Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
 		}); err != nil {
@@ -1054,7 +1054,7 @@ func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
 		}
 	}
 
-	// The 11th and 12th spent the address budget of two; the 13th has none.
+	// The third to fifth spent the address budget of three; the sixth has none.
 	if _, err := f.service.Login(ctx, LoginCommand{
 		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
 	}); !errors.Is(err, ErrTooManyAttempts) {
@@ -1134,9 +1134,9 @@ func TestPastTheTrustedBudgetALoopIsStillBounded(t *testing.T) {
 
 func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
 	// Collected cookies share the trusted budget: past four, each attempt
-	// pays the address budget of two.
+	// pays the address budget of five.
 	f := newUnlockFixture(t, ServiceConfig{
-		MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4, MaxAttemptsPerAddress: 2,
+		MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4, MaxAttemptsPerAddress: 5,
 	})
 	ctx := context.Background()
 	cookies := []string{
@@ -1144,7 +1144,7 @@ func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
 	}
 
 	for i, cookie := range cookies {
-		for j := range 2 {
+		for j := range 3 {
 			if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err != nil {
 				t.Fatalf("sign-in %d through cookie %d = %v, want a session", j+1, i+1, err)
 			}
@@ -1152,7 +1152,56 @@ func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
 	}
 
 	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookies[2]}); !errors.Is(err, ErrTooManyAttempts) {
-		t.Errorf("the seventh trusted sign-in = %v, want ErrTooManyAttempts: the fifth and sixth should have paid the address budget", err)
+		t.Errorf("the tenth trusted sign-in = %v, want ErrTooManyAttempts: the fifth to ninth should have paid the address budget", err)
+	}
+}
+
+func TestTrustedAttemptsFromOneAddressPayTheAddressBudget(t *testing.T) {
+	// Each account's own trusted limits are far from spent; only the
+	// address's trusted window and then its ordinary budget bind.
+	const budget = 4
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: budget})
+	ctx := context.Background()
+	logins := []string{"ivanov", "petrov", "sidorov"}
+	for _, login := range logins[1:] {
+		f.repo.Add(users.User{
+			Login: login, FullName: login, Status: users.StatusActive,
+			PasswordHash: passwordtest.Hash(t, testPassword),
+		})
+	}
+	cookies := map[string][]string{}
+	for i, login := range logins {
+		for j := range 2 {
+			result, err := f.service.Login(ctx, LoginCommand{Login: login, Password: testPassword, IP: fmt.Sprintf("10.0.%d.%d", i+1, j+1)})
+			if err != nil {
+				t.Fatalf("%s's sign-in %d = %v, want a session", login, j+1, err)
+			}
+			cookies[login] = append(cookies[login], result.DeviceToken)
+		}
+	}
+
+	attempt, rowsAtRefusal := 0, -1
+	for range 3 {
+		for _, login := range logins {
+			for _, cookie := range cookies[login] {
+				attempt++
+				_, err := f.service.Login(ctx, LoginCommand{Login: login, Password: "a guess", IP: "10.0.0.1", DeviceToken: cookie})
+				want := ErrInvalidCredentials
+				if attempt > 2*budget {
+					want = ErrTooManyAttempts
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("attempt %d through %s's cookie = %v, want %v", attempt, login, err, want)
+				}
+				if attempt == 2*budget+1 {
+					rowsAtRefusal = len(f.sink.entries)
+				}
+			}
+		}
+	}
+
+	if got := len(f.sink.entries); got != rowsAtRefusal {
+		t.Errorf("the trail grew from %d to %d rows past the address budget, want no further rows", rowsAtRefusal, got)
 	}
 }
 
