@@ -519,7 +519,7 @@ func TestTheLeaderboardNamesMigrationStopsShowingEmailLogins(t *testing.T) {
 	}{
 		{"logins with a self-registered participant", contest("finished", "login", cardHolder, selfRegistered), "full_name"},
 		{"logins of card holders and accounts without email", contest("running", "login", cardHolder, noEmail), "login"},
-		{"an archived contest", contest("archived", "login", selfRegistered), "login"},
+		{"an archived contest with a self-registered participant", contest("archived", "login", selfRegistered), "full_name"},
 		{"full names already", contest("published", "full_name", selfRegistered), "full_name"},
 		{"only a deleted account's registration", contest("draft", "login", deleted), "login"},
 	}
