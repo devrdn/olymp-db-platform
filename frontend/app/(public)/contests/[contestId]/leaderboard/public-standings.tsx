@@ -3,8 +3,9 @@
 import { StandingsView, type StandingsDictionary } from "@/components/product/standings";
 import { useStandings } from "@/components/product/use-standings";
 import type { Standings } from "@/lib/api/leaderboard";
+import type { Locale } from "@/lib/i18n/config";
 
-import { fetchPublicStandingsAction } from "./actions";
+import { fetchPublicStandings } from "./requests";
 
 /** The public table, kept fresh for as long as the page is open and visible. */
 export function PublicStandings({
@@ -16,10 +17,10 @@ export function PublicStandings({
   contestId: string;
   initial: Standings;
   dict: StandingsDictionary;
-  locale: string;
+  locale: Locale;
 }) {
   const { standings, failed } = useStandings({
-    load: () => fetchPublicStandingsAction(contestId),
+    load: () => fetchPublicStandings(contestId, locale),
     active: true,
     initial,
   });

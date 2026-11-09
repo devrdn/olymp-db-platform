@@ -4,8 +4,8 @@ import { describe, expect, test, vi } from "vitest";
 import type { Standings, StandingsRow } from "@/lib/api/leaderboard";
 import en from "@/lib/i18n/dictionaries/en";
 
-const { fetchPublicStandingsAction } = vi.hoisted(() => ({ fetchPublicStandingsAction: vi.fn() }));
-vi.mock("./actions", () => ({ fetchPublicStandingsAction }));
+const { fetchPublicStandings } = vi.hoisted(() => ({ fetchPublicStandings: vi.fn() }));
+vi.mock("./requests", () => ({ fetchPublicStandings }));
 
 import { PublicStandings } from "./public-standings";
 
@@ -38,7 +38,7 @@ describe("the public standings", () => {
   // The frozen table's tiers are the ones the server gave its frozen places;
   // the page draws them as they come.
   test("show the frozen table's prize tiers, and a dash for everybody else", () => {
-    fetchPublicStandingsAction.mockResolvedValue({ kind: "ok", standings: frozen([]) });
+    fetchPublicStandings.mockResolvedValue({ kind: "ok", standings: frozen([]) });
 
     render(
       <PublicStandings

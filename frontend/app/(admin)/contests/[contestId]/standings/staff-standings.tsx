@@ -21,7 +21,8 @@ import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { fetchStaffStandingsAction, revealStandingsAction, type RevealState } from "./actions";
+import { revealStandingsAction, type RevealState } from "./actions";
+import { fetchStaffStandings } from "./requests";
 import { messageForCode } from "@/lib/i18n/errors";
 
 type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
@@ -84,17 +85,7 @@ export function StaffStandingsView({
         return;
       }
       const id = ++requestId;
-      let result: Awaited<ReturnType<typeof fetchStaffStandingsAction>>;
-      try {
-        result = await fetchStaffStandingsAction(contestId);
-      } catch {
-        // An action can throw (network drop, redeployed action id); treat it as
-        // a failed poll so the chain continues.
-        if (cancelled || id !== requestId) return;
-        setFailed(true);
-        schedule();
-        return;
-      }
+      const result = await fetchStaffStandings(contestId);
       if (cancelled || id !== requestId) return;
 
       if (result.kind === "ok") {
