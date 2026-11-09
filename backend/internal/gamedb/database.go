@@ -34,9 +34,9 @@ func HardenDatabase(ctx context.Context, conn Conn) error {
 func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 	return revokeFromPublic(ctx, conn,
 		`SELECT coalesce(
-			string_agg(format('REVOKE SELECT ON pg_catalog.%I FROM PUBLIC', c.relname), '; '), '')
+			string_agg(format('REVOKE SELECT ON %s.%I FROM PUBLIC', c.relnamespace::regnamespace, c.relname), '; '), '')
 		 FROM pg_class c
-		 WHERE c.relnamespace = 'pg_catalog'::regnamespace
+		 WHERE c.relnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
 		   AND c.relname = ANY($1)
 		   AND has_any_column_privilege('public', c.oid, 'SELECT')`,
 		sqlpolicy.SensitiveCatalogs())

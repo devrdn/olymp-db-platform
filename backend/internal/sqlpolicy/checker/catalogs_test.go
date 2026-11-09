@@ -52,6 +52,35 @@ func TestTheSensitiveCatalogsAreNeverReadable(t *testing.T) {
 	}
 }
 
+// information_schema has views of its own that name the database and the
+// roles, which CURRENT_CATALOG and CURRENT_USER are refused for.
+func TestTheInformationSchemaViewsOfTheInstallationAreNeverReadable(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT catalog_name FROM information_schema.information_schema_catalog_name`,
+		`SELECT role_name FROM information_schema.enabled_roles`,
+		`SELECT grantee FROM information_schema.applicable_roles`,
+		`SELECT grantee FROM information_schema.role_table_grants`,
+		`SELECT role_name FROM INFORMATION_SCHEMA.ENABLED_ROLES`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			r := refusal(t, sql, sqlpolicy.ReadOnly())
+			if r.Code != sqlpolicy.CodeCatalogNotReadable {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeCatalogNotReadable)
+			}
+		})
+	}
+}
+
+// information_schema is not on the search path, so the bare name is a table
+// of the game's, even in a contest that closes the catalogs.
+func TestAGameTableMayShareANameWithAnInformationSchemaView(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+
+	allow(t, `SELECT role_name FROM enabled_roles`, closed)
+	allow(t, `SELECT role_name FROM public.enabled_roles`, closed)
+}
+
 func TestASensitiveCatalogIsFoundWhereverItIsJoined(t *testing.T) {
 	for name, sql := range map[string]string{
 		"in a join":      `SELECT s.name FROM suspects s JOIN pg_database d ON true`,

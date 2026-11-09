@@ -112,6 +112,26 @@ func TestTheSensitiveCatalogsAreRefusedByTheDatabaseItself(t *testing.T) {
 	}
 }
 
+// These views answer with the database's name and the role's, whatever else
+// was revoked.
+func TestTheInformationSchemaViewsOfTheInstallationAreRefusedByTheDatabaseItself(t *testing.T) {
+	reader, _ := setupGame(t)
+
+	for _, statement := range []string{
+		`SELECT catalog_name FROM information_schema.information_schema_catalog_name`,
+		`SELECT role_name FROM information_schema.enabled_roles`,
+		`SELECT grantee FROM information_schema.applicable_roles`,
+		`SELECT grantee FROM information_schema.role_table_grants`,
+	} {
+		t.Run(statement, func(t *testing.T) {
+			err := refused(t, reader, statement)
+			if !strings.Contains(err.Error(), "permission denied for view") {
+				t.Fatalf("refused, but not by privileges: %v", err)
+			}
+		})
+	}
+}
+
 // Exploring the data's shape is part of the exercise.
 func TestTheStructuralCatalogsStayReadable(t *testing.T) {
 	reader, _ := setupGame(t)
@@ -187,17 +207,19 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			var present bool
+			// regclass spells the relation with its schema where one is needed.
+			var relation string
 			if err := reader.QueryRow(t.Context(),
-				`SELECT EXISTS (
-					SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-					WHERE n.nspname = 'pg_catalog' AND c.relname = $1)`, name).Scan(&present); err != nil {
+				`SELECT coalesce((
+					SELECT c.oid::regclass::text FROM pg_class c
+					WHERE c.relnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+					  AND c.relname = $1), '')`, name).Scan(&relation); err != nil {
 				t.Fatalf("looking for the relation: %v", err)
 			}
-			if !present {
-				t.Skipf("pg_catalog.%s does not exist on this server", name)
+			if relation == "" {
+				t.Skipf("%s does not exist on this server", name)
 			}
-			refused(t, reader, `SELECT 1 FROM pg_catalog.`+sqlpolicy.QuoteIdentifier(name)+` LIMIT 1`)
+			refused(t, reader, `SELECT 1 FROM `+relation+` LIMIT 1`)
 		})
 	}
 }

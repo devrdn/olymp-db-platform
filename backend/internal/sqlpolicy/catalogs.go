@@ -68,6 +68,16 @@ var (
 		"pg_stat_subscription_stats":   {},
 	}
 
+	// information_schema's own views of who exists: the database's name and
+	// the roles. That schema is not on the search path, so only the qualified
+	// name is one of these; a game may hold a table called enabled_roles.
+	sensitiveInformationSchema = map[string]struct{}{
+		"information_schema_catalog_name": {},
+		"enabled_roles":                   {},
+		"applicable_roles":                {},
+		"role_table_grants":               {},
+	}
+
 	// Schemas whose contents are catalog rather than game data.
 	catalogSchemas = map[string]struct{}{
 		"pg_catalog":         {},
@@ -145,6 +155,9 @@ func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 	if _, yes := sensitiveCatalogs[name]; yes {
 		return true, true
 	}
+	if _, yes := sensitiveInformationSchema[name]; yes && schema == "information_schema" {
+		return true, true
+	}
 	if _, yes := catalogSchemas[schema]; yes {
 		return false, true
 	}
@@ -156,12 +169,16 @@ func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 	return false, false
 }
 
-// SensitiveCatalogs names the relations that must never be readable, sorted.
-// internal/gamedb REVOKEs the same list, so the checker and the privileges
-// come from one description; a gamedb test asserts each is revoked.
+// SensitiveCatalogs names the relations of pg_catalog and information_schema
+// that must never be readable, sorted. internal/gamedb REVOKEs the same list,
+// so the checker and the privileges come from one description; a gamedb test
+// asserts each is revoked.
 func SensitiveCatalogs() []string {
-	out := make([]string, 0, len(sensitiveCatalogs))
+	out := make([]string, 0, len(sensitiveCatalogs)+len(sensitiveInformationSchema))
 	for name := range sensitiveCatalogs {
+		out = append(out, name)
+	}
+	for name := range sensitiveInformationSchema {
 		out = append(out, name)
 	}
 	slices.Sort(out)
