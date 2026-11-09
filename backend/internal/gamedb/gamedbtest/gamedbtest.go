@@ -132,6 +132,24 @@ func DSN(t *testing.T, user, password, database string) string {
 	return parsed.String()
 }
 
+// AuthorRefusedDSN is a provisioning DSN whose connections carry a startup
+// option only a superuser may set, so a provisioner built on it is refused
+// every game_author login (42501) while its own connections succeed. It changes
+// nothing on the cluster, so no other test's build can trip over it.
+func AuthorRefusedDSN(t *testing.T) string {
+	t.Helper()
+
+	user, password := AdminCredentials(t)
+	parsed, err := url.Parse(DSN(t, user, password, "postgres"))
+	if err != nil {
+		t.Fatalf("the provisioning DSN is not a URL: %v", err)
+	}
+	query := parsed.Query()
+	query.Set("options", "-c log_min_messages=warning")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 // AdminCredentials returns the provisioning role's name and password.
 func AdminCredentials(t *testing.T) (string, string) {
 	t.Helper()

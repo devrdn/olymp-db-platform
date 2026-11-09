@@ -427,36 +427,32 @@ func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
 }
 
 // pgx reports a refused login as a ConnectError wrapping a PgError, which
-// names the role and the host. It must not become a ScriptError. The refusal
-// provoked is the role's connection limit, which a build restating the role
-// cannot lift, unlike a wrong password.
+// names the role and the host. It must not become a ScriptError. A wrong
+// password cannot provoke it, since the build restates the role's password
+// first.
 func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
-	p := provisioner(t)
+	requireCluster(t)
 
-	var limit int
-	if err := admin(t).QueryRow(t.Context(),
-		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&limit); err != nil {
-		t.Fatalf("reading the author role's connection limit: %v", err)
-	}
-	busy := scratchDatabase(t)
-	for range limit {
-		connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), busy)
+	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.AuthorRefusedDSN(t), gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("building the provisioner: %v", err)
 	}
 
 	template := named(t, "tpl")
-	err := buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	err = buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
 	if err == nil {
 		t.Fatal("a build ran the script over a connection that could not be made")
 	}
 
-	// The premise: a PgError really is inside, and it is the limit's (53300
-	// too_many_connections).
+	// The premise: a PgError really is inside, and it is the login's refusal
+	// (42501), not some other failure of the build.
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("a refused login came back without PostgreSQL's own error inside it: %v", err)
 	}
-	if pgErr.Code != "53300" {
-		t.Fatalf("the login was refused with SQLSTATE %s, not by the connection limit: %v", pgErr.Code, err)
+	var connect *pgconn.ConnectError
+	if pgErr.Code != "42501" || !errors.As(err, &connect) || connect.Config.User != gamedb.RoleAuthor {
+		t.Fatalf("the build failed with SQLSTATE %s, not by a refused %s login: %v", pgErr.Code, gamedb.RoleAuthor, err)
 	}
 	var refused *gamedb.ScriptError
 	if errors.As(err, &refused) {

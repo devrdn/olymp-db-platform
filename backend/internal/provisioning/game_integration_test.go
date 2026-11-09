@@ -14,6 +14,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The whole chain across both clusters (CLAUDE.md rule 10): every other test
@@ -329,23 +330,12 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	contest, _ := contestFor(t, t.Context(), 0)
 	repo := ownBuilds(contest.ID)
 
-	user, password := gamedbtest.AdminCredentials(t)
-	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+	// A refused author login: pgx's *pgconn.ConnectError names the role, the
+	// addresses and the database, with 42501 nested inside it.
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.AuthorRefusedDSN(t),
 		gamedbtest.AuthorPassword(t))
 	if err != nil {
 		t.Fatalf("open the game cluster: %v", err)
-	}
-
-	// The author role at its connection limit: pgx's *pgconn.ConnectError names
-	// the role, the addresses and the database, with 53300 nested inside it.
-	var limit int
-	if err := gamedbtest.Admin(t).QueryRow(t.Context(),
-		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&limit); err != nil {
-		t.Fatalf("read the author role's connection limit: %v", err)
-	}
-	busy := gamedbtest.Scratch(t)
-	for range limit {
-		gamedbtest.Connect(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), busy)
 	}
 
 	games := provisioning.NewGames(repo, cluster, editableContest{})
@@ -359,6 +349,12 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	if buildErr == nil {
 		t.Fatal("a cluster that refused the author's login was reported as a clean tick")
 	}
+	var pgErr *pgconn.PgError
+	var connect *pgconn.ConnectError
+	if !errors.As(buildErr, &pgErr) || pgErr.Code != "42501" ||
+		!errors.As(buildErr, &connect) || connect.Config.User != gamedb.RoleAuthor {
+		t.Fatalf("the build failed, but not by a refused %s login: %v", gamedb.RoleAuthor, buildErr)
+	}
 	if built.Status != provisioning.TemplateFailed {
 		t.Fatalf("the build finished as %q, want failed", built.Status)
 	}
@@ -371,7 +367,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	if stored.BuildError != provisioning.BuildFailedInternally {
 		t.Fatalf("the stored build error is %q, want the fixed sentence", stored.BuildError)
 	}
-	for _, ours := range []string{gamedb.RoleAuthor, "53300", "failed to connect", "too many connections"} {
+	for _, ours := range []string{gamedb.RoleAuthor, "42501", "failed to connect", "permission denied"} {
 		if strings.Contains(stored.BuildError, ours) {
 			t.Fatalf("the stored build error names %q: %q", ours, stored.BuildError)
 		}
