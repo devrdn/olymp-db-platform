@@ -104,7 +104,7 @@ jobs:
       GAME_AUTHOR_PASSWORD: dbcontest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The game cluster is started from the development overlay's own
       # pg-game-test definition — the one `make test-game-cluster` starts —
@@ -129,7 +129,7 @@ jobs:
           -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml
           --profile test up -d --wait pg-game-test
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -184,9 +184,9 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -198,9 +198,9 @@ jobs:
     name: security scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
