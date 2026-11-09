@@ -35,8 +35,8 @@ export function RegistrationDesk({
   errors: Dictionary["errors"];
   locale: string;
 }) {
-  // Local rows take each mark at once; a fresh list from the server (the
-  // action revalidates the page) replaces them, so other desks' marks arrive.
+  // Local rows take each mark at once; a fresh list from the server (a reload
+  // of the page) replaces them, which is how other desks' marks arrive.
   const [rows, setRows] = useState(registrations);
   const [source, setSource] = useState(registrations);
   if (source !== registrations) {

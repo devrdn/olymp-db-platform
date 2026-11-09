@@ -40,7 +40,14 @@ describe("checkInAction", () => {
       body: { checked_in: true },
     });
     expect(result.registration?.checkedInAt).toBe("2026-11-06T18:00:00Z");
-    expect(revalidatePath).toHaveBeenCalledWith("/registrations");
+  });
+
+  test("leaves the page as it is", async () => {
+    serverRequest.mockResolvedValueOnce(wire);
+
+    await checkInAction(id, true);
+
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   test("never sends a forged id to the server", async () => {
