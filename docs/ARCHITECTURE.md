@@ -3695,7 +3695,7 @@ tab; and anybody at all without signing in, at
 - **a freeze** — none, or N minutes or hours before `ends_at`; from then on
   everybody but the organiser sees the table as it stood at the freeze, while
   answers continue to be accepted and scored;
-- **how a participant is labelled** — by login (default) or by full name;
+- **how a participant is labelled** — by full name (default) or by login;
 - **how many prize places** — counts of first, second and third prizes, each
   0..1000 and none by default (`contests.prize_first`, `prize_second`,
   `prize_third`). Tiers go down the places, and a shared place is shared whole,

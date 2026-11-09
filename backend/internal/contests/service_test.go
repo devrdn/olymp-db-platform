@@ -97,6 +97,25 @@ func TestCreateDefaultsToInviteOnlyAndSeveralQuestions(t *testing.T) {
 	}
 }
 
+// The public table is read without a session, and a self-registered
+// participant's login is their email address.
+func TestCreateLabelsTheLeaderboardByFullNameByDefault(t *testing.T) {
+	f := conteststest.NewFixture()
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	stored, err := f.Contests.ByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if stored.LeaderboardNames != contests.LeaderboardNamesFullName {
+		t.Errorf("stored LeaderboardNames = %q, want %q", stored.LeaderboardNames, contests.LeaderboardNamesFullName)
+	}
+}
+
 func TestCreateRecordsWhoCreatedTheContest(t *testing.T) {
 	f := conteststest.NewFixture()
 

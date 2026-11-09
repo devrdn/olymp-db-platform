@@ -186,7 +186,7 @@ type CreateCommand struct {
 	Languages    []ContestLanguage
 	Translations []Translation
 	// LeaderboardFreezeMin is nil for no freeze; LeaderboardNames empty
-	// defaults to LeaderboardNamesLogin.
+	// defaults to LeaderboardNamesFullName.
 	LeaderboardFreezeMin *int
 	LeaderboardNames     string
 	// ICPCPenaltyMin is nil for the default of DefaultICPCPenaltyMin minutes.
@@ -215,7 +215,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		CreatedBy:    cmd.ActorID,
 
 		LeaderboardFreezeMin: cmd.LeaderboardFreezeMin,
-		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesLogin),
+		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesFullName),
 		ICPCPenaltyMin:       orDefaultValue(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
 		ResultDownload:       orDefaultValue(cmd.ResultDownload, true),
 		SchemaDiagram:        orDefaultValue(cmd.SchemaDiagram, true),

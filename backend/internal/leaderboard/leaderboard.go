@@ -195,8 +195,9 @@ type Row struct {
 // account has no label, since its login may now belong to somebody else.
 //
 // Under full names a missing name is an empty label, never the login: the
-// public table is read without a session, and a login is a student card
-// number or a username, which a contest showing names chose not to publish.
+// public table is read without a session, and a login may be a student card
+// number or an email address, which a contest showing names chose not to
+// publish.
 func (r Row) Label(names string) string {
 	switch {
 	case r.AccountDeleted:

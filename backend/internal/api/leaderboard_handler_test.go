@@ -297,6 +297,51 @@ func TestThePublicTableUnderFullNamesCarriesNoLoginForAnUnnamedAccount(t *testin
 	}
 }
 
+// A self-registered participant's login is their email address, so a contest
+// left at its defaults must not publish it.
+func TestThePublicTableOfADefaultContestCarriesNoLogin(t *testing.T) {
+	f := newBoardFixture(t)
+	created, err := f.stores.Service.Create(t.Context(), contests.CreateCommand{ActorID: f.organizer.ID})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	start, end := f.now.Add(-time.Hour), f.now.Add(time.Hour)
+	created.Status, created.StartsAt, created.EndsAt = contests.StatusRunning, &start, &end
+	c := f.stores.Contests.Put(created)
+	maria := f.stores.Users.Add(users.User{
+		Login: "maria.rusu@example.org", Email: "maria.rusu@example.org", FullName: "Maria Rusu", Status: users.StatusActive,
+	})
+	me, err := f.stores.Registrations.Add(t.Context(), c.ID, maria.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.standings.entries = []leaderboard.Entry{{
+		Registration: me.ID, Login: maria.Login, FullName: maria.FullName,
+		Points: 12, Solved: 2, LastScoredAt: scoredAt(f.now.Add(-time.Minute)),
+	}}
+
+	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Rows []struct {
+			Label string `json:"label"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Rows) != 1 {
+		t.Fatalf("rows = %+v, want the one participant", body.Rows)
+	}
+	for _, row := range body.Rows {
+		if row.Label == maria.Login {
+			t.Errorf("a public row is labelled with the participant's login %q", row.Label)
+		}
+	}
+}
+
 // The table must not be a way to learn which contests exist.
 func TestThePublicTableAnswersTheSameForADraftAMissingContestAndNonsense(t *testing.T) {
 	f := newBoardFixture(t)

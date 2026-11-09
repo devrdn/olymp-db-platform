@@ -87,8 +87,9 @@ const DefaultICPCPenaltyMin = 20
 // the migration's CHECK (icpc_penalty_min BETWEEN 0 AND 240).
 const maxICPCPenaltyMin = 240
 
-// Leaderboard labels (docs/ARCHITECTURE.md §10). The table is public, so the
-// login is the default and a full name is the organiser's choice.
+// Leaderboard labels (docs/ARCHITECTURE.md §10). The table is public and a
+// self-registered participant's login is their email address, so a full name
+// is the default and the login is the organiser's choice.
 const (
 	LeaderboardNamesLogin    = "login"
 	LeaderboardNamesFullName = "full_name"
