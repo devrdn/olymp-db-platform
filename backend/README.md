@@ -226,10 +226,11 @@ PUBLIC_URL=https://olympdb.usm.md
 ## Running locally
 
 Compose and the Makefile both read `deploy/.env`, and the host-side targets
-take the database password from it, so create it first:
+take the database password from it, so create it first, readable by you alone
+(`make` refuses a file other accounts can read):
 
 ```bash
-cp deploy/.env.example deploy/.env
+install -m 600 deploy/.env.example deploy/.env
 ```
 
 Fill in the passwords, then start the infrastructure, apply migrations and run

@@ -74,11 +74,12 @@ lists every document.
 You will need Docker, Go 1.26+ and Node 22+.
 
 ```bash
-cp deploy/.env.example deploy/.env
+install -m 600 deploy/.env.example deploy/.env
 ```
 
-Fill in the passwords in `deploy/.env` — the file is read by everything below
-and is never committed. Then:
+Fill in the passwords in `deploy/.env` — the file is read by everything below,
+is never committed, and must stay readable by you alone (`make` refuses it
+otherwise). Then:
 
 ```bash
 make dev-up

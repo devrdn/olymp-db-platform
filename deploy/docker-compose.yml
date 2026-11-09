@@ -355,25 +355,31 @@ services:
     # and the limiter reads an error as "refuse" — which signs the whole
     # olympiad out at once. `allkeys-lru` spends the pressure on what nobody
     # has touched: the sessions of people who left, before the ones in use.
+    #
+    # The configuration arrives on stdin because a process's arguments are
+    # listed by the host's `ps` to every local account, and the password is
+    # enough to write a session for any user. Every step execs, so Redis is
+    # PID 1 and receives Docker's stop signal; the image's entrypoint still
+    # drops it to the redis user.
     command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --maxmemory
-      - ${REDIS_MAXMEMORY:-256mb}
-      - --maxmemory-policy
-      - allkeys-lru
-      - --requirepass
-      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - sh
+      - -c
+      - |
+        exec docker-entrypoint.sh redis-server - <<EOF
+        appendonly yes
+        maxmemory ${REDIS_MAXMEMORY:-256mb}
+        maxmemory-policy allkeys-lru
+        requirepass $${REDIS_PASSWORD}
+        EOF
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     networks: [internal]
 
   # One-shot job: applies pending migrations, then exits. The API waits for it

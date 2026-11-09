@@ -270,8 +270,9 @@ participant.spec.ts` from `frontend/`.
 ## 2. Running them
 
 All `make` targets run from the repository root. The database targets read
-`deploy/.env` (copy it from `deploy/.env.example` and fill in the passwords);
-they stop with an explanation when it is missing.
+`deploy/.env` (create it with `install -m 600 deploy/.env.example deploy/.env`
+and fill in the passwords); they stop with an explanation when it is missing
+or readable by other accounts.
 
 | Command | Runs | Needs |
 |---|---|---|

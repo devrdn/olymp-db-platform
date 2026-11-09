@@ -357,13 +357,19 @@ test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI
 	@echo "test-all: all checks passed."
 
 # require-env fails with an explanation instead of letting the command reach the
-# database with empty credentials and report an authentication failure.
+# database with empty credentials and report an authentication failure. It also
+# refuses a file other accounts can read: it holds every secret of the
+# installation, and a copy made with plain `cp` is world-readable.
 .PHONY: require-env
 require-env:
 	@test -f $(ENV_FILE) || { \
 		echo "$(ENV_FILE) is missing. Create it first:"; \
-		echo "  cp deploy/.env.example $(ENV_FILE)"; \
+		echo "  install -m 600 deploy/.env.example $(ENV_FILE)"; \
 		echo "then fill in the passwords."; \
+		exit 1; }
+	@test -z "$$(find $(ENV_FILE) \( -perm -040 -o -perm -004 \))" || { \
+		echo "$(ENV_FILE) is readable by other accounts, and it holds every secret. Run:"; \
+		echo "  chmod 600 $(ENV_FILE)"; \
 		exit 1; }
 	@test -n "$(CORE_DB_PASSWORD)" || { \
 		echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; }
