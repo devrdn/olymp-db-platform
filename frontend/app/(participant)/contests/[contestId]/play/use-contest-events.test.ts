@@ -404,10 +404,9 @@ describe("useContestEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(3);
     });
 
-    // The server's `retry:` is a flat thirty seconds, so clients cut by a
-    // deploy would return together. With Math.random at its top value the wait
-    // is the floor plus half, so five seconds is not enough.
-    test("the reconnect delay carries jitter, so a deploy does not bring every client back at once", async () => {
+    // With Math.random at its top value the wait is the floor plus half, so
+    // five seconds is not enough.
+    test("the reconnect delay carries jitter, so channels refused together do not return together", async () => {
       vi.spyOn(Math, "random").mockReturnValue(1);
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "too_many_connections")));
       renderHook(() => useContestEvents("c1"));

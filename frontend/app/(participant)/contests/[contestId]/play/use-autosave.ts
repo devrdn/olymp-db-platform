@@ -21,7 +21,9 @@ import { isClosed, type ClosedCode } from "./refusals";
  * - at most one ordinary request per document is in flight; edits made
  *   meanwhile leave after it answers;
  * - a network or 5xx failure is retried after 2, 4, 8, 16 and then every
- *   30 s; a 429 waits as long as `Retry-After` says;
+ *   30 s; a 429 waits as long as `Retry-After` says; each wait is lengthened
+ *   by up to half at random, since an API restart fails every participant's
+ *   save at once and equal waits would bring them all back at once;
  * - a refusal of the text itself (a 4xx such as `workspace_notes_too_long`)
  *   is not retried until the text changes;
  * - once the contest has closed for the participant (409 `contest_ended`,
@@ -476,7 +478,7 @@ export class AutosaveEngine {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       this.send({ keepalive: false, bypassWait: false });
-    }, wait);
+    }, wait * (1 + Math.random() * 0.5));
   }
 
   /** Gives unsaved text with nothing pending the ordinary wait. */

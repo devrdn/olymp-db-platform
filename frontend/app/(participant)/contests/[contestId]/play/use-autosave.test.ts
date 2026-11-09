@@ -82,6 +82,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   window.localStorage.clear();
   version = 0;
+  // The lower end of the retry pause's random spread, so the waits below are exact.
+  vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
 afterEach(() => {
@@ -243,6 +245,23 @@ describe("a save that fails", () => {
       await wait(1);
       expect(save).toHaveBeenCalledTimes(index + 2);
     }
+  });
+
+  test.each([
+    { random: 0, stillWaiting: 1999, retried: 2000 },
+    { random: 0.9999, stillWaiting: 2998, retried: 3000 },
+  ])("waits between the pause and half as long again (random $random)", async ({ random, stillWaiting, retried }) => {
+    vi.mocked(Math.random).mockReturnValue(random);
+    const save = vi.fn<SaveFn>().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue("v1");
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    await wait(stillWaiting);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await wait(retried - stillWaiting);
+    expect(save).toHaveBeenCalledTimes(2);
   });
 
   test("keeps its text in the draft while it waits", async () => {

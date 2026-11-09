@@ -38,8 +38,10 @@ const RECONNECT_MAX_DELAY_MS = 60_000;
 /**
  * Random spread added to a reconnect delay: a wait falls in
  * `[delay, delay * 1.5)`. Added, never subtracted, because every attempt
- * spends the play screen's read budget. A deploy cuts every channel at once, and without jitter they would all return
- * in the same instant against the per-participant connection cap.
+ * spends the play screen's read budget. It spreads only this hook's own
+ * reconnects, after a refused or failed connection (`CLOSED`), which an API
+ * restart causes for every channel at once; a stream that is merely cut is
+ * the browser's to retry, on the server's `retry:` interval.
  */
 const RECONNECT_JITTER = 0.5;
 
