@@ -6,8 +6,18 @@ import { API_PREFIX } from "@/lib/api/client";
 import { apiOrigin } from "@/lib/api/config";
 import { SERVER_REQUEST_TIMEOUT_MS } from "@/lib/api/server";
 
-/** Must match `auth.SessionCookieName` in the Go service. Defined only here on this side. */
-export const SESSION_COOKIE = "dbcontest_session";
+import { cookieSecure } from "./cookie-policy";
+
+/**
+ * The session cookie's name and the attributes that must accompany it, the
+ * expired copy that clears it included. Named as the Go service names it from
+ * the same `COOKIE_SECURE`: a Secure cookie takes the `__Host-` prefix, which
+ * a browser refuses to accept from a sibling host or with a `Domain`.
+ */
+export function sessionCookie(): { name: string; path: "/"; secure: boolean } {
+  const secure = cookieSecure();
+  return { name: secure ? "__Host-dbcontest_session" : "dbcontest_session", path: "/", secure };
+}
 
 /**
  * Who the caller is, as `/auth/me` reports it. Route protection branches on
@@ -27,10 +37,10 @@ export type CurrentIdentity = {
  * cookies of its own. Empty when there is no session.
  */
 export async function sessionHeader(): Promise<Record<string, string>> {
-  const jar = await cookies();
-  const session = jar.get(SESSION_COOKIE)?.value;
+  const { name } = sessionCookie();
+  const session = (await cookies()).get(name)?.value;
 
-  return session ? { cookie: `${SESSION_COOKIE}=${session}` } : {};
+  return session ? { cookie: `${name}=${session}` } : {};
 }
 
 /**

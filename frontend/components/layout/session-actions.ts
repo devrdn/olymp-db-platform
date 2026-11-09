@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { serverRequest } from "@/lib/api/server";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 import { signOut } from "@/lib/auth/sign-out";
 
 /**
@@ -16,7 +16,7 @@ export async function signOutAction() {
 
   await signOut({
     endSession: () => serverRequest("/auth/logout", { method: "POST" }),
-    clearCookie: () => jar.delete(SESSION_COOKIE),
+    clearCookie: () => jar.delete(sessionCookie()),
   });
 
   // redirect() signals by throwing, so it stays outside anything that catches.

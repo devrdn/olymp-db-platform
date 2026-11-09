@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
 import { checkPasswordChange } from "@/lib/auth/password-change";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 
 export type ChangePasswordState = { code?: string };
 
@@ -46,14 +46,14 @@ export async function changePasswordAction(
 
     // The session expired meanwhile; this is not a password-field error.
     if (code === "unauthenticated") {
-      (await cookies()).delete(SESSION_COOKIE);
+      (await cookies()).delete(sessionCookie());
       redirect("/login");
     }
 
     return { code };
   }
 
-  (await cookies()).delete(SESSION_COOKIE);
+  (await cookies()).delete(sessionCookie());
 
   // The browser arrives with no session, so the address carries the notice.
   redirect("/login?changed=1");

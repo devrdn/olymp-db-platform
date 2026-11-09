@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { INGRESS_HEADER } from "@/lib/api/forwarded";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 
 import { config, proxy } from "./proxy";
 
@@ -13,7 +13,7 @@ import { config, proxy } from "./proxy";
  */
 function request(url: string, session = false) {
   const req = new NextRequest(new URL(url, "http://localhost:3000"));
-  if (session) req.cookies.set(SESSION_COOKIE, "opaque");
+  if (session) req.cookies.set(sessionCookie().name, "opaque");
   return req;
 }
 
@@ -24,12 +24,27 @@ function destination(url: string, session = false): string | null {
 }
 
 describe("proxy", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   test("sends a signed-out visitor to sign-in", () => {
     expect(destination("/contests")).toBe("http://localhost:3000/login?next=%2Fcontests");
   });
 
   test("lets a signed-in visitor through", () => {
     expect(destination("/contests", true)).toBeNull();
+  });
+
+  test("does not count an unprefixed cookie as a session where the cookie is Secure", () => {
+    vi.stubEnv("COOKIE_SECURE", "true");
+    const req = new NextRequest(new URL("/contests", "http://localhost:3000"));
+    req.cookies.set("dbcontest_session", "opaque");
+
+    expect(proxy(req).headers.get("location")).toBe("http://localhost:3000/login?next=%2Fcontests");
+
+    req.cookies.set("__Host-dbcontest_session", "opaque");
+    expect(proxy(req).headers.get("location")).toBeNull();
   });
 
   // The healthcheck has no session and treats a redirect as failure.
@@ -82,7 +97,7 @@ describe("proxy's forwarded headers", () => {
 
   function passedOn(path: string, headers: Record<string, string>, session = true) {
     const req = new NextRequest(new URL(path, "http://localhost:3000"), { headers });
-    if (session) req.cookies.set(SESSION_COOKIE, "opaque");
+    if (session) req.cookies.set(sessionCookie().name, "opaque");
     const response = proxy(req);
     const overridden = (response.headers.get("x-middleware-override-headers") ?? "").split(",");
     return {

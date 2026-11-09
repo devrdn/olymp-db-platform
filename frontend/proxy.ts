@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ingressSecret } from "@/lib/api/config";
 import { headedForApi, incomingRequestHeaders } from "@/lib/api/forwarded";
 import { guardRedirect } from "@/lib/auth/guard";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 
 /**
  * Next 16's `proxy` convention (formerly middleware), running on Node.
@@ -31,7 +31,7 @@ export function proxy(request: NextRequest) {
   const target = guardRedirect(
     request.nextUrl.pathname,
     request.nextUrl.search,
-    request.cookies.has(SESSION_COOKIE),
+    request.cookies.has(sessionCookie().name),
   );
 
   if (!target) return next();

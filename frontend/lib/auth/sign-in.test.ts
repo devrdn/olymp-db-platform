@@ -1,10 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEVICE_COOKIE, signIn } from "./sign-in";
 
 function apiAnswering(body: unknown, init: ResponseInit): typeof fetch {
   return async () => new Response(JSON.stringify(body), init);
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("signIn", () => {
   test("hands the session cookie the API issued on to the browser", async () => {
@@ -134,6 +138,25 @@ describe("signIn", () => {
     );
 
     expect(sent?.get("cookie")).toBe("dbcontest_session=old-session");
+  });
+
+  test("sends the previous session under the prefixed name where the cookie is Secure", async () => {
+    vi.stubEnv("COOKIE_SECURE", "true");
+    let sent: Headers | undefined;
+
+    await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async (_input, init) => {
+          sent = new Headers(init?.headers);
+          return new Response(JSON.stringify({ error: { code: "invalid_credentials" } }), { status: 401 });
+        },
+        setCookie: () => {},
+        sessionToken: "old-session",
+      },
+    );
+
+    expect(sent?.get("cookie")).toBe("__Host-dbcontest_session=old-session");
   });
 
   test("sends no cookie header when the browser has neither cookie", async () => {

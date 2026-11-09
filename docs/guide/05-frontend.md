@@ -103,8 +103,12 @@ Three layers, from the edge inward:
    (section 2 explains why). Then, for any path not under `/api/`, it calls
    `guardRedirect` from [`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts).
 2. **`guardRedirect`** decides from the path and whether the session cookie
-   exists. The cookie is httpOnly and opaque here, so this check knows only
-   that a cookie is present, not whether it is valid. Paths reachable without a cookie are listed in `guard.ts`:
+   exists, under the name `sessionCookie()` in
+   [`lib/auth/session.ts`](../../frontend/lib/auth/session.ts) gives it:
+   `__Host-dbcontest_session` where `COOKIE_SECURE` is on,
+   `dbcontest_session` otherwise. The cookie is httpOnly and opaque here,
+   so this check knows only that a cookie is present, not whether it is
+   valid. Paths reachable without a cookie are listed in `guard.ts`:
    `PUBLIC_PATHS` (`/` and `/login`), `PUBLIC_EXACT` (`/healthz`) and
    `PUBLIC_PATTERNS` (a contest's leaderboard). Everything else redirects to
    `/login?next=<path and query>`.

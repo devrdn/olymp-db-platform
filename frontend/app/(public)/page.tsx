@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { branding } from "@/lib/api/branding";
 import { serverRequest } from "@/lib/api/server";
 import { publicContestsSchema, publicStatsSchema } from "@/lib/api/showcase";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -35,7 +35,7 @@ export default async function HomePage() {
    * a round trip for strangers; a stale cookie only offers a link that ends at
    * sign-in anyway.
    */
-  const signedIn = jar.has(SESSION_COOKIE);
+  const signedIn = jar.has(sessionCookie().name);
 
   // Resolved once for both hero and footer, so they agree.
   const name = brand.name.trim() || dict.home.defaultName;

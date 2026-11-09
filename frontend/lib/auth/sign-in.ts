@@ -1,7 +1,7 @@
 import { API_PREFIX } from "@/lib/api/client";
 
 import { parseSetCookie, type ParsedCookie } from "./cookie";
-import { SESSION_COOKIE } from "./session";
+import { sessionCookie } from "./session";
 
 /**
  * Signing in, on the server: the API's `Set-Cookie` arrives here and has to be
@@ -63,7 +63,7 @@ export async function signIn(
 
   const cookie = [
     ...(deviceToken ? [`${DEVICE_COOKIE}=${deviceToken}`] : []),
-    ...(sessionToken ? [`${SESSION_COOKIE}=${sessionToken}`] : []),
+    ...(sessionToken ? [`${sessionCookie().name}=${sessionToken}`] : []),
   ].join("; ");
 
   const attempt = () =>
