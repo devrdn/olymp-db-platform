@@ -158,40 +158,13 @@ func TestUploadingTooOftenIsRefusedAndTheRefusalsCount(t *testing.T) {
 }
 
 func TestAnUploadPastTheDecodeSlotsIsToldToComeBackWithoutReachingTheStore(t *testing.T) {
-	store := &blockingCoverStore{
-		entered: make(chan struct{}, api.CoverDecodeSlots+1),
-		release: make(chan struct{}),
-	}
-	release := sync.OnceFunc(func() { close(store.release) })
-	t.Cleanup(release)
+	store, release := newBlockingCoverStore(t)
 	f := newCoverFixtureServing(t, store, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
 	picture := coverJPEG(t, 800, 450)
 
-	held := make(chan int, api.CoverDecodeSlots)
-	for range api.CoverDecodeSlots {
-		req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
-		go func() {
-			rec := httptest.NewRecorder()
-			f.router.ServeHTTP(rec, req)
-			held <- rec.Code
-		}()
-		<-store.entered
-	}
-
-	refused := make(chan *httptest.ResponseRecorder, 1)
-	req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
-	go func() {
-		rec := httptest.NewRecorder()
-		f.router.ServeHTTP(rec, req)
-		refused <- rec
-	}()
-	var rec *httptest.ResponseRecorder
-	select {
-	case rec = <-refused:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the upload past the slots waited for one instead of being refused")
-	}
+	held := f.holdDecodeSlots(t, store, contest, picture)
+	rec := f.uploadPromptly(t, contest, picture)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (%s)", rec.Code, rec.Body.String())
 	}
@@ -213,6 +186,22 @@ func TestAnUploadPastTheDecodeSlotsIsToldToComeBackWithoutReachingTheStore(t *te
 	}
 	if rec := f.upload(t, contest, picture, "Photo: A. Organiser"); rec.Code != http.StatusOK {
 		t.Errorf("an upload after the slots came free answered %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnUploadStillSendingItsBodyHoldsNoDecodeSlot(t *testing.T) {
+	store, _ := newBlockingCoverStore(t)
+	f := newCoverFixtureServing(t, store, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+	picture := coverJPEG(t, 800, 450)
+
+	for range api.CoverDecodeSlots {
+		f.startSlowUpload(t, contest)
+	}
+	f.holdDecodeSlots(t, store, contest, picture)
+
+	if rec := f.uploadPromptly(t, contest, picture); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status with every slot decoding = %d, want 503 (%s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -513,11 +502,99 @@ type blockingCoverStore struct {
 	release chan struct{}
 }
 
+// newBlockingCoverStore returns the store and its release, which the test's
+// cleanup also calls so no upload is left waiting.
+func newBlockingCoverStore(t *testing.T) (*blockingCoverStore, func()) {
+	t.Helper()
+	store := &blockingCoverStore{
+		entered: make(chan struct{}, api.CoverDecodeSlots+1),
+		release: make(chan struct{}),
+	}
+	release := sync.OnceFunc(func() { close(store.release) })
+	t.Cleanup(release)
+	return store, release
+}
+
 func (s *blockingCoverStore) Upload(context.Context, uuid.UUID, uuid.UUID, io.Reader, string) (covers.Cover, error) {
 	s.calls.Add(1)
 	s.entered <- struct{}{}
 	<-s.release
 	return covers.Cover{Hash: "held"}, nil
+}
+
+// coverWait bounds every wait in the slot tests, so a regression fails rather
+// than hangs.
+const coverWait = 5 * time.Second
+
+// holdDecodeSlots starts as many uploads as there are slots and returns once
+// each is inside the store; their status codes arrive on the channel after
+// the store is released.
+func (f *coverFixture) holdDecodeSlots(t *testing.T, store *blockingCoverStore, contest uuid.UUID, picture []byte) <-chan int {
+	t.Helper()
+	held := make(chan int, api.CoverDecodeSlots)
+	for range api.CoverDecodeSlots {
+		req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
+		go func() {
+			rec := httptest.NewRecorder()
+			f.router.ServeHTTP(rec, req)
+			held <- rec.Code
+		}()
+		select {
+		case <-store.entered:
+		case <-time.After(coverWait):
+			t.Fatal("an upload with a slot free never reached the store")
+		}
+	}
+	return held
+}
+
+// uploadPromptly sends one upload and fails the test if it is still waiting
+// after coverWait.
+func (f *coverFixture) uploadPromptly(t *testing.T, contest uuid.UUID, picture []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
+	go func() {
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, req)
+		answered <- rec
+	}()
+	select {
+	case rec := <-answered:
+		return rec
+	case <-time.After(coverWait):
+		t.Fatal("the upload waited instead of being answered")
+		return nil
+	}
+}
+
+// startSlowUpload sends the start of a form and leaves the rest of its body
+// unsent until the test ends.
+func (f *coverFixture) startSlowUpload(t *testing.T, contest uuid.UUID) {
+	t.Helper()
+	body, sending := io.Pipe()
+	form := multipart.NewWriter(sending)
+	req := httptest.NewRequest(http.MethodPut, "/contests/"+contest.String()+"/cover", body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.AddCookie(f.cookie)
+
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		f.router.ServeHTTP(httptest.NewRecorder(), req)
+		// A handler that answered without reading must not leave the write
+		// below waiting.
+		_ = body.Close()
+	}()
+	t.Cleanup(func() {
+		_ = sending.CloseWithError(io.ErrUnexpectedEOF)
+		<-served
+	})
+
+	// A pipe write returns only once the handler has read it.
+	if _, err := form.CreateFormFile("file", "cover.jpg"); err != nil {
+		t.Fatalf("the handler did not start reading the body: %v", err)
+	}
 }
 
 // coverFiles stands in for the directory on the volume.

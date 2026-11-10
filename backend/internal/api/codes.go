@@ -448,11 +448,12 @@ var (
 
 	// --- A contest's cover picture --------------------------------------------
 	// One code per covers.Service refusal (CLAUDE.md rule 1), plus the
-	// uploader's budget: each names something different to change.
+	// uploader's budget and the process's decode slots: each names something
+	// different to change, or to wait for.
 	codeCoverTooOften = httpx.NewCode("cover_too_often",
 		"This account has uploaded covers more often this minute than the installation allows, refused uploads included. Nothing was stored; wait `Retry-After` seconds and try again.")
 	codeCoverBusy = httpx.NewCode("cover_busy",
-		"As many covers are being processed at once as this installation allows, across every account, and this one was not read: nothing was stored. A statement about the service's load rather than about the caller, whose upload still counted against `cover_too_often`; `Retry-After` says how long to wait.")
+		"As many covers are being processed at once as this installation allows, across every account, and this one was not decoded: nothing was stored. A statement about the service's load rather than about the caller, whose upload still counted against `cover_too_often`; `Retry-After` says how long to wait.")
 	codeCoverTooLarge = httpx.NewCode("cover_too_large",
 		"The uploaded file is heavier than a cover may be. The message names the limit.")
 	codeCoverKind = httpx.NewCode("cover_kind",

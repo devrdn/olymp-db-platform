@@ -115,7 +115,7 @@
     },
     {
       "code": "cover_busy",
-      "meaning": "As many covers are being processed at once as this installation allows, across every account, and this one was not read: nothing was stored. A statement about the service's load rather than about the caller, whose upload still counted against `cover_too_often`; `Retry-After` says how long to wait."
+      "meaning": "As many covers are being processed at once as this installation allows, across every account, and this one was not decoded: nothing was stored. A statement about the service's load rather than about the caller, whose upload still counted against `cover_too_often`; `Retry-After` says how long to wait."
     },
     {
       "code": "cover_dimensions",

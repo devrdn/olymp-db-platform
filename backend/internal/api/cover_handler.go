@@ -39,7 +39,8 @@ const (
 	coverWindow = time.Minute
 
 	// coverBusyRetry is what an upload that found no decode slot is told to
-	// wait: a decode at the pixel bound takes seconds, not minutes.
+	// wait: a slot is held for the decode and the write, which take seconds at
+	// the pixel bound, not for the body's arrival.
 	coverBusyRetry = 5 * time.Second
 
 	// coverEnvelopeSlack is what the multipart framing adds on top of the
@@ -73,7 +74,7 @@ type CoverHandler struct {
 	limiter *auth.Limiter
 	mw      *auth.Middleware
 	log     *slog.Logger
-	// decoding holds one token per upload between parsing and its answer.
+	// decoding holds one token per upload from its parsed form to its answer.
 	decoding chan struct{}
 }
 
@@ -136,17 +137,6 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	if !h.admitUpload(w, r, identity.UserID) {
 		return
 	}
-	// Refused rather than queued, as for exports: the account's budget is a
-	// rate, and only a count in flight bounds the memory the decodes hold.
-	select {
-	case h.decoding <- struct{}{}:
-		defer func() { <-h.decoding }()
-	default:
-		w.Header().Set("Retry-After", strconv.Itoa(int(coverBusyRetry/time.Second)))
-		httpx.Error(w, r, http.StatusServiceUnavailable, codeCoverBusy,
-			"As many covers are being processed at once as this installation allows; try again in a moment")
-		return
-	}
 
 	// The ceiling is on the socket, because a declared length is only a claim
 	// (CLAUDE.md rule 12). This bounds the envelope; covers.Process bounds the
@@ -176,6 +166,19 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = file.Close() }()
+
+	// Taken once the body is in, so a slow sender holds no slot. Refused
+	// rather than queued, as for exports: the account's budget is a rate, and
+	// only a count in flight bounds the memory the decodes hold.
+	select {
+	case h.decoding <- struct{}{}:
+		defer func() { <-h.decoding }()
+	default:
+		w.Header().Set("Retry-After", strconv.Itoa(int(coverBusyRetry/time.Second)))
+		httpx.Error(w, r, http.StatusServiceUnavailable, codeCoverBusy,
+			"As many covers are being processed at once as this installation allows; try again in a moment")
+		return
+	}
 
 	cover, err := h.covers.Upload(r.Context(), contestID, identity.UserID, file,
 		r.FormValue(coverAttributionField))
