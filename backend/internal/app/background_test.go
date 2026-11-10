@@ -6,12 +6,16 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
@@ -521,5 +525,44 @@ func TestTendPoolsWithNoTenderIsUnaffected(t *testing.T) {
 
 	if job.wake != nil {
 		t.Fatalf("wake = %v, want nil with no tender wired", job.wake)
+	}
+}
+
+// coverRows is the covers table as the sweep reads it.
+type coverRows []string
+
+func (r coverRows) ReferencedHashes(context.Context) ([]string, error) { return r, nil }
+
+func TestTheCoverSweepRemovesWhatNoContestNamesOnItsOwn(t *testing.T) {
+	files, err := filestore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("filestore.New() = %v", err)
+	}
+	kept, orphan := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	longAgo := time.Now().Add(-2 * covers.OrphanGrace)
+	for _, hash := range []string{kept, orphan} {
+		key := covers.Key(hash, 800)
+		if err := files.Put(t.Context(), key, "image/jpeg", []byte("jpeg")); err != nil {
+			t.Fatalf("Put(%s) = %v", key, err)
+		}
+		if err := os.Chtimes(filepath.Join(files.Dir(), key), longAgo, longAgo); err != nil {
+			t.Fatalf("age %s: %v", key, err)
+		}
+	}
+
+	job := sweepCoverOrphans(quiet(), covers.NewOrphanSweeper(files, coverRows{kept}))
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+
+	if _, _, err := files.Get(t.Context(), covers.Key(orphan, 800)); err == nil {
+		t.Error("a cover file no contest names is still on the volume")
+	}
+	if _, _, err := files.Get(t.Context(), covers.Key(kept, 800)); err != nil {
+		t.Errorf("the named cover was removed: %v", err)
+	}
+	if job.every != abandonedUploadsEvery || job.atStart {
+		t.Errorf("every = %s, atStart = %v; want the upload janitor's %s, not at startup",
+			job.every, job.atStart, abandonedUploadsEvery)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
@@ -291,6 +292,30 @@ func abandonedUploads(log *slog.Logger, games *provisioning.Games, olderThan tim
 			if result.Abandoned > 0 || result.OrphanFiles > 0 {
 				log.InfoContext(ctx, "swept abandoned uploads",
 					"abandoned", result.Abandoned, "orphan_files", result.OrphanFiles)
+			}
+			return err
+		},
+	}
+}
+
+// sweepCoverOrphans removes cover files no contest names, so the volume holds
+// at most an hour's uploads beyond the covers in use (covers.OrphanGrace).
+// Find refuses to plan when the rows cannot be read, so a failed tick removes
+// nothing.
+func sweepCoverOrphans(log *slog.Logger, sweeper *covers.OrphanSweeper) task {
+	return task{
+		name: "cover-orphan-sweep",
+		// Not at startup, for the same reason as the upload janitor.
+		every: abandonedUploadsEvery,
+		run: func(ctx context.Context) error {
+			orphans, err := sweeper.Find(ctx)
+			if err != nil {
+				return err
+			}
+			result, err := sweeper.Remove(ctx, orphans)
+			if result.Removed > 0 || result.Failed > 0 {
+				log.InfoContext(ctx, "swept orphaned cover files",
+					"removed", result.Removed, "failed", result.Failed, "freed_bytes", result.FreedBytes)
 			}
 			return err
 		},

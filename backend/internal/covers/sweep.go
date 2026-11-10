@@ -46,8 +46,8 @@ type OrphanSweepResult struct {
 
 // OrphanSweeper finds, and when told to removes, cover files no contest refers
 // to. The product never deletes a cover file (so a refused delete cannot fail
-// an edit); this collects them. It is run by an operator from cmd/gameorphans,
-// not offered by the API.
+// an edit); this collects them. The API runs it every ten minutes, and an
+// operator can inspect or run it from cmd/gameorphans; no route offers it.
 type OrphanSweeper struct {
 	files OrphanFiles
 	rows  OrphanHashes

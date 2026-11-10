@@ -569,6 +569,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		return nil, fmt.Errorf("open the cover directory: %w", err)
 	}
 	log.Info("cover storage ready", "dir", coverFiles.Dir())
+	a.tasks = append(a.tasks, sweepCoverOrphans(log, covers.NewOrphanSweeper(coverFiles, postgres.NewCovers(pool))))
 
 	modules = append(modules, api.NewCoverHandler(
 		covers.NewService(postgres.NewCovers(pool), coverFiles),

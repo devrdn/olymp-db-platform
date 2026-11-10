@@ -1,9 +1,9 @@
-// Command gameorphans finds, and when told to removes, what the product never
-// removes itself: databases the core database marks 'dropped' that still exist
-// on the game cluster (the reclaim sweep skips such rows), and cover files no
-// contest refers to (rules in covers.OrphanSweeper).
+// Command gameorphans finds, and when told to removes, databases the core
+// database marks 'dropped' that still exist on the game cluster (the reclaim
+// sweep skips such rows), and cover files no contest refers to (rules in
+// covers.OrphanSweeper, which the API also runs on a timer).
 //
-// It is run by hand, not offered by the API: deciding that something is safe
+// It is run by hand, not offered by the API: deciding that a database is safe
 // to destroy needs somebody who can look at the machine.
 //
 // Usage:
