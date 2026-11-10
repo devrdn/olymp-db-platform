@@ -7,11 +7,15 @@
  * to Secure in production builds.
  */
 export function cookieSecure(): boolean {
-  const configured = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  const configured = process.env.COOKIE_SECURE;
+  if (!configured) return process.env.NODE_ENV === "production";
 
-  if (configured === "true" || configured === "1") return true;
-  if (configured === "false" || configured === "0") return false;
+  // The spellings Go's strconv.ParseBool accepts: the cookie's name follows
+  // this value, and the API names it by that rule.
+  if (["1", "t", "T", "TRUE", "true", "True"].includes(configured)) return true;
+  if (["0", "f", "F", "FALSE", "false", "False"].includes(configured)) return false;
 
-  // Unset or unreadable: the safe default, so a typo never drops the attribute.
-  return process.env.NODE_ENV === "production";
+  // The API refuses to start on such a value; guessing here would pick a
+  // cookie name it never sets.
+  throw new Error(`COOKIE_SECURE is ${JSON.stringify(configured)}: set it to true or false`);
 }

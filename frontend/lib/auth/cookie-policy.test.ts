@@ -44,10 +44,36 @@ describe("cookieSecure", () => {
     expect(cookieSecure()).toBe(false);
   });
 
-  test("treats an unreadable value as unset rather than as false", () => {
-    setEnv("COOKIE_SECURE", "yes please");
+  test("treats an empty value as unset, as the API does", () => {
+    setEnv("COOKIE_SECURE", "");
     setEnv("NODE_ENV", "production");
 
     expect(cookieSecure()).toBe(true);
   });
+
+  // The API reads the variable with Go's strconv.ParseBool, and the cookie's
+  // name follows it on both sides.
+  test.each(["1", "t", "T", "TRUE", "true", "True"])("reads %s as true, as the API does", (value) => {
+    setEnv("COOKIE_SECURE", value);
+    setEnv("NODE_ENV", "development");
+
+    expect(cookieSecure()).toBe(true);
+  });
+
+  test.each(["0", "f", "F", "FALSE", "false", "False"])("reads %s as false, as the API does", (value) => {
+    setEnv("COOKIE_SECURE", value);
+    setEnv("NODE_ENV", "production");
+
+    expect(cookieSecure()).toBe(false);
+  });
+
+  test.each(["yes please", "tRuE", " true", "on"])(
+    "refuses %j, which the API refuses to start with, rather than guess a cookie name",
+    (value) => {
+      setEnv("COOKIE_SECURE", value);
+      setEnv("NODE_ENV", "production");
+
+      expect(() => cookieSecure()).toThrow(/COOKIE_SECURE/);
+    },
+  );
 });
