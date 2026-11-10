@@ -927,9 +927,11 @@ an advisory lock, and a game build is claimed by one worker through its row.
 | `game-build` | 5 s | yes | `provisioning.Games.Build`: build one pending template; take back a build left in `building` longer than `GAME_BUILD_TIMEOUT` plus a margin. | `GAME_PROVISIONER_DSN` set |
 | `game-reclaim` | 10 min | no | `provisioning.Service.Reclaim`: drop idle participant databases past their contest's grace period, then templates with no copies left. | `GAME_PROVISIONER_DSN` set |
 | `game-upload-sweep` | 10 min | no | `provisioning.Games.SweepUploads`: abort uploads idle past `GAME_UPLOAD_ABANDONED_AFTER` (default 24 h), remove files no row names. | `GAME_UPLOAD_DIR` set too |
+| `cover-orphan-sweep` | 10 min | no | `covers.OrphanSweeper`: remove cover files no contest names once they are an hour old (`covers.OrphanGrace`); a tick that cannot read the rows removes nothing. | always |
 
-Not periodic: `cmd/gameorphans` lists, and with `-apply` removes, databases
-and cover files the product does not remove itself. `cmd/gamecheck` lists, and
+Not periodic: `cmd/gameorphans` lists, and with `-apply` removes, game
+databases the product does not remove itself, and orphaned cover files without
+waiting for the sweep. `cmd/gamecheck` lists, and
 changes nothing, the contests whose template the core database records as
 built and the game cluster lacks, which is the state a restore onto a new
 host leaves. Both are run by hand.

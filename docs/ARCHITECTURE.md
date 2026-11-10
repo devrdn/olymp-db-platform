@@ -3653,8 +3653,9 @@ a failed read.
 not pass a contest that has a picture and no credit line. A drawn cover needs
 none — we are its author.
 
-**Orphaned files are collected by `cmd/gameorphans`** along with lost game
-databases: a file whose hash no row of `contest_covers` refers to is deleted —
+**Orphaned files are collected by the API's `cover-orphan-sweep`** every ten
+minutes, and on demand by `cmd/gameorphans` along with lost game databases: a
+file whose hash no row of `contest_covers` refers to is deleted —
 but only if it is more than an hour old, because a younger one may be an
 upload in flight, and only if **nobody** refers to it, since the name is the
 hash and two contests with the same picture share one file. By default the
@@ -4439,9 +4440,11 @@ if wanted.
    `make restore-covers FILE=… CONFIRM=yes` and
    `make restore-game-uploads FILE=… CONFIRM=yes` on the new host, and
    restart the `api`. Both volume restores write the files as the API's user
-   (65532), since the API cannot open a file it does not own. Restore the
-   uploads after `make restore`, not before: until the rows are back, the
-   upload sweep treats the files as orphans and deletes them.
+   (65532), since the API cannot open a file it does not own. Restore both
+   volumes after `make restore`, not before: until the rows are back, the
+   upload sweep and the cover sweep treat the files as orphans and delete
+   them, and a restored cover keeps the age that puts it past the hour's
+   grace.
 5. Rebuild the game of every contest still to be played. The restored
    database records each template as built, so until then that contest has
    no game; `make game-check` lists every such contest with its status, and

@@ -701,9 +701,12 @@ endef
 
 # A cover is named by the hash of its own content, so copying an archive over
 # a volume that already holds some of the same files replaces each with an
-# identical one.
-restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
-	$(call restore-volume,covers,covers,$(CONTAINER_COVER_DIR))
+# identical one. Run it after `make restore`, never before: the cover sweep
+# deletes a file no contest names once it is an hour old, and a restored file
+# keeps the age it had when it was backed up.
+COVERS_RESTORE_NOTE := Run this after make restore: until the database names these covers, the cover sweep deletes them.
+restore-covers: require-env ## Restore the covers volume from an archive, after make restore (FILE=path CONFIRM=yes)
+	$(call restore-volume,covers,covers,$(CONTAINER_COVER_DIR),COVERS_RESTORE_NOTE)
 
 # An upload is named by its own id, so a file already there is the same upload.
 # Run it after `make restore`, never before: the upload sweep deletes a file
