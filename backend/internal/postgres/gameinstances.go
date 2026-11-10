@@ -469,10 +469,31 @@ func (r *GameInstances) RecordedDatabases(ctx context.Context) ([]provisioning.D
 
 // MarkTemplateDropped moves one contest's template to the terminal 'dropped'
 // status, keeping the row as MarkDropped does.
+//
+// A building row is left alone and reported: its build is about to create the
+// database, and the mark would hide it. Against a concurrent ClaimBuild only
+// one wins: the update waits for a row being claimed and then skips it, and
+// the claim skips a row being marked. The second statement's fresh snapshot
+// sees a claim the update waited for.
 func (r *GameInstances) MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_templates SET status = 'dropped', updated_at = now() WHERE contest_id = $1`, contestID); err != nil {
+	q := r.querier(ctx)
+	tag, err := q.Exec(ctx, `
+		UPDATE game_templates SET status = 'dropped', updated_at = now()
+		WHERE contest_id = $1 AND status <> 'building'`, contestID)
+	if err != nil {
 		return fmt.Errorf("mark the template of contest %s dropped: %w", contestID, err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	var building bool
+	if err := q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM game_templates WHERE contest_id = $1 AND status = 'building')`,
+		contestID).Scan(&building); err != nil {
+		return fmt.Errorf("mark the template of contest %s dropped: %w", contestID, err)
+	}
+	if building {
+		return provisioning.ErrBuildInProgress
 	}
 	return nil
 }

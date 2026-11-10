@@ -564,7 +564,36 @@ func TestDropGameDropsEveryCopyNotYetDroppedThenTheTemplateAndMarksTheirRows(t *
 	})
 }
 
-func TestDropGameRefusesWhileACopyIsInUse(t *testing.T) {
+func TestDropGameRefusesADraftWhoseGameIsBeingBuiltAndDropsNothing(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
+		if _, err := service.TopUp(ctx, contest, 1); err != nil {
+			t.Fatalf("top-up: %v", err)
+		}
+		copied := instancesOf(t, ctx, contest.ID)[0].Database
+		markTemplateReady(t, ctx, contest.ID, provisioning.TemplateName(contest.ID))
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE game_templates SET status = 'building' WHERE contest_id = $1`, contest.ID); err != nil {
+			t.Fatalf("setup: start the build: %v", err)
+		}
+
+		if err := service.DropGame(ctx, contest.ID); !errors.Is(err, provisioning.ErrBuildInProgress) {
+			t.Fatalf("DropGame() = %v, want ErrBuildInProgress", err)
+		}
+
+		if drops := fake.idleDrops(); len(drops) != 0 {
+			t.Errorf("drops = %v, want none while the game is being built", drops)
+		}
+		if status := statusOf(t, ctx, copied); status == "dropped" {
+			t.Error("a copy was marked dropped")
+		}
+		if status := templateStatusOf(t, ctx, contest.ID); status != "building" {
+			t.Errorf("template status = %q, want building", status)
+		}
+	})
+}
+
+func TestDropGameRefusesWhileACopyIsInUseAndFinishesOnTheNextCall(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
 		if _, err := service.TopUp(ctx, contest, 1); err != nil {
@@ -578,20 +607,27 @@ func TestDropGameRefusesWhileACopyIsInUse(t *testing.T) {
 		if err := service.DropGame(ctx, contest.ID); err == nil {
 			t.Fatal("DropGame() = nil with a copy still in use")
 		}
-
 		if status := statusOf(t, ctx, busy); status == "dropped" {
 			t.Error("the copy in use was marked dropped")
 		}
 		if _, _, called := fake.outcomeOf(template); called {
 			t.Error("the template was dropped ahead of a copy still in use")
 		}
-		if status := templateStatusOf(t, ctx, contest.ID); status == "dropped" {
-			t.Error("the template was marked dropped")
+
+		fake.busy = nil
+		if err := service.DropGame(ctx, contest.ID); err != nil {
+			t.Fatalf("DropGame() once the copy is free = %v", err)
+		}
+		if status := statusOf(t, ctx, busy); status != "dropped" {
+			t.Errorf("copy status = %q, want dropped", status)
+		}
+		if !wasDropped(fake, template) {
+			t.Error("the template was not dropped on the next call")
 		}
 	})
 }
 
-func TestDropGameKeepsTheTemplatesRowWhenItsDropFails(t *testing.T) {
+func TestDropGameFinishesOnTheNextCallAfterTheTemplatesDropFails(t *testing.T) {
 	withRollback(t, func(ctx context.Context) {
 		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
 		template := provisioning.TemplateName(contest.ID)
@@ -602,8 +638,26 @@ func TestDropGameKeepsTheTemplatesRowWhenItsDropFails(t *testing.T) {
 		if err := service.DropGame(ctx, contest.ID); !errors.Is(err, refused) {
 			t.Fatalf("DropGame() = %v, want the cluster's error", err)
 		}
-		if status := templateStatusOf(t, ctx, contest.ID); status == "dropped" {
-			t.Error("a template whose drop failed was marked dropped")
+
+		fake.failIdleDrop = nil
+		if err := service.DropGame(ctx, contest.ID); err != nil {
+			t.Fatalf("DropGame() once the cluster answers = %v", err)
+		}
+		if !wasDropped(fake, template) {
+			t.Error("the template was not dropped on the next call")
+		}
+		if status := templateStatusOf(t, ctx, contest.ID); status != "dropped" {
+			t.Errorf("template status = %q, want dropped", status)
+		}
+	})
+}
+
+func TestDropGameOfAContestWithNoGameSucceeds(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, _, _, contest, _ := serviceWithAudit(t, ctx, 0)
+
+		if err := service.DropGame(ctx, contest.ID); err != nil {
+			t.Fatalf("DropGame() = %v", err)
 		}
 	})
 }

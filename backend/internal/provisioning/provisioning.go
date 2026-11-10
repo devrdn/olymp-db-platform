@@ -91,7 +91,8 @@ type Repository interface {
 	// offered ahead of the instances copied from it.
 	ReclaimableTemplates(ctx context.Context, installationGraceMin, limit int) ([]TemplateCandidate, error)
 	// MarkTemplateDropped moves one contest's template to the terminal
-	// 'dropped' status.
+	// 'dropped' status, or returns ErrBuildInProgress and leaves a template
+	// being built. A contest with no template is not an error.
 	MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error
 	// Instances lists up to limit of one contest's rows, dropped ones
 	// included, newest last (CLAUDE.md rule 2).

@@ -207,11 +207,19 @@ func templateReclaimEntry(t TemplateCandidate) audit.Entry {
 // a contest whose rows are about to be deleted: they are how every other tool
 // finds a game database, so the databases must go first.
 //
+// The template's row is marked before anything is dropped, so no build can
+// start on it afterwards; a build already running refuses the call with
+// ErrBuildInProgress, since it is about to create the database.
+//
 // Like Reclaim it never forces a connection closed, but a database still in
 // use fails the call instead of being skipped, since the caller must not
 // delete the rows behind it. A later call carries on where this one stopped.
 // Nothing is written to the trail: the contest's deletion is the event.
 func (s *Service) DropGame(ctx context.Context, contestID uuid.UUID) error {
+	if err := s.repo.MarkTemplateDropped(ctx, contestID); err != nil {
+		return fmt.Errorf("take the game out of the build queue: %w", err)
+	}
+
 	// No copy is as new as math.MaxInt32, so this is every copy not yet dropped.
 	copies, err := s.repo.Stale(ctx, contestID, math.MaxInt32)
 	if err != nil {
@@ -226,13 +234,9 @@ func (s *Service) DropGame(ctx context.Context, contestID uuid.UUID) error {
 		}
 	}
 
-	// By name rather than by the row's status: a pending rebuild still has
-	// the previous template on disk, and IF EXISTS makes a missing one free.
-	template := templateName(contestID)
-	if err := s.dropInUse(ctx, template); err != nil {
-		return err
-	}
-	return s.repo.MarkTemplateDropped(ctx, contestID)
+	// By name rather than by the row: a pending rebuild still has the previous
+	// template on disk, and IF EXISTS makes a missing one free.
+	return s.dropInUse(ctx, templateName(contestID))
 }
 
 // dropInUse is DropIdle with "still in use" as an error.

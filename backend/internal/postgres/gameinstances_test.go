@@ -674,6 +674,62 @@ func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	})
 }
 
+// A draft's template is marked before it is dropped, so no build may start on
+// it afterwards, and a build already running must not be hidden by the mark.
+func TestMarkTemplateDroppedTakesAWaitingGameOutOfTheQueueAndRefusesARunningBuild(t *testing.T) {
+	cases := []struct {
+		name, status, want string
+		err                error
+	}{
+		{name: "no game", status: ""},
+		{name: "waiting to be built", status: "pending", want: "dropped"},
+		{name: "built", status: "ready", want: "dropped"},
+		{name: "failed", status: "failed", want: "dropped"},
+		{name: "already dropped", status: "dropped", want: "dropped"},
+		{name: "being built", status: "building", want: "building", err: provisioning.ErrBuildInProgress},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				contest := aContest(t, ctx)
+				if tc.status != "" {
+					reclaimTemplate(t, ctx, contest, tc.status)
+					// The oldest row, so a claim that could take it would.
+					if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+						`UPDATE game_templates SET updated_at = now() - interval '10 years' WHERE contest_id = $1`,
+						contest); err != nil {
+						t.Fatalf("age the template: %v", err)
+					}
+				}
+				repo := NewGameInstances(testPool)
+
+				if err := repo.MarkTemplateDropped(ctx, contest); !errors.Is(err, tc.err) {
+					t.Fatalf("MarkTemplateDropped() = %v, want %v", err, tc.err)
+				}
+				if tc.status == "" {
+					return
+				}
+
+				var status string
+				if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+					`SELECT status FROM game_templates WHERE contest_id = $1`, contest).Scan(&status); err != nil {
+					t.Fatalf("read the template back: %v", err)
+				}
+				if status != tc.want {
+					t.Fatalf("status = %q, want %q", status, tc.want)
+				}
+				claimed, err := repo.ClaimBuild(ctx, time.Hour)
+				if err != nil && !errors.Is(err, provisioning.ErrNoGame) {
+					t.Fatalf("claim a build: %v", err)
+				}
+				if tc.err == nil && claimed.ContestID == contest {
+					t.Fatal("the marked game was claimed for a build")
+				}
+			})
+		})
+	}
+}
+
 // Dropped rows must come back too: the orphan sweep finds orphans by them.
 func TestRecordedDatabasesCarriesInstancesAndTemplatesWithTheirStatus(t *testing.T) {
 	withTx(t, func(ctx context.Context) {

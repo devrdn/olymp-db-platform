@@ -43,7 +43,7 @@
     },
     {
       "code": "build_in_progress",
-      "meaning": "The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice."
+      "meaning": "The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice. Deleting a draft is refused the same way while its game is being built, since the build is about to create the database the delete would have to drop; once the build finishes the draft can be deleted."
     },
     {
       "code": "cannot_act_on_self",

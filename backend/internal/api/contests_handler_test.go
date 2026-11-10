@@ -22,6 +22,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -567,6 +568,23 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 }
 
 // The organiser is told why, not just that the contest is running.
+// The build holds the template open, so the draft can go once it finishes:
+// the organiser's to wait for, not an outage.
+func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.stores.Games.DropErr = fmt.Errorf("mark the template dropped: %w", provisioning.ErrBuildInProgress)
+
+	rec := f.do(http.MethodDelete, "/contests/"+c.ID.String(), "")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "build_in_progress" {
+		t.Errorf("error code = %q, want build_in_progress", code)
+	}
+}
+
 func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)

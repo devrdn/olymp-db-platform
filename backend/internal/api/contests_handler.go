@@ -14,6 +14,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -683,10 +684,20 @@ func (h *ContestsHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.service.Delete(r.Context(), identity.UserID, id); err != nil {
+		if draftDeleteErrors.answer(w, r, h.log, err) {
+			return
+		}
 		h.fail(w, r, err)
 		return
 	}
 	httpx.NoContent(w, r)
+}
+
+// draftDeleteErrors answers the refusal only deleting a draft meets: its game
+// is being built, and the draft can go once the build has finished.
+var draftDeleteErrors = errorTable{
+	{err: provisioning.ErrBuildInProgress, status: http.StatusConflict, code: codeBuildInProgress,
+		message: "The draft's game is being built; it can be deleted once the build has finished"},
 }
 
 type statusRequest struct {
