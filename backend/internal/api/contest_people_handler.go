@@ -224,8 +224,8 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 // UserResponse: no status, roles or password state.
 //
 // This search runs under participant.manage, so any contest's staff may call
-// it; the email is whole only when the query matched it and masked otherwise
-// (see contests.Person), since a login and a full name do not always tell two
+// it; the email is whole only when the query names its local part and masked
+// otherwise (see contests.Person), since a login and a full name do not always tell two
 // people apart. Email is omitted when the account has none, so a missing
 // address is not read as a blank one.
 type PersonResponse struct {

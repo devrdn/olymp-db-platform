@@ -38,10 +38,10 @@ var ErrQueryTooLong = errors.New("search text is too long")
 //
 // The search runs behind participant.manage, not users.manage, so any
 // contest's staff can call it against every account in the installation.
-// Email is therefore the full address only when the query matched the email
-// itself, which tells two same-named people apart without handing a
-// throwaway contest's owner every address: for a match on the login or the
-// name it is masked to the local part's first character, "…" and the domain.
+// Email is therefore the full address only when the query names its whole
+// local part and "@" (see shownEmail), which tells two same-named people
+// apart without handing a throwaway contest's owner every address: otherwise
+// it is masked to the local part's first character, "…" and the domain.
 // An account without an email has Email == "".
 type Person struct {
 	UserID   uuid.UUID
@@ -83,11 +83,14 @@ func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]
 	return out, nil
 }
 
-// shownEmail is the address as Person publishes it: whole when query is a
-// case-insensitive substring of it (what the repository's ILIKE matched),
-// masked otherwise, and "" for an account without one.
+// shownEmail is the address as Person publishes it: whole only when query
+// contains the address's whole local part followed by "@",
+// case-insensitively, masked otherwise, and "" for an account without one.
+// A fragment or the domain is part of every address it matches, so it must
+// not unmask them.
 func shownEmail(email, query string) string {
-	if email == "" || strings.Contains(strings.ToLower(email), strings.ToLower(query)) {
+	local, _, _ := strings.Cut(email, "@")
+	if email == "" || strings.Contains(strings.ToLower(query), strings.ToLower(local)+"@") {
 		return email
 	}
 	return maskEmail(email)

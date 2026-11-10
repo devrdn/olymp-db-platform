@@ -404,9 +404,9 @@ func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
 }
 
 // This endpoint reaches every contest's staff, not only users.manage, so the
-// whole address is published only to a query that matched it; a match on the
-// login or the name gets a masked one (see contests.Person).
-func TestDirectorySearchPublishesTheEmailAddressOnlyToAQueryThatMatchedIt(t *testing.T) {
+// whole address is published only to a query that names its local part; any
+// other match gets a masked one (see contests.Person).
+func TestDirectorySearchPublishesTheEmailAddressOnlyToAQueryThatNamesIt(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	f.stores.Users.Add(users.User{

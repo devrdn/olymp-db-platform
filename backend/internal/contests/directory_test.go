@@ -34,11 +34,11 @@ func TestSearchPeopleMatchesLoginNameOrEmail(t *testing.T) {
 	}
 }
 
-// The search is open to every contest's staff, so a match on the login or
-// the name must not hand over the address; only a query that matched the
-// address itself (case-insensitively, as the repository matches) reads it
-// whole.
-func TestSearchPeopleShowsTheWholeEmailOnlyWhenTheQueryMatchedIt(t *testing.T) {
+// The search is open to every contest's staff, so only a query naming the
+// address's whole local part and "@" (case-insensitively) reads it whole; a
+// match on the login, the name, a fragment of the address or its domain is
+// masked.
+func TestSearchPeopleShowsTheWholeEmailOnlyToAQueryNamingItsLocalPart(t *testing.T) {
 	f := conteststest.NewFixture()
 	f.Users.Add(users.User{
 		Login: "s.ivanov", FullName: "Ivanov Sergei", Email: "Sergei.I@example.edu",
@@ -46,10 +46,14 @@ func TestSearchPeopleShowsTheWholeEmailOnlyWhenTheQueryMatchedIt(t *testing.T) {
 	})
 
 	cases := map[string]string{
-		"ivanov":          "S…@example.edu",
-		"Ivanov S":        "S…@example.edu",
-		"sergei.i@exampl": "Sergei.I@example.edu",
-		"@EXAMPLE.edu":    "Sergei.I@example.edu",
+		"ivanov":               "S…@example.edu",
+		"Ivanov S":             "S…@example.edu",
+		"sergei.i":             "S…@example.edu",
+		"i@example":            "S…@example.edu",
+		"@EXAMPLE.edu":         "S…@example.edu",
+		"sergei.i@":            "Sergei.I@example.edu",
+		"sergei.i@exampl":      "Sergei.I@example.edu",
+		"SERGEI.I@EXAMPLE.EDU": "Sergei.I@example.edu",
 	}
 	for query, want := range cases {
 		found, err := f.Service.SearchPeople(context.Background(), query, 0)
@@ -61,6 +65,27 @@ func TestSearchPeopleShowsTheWholeEmailOnlyWhenTheQueryMatchedIt(t *testing.T) {
 		}
 		if found[0].Email != want {
 			t.Errorf("SearchPeople(%q) email = %q, want %q", query, found[0].Email, want)
+		}
+	}
+}
+
+// A domain is part of every address on it, so it unmasks none of them.
+func TestSearchPeopleMasksEveryAddressADomainQueryMatches(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Users.Add(users.User{Login: "s.ivanov", FullName: "Ivanov", Email: "sergei@usm.md", Status: users.StatusActive})
+	f.Users.Add(users.User{Login: "a.popa", FullName: "Popa", Email: "ana@usm.md", Status: users.StatusActive})
+	want := map[string]string{"s.ivanov": "s…@usm.md", "a.popa": "a…@usm.md"}
+
+	found, err := f.Service.SearchPeople(context.Background(), "@usm.md", 0)
+	if err != nil {
+		t.Fatalf("SearchPeople() = %v", err)
+	}
+	if len(found) != len(want) {
+		t.Fatalf("SearchPeople() = %+v, want both accounts on the domain", found)
+	}
+	for _, p := range found {
+		if p.Email != want[p.Login] {
+			t.Errorf("SearchPeople() email of %s = %q, want %q", p.Login, p.Email, want[p.Login])
 		}
 	}
 }
