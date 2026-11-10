@@ -543,14 +543,14 @@ services:
       #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
       #             8 MiB upload chunks                               = 1024 MiB
       #   GOMEMLIMIT                                                   = 1280 MiB
-      #   covers:   two decodes at once (api.CoverDecodeSlots), each a
-      #             40-megapixel source and its resampling buffer
-      #                                     2 × about 560 MiB          = 1120 MiB
-      # The covers term is live heap the collector cannot free, so it sits
-      # above the target rather than in it: 2400 MiB, inside the 3 GiB
-      # ceiling below. The base is an estimate, not a measured peak. The API logs a warning
-      # at start-up when GOMEMLIMIT is below concurrency × 64 MiB + 1 GiB.
-      # Raise PASSWORD_HASH_CONCURRENCY and this figure rises by 64 MiB a slot.
+      # The target covers the base and password hashing. Two cover decodes at
+      # once (api.CoverDecodeSlots, about 560 MiB each for a 40-megapixel
+      # source and its resampling buffer) can hold about 1.1 GiB of live heap
+      # above it; that still fits under the container limit below, and while
+      # they run the collector works harder. The base is an estimate, not a
+      # measured peak. The API logs a warning at start-up when GOMEMLIMIT is
+      # below concurrency × 64 MiB + 1 GiB. Raise PASSWORD_HASH_CONCURRENCY
+      # and this figure rises by 64 MiB a slot.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-1280MiB}
       # The provisioning role, not a participant's: this creates and drops
       # databases and never runs anybody's SQL. The Query Runner holds the
@@ -655,8 +655,9 @@ services:
       # point: a read-only volume must be a failed deployment, not a failed
       # upload on the morning of an olympiad.
       COVER_DIR: ${COVER_DIR:-/var/lib/dbcontest/covers}
-    # The hard ceiling: 3 GiB, generous headroom over GOMEMLIMIT's 1280 MiB,
-    # not a measured peak — nobody has measured this process's peak under a
+    # The hard ceiling: 3 GiB, room for GOMEMLIMIT's 1280 MiB and the 1.1 GiB
+    # two cover decodes can hold above it (about 2.4 GiB together), not a
+    # measured peak — nobody has measured this process's peak under a
     # contest's load yet. GOMEMLIMIT is a target the collector works towards,
     # not a wall; live data can exceed it, and this ceiling exists so the
     # kernel kills a runaway process rather than the host, not to be reached
