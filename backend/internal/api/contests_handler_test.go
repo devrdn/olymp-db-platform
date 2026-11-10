@@ -567,9 +567,8 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
-// The organiser is told why, not just that the contest is running.
-// The build holds the template open, so the draft can go once it finishes:
-// the organiser's to wait for, not an outage.
+// The game's template is being built, so the draft can go once the build
+// finishes: the organiser's to wait for, not an outage.
 func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -585,6 +584,7 @@ func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {
 	}
 }
 
+// The organiser is told why, not just that the contest is running.
 func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)

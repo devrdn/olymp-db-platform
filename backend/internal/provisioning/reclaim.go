@@ -207,8 +207,8 @@ func templateReclaimEntry(t TemplateCandidate) audit.Entry {
 // a contest whose rows are about to be deleted: they are how every other tool
 // finds a game database, so the databases must go first.
 //
-// The template's row is marked before anything is dropped, so no build can
-// start on it afterwards; a build already running refuses the call with
+// The template's row is marked before anything is dropped, so a build already
+// queued is never claimed; a build already running refuses the call with
 // ErrBuildInProgress, since it is about to create the database.
 //
 // Like Reclaim it never forces a connection closed, but a database still in
