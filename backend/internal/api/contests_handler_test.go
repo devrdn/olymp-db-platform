@@ -13,11 +13,15 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/api"
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -825,6 +829,97 @@ func TestICPCPenaltyMinSurvivesARoundTripThroughTheAPI(t *testing.T) {
 	}
 	if got := decode(t, rec)["icpc_penalty_min"]; got != float64(15) {
 		t.Errorf("icpc_penalty_min = %v, want it to survive an unrelated update", got)
+	}
+}
+
+// The in-memory stores keep any prefix, but the column is cidr[], which
+// refuses bits to the right of the mask, so this crosses the real database.
+// Everything runs in one transaction that is rolled back.
+func TestANetworkTypedWithHostBitsIsSavedAsTheNetworkItNames(t *testing.T) {
+	pool, err := storagetest.OpenCore(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("OpenCore() = %v", err)
+	}
+	if pool == nil {
+		t.Skip("CORE_DB_DSN is not set; run the database tests")
+	}
+	t.Cleanup(pool.Close)
+
+	errRollback := errors.New("roll back the test transaction")
+	err = storage.NewUnitOfWork(pool).Do(t.Context(), func(ctx context.Context) error {
+		accounts := postgres.NewUsers(pool)
+		actor, err := accounts.Create(ctx, users.User{
+			Login: "cidr-" + uuid.NewString()[:8], FullName: "Organizer",
+			Status: users.StatusActive, PasswordHash: "not-a-real-hash",
+		})
+		if err != nil {
+			t.Fatalf("create the organizer: %v", err)
+		}
+		var contestID uuid.UUID
+		if err := storage.QuerierFrom(ctx, pool).QueryRow(ctx,
+			`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, actor.ID).Scan(&contestID); err != nil {
+			t.Fatalf("create the contest: %v", err)
+		}
+		managers := postgres.NewContestManagers(pool)
+		if err := managers.Grant(ctx, contests.Manager{
+			ContestID: contestID, UserID: actor.ID, Role: rbac.RoleOwner, GrantedBy: actor.ID,
+		}); err != nil {
+			t.Fatalf("make the organizer its owner: %v", err)
+		}
+
+		c := cache.NewMemory(100)
+		t.Cleanup(func() { _ = c.Close() })
+		log := logging.New("error", io.Discard)
+		sessions := auth.NewSessionStore(c, time.Hour)
+		token, err := sessions.Create(ctx, auth.Principal{UserID: actor.ID, Login: actor.Login})
+		if err != nil {
+			t.Fatalf("session Create() = %v", err)
+		}
+		mw := auth.NewMiddleware(auth.MiddlewareConfig{
+			Sessions: sessions, Users: accounts, Authorizer: rbac.New(postgres.NewContestRoles(pool)),
+			Cookies: auth.NewCookieWriter(false), Logger: log,
+		})
+		service := contests.NewService(contests.ServiceConfig{
+			Contests:      postgres.NewContests(pool),
+			Managers:      managers,
+			Registrations: postgres.NewRegistrations(pool),
+			Policies:      postgres.NewSQLPolicies(pool),
+			Languages:     postgres.NewLanguages(pool),
+			Users:         accounts,
+			Audit:         audit.New(postgres.NewAuditSink(pool)),
+			UnitOfWork:    storage.NewUnitOfWork(pool),
+			Gate:          contests.NewGate(0),
+			GameReadiness: postgres.NewGameInstances(pool),
+			Covers:        postgres.NewCovers(pool),
+			Logger:        log,
+		})
+		router := chi.NewRouter()
+		api.NewContestsHandler(service, mw, log, "en").Mount(router)
+		send := func(method, body string) *httptest.ResponseRecorder {
+			req := httptest.NewRequestWithContext(ctx, method, "/contests/"+contestID.String(), strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(&http.Cookie{Name: sessionName, Value: token})
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			return rec
+		}
+
+		if rec := send(http.MethodPatch, `{"allowed_cidrs": ["192.168.1.10/24"]}`); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+
+		rec := send(http.MethodGet, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		cidrs, _ := decode(t, rec)["allowed_cidrs"].([]any)
+		if len(cidrs) != 1 || cidrs[0] != "192.168.1.0/24" {
+			t.Errorf("allowed_cidrs = %v, want the network 192.168.1.0/24", cidrs)
+		}
+		return errRollback
+	})
+	if err != nil && !errors.Is(err, errRollback) {
+		t.Fatalf("test transaction failed: %v", err)
 	}
 }
 

@@ -985,7 +985,8 @@ func formatTime(t *time.Time) string {
 
 // parseCIDRs turns the request's networks into prefixes. nil means "leave the
 // restriction alone" and empty means "clear it", so an empty list returns a
-// non-nil slice.
+// non-nil slice. A network typed with host bits set is stored as the network
+// it names, since the cidr column refuses those bits.
 func parseCIDRs(values []string) ([]netip.Prefix, error) {
 	if values == nil {
 		return nil, nil
@@ -996,7 +997,7 @@ func parseCIDRs(values []string) ([]netip.Prefix, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%q is not a valid network in CIDR notation", value)
 		}
-		prefixes = append(prefixes, prefix)
+		prefixes = append(prefixes, prefix.Masked())
 	}
 	return prefixes, nil
 }
