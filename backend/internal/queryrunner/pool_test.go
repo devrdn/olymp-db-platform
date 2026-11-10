@@ -16,7 +16,8 @@ import (
 )
 
 // These tests observe kept connections from the server's side
-// (pg_backend_pid, pg_stat_activity), not from a counter inside the pool.
+// (pg_backend_pid, pg_stat_activity), not from a counter inside the pool; what
+// the pool reports to the Observer is checked against that.
 
 func TestAReadIsServedByTheConnectionThePreviousReadLeft(t *testing.T) {
 	runner, database := setupWith(t, unlimited(), anything{})
@@ -24,6 +25,18 @@ func TestAReadIsServedByTheConnectionThePreviousReadLeft(t *testing.T) {
 	first := backend(t, runner, database)
 	if second := backend(t, runner, database); second != first {
 		t.Fatalf("the second read ran on backend %d, the first on %d: nothing was kept", second, first)
+	}
+}
+
+func TestThePoolReportsWhetherItReusedOrDialledEachConnection(t *testing.T) {
+	runner, database, o := observedRunner(t, unlimited(), anything{})
+
+	first := backend(t, runner, database)
+	if second := backend(t, runner, database); second != first {
+		t.Fatalf("the second read ran on backend %d, the first on %d: nothing was kept", second, first)
+	}
+	if got := o.lends(); got != "dialled,reused" {
+		t.Errorf("lends = %q, want dialled,reused", got)
 	}
 }
 

@@ -135,7 +135,7 @@ const metricsShutdownTimeout = 5 * time.Second
 // observe registers the runner's series on prom and attaches them to the
 // runner. The result also takes the gRPC server's rendered cut-offs.
 func observe(prom *metrics.Prometheus, runner *queryrunner.Runner) *metrics.QueryRunner {
-	observed := metrics.NewQueryRunner(prom, queryrunner.Endings(), queryrunner.CutOffs())
+	observed := metrics.NewQueryRunner(prom, queryrunner.Endings(), queryrunner.CutOffs(), queryrunner.Lends())
 	runner.WithObserver(observed)
 	observed.WatchAdmission(runner.Admission)
 	return observed

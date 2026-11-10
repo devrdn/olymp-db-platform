@@ -155,6 +155,7 @@ func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 // Run.
 func (r *Runner) WithObserver(o Observer) *Runner {
 	r.observer = o
+	r.conns.observer = o
 	return r
 }
 

@@ -66,6 +66,7 @@ func TestTheMetricsListenerServesTheRunnersSeries(t *testing.T) {
 		`queryrunner_queries_total{outcome="rejected",reason="parse_error"} 1`,
 		`queryrunner_queries_total{outcome="timeout",reason="queue"} 0`,
 		`queryrunner_result_cutoffs_total{limit="rendered"} 0`,
+		`queryrunner_connections_lent_total{outcome="dialled"} 0`,
 		"queryrunner_active_queries 0",
 		"queryrunner_admission_queue_depth 0",
 		"queryrunner_admission_wait_seconds_count 0",

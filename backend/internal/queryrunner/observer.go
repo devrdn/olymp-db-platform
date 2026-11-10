@@ -24,6 +24,8 @@ type Observer interface {
 	Executed(outcome string, d time.Duration)
 	// CutOff is one answer cut by a limit of the result budget.
 	CutOff(limit string)
+	// Lent is one connection the pool handed a query: one of Lends.
+	Lent(outcome string)
 }
 
 // Reasons Run reports beside the journal's status. A refusal by the checker
@@ -53,6 +55,13 @@ const (
 	CutOffRendered = "rendered"
 )
 
+// How the pool came by a connection it lent: the one a read left kept, or a
+// new one dialled.
+const (
+	lentReused  = "reused"
+	lentDialled = "dialled"
+)
+
 // Endings lists every outcome Run reports with the reasons each may carry, so
 // a metrics backend can declare the series up front and refuse any other.
 func Endings() map[string][]string {
@@ -71,6 +80,11 @@ func Endings() map[string][]string {
 // CutOffs lists every limit CutOff may be handed.
 func CutOffs() []string {
 	return []string{CutOffRows, CutOffBytes, CutOffSocket, CutOffRendered}
+}
+
+// Lends lists every outcome Lent may be handed.
+func Lends() []string {
+	return []string{lentReused, lentDialled}
 }
 
 // ending names how a Run ended: the journal's status, and a reason from
@@ -123,3 +137,4 @@ func (discard) Ended(string, string)           {}
 func (discard) Waited(time.Duration)           {}
 func (discard) Executed(string, time.Duration) {}
 func (discard) CutOff(string)                  {}
+func (discard) Lent(string)                    {}

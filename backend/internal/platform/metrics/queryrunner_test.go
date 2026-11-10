@@ -18,9 +18,11 @@ var runnerEndings = map[string][]string{
 
 var runnerCutOffs = []string{"rows", "bytes"}
 
+var runnerLends = []string{"reused", "dialled"}
+
 func TestQueryRunnerCountsEachEndingUnderItsOutcomeAndReason(t *testing.T) {
 	p := NewPrometheus()
-	m := NewQueryRunner(p, runnerEndings, runnerCutOffs)
+	m := NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
 
 	m.Ended("ok", "")
 	m.Ended("ok", "")
@@ -46,13 +48,14 @@ func TestQueryRunnerCountsEachEndingUnderItsOutcomeAndReason(t *testing.T) {
 // that increment, so every declared ending is exported at zero from the start.
 func TestQueryRunnerExportsEveryDeclaredSeriesBeforeItHappens(t *testing.T) {
 	p := NewPrometheus()
-	NewQueryRunner(p, runnerEndings, runnerCutOffs)
+	NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
 
 	body := scrape(t, p)
 	for _, want := range []string{
 		`queryrunner_queries_total{outcome="rejected",reason="busy"} 0`,
 		`queryrunner_queries_total{outcome="timeout",reason="deadline"} 0`,
 		`queryrunner_result_cutoffs_total{limit="bytes"} 0`,
+		`queryrunner_connections_lent_total{outcome="dialled"} 0`,
 		`queryrunner_query_duration_seconds_count{outcome="error"} 0`,
 		`queryrunner_admission_wait_seconds_count 0`,
 	} {
@@ -66,12 +69,13 @@ func TestQueryRunnerExportsEveryDeclaredSeriesBeforeItHappens(t *testing.T) {
 // whatever produced it, is folded into "other" rather than minting a series.
 func TestQueryRunnerFoldsUndeclaredLabelValuesIntoOther(t *testing.T) {
 	p := NewPrometheus()
-	m := NewQueryRunner(p, runnerEndings, runnerCutOffs)
+	m := NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
 
 	m.Ended("rejected", "SELECT * FROM secrets")
 	m.Ended("exploded", "busy")
 	m.Executed("exploded", time.Second)
 	m.CutOff("participant-42")
+	m.Lent("game_db_42")
 
 	if got := testutil.ToFloat64(m.queries.WithLabelValues("rejected", otherLabel)); got != 1 {
 		t.Errorf("undeclared reason: queries{rejected,other} = %v, want 1", got)
@@ -82,9 +86,12 @@ func TestQueryRunnerFoldsUndeclaredLabelValuesIntoOther(t *testing.T) {
 	if got := testutil.ToFloat64(m.cutoffs.WithLabelValues(otherLabel)); got != 1 {
 		t.Errorf("undeclared limit: cutoffs{other} = %v, want 1", got)
 	}
+	if got := testutil.ToFloat64(m.lends.WithLabelValues(otherLabel)); got != 1 {
+		t.Errorf("undeclared lend: lends{other} = %v, want 1", got)
+	}
 
 	body := scrape(t, p)
-	for _, leaked := range []string{"secrets", "exploded", "participant-42"} {
+	for _, leaked := range []string{"secrets", "exploded", "participant-42", "game_db_42"} {
 		if strings.Contains(body, leaked) {
 			t.Errorf("the scrape carries the undeclared value %q", leaked)
 		}
@@ -93,7 +100,7 @@ func TestQueryRunnerFoldsUndeclaredLabelValuesIntoOther(t *testing.T) {
 
 func TestQueryRunnerObservesWaitsDurationsAndCutOffs(t *testing.T) {
 	p := NewPrometheus()
-	m := NewQueryRunner(p, runnerEndings, runnerCutOffs)
+	m := NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
 
 	m.Waited(0)
 	m.Waited(2 * time.Second)
@@ -116,11 +123,30 @@ func TestQueryRunnerObservesWaitsDurationsAndCutOffs(t *testing.T) {
 	}
 }
 
+func TestQueryRunnerCountsEachLendUnderItsOutcome(t *testing.T) {
+	p := NewPrometheus()
+	m := NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
+
+	m.Lent("dialled")
+	m.Lent("reused")
+	m.Lent("reused")
+
+	body := scrape(t, p)
+	for _, want := range []string{
+		`queryrunner_connections_lent_total{outcome="dialled"} 1`,
+		`queryrunner_connections_lent_total{outcome="reused"} 2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape is missing %s", want)
+		}
+	}
+}
+
 // Running and waiting are read when scraped, so they cannot drift from the
 // gate and cost nothing per query.
 func TestQueryRunnerReadsAdmissionWhenScraped(t *testing.T) {
 	p := NewPrometheus()
-	m := NewQueryRunner(p, runnerEndings, runnerCutOffs)
+	m := NewQueryRunner(p, runnerEndings, runnerCutOffs, runnerLends)
 
 	running, waiting := 3, 7
 	m.WatchAdmission(func() (int, int) { return running, waiting })
@@ -147,12 +173,13 @@ func TestQueryRunnerDoesNothingOnNonPrometheusBackends(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			m := NewQueryRunner(rec, runnerEndings, runnerCutOffs)
+			m := NewQueryRunner(rec, runnerEndings, runnerCutOffs, runnerLends)
 			// None of these may panic.
 			m.Ended("ok", "")
 			m.Waited(time.Second)
 			m.Executed("ok", time.Second)
 			m.CutOff("rows")
+			m.Lent("reused")
 			m.WatchAdmission(func() (int, int) { return 1, 1 })
 		})
 	}

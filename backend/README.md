@@ -850,6 +850,7 @@ never declared. Every declared series is exported at zero from the start.
 | `queryrunner_active_queries` | gauge | — | queries holding a running slot, read from the gate at scrape time |
 | `queryrunner_admission_queue_depth` | gauge | — | queries waiting for a slot, read from the gate at scrape time |
 | `queryrunner_result_cutoffs_total` | counter | `limit` | where an answer is cut to the result budget |
+| `queryrunner_connections_lent_total` | counter | `outcome` | once per connection a query is lent: `reused` (the one its database's last clean read left kept) or `dialled` (a new one); a low reused share means kept connections are evicted or expire before their participant's next read |
 
 `outcome` is the query log's status, so a dashboard and the journal agree:
 

@@ -11,8 +11,9 @@ import (
 const otherLabel = "other"
 
 // QueryRunner is the Query Runner's own set: how each query ended, how long
-// admission and execution took, how many queries run and wait, and how often
-// an answer was cut to its budget.
+// admission and execution took, how many queries run and wait, how often an
+// answer was cut to its budget, and how often a query's connection was a kept
+// one rather than a new one.
 //
 // Label values are bounded by the lists given to NewQueryRunner, never by
 // what a request carries: an undeclared value is counted as "other", so no
@@ -24,20 +25,23 @@ type QueryRunner struct {
 	duration *prometheus.HistogramVec
 	wait     prometheus.Histogram
 	cutoffs  *prometheus.CounterVec
+	lends    *prometheus.CounterVec
 
 	// The declared series, resolved once so a query costs a map lookup and
 	// an atomic add. A value missing here goes to "other" through the vec.
 	ended    map[string]map[string]prometheus.Counter
 	executed map[string]prometheus.Observer
 	cut      map[string]prometheus.Counter
+	lent     map[string]prometheus.Counter
 }
 
 // NewQueryRunner registers the set on rec's registry when rec is the
 // Prometheus backend, and returns a set that discards otherwise. endings maps
 // each outcome to the reasons it may carry; cutoffs lists the budget limits
-// that may cut an answer. Every declared series is exported at zero from the
-// start, so rate() sees its first increment.
-func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string) *QueryRunner {
+// that may cut an answer; lends lists how a lent connection may have been come
+// by. Every declared series is exported at zero from the start, so rate() sees
+// its first increment.
+func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs, lends []string) *QueryRunner {
 	q := &QueryRunner{}
 	p, ok := rec.(*Prometheus)
 	if !ok {
@@ -67,7 +71,11 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 		Name: "queryrunner_result_cutoffs_total",
 		Help: "Answers cut to the result budget, by the limit that cut them.",
 	}, []string{"limit"})
-	q.registry.MustRegister(q.queries, q.duration, q.wait, q.cutoffs)
+	q.lends = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "queryrunner_connections_lent_total",
+		Help: "Connections lent to queries, by whether a kept one was reused or a new one dialled.",
+	}, []string{"outcome"})
+	q.registry.MustRegister(q.queries, q.duration, q.wait, q.cutoffs, q.lends)
 
 	q.ended = make(map[string]map[string]prometheus.Counter, len(endings))
 	q.executed = make(map[string]prometheus.Observer, len(endings))
@@ -81,6 +89,10 @@ func NewQueryRunner(rec Recorder, endings map[string][]string, cutoffs []string)
 	q.cut = make(map[string]prometheus.Counter, len(cutoffs))
 	for _, limit := range cutoffs {
 		q.cut[limit] = q.cutoffs.WithLabelValues(limit)
+	}
+	q.lent = make(map[string]prometheus.Counter, len(lends))
+	for _, outcome := range lends {
+		q.lent[outcome] = q.lends.WithLabelValues(outcome)
 	}
 	return q
 }
@@ -132,6 +144,18 @@ func (q *QueryRunner) CutOff(limit string) {
 		return
 	}
 	q.cutoffs.WithLabelValues(otherLabel).Inc()
+}
+
+// Lent counts one connection lent to a query.
+func (q *QueryRunner) Lent(outcome string) {
+	if q.lends == nil {
+		return
+	}
+	if counter, known := q.lent[outcome]; known {
+		counter.Inc()
+		return
+	}
+	q.lends.WithLabelValues(otherLabel).Inc()
 }
 
 // WatchAdmission exports how many queries run and wait, read from load at

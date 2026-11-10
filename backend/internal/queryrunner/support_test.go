@@ -176,6 +176,7 @@ type observed struct {
 	waits    []time.Duration
 	executed []string
 	cutoffs  []string
+	lent     []string
 }
 
 func (o *observed) Ended(outcome, reason string) {
@@ -200,6 +201,19 @@ func (o *observed) CutOff(limit string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.cutoffs = append(o.cutoffs, limit)
+}
+
+func (o *observed) Lent(outcome string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lent = append(o.lent, outcome)
+}
+
+// lends is every Lent so far, in order: "dialled,reused".
+func (o *observed) lends() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return strings.Join(o.lent, ",")
 }
 
 // report returns copies of what was recorded so far, as one string per

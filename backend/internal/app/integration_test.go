@@ -70,7 +70,7 @@ func registeredSeries(t *testing.T) map[string]exportedSeries {
 	metrics.NewMailCounters(api, mailing.KindNames(), mailing.Outcomes())
 
 	runner := metrics.NewPrometheus()
-	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs())
+	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs(), queryrunner.Lends())
 	observed.WatchAdmission(func() (int, int) { return 0, 0 })
 
 	return map[string]exportedSeries{serviceAPI: gathered(t, api), serviceRunner: gathered(t, runner)}

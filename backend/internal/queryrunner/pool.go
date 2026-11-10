@@ -53,6 +53,7 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 // database.
 type pool struct {
 	dial        dialer
+	observer    Observer
 	capacity    int
 	maxIdle     int
 	idleTimeout time.Duration
@@ -80,6 +81,7 @@ const resetTimeout = 2 * time.Second
 func newPool(dial dialer, capacity, maxIdle int, idleTimeout time.Duration) *pool {
 	return &pool{
 		dial:        dial,
+		observer:    discard{},
 		capacity:    capacity,
 		maxIdle:     maxIdle,
 		idleTimeout: idleTimeout,
@@ -103,6 +105,7 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 		p.mu.Unlock()
 		kept.session.meter.reset(readBudget)
 		kept.session.reused = true
+		p.observer.Lent(lentReused)
 		return kept.session, nil
 	}
 	// A write closes the read connection kept for its database before
@@ -124,6 +127,7 @@ func (p *pool) acquire(ctx context.Context, database string, write bool, readBud
 		p.mu.Unlock()
 		return nil, err
 	}
+	p.observer.Lent(lentDialled)
 	return &session{conn: conn, meter: meter, database: database, write: write}, nil
 }
 
