@@ -122,6 +122,8 @@ func TestQuestionTextIsBounded(t *testing.T) {
 		{"body past the bound", contests.QuestionText{BodyMD: strings.Repeat("ж", 20_001)}, false},
 		{"label at the bound", contests.QuestionText{Choices: map[string]string{"a": strings.Repeat("ж", 1000)}}, true},
 		{"label past the bound", contests.QuestionText{Choices: map[string]string{"a": strings.Repeat("ж", 1001)}}, false},
+		{"label key at the bound", contests.QuestionText{Choices: map[string]string{strings.Repeat("ж", 1000): "suspect"}}, true},
+		{"label key past the bound", contests.QuestionText{Choices: map[string]string{strings.Repeat("ж", 1001): "suspect"}}, false},
 		{"as many labels as options", contests.QuestionText{Choices: labels(50)}, true},
 		{"more labels than options", contests.QuestionText{Choices: labels(51)}, false},
 		{"no title", contests.QuestionText{BodyMD: "Who did it?"}, true},
@@ -272,6 +274,22 @@ func TestAnswerRejectsAnOverlongRegularExpression(t *testing.T) {
 
 	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
 		t.Errorf("Validate() = %v, want contests.ErrInvalidAnswer", err)
+	}
+}
+
+func TestAContestHoldsAtMostAPackagesWorthOfQuestions(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	for range contests.MaxPackageQuestions {
+		if _, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID)); err != nil {
+			t.Fatalf("AddQuestion() below the bound = %v", err)
+		}
+	}
+
+	_, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
+
+	if !errors.Is(err, contests.ErrInvalidQuestion) {
+		t.Errorf("AddQuestion() past the bound = %v, want ErrInvalidQuestion", err)
 	}
 }
 
@@ -434,6 +452,27 @@ func TestChoiceAnswerNamingAnOptionIsAccepted(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("SetAnswers() = %v, want nil", err)
+	}
+}
+
+func TestAQuestionHoldsAtMostFiftyAnswers(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	q, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
+	if err != nil {
+		t.Fatalf("AddQuestion() = %v", err)
+	}
+	answers := make([]contests.Answer, 50)
+	for i := range answers {
+		answers[i] = contests.Answer{MatchKind: contests.MatchExact, Value: fmt.Sprint("the butler ", i)}
+	}
+
+	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID, answers); err != nil {
+		t.Errorf("SetAnswers() at the bound = %v, want nil", err)
+	}
+	answers = append(answers, contests.Answer{MatchKind: contests.MatchExact, Value: "the gardener"})
+	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID, answers); !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Errorf("SetAnswers() past the bound = %v, want ErrInvalidAnswer", err)
 	}
 }
 

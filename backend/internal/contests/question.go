@@ -34,6 +34,10 @@ const (
 // maxChoices bounds a choice question's options (CLAUDE.md rule 2).
 const maxChoices = 50
 
+// maxAnswers bounds a question's reference answers, which are spelling
+// variants: grading and the publish gate compare with every one of them.
+const maxAnswers = 50
+
 // Bounds on a question's authored text (CLAUDE.md rule 2), in characters.
 const (
 	maxQuestionTitleRunes = 200
@@ -170,7 +174,10 @@ func (t QuestionText) Validate() error {
 	if len(t.Choices) > maxChoices {
 		return fmt.Errorf("%w: at most %d option labels", ErrInvalidQuestion, maxChoices)
 	}
-	for _, label := range t.Choices {
+	for id, label := range t.Choices {
+		if utf8.RuneCountInString(id) > maxAnswerRunes {
+			return fmt.Errorf("%w: an option identifier is at most %d characters", ErrInvalidQuestion, maxAnswerRunes)
+		}
 		if utf8.RuneCountInString(label) > maxChoiceLabelRunes {
 			return fmt.Errorf("%w: an option label is at most %d characters", ErrInvalidQuestion, maxChoiceLabelRunes)
 		}
@@ -236,6 +243,9 @@ func compileAnswerPattern(pattern string) (*regexp.Regexp, error) {
 // validateAnswersFor checks a whole set of reference answers against the
 // question they belong to.
 func validateAnswersFor(q Question, answers []Answer) error {
+	if len(answers) > maxAnswers {
+		return fmt.Errorf("%w: at most %d answers", ErrInvalidAnswer, maxAnswers)
+	}
 	for _, a := range answers {
 		if err := a.Validate(); err != nil {
 			return err
@@ -348,6 +358,13 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 	}
 	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
 		return Question{}, err
+	}
+	existing, err := s.questions.List(ctx, c.ID)
+	if err != nil {
+		return Question{}, err
+	}
+	if len(existing) >= MaxPackageQuestions {
+		return Question{}, fmt.Errorf("%w: at most %d questions", ErrInvalidQuestion, MaxPackageQuestions)
 	}
 
 	var created Question

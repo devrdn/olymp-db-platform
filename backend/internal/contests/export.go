@@ -12,9 +12,9 @@ import (
 // ErrPackageTooLarge reports a contest with more than MaxPackageQuestions.
 var ErrPackageTooLarge = errors.New("contest carries more questions than one package holds")
 
-// MaxPackageQuestions bounds the one list in a package that authoring leaves
-// unbounded, since questions are added one request at a time (CLAUDE.md
-// rule 2). Exceeding it is a refusal, not truncation: a truncated package is
+// MaxPackageQuestions bounds a contest's questions (CLAUDE.md rule 2): adding
+// one past it is refused, and so is exporting a contest that holds more from
+// before the bound. That is a refusal, not truncation: a truncated package is
 // an answer key that no longer matches its contest, with nothing to say so.
 const MaxPackageQuestions = 500
 
