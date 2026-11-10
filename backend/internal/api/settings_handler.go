@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
@@ -41,19 +42,25 @@ type SettingsAccounts interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 }
 
+// SettingsImageReadsPerMinute is per address and as generous as a cover's:
+// the sign-in screen asks for the pictures from every browser behind a
+// school's one address, and repeat visits hit the immutable cache.
+const SettingsImageReadsPerMinute = PublicCoverReadsPerMinute
+
 // SettingsHandler serves what the installation calls itself.
 type SettingsHandler struct {
 	settings SettingsStore
 	mail     SettingsMail
 	accounts SettingsAccounts
+	limiter  *auth.Limiter
 	mw       *auth.Middleware
 	log      *slog.Logger
 }
 
 // NewSettingsHandler assembles the settings endpoints.
 func NewSettingsHandler(store SettingsStore, mail SettingsMail, accounts SettingsAccounts,
-	mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
-	return &SettingsHandler{settings: store, mail: mail, accounts: accounts, mw: mw, log: log}
+	limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
+	return &SettingsHandler{settings: store, mail: mail, accounts: accounts, limiter: limiter, mw: mw, log: log}
 }
 
 // Mount registers the routes under /settings. The read is open because the
@@ -133,6 +140,21 @@ func (h *SettingsHandler) presentImages(r *http.Request) map[string]string {
 //     lock.
 //   - immutable caching, safe because the address carries the hash.
 func (h *SettingsHandler) image(w http.ResponseWriter, r *http.Request) {
+	// Before the database, which hands over the whole picture even for a
+	// request that ends in 304.
+	allowed, err := h.limiter.Allow(r.Context(), "settings_image:ip:"+addressKey(r), SettingsImageReadsPerMinute, time.Minute)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not check the installation image rate limit", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", "60")
+		httpx.Error(w, r, http.StatusTooManyRequests, codePublicTooOften,
+			"The installation's pictures are being asked for too often; wait before asking again")
+		return
+	}
+
 	img, err := h.settings.Image(r.Context(), chi.URLParam(r, "kind"))
 	switch {
 	case err == nil:

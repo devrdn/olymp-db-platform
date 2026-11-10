@@ -33,6 +33,7 @@ import (
 type settingsFixture struct {
 	router http.Handler
 	store  *settingsRepo
+	images *settingsImages
 	cookie *http.Cookie
 	// relay is the fake SMTP relay the installation sends through; nil with
 	// mail off.
@@ -70,9 +71,13 @@ func (r *settingsRepo) Save(_ context.Context, _ uuid.UUID, values settings.Valu
 	return nil
 }
 
-type settingsImages struct{ byKind map[string]settings.Image }
+type settingsImages struct {
+	byKind map[string]settings.Image
+	reads  int
+}
 
 func (i *settingsImages) ByKind(_ context.Context, kind string) (settings.Image, error) {
+	i.reads++
 	img, ok := i.byKind[kind]
 	if !ok {
 		return settings.Image{}, settings.ErrImageNotFound
@@ -142,9 +147,10 @@ func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture 
 	})
 
 	store := &settingsRepo{values: settings.Values{}}
+	images := &settingsImages{byKind: map[string]settings.Image{}}
 	trail := audit.New(&apiSink{})
-	service := settings.NewService(store, &settingsImages{byKind: map[string]settings.Image{}},
-		trail, settingsUnitOfWork{})
+	service := settings.NewService(store, images, trail, settingsUnitOfWork{})
+	limiter := auth.NewLimiter(c)
 
 	var relay *mailtest.Server
 	relayConfig := mail.Config{}
@@ -169,17 +175,18 @@ func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture 
 	tester := mailing.NewTester(mailing.TesterConfig{
 		Transport: sender,
 		Texts:     mailing.NewTexts("https://olympdb.usm.md"),
-		Limiter:   auth.NewLimiter(c),
+		Limiter:   limiter,
 		Audit:     trail,
 		Logger:    log,
 	})
 
 	router := chi.NewRouter()
-	api.NewSettingsHandler(service, tester, repo, mw, log).Mount(router)
+	api.NewSettingsHandler(service, tester, repo, limiter, mw, log).Mount(router)
 
 	return &settingsFixture{
 		router: router,
 		store:  store,
+		images: images,
 		cookie: &http.Cookie{Name: sessionName, Value: token},
 		relay:  relay,
 	}
@@ -409,6 +416,33 @@ func TestAPictureIsServedWithoutASessionAndCannotBeOpenedAsADocument(t *testing.
 	}
 	if rec.Header().Get("ETag") == "" {
 		t.Error("no ETag: the URL carries the hash, so caching should be unconditional")
+	}
+}
+
+// The read needs no session and pulls the picture out of the core database,
+// so an address past its budget is refused before that read.
+func TestAPictureIsRefusedPastTheAddressBudgetWithoutReadingIt(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	if rec := f.upload(t, settings.ImageLogo, pngBytes(t), f.cookie); rec.Code != http.StatusOK {
+		t.Fatalf("upload = %d (%s)", rec.Code, rec.Body.String())
+	}
+	for range api.SettingsImageReadsPerMinute {
+		if rec := f.do(http.MethodGet, "/settings/images/logo", ""); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 within the budget (%s)", rec.Code, rec.Body.String())
+		}
+	}
+	reads := f.images.reads
+
+	rec := f.do(http.MethodGet, "/settings/images/logo", "")
+
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "public_too_often" {
+		t.Fatalf("answer = %d %s, want 429 public_too_often", rec.Code, errorCode(t, rec))
+	}
+	if after := rec.Header().Get("Retry-After"); after != "60" {
+		t.Errorf("Retry-After = %q, want 60", after)
+	}
+	if f.images.reads != reads {
+		t.Errorf("the refused request read the picture: %d reads, want %d", f.images.reads, reads)
 	}
 }
 
