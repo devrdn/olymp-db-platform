@@ -26,12 +26,21 @@ const (
 	// already been read and sniffed.
 	CoverUploadsPerMinute = 10
 
+	// CoverDecodeSlots is how many uploads may decode at once, across every
+	// account. A picture at the pixel bound holds about 560 MiB while it is
+	// resampled, so this is a memory figure (deploy/docker-compose.yml).
+	CoverDecodeSlots = 2
+
 	// PublicCoverReadsPerMinute is per address and generous: one front-page
 	// visit asks for every card's picture, a school puts a hundred browsers
 	// behind one address, and repeat visits hit the immutable cache.
 	PublicCoverReadsPerMinute = 300
 
 	coverWindow = time.Minute
+
+	// coverBusyRetry is what an upload that found no decode slot is told to
+	// wait: a decode at the pixel bound takes seconds, not minutes.
+	coverBusyRetry = 5 * time.Second
 
 	// coverEnvelopeSlack is what the multipart framing adds on top of the
 	// picture. The socket ceiling is the domain limit plus this, or a picture
@@ -64,11 +73,16 @@ type CoverHandler struct {
 	limiter *auth.Limiter
 	mw      *auth.Middleware
 	log     *slog.Logger
+	// decoding holds one token per upload between parsing and its answer.
+	decoding chan struct{}
 }
 
 // NewCoverHandler assembles the cover endpoints.
 func NewCoverHandler(store CoverStore, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *CoverHandler {
-	return &CoverHandler{covers: store, limiter: limiter, mw: mw, log: log}
+	return &CoverHandler{
+		covers: store, limiter: limiter, mw: mw, log: log,
+		decoding: make(chan struct{}, CoverDecodeSlots),
+	}
 }
 
 // Mount registers the routes. The public read lives under /public/, away from
@@ -120,6 +134,17 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	// Before the body is touched: reading and decoding a photograph only to
 	// refuse it is what this budget prevents.
 	if !h.admitUpload(w, r, identity.UserID) {
+		return
+	}
+	// Refused rather than queued, as for exports: the account's budget is a
+	// rate, and only a count in flight bounds the memory the decodes hold.
+	select {
+	case h.decoding <- struct{}{}:
+		defer func() { <-h.decoding }()
+	default:
+		w.Header().Set("Retry-After", strconv.Itoa(int(coverBusyRetry/time.Second)))
+		httpx.Error(w, r, http.StatusServiceUnavailable, codeCoverBusy,
+			"As many covers are being processed at once as this installation allows; try again in a moment")
 		return
 	}
 

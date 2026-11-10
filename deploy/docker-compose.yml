@@ -543,7 +543,12 @@ services:
       #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
       #             8 MiB upload chunks                               = 1024 MiB
       #   GOMEMLIMIT                                                   = 1280 MiB
-      # The base is an estimate, not a measured peak. The API logs a warning
+      #   covers:   two decodes at once (api.CoverDecodeSlots), each a
+      #             40-megapixel source and its resampling buffer
+      #                                     2 × about 560 MiB          = 1120 MiB
+      # The covers term is live heap the collector cannot free, so it sits
+      # above the target rather than in it: 2400 MiB, inside the 3 GiB
+      # ceiling below. The base is an estimate, not a measured peak. The API logs a warning
       # at start-up when GOMEMLIMIT is below concurrency × 64 MiB + 1 GiB.
       # Raise PASSWORD_HASH_CONCURRENCY and this figure rises by 64 MiB a slot.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-1280MiB}

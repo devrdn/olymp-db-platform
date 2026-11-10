@@ -114,6 +114,10 @@
       "meaning": "The attribution is longer than a credit line may be. The message names the limit in characters."
     },
     {
+      "code": "cover_busy",
+      "meaning": "As many covers are being processed at once as this installation allows, across every account, and this one was not read: nothing was stored. A statement about the service's load rather than about the caller, whose upload still counted against `cover_too_often`; `Retry-After` says how long to wait."
+    },
+    {
       "code": "cover_dimensions",
       "meaning": "The picture declares more pixels on a side than a cover may have. Refused from the file's header, before any of it is decoded. The message names the limit."
     },

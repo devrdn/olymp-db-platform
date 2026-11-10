@@ -2232,6 +2232,8 @@ const ro = {
       "Acest fișier nu este o imagine pe care instalarea o păstrează. PNG, JPEG, GIF sau WebP — formatul este citit din fișier, nu din numele lui. Un .ico nu este necesar: orice browser actual acceptă un PNG drept pictogramă de filă.",
     cover_too_often:
       "Din acest cont au fost încărcate coperte prea des. Așteptați un minut și încercați din nou.",
+    cover_busy:
+      "Chiar acum se prelucrează mai multe coperte. Nu s-a salvat nimic — încercați din nou peste câteva secunde.",
     cover_too_large:
       "Fișierul este prea greu pentru o copertă. Până la 8 MB.",
     cover_kind:

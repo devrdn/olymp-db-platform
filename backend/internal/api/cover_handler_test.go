@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,6 +154,65 @@ func TestUploadingTooOftenIsRefusedAndTheRefusalsCount(t *testing.T) {
 	}
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("the refusal does not say how long to wait")
+	}
+}
+
+func TestAnUploadPastTheDecodeSlotsIsToldToComeBackWithoutReachingTheStore(t *testing.T) {
+	store := &blockingCoverStore{
+		entered: make(chan struct{}, api.CoverDecodeSlots+1),
+		release: make(chan struct{}),
+	}
+	release := sync.OnceFunc(func() { close(store.release) })
+	t.Cleanup(release)
+	f := newCoverFixtureServing(t, store, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+	picture := coverJPEG(t, 800, 450)
+
+	held := make(chan int, api.CoverDecodeSlots)
+	for range api.CoverDecodeSlots {
+		req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
+		go func() {
+			rec := httptest.NewRecorder()
+			f.router.ServeHTTP(rec, req)
+			held <- rec.Code
+		}()
+		<-store.entered
+	}
+
+	refused := make(chan *httptest.ResponseRecorder, 1)
+	req := f.uploadRequest(t, contest, picture, "Photo: A. Organiser")
+	go func() {
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, req)
+		refused <- rec
+	}()
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-refused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upload past the slots waited for one instead of being refused")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := errorCode(t, rec); got != "cover_busy" {
+		t.Errorf("code = %q, want cover_busy", got)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("the refusal does not say how long to wait")
+	}
+	if got := store.calls.Load(); got != api.CoverDecodeSlots {
+		t.Errorf("the store was reached %d times, want %d: the refused upload reached it", got, api.CoverDecodeSlots)
+	}
+
+	release()
+	for range api.CoverDecodeSlots {
+		if code := <-held; code != http.StatusOK {
+			t.Errorf("a held upload answered %d, want 200", code)
+		}
+	}
+	if rec := f.upload(t, contest, picture, "Photo: A. Organiser"); rec.Code != http.StatusOK {
+		t.Errorf("an upload after the slots came free answered %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -317,6 +378,18 @@ type coverFixture struct {
 func newCoverFixture(t *testing.T, permissions ...string) *coverFixture {
 	t.Helper()
 
+	covering := &coverRepo{rows: map[uuid.UUID]covers.Cover{}, published: map[uuid.UUID]bool{}}
+	files := &coverFiles{stored: map[string][]byte{}}
+	f := newCoverFixtureServing(t, covers.NewService(covering, files), permissions...)
+	f.repo, f.files = covering, files
+	return f
+}
+
+// newCoverFixtureServing mounts the routes over any store, for a test that
+// needs the store itself to behave in some particular way.
+func newCoverFixtureServing(t *testing.T, store api.CoverStore, permissions ...string) *coverFixture {
+	t.Helper()
+
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -338,20 +411,22 @@ func newCoverFixture(t *testing.T, permissions ...string) *coverFixture {
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
 
-	covering := &coverRepo{rows: map[uuid.UUID]covers.Cover{}, published: map[uuid.UUID]bool{}}
-	files := &coverFiles{stored: map[string][]byte{}}
-
 	router := chi.NewRouter()
-	api.NewCoverHandler(covers.NewService(covering, files), auth.NewLimiter(c), mw, log).Mount(router)
+	api.NewCoverHandler(store, auth.NewLimiter(c), mw, log).Mount(router)
 
-	return &coverFixture{
-		router: router, repo: covering, files: files,
-		cookie: &http.Cookie{Name: sessionName, Value: token},
-	}
+	return &coverFixture{router: router, cookie: &http.Cookie{Name: sessionName, Value: token}}
 }
 
 // upload sends one multipart form, as the organiser's panel does.
 func (f *coverFixture) upload(t *testing.T, contest uuid.UUID, picture []byte, attribution string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, f.uploadRequest(t, contest, picture, attribution))
+	return rec
+}
+
+func (f *coverFixture) uploadRequest(t *testing.T, contest uuid.UUID, picture []byte, attribution string) *http.Request {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -373,9 +448,7 @@ func (f *coverFixture) upload(t *testing.T, contest uuid.UUID, picture []byte, a
 	req := httptest.NewRequest(http.MethodPut, "/contests/"+contest.String()+"/cover", &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
 	req.AddCookie(f.cookie)
-	rec := httptest.NewRecorder()
-	f.router.ServeHTTP(rec, req)
-	return rec
+	return req
 }
 
 func (f *coverFixture) do(t *testing.T, method, path, body string, header http.Header) *httptest.ResponseRecorder {
@@ -429,6 +502,22 @@ func (r *coverRepo) PublicByContest(ctx context.Context, contestID uuid.UUID) (c
 func (r *coverRepo) Delete(_ context.Context, contestID uuid.UUID) error {
 	delete(r.rows, contestID)
 	return nil
+}
+
+// blockingCoverStore holds every upload until release is closed, as a slow
+// decode would. Only Upload is implemented.
+type blockingCoverStore struct {
+	api.CoverStore
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingCoverStore) Upload(context.Context, uuid.UUID, uuid.UUID, io.Reader, string) (covers.Cover, error) {
+	s.calls.Add(1)
+	s.entered <- struct{}{}
+	<-s.release
+	return covers.Cover{Hash: "held"}, nil
 }
 
 // coverFiles stands in for the directory on the volume.

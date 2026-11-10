@@ -2462,6 +2462,8 @@ const en = {
       "That file is not a picture this installation stores. PNG, JPEG, GIF or WebP — the format is read from the file itself, not from its name. An .ico is not needed: every current browser takes a PNG as a tab icon.",
     cover_too_often:
       "Covers have been uploaded from this account too often. Wait a minute and try again.",
+    cover_busy:
+      "Several covers are being processed right now. Nothing was saved — try again in a few seconds.",
     cover_too_large:
       "That file is too heavy for a cover. Up to 8 MB.",
     cover_kind:
