@@ -54,6 +54,7 @@ volumes:
   contest-covers-data:
 EOF
 : >"$WORK/env"
+chmod 600 "$WORK/env"
 
 # The archive as `make backup` writes it: the files copied out of the api
 # container onto the host, owned by the host user, keeping the API's 0600.

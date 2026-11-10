@@ -125,6 +125,7 @@ clean_env() {
 		BACKUP_OFFHOST BACKUP_OFFHOST_TARGET BACKUP_OFFHOST_SSH_KEY BACKUP_RCLONE_CONFIG \
 		BACKUP_TEXTFILE_DIR CORE_DB_NAME STUB_MAKE
 	: >"$ROOT/deploy/.env"
+	chmod 600 "$ROOT/deploy/.env"
 }
 
 # The tempting directory: eleven complete sets over six days, and everything

@@ -71,6 +71,7 @@ volumes:
   contest-covers-data:
 EOF
 : >"$WORK/env"
+chmod 600 "$WORK/env"
 
 run_make() { # log, target, assignments...: the real target, against this project only
 	log="$1"

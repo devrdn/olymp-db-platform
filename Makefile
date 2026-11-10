@@ -367,7 +367,7 @@ require-env:
 		echo "  install -m 600 deploy/.env.example $(ENV_FILE)"; \
 		echo "then fill in the passwords."; \
 		exit 1; }
-	@test -z "$$(find $(ENV_FILE) \( -perm -040 -o -perm -004 \))" || { \
+	@test -z "$$(find -L $(ENV_FILE) \( -perm -040 -o -perm -004 \))" || { \
 		echo "$(ENV_FILE) is readable by other accounts, and it holds every secret. Run:"; \
 		echo "  chmod 600 $(ENV_FILE)"; \
 		exit 1; }
