@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -64,9 +65,9 @@ type Hints interface {
 //   - No read charge per tick. A resync is a push the server chose, and
 //     charging it would let an idle connection starve its own account's read
 //     budget.
-//   - Paced reconnects. The stream's retry field is set to the resync interval
-//     instead of EventSource's three-second default, which would spend the
-//     account's read budget on flaky wifi.
+//   - Paced reconnects. The stream's retry field (reconnectDelay) replaces
+//     EventSource's three-second default, which would spend the account's read
+//     budget on flaky wifi.
 //   - Tolerance of transient failures. queryproxy.ErrUnavailable on a tick is
 //     retried next tick; only a real refusal closes the channel.
 //   - Nothing held while idle. Between ticks a connection holds a ticker and a
@@ -242,7 +243,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	// Sent once, before the first event, to pace reconnects.
-	if err := writeRetry(w, h.resync); err != nil {
+	if err := writeRetry(w, reconnectDelay()); err != nil {
 		return
 	}
 	if err := h.sendSync(w, contest, participant); err != nil {
@@ -341,6 +342,15 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 // deadlines, and that is no reason to refuse a write.
 func (h *EventsHandler) setWriteDeadline(rc *http.ResponseController) {
 	_ = rc.SetWriteDeadline(time.Now().Add(h.writeTimeout))
+}
+
+// reconnectDelay is one connection's retry field: from the default resync
+// interval to half again as long, drawn per connection. Browsers cut off at
+// the same instant, as by an API restart, then reconnect, and start their
+// resync ticks, spread out rather than all in the same second.
+func reconnectDelay() time.Duration {
+	// #nosec G404 -- jitter for a reconnect delay, not a security decision.
+	return defaultResyncInterval + time.Duration(rand.Int64N(int64(defaultResyncInterval/2)+1))
 }
 
 // writeRetry writes the stream's retry field: how long a client should wait

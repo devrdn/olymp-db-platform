@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -636,23 +637,29 @@ func TestEventsMarksItselfStreamingForMetrics(t *testing.T) {
 	}
 }
 
-// Rather than EventSource's undeclared three-second default.
-func TestEventsSendsARetryFieldToPaceReconnects(t *testing.T) {
+// Rather than EventSource's undeclared three-second default, and not one value
+// for every connection, or browsers cut off together reconnect together. The
+// resync interval is moved out of the way to show the field does not follow it.
+func TestEventsSendsARetryFieldOfThirtyToFortyFiveSeconds(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
 	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.handler.WithResyncInterval(45 * time.Second)
+	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
 	rec, done := f.serve(req)
-	waitForSubstring(t, rec, "retry:")
+	waitForSubstring(t, rec, "event: sync")
 	cancel()
 	waitDone(t, done)
 
-	if !strings.Contains(rec.String(), "retry: 45000") {
-		t.Fatalf("no retry field pacing reconnects to the resync interval: %s", rec.String())
+	var retry int
+	if _, err := fmt.Sscanf(rec.String(), "retry: %d\n", &retry); err != nil {
+		t.Fatalf("the stream does not open with a retry field: %v: %s", err, rec.String())
+	}
+	if retry < 30000 || retry > 45000 {
+		t.Errorf("retry = %d ms, want 30000 to 45000", retry)
 	}
 }
 

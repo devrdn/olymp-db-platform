@@ -835,7 +835,7 @@ sequenceDiagram
     M->>E: Authenticate passed
     E->>Q: AdmitRead, then AccessForEvents - running, or published and waiting
     E->>E: connection cap per registration, 4 by default
-    E-->>B: retry 30 s, sync, contest_started if running
+    E-->>B: retry 30 to 45 s, drawn per connection, sync, contest_started if running
     loop every 30 seconds
         E->>M: SessionStillValid
         E->>Q: AccessForEvents
