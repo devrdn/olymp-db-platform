@@ -466,6 +466,62 @@ func TestForAccessReadsTheParticipantAndTheContestTogether(t *testing.T) {
 	})
 }
 
+// The participant lookups carry everything the gate and language negotiation
+// read, and no titles or descriptions: nothing on a participant's path shows
+// them, so a path that starts to will find them missing in its own tests.
+func TestParticipantLookupsReadTheContestWithoutItsTranslations(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-lookup-texts")
+		student := makeUser(t, ctx, "student-lookup-texts")
+		contestID := makeContest(t, ctx, author.ID)
+		makeRegistration(t, ctx, contestID, student.ID)
+		store := NewContests(testPool)
+		if err := store.ReplaceLanguages(ctx, contestID, []contests.ContestLanguage{
+			{Code: "en", IsDefault: true}, {Code: "ro"},
+		}); err != nil {
+			t.Fatalf("ReplaceLanguages() = %v", err)
+		}
+		if err := store.ReplaceTranslations(ctx, contestID, []contests.Translation{
+			{Lang: "en", Title: "Night in the archive", Description: "A long brief."},
+			{Lang: "ro", Title: "Noapte în arhivă", Description: "O descriere lungă."},
+		}); err != nil {
+			t.Fatalf("ReplaceTranslations() = %v", err)
+		}
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE contests SET settings = '{"query_rate_limit_per_min": 7}' WHERE id = $1`, contestID); err != nil {
+			t.Fatalf("set settings: %v", err)
+		}
+		staff, err := store.ByID(ctx, contestID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if len(staff.Translations) != 2 || staff.Settings.QueryRateLimitPerMin != 7 {
+			t.Fatalf("staff read = %+v, want two translations and a rate of 7", staff)
+		}
+
+		_, forAccess, err := repo.ForAccess(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForAccess() = %v", err)
+		}
+		forRun, err := repo.ForRun(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForRun() = %v", err)
+		}
+		want := staff
+		want.Translations = nil
+		for name, got := range map[string]contests.Contest{"ForAccess": forAccess, "ForRun": forRun.Contest} {
+			if len(got.Translations) != 0 {
+				t.Errorf("%s translations = %v, want none", name, got.Translations)
+			}
+			got.Translations = nil
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s contest = %+v, want %+v as ByID reads it, translations aside", name, got, want)
+			}
+		}
+	})
+}
+
 func TestForRunReportsNoGameForATemplateStillBuilding(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
