@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
@@ -360,11 +363,20 @@ func TestAScriptSavedInTheCoreDatabaseLeavesNothingOnTheGameClusterOnceItsDraftI
 	}
 	t.Cleanup(func() { gamedbtest.Drop(copied) })
 
-	if err := databases.DropGame(t.Context(), contest.ID); err != nil {
-		t.Fatalf("drop the draft's game: %v", err)
-	}
-	if _, err := testPool.Exec(t.Context(), `DELETE FROM contests WHERE id = $1`, contest.ID); err != nil {
+	drafts := contests.NewService(contests.ServiceConfig{
+		Contests:      postgres.NewContests(testPool),
+		GameDatabases: databases,
+		GameReadiness: postgres.NewGameInstances(testPool),
+		Covers:        postgres.NewCovers(testPool),
+		Gate:          contests.NewGate(0),
+		Audit:         audit.New(unreadTrail{}),
+		UnitOfWork:    storage.NewUnitOfWork(testPool),
+	})
+	if err := drafts.Delete(t.Context(), uuid.New(), contest.ID); err != nil {
 		t.Fatalf("delete the draft: %v", err)
+	}
+	if _, err := drafts.ByID(t.Context(), contest.ID); !errors.Is(err, contests.ErrNotFound) {
+		t.Fatalf("the draft after its delete: %v, want ErrNotFound", err)
 	}
 
 	want := []string{saved.Database, copied}
