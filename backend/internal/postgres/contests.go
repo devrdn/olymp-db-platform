@@ -18,8 +18,8 @@ import (
 // Contests implements contests.Repository.
 var _ contests.Repository = (*Contests)(nil)
 
-// contestColumns is the projection every contest read shares; its order must
-// match contestScanTargets. Languages and translations arrive as JSON from
+// contestColumns is the projection of the staff, scheduler and profile reads;
+// its order must match contestScanTargets. Languages and translations arrive as JSON from
 // correlated subqueries, which avoids an N+1 and reads them in the same
 // snapshot as the contest.
 const contestColumns = contestColumnsBefore + `,

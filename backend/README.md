@@ -850,9 +850,9 @@ never declared. Every declared series is exported at zero from the start.
 | `queryrunner_active_queries` | gauge | — | queries holding a running slot, read from the gate at scrape time |
 | `queryrunner_admission_queue_depth` | gauge | — | queries waiting for a slot, read from the gate at scrape time |
 | `queryrunner_result_cutoffs_total` | counter | `limit` | where an answer is cut to the result budget |
-| `queryrunner_connections_lent_total` | counter | `outcome` | once per connection a query is lent: `reused` (the one its database's last clean read left kept) or `dialled` (a new one); a low reused share means kept connections are evicted or expire before their participant's next read |
+| `queryrunner_connections_lent_total` | counter | `outcome` | once per connection a query is lent: `reused` (the one its database's last clean read left kept) or `dialled` (a new one). Some lends can only dial: every connection of a `read_write` contest is the writer's, and a write's connection is never kept, nor one whose query failed or was abandoned, nor any while `QUERY_IDLE_CONNS` or `QUERY_CONN_IDLE_TIMEOUT` is zero. Among reads of `read_only` contests, a low reused share means kept connections are evicted or expire before their participant's next read |
 
-`outcome` is the query log's status, so a dashboard and the journal agree:
+For `queryrunner_queries_total` and `queryrunner_query_duration_seconds`, `outcome` is the query log's status, so a dashboard and the journal agree:
 
 | `outcome` | `reason` |
 |---|---|
