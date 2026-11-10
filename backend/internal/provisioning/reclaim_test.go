@@ -3,6 +3,7 @@ package provisioning_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -520,6 +521,89 @@ func TestReclaimLeavesTheTemplateAloneWhileAnInstanceIsStillBusy(t *testing.T) {
 		}
 		if status := templateStatusOf(t, ctx, contest.ID); status == "dropped" {
 			t.Fatal("the template was marked dropped while an instance still needed it")
+		}
+	})
+}
+
+func TestDropGameDropsEveryCopyNotYetDroppedThenTheTemplateAndMarksTheirRows(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
+		if _, err := service.TopUp(ctx, contest, 3); err != nil {
+			t.Fatalf("top-up: %v", err)
+		}
+		copies := instancesOf(t, ctx, contest.ID)
+		if len(copies) != 3 {
+			t.Fatalf("setup: %d copies, want 3", len(copies))
+		}
+		gone := copies[0].Database
+		if err := postgres.NewGameInstances(testPool).MarkDropped(ctx, gone); err != nil {
+			t.Fatalf("setup: mark %s dropped: %v", gone, err)
+		}
+		template := provisioning.TemplateName(contest.ID)
+		markTemplateReady(t, ctx, contest.ID, template)
+
+		if err := service.DropGame(ctx, contest.ID); err != nil {
+			t.Fatalf("DropGame() = %v", err)
+		}
+
+		drops := fake.idleDrops()
+		if len(drops) != 3 || drops[2] != template {
+			t.Fatalf("drops = %v, want the two live copies and then %s", drops, template)
+		}
+		if slices.Contains(drops, gone) {
+			t.Fatalf("drops = %v, want %s, already dropped, left alone", drops, gone)
+		}
+		for _, c := range copies {
+			if status := statusOf(t, ctx, c.Database); status != "dropped" {
+				t.Errorf("%s status = %q, want dropped", c.Database, status)
+			}
+		}
+		if status := templateStatusOf(t, ctx, contest.ID); status != "dropped" {
+			t.Errorf("template status = %q, want dropped", status)
+		}
+	})
+}
+
+func TestDropGameRefusesWhileACopyIsInUse(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
+		if _, err := service.TopUp(ctx, contest, 1); err != nil {
+			t.Fatalf("top-up: %v", err)
+		}
+		busy := instancesOf(t, ctx, contest.ID)[0].Database
+		fake.markBusy(busy)
+		template := provisioning.TemplateName(contest.ID)
+		markTemplateReady(t, ctx, contest.ID, template)
+
+		if err := service.DropGame(ctx, contest.ID); err == nil {
+			t.Fatal("DropGame() = nil with a copy still in use")
+		}
+
+		if status := statusOf(t, ctx, busy); status == "dropped" {
+			t.Error("the copy in use was marked dropped")
+		}
+		if _, _, called := fake.outcomeOf(template); called {
+			t.Error("the template was dropped ahead of a copy still in use")
+		}
+		if status := templateStatusOf(t, ctx, contest.ID); status == "dropped" {
+			t.Error("the template was marked dropped")
+		}
+	})
+}
+
+func TestDropGameKeepsTheTemplatesRowWhenItsDropFails(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
+		template := provisioning.TemplateName(contest.ID)
+		markTemplateReady(t, ctx, contest.ID, template)
+		refused := errors.New("the cluster refused")
+		fake.failIdleDropOf(template, refused)
+
+		if err := service.DropGame(ctx, contest.ID); !errors.Is(err, refused) {
+			t.Fatalf("DropGame() = %v, want the cluster's error", err)
+		}
+		if status := templateStatusOf(t, ctx, contest.ID); status == "dropped" {
+			t.Error("a template whose drop failed was marked dropped")
 		}
 	})
 }

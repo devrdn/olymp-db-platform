@@ -1445,8 +1445,9 @@ func (s *Sink) Actions() []string {
 	return actions
 }
 
-// Games is an in-memory contests.GameSource and the publish gate's question
-// about a built game, without the template lifecycle of internal/provisioning.
+// Games is an in-memory contests.GameSource, contests.GameDropper and the
+// publish gate's question about a built game, without the template lifecycle
+// of internal/provisioning.
 type Games struct {
 	byContest map[uuid.UUID]string
 	// files marks games built from an uploaded dump (PutFile). They are kept
@@ -1458,9 +1459,25 @@ type Games struct {
 	Err error
 	// ReadyErr, when set, is what GameReady returns.
 	ReadyErr error
+	// Drops records every DropGame call; DropErr, when set, is what it
+	// returns. ContestExists lets a drop record whether the contest's row was
+	// still there.
+	Drops         []GameDrop
+	DropErr       error
+	ContestExists func(id uuid.UUID) bool
 }
 
-var _ contests.GameSource = (*Games)(nil)
+// GameDrop is one DropGame call and what stood around it.
+type GameDrop struct {
+	ContestID      uuid.UUID
+	ContestPresent bool
+	InTransaction  bool
+}
+
+var (
+	_ contests.GameSource  = (*Games)(nil)
+	_ contests.GameDropper = (*Games)(nil)
+)
 
 func NewGames() *Games {
 	return &Games{byContest: map[uuid.UUID]string{}, files: map[uuid.UUID]bool{}, ready: map[uuid.UUID]bool{}}
@@ -1508,6 +1525,15 @@ func (r *Games) Script(_ context.Context, contestID uuid.UUID) (string, bool, bo
 	}
 	script, ok := r.byContest[contestID]
 	return script, ok, false, nil
+}
+
+func (r *Games) DropGame(ctx context.Context, contestID uuid.UUID) error {
+	r.Drops = append(r.Drops, GameDrop{
+		ContestID:      contestID,
+		ContestPresent: r.ContestExists != nil && r.ContestExists(contestID),
+		InTransaction:  inTx(ctx),
+	})
+	return r.DropErr
 }
 
 func maps(in map[string]string) map[string]string {

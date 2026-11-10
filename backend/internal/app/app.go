@@ -363,11 +363,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		userService.WithAccessCache(accounts)
 	}
 
-	// Assigned only when gameAuthoring exists: a nil *provisioning.Games in
-	// the interface would not be nil, and ExportPackage would dereference it.
+	// Assigned only when the game cluster exists: a nil pointer in the
+	// interface would not be nil, and ExportPackage or Delete would
+	// dereference it.
 	var packageGames contests.GameSource
 	if gameAuthoring != nil {
 		packageGames = gameAuthoring
+	}
+	var draftGames contests.GameDropper
+	if gameDatabases != nil {
+		draftGames = gameDatabases
 	}
 
 	// Read from the core database, so the publish gate refuses a contest
@@ -384,6 +389,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Policies:      postgres.NewSQLPolicies(pool),
 		Languages:     postgres.NewLanguages(pool),
 		Game:          packageGames,
+		GameDatabases: draftGames,
 		GameReadiness: gameReadiness,
 		Submissions:   postgres.NewSubmissions(pool),
 		Sequence:      postgres.NewSequence(pool),

@@ -93,6 +93,7 @@ func NewFixture() *Fixture {
 	f.Stories.ContestExists = f.Contests.Exists
 	f.SchemaNotes.ContestExists = f.Contests.Exists
 	f.Policies.ContestExists = f.Contests.Exists
+	f.Games.ContestExists = f.Contests.Exists
 	f.Registrations.ContestExists = f.Contests.Exists
 	// The publish gate reads these to find a participant who administers
 	// every contest.
@@ -126,6 +127,7 @@ func NewFixture() *Fixture {
 		Policies:      f.Policies,
 		Languages:     f.Languages,
 		Game:          f.Games,
+		GameDatabases: f.Games,
 		GameReadiness: f.Games,
 		Covers:        f.Covers,
 		Submissions:   f.Submissions,

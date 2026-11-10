@@ -8,6 +8,8 @@ var (
 	SplitCSVLine   = splitCSVLine
 	FormatCSVRow   = formatCSVRow
 	ValidateScalar = validateScalar
+	// TemplateName is the database a contest's game is built into.
+	TemplateName = templateName
 )
 
 // SetClock replaces the clock the cluster measurement ages by.

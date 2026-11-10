@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -199,4 +200,49 @@ func templateReclaimEntry(t TemplateCandidate) audit.Entry {
 		EntityID: t.ContestID.String(),
 		Payload:  map[string]any{"database": t.Database},
 	}
+}
+
+// DropGame drops one contest's databases from the game cluster, every copy
+// not yet dropped and then the template, marking each row 'dropped'. It is for
+// a contest whose rows are about to be deleted: they are how every other tool
+// finds a game database, so the databases must go first.
+//
+// Like Reclaim it never forces a connection closed, but a database still in
+// use fails the call instead of being skipped, since the caller must not
+// delete the rows behind it. A later call carries on where this one stopped.
+// Nothing is written to the trail: the contest's deletion is the event.
+func (s *Service) DropGame(ctx context.Context, contestID uuid.UUID) error {
+	// No copy is as new as math.MaxInt32, so this is every copy not yet dropped.
+	copies, err := s.repo.Stale(ctx, contestID, math.MaxInt32)
+	if err != nil {
+		return fmt.Errorf("list the contest's databases: %w", err)
+	}
+	for _, c := range copies {
+		if err := s.dropInUse(ctx, c.Database); err != nil {
+			return err
+		}
+		if err := s.repo.MarkDropped(ctx, c.Database); err != nil {
+			return err
+		}
+	}
+
+	// By name rather than by the row's status: a pending rebuild still has
+	// the previous template on disk, and IF EXISTS makes a missing one free.
+	template := templateName(contestID)
+	if err := s.dropInUse(ctx, template); err != nil {
+		return err
+	}
+	return s.repo.MarkTemplateDropped(ctx, contestID)
+}
+
+// dropInUse is DropIdle with "still in use" as an error.
+func (s *Service) dropInUse(ctx context.Context, database string) error {
+	dropped, err := s.cluster.DropIdle(ctx, database)
+	if err != nil {
+		return fmt.Errorf("drop %s: %w", database, err)
+	}
+	if !dropped {
+		return fmt.Errorf("drop %s: a connection to it is still open", database)
+	}
+	return nil
 }

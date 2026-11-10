@@ -57,6 +57,9 @@ type ServiceConfig struct {
 	// Game reads the SQL a contest's game is built from, for ExportPackage.
 	// Optional: without a game cluster, a package simply carries no game.
 	Game GameSource
+	// GameDatabases drops a deleted draft's databases from the game cluster.
+	// Optional: without a game cluster there are none.
+	GameDatabases GameDropper
 	// Submissions records answers. Optional; only Submit uses it, and a
 	// Service without one panics there.
 	Submissions SubmissionRepository
@@ -103,6 +106,7 @@ type Service struct {
 	languages       LanguageCatalog
 	users           UserDirectory
 	game            GameSource
+	gameDatabases   GameDropper
 	submissions     SubmissionRepository
 	sequence        SequentialGate
 	covers          scheduleCovers
@@ -152,6 +156,7 @@ func NewService(cfg ServiceConfig) *Service {
 		languages:       cfg.Languages,
 		users:           cfg.Users,
 		game:            cfg.Game,
+		gameDatabases:   cfg.GameDatabases,
 		submissions:     cfg.Submissions,
 		sequence:        cfg.Sequence,
 		covers:          cfg.Covers,
@@ -642,6 +647,14 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 	return nil
 }
 
+// GameDropper removes a contest's databases from the game cluster (CLAUDE.md
+// Go layout rule 3); internal/provisioning implements it.
+type GameDropper interface {
+	// DropGame drops every database of the contest not yet dropped and marks
+	// its row so. After an error some may remain, still recorded.
+	DropGame(ctx context.Context, contestID uuid.UUID) error
+}
+
 // Delete removes a draft. A contest that was ever published is a record and
 // can only be archived.
 func (s *Service) Delete(ctx context.Context, actorID, contestID uuid.UUID) error {
@@ -651,6 +664,14 @@ func (s *Service) Delete(ctx context.Context, actorID, contestID uuid.UUID) erro
 	}
 	if c.Status != StatusDraft {
 		return fmt.Errorf("%w: only a draft can be deleted, this one is %s", ErrNotEditable, c.Status)
+	}
+
+	// Before the rows, which are how anything finds a game database again, and
+	// outside the unit of work: DROP DATABASE cannot run in a transaction.
+	if s.gameDatabases != nil {
+		if err := s.gameDatabases.DropGame(ctx, contestID); err != nil {
+			return fmt.Errorf("drop the draft's game databases: %w", err)
+		}
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {

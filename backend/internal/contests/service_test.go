@@ -974,6 +974,43 @@ func TestDeleteRefusesAContestThatWasPublished(t *testing.T) {
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Delete() = %v, want ErrNotEditable", err)
 	}
+	if len(f.Games.Drops) != 0 {
+		t.Errorf("a refused delete dropped the game: %+v", f.Games.Drops)
+	}
+}
+
+func TestDeleteDropsTheDraftsGameBeforeItsRows(t *testing.T) {
+	// The rows are how anything finds a game database again, and DROP
+	// DATABASE cannot run inside the transaction that deletes them.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	if err := f.Service.Delete(context.Background(), uuid.New(), c.ID); err != nil {
+		t.Fatalf("Delete() = %v", err)
+	}
+
+	want := []conteststest.GameDrop{{ContestID: c.ID, ContestPresent: true, InTransaction: false}}
+	if !slices.Equal(f.Games.Drops, want) {
+		t.Errorf("DropGame calls = %+v, want %+v", f.Games.Drops, want)
+	}
+}
+
+func TestDeleteKeepsADraftWhoseGameCouldNotBeDropped(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	f.Games.DropErr = errors.New("the game cluster is unreachable")
+
+	err := f.Service.Delete(context.Background(), uuid.New(), c.ID)
+
+	if !errors.Is(err, f.Games.DropErr) {
+		t.Errorf("Delete() = %v, want the drop's error", err)
+	}
+	if _, err := f.Service.ByID(context.Background(), c.ID); err != nil {
+		t.Errorf("ByID() after a refused delete = %v, want the draft still there", err)
+	}
+	if slices.Contains(f.Audit.Actions(), audit.ActionContestDelete) {
+		t.Error("a refused delete was recorded on the trail")
+	}
 }
 
 func TestDeleteRemovesADraft(t *testing.T) {

@@ -357,7 +357,10 @@ stateDiagram-v2
   user the statement returns as finished, in the same transaction.
 - Deleting a draft: `DELETE /contests/ID`, behind `contest.edit`, calling
   `Service.Delete`. Any other status is refused; a contest that was ever
-  published can only be archived.
+  published can only be archived. The draft's game databases are dropped
+  from the game cluster first (`provisioning.Service.DropGame`), since its
+  rows are how every other tool finds them; one still in use refuses the
+  delete, and the rows stay for the next try.
 - After a move to `published` or `running`, the pool tender is woken
   (`PoolTrigger.Trigger`, [flow 6](#6-provisioning-a-participants-database)).
 - What a status allows: story, questions and the SQL policy are editable only
