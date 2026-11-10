@@ -466,9 +466,8 @@ func TestForAccessReadsTheParticipantAndTheContestTogether(t *testing.T) {
 	})
 }
 
-// The participant lookups carry everything the gate and language negotiation
-// read, and no titles or descriptions: nothing on a participant's path shows
-// them, so a path that starts to will find them missing in its own tests.
+// Both participant lookups return the contest as ByID reads it, languages and
+// settings included, except that Translations is empty.
 func TestParticipantLookupsReadTheContestWithoutItsTranslations(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)

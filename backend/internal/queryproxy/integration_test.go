@@ -231,6 +231,63 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 	}
 }
 
+// New's lookup and the single-query one keep the same Lookup contract, against
+// a contest that has a title and description to leave out.
+func TestBothLookupsHandAccessAContestWithoutTranslations(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	contestID := makeRunningFixedContest(t, ctx, pool, author, time.Now().Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+	contestStore := postgres.NewContests(pool)
+	if err := contestStore.ReplaceLanguages(ctx, contestID, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
+		t.Fatalf("ReplaceLanguages() = %v", err)
+	}
+	if err := contestStore.ReplaceTranslations(ctx, contestID, []contests.Translation{
+		{Lang: "en", Title: "Night in the archive", Description: "A long brief."},
+	}); err != nil {
+		t.Fatalf("ReplaceTranslations() = %v", err)
+	}
+	registrations := postgres.NewRegistrations(pool)
+	if _, err := registrations.Add(ctx, contestID, student); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	newService := func() *queryproxy.Service {
+		return queryproxy.New(registrations, contestStore, nil, nil, nil, fiveSecondGate,
+			audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
+	}
+	for name, service := range map[string]*queryproxy.Service{
+		"New's lookup":           newService(),
+		"postgres.Registrations": newService().WithLookup(registrations),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
+			if err != nil {
+				t.Fatalf("Access() = %v", err)
+			}
+			_, forEvents, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{})
+			if err != nil {
+				t.Fatalf("AccessForEvents() = %v", err)
+			}
+			for call, got := range map[string]contests.Contest{"Access": contest, "AccessForEvents": forEvents} {
+				if len(got.Translations) != 0 {
+					t.Errorf("%s translations = %v, want none", call, got.Translations)
+				}
+				if got.DefaultLanguage() != "en" {
+					t.Errorf("%s default language = %q, want en", call, got.DefaultLanguage())
+				}
+			}
+		})
+	}
+}
+
 // The fact that closes the console is decided in SQL (postgres.Answerable) and
 // applied in Go (Run), so it is tested across that boundary (CLAUDE.md
 // rule 11).

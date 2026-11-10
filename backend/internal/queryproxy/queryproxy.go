@@ -102,6 +102,11 @@ type LookupResult struct {
 }
 
 // Lookup answers who is asking and what about, in one round trip per request.
+//
+// The contest either method returns carries no Translations: no participant
+// path shows a title or description, and every language's description would
+// otherwise ride on each call. A participant path that needs one reads the
+// contest by ID.
 type Lookup interface {
 	ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error)
 	// ForAccess is the participant and the contest, for read endpoints that
@@ -250,6 +255,7 @@ func (d defaultLookup) ForAccess(ctx context.Context, contestID, userID uuid.UUI
 	if err != nil {
 		return contests.Participant{}, contests.Contest{}, err
 	}
+	contest.Translations = nil
 	return participant, contest, nil
 }
 
@@ -460,7 +466,8 @@ func (s *Service) admit(contest contests.Contest, participant contests.Participa
 // contestID, for the read endpoints (story, questions). It is the same gate
 // Run asks, without Run's game lookup or provisioning. It starts no clock (see
 // StartOnRead) and charges no rate: AdmitRead before it is the read budget,
-// which a workspace write must not spend.
+// which a workspace write must not spend. The contest is Lookup's, without
+// Translations.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
@@ -534,7 +541,7 @@ func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (con
 //
 // The Standing is returned either way so the channel can tell "finished" from
 // a plain close (Standing.Over). A failed lookup returns the zero Standing,
-// which is over for nobody.
+// which is over for nobody. The contest is Lookup's, without Translations.
 func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {

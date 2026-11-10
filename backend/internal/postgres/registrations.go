@@ -119,8 +119,8 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 }
 
 // ForRun implements queryproxy.Lookup: the participant, the contest, its game
-// and the participant's own copy of it, in one round trip. The contest has no
-// Translations (participantContestColumns).
+// and the participant's own copy of it, in one round trip. The contest is read
+// with participantContestColumns.
 //
 // A registration's foreign key guarantees its contest exists, so "never
 // registered" and "no such contest" are both ErrParticipantNotFound. The
@@ -194,7 +194,7 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 
 // ForAccess implements queryproxy.Lookup: the participant and the contest in
 // one round trip, for read endpoints that need no game. Not-found and the
-// missing Translations are as in ForRun.
+// contest's projection are as in ForRun.
 func (r *Registrations) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
 	var (
 		p                                 contests.Participant
