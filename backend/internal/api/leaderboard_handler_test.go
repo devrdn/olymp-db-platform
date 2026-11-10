@@ -194,7 +194,7 @@ func newBoardFixture(t *testing.T) *boardFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cookies[u.ID] = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+		f.cookies[u.ID] = &http.Cookie{Name: sessionName, Value: token}
 	}
 	f.cookies[uuid.Nil] = f.cookies[stranger.ID]
 

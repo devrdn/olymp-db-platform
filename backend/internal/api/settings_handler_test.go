@@ -180,7 +180,7 @@ func newSettingsFixtureWith(t *testing.T, setup settingsSetup) *settingsFixture 
 	return &settingsFixture{
 		router: router,
 		store:  store,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie: &http.Cookie{Name: sessionName, Value: token},
 		relay:  relay,
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,16 +57,20 @@ func newMiddlewareFixture(t *testing.T, roles rbac.ContestRoleLoader, permission
 		Sessions:   sessions,
 		Users:      repo,
 		Authorizer: rbac.New(roles),
-		Cookies:    NewCookieWriter(false),
+		Cookies:    testCookies,
 		Logger:     logging.New("error", io.Discard),
 	})
 
 	return &mwFixture{mw: mw, repo: repo, sessions: sessions, user: user, token: token}
 }
 
+// testCookies is every middleware's writer under test, configured as a TLS
+// deployment configures it.
+var testCookies = NewCookieWriter(true)
+
 func authed(token string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: token})
 	return req
 }
 
@@ -187,6 +192,40 @@ func TestAuthenticateAnswersWithAStructuredError(t *testing.T) {
 	}
 }
 
+func TestAuthenticateRefusesARequestCarryingTwoSessionCookies(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	req := authed(f.token)
+	req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: f.token})
+	rec := httptest.NewRecorder()
+
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"unauthenticated"`) {
+		t.Errorf("answer = %d %s, want 401 unauthenticated: two cookies of the name are no one session", rec.Code, rec.Body)
+	}
+}
+
+func TestAuthenticateReadsOnlyTheSessionCookieNameInForce(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	bare := &http.Cookie{Name: plainSessionName, Value: f.token}
+
+	alone := httptest.NewRequest(http.MethodGet, "/", nil)
+	alone.AddCookie(bare)
+	rec := httptest.NewRecorder()
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, alone)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("bare name alone = %d, want 401 where the cookie is Secure", rec.Code)
+	}
+
+	beside := authed(f.token)
+	beside.AddCookie(bare)
+	rec = httptest.NewRecorder()
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, beside)
+	if rec.Code != http.StatusOK {
+		t.Errorf("bare name beside the session = %d, want 200: it is not a second session cookie", rec.Code)
+	}
+}
+
 func TestRequirePermissionAllowsAHolder(t *testing.T) {
 	f := newMiddlewareFixture(t, staticRoles{}, rbac.PermissionUsersManage)
 	rec := httptest.NewRecorder()
@@ -235,7 +274,7 @@ func contestRouter(f *mwFixture, permission string) http.Handler {
 
 func contestRequest(token, contestID string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/contests/"+contestID+"/", nil)
-	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: token})
 	return req
 }
 
@@ -324,7 +363,7 @@ func TestActiveSessionIsExtendedOnUse(t *testing.T) {
 		Sessions:   sessions,
 		Users:      repo,
 		Authorizer: rbac.New(staticRoles{}),
-		Cookies:    NewCookieWriter(false),
+		Cookies:    testCookies,
 		Logger:     logging.New("error", io.Discard),
 	})
 
@@ -364,7 +403,7 @@ func TestOneTimePasswordAccountMayStillChangeItsPassword(t *testing.T) {
 
 	for _, path := range []string{"/api/v1/auth/password", "/api/v1/auth/logout", "/api/v1/auth/me"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: f.token})
 		rec := httptest.NewRecorder()
 
 		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
@@ -386,7 +425,7 @@ func TestTheWayOutIsNamedExactly(t *testing.T) {
 		"/hack/auth/logout",
 	} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: f.token})
 		rec := httptest.NewRecorder()
 
 		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
@@ -404,7 +443,7 @@ func TestTheWayOutWorksWhereverTheAPIIsMounted(t *testing.T) {
 
 	for _, path := range []string{"/auth/password", "/api/v1/auth/password", "/api/v2/auth/password"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: f.token})
 		rec := httptest.NewRecorder()
 
 		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
@@ -438,7 +477,7 @@ func TestAuthenticateRefusesASessionPastItsMaximumLifetimeHoweverRecentlyUsed(t 
 
 	mw := NewMiddleware(MiddlewareConfig{
 		Sessions: sessions, Users: repo, Authorizer: rbac.New(staticRoles{}),
-		Cookies: NewCookieWriter(false), Logger: logging.New("error", io.Discard),
+		Cookies: testCookies, Logger: logging.New("error", io.Discard),
 	})
 	rec := httptest.NewRecorder()
 	mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, authed(token))
@@ -511,7 +550,7 @@ func newCachedFixture(t *testing.T, ttl time.Duration) *cachedFixture {
 		Users:      counted,
 		Accounts:   accounts,
 		Authorizer: rbac.New(staticRoles{}),
-		Cookies:    NewCookieWriter(false),
+		Cookies:    testCookies,
 		Logger:     log,
 	})
 	service := users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
@@ -764,6 +803,17 @@ func TestSessionStillValidEndsWithTheAccountNotOnlyWithTheSession(t *testing.T) 
 				t.Error("the stream's session was still reported valid after the account changed")
 			}
 		})
+	}
+}
+
+func TestSessionStillValidRefusesTwoSessionCookies(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	req := authed(f.token)
+	req.AddCookie(&http.Cookie{Name: testCookies.SessionName(), Value: f.token})
+
+	alive, err := f.mw.SessionStillValid(req)
+	if err != nil || alive {
+		t.Errorf("SessionStillValid() = %v, %v; want false, nil", alive, err)
 	}
 }
 

@@ -97,7 +97,7 @@ func newConsoleFixture(t *testing.T, console api.Console) *consoleFixture {
 
 	return &consoleFixture{
 		router: router,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie: &http.Cookie{Name: sessionName, Value: token},
 		logs:   logs,
 	}
 }

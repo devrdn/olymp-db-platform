@@ -140,7 +140,7 @@ func newClarifyFixture(t *testing.T) *clarifyFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cookies[u.ID] = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+		f.cookies[u.ID] = &http.Cookie{Name: sessionName, Value: token}
 	}
 
 	f.domain = clarificationstest.NewFixture()

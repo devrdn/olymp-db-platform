@@ -361,7 +361,7 @@ func newContestFixtureWith(t *testing.T, authorizer auth.Authorizer) *contestFix
 		stores:   stores,
 		sessions: sessions,
 		actor:    actor,
-		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:   &http.Cookie{Name: sessionName, Value: token},
 	}
 }
 
@@ -404,7 +404,7 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 		{"the participant's query log as a page", "/contests/" + contestID + "/play/log"},
 	} {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+		req.AddCookie(&http.Cookie{Name: sessionName, Value: token})
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code == http.StatusNotFound {

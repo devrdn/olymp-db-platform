@@ -390,7 +390,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 		signalStore:    signals,
 		resets:         resets,
 		logs:           logs,
-		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:         &http.Cookie{Name: sessionName, Value: token},
 		userID:         actor.ID,
 	}
 }
@@ -1301,7 +1301,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 		Authorizer: rbac.New(contestRoles{stores}),
 		Cookies:    auth.NewCookieWriter(false), Logger: log,
 	})
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	cookie := &http.Cookie{Name: sessionName, Value: token}
 
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
@@ -1529,7 +1529,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 		"/contests/"+c.ID.String()+"/questions/"+q.ID.String()+"/answer",
 		strings.NewReader(`{"value":"anything"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: sessionName, Value: token})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -1664,7 +1664,7 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",
 		strings.NewReader(`{"value":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: sessionName, Value: token})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

@@ -153,7 +153,7 @@ func (h *ParticipantHandler) observe(r *http.Request, participant contests.Parti
 	}
 	h.watcher.Observe(r.Context(), monitor.Visit{
 		Contest: contest.ID, Registration: participant.ID,
-		Address: clientAddress(r), Session: sessionTag(r), UserAgent: r.UserAgent(),
+		Address: clientAddress(r), Session: sessionTag(h.mw, r), UserAgent: r.UserAgent(),
 	})
 }
 

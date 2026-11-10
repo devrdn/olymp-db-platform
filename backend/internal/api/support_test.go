@@ -9,11 +9,16 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/google/uuid"
 )
 
 const testPassword = "correct horse battery staple"
+
+// sessionName is the session cookie's name under the writer every test router
+// is given.
+var sessionName = auth.NewCookieWriter(false).SessionName()
 
 // maxLoginAttempts mirrors the service's per-account throttle.
 const maxLoginAttempts = 10

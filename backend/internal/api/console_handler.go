@@ -94,7 +94,7 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 		// traced.
 		RequestID: requestUUID(r.Context()),
 		// For the tracker of parallel sessions.
-		Session:   sessionTag(r),
+		Session:   sessionTag(h.mw, r),
 		UserAgent: r.UserAgent(),
 	})
 	if err != nil {
@@ -131,12 +131,9 @@ func clientAddress(r *http.Request) netip.Addr {
 // sessionTag names the request's session for the monitoring trail by a hash of
 // the token (monitor.SessionTag), so the token never leaves the authentication
 // layer.
-func sessionTag(r *http.Request) string {
-	cookie, err := r.Cookie(auth.SessionCookieName)
-	if err != nil {
-		return ""
-	}
-	return monitor.SessionTag(cookie.Value)
+func sessionTag(mw *auth.Middleware, r *http.Request) string {
+	token, _ := mw.SessionToken(r)
+	return monitor.SessionTag(token)
 }
 
 // requestUUID is the request identifier as the journal's uuid column needs it.

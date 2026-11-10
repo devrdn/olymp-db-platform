@@ -87,7 +87,7 @@ func (f *handlerFixture) login(t *testing.T) *http.Cookie {
 		t.Fatalf("login status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.SessionCookieName {
+		if c.Name == sessionName {
 			return c
 		}
 	}
@@ -105,7 +105,7 @@ func TestLoginEndpointSetsTheSessionCookie(t *testing.T) {
 	}
 	var found bool
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.SessionCookieName && c.Value != "" {
+		if c.Name == sessionName && c.Value != "" {
 			found = true
 		}
 	}
@@ -317,7 +317,7 @@ func TestLogoutClearsTheCookieAndEndsTheSession(t *testing.T) {
 	}
 	var cleared bool
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.SessionCookieName && c.MaxAge < 0 {
+		if c.Name == sessionName && c.MaxAge < 0 {
 			cleared = true
 		}
 	}
@@ -560,7 +560,7 @@ func TestSigningInAgainEndsTheBrowsersPreviousSession(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("second login status = %d (body: %s)", rec.Code, rec.Body.String())
 	}
-	second := responseCookie(rec, auth.SessionCookieName)
+	second := responseCookie(rec, sessionName)
 	if second == nil || second.Value == first.Value {
 		t.Fatal("the second login issued no new session cookie")
 	}
@@ -579,7 +579,7 @@ func TestSigningInAgainEndsTheBrowsersPreviousSession(t *testing.T) {
 		t.Errorf("the new session does not authenticate: status = %d", code)
 	}
 
-	stale := &http.Cookie{Name: auth.SessionCookieName, Value: "garbled"}
+	stale := &http.Cookie{Name: sessionName, Value: "garbled"}
 	if rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`, stale); rec.Code != http.StatusOK {
 		t.Errorf("a login carrying a stale cookie = %d, want 200", rec.Code)
 	}

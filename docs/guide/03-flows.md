@@ -68,7 +68,9 @@ sequenceDiagram
   `callerHeaders()` (the forwarded address, only when `X-Ingress-Secret`
   matches `INGRESS_SECRET`, see
   [frontend/lib/api/forwarded.ts](../../frontend/lib/api/forwarded.ts)) and
-  `sessionHeader()` (the `dbcontest_session` cookie, passed on as a header).
+  `sessionHeader()` (the session cookie, passed on as a header:
+  `__Host-dbcontest_session`, or `dbcontest_session` where `COOKIE_SECURE`
+  is off).
 - The API's routers: `NewRouter` in
   [backend/internal/api/router.go](../../backend/internal/api/router.go). Each
   feature is an `api.Module` whose `Mount` adds its routes under `/api/v1`;
@@ -137,7 +139,7 @@ sequenceDiagram
     S->>L: reset the account-and-address counter (untrusted only)
     S->>U: RecordLogin
     S->>S: issue or renew the device cookie, audit auth.login
-    H-->>W: 200 with Set-Cookie dbcontest_session and dbcontest_device
+    H-->>W: 200 with Set-Cookie for the session and dbcontest_device
     W-->>B: cookies set on the browser, redirect
 ```
 
@@ -205,11 +207,11 @@ sequenceDiagram
     participant U as users store
     participant H as Handler
 
-    X->>O: POST /api/v1/... with dbcontest_session
+    X->>O: POST /api/v1/... with the session cookie
     O->>O: GET, HEAD, OPTIONS or no Origin pass
     O->>O: else Origin must match Host and scheme, or PUBLIC_ORIGINS
     O->>M: next
-    M->>K: Get(token), 401 unauthenticated if missing or expired
+    M->>K: Get(token), 401 unauthenticated if missing, sent twice or expired
     M->>AC: lookup the account
     M->>U: ByID on a miss, or when the cached copy would refuse
     M->>M: live check - active and session generation matches

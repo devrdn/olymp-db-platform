@@ -112,7 +112,7 @@ func (h *ClarificationsHandler) admit(w http.ResponseWriter, r *http.Request, us
 	if h.watcher != nil {
 		h.watcher.Observe(r.Context(), monitor.Visit{
 			Contest: contest.ID, Registration: participant.ID,
-			Address: clientAddress(r), Session: sessionTag(r), UserAgent: r.UserAgent(),
+			Address: clientAddress(r), Session: sessionTag(h.mw, r), UserAgent: r.UserAgent(),
 		})
 	}
 	return participant, contest, true

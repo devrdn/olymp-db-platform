@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -114,15 +115,18 @@ func (p *participant) signIn(ctx context.Context, api, secret string) error {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("sign in %s: %d %s", p.record.Login, resp.StatusCode, detail)
 	}
+	// The cookie's name follows the API's TLS setting, which the driver never
+	// reads.
+	names := []string{auth.NewCookieWriter(true).SessionName(), auth.NewCookieWriter(false).SessionName()}
 	for _, c := range resp.Cookies() {
-		if c.Name == auth.SessionCookieName {
+		if slices.Contains(names, c.Name) {
 			// #nosec G124 -- a client keeping a cookie to send back, not a
 			// server setting one: the attributes are the API's to decide.
 			p.session = &http.Cookie{Name: c.Name, Value: c.Value}
 			return nil
 		}
 	}
-	return fmt.Errorf("sign in %s: no %s cookie in the answer", p.record.Login, auth.SessionCookieName)
+	return fmt.Errorf("sign in %s: no session cookie in the answer", p.record.Login)
 }
 
 // signOut ends the session so it does not linger in the session store.

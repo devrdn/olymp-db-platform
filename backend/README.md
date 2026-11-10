@@ -157,7 +157,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
 | `QUERY_RUNNER_TOKEN` | outside `development`, when `QUERY_RUNNER_ADDR` is set | — | secret presented on every call to the Query Runner (32-512 printable ASCII bytes); the runner requires the same value |
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
-| `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
+| `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure and name it `__Host-dbcontest_session`, which no other host can set; off, it is `dbcontest_session` |
 | `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
 
 ### The mail relay

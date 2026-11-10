@@ -146,7 +146,7 @@ func newResultsFixtureWith(t *testing.T, opts resultsOptions) *resultsFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cookies[u.ID] = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+		f.cookies[u.ID] = &http.Cookie{Name: sessionName, Value: token}
 	}
 
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{

@@ -178,7 +178,7 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cookies[u.ID] = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+		f.cookies[u.ID] = &http.Cookie{Name: sessionName, Value: token}
 	}
 
 	seed := func(owner users.User) (contests.Contest, uuid.UUID) {

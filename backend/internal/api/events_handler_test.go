@@ -70,7 +70,7 @@ func newEventsFixture(t *testing.T) *eventsFixture {
 
 	return &eventsFixture{
 		router: router, handler: handler, access: access, shutdown: shutdown,
-		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:   &http.Cookie{Name: sessionName, Value: token},
 		sessions: sessions,
 	}
 }

@@ -180,7 +180,7 @@ func newProfileFixture(t *testing.T) *profileFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cookies[u.ID] = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+		f.cookies[u.ID] = &http.Cookie{Name: sessionName, Value: token}
 	}
 
 	enrol := func(status string, who users.User) contests.Contest {

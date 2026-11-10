@@ -346,7 +346,7 @@ func newCoverFixture(t *testing.T, permissions ...string) *coverFixture {
 
 	return &coverFixture{
 		router: router, repo: covering, files: files,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie: &http.Cookie{Name: sessionName, Value: token},
 	}
 }
 

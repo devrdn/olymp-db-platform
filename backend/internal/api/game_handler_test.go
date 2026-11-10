@@ -493,7 +493,7 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 
 	return &gameFixture{
 		router: router, games: games, databases: databases, handler: handler, stores: stores, actor: actor,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie: &http.Cookie{Name: sessionName, Value: token},
 	}
 }
 

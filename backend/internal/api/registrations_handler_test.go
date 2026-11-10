@@ -66,7 +66,7 @@ func mountRegistrations(t *testing.T, formOpen bool, permissions ...string) *reg
 	}
 	handler.Mount(router)
 	f.router = router
-	f.cookie = &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	f.cookie = &http.Cookie{Name: sessionName, Value: token}
 	f.staffID = staff.ID
 	return f
 }

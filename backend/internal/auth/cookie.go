@@ -16,15 +16,25 @@ func NewCookieWriter(secure bool) CookieWriter {
 	return CookieWriter{secure: secure}
 }
 
+// SessionName is the session cookie's name. A browser accepts the __Host-
+// prefix only from a secure origin, host-only and with Path=/, so no sibling
+// host can plant a cookie of that name; without TLS it refuses the prefix.
+func (c CookieWriter) SessionName() string {
+	if c.secure {
+		return "__Host-dbcontest_session"
+	}
+	return "dbcontest_session"
+}
+
 // Set writes the session cookie: HttpOnly keeps the token from scripts, and
 // SameSite=Lax blocks cross-site POSTs while letting ordinary links carry the
 // session.
 func (c CookieWriter) Set(w http.ResponseWriter, token string, ttl time.Duration) {
-	http.SetCookie(w, c.cookie(SessionCookieName, token, int(ttl.Seconds())))
+	http.SetCookie(w, c.cookie(c.SessionName(), token, int(ttl.Seconds())))
 }
 
 func (c CookieWriter) Clear(w http.ResponseWriter) {
-	http.SetCookie(w, c.cookie(SessionCookieName, "", -1))
+	http.SetCookie(w, c.cookie(c.SessionName(), "", -1))
 }
 
 // SetDevice writes the device cookie (see DeviceTrust) with the session

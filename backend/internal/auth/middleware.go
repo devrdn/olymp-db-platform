@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const SessionCookieName = "dbcontest_session"
-
 const contestIDParam = "contestID"
 
 // passwordChangeExemptPaths are what an account on its one-time password may
@@ -86,14 +84,14 @@ func NewMiddleware(cfg MiddlewareConfig) *Middleware {
 // confirmed against the database.
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(SessionCookieName)
-		if err != nil {
+		token, ok := m.SessionToken(r)
+		if !ok {
 			m.unauthenticated(w, r)
 			return
 		}
 
 		ctx := r.Context()
-		session, err := m.sessions.Get(ctx, cookie.Value)
+		session, err := m.sessions.Get(ctx, token)
 		if err != nil {
 			if !errors.Is(err, ErrSessionNotFound) {
 				m.log.ErrorContext(ctx, "could not read session", "error", err)
@@ -120,7 +118,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 				if !errors.Is(err, users.ErrNotFound) {
 					m.log.ErrorContext(ctx, "could not load the session's account", "error", err)
 				}
-				m.discard(ctx, cookie.Value)
+				m.discard(ctx, token)
 				m.unauthenticated(w, r)
 				return
 			}
@@ -128,7 +126,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 
 		// Drop a dead session's record from the store.
 		if !live(user, session) {
-			m.discard(ctx, cookie.Value)
+			m.discard(ctx, token)
 			m.unauthenticated(w, r)
 			return
 		}
@@ -150,7 +148,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 
 		// Extend the session on activity; the store writes only when due
 		// (CLAUDE.md rule 6).
-		if err := m.sessions.Touch(ctx, cookie.Value, session); err != nil {
+		if err := m.sessions.Touch(ctx, token, session); err != nil {
 			m.log.WarnContext(ctx, "could not extend the session", "error", err)
 		}
 
@@ -167,18 +165,30 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
+// SessionToken is the token of r's session cookie. Two cookies of the name
+// are no session: a browser sends both when another host has planted one, and
+// picking either lets the API and the interface disagree about who is signed
+// in.
+func (m *Middleware) SessionToken(r *http.Request) (string, bool) {
+	cookies := r.CookiesNamed(m.cookies.SessionName())
+	if len(cookies) != 1 {
+		return "", false
+	}
+	return cookies[0].Value, true
+}
+
 // SessionStillValid reports whether Authenticate would still admit the
 // session cookie on r. A long-held response such as an event stream asks
 // before each push, so it does not outlive the session or the account. The
 // account is checked as Authenticate checks it. An error says nothing about
 // validity; the caller decides whether to ask again.
 func (m *Middleware) SessionStillValid(r *http.Request) (bool, error) {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil {
+	token, ok := m.SessionToken(r)
+	if !ok {
 		return false, nil
 	}
 	ctx := r.Context()
-	session, err := m.sessions.Get(ctx, cookie.Value)
+	session, err := m.sessions.Get(ctx, token)
 	switch {
 	case errors.Is(err, ErrSessionNotFound):
 		return false, nil

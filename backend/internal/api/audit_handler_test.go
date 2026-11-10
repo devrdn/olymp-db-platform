@@ -60,7 +60,7 @@ func newAuditFixture(t *testing.T, trail audit.Reader, permissions ...string) (h
 
 	router := chi.NewRouter()
 	api.NewAuditHandler(trail, mw, log).Mount(router)
-	return router, &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	return router, &http.Cookie{Name: sessionName, Value: token}
 }
 
 func getAudit(t *testing.T, router http.Handler, cookie *http.Cookie, path string) *httptest.ResponseRecorder {

@@ -84,7 +84,7 @@ func newContestFixtureAuthz(t *testing.T, wrap func(auth.Authorizer) auth.Author
 		stores:   stores,
 		sessions: sessions,
 		actor:    actor,
-		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:   &http.Cookie{Name: sessionName, Value: token},
 	}
 }
 
@@ -851,7 +851,7 @@ func (f *contestFixture) asParticipant(t *testing.T, login string) (users.User, 
 	if err != nil {
 		t.Fatalf("session Create() returned error: %v", err)
 	}
-	return user, &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	return user, &http.Cookie{Name: sessionName, Value: token}
 }
 
 func (f *contestFixture) asked(t *testing.T, path string, cookie *http.Cookie) *httptest.ResponseRecorder {

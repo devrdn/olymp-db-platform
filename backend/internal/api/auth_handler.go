@@ -90,10 +90,7 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 
 	// A successful sign-in replaces an existing session instead of leaving it
 	// alive.
-	var previousToken string
-	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
-		previousToken = cookie.Value
-	}
+	previousToken, _ := h.mw.SessionToken(r)
 
 	result, err := h.service.Login(r.Context(), auth.LoginCommand{
 		Login:         req.Login,
@@ -183,9 +180,8 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(auth.SessionCookieName)
-	if err == nil {
-		if err := h.service.Logout(r.Context(), cookie.Value); err != nil {
+	if token, ok := h.mw.SessionToken(r); ok {
+		if err := h.service.Logout(r.Context(), token); err != nil {
 			h.log.ErrorContext(r.Context(), "logout failed", "error", err)
 			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 			return

@@ -102,10 +102,9 @@ Three layers, from the edge inward:
    removes forwarded-address headers the reverse proxy did not vouch for
    (section 2 explains why). Then, for any path not under `/api/`, it calls
    `guardRedirect` from [`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts).
-2. **`guardRedirect`** decides from the path and whether the
-   `dbcontest_session` cookie exists. The cookie is httpOnly and opaque here,
-   so this check knows only that a cookie is present, not whether it is
-   valid. Paths reachable without a cookie are listed in `guard.ts`:
+2. **`guardRedirect`** decides from the path and whether the session cookie
+   exists. The cookie is httpOnly and opaque here, so this check knows only
+   that a cookie is present, not whether it is valid. Paths reachable without a cookie are listed in `guard.ts`:
    `PUBLIC_PATHS` (`/` and `/login`), `PUBLIC_EXACT` (`/healthz`) and
    `PUBLIC_PATTERNS` (a contest's leaderboard). Everything else redirects to
    `/login?next=<path and query>`.

@@ -46,7 +46,7 @@ func (h *ParticipantHandler) resetDatabase(w http.ResponseWriter, r *http.Reques
 		ContestID: contestID,
 		UserID:    identity.UserID,
 		Address:   clientAddress(r),
-		Session:   sessionTag(r),
+		Session:   sessionTag(h.mw, r),
 		UserAgent: r.UserAgent(),
 	})
 	if err != nil {

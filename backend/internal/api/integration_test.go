@@ -359,7 +359,7 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 		router:       router,
 		repo:         repo,
 		admin:        admin,
-		cookie:       &http.Cookie{Name: auth.SessionCookieName, Value: adminToken},
+		cookie:       &http.Cookie{Name: sessionName, Value: adminToken},
 		accountReads: reads,
 	}
 }
@@ -493,7 +493,7 @@ func TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP(t *testing.T) {
 	}
 	var session *http.Cookie
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.SessionCookieName {
+		if c.Name == sessionName {
 			session = c
 		}
 	}

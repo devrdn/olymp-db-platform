@@ -83,7 +83,7 @@ func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, status api.MailStatus
 		router:   router,
 		repo:     repo,
 		admin:    admin,
-		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:   &http.Cookie{Name: sessionName, Value: token},
 		hasher:   hasher,
 		unlocker: unlocker,
 	}
@@ -748,7 +748,7 @@ func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) 
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: sessionName, Value: token})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
