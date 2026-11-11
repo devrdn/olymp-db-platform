@@ -284,4 +284,71 @@ func ManagerRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			notFound(t, target.Repo.Revoke(ctx, contest, helper), "a second Revoke():")
 		})
 	})
+
+	t.Run("Revoke remembers the person for that contest only", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ManagerTarget) {
+			contest, other := target.NewContest(), target.NewContest()
+			owner := target.NewUser("olga", "olga")
+			leaving := target.NewUser("hana", "hana")
+			staying := target.NewUser("ivan", "ivan")
+			stranger := target.NewUser("kira", "kira")
+			grant(t, ctx, target, contest, owner, rbac.RoleOwner, owner)
+			grant(t, ctx, target, contest, leaving, rbac.RoleManager, owner)
+			grant(t, ctx, target, contest, staying, rbac.RoleManager, owner)
+			grant(t, ctx, target, other, leaving, rbac.RoleManager, owner)
+
+			if err := target.Repo.Revoke(ctx, contest, leaving); err != nil {
+				t.Fatalf("Revoke() = %v", err)
+			}
+
+			former, err := target.Repo.FormerManagers(ctx, contest)
+			if err != nil || !slices.Equal(former, []uuid.UUID{leaving}) {
+				t.Errorf("FormerManagers() = %v, %v; want only the revoked manager", former, err)
+			}
+			if former, err := target.Repo.FormerManagers(ctx, other); err != nil || len(former) != 0 {
+				t.Errorf("FormerManagers() of the other contest = %v, %v; want none", former, err)
+			}
+			for _, c := range []struct {
+				name string
+				user uuid.UUID
+				want bool
+			}{
+				{"a revoked manager", leaving, true},
+				{"a current manager", staying, true},
+				{"the owner", owner, true},
+				{"somebody never appointed", stranger, false},
+			} {
+				if got, err := target.Repo.EverManaged(ctx, contest, c.user); err != nil || got != c.want {
+					t.Errorf("EverManaged() for %s = %v, %v; want %v", c.name, got, err, c.want)
+				}
+			}
+			if got, err := target.Repo.EverManaged(ctx, other, leaving); err != nil || !got {
+				t.Errorf("EverManaged() for a current manager of the other contest = %v, %v; want true", got, err)
+			}
+			if got, err := target.Repo.EverManaged(ctx, other, staying); err != nil || got {
+				t.Errorf("EverManaged() for staff of another contest only = %v, %v; want false", got, err)
+			}
+
+			grant(t, ctx, target, contest, leaving, rbac.RoleManager, owner)
+			if err := target.Repo.Revoke(ctx, contest, leaving); err != nil {
+				t.Fatalf("a second Revoke() = %v", err)
+			}
+			if former, _ := target.Repo.FormerManagers(ctx, contest); !slices.Equal(former, []uuid.UUID{leaving}) {
+				t.Errorf("FormerManagers() after revoking twice = %v, want them once", former)
+			}
+		})
+	})
+
+	t.Run("a refused Revoke remembers nobody", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ManagerTarget) {
+			contest := target.NewContest()
+			stranger := target.NewUser("ivan", "ivan")
+
+			notFound(t, target.Repo.Revoke(ctx, contest, stranger), "Revoke() for an account never appointed:")
+
+			if former, err := target.Repo.FormerManagers(ctx, contest); err != nil || len(former) != 0 {
+				t.Errorf("FormerManagers() = %v, %v; want none", former, err)
+			}
+		})
+	})
 }

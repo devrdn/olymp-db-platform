@@ -556,3 +556,104 @@ func TestTheLeaderboardNamesMigrationStopsShowingEmailLogins(t *testing.T) {
 		t.Errorf("after rolling back 000052 leaderboard_names = %q, want full_name kept", names)
 	}
 }
+
+// Every revoke the audit trail remembers becomes a former-manager row, once
+// per person and contest; a contest or account that no longer exists is left
+// out, and rolling back only drops the table.
+func TestTheFormerManagersMigrationRecoversRevokesFromTheAuditTrail(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(52); err != nil {
+		t.Fatalf("migrate to 52: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	account := func(login string) string {
+		t.Helper()
+		var id string
+		if err := conn.QueryRow(ctx, `
+			INSERT INTO users (login, password_hash, full_name, status)
+			VALUES ($1, 'x', 'A Person', 'active') RETURNING id`, login).Scan(&id); err != nil {
+			t.Fatalf("create account %s: %v", login, err)
+		}
+		return id
+	}
+	author := account("author")
+	revoked := account("revoked")
+	twice := account("revoked-twice")
+	granted := account("still-granted")
+	var contest string
+	if err := conn.QueryRow(ctx, `INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author).Scan(&contest); err != nil {
+		t.Fatalf("create contest: %v", err)
+	}
+	const (
+		revokedAt = "2026-03-01T10:00:00Z"
+		unknown   = "00000000-0000-4000-8000-000000000001"
+	)
+	entry := func(action, contestID, userID, at string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO audit_log (actor_id, action, entity, entity_id, payload, created_at)
+			VALUES ($1, $2, 'contest', $3, jsonb_build_object('user_id', $4::text), $5::timestamptz)`,
+			author, action, contestID, userID, at); err != nil {
+			t.Fatalf("write the audit entry: %v", err)
+		}
+	}
+	entry("contest.manager_revoke", contest, revoked, revokedAt)
+	entry("contest.manager_revoke", contest, twice, "2026-03-02T10:00:00Z")
+	entry("contest.manager_revoke", contest, twice, "2026-03-03T10:00:00Z")
+	entry("contest.manager_revoke", contest, unknown, revokedAt)
+	entry("contest.manager_revoke", unknown, revoked, revokedAt)
+	entry("contest.manager_grant", contest, granted, revokedAt)
+
+	if err := m.Migrate(53); err != nil {
+		t.Fatalf("migrate to 53: %v", err)
+	}
+
+	rows, err := conn.Query(ctx, `SELECT user_id::text, revoked_at = $2::timestamptz FROM contest_former_managers WHERE contest_id = $1`, contest, revokedAt)
+	if err != nil {
+		t.Fatalf("read the former managers: %v", err)
+	}
+	got := map[string]bool{}
+	for rows.Next() {
+		var user string
+		var atRevoke bool
+		if err := rows.Scan(&user, &atRevoke); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[user] = atRevoke
+	}
+	rows.Close()
+	if len(got) != 2 {
+		t.Errorf("former managers = %v, want the revoked and the twice-revoked accounts only", got)
+	}
+	if atRevoke, ok := got[revoked]; !ok || !atRevoke {
+		t.Errorf("the revoked account: present %v, stamped with the audit time %v", ok, atRevoke)
+	}
+	if _, ok := got[twice]; !ok {
+		t.Error("the account revoked twice is missing")
+	}
+
+	if err := m.Migrate(52); err != nil {
+		t.Fatalf("migrate to 52: %v", err)
+	}
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('contest_former_managers') IS NOT NULL`).Scan(&exists); err != nil || exists {
+		t.Errorf("after rolling back 000053 the table exists = %v (err %v), want dropped", exists, err)
+	}
+}

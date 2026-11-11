@@ -23,6 +23,8 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 	actor := uuid.New()
 	c := f.SeedPublishableContest()
 	staff := f.AddUser("t.manager")
+	// Never staff: a former manager cannot be added to the roster.
+	listed := f.AddUser("t.listed")
 	student := f.AddUser("s.popescu")
 	rival := f.AddUser("a.ionescu")
 	doomed := f.SeedContest(contests.StatusDraft)
@@ -123,12 +125,12 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			_, err := f.Service.AddParticipants(ctx, contests.AddParticipantsCommand{
 				ActorID:   actor,
 				ContestID: c.ID,
-				Logins:    []string{staff.Login},
+				Logins:    []string{listed.Login},
 			})
 			return err
 		}},
 		{"RemoveParticipant", func() error {
-			return f.Service.RemoveParticipant(ctx, actor, c.ID, staff.ID)
+			return f.Service.RemoveParticipant(ctx, actor, c.ID, listed.ID)
 		}},
 		{"Transition", func() error {
 			return f.Service.Transition(ctx, actor, c.ID, contests.StatusPublished)

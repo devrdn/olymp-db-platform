@@ -49,7 +49,14 @@ type ManagerRepository interface {
 	Get(ctx context.Context, contestID, userID uuid.UUID) (Manager, error)
 	// Grant appoints a user, replacing any role they already held.
 	Grant(ctx context.Context, m Manager) error
+	// Revoke removes a user from the staff and remembers them as a former
+	// manager of the contest, atomically; or ErrManagerNotFound.
 	Revoke(ctx context.Context, contestID, userID uuid.UUID) error
+	// EverManaged reports whether the user is on the contest's staff now or
+	// was revoked from it.
+	EverManaged(ctx context.Context, contestID, userID uuid.UUID) (bool, error)
+	// FormerManagers returns the users revoked from the contest's staff.
+	FormerManagers(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // Managers returns the contest's staff, owner first.

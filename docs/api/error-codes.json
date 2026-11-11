@@ -719,7 +719,7 @@
     },
     {
       "code": "staff_cannot_participate",
-      "meaning": "This account already staffs the contest (owner or manager), so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard."
+      "meaning": "This account staffs the contest (owner or manager) or once did, so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard, and revoking the role does not undo that."
     },
     {
       "code": "status_changed",
