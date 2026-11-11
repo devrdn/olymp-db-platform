@@ -1044,7 +1044,7 @@ const ro = {
           unknown_account: "nu există acest cont",
           already_enrolled: "deja înscris",
           account_blocked: "cont blocat",
-          staff_member: "face deja parte din echipa olimpiadei",
+          staff_member: "face sau a făcut parte din echipa olimpiadei",
         },
       },
     },
@@ -2148,7 +2148,7 @@ const ro = {
     accepted: {
       title: "Verificați e-mailul",
       body:
-        "Am trimis codul și datele de autentificare la {email}. Dacă nu primiți nimic în câteva minute, verificați dosarul de spam. Organizatorii vă pot găsi și după nume la intrare.",
+        "Codul dumneavoastră este în drum spre {email}. Dacă este un cont nou, datele de autentificare vin odată cu el. Dacă nu primiți nimic în câteva minute, verificați dosarul de spam. Organizatorii vă pot găsi și după nume la intrare.",
     },
     repeat: {
       title: "Sunteți deja înregistrat",

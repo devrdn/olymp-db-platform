@@ -1152,7 +1152,7 @@ const en = {
           unknown_account: "no such account",
           already_enrolled: "already enrolled",
           account_blocked: "account is blocked",
-          staff_member: "already staffs this contest",
+          staff_member: "is or was on this contest's staff",
         },
       },
     },
@@ -2378,7 +2378,7 @@ const en = {
     accepted: {
       title: "Check your email",
       body:
-        "We sent your code and sign-in details to {email}. If nothing arrives within a few minutes, check the spam folder. The organisers can also find you by name at the entrance.",
+        "Your code is on its way to {email}. If this is a new account, its sign-in details come with it. If nothing arrives within a few minutes, check the spam folder. The organisers can also find you by name at the entrance.",
     },
     repeat: {
       title: "You are already registered",

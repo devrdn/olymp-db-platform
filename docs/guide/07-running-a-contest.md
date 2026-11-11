@@ -425,9 +425,10 @@ Behaviour of the product that surprises people on the day:
   `nothing_left_to_answer`; the story, the answers and the results stay. In a
   contest with a single question, a participant who solves it early, or spends
   its last attempt, has ended their own console. Say so in the instructions.
-- **Staff and former staff cannot take part.** An account on the contest's staff, or revoked from it, is skipped
-  when added as a participant ("already staffs this contest") and refused
-  when it enrols itself (`staff_cannot_participate`), and an administrator on
+- **Staff and former staff cannot take part.** An account on the contest's
+  staff, or revoked from it, is skipped when added as a participant ("is or
+  was on this contest's staff") and refused when it enrols itself
+  (`staff_cannot_participate`), and an administrator on
   the roster holds publication back (`staff_registered`). Test as a
   participant with a plain account.
 - **A participant can reset their own database** in a `read_write` contest:
