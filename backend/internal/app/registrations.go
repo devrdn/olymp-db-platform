@@ -36,7 +36,18 @@ func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAcc
 		Delivery:    users.Delivery{ByEmail: n.ByEmail},
 		SelfService: true,
 	})
-	if errors.Is(err, users.ErrLoginTaken) || errors.Is(err, users.ErrEmailTaken) {
+	// A taken email is found only when the account is inserted, after its
+	// password was hashed; a taken login is refused before any hashing, so
+	// with mail on that case spends the hash itself.
+	if errors.Is(err, users.ErrEmailTaken) {
+		return registrations.Account{Existing: true}, nil
+	}
+	if errors.Is(err, users.ErrLoginTaken) {
+		if n.ByEmail {
+			if err := a.Decoy(ctx); err != nil {
+				return registrations.Account{}, err
+			}
+		}
 		return registrations.Account{Existing: true}, nil
 	}
 	if err != nil {

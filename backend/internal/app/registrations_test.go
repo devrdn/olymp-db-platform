@@ -8,11 +8,15 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
+	"github.com/devrdn/db-contest/backend/internal/registrations/registrationstest"
+	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/google/uuid"
 )
 
 type discardAudit struct{}
@@ -138,5 +142,43 @@ func TestADecoyHashWaitsOnlyTheSignInWait(t *testing.T) {
 
 	if err := accounts.Decoy(t.Context()); !errors.Is(err, password.ErrBusy) {
 		t.Errorf("Decoy() on a full hasher = %v, want password.ErrBusy like Create", err)
+	}
+}
+
+// mailOutbox is registrationstest's outbox with the abandon call users.Service
+// also needs.
+type mailOutbox struct{ *registrationstest.Outbox }
+
+func (mailOutbox) AbandonPending(context.Context, mailing.Kind, []uuid.UUID, string) error {
+	return nil
+}
+
+// A taken login is refused before any hashing, so with mail on the adapter
+// spends the hash itself; without mail it does not.
+func TestATakenLoginSpendsAHashOnlyWithMailOn(t *testing.T) {
+	repo := userstest.New()
+	repo.GrantRole("student")
+	repo.Add(users.User{Login: "ana@example.com", FullName: "Ana", Status: users.StatusActive})
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	service := users.NewService(repo, audit.New(discardAudit{}), &userstest.SpyUnitOfWork{}, hasher).WithMail(users.Mail{
+		Outbox: mailOutbox{&registrationstest.Outbox{}}, Texts: mailing.NewTexts("https://olympdb.usm.md"),
+		Settings: registrationstest.Settings{Values: settings.Values{
+			settings.KeyName: "Olimpiada USM", settings.KeyMailLanguage: string(mailing.English),
+		}},
+	})
+	accounts := registrationAccounts{users: service, hasher: hasher}
+	n := registrations.NewAccount{Login: "ana@example.com", Email: "ana@example.com", FullName: "Ana Popescu"}
+	slot, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() = %v", err)
+	}
+	t.Cleanup(slot.Release)
+
+	if got, err := accounts.Create(t.Context(), n); err != nil || !got.Existing {
+		t.Errorf("without mail: Create() = %+v, %v, want an existing account at no cost", got, err)
+	}
+	n.ByEmail = true
+	if _, err := accounts.Create(t.Context(), n); !errors.Is(err, password.ErrBusy) {
+		t.Errorf("with mail: Create() = %v, want password.ErrBusy from the decoy hash", err)
 	}
 }
