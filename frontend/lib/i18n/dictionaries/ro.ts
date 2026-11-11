@@ -2255,6 +2255,8 @@ const ro = {
       "Olimpiada s-a încheiat, deci nu mai acceptă nimic.",
     no_game_yet:
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
+    game_template_too_large:
+      "Baza de joc a depășit dimensiunea permisă unui joc pe această instalare, așa că construirea a fost oprită și nu s-a păstrat nimic din ea. Micșorați datele sau rugați un administrator să mărească limita.",
     no_game_to_build:
       "Această olimpiadă nu are un joc salvat, deci nu este nimic de construit. Scrieți SQL-ul, încărcați un dump gata făcut sau descrieți tabelele și salvați — construirea citește ce este salvat.",
     schema_hidden:

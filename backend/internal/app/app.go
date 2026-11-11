@@ -209,6 +209,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			a.close()
 			return nil, err
 		}
+		if cluster, err = cluster.WithTemplateMaxBytes(cfg.GameTemplateMaxBytes); err != nil {
+			a.close()
+			return nil, err
+		}
 		games := postgres.NewGameInstances(pool)
 		databases := provisioning.New(games, cluster, auditRecorder, storage.NewUnitOfWork(pool)).
 			WithWorkers(cfg.ProvisionWorkers).

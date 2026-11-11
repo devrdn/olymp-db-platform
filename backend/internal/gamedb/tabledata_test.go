@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -106,5 +107,24 @@ func TestLoadTableDataRefusalBecomesATableDataError(t *testing.T) {
 	}
 	if !strings.Contains(tde.ScriptRejection(), "codes") {
 		t.Fatalf("ScriptRejection() = %q, does not name the table", tde.ScriptRejection())
+	}
+}
+
+// The table builder's rows load after the script, into the same template, so
+// they count against the same limit.
+func TestLoadingTableDataPastTheTemplateLimitFails(t *testing.T) {
+	p := limitedProvisioner(t, smallTemplateLimit)
+	template := named(t, "tpl")
+	if err := buildTemplateString(p, t.Context(), template, codesScript, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("building the template: %v", err)
+	}
+
+	var rows strings.Builder
+	for i := range 300000 {
+		fmt.Fprintf(&rows, "%d,label number %d\n", i, i)
+	}
+	err := p.LoadTableData(t.Context(), template, "codes", []string{"id", "label"}, strings.NewReader(rows.String()))
+	if !errors.Is(err, gamedb.ErrTemplateTooLarge) {
+		t.Fatalf("loading rows past the template's limit returned %v, want ErrTemplateTooLarge", err)
 	}
 }

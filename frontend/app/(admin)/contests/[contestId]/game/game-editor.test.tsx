@@ -23,6 +23,7 @@ function game(overrides: Partial<Game> = {}): Game {
     source: "editor",
     upload: undefined,
     buildError: "",
+    buildErrorCode: "",
     scriptBytes: 0,
     maxScriptBytes: 512 * 1024,
     building: false,
@@ -70,6 +71,22 @@ describe("the game editor", () => {
 
     expect(screen.getByText(t.buildError)).toBeInTheDocument();
     expect(screen.getByText(/nosuchtype/)).toBeInTheDocument();
+  });
+
+  // PostgreSQL said nothing here: the platform stopped the build, so the
+  // sentence is the interface's own, in the reader's language.
+  test("says in its own words that the game grew too large for the installation", () => {
+    show(
+      game({
+        status: "failed",
+        buildError: "The game's database grew past the size one game may take on this installation.",
+        buildErrorCode: "game_template_too_large",
+      }),
+    );
+
+    expect(screen.getByText(t.buildError)).toBeInTheDocument();
+    expect(screen.getByText(en.errors.game_template_too_large)).toBeInTheDocument();
+    expect(screen.queryByText(t.buildErrorLede)).not.toBeInTheDocument();
   });
 
   // The editor is empty for a file-sourced game, so only this note says where

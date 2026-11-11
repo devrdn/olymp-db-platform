@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -214,6 +215,27 @@ func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
 	if timeout != "0" {
 		t.Fatalf("statement_timeout = %q for the author role, want 0: a build is bounded by "+
 			"the caller's deadline, not by a figure sized for a participant's query", timeout)
+	}
+}
+
+// Temporary files live outside every database, where the build's size watch
+// does not see them, so the role bounds them itself. A script cannot lift the
+// bound: temp_file_limit is not USERSET.
+func TestTheAuthorRoleHasATempFileLimit(t *testing.T) {
+	conn := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), scratchDatabase(t))
+
+	var limit string
+	if err := conn.QueryRow(t.Context(), `SHOW temp_file_limit`).Scan(&limit); err != nil {
+		t.Fatalf("reading temp_file_limit: %v", err)
+	}
+	if limit != "256MB" {
+		t.Fatalf("temp_file_limit = %q for the author role, want 256MB", limit)
+	}
+
+	_, err := conn.Exec(t.Context(), `SET temp_file_limit = -1`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("lifting temp_file_limit as the author returned %v, want a privilege refusal (42501)", err)
 	}
 }
 

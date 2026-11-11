@@ -313,6 +313,10 @@ type gameResponse struct {
 	// field and the contest.game_built audit payload keeps it, so a connect
 	// string here would be published twice.
 	BuildError string `json:"build_error"`
+	// BuildErrorCode is a declared code (codes.go) for a build failure the
+	// interface shows in its own words, such as a game too large for the
+	// installation; empty for any other failure.
+	BuildErrorCode string `json:"build_error_code"`
 	// ScriptBytes says whether there is a script without carrying it.
 	ScriptBytes int `json:"script_bytes"`
 	// MaxScriptBytes is provisioning.MaxScriptBytes, published so the editor
@@ -357,6 +361,9 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
 		BuilderLimits: h.builderLimitsView(),
 		NeedsBuild:    template.NeedsBuild(),
+	}
+	if template.TooLarge() {
+		resp.BuildErrorCode = codeGameTemplateTooLarge.String()
 	}
 	if template.Source == provisioning.SourceFile && template.UploadID != nil {
 		upload, err := h.games.Upload(ctx, template.ContestID, *template.UploadID)

@@ -35,6 +35,13 @@ func (p *Provisioner) LoadTableData(ctx context.Context, database, table string,
 	ctx, cancel := context.WithTimeout(ctx, p.buildTimeout)
 	defer cancel()
 
+	// The rows land in the template the script built, under the same limit.
+	return p.withinSizeLimit(ctx, database, func(ctx context.Context) error {
+		return p.copyTableData(ctx, database, table, columns, data)
+	})
+}
+
+func (p *Provisioner) copyTableData(ctx context.Context, database, table string, columns []string, data io.Reader) error {
 	conn, err := p.connect(ctx, p.base.User, database)
 	if err != nil {
 		return err

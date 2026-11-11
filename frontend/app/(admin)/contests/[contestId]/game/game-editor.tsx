@@ -55,6 +55,10 @@ export function GameEditor({
   // means an older API did not send it.
   const maxBytes = game.maxScriptBytes > 0 ? game.maxScriptBytes : FALLBACK_MAX_GAME_SCRIPT_BYTES;
   const tooLong = bytes > maxBytes;
+  // A refusal the platform names is shown in the reader's language; an
+  // unknown code falls back to the words the server stored.
+  const platformRefusal =
+    game.buildErrorCode !== "" ? errors[game.buildErrorCode as keyof typeof errors] : undefined;
 
   return (
     <form action={save} className="flex flex-col gap-4">
@@ -90,8 +94,14 @@ export function GameEditor({
       {game.status === "failed" && game.buildError !== "" ? (
         <div className="flex flex-col gap-2 border-l-2 border-bad pl-4">
           <p className="text-control text-ink">{t.buildError}</p>
-          <p className="max-w-body text-small text-ink-2">{t.buildErrorLede}</p>
-          <pre className="overflow-x-auto font-mono text-data text-bad">{game.buildError}</pre>
+          {platformRefusal ? (
+            <p className="max-w-body text-small text-ink-2">{platformRefusal}</p>
+          ) : (
+            <>
+              <p className="max-w-body text-small text-ink-2">{t.buildErrorLede}</p>
+              <pre className="overflow-x-auto font-mono text-data text-bad">{game.buildError}</pre>
+            </>
+          )}
         </div>
       ) : null}
 

@@ -1136,3 +1136,79 @@ func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
 		t.Fatalf("the total went from %d to %d after adding a database of %d bytes", before, after, own)
 	}
 }
+
+// smallTemplateLimit leaves room for an empty database (about 7.5 MB on
+// PostgreSQL 16) and a few megabytes of the author's own.
+const smallTemplateLimit = 16 << 20
+
+func limitedProvisioner(t *testing.T, maxBytes int64) *gamedb.Provisioner {
+	t.Helper()
+	p, err := provisioner(t).WithTemplateMaxBytes(maxBytes)
+	if err != nil {
+		t.Fatalf("limiting the template: %v", err)
+	}
+	return p
+}
+
+// The script adds a few megabytes and then counts for about a second, a hundred
+// times over, so only the size watch can end it within the test's bound. It
+// counts rather than sleeps because a hardened cluster refuses pg_sleep.
+func TestABuildThatGrowsPastTheLimitFailsAndLeavesNoDatabase(t *testing.T) {
+	p := limitedProvisioner(t, smallTemplateLimit)
+	template := named(t, "tpl")
+
+	var script strings.Builder
+	script.WriteString("CREATE TABLE filler (n bigint);\n")
+	for range 100 {
+		script.WriteString("INSERT INTO filler SELECT g FROM generate_series(1, 100000) g;\n" +
+			"SELECT count(*) FROM generate_series(1, 4000) a, generate_series(1, 4000) b;\n")
+	}
+
+	started := time.Now()
+	err := buildTemplateString(p, t.Context(), template, script.String(), sqlpolicy.ReadOnly())
+	if !errors.Is(err, gamedb.ErrTemplateTooLarge) {
+		t.Fatalf("a build growing past its limit returned %v, want ErrTemplateTooLarge", err)
+	}
+	if elapsed := time.Since(started); elapsed > 30*time.Second {
+		t.Fatalf("the build ran for %s; it should have been stopped seconds after passing the limit", elapsed)
+	}
+	if instanceExists(t, template) {
+		t.Fatal("a build stopped for its size left its half-built template behind")
+	}
+}
+
+// One statement can pass the limit between two readings of the size, and the
+// script can end before the next one.
+func TestABuildThatFinishesPastTheLimitStillFails(t *testing.T) {
+	p := limitedProvisioner(t, smallTemplateLimit)
+	template := named(t, "tpl")
+
+	err := buildTemplateString(p, t.Context(), template,
+		`CREATE TABLE filler AS SELECT g::bigint AS n FROM generate_series(1, 600000) g;`, sqlpolicy.ReadOnly())
+	if !errors.Is(err, gamedb.ErrTemplateTooLarge) {
+		t.Fatalf("a build that ended past its limit returned %v, want ErrTemplateTooLarge", err)
+	}
+	if instanceExists(t, template) {
+		t.Fatal("a build refused for its size left its template behind")
+	}
+}
+
+func TestABuildUnderTheLimitSucceeds(t *testing.T) {
+	p := limitedProvisioner(t, 64<<20)
+	template := named(t, "tpl")
+
+	if err := buildTemplateString(p, t.Context(), template, detectiveScript, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("a small game under its limit failed to build: %v", err)
+	}
+	if !instanceExists(t, template) {
+		t.Fatal("the template is not there")
+	}
+}
+
+func TestATemplateLimitThatIsNotPositiveIsRefusedUpFront(t *testing.T) {
+	for _, limit := range []int64{0, -1} {
+		if _, err := provisioner(t).WithTemplateMaxBytes(limit); err == nil {
+			t.Errorf("a template limit of %d was accepted", limit)
+		}
+	}
+}

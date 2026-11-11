@@ -1064,6 +1064,30 @@ func TestABuildToreDownTheTemplateWhenLoadingTableDataFailed(t *testing.T) {
 	}
 }
 
+// The rows load into the template the script built, under the same limit.
+func TestABuildWhoseTableDataPassesTheTemplateSizeLimitIsTooLargeAndTornDown(t *testing.T) {
+	t.Parallel()
+	service, _, cluster, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+	cluster.tableDataFail = fmt.Errorf("%w: past the limit", provisioning.ErrTemplateTooLarge)
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("table data too large for the cluster was reported as the tick's own failure: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed || !built.TooLarge() {
+		t.Fatalf("finished as %q with %q, want failed as too large", built.Status, built.BuildError)
+	}
+	if len(cluster.dropped) != 1 || cluster.dropped[0] != built.Database {
+		t.Fatalf("dropped = %v, want exactly %q torn down", cluster.dropped, built.Database)
+	}
+}
+
 // A first row larger than maxBytes is returned whole rather than as an empty
 // page, whose "next" offset would point back at itself.
 func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {

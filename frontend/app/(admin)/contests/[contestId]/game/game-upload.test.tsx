@@ -76,6 +76,7 @@ function game(overrides: Partial<Game> = {}): Game {
     source: "editor",
     upload: undefined,
     buildError: "",
+    buildErrorCode: "",
     scriptBytes: 0,
     maxScriptBytes: 512 * 1024,
     building: false,

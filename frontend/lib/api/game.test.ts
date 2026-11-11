@@ -51,6 +51,16 @@ describe("gameSchema", () => {
     expect(parsed.source).toBe("editor");
   });
 
+  // A failure the platform names travels as a code, for the interface to
+  // translate; an older API sends none.
+  test("carries the code of a build failure the platform names", () => {
+    expect(
+      gameSchema.parse({ ...game, status: "failed", build_error_code: "game_template_too_large" })
+        .buildErrorCode,
+    ).toBe("game_template_too_large");
+    expect(gameSchema.parse(game).buildErrorCode).toBe("");
+  });
+
   // An API older than the source field.
   test("reads a reply with no source field as an editor-written game", () => {
     expect(gameSchema.parse(game).source).toBe("editor");
