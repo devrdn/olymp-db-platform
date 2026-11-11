@@ -343,6 +343,52 @@ func TestANonPositiveGameBuildTimeoutIsRejected(t *testing.T) {
 	}
 }
 
+func TestGameTemplateMaxBytesDefaultsToTwoGibibytes(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameTemplateMaxBytes != 2<<30 {
+		t.Errorf("GameTemplateMaxBytes = %d, want 2 GiB", cfg.GameTemplateMaxBytes)
+	}
+}
+
+func TestGameTemplateMaxBytesIsConfigurableWithinItsBounds(t *testing.T) {
+	for value, want := range map[string]int64{
+		"67108864":    64 << 20,
+		"8589934592":  8 << 30,
+		"68719476736": 64 << 30,
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("GAME_TEMPLATE_MAX_BYTES", value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() returned error: %v", err)
+			}
+			if cfg.GameTemplateMaxBytes != want {
+				t.Errorf("GameTemplateMaxBytes = %d, want %d", cfg.GameTemplateMaxBytes, want)
+			}
+		})
+	}
+}
+
+func TestAGameTemplateMaxBytesOutsideItsBoundsIsRejected(t *testing.T) {
+	for _, value := range []string{"-1", "0", "67108863", "68719476737"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("GAME_TEMPLATE_MAX_BYTES", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted GAME_TEMPLATE_MAX_BYTES=%s, want error", value)
+			}
+		})
+	}
+}
+
 func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "production")

@@ -83,6 +83,9 @@ export const gameSchema = z
     // Absent for an editor-sourced game, so "no file" stays distinct.
     upload: gameUploadSourceSchema.optional(),
     build_error: z.string().default(""),
+    // Set only for a failure the platform names, such as a game too large for
+    // the installation; the interface shows its own sentence for it.
+    build_error_code: z.string().default(""),
     script_bytes: z.number().default(0),
     // Read from the server, not kept as a constant here (CLAUDE.md rule 11).
     // Zero means "the server did not say", not a ceiling of nothing.
@@ -100,6 +103,7 @@ export const gameSchema = z
     source: raw.source,
     upload: raw.upload,
     buildError: raw.build_error,
+    buildErrorCode: raw.build_error_code,
     scriptBytes: raw.script_bytes,
     maxScriptBytes: raw.max_script_bytes,
     building: raw.building,

@@ -108,6 +108,9 @@ var sessionDefaults = [][2]string{
 var authorDefaults = [][2]string{
 	{"statement_timeout", "0"},
 	{"idle_in_transaction_session_timeout", "30s"},
+	// Temporary files are not part of the template, so the build's size
+	// limit does not see them. A real bound: it is not USERSET.
+	{"temp_file_limit", "256MB"},
 }
 
 // PrepareCluster makes the cluster ready to host participant databases. It runs

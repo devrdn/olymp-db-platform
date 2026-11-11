@@ -2485,6 +2485,8 @@ const en = {
       "The contest has ended, so it takes nothing more.",
     no_game_yet:
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
+    game_template_too_large:
+      "The game database grew past the size one game may take on this installation, so the build was stopped and nothing of it was kept. Make the data smaller, or ask an administrator to raise the limit.",
     no_game_to_build:
       "This contest has no game stored, so there is nothing to build. Write its SQL, upload a ready-made dump, or describe its tables and save that — a build reads what is stored.",
     schema_hidden:

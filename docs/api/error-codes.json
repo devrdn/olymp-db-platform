@@ -298,6 +298,10 @@
       "meaning": "A value does not match its column's type, is empty in a column that does not allow it, or is not storable text (bytes that are not UTF-8, as in a file saved in a legacy encoding, or a NUL character). The message names the row and the column."
     },
     {
+      "code": "game_template_too_large",
+      "meaning": "The game's build was stopped because its database grew past the size one game may take on this installation (GAME_TEMPLATE_MAX_BYTES), and the half-built database was dropped. Carried in a failed game's `build_error_code` rather than as an error answer, since a build runs after the request that queued it. The organiser makes the data smaller, or an administrator raises the limit."
+    },
+    {
       "code": "game_upload_already_complete",
       "meaning": "This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled."
     },

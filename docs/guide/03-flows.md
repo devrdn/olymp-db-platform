@@ -466,7 +466,7 @@ Which process does what:
 
 | Process or package | Part in the build |
 |---|---|
-| `cmd/gamedb` (compose service `game-prepare`) | Runs on every deploy before the Query Runner. `gamedb.PrepareCluster` creates the roles `game_reader`, `game_writer` and `game_author`, their session defaults (`statement_timeout` 5s for participants, 0 for the author) and what they may not reach. It then applies `gamedb.HardenDatabase` to every database on the cluster, so a revocation added since a template or an instance was built still reaches it. |
+| `cmd/gamedb` (compose service `game-prepare`) | Runs on every deploy before the Query Runner. `gamedb.PrepareCluster` creates the roles `game_reader`, `game_writer` and `game_author`, their session defaults (`statement_timeout` 5s for participants, 0 for the author; `temp_file_limit` 64MB for participants, 256MB for the author) and what they may not reach. It then applies `gamedb.HardenDatabase` to every database on the cluster, so a revocation added since a template or an instance was built still reaches it. |
 | Core API, `internal/api` | `GameHandler` in [game_handler.go](../../backend/internal/api/game_handler.go): reads need `contest.view`, writes `contest.edit`. |
 | Core API, `internal/provisioning` | `Games` stores the description, queues it, and runs `Build` from the `game-build` task. Replacing or rebuilding the game is refused once the contest has started (`requireEditable`, `ErrGameNotEditable`), except a rebuild of a running contest whose template is missing from the game cluster (`RequestBuild`, `recoverable`). |
 | Core API, `internal/gamedb` | `Provisioner` connects with `GAME_PROVISIONER_DSN` on a maintenance pool with a 10-minute statement timeout, and runs the organiser's SQL only as `game_author` with `GAME_AUTHOR_PASSWORD`. |
@@ -481,9 +481,17 @@ Which process does what:
   replacement or rebuild; copies made from an older version are stale
   ([flow 6](#6-provisioning-a-participants-database)).
 - A script error is shown to the organiser in PostgreSQL's words
-  (`ScriptFailure`); any other failure shows the fixed
-  `BuildFailedInternally` sentence and the detail goes only to the service
-  log.
+  (`ScriptFailure`); a template that grows past `GAME_TEMPLATE_MAX_BYTES` is
+  stopped and dropped, and shown as `game_template_too_large` in the
+  interface's own words (`ErrTemplateTooLarge`, `BuildTemplateTooLarge`); any
+  other failure shows the fixed `BuildFailedInternally` sentence and the
+  detail goes only to the service log.
+- While the script runs and the table builder's rows load, the build reads
+  its template's size every two seconds and once more at the end
+  (`gamedb.Provisioner.withinSizeLimit`). The game cluster's volume cannot be
+  given a size, so this is what keeps one build from filling its disk;
+  `game_author`'s `temp_file_limit` of 256MB bounds the temporary files the
+  reading does not see.
 
 Rules that matter:
 

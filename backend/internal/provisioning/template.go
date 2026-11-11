@@ -29,6 +29,11 @@ var (
 	ErrGameNotEditable = errors.New("the contest's game can no longer be replaced")
 	// ErrBuildInProgress is a build somebody else already claimed.
 	ErrBuildInProgress = errors.New("the game is already being built")
+	// ErrTemplateTooLarge is a build whose template database grew past the
+	// size one game may take on the game cluster. The cluster refuses it
+	// (gamedb.ErrTemplateTooLarge is this error) and the build records
+	// BuildTemplateTooLarge.
+	ErrTemplateTooLarge = errors.New("the game's database grew past the size one game may take")
 )
 
 // ScriptFailure is the one build failure whose text may be shown to the
@@ -54,6 +59,12 @@ type ScriptFailure interface {
 // served to anyone with contest.view and written to the append-only audit
 // trail. The real error goes to the service log instead.
 const BuildFailedInternally = "The game could not be built. The failure was not in the script — ask an administrator to check the service log."
+
+// BuildTemplateTooLarge is what a build records when its template grew past
+// the size one game may take (ErrTemplateTooLarge). A fixed sentence, so
+// Template.TooLarge can recognise it and an interface can show its own
+// translation instead.
+const BuildTemplateTooLarge = "The game's database grew past the size one game may take on this installation. Make the data smaller, or ask an administrator to raise the limit."
 
 // MaxBuildErrorBytes bounds the stored text of a failed build (CLAUDE.md
 // rule 2). A script refusal quotes the organiser's file back, and both sinks
@@ -172,6 +183,12 @@ func (t Template) Building() bool { return t.Status == TemplateBuilding || t.Sta
 // and a failed build's error is what should be shown.
 func (t Template) NeedsBuild() bool {
 	return t.Status == TemplateReady && t.DataChangedAt != nil
+}
+
+// TooLarge reports a build refused because its template grew past the size
+// one game may take.
+func (t Template) TooLarge() bool {
+	return t.Status == TemplateFailed && t.BuildError == BuildTemplateTooLarge
 }
 
 // TemplateRepository is the storage the game's own lifecycle needs, apart from
@@ -708,15 +725,7 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 
 	if buildErr == "" {
 		if err := g.cluster.BuildTemplate(ctx, claimed.Database, strings.NewReader(claimed.Script), policy); err != nil {
-			var refused ScriptFailure
-			if errors.As(err, &refused) {
-				// PostgreSQL's words about their SQL are what the author
-				// needs to fix it.
-				buildErr = refused.ScriptRejection()
-			} else {
-				cause = fmt.Errorf("build the game template: %w", err)
-				buildErr = BuildFailedInternally
-			}
+			buildErr, cause = buildFailure(err, "build the game template")
 		}
 	}
 
@@ -762,13 +771,7 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 		} else {
 			defer file.Close()
 			if err := g.cluster.BuildTemplate(ctx, claimed.Database, file, policy); err != nil {
-				var refused ScriptFailure
-				if errors.As(err, &refused) {
-					buildErr = refused.ScriptRejection()
-				} else {
-					cause = fmt.Errorf("build the game template from the uploaded file: %w", err)
-					buildErr = BuildFailedInternally
-				}
+				buildErr, cause = buildFailure(err, "build the game template from the uploaded file")
 			}
 		}
 	}
@@ -807,33 +810,36 @@ func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Te
 
 	if buildErr == "" {
 		if err := g.cluster.BuildTemplate(ctx, claimed.Database, strings.NewReader(script), policy); err != nil {
-			var refused ScriptFailure
-			if errors.As(err, &refused) {
-				// Generated SQL PostgreSQL still refused, such as a value the
-				// server rejects; its words go to the organiser.
-				buildErr = refused.ScriptRejection()
-			} else {
-				cause = fmt.Errorf("build the game template from its table-builder definition: %w", err)
-				buildErr = BuildFailedInternally
-			}
+			// Generated SQL PostgreSQL still refused, such as a value the
+			// server rejects, is the organiser's to read too.
+			buildErr, cause = buildFailure(err, "build the game template from its table-builder definition")
 		}
 	}
 
 	// A table with no completed CSV stays empty rather than failing the build.
 	if buildErr == "" {
 		if err := g.loadTableData(ctx, claimed.ContestID, claimed.Database, claimed.Definition); err != nil {
-			var refused ScriptFailure
-			if errors.As(err, &refused) {
-				buildErr = refused.ScriptRejection()
-			} else {
-				cause = fmt.Errorf("load the table-builder definition's own data: %w", err)
-				buildErr = BuildFailedInternally
-			}
+			buildErr, cause = buildFailure(err, "load the table-builder definition's own data")
 			_ = g.cluster.Drop(context.WithoutCancel(ctx), claimed.Database)
 		}
 	}
 
 	return g.recordBuildOutcome(ctx, claimed, buildErr, cause)
+}
+
+// buildFailure decides what the organiser is told about a failed step of
+// their build: PostgreSQL's words about their own SQL, which they need to fix
+// it; that the game is too large; or BuildFailedInternally, with the real
+// error returned as cause for the service log only.
+func buildFailure(err error, step string) (buildErr string, cause error) {
+	if errors.Is(err, ErrTemplateTooLarge) {
+		return BuildTemplateTooLarge, nil
+	}
+	var refused ScriptFailure
+	if errors.As(err, &refused) {
+		return refused.ScriptRejection(), nil
+	}
+	return BuildFailedInternally, fmt.Errorf("%s: %w", step, err)
 }
 
 // recordBuildOutcome finishes a claimed build's row and audit entry; every

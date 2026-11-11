@@ -2,6 +2,7 @@ package provisioning_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -543,6 +544,50 @@ func TestAFailedBuildKeepsThePostgresErrorForWhoeverWroteTheScript(t *testing.T)
 	}
 }
 
+// tooLarge is the cluster's refusal of a template past its size limit, wrapped
+// as gamedb returns it.
+var tooLarge = fmt.Errorf("%w: game_tpl_cabc holds 2200000000 bytes, past the limit of 2147483648",
+	provisioning.ErrTemplateTooLarge)
+
+// A game too large for the cluster is the organiser's to shrink, so it is a
+// recorded outcome they can read rather than the tick's failure, and it names
+// no figure of the installation.
+func TestABuildPastTheTemplateSizeLimitTellsTheOrganiserTheGameIsTooLarge(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	cluster.fail = tooLarge
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE big (x int);`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("a game too large for the cluster was reported as the tick's own failure: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed || built.BuildError != provisioning.BuildTemplateTooLarge {
+		t.Fatalf("finished as %q with %q, want failed with the too-large sentence", built.Status, built.BuildError)
+	}
+	if !built.TooLarge() {
+		t.Fatal("the outcome does not say the game was too large")
+	}
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.BuildTemplateTooLarge {
+		t.Fatalf("recorded %+v", store.finished)
+	}
+}
+
+func TestOnlyABuildRefusedForItsSizeIsTooLarge(t *testing.T) {
+	t.Parallel()
+	for _, template := range []provisioning.Template{
+		{Status: provisioning.TemplateFailed, BuildError: provisioning.BuildFailedInternally},
+		{Status: provisioning.TemplateReady},
+		{Status: provisioning.TemplatePending, BuildError: provisioning.BuildTemplateTooLarge},
+	} {
+		if template.TooLarge() {
+			t.Errorf("%+v reads as too large", template)
+		}
+	}
+}
+
 // A build that failed for our own reasons must not describe our cluster to the
 // organiser: BuildError is served verbatim and the audit payload is append-only.
 func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *testing.T) {
@@ -795,6 +840,28 @@ func TestAFileSourcedBuildThatFailsKeepsThePostgresErrorForTheOrganiser(t *testi
 	}
 	if !strings.Contains(built.BuildError, "nosuchtype") {
 		t.Fatalf("build error = %q — PostgreSQL's own words are the useful ones", built.BuildError)
+	}
+}
+
+func TestAFileSourcedBuildPastTheTemplateSizeLimitTellsTheOrganiserTheGameIsTooLarge(t *testing.T) {
+	t.Parallel()
+	service, store, cluster, files := uploadsGames(t, true)
+	cluster.fail = tooLarge
+
+	id := uuid.New()
+	sealedUpload(t, files, id, `CREATE TABLE big (x int);`)
+	store.template = provisioning.Template{
+		ContestID: uuid.New(), Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, UploadID: &id,
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("a dump too large for the cluster was reported as the tick's own failure: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed || !built.TooLarge() {
+		t.Fatalf("finished as %q with %q, want failed as too large", built.Status, built.BuildError)
 	}
 }
 

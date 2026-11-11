@@ -31,6 +31,7 @@ function game(overrides: Partial<Game> = {}): Game {
     source: "builder",
     upload: undefined,
     buildError: "",
+    buildErrorCode: "",
     scriptBytes: 0,
     maxScriptBytes: 512 * 1024,
     building: false,

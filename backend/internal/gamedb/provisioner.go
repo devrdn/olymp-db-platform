@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,6 +26,11 @@ var ErrBadName = errors.New("not a plain database name")
 // would run as the provisioning superuser. config.Load also requires
 // GAME_AUTHOR_PASSWORD wherever GAME_PROVISIONER_DSN is set.
 var ErrNoAuthorCredential = errors.New("no " + RoleAuthor + " credential to run the game script with")
+
+// ErrTemplateTooLarge is a build stopped because its template grew past
+// WithTemplateMaxBytes. It is the domain's own error, so provisioning tells
+// the organiser without importing this package.
+var ErrTemplateTooLarge = provisioning.ErrTemplateTooLarge
 
 // ScriptError is PostgreSQL's verdict on a statement in an organiser's game
 // script: the one build failure whose words may be shown to its author and
@@ -109,6 +116,8 @@ type Provisioner struct {
 	authorPassword string
 	strategy       CopyStrategy
 	buildTimeout   time.Duration
+	// maxTemplateBytes bounds one template's database while it is built.
+	maxTemplateBytes int64
 }
 
 // DefaultBuildTimeout bounds one build when nothing configures otherwise.
@@ -140,6 +149,20 @@ func (p *Provisioner) WithBuildTimeout(d time.Duration) (*Provisioner, error) {
 	return p, nil
 }
 
+// DefaultTemplateMaxBytes bounds one template when nothing configures
+// otherwise.
+const DefaultTemplateMaxBytes = 2 << 30
+
+// WithTemplateMaxBytes overrides how large one template may grow while it is
+// built. A non-positive value is refused up front.
+func (p *Provisioner) WithTemplateMaxBytes(n int64) (*Provisioner, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("template size limit must be positive, got %d", n)
+	}
+	p.maxTemplateBytes = n
+	return p, nil
+}
+
 // NewProvisioner returns a provisioner over the cluster.
 //
 // adminDSN carries the provisioning role's credentials; its database is a
@@ -155,7 +178,8 @@ func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisione
 		return nil, errors.New("the provisioning DSN carries no credentials")
 	}
 	return &Provisioner{
-		admin: admin, base: base, authorPassword: authorPassword, buildTimeout: DefaultBuildTimeout,
+		admin: admin, base: base, authorPassword: authorPassword,
+		buildTimeout: DefaultBuildTimeout, maxTemplateBytes: DefaultTemplateMaxBytes,
 	}, nil
 }
 
@@ -247,6 +271,12 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 	ctx, cancel := context.WithTimeout(ctx, p.buildTimeout)
 	defer cancel()
 
+	return p.withinSizeLimit(ctx, database, func(ctx context.Context) error {
+		return p.streamScript(ctx, database, script)
+	})
+}
+
+func (p *Provisioner) streamScript(ctx context.Context, database string, script io.Reader) error {
 	conn, err := p.connect(ctx, url.UserPassword(RoleAuthor, p.authorPassword), database)
 	if err != nil {
 		return err
@@ -299,6 +329,76 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 			}
 		}
 	}
+}
+
+// sizeCheckInterval is how often a build reads its template's size, one
+// pg_database_size each time.
+const sizeCheckInterval = 2 * time.Second
+
+// withinSizeLimit runs work with a context cancelled once database grows past
+// maxTemplateBytes, and measures once more after work succeeds, since a script
+// can pass the limit and end between two readings. The watch has stopped
+// before it returns.
+//
+// The bound is checked by the build because the disk cannot check it: the
+// game cluster keeps every database on one Docker volume, which takes no size,
+// and a second volume on the same disk would bound nothing. Temporary files
+// are outside any database, so the author role's temp_file_limit bounds them.
+func (p *Provisioner) withinSizeLimit(ctx context.Context, database string, work func(context.Context) error) error {
+	watched, stopWatching := context.WithCancel(ctx)
+	defer stopWatching()
+
+	var (
+		// Written by the watch before it cancels work; read after it ends.
+		stopped error
+		watch   sync.WaitGroup
+	)
+	watch.Add(1)
+	go func() {
+		defer watch.Done()
+		ticker := time.NewTicker(sizeCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watched.Done():
+				return
+			case <-ticker.C:
+			}
+			if err := p.withinLimit(watched, database); err != nil {
+				// A reading cut short because work has finished is no verdict.
+				// Any other failed reading stops the build: an unmeasured
+				// build is an unbounded one.
+				if watched.Err() == nil {
+					stopped = err
+					stopWatching()
+				}
+				return
+			}
+		}
+	}()
+
+	err := work(watched)
+	stopWatching()
+	watch.Wait()
+	if stopped != nil {
+		return stopped
+	}
+	if err != nil {
+		return err
+	}
+	return p.withinLimit(ctx, database)
+}
+
+func (p *Provisioner) withinLimit(ctx context.Context, database string) error {
+	size, err := p.DatabaseSize(ctx, database)
+	if err != nil {
+		return err
+	}
+	if size > p.maxTemplateBytes {
+		return fmt.Errorf("%w: %s holds %d bytes, past the limit of %d",
+			ErrTemplateTooLarge, database, size, p.maxTemplateBytes)
+	}
+	return nil
 }
 
 // maxBatchedStatements and maxBatchedBytes bound one round trip's worth of

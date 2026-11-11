@@ -648,6 +648,32 @@ func TestAFileSourcedGamesStatusNamesItsSourceAndItsUpload(t *testing.T) {
 	}
 }
 
+// The interface shows its own sentence for a game too large for the cluster;
+// any other failure carries no code and is shown as the words it came with.
+func TestAGameTooLargeForTheClusterCarriesItsCodeAndNoOtherFailureDoes(t *testing.T) {
+	for buildError, want := range map[string]string{
+		provisioning.BuildTemplateTooLarge:                             "game_template_too_large",
+		provisioning.BuildFailedInternally:                             "",
+		`the game script was refused: syntax error at or near "SELEC"`: "",
+	} {
+		t.Run(buildError, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.template = provisioning.Template{
+				Status: provisioning.TemplateFailed, Version: 1, Source: provisioning.SourceEditor,
+				Database: "game_tpl_cabc", BuildError: buildError,
+			}
+
+			body := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+			if body["build_error_code"] != want {
+				t.Fatalf("build_error_code = %v, want %q", body["build_error_code"], want)
+			}
+			if body["build_error"] != buildError {
+				t.Fatalf("build_error = %v, want the recorded text", body["build_error"])
+			}
+		})
+	}
+}
+
 // Clients test whether Upload is present.
 func TestAnEditorSourcedGamesStatusNamesItsSourceAndCarriesNoUpload(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)

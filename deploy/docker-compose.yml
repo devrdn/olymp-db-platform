@@ -589,6 +589,9 @@ services:
       # the container; .env.example has always said so, and this line is what
       # makes saying so true.
       GAME_BUILD_TIMEOUT: ${GAME_BUILD_TIMEOUT:-30m}
+      # How large one template may grow while it is built: the bound that
+      # keeps one build from filling the volume, sized against that volume.
+      GAME_TEMPLATE_MAX_BYTES: ${GAME_TEMPLATE_MAX_BYTES:-2147483648}
       GAME_COPY_STRATEGY: ${GAME_COPY_STRATEGY:-}
       # How long a finished contest's participant databases survive, for every
       # contest whose organizer left settings.grace_period_min at zero
