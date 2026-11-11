@@ -141,6 +141,11 @@ const maxExportConcurrency = 10
 // a pool of five) that exceed the pool.
 func maxExportsForPool(poolMax int) int { return poolMax * 2 / 5 }
 
+// DefaultGameTemplateMaxBytes is GAME_TEMPLATE_MAX_BYTES unset: twice the
+// default upload ceiling, since a restored dump is at least as large as the
+// file.
+const DefaultGameTemplateMaxBytes = 8 << 30
+
 // GAME_TEMPLATE_MAX_BYTES's bounds. An empty database alone is about 8 MB, so
 // below 64 MiB hardly a game fits; 64 GiB is the whole cluster's default
 // budget (GAME_CLUSTER_MAX_BYTES), past which one build could fill the disk.
@@ -148,6 +153,21 @@ const (
 	minGameTemplateMaxBytes = 64 << 20
 	maxGameTemplateMaxBytes = 64 << 30
 )
+
+// GameTemplateMaxBytes reads GAME_TEMPLATE_MAX_BYTES on its own, for the
+// game-prepare job, which states game_author's temp_file_limit from it and
+// must agree with the Core API that builds under it.
+func GameTemplateMaxBytes() (int64, error) {
+	n, err := int64Env("GAME_TEMPLATE_MAX_BYTES", DefaultGameTemplateMaxBytes)
+	if err != nil {
+		return 0, err
+	}
+	if n < minGameTemplateMaxBytes || n > maxGameTemplateMaxBytes {
+		return 0, fmt.Errorf("GAME_TEMPLATE_MAX_BYTES: %d is outside [%d, %d]",
+			n, int64(minGameTemplateMaxBytes), int64(maxGameTemplateMaxBytes))
+	}
+	return n, nil
+}
 
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
@@ -499,12 +519,8 @@ func Load() (Config, error) {
 	if cfg.GameBuildTimeout <= 0 {
 		return Config{}, fmt.Errorf("GAME_BUILD_TIMEOUT must be positive, got %s", cfg.GameBuildTimeout)
 	}
-	if cfg.GameTemplateMaxBytes, err = int64Env("GAME_TEMPLATE_MAX_BYTES", 2<<30); err != nil {
+	if cfg.GameTemplateMaxBytes, err = GameTemplateMaxBytes(); err != nil {
 		return Config{}, err
-	}
-	if cfg.GameTemplateMaxBytes < minGameTemplateMaxBytes || cfg.GameTemplateMaxBytes > maxGameTemplateMaxBytes {
-		return Config{}, fmt.Errorf("GAME_TEMPLATE_MAX_BYTES: %d is outside [%d, %d]",
-			cfg.GameTemplateMaxBytes, int64(minGameTemplateMaxBytes), int64(maxGameTemplateMaxBytes))
 	}
 	if cfg.PoolMax, err = intEnv("GAME_POOL_MAX", 500); err != nil {
 		return Config{}, err

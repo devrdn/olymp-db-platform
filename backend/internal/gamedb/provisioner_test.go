@@ -938,9 +938,10 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 func TestAGameScriptCannotChangeTheAuthorRoleForTheNextBuild(t *testing.T) {
 	pool := admin(t)
 	roles := gamedb.Roles{
-		ReaderPassword: gamedbtest.ReaderPassword(t),
-		WriterPassword: gamedbtest.WriterPassword(t),
-		AuthorPassword: gamedbtest.AuthorPassword(t),
+		ReaderPassword:      gamedbtest.ReaderPassword(t),
+		WriterPassword:      gamedbtest.WriterPassword(t),
+		AuthorPassword:      gamedbtest.AuthorPassword(t),
+		AuthorTempFileBytes: gamedb.DefaultTemplateMaxBytes,
 	}
 
 	for _, change := range []struct{ name, script string }{
@@ -1202,6 +1203,29 @@ func TestABuildUnderTheLimitSucceeds(t *testing.T) {
 	}
 	if !instanceExists(t, template) {
 		t.Fatal("the template is not there")
+	}
+}
+
+// Each build restates the author role, so the script runs under the limit of
+// the provisioner that builds it, not whatever the last deploy stated.
+func TestABuildRunsUnderATempFileLimitOfTheTemplatesOwnSize(t *testing.T) {
+	p := limitedProvisioner(t, 96<<20)
+	template := named(t, "tpl")
+
+	err := buildTemplateString(p, t.Context(), template, `
+DO $$
+DECLARE
+	limit_now text;
+BEGIN
+	-- SHOW, because a hardened cluster refuses current_setting().
+	EXECUTE 'SHOW temp_file_limit' INTO limit_now;
+	IF limit_now <> '96MB' THEN
+		RAISE EXCEPTION 'temp_file_limit is %', limit_now;
+	END IF;
+END
+$$;`, sqlpolicy.ReadOnly())
+	if err != nil {
+		t.Fatalf("the script did not run under a temp_file_limit of the template's 96 MiB: %v", err)
 	}
 }
 

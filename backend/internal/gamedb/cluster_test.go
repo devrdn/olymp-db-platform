@@ -3,6 +3,7 @@ package gamedb_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -20,9 +21,10 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	requireCluster(t)
 
 	if err := gamedb.PrepareCluster(t.Context(), admin(t), gamedb.Roles{
-		ReaderPassword: gamedbtest.ReaderPassword(t),
-		WriterPassword: gamedbtest.WriterPassword(t),
-		AuthorPassword: gamedbtest.AuthorPassword(t),
+		ReaderPassword:      gamedbtest.ReaderPassword(t),
+		WriterPassword:      gamedbtest.WriterPassword(t),
+		AuthorPassword:      gamedbtest.AuthorPassword(t),
+		AuthorTempFileBytes: gamedb.DefaultTemplateMaxBytes,
 	}); err != nil {
 		t.Fatalf("a second run failed: %v", err)
 	}
@@ -116,9 +118,10 @@ func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			failures <- gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
-				ReaderPassword: gamedbtest.ReaderPassword(t),
-				WriterPassword: gamedbtest.WriterPassword(t),
-				AuthorPassword: gamedbtest.AuthorPassword(t),
+				ReaderPassword:      gamedbtest.ReaderPassword(t),
+				WriterPassword:      gamedbtest.WriterPassword(t),
+				AuthorPassword:      gamedbtest.AuthorPassword(t),
+				AuthorTempFileBytes: gamedb.DefaultTemplateMaxBytes,
 			})
 		}()
 	}
@@ -218,9 +221,9 @@ func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
 	}
 }
 
-// Temporary files live outside every database, where the build's size watch
-// does not see them, so the role bounds them itself. A script cannot lift the
-// bound: temp_file_limit is not USERSET.
+// The test clusters are prepared with the default template limit, which is
+// therefore the author's temp_file_limit; the role setting says why. A script
+// cannot lift it: temp_file_limit is not USERSET.
 func TestTheAuthorRoleHasATempFileLimit(t *testing.T) {
 	conn := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), scratchDatabase(t))
 
@@ -228,14 +231,29 @@ func TestTheAuthorRoleHasATempFileLimit(t *testing.T) {
 	if err := conn.QueryRow(t.Context(), `SHOW temp_file_limit`).Scan(&limit); err != nil {
 		t.Fatalf("reading temp_file_limit: %v", err)
 	}
-	if limit != "256MB" {
-		t.Fatalf("temp_file_limit = %q for the author role, want 256MB", limit)
+	if want := fmt.Sprintf("%dGB", gamedb.DefaultTemplateMaxBytes>>30); limit != want {
+		t.Fatalf("temp_file_limit = %q for the author role, want %s, the template limit it was prepared with",
+			limit, want)
 	}
 
 	_, err := conn.Exec(t.Context(), `SET temp_file_limit = -1`)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 		t.Fatalf("lifting temp_file_limit as the author returned %v, want a privilege refusal (42501)", err)
+	}
+}
+
+func TestPreparingTheClusterRefusesATemplateLimitThatIsNotPositive(t *testing.T) {
+	for _, limit := range []int64{0, -1} {
+		err := gamedb.PrepareCluster(t.Context(), admin(t), gamedb.Roles{
+			ReaderPassword:      gamedbtest.ReaderPassword(t),
+			WriterPassword:      gamedbtest.WriterPassword(t),
+			AuthorPassword:      gamedbtest.AuthorPassword(t),
+			AuthorTempFileBytes: limit,
+		})
+		if err == nil {
+			t.Errorf("the cluster was prepared with an author temp_file_limit of %d bytes", limit)
+		}
 	}
 }
 
@@ -256,9 +274,10 @@ func TestPreparingTheClusterTakesBackARoleMembershipSomebodyGranted(t *testing.T
 			})
 
 			if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
-				ReaderPassword: gamedbtest.ReaderPassword(t),
-				WriterPassword: gamedbtest.WriterPassword(t),
-				AuthorPassword: gamedbtest.AuthorPassword(t),
+				ReaderPassword:      gamedbtest.ReaderPassword(t),
+				WriterPassword:      gamedbtest.WriterPassword(t),
+				AuthorPassword:      gamedbtest.AuthorPassword(t),
+				AuthorTempFileBytes: gamedb.DefaultTemplateMaxBytes,
 			}); err != nil {
 				t.Fatalf("preparing the cluster: %v", err)
 			}

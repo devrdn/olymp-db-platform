@@ -35,16 +35,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	roles := gamedb.Roles{}
-	if roles.ReaderPassword, err = required("GAME_READER_PASSWORD"); err != nil {
-		return err
-	}
-	if roles.WriterPassword, err = required("GAME_WRITER_PASSWORD"); err != nil {
-		return err
-	}
-	// The game script role, defined here with the other two so an existing
-	// cluster picks it up on the next deploy.
-	if roles.AuthorPassword, err = required("GAME_AUTHOR_PASSWORD"); err != nil {
+	roles, err := rolesFromEnv()
+	if err != nil {
 		return err
 	}
 	env := os.Getenv("ENV")
@@ -80,6 +72,31 @@ func run() error {
 	fmt.Println("game cluster prepared: roles, session defaults, connect privileges " +
 		"and the catalogue and function revocations in every database")
 	return nil
+}
+
+// rolesFromEnv reads what the three roles are given.
+func rolesFromEnv() (gamedb.Roles, error) {
+	var (
+		roles gamedb.Roles
+		err   error
+	)
+	if roles.ReaderPassword, err = required("GAME_READER_PASSWORD"); err != nil {
+		return gamedb.Roles{}, err
+	}
+	if roles.WriterPassword, err = required("GAME_WRITER_PASSWORD"); err != nil {
+		return gamedb.Roles{}, err
+	}
+	// The game script role, defined here with the other two so an existing
+	// cluster picks it up on the next deploy.
+	if roles.AuthorPassword, err = required("GAME_AUTHOR_PASSWORD"); err != nil {
+		return gamedb.Roles{}, err
+	}
+	// The Core API's own reading, so the deploy and every build state the
+	// same limit.
+	if roles.AuthorTempFileBytes, err = config.GameTemplateMaxBytes(); err != nil {
+		return gamedb.Roles{}, err
+	}
+	return roles, nil
 }
 
 // verifyMemory proves at deploy time that the game cluster matches the Query
