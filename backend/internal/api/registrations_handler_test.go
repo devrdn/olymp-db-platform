@@ -136,7 +136,7 @@ func TestAFirstRegistrationAnswersTheCodeAndTheAccount(t *testing.T) {
 	rec := f.register("192.0.2.1", "Ana", "Popescu", "Ana@Example.com")
 
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 202 (%s)", rec.Code, rec.Body.String())
 	}
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store: the answer carries a password", got)
@@ -166,7 +166,7 @@ func TestARegistrationWithAnExistingAccountShowsNoPassword(t *testing.T) {
 	rec := f.register("192.0.2.1", "Ana", "Popescu", "ana@example.com")
 
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 202 (%s)", rec.Code, rec.Body.String())
 	}
 	body := jsonFields(t, rec)
 	if body["account"] != "existing" || body["code"] == nil {
@@ -278,7 +278,7 @@ func TestRegistrationsAreLimitedPerAddressBeforeAnyStorage(t *testing.T) {
 	f := newRegistrationsFixture(t)
 	for i := range api.RegistrationsPerAddress {
 		if rec := f.register("192.0.2.1", "Ana", "Popescu", fmt.Sprintf("ana%d@example.com", i)); rec.Code != http.StatusAccepted {
-			t.Fatalf("registration %d = %d, want 201", i, rec.Code)
+			t.Fatalf("registration %d = %d, want 202", i, rec.Code)
 		}
 	}
 	reads := f.Store.Writes
@@ -326,7 +326,7 @@ func TestTheAddressIsCheckedBeforeTheEmail(t *testing.T) {
 	}
 
 	if rec := f.register("192.0.2.2", "Ana", "Popescu", "target@example.com"); rec.Code != http.StatusAccepted {
-		t.Errorf("the email from a fresh address = %d, want 201: refusals by address spent its budget", rec.Code)
+		t.Errorf("the email from a fresh address = %d, want 202: refusals by address spent its budget", rec.Code)
 	}
 }
 
