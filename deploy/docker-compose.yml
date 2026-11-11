@@ -208,6 +208,10 @@ services:
       # is a cluster with no game_author on it at all — and `gamedb` refuses
       # to run without it rather than silently preparing two roles of three.
       GAME_AUTHOR_PASSWORD: ${GAME_AUTHOR_PASSWORD:?set GAME_AUTHOR_PASSWORD in .env}
+      # game_author's temp_file_limit, the same bound the api builds under.
+      # Same variable, same default as the api's: each build restates the
+      # role from the api's value, so two values would flip it back and forth.
+      GAME_TEMPLATE_MAX_BYTES: ${GAME_TEMPLATE_MAX_BYTES:-8589934592}
       # The per-process memory cap (pg-game's ulimits.data), so this job proves
       # at deploy time that the cap is in force — a throwaway session allocating
       # over it must be refused with "out of memory", one allocating a quarter
@@ -591,7 +595,8 @@ services:
       GAME_BUILD_TIMEOUT: ${GAME_BUILD_TIMEOUT:-30m}
       # How large one template may grow while it is built: the bound that
       # keeps one build from filling the volume, sized against that volume.
-      GAME_TEMPLATE_MAX_BYTES: ${GAME_TEMPLATE_MAX_BYTES:-2147483648}
+      # game-prepare reads it too, with the same default.
+      GAME_TEMPLATE_MAX_BYTES: ${GAME_TEMPLATE_MAX_BYTES:-8589934592}
       GAME_COPY_STRATEGY: ${GAME_COPY_STRATEGY:-}
       # How long a finished contest's participant databases survive, for every
       # contest whose organizer left settings.grace_period_min at zero

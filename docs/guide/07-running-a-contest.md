@@ -623,11 +623,12 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
   size fits the budget: the default 64 GiB holds 310 copies of a 210 MiB
   template, and a 1 GB dump leaves most of a three-hundred roster refused on
   their first query.
-- **One game's build.** `GAME_TEMPLATE_MAX_BYTES` (2 GiB by default) caps
-  how large a template may grow while it is built. Past it the build stops,
-  its database is dropped and the organiser reads that the game is too large;
-  shrink the data, or raise the limit and rebuild. A restored dump can take
-  more room than its file, so build a large game well before the day.
+- **One game's build.** `GAME_TEMPLATE_MAX_BYTES` (8 GiB by default) caps
+  how large a template may grow while it is built, and how much temporary
+  space the build may use. Past it the build stops, its database is dropped
+  and the organiser reads that the game is too large; shrink the data, or
+  raise the limit, redeploy and rebuild. A restored dump can take more room
+  than its file, so build a large game well before the day.
 - **One participant's copy.** The disk quota factor caps each copy; at it,
   that participant's writes answer `query_disk_full`, and they free space or
   reset.

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -343,15 +344,50 @@ func TestANonPositiveGameBuildTimeoutIsRejected(t *testing.T) {
 	}
 }
 
-func TestGameTemplateMaxBytesDefaultsToTwoGibibytes(t *testing.T) {
+func TestGameTemplateMaxBytesDefaultsToEightGibibytes(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if cfg.GameTemplateMaxBytes != 2<<30 {
-		t.Errorf("GameTemplateMaxBytes = %d, want 2 GiB", cfg.GameTemplateMaxBytes)
+	if cfg.GameTemplateMaxBytes != 8<<30 {
+		t.Errorf("GameTemplateMaxBytes = %d, want 8 GiB", cfg.GameTemplateMaxBytes)
+	}
+}
+
+// game-prepare states game_author's temp_file_limit from the same variable the
+// api builds with; with different values every build would restate the role
+// one way and every deploy the other.
+func TestTheTemplateLimitReachesTheGamePrepareJobAsItReachesTheAPI(t *testing.T) {
+	api, passed := serviceEnvironment(t, "api", 10)["GAME_TEMPLATE_MAX_BYTES"]
+	if !passed {
+		t.Fatal("the api service is not passed GAME_TEMPLATE_MAX_BYTES")
+	}
+	prepare, passed := serviceEnvironment(t, "game-prepare", 1)["GAME_TEMPLATE_MAX_BYTES"]
+	if !passed {
+		t.Fatal("the game-prepare service is not passed GAME_TEMPLATE_MAX_BYTES, so the author role's " +
+			"temp_file_limit is stated from a default nobody chose")
+	}
+	if api != prepare {
+		t.Fatalf("api gets %s and game-prepare %s; one variable, one default", api, prepare)
+	}
+	if want := strconv.FormatInt(DefaultGameTemplateMaxBytes, 10); composeDefault(api) != want {
+		t.Fatalf("the compose default is %s, want %s, the one Load falls back to", composeDefault(api), want)
+	}
+}
+
+func TestGameTemplateMaxBytesIsReadAloneWithTheSameDefaultAndBounds(t *testing.T) {
+	if got, err := GameTemplateMaxBytes(); err != nil || got != DefaultGameTemplateMaxBytes {
+		t.Fatalf("unset: %d, %v; want the default %d", got, err, int64(DefaultGameTemplateMaxBytes))
+	}
+	t.Setenv("GAME_TEMPLATE_MAX_BYTES", "100663296")
+	if got, err := GameTemplateMaxBytes(); err != nil || got != 96<<20 {
+		t.Fatalf("set to 96 MiB: %d, %v", got, err)
+	}
+	t.Setenv("GAME_TEMPLATE_MAX_BYTES", "67108863")
+	if _, err := GameTemplateMaxBytes(); err == nil {
+		t.Fatal("a value under the floor was accepted")
 	}
 }
 

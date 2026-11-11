@@ -151,7 +151,7 @@ func (p *Provisioner) WithBuildTimeout(d time.Duration) (*Provisioner, error) {
 
 // DefaultTemplateMaxBytes bounds one template when nothing configures
 // otherwise.
-const DefaultTemplateMaxBytes = 2 << 30
+const DefaultTemplateMaxBytes = 8 << 30
 
 // WithTemplateMaxBytes overrides how large one template may grow while it is
 // built. A non-positive value is refused up front.
@@ -243,7 +243,7 @@ func (p *Provisioner) fill(ctx context.Context, name string, script io.Reader, p
 	if err := lendTemplateToTheAuthor(ctx, admin, name); err != nil {
 		return err
 	}
-	if err := restateAuthor(ctx, p.admin, p.authorPassword); err != nil {
+	if err := restateAuthor(ctx, p.admin, p.authorPassword, p.maxTemplateBytes); err != nil {
 		return fmt.Errorf("restate %s: %w", RoleAuthor, err)
 	}
 	if err := p.runScript(ctx, name, script); err != nil {
@@ -342,8 +342,7 @@ const sizeCheckInterval = 2 * time.Second
 //
 // The bound is checked by the build because the disk cannot check it: the
 // game cluster keeps every database on one Docker volume, which takes no size,
-// and a second volume on the same disk would bound nothing. Temporary files
-// are outside any database, so the author role's temp_file_limit bounds them.
+// and a second volume on the same disk would bound nothing.
 func (p *Provisioner) withinSizeLimit(ctx context.Context, database string, work func(context.Context) error) error {
 	watched, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()

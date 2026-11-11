@@ -108,9 +108,10 @@ func Admin(t *testing.T) *pgxpool.Pool {
 	requireCluster(t)
 
 	if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
-		ReaderPassword: ReaderPassword(t),
-		WriterPassword: WriterPassword(t),
-		AuthorPassword: AuthorPassword(t),
+		ReaderPassword:      ReaderPassword(t),
+		WriterPassword:      WriterPassword(t),
+		AuthorPassword:      AuthorPassword(t),
+		AuthorTempFileBytes: gamedb.DefaultTemplateMaxBytes,
 	}); err != nil {
 		t.Fatalf("preparing the cluster: %v", err)
 	}

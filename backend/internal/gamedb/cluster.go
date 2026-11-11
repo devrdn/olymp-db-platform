@@ -55,6 +55,9 @@ type Roles struct {
 	ReaderPassword string
 	WriterPassword string
 	AuthorPassword string // the Core API's own credential, see RoleAuthor
+	// AuthorTempFileBytes is game_author's temp_file_limit: the template size
+	// limit the Core API builds with (GAME_TEMPLATE_MAX_BYTES).
+	AuthorTempFileBytes int64
 }
 
 // Conn is the part of a connection this package uses.
@@ -108,15 +111,15 @@ var sessionDefaults = [][2]string{
 var authorDefaults = [][2]string{
 	{"statement_timeout", "0"},
 	{"idle_in_transaction_session_timeout", "30s"},
-	// Temporary files are not part of the template, so the build's size
-	// limit does not see them. A real bound: it is not USERSET.
-	{"temp_file_limit", "256MB"},
 }
 
 // PrepareCluster makes the cluster ready to host participant databases. It runs
 // on every deploy, so it is idempotent, and it is the only place the roles are
 // defined: rerunning it is how a new restriction reaches an existing cluster.
 func PrepareCluster(ctx context.Context, cluster Cluster, roles Roles) error {
+	if roles.AuthorTempFileBytes <= 0 {
+		return fmt.Errorf("%s's temp_file_limit must be positive, got %d bytes", RoleAuthor, roles.AuthorTempFileBytes)
+	}
 	return underPrepareLock(ctx, cluster, func(conn Conn) error { return prepare(ctx, conn, roles) })
 }
 
@@ -126,9 +129,9 @@ func PrepareCluster(ctx context.Context, cluster Cluster, roles Roles) error {
 //
 // cluster must be connected to the provisioning database: an advisory lock
 // belongs to one database, and PrepareCluster takes prepareLock there.
-func restateAuthor(ctx context.Context, cluster Cluster, password string) error {
+func restateAuthor(ctx context.Context, cluster Cluster, password string, tempFileBytes int64) error {
 	return underPrepareLock(ctx, cluster, func(conn Conn) error {
-		return prepareRole(ctx, conn, authorRole(password))
+		return prepareRole(ctx, conn, authorRole(password, tempFileBytes))
 	})
 }
 
@@ -173,7 +176,7 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 	for _, role := range []roleSpec{
 		{RoleReader, roles.ReaderPassword, RoleConnectionLimit, readerDefaults},
 		{RoleWriter, roles.WriterPassword, RoleConnectionLimit, sessionDefaults},
-		authorRole(roles.AuthorPassword),
+		authorRole(roles.AuthorPassword, roles.AuthorTempFileBytes),
 	} {
 		if err := prepareRole(ctx, conn, role); err != nil {
 			return fmt.Errorf("preparing %s: %w", role.name, err)
@@ -182,8 +185,15 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 	return keepRolesOutOfMaintenanceDatabases(ctx, conn)
 }
 
-func authorRole(password string) roleSpec {
-	return roleSpec{RoleAuthor, password, authorConnectionLimit, authorDefaults}
+// authorRole states game_author with a temp_file_limit equal to the template
+// size limit. Temporary files are outside the database the build measures,
+// and a restored dump sorts each index it builds through them, roughly the
+// size of its keys: a smaller bound would refuse a dump the size limit
+// admits, with nothing in the SQL to fix. A real bound: it is not USERSET.
+func authorRole(password string, tempFileBytes int64) roleSpec {
+	defaults := append(append([][2]string{}, authorDefaults...),
+		[2]string{"temp_file_limit", fmt.Sprintf("%dkB", tempFileBytes/1024)})
+	return roleSpec{RoleAuthor, password, authorConnectionLimit, defaults}
 }
 
 // prepareRole creates the role if missing and then states every attribute,
