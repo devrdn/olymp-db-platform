@@ -38,8 +38,9 @@ var (
 	// is a name clients match on.
 	ErrParticipantStarted = errors.New("this participant has a record in this contest; disqualify instead of removing")
 	// ErrStaffCannotParticipate refuses a registration to the contest's own
-	// staff, or to an account holding contest.admin_all: they read the
-	// reference answers and the unfrozen leaderboard. ErrParticipantCannotBeStaff
+	// staff or former staff, or to an account holding contest.admin_all: they
+	// read, or once could read, the reference answers and the unfrozen
+	// leaderboard. ErrParticipantCannotBeStaff
 	// is the opposite direction.
 	ErrStaffCannotParticipate = errors.New("contest staff cannot also register as a participant")
 )
@@ -279,9 +280,16 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 		if err != nil {
 			return err
 		}
-		staffIDs := make(map[uuid.UUID]struct{}, len(staff))
+		former, err := s.managers.FormerManagers(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+		staffIDs := make(map[uuid.UUID]struct{}, len(staff)+len(former))
 		for _, m := range staff {
 			staffIDs[m.UserID] = struct{}{}
+		}
+		for _, id := range former {
+			staffIDs[id] = struct{}{}
 		}
 		for _, id := range cmd.UserIDs {
 			user, err := s.users.ByID(ctx, id)
@@ -332,8 +340,8 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 // ByLogin still returns a deleted account whose login nobody reclaimed, so a
 // deleted account is skipped as unknown. Whether the person is already
 // enrolled is decided by the write's unique index, not a lookup, so two
-// overlapping imports cannot both pass. staff is the contest's staff, read
-// under the contest lock.
+// overlapping imports cannot both pass. staff is the contest's staff and
+// former staff, read under the contest lock.
 func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, staff map[uuid.UUID]struct{}, user users.User, result *AddParticipantsResult) error {
 	if user.Status == users.StatusDeleted {
 		result.skip(user.Login, SkipUnknownAccount)
@@ -399,10 +407,10 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
-		if _, err := s.managers.Get(ctx, c.ID, cmd.UserID); err == nil {
-			return ErrStaffCannotParticipate
-		} else if !errors.Is(err, ErrManagerNotFound) {
+		if managed, err := s.managers.EverManaged(ctx, c.ID, cmd.UserID); err != nil {
 			return err
+		} else if managed {
+			return ErrStaffCannotParticipate
 		}
 		self, err := s.users.ByID(ctx, cmd.UserID)
 		if err != nil {

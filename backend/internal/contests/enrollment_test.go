@@ -308,6 +308,103 @@ func TestImportReadsTheStaffListOnceNotOncePerRow(t *testing.T) {
 	if f.Managers.Lookups != 1 {
 		t.Errorf("the import looked the staff up %d times, want once", f.Managers.Lookups)
 	}
+	if f.Managers.FormerLookups != 1 {
+		t.Errorf("the import looked the former staff up %d times, want once", f.Managers.FormerLookups)
+	}
+}
+
+// formerManager appoints and then removes somebody, through the service, so
+// the contest remembers them.
+func formerManager(t *testing.T, f *conteststest.Fixture, c contests.Contest, login string) users.User {
+	t.Helper()
+	u := f.AddUser(login)
+	ctx, actor := context.Background(), uuid.New()
+	if err := f.Service.GrantManager(ctx, actor, c.ID, u.ID, rbac.RoleManager); err != nil {
+		t.Fatalf("GrantManager() = %v", err)
+	}
+	if err := f.Service.RevokeManager(ctx, actor, c.ID, u.ID); err != nil {
+		t.Fatalf("RevokeManager() = %v", err)
+	}
+	return u
+}
+
+// Revoking the role does not undo what the person has seen.
+func TestARevokedManagerCannotSelfEnrol(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	former := formerManager(t, f, c, "former")
+
+	_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: former.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	})
+
+	if !errors.Is(err, contests.ErrStaffCannotParticipate) {
+		t.Errorf("Enroll() = %v, want ErrStaffCannotParticipate", err)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, former.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+		t.Errorf("a refused self-enrollment must not create a registration: ByUser() = %v", err)
+	}
+}
+
+func TestARevokedManagerStillMayEnrolInAnotherContest(t *testing.T) {
+	f := conteststest.NewFixture()
+	managed := f.SeedContest(contests.StatusPublished)
+	other := f.SeedContest(contests.StatusPublished)
+	other.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(other)
+	former := formerManager(t, f, managed, "former")
+
+	_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: former.ID, ContestID: other.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	})
+
+	if err != nil {
+		t.Errorf("Enroll() in a contest they never managed = %v, want nil", err)
+	}
+}
+
+func TestStaffCannotAddAFormerManager(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	former := formerManager(t, f, c, "former")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, UserIDs: []uuid.UUID{former.ID},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+
+	if result.Added != 0 || len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipStaffMember {
+		t.Errorf("result = %+v, want nobody added and one entry skipped as %q", result, contests.SkipStaffMember)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, former.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+		t.Errorf("a former manager must not gain a registration: ByUser() = %v", err)
+	}
+}
+
+func TestImportSkipsAFormerManager(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	formerManager(t, f, c, "former")
+	f.AddUser("s.popescu")
+	f.AddUser("s.ionescu")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Logins: []string{"s.popescu", "former", "s.ionescu"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+
+	if result.Added != 2 {
+		t.Errorf("added = %d, want the two others", result.Added)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Ref != "former" || result.Skipped[0].Reason != contests.SkipStaffMember {
+		t.Errorf("skipped = %+v, want only former, as %q", result.Skipped, contests.SkipStaffMember)
+	}
 }
 
 func TestParticipantsCannotBeAddedToAFinishedContest(t *testing.T) {

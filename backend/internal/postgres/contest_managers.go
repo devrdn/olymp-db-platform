@@ -102,10 +102,17 @@ func (r *ContestManagers) Grant(ctx context.Context, m contests.Manager) error {
 	return nil
 }
 
-// Revoke removes a user from the staff.
+// Revoke removes a user from the staff and records them as a former manager,
+// in one statement so neither happens without the other.
 func (r *ContestManagers) Revoke(ctx context.Context, contestID, userID uuid.UUID) error {
-	tag, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM contest_managers WHERE contest_id = $1 AND user_id = $2`, contestID, userID)
+	tag, err := r.querier(ctx).Exec(ctx, `
+		WITH removed AS (
+			DELETE FROM contest_managers WHERE contest_id = $1 AND user_id = $2
+			RETURNING contest_id, user_id
+		)
+		INSERT INTO contest_former_managers (contest_id, user_id)
+		SELECT contest_id, user_id FROM removed
+		ON CONFLICT (contest_id, user_id) DO UPDATE SET revoked_at = now()`, contestID, userID)
 	if err != nil {
 		return fmt.Errorf("revoke contest role: %w", err)
 	}
@@ -113,4 +120,41 @@ func (r *ContestManagers) Revoke(ctx context.Context, contestID, userID uuid.UUI
 		return contests.ErrManagerNotFound
 	}
 	return nil
+}
+
+// EverManaged reports whether the user staffs the contest or was revoked
+// from it.
+func (r *ContestManagers) EverManaged(ctx context.Context, contestID, userID uuid.UUID) (bool, error) {
+	var managed bool
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM contest_managers WHERE contest_id = $1 AND user_id = $2)
+		    OR EXISTS (SELECT 1 FROM contest_former_managers WHERE contest_id = $1 AND user_id = $2)`,
+		contestID, userID).Scan(&managed)
+	if err != nil {
+		return false, fmt.Errorf("check contest staff history: %w", err)
+	}
+	return managed, nil
+}
+
+// FormerManagers returns the users revoked from the contest's staff.
+func (r *ContestManagers) FormerManagers(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx,
+		`SELECT user_id FROM contest_former_managers WHERE contest_id = $1 ORDER BY revoked_at, user_id`, contestID)
+	if err != nil {
+		return nil, fmt.Errorf("list former contest managers: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan former contest manager: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list former contest managers: %w", err)
+	}
+	return ids, nil
 }

@@ -724,6 +724,7 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 // Managers is an in-memory contests.ManagerRepository.
 type Managers struct {
 	byContest map[uuid.UUID][]contests.Manager
+	former    map[uuid.UUID][]uuid.UUID
 	// Accounts stands in for the join that names each entry at read time.
 	// Nil leaves what the entry was stored with.
 	Accounts AccountLookup
@@ -733,12 +734,14 @@ type Managers struct {
 	// Lookups counts Get and List calls, so a test can bound the lookups a
 	// bulk operation makes.
 	Lookups int
+	// FormerLookups counts FormerManagers calls.
+	FormerLookups int
 }
 
 var _ contests.ManagerRepository = (*Managers)(nil)
 
 func NewManagers() *Managers {
-	return &Managers{byContest: map[uuid.UUID][]contests.Manager{}}
+	return &Managers{byContest: map[uuid.UUID][]contests.Manager{}, former: map[uuid.UUID][]uuid.UUID{}}
 }
 
 func (r *Managers) named(ctx context.Context, m contests.Manager) contests.Manager {
@@ -799,7 +802,23 @@ func (r *Managers) Revoke(_ context.Context, contestID, userID uuid.UUID) error 
 		return contests.ErrManagerNotFound
 	}
 	r.byContest[contestID] = kept
+	if !slices.Contains(r.former[contestID], userID) {
+		r.former[contestID] = append(r.former[contestID], userID)
+	}
 	return nil
+}
+
+func (r *Managers) EverManaged(_ context.Context, contestID, userID uuid.UUID) (bool, error) {
+	r.Lookups++
+	if slices.Contains(r.former[contestID], userID) {
+		return true, nil
+	}
+	return slices.ContainsFunc(r.byContest[contestID], func(m contests.Manager) bool { return m.UserID == userID }), nil
+}
+
+func (r *Managers) FormerManagers(_ context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	r.FormerLookups++
+	return slices.Clone(r.former[contestID]), nil
 }
 
 // AccountLookup stands in for the join that names an account. Without it an

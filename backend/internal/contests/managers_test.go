@@ -151,6 +151,27 @@ func TestRevokingAManagerRemovesThem(t *testing.T) {
 	}
 }
 
+func TestRevokingAManagerRemembersThem(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	assistant := f.AddUser("assistant")
+	if err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, assistant.ID, rbac.RoleManager); err != nil {
+		t.Fatalf("GrantManager() = %v", err)
+	}
+
+	if err := f.Service.RevokeManager(context.Background(), uuid.New(), c.ID, assistant.ID); err != nil {
+		t.Fatalf("RevokeManager() = %v", err)
+	}
+
+	former, err := f.Managers.FormerManagers(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("FormerManagers() = %v", err)
+	}
+	if len(former) != 1 || former[0] != assistant.ID {
+		t.Errorf("FormerManagers() = %v, want just the assistant", former)
+	}
+}
+
 func TestRevokingSomebodyWhoIsNotStaffReportsNotFound(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
