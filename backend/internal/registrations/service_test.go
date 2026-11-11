@@ -335,24 +335,42 @@ func TestASettingsFailureMakesNoAccount(t *testing.T) {
 	}
 }
 
-// With mail on, a repeat and an address that already has an account must cost
-// what a new account costs, or the response time says which one it was.
-func TestWithMailOnTheCasesWithoutANewAccountSpendADecoyHash(t *testing.T) {
-	f := registrationstest.NewFixture(nil)
-	f.Accounts.Taken = map[string]bool{"known@example.com": true}
+// With mail on every case must cost one password hash, or the response time
+// says which one it was; an email held under another login is found only after
+// the hash, a taken login before it.
+func TestWithMailOnEveryCaseSpendsOneHash(t *testing.T) {
+	for _, c := range []struct {
+		name, email string
+		repeat      bool
+	}{
+		{"new address", "fresh@example.com", false},
+		{"repeat", "fresh@example.com", true},
+		{"taken login", "known@example.com", false},
+		{"taken email", "other@example.com", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := registrationstest.NewFixture(nil)
+			f.Accounts.Taken = map[string]bool{"known@example.com": true}
+			f.Accounts.TakenEmails = map[string]bool{"other@example.com": true}
+			if c.repeat {
+				if _, err := f.Service.Register(t.Context(), applicant(t, c.email)); err != nil {
+					t.Fatalf("first Register() = %v", err)
+				}
+				f.Accounts.Hashes = 0
+			}
 
-	for _, email := range []string{"fresh@example.com", "fresh@example.com", "known@example.com"} {
-		if _, err := f.Service.Register(t.Context(), applicant(t, email)); err != nil {
-			t.Fatalf("Register(%q) = %v", email, err)
-		}
-	}
+			if _, err := f.Service.Register(t.Context(), applicant(t, c.email)); err != nil {
+				t.Fatalf("Register() = %v", err)
+			}
 
-	if f.Accounts.Decoys != 2 {
-		t.Errorf("decoy hashes = %d, want 2: the repeat and the known account, not the new account", f.Accounts.Decoys)
+			if f.Accounts.Hashes != 1 {
+				t.Errorf("hashes = %d, want 1", f.Accounts.Hashes)
+			}
+		})
 	}
 }
 
-func TestWithMailOffNoDecoyHashIsSpent(t *testing.T) {
+func TestWithMailOffNoDecoyHashIsSpentOnAKnownAddress(t *testing.T) {
 	f := registrationstest.NewFixture(nil)
 	f.Outbox.Off = true
 	f.Accounts.Taken = map[string]bool{"known@example.com": true}
@@ -363,8 +381,8 @@ func TestWithMailOffNoDecoyHashIsSpent(t *testing.T) {
 		}
 	}
 
-	if f.Accounts.Decoys != 0 {
-		t.Errorf("decoy hashes = %d, want none: with mail off the answer already tells the cases apart", f.Accounts.Decoys)
+	if f.Accounts.Hashes != 1 {
+		t.Errorf("hashes = %d, want 1: only the new account's", f.Accounts.Hashes)
 	}
 }
 

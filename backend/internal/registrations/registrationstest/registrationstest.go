@@ -196,8 +196,12 @@ type Accounts struct {
 	mu      sync.Mutex
 	Taken   map[string]bool
 	Created []registrations.NewAccount
-	// Decoys counts the throwaway hashes spent.
-	Decoys int
+	// TakenEmails are held by an account under another login.
+	TakenEmails map[string]bool
+	// Hashes counts the password hashes spent, as the real adapter spends
+	// them: one for a new account, one for a taken email (found after the
+	// hash) and, with mail on, one for a taken login or a repeat (a decoy).
+	Hashes int
 	// Err, when set, is every Create's answer.
 	Err error
 	// Store, when set, learns each created account's login for its join.
@@ -213,6 +217,13 @@ func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (regist
 		return registrations.Account{}, a.Err
 	}
 	if a.Taken[n.Login] {
+		if n.ByEmail {
+			a.Hashes++
+		}
+		return registrations.Account{Existing: true}, nil
+	}
+	a.Hashes++
+	if a.TakenEmails[n.Email] {
 		return registrations.Account{Existing: true}, nil
 	}
 	a.Created = append(a.Created, n)
@@ -232,7 +243,7 @@ func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (regist
 func (a *Accounts) Decoy(context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Decoys++
+	a.Hashes++
 	return nil
 }
 
