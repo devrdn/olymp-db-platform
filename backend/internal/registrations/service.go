@@ -62,6 +62,9 @@ type Account struct {
 // aborts it, and must not abort the registration with it.
 type Accounts interface {
 	Create(ctx context.Context, n NewAccount) (Account, error)
+	// Decoy spends what Create spends on a new account's password and makes
+	// nothing, so a caller that made no account takes as long as one that did.
+	Decoy(ctx context.Context) error
 }
 
 // Outbox queues email (mailing.Outbox).
@@ -125,6 +128,9 @@ type Outcome struct {
 	// EmailSent means the code was queued: false with mail off, or for a
 	// repeat within the cooldown.
 	EmailSent bool
+	// MailOn is true whenever the installation sends mail, queued or not: the
+	// person's details travel by email, so the answer need not carry them.
+	MailOn bool
 }
 
 // codeAttempts is how many codes a registration draws before giving up. With
@@ -135,6 +141,12 @@ const codeAttempts = 5
 // Register records a, or mails the code again for an email already
 // registered; a repeat never touches the account.
 func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
+	out, err := s.register(ctx, a)
+	out.MailOn = err == nil && s.cfg.Outbox.Enabled()
+	return out, err
+}
+
+func (s *Service) register(ctx context.Context, a Applicant) (Outcome, error) {
 	existing, err := s.cfg.Store.ByEmailKey(ctx, a.EmailKey)
 	if err == nil {
 		return s.resend(ctx, existing)
@@ -167,6 +179,11 @@ func (s *Service) Register(ctx context.Context, a Applicant) (Outcome, error) {
 	})
 	if err != nil {
 		return Outcome{}, fmt.Errorf("create the account: %w", err)
+	}
+	if account.Existing && mailOn {
+		if err := s.cfg.Accounts.Decoy(ctx); err != nil {
+			return Outcome{}, fmt.Errorf("spend the decoy hash: %w", err)
+		}
 	}
 
 	r := Registration{FirstName: a.FirstName, LastName: a.LastName, Email: a.Email, EmailKey: a.EmailKey}
@@ -243,6 +260,11 @@ func (s *Service) resend(ctx context.Context, r Registration) (Outcome, error) {
 	out := Outcome{Status: StatusExisting, Registration: r}
 	if !s.cfg.Outbox.Enabled() {
 		return out, nil
+	}
+	// The answer to a repeat is the answer to a new address, so it costs the
+	// same time.
+	if err := s.cfg.Accounts.Decoy(ctx); err != nil {
+		return Outcome{}, fmt.Errorf("spend the decoy hash: %w", err)
 	}
 	lang, installation, err := s.letterhead(ctx)
 	if err != nil {

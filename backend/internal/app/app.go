@@ -554,7 +554,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// while the deployment says the event is on.
 	registrationsHandler := api.NewRegistrationsHandler(registrations.NewService(registrations.Config{
 		Store:      postgres.NewEventRegistrations(pool),
-		Accounts:   registrationAccounts{users: userService},
+		Accounts:   registrationAccounts{users: userService, hasher: passwords},
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,

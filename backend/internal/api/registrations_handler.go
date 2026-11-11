@@ -83,6 +83,15 @@ type registerCreatedResponse struct {
 	EmailSent       bool   `json:"email_sent"`
 }
 
+// registerAcceptedResponse answers every registration while mail is on, the
+// new address and the known one alike: the sign-in details go by email, and
+// the body says nothing that tells the cases apart.
+type registerAcceptedResponse struct {
+	Status    string `json:"status"`
+	Email     string `json:"email"`
+	EmailSent bool   `json:"email_sent"`
+}
+
 // registerExistingResponse carries no code and no name: whoever knows an
 // address must not read its code off the page.
 type registerExistingResponse struct {
@@ -117,6 +126,12 @@ func (h *RegistrationsHandler) register(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	noIndex(w)
+	if out.MailOn {
+		httpx.JSON(w, r, http.StatusAccepted, registerAcceptedResponse{
+			Status: "accepted", Email: applicant.EmailKey, EmailSent: true,
+		})
+		return
+	}
 	if out.Status == registrations.StatusExisting {
 		httpx.JSON(w, r, http.StatusOK, registerExistingResponse{
 			Status: string(out.Status), Email: applicant.Email, EmailSent: out.EmailSent,

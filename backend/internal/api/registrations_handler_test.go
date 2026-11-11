@@ -110,7 +110,7 @@ func TestThePublicFormIsMountedOnlyWhenOpenedAndTheStaffRoutesAlways(t *testing.
 		wantForm int
 	}{
 		{"closed", false, http.StatusNotFound},
-		{"open", true, http.StatusCreated},
+		{"open", true, http.StatusAccepted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := mountRegistrations(t, c.open, rbac.PermissionUsersManage)
@@ -131,6 +131,7 @@ func TestThePublicFormIsMountedOnlyWhenOpenedAndTheStaffRoutesAlways(t *testing.
 
 func TestAFirstRegistrationAnswersTheCodeAndTheAccount(t *testing.T) {
 	f := newRegistrationsFixture(t)
+	f.Outbox.Off = true
 
 	rec := f.register("192.0.2.1", "Ana", "Popescu", "Ana@Example.com")
 
@@ -145,7 +146,7 @@ func TestAFirstRegistrationAnswersTheCodeAndTheAccount(t *testing.T) {
 	want := map[string]any{
 		"status": "created", "code": code, "first_name": "Ana", "last_name": "Popescu",
 		"email": "Ana@Example.com", "account": "created", "login": "ana@example.com",
-		"one_time_password": "one-time-ana@example.com", "email_sent": true,
+		"one_time_password": "one-time-ana@example.com", "email_sent": false,
 	}
 	for key, value := range want {
 		if body[key] != value {
@@ -159,6 +160,7 @@ func TestAFirstRegistrationAnswersTheCodeAndTheAccount(t *testing.T) {
 
 func TestARegistrationWithAnExistingAccountShowsNoPassword(t *testing.T) {
 	f := newRegistrationsFixture(t)
+	f.Outbox.Off = true
 	f.Accounts.Taken = map[string]bool{"ana@example.com": true}
 
 	rec := f.register("192.0.2.1", "Ana", "Popescu", "ana@example.com")
@@ -180,6 +182,7 @@ func TestARegistrationWithAnExistingAccountShowsNoPassword(t *testing.T) {
 // Anyone who knows an address could otherwise read its code off the page.
 func TestARepeatRegistrationShowsNoCode(t *testing.T) {
 	f := newRegistrationsFixture(t)
+	f.Outbox.Off = true
 	f.register("192.0.2.1", "Ana", "Popescu", "ana@example.com")
 
 	rec := f.register("192.0.2.2", "Someone", "Else", "ANA@example.com")
@@ -195,6 +198,49 @@ func TestARepeatRegistrationShowsNoCode(t *testing.T) {
 	for key, value := range want {
 		if body[key] != value {
 			t.Errorf("%s = %v, want %v (within the cooldown nothing is resent)", key, body[key], value)
+		}
+	}
+}
+
+// With mail on the sign-in details travel by email, so the answer neither
+// carries them nor tells a new address from one already known.
+func TestWithMailOnEveryRegistrationAnswersTheSameBytes(t *testing.T) {
+	f := newRegistrationsFixture(t)
+	f.Accounts.Taken = map[string]bool{"known@example.com": true}
+
+	fresh := f.register("192.0.2.1", "Ana", "Popescu", "fresh@example.com")
+	repeat := f.register("192.0.2.2", "Someone", "Else", "FRESH@example.com")
+	known := f.register("192.0.2.3", "Ion", "Rusu", "known@example.com")
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"fresh": fresh, "repeat": repeat, "known": known} {
+		if rec.Code != http.StatusAccepted {
+			t.Errorf("%s status = %d, want 202 (%s)", name, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", name, got)
+		}
+	}
+	want := `{"status":"accepted","email":"fresh@example.com","email_sent":true}`
+	if got := strings.TrimSpace(fresh.Body.String()); got != want {
+		t.Errorf("fresh body = %s, want %s", got, want)
+	}
+	if got := strings.TrimSpace(repeat.Body.String()); got != want {
+		t.Errorf("repeat body = %s, want %s", got, want)
+	}
+	if a, b := strings.ReplaceAll(fresh.Body.String(), "fresh@", "known@"), known.Body.String(); a != b {
+		t.Errorf("known body = %s, want the fresh one's bytes %s", b, a)
+	}
+}
+
+func TestWithMailOnTheAnswerCarriesNoSecret(t *testing.T) {
+	f := newRegistrationsFixture(t)
+
+	for _, email := range []string{"ana@example.com", "ana@example.com"} {
+		body := jsonFields(t, f.register("192.0.2.1", "Ana", "Popescu", email))
+		for _, key := range []string{"code", "login", "one_time_password", "account", "first_name", "last_name"} {
+			if _, ok := body[key]; ok {
+				t.Errorf("body carries %q: %v", key, body)
+			}
 		}
 	}
 }
@@ -231,7 +277,7 @@ func TestARegistrationAnswersItsRefusals(t *testing.T) {
 func TestRegistrationsAreLimitedPerAddressBeforeAnyStorage(t *testing.T) {
 	f := newRegistrationsFixture(t)
 	for i := range api.RegistrationsPerAddress {
-		if rec := f.register("192.0.2.1", "Ana", "Popescu", fmt.Sprintf("ana%d@example.com", i)); rec.Code != http.StatusCreated {
+		if rec := f.register("192.0.2.1", "Ana", "Popescu", fmt.Sprintf("ana%d@example.com", i)); rec.Code != http.StatusAccepted {
 			t.Fatalf("registration %d = %d, want 201", i, rec.Code)
 		}
 	}
@@ -245,7 +291,7 @@ func TestRegistrationsAreLimitedPerAddressBeforeAnyStorage(t *testing.T) {
 	if f.Store.Writes != reads {
 		t.Error("a refused registration reached the store")
 	}
-	if rec := f.register("192.0.2.9", "Ana", "Popescu", "late@example.com"); rec.Code != http.StatusCreated {
+	if rec := f.register("192.0.2.9", "Ana", "Popescu", "late@example.com"); rec.Code != http.StatusAccepted {
 		t.Errorf("another address = %d, want its own budget", rec.Code)
 	}
 }
@@ -254,7 +300,7 @@ func TestRegistrationsAreLimitedPerEmailWhateverItsCase(t *testing.T) {
 	f := newRegistrationsFixture(t)
 	for i := range api.RegistrationsPerEmail {
 		rec := f.register(fmt.Sprintf("192.0.2.%d", i+1), "Ana", "Popescu", "Ana@example.com")
-		if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		if rec.Code != http.StatusAccepted {
 			t.Fatalf("attempt %d = %d, want it admitted", i, rec.Code)
 		}
 	}
@@ -279,7 +325,7 @@ func TestTheAddressIsCheckedBeforeTheEmail(t *testing.T) {
 		}
 	}
 
-	if rec := f.register("192.0.2.2", "Ana", "Popescu", "target@example.com"); rec.Code != http.StatusCreated {
+	if rec := f.register("192.0.2.2", "Ana", "Popescu", "target@example.com"); rec.Code != http.StatusAccepted {
 		t.Errorf("the email from a fresh address = %d, want 201: refusals by address spent its budget", rec.Code)
 	}
 }
