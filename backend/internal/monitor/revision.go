@@ -25,6 +25,12 @@ const RevisionWindow = 30 * time.Second
 // of up to four bytes each.
 const MaxRevisionBodyBytes = 4 * 20000
 
+// MaxRevisions is how many revisions one registration keeps, over all its
+// documents: at most MaxRevisions × MaxRevisionBodyBytes (about 80 MB) of
+// history. Past it a save rewrites the document's latest revision, and a
+// document with no revision yet records none.
+const MaxRevisions = 1000
+
 // ErrRevisionInvalid refuses a revision that names no registration, no known
 // document or no time, or whose title or body is past its bound.
 var ErrRevisionInvalid = errors.New("the revision is invalid")

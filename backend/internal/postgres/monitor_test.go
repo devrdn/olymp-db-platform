@@ -287,6 +287,78 @@ func TestARevisionYoungerThanThirtySecondsIsRewrittenInPlace(t *testing.T) {
 	})
 }
 
+// fillRevisions makes the registration hold n revisions of documents that no
+// test names, by direct insert.
+func fillRevisions(t *testing.T, ctx context.Context, registration uuid.UUID, n int, at time.Time) {
+	t.Helper()
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+		INSERT INTO workspace_revisions (registration_id, document, body, started_at, updated_at)
+		SELECT $1, gen_random_uuid()::text, 'filler', $3, $3 FROM generate_series(1, $2)`,
+		registration, n, at); err != nil {
+		t.Fatalf("fill the revisions: %v", err)
+	}
+}
+
+func revisionCount(t *testing.T, ctx context.Context, registration uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`SELECT count(*) FROM workspace_revisions WHERE registration_id = $1`, registration).Scan(&n); err != nil {
+		t.Fatalf("count the revisions: %v", err)
+	}
+	return n
+}
+
+func TestAtTheRevisionCeilingASaveRewritesTheLatest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+		start := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+		save := func(body string, at time.Time) {
+			t.Helper()
+			if err := store.RecordRevision(ctx, monitor.Revision{
+				Registration: f.registration, Document: monitor.DocumentNotes, Body: body, At: at,
+			}); err != nil {
+				t.Fatalf("RecordRevision(%q) = %v", body, err)
+			}
+		}
+		save("first", start)
+		fillRevisions(t, ctx, f.registration, monitor.MaxRevisions-1, start)
+
+		later := start.Add(10 * time.Minute)
+		save("second", later)
+
+		if got := revisionCount(t, ctx, f.registration); got != monitor.MaxRevisions {
+			t.Fatalf("revisions at the ceiling after a save = %d, want %d", got, monitor.MaxRevisions)
+		}
+		got := storedRevisions(t, ctx, f.registration, monitor.DocumentNotes)
+		if len(got) != 1 || got[0].body != "second" || !got[0].updatedAt.Equal(later) || !got[0].startedAt.Equal(start) {
+			t.Fatalf("the notes' revisions at the ceiling = %+v, want the latest rewritten", got)
+		}
+	})
+}
+
+func TestAtTheRevisionCeilingANewDocumentAddsNoHistory(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+		at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+		fillRevisions(t, ctx, f.registration, monitor.MaxRevisions, at)
+
+		if err := store.RecordRevision(ctx, monitor.Revision{
+			Registration: f.registration, Document: monitor.DocumentNotes, Body: "new", At: at.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("RecordRevision at the ceiling = %v, want the call to succeed", err)
+		}
+		if got := revisionCount(t, ctx, f.registration); got != monitor.MaxRevisions {
+			t.Fatalf("revisions = %d, want %d", got, monitor.MaxRevisions)
+		}
+		if got := storedRevisions(t, ctx, f.registration, monitor.DocumentNotes); len(got) != 0 {
+			t.Fatalf("a document with no history got %+v at the ceiling", got)
+		}
+	})
+}
+
 func TestASaveOfTheSameBodyWritesNothing(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		store := NewMonitor(testPool)

@@ -486,6 +486,25 @@ func TestSavingTheNotesWritesTheirRevision(t *testing.T) {
 	})
 }
 
+func TestAtTheRevisionCeilingTheWorkspaceStillSaves(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewWorkspace(testPool)
+		registration := workspaceRegistration(t, ctx)
+		fillRevisions(t, ctx, registration, monitor.MaxRevisions, time.Now())
+
+		if _, err := repo.SaveNotes(ctx, registration, "still saved"); err != nil {
+			t.Fatalf("SaveNotes() at the ceiling = %v", err)
+		}
+		notes, _, err := repo.Load(ctx, registration, "Query 1")
+		if err != nil || notes.Body != "still saved" {
+			t.Fatalf("Load() = %q, %v, want the new notes", notes.Body, err)
+		}
+		if got := revisionCount(t, ctx, registration); got != monitor.MaxRevisions {
+			t.Fatalf("revisions = %d, want %d", got, monitor.MaxRevisions)
+		}
+	})
+}
+
 func TestSavingATabsTextWritesItsRevisionWithItsTitle(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewWorkspace(testPool)

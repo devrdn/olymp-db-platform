@@ -149,7 +149,9 @@ func (m *Monitor) checkStored(ctx context.Context, events []monitor.Event) error
 //   - a save within monitor.RevisionWindow of the latest revision's start
 //     (monitor.Extends) rewrites it in place; updated_at only moves forward,
 //     so a clock stepping back never puts it before started_at;
-//   - anything else starts a new revision.
+//   - anything else starts a new revision, unless the registration already
+//     holds monitor.MaxRevisions: then the document's latest revision is
+//     rewritten, and a document with none records nothing.
 //
 // The latest revision is read FOR UPDATE, so concurrent saves take turns. Two
 // racing first saves can each insert a revision; that adds an extra revision,
@@ -178,7 +180,7 @@ func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision)
 			revision.Registration, revision.Document, revision.Body).Scan(&latest, &unchanged, &startedAt)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			return m.insertRevision(ctx, querier, revision)
+			return m.startRevision(ctx, querier, revision, 0)
 		case err != nil:
 			return fmt.Errorf("read the latest revision of %s: %w", revision.Document, err)
 		case unchanged:
@@ -193,9 +195,35 @@ func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision)
 			}
 			return nil
 		default:
-			return m.insertRevision(ctx, querier, revision)
+			return m.startRevision(ctx, querier, revision, latest)
 		}
 	})
+}
+
+// startRevision inserts a revision, or at the ceiling rewrites the document's
+// latest one (zero when it has none). The count rides the
+// (registration_id, document, id) index.
+func (m *Monitor) startRevision(ctx context.Context, querier storage.Querier, revision monitor.Revision, latest int64) error {
+	var held int
+	if err := querier.QueryRow(ctx,
+		`SELECT count(*) FROM workspace_revisions WHERE registration_id = $1`,
+		revision.Registration).Scan(&held); err != nil {
+		return fmt.Errorf("count the revisions of registration %s: %w", revision.Registration, err)
+	}
+	switch {
+	case held < monitor.MaxRevisions:
+		return m.insertRevision(ctx, querier, revision)
+	case latest == 0:
+		return nil
+	}
+	if _, err := querier.Exec(ctx, `
+		UPDATE workspace_revisions
+		SET body = $2, title = nullif($3, ''), updated_at = greatest(updated_at, $4)
+		WHERE id = $1`,
+		latest, revision.Body, revision.Title, revision.At); err != nil {
+		return fmt.Errorf("rewrite revision %d at the ceiling: %w", latest, err)
+	}
+	return nil
 }
 
 func (m *Monitor) insertRevision(ctx context.Context, querier storage.Querier, revision monitor.Revision) error {
