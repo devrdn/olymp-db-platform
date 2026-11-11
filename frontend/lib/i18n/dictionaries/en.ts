@@ -2366,7 +2366,6 @@ const en = {
       codeLabel: "Your code",
       codeHint: "Show it to the organisers at the entrance.",
       copyCode: "Copy the code",
-      emailSent: "We also sent it to {email}.",
       emailNotSent: "The email could not be sent. Keep this code: write it down or take a photo.",
       accountTitle: "Your account",
       login: "Login",
@@ -2376,9 +2375,13 @@ const en = {
       passwordNote: "You will set your own password the first time you sign in.",
       accountExisting: "You already have an account here. Sign in with it.",
     },
+    accepted: {
+      title: "Check your email",
+      body:
+        "We sent your code and sign-in details to {email}. If nothing arrives within a few minutes, check the spam folder. The organisers can also find you by name at the entrance.",
+    },
     repeat: {
       title: "You are already registered",
-      emailSent: "We sent your code to {email} again.",
       emailNotSent:
         "You registered with {email}. If you cannot find our email, the organisers will find you by name at the entrance.",
     },

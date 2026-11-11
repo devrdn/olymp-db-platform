@@ -34,7 +34,7 @@ const created = {
   account: "created",
   login: "ana@example.com",
   oneTimePassword: "Secret-123",
-  emailSent: true,
+  emailSent: false,
 };
 
 function renderForm() {
@@ -49,7 +49,7 @@ async function submit() {
 }
 
 describe("RegisterForm, a new registration", () => {
-  test("shows the code split in two, and where it was mailed", async () => {
+  test("shows the code split in two", async () => {
     registerAction.mockResolvedValue({ outcome: created });
     renderForm();
 
@@ -57,9 +57,6 @@ describe("RegisterForm, a new registration", () => {
 
     expect(await screen.findByRole("heading", { name: en.registration.created.title })).toBeInTheDocument();
     expect(screen.getByText("K7M-2QX")).toBeInTheDocument();
-    expect(
-      screen.getByText(en.registration.created.emailSent.replace("{email}", "ana@example.com")),
-    ).toBeInTheDocument();
     expect(registerAction.mock.calls[0][1].get("email")).toBe("ana@example.com");
   });
 
@@ -97,8 +94,8 @@ describe("RegisterForm, a new registration", () => {
     expect(copyText).toHaveBeenCalledWith("Secret-123");
   });
 
-  test("tells the visitor to keep the code when the email could not be sent", async () => {
-    registerAction.mockResolvedValue({ outcome: { ...created, emailSent: false } });
+  test("tells the visitor to keep the code, since no email was sent", async () => {
+    registerAction.mockResolvedValue({ outcome: created });
     renderForm();
 
     await submit();
@@ -121,23 +118,8 @@ describe("RegisterForm, a new registration", () => {
   });
 });
 
-describe("RegisterForm, a repeat registration", () => {
-  test("says the code was mailed again and never shows it", async () => {
-    registerAction.mockResolvedValue({
-      outcome: { status: "existing", email: "ana@example.com", emailSent: true },
-    });
-    renderForm();
-
-    await submit();
-
-    expect(await screen.findByRole("heading", { name: en.registration.repeat.title })).toBeInTheDocument();
-    expect(
-      screen.getByText(en.registration.repeat.emailSent.replace("{email}", "ana@example.com")),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(en.registration.created.codeLabel)).not.toBeInTheDocument();
-  });
-
-  test("points at the earlier email when nothing was sent this time", async () => {
+describe("RegisterForm, a repeat registration with mail off", () => {
+  test("points at the earlier registration and never shows a code", async () => {
     registerAction.mockResolvedValue({
       outcome: { status: "existing", email: "ana@example.com", emailSent: false },
     });
@@ -145,9 +127,27 @@ describe("RegisterForm, a repeat registration", () => {
 
     await submit();
 
+    expect(await screen.findByRole("heading", { name: en.registration.repeat.title })).toBeInTheDocument();
     expect(
-      await screen.findByText(en.registration.repeat.emailNotSent.replace("{email}", "ana@example.com")),
+      screen.getByText(en.registration.repeat.emailNotSent.replace("{email}", "ana@example.com")),
     ).toBeInTheDocument();
+    expect(screen.queryByText(en.registration.created.codeLabel)).not.toBeInTheDocument();
+  });
+});
+
+describe("RegisterForm, an accepted registration (mail on)", () => {
+  test("says to check the email and shows no code, login or password", async () => {
+    registerAction.mockResolvedValue({ outcome: { status: "accepted", email: "ana@example.com" } });
+    renderForm();
+
+    await submit();
+
+    expect(await screen.findByRole("heading", { name: en.registration.accepted.title })).toBeInTheDocument();
+    expect(
+      screen.getByText(en.registration.accepted.body.replace("{email}", "ana@example.com")),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(en.registration.created.codeLabel)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.registration.created.password)).not.toBeInTheDocument();
   });
 });
 

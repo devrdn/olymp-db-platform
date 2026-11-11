@@ -196,6 +196,8 @@ type Accounts struct {
 	mu      sync.Mutex
 	Taken   map[string]bool
 	Created []registrations.NewAccount
+	// Decoys counts the throwaway hashes spent.
+	Decoys int
 	// Err, when set, is every Create's answer.
 	Err error
 	// Store, when set, learns each created account's login for its join.
@@ -225,6 +227,13 @@ func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (regist
 		a.Store.mu.Unlock()
 	}
 	return account, nil
+}
+
+func (a *Accounts) Decoy(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Decoys++
+	return nil
 }
 
 // Outbox records what was queued.

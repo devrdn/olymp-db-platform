@@ -25,7 +25,7 @@ func newRegistrationAccounts(t *testing.T) (registrationAccounts, *userstest.Rep
 	repo := userstest.New()
 	repo.GrantRole("student")
 	service := users.NewService(repo, audit.New(discardAudit{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher())
-	return registrationAccounts{users: service}, repo
+	return registrationAccounts{users: service, hasher: passwordtest.NewHasher()}, repo
 }
 
 func TestARegistrationMakesAStudentAccount(t *testing.T) {
@@ -119,5 +119,24 @@ func TestARegistrationsPasswordWaitsOnlyTheSignInWait(t *testing.T) {
 
 	if !errors.Is(err, password.ErrBusy) || time.Since(started) > time.Second {
 		t.Errorf("Create() = %v after %v, want password.ErrBusy after the sign-in wait", err, time.Since(started))
+	}
+}
+
+func TestADecoyHashWaitsOnlyTheSignInWait(t *testing.T) {
+	accounts, _ := newRegistrationAccounts(t)
+	if err := accounts.Decoy(t.Context()); err != nil {
+		t.Fatalf("Decoy() = %v", err)
+	}
+
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	slot, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() = %v", err)
+	}
+	t.Cleanup(slot.Release)
+	accounts.hasher = hasher
+
+	if err := accounts.Decoy(t.Context()); !errors.Is(err, password.ErrBusy) {
+		t.Errorf("Decoy() on a full hasher = %v, want password.ErrBusy like Create", err)
 	}
 }

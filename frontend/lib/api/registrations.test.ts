@@ -55,6 +55,12 @@ describe("registrationOutcomeSchema", () => {
     expect(outcome).not.toHaveProperty("oneTimePassword", expect.anything());
   });
 
+  test("reads the uniform answer of a mailed registration, which carries nothing else", () => {
+    expect(
+      registrationOutcomeSchema.parse({ status: "accepted", email: "ana@example.com", email_sent: true }),
+    ).toEqual({ status: "accepted", email: "ana@example.com" });
+  });
+
   test("reads a repeat registration, which carries no code", () => {
     expect(
       registrationOutcomeSchema.parse({ status: "existing", email: "ana@example.com", email_sent: true }),

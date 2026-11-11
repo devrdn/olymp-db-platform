@@ -33,7 +33,19 @@ const createdSchema = z
     emailSent: raw.email_sent,
   }));
 
-/** A repeat: the code is only mailed again, never shown, so the page cannot leak it. */
+/**
+ * Mail is on: the code and the sign-in details went by email, and the answer
+ * is the same for a new address, a repeat and an address with an account.
+ */
+const acceptedSchema = z
+  .object({
+    status: z.literal("accepted"),
+    email: z.string(),
+    email_sent: z.literal(true),
+  })
+  .transform((raw) => ({ status: raw.status, email: raw.email }));
+
+/** Mail is off: a repeat, whose code is never shown, so the page cannot leak it. */
 const repeatSchema = z
   .object({
     status: z.literal("existing"),
@@ -42,7 +54,7 @@ const repeatSchema = z
   })
   .transform((raw) => ({ status: raw.status, email: raw.email, emailSent: raw.email_sent }));
 
-export const registrationOutcomeSchema = z.union([createdSchema, repeatSchema]);
+export const registrationOutcomeSchema = z.union([acceptedSchema, createdSchema, repeatSchema]);
 export type RegistrationOutcome = z.infer<typeof registrationOutcomeSchema>;
 
 export const registrationSchema = z

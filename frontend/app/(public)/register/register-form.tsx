@@ -103,15 +103,24 @@ function Outcome({ outcome, t }: { outcome: RegistrationOutcome; t: Text }) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
 
+  if (outcome.status === "accepted") {
+    return (
+      <div className="flex max-w-lede flex-col gap-4">
+        <h2 ref={heading} tabIndex={-1} className="text-h3 text-ink outline-none">
+          {t.accepted.title}
+        </h2>
+        <p className="text-body text-ink-2">{t.accepted.body.replace("{email}", outcome.email)}</p>
+      </div>
+    );
+  }
+
   if (outcome.status === "existing") {
     return (
       <div className="flex max-w-lede flex-col gap-4">
         <h2 ref={heading} tabIndex={-1} className="text-h3 text-ink outline-none">
           {t.repeat.title}
         </h2>
-        <p className="text-body text-ink-2">
-          {(outcome.emailSent ? t.repeat.emailSent : t.repeat.emailNotSent).replace("{email}", outcome.email)}
-        </p>
+        <p className="text-body text-ink-2">{t.repeat.emailNotSent.replace("{email}", outcome.email)}</p>
       </div>
     );
   }
@@ -133,9 +142,7 @@ function Outcome({ outcome, t }: { outcome: RegistrationOutcome; t: Text }) {
           <p className="text-body text-ink-2">{c.codeHint}</p>
         </div>
 
-        <p className={outcome.emailSent ? "text-body text-ink-2" : "text-body text-warn"}>
-          {outcome.emailSent ? c.emailSent.replace("{email}", outcome.email) : c.emailNotSent}
-        </p>
+        <p className="text-body text-warn">{c.emailNotSent}</p>
       </div>
 
       {outcome.account === "created" && outcome.login && outcome.oneTimePassword ? (

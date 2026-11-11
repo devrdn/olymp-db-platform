@@ -2136,7 +2136,6 @@ const ro = {
       codeLabel: "Codul dumneavoastră",
       codeHint: "Arătați-l organizatorilor la intrare.",
       copyCode: "Copiați codul",
-      emailSent: "L-am trimis și la {email}.",
       emailNotSent: "E-mailul nu a putut fi trimis. Păstrați acest cod: notați-l sau fotografiați-l.",
       accountTitle: "Contul dumneavoastră",
       login: "Login",
@@ -2146,9 +2145,13 @@ const ro = {
       passwordNote: "La prima autentificare vă veți seta propria parolă.",
       accountExisting: "Aveți deja un cont aici. Autentificați-vă cu el.",
     },
+    accepted: {
+      title: "Verificați e-mailul",
+      body:
+        "Am trimis codul și datele de autentificare la {email}. Dacă nu primiți nimic în câteva minute, verificați dosarul de spam. Organizatorii vă pot găsi și după nume la intrare.",
+    },
     repeat: {
       title: "Sunteți deja înregistrat",
-      emailSent: "V-am trimis din nou codul la {email}.",
       emailNotSent:
         "V-ați înregistrat cu {email}. Dacă nu găsiți e-mailul nostru, organizatorii vă vor găsi după nume la intrare.",
     },

@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
@@ -16,6 +18,9 @@ const registrationRole = "student"
 // aborts only the account and the registration still lands.
 type registrationAccounts struct {
 	users *users.Service
+	// hasher is the one the account's password is hashed with (the sign-in
+	// hasher, which users.Service uses for a SelfService account).
+	hasher *password.Hasher
 }
 
 var _ registrations.Accounts = registrationAccounts{}
@@ -40,4 +45,17 @@ func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAcc
 	return registrations.Account{
 		ID: created.User.ID, Login: created.User.Login, OneTimePassword: created.OneTimePassword,
 	}, nil
+}
+
+// decoyPassword stands for a one-time password nobody will ever hold.
+const decoyPassword = "decoy-one-time-password-never-issued"
+
+// Decoy hashes a throwaway value with the hasher Create uses, at the same
+// cost, so that with mail on the form's response time does not tell an address
+// that got an account from one that already had one.
+func (a registrationAccounts) Decoy(ctx context.Context) error {
+	if _, err := a.hasher.Hash(ctx, decoyPassword); err != nil {
+		return fmt.Errorf("hash the decoy password: %w", err)
+	}
+	return nil
 }
