@@ -103,7 +103,9 @@ func (r *ContestManagers) Grant(ctx context.Context, m contests.Manager) error {
 }
 
 // Revoke removes a user from the staff and records them as a former manager,
-// in one statement so neither happens without the other.
+// in one statement so neither happens without the other. The upsert is
+// load-bearing: RowsAffected counts the insert, so DO NOTHING would answer
+// ErrManagerNotFound for a re-granted former manager.
 func (r *ContestManagers) Revoke(ctx context.Context, contestID, userID uuid.UUID) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		WITH removed AS (

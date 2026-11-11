@@ -40,8 +40,7 @@ var (
 	// ErrStaffCannotParticipate refuses a registration to the contest's own
 	// staff or former staff, or to an account holding contest.admin_all: they
 	// read, or once could read, the reference answers and the unfrozen
-	// leaderboard. ErrParticipantCannotBeStaff
-	// is the opposite direction.
+	// leaderboard. ErrParticipantCannotBeStaff is the opposite direction.
 	ErrStaffCannotParticipate = errors.New("contest staff cannot also register as a participant")
 )
 
@@ -276,6 +275,9 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
+		// List is read before FormerManagers: RevokeManager takes no contest
+		// lock, and this order puts a concurrent revoke in both lists rather
+		// than in neither.
 		staff, err := s.managers.List(ctx, c.ID)
 		if err != nil {
 			return err

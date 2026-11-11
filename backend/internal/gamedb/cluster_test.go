@@ -222,8 +222,7 @@ func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
 }
 
 // The test clusters are prepared with the default template limit, which is
-// therefore the author's temp_file_limit; the role setting says why. A script
-// cannot lift it: temp_file_limit is not USERSET.
+// therefore the author's temp_file_limit.
 func TestTheAuthorRoleHasATempFileLimit(t *testing.T) {
 	conn := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), scratchDatabase(t))
 

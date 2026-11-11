@@ -64,8 +64,9 @@ through these endpoints is drawn in [03-flows.md](03-flows.md).
 
 One account can be several actors in different contests: an organiser who owns
 the March olympiad can take part in a contest they do not staff. It cannot be
-staff, or former staff, and participant of the same contest, and an account holding
-`contest.admin_all` cannot participate anywhere (`staff_cannot_participate`).
+staff, or former staff, and participant of the same contest, and an account
+holding `contest.admin_all` cannot participate anywhere
+(`staff_cannot_participate`).
 
 ## Anonymous visitor
 

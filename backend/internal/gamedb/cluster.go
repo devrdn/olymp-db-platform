@@ -189,7 +189,7 @@ func prepare(ctx context.Context, conn Conn, roles Roles) error {
 // size limit. Temporary files are outside the database the build measures,
 // and a restored dump sorts each index it builds through them, roughly the
 // size of its keys: a smaller bound would refuse a dump the size limit
-// admits, with nothing in the SQL to fix. A real bound: it is not USERSET.
+// admits, with nothing in the SQL to fix.
 func authorRole(password string, tempFileBytes int64) roleSpec {
 	defaults := append(append([][2]string{}, authorDefaults...),
 		[2]string{"temp_file_limit", fmt.Sprintf("%dkB", tempFileBytes/1024)})
