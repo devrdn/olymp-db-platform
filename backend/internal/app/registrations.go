@@ -62,8 +62,7 @@ func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAcc
 const decoyPassword = "decoy-one-time-password-never-issued"
 
 // Decoy hashes a throwaway value with the hasher Create uses, at the same
-// cost, so that with mail on the form's response time does not tell an address
-// that got an account from one that already had one.
+// cost.
 func (a registrationAccounts) Decoy(ctx context.Context) error {
 	if _, err := a.hasher.Hash(ctx, decoyPassword); err != nil {
 		return fmt.Errorf("hash the decoy password: %w", err)

@@ -1801,8 +1801,8 @@ it, with the number of questions waiting beside it while the contest runs.
     participant**, not only managing it now: revoking the role must not turn
     somebody who has read the reference answers into a competitor.
     Self-enrolment, a manager's addition and a roster import all refuse such
-    an account (an import skips it with `staff_member`, and adds the rest). Revoking a
-    manager records them in `contest_former_managers` in the same statement as
+    an account (an import skips it with `staff_member`, and adds the rest).
+    Revoking a manager records them in `contest_former_managers` in the same statement as
     the delete, so neither happens without the other; migration 000053
     backfilled the table from the revocations the audit trail already held.
   - **The access check has two steps.**

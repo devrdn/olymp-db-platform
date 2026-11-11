@@ -60,12 +60,12 @@ type Account struct {
 // Accounts creates participant accounts (users.Service, adapted in
 // internal/app). Create runs its own transaction: a taken login or email
 // aborts it, and must not abort the registration with it. When NewAccount.ByEmail
-// is set, Create costs one password hash whatever it answers, so the time it
-// takes does not tell a new address from a known one.
+// is set, Create costs one password hash whatever it answers.
 type Accounts interface {
 	Create(ctx context.Context, n NewAccount) (Account, error)
 	// Decoy spends what Create spends on a new account's password and makes
-	// nothing, so a caller that made no account takes as long as one that did.
+	// nothing, so the response time does not tell a new address from a known
+	// one.
 	Decoy(ctx context.Context) error
 }
 
@@ -258,8 +258,6 @@ func (s *Service) resend(ctx context.Context, r Registration) (Outcome, error) {
 	if !s.cfg.Outbox.Enabled() {
 		return out, nil
 	}
-	// The answer to a repeat is the answer to a new address, so it costs the
-	// same time.
 	if err := s.cfg.Accounts.Decoy(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("spend the decoy hash: %w", err)
 	}
