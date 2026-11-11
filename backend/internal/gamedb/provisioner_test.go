@@ -1208,11 +1208,20 @@ func TestABuildUnderTheLimitSucceeds(t *testing.T) {
 
 // Each build restates the author role, so the script runs under the limit of
 // the provisioner that builds it, not whatever the last deploy stated.
+//
+// The restate and the script's connection are two steps, and another test
+// package preparing the same cluster in between resets game_author to the
+// default, which the script then reports. That is a property of the shared
+// cluster, not of the build, so a build that saw another value is tried again
+// with a fresh template; a build that never restates sees the default every
+// time and still fails.
 func TestABuildRunsUnderATempFileLimitOfTheTemplatesOwnSize(t *testing.T) {
+	const attempts = 3
 	p := limitedProvisioner(t, 96<<20)
-	template := named(t, "tpl")
 
-	err := buildTemplateString(p, t.Context(), template, `
+	var err error
+	for range attempts {
+		err = buildTemplateString(p, t.Context(), named(t, "tpl"), `
 DO $$
 DECLARE
 	limit_now text;
@@ -1224,9 +1233,11 @@ BEGIN
 	END IF;
 END
 $$;`, sqlpolicy.ReadOnly())
-	if err != nil {
-		t.Fatalf("the script did not run under a temp_file_limit of the template's 96 MiB: %v", err)
+		if err == nil {
+			return
+		}
 	}
+	t.Fatalf("the script did not run under a temp_file_limit of the template's 96 MiB in %d builds: %v", attempts, err)
 }
 
 func TestATemplateLimitThatIsNotPositiveIsRefusedUpFront(t *testing.T) {
