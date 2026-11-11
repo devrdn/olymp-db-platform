@@ -668,6 +668,14 @@ it never runs in bulk at the moment that matters:
   the condition: a copy at an older version is never handed out but remade,
   and `provisioning.Service.Ready`, which would also wait for every copy to
   be remade, is still not called.
+- **A build watches its template's size.** The game cluster's volume is a
+  plain Docker volume and cannot be given a size, so a script that fills
+  tables would fill the disk under every participant. The build reads the
+  template's size every two seconds and stops past `GAME_TEMPLATE_MAX_BYTES`
+  (8 GiB by default, between 64 MiB and 64 GiB) with `ErrTemplateTooLarge`,
+  dropping the half-built database; the organiser is shown the failure as
+  `build_error_code`. `game_author`'s `temp_file_limit` is the same setting, so
+  the temporary files a size reading does not see are bounded by it too.
 - **Template discipline.** Nothing may be connected to a template while
   `CREATE DATABASE` copies it: the builder role is disconnected as soon as the
   build finishes, and an organiser previewing the game schema does so on a
@@ -1585,8 +1593,9 @@ and it was reversed by participant monitoring (section 9.4): a contest's
 organiser sees the current notes and tabs and the whole history of their
 edits. Every save of a note or a tab writes a revision into
 `workspace_revisions` in the same transaction, and creating, renaming or
-deleting a tab writes an event into `participant_events`; if the history did
-not record, the change did not save. The participant is told so on screen, in
+deleting a tab writes an event into `participant_events`; if the history could
+not be written, the change did not save. The history is bounded (section 9.4),
+but the workspace itself always saves. The participant is told so on screen, in
 a line under the heading and a line under the notes field.
 
 `localStorage` stays in this design for one job: a draft that has been typed
@@ -1788,7 +1797,14 @@ it, with the number of questions waiting beside it while the contest runs.
     results, and combining the roles would make the competition unfair by
     construction rather than by oversight. The rule binds new appointments
     only: an account that already held both before the check existed is not
-    separated by it.
+    separated by it. **Having managed a contest is enough to be refused as its
+    participant**, not only managing it now: revoking the role must not turn
+    somebody who has read the reference answers into a competitor.
+    Self-enrolment, a manager's addition and a roster import all refuse such
+    an account (an import skips it with `staff_member`, and adds the rest). Revoking a
+    manager records them in `contest_former_managers` in the same statement as
+    the delete, so neither happens without the other; migration 000053
+    backfilled the table from the revocations the audit trail already held.
   - **The access check has two steps.**
     `RequirePermission("contest.edit", contestID)` consults the global
     permissions first — a system administrator always passes — and then the
@@ -1923,6 +1939,16 @@ anyway. Otherwise an early return in microseconds against tens of
 milliseconds would be an oracle for enumerating logins. A blocked account
 learns that it is blocked **only after the password matched**: the owner has a
 right to know, somebody guessing does not.
+
+**The event registration form does not say who is registered.** The public
+form (`POST /api/v1/public/registrations`) is open to anybody, so with mail on
+every case — a new address, a repeat, an address an account already holds, a
+repeat inside the cooldown — answers 202 with the same body, `{"status":
+"accepted", "email": …, "email_sent": true}`; the code and the sign-in details
+travel only in the message. Each case also spends exactly one password hash, a
+decoy where no account is made, so the time tells no more than the body.
+With mail off nothing can be sent, so the code and the one-time password are
+shown on screen as the answer to the request (201, or 200 for a repeat).
 
 **Authorisation has two levels** (`internal/rbac`) — exactly the model in
 section 7. A separate permission, `contest.admin_all`, removes the scope, and
@@ -3083,6 +3109,13 @@ the history's limits. Renaming without editing writes no revision; the
 inside the transaction, but only on the rare create, rename and delete, so
 autosave does not pay for it. Two simultaneous *first* saves of a document can
 each insert a revision — extra history, nothing lost.
+
+**A registration keeps at most `monitor.MaxRevisions` (1000) revisions.** The
+window bounds the rate, not the total, and every row is re-read by the
+organiser's workspace view and the backup. Once a registration holds that many
+a save no longer starts a revision: it rewrites the document's latest one, or
+records nothing for a document that has none. The workspace itself is saved
+either way; only the history stops growing.
 
 **The organiser's routes, all `GET` under `/contests/{id}/monitor`:**
 
