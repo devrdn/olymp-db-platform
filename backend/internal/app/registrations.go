@@ -58,13 +58,13 @@ func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAcc
 	}, nil
 }
 
-// decoyPassword stands for a one-time password nobody will ever hold.
-const decoyPassword = "decoy-one-time-password-never-issued"
+// decoyInput stands for a one-time password nobody will ever hold.
+const decoyInput = "decoy-one-time-password-never-issued"
 
 // Decoy hashes a throwaway value with the hasher Create uses, at the same
 // cost.
 func (a registrationAccounts) Decoy(ctx context.Context) error {
-	if _, err := a.hasher.Hash(ctx, decoyPassword); err != nil {
+	if _, err := a.hasher.Hash(ctx, decoyInput); err != nil {
 		return fmt.Errorf("hash the decoy password: %w", err)
 	}
 	return nil
