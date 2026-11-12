@@ -49,6 +49,7 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
           locale={locale}
           scoring={contest.scoring}
           trustedDomain={methods?.trustedEmailDomain}
+          trustedDomainOnly={contest.settings.trustedDomainOnly}
           dict={dict}
         />
       ) : null}

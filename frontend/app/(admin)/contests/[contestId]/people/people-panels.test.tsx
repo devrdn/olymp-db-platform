@@ -69,7 +69,7 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
   const mark = (domain: string) =>
     dict.workspace.people.participants.untrustedEmail.replace("{domain}", () => domain);
 
-  const panel = (participants: Participant[], trustedDomain?: string) =>
+  const panel = (participants: Participant[], trustedDomain?: string, trustedDomainOnly = true) =>
     render(
       <ParticipantPanel
         contestId="c1"
@@ -78,9 +78,17 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
         locale="en"
         scoring="points"
         trustedDomain={trustedDomain}
+        trustedDomainOnly={trustedDomainOnly}
         dict={dict}
       />,
     );
+
+  /** Unrestricted, most participants would carry it, and staff would learn to ignore it. */
+  test("marks nobody in a contest open to any address", () => {
+    panel([participant({ trustedEmail: false })], "example.edu", false);
+
+    expect(screen.queryByText(mark("example.edu"))).not.toBeInTheDocument();
+  });
 
   test("marks a participant without a verified address there, naming the domain the site has", () => {
     panel([participant({ trustedEmail: false })], "example.edu");
