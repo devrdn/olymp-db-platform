@@ -151,6 +151,22 @@ describe("the sign-in page after an external sign-in came back refused", () => {
   });
 });
 
+/**
+ * A staff account made Microsoft-only before its promotion has no password;
+ * the refusal must give it a way forward.
+ */
+describe.each([
+  ["en", /ask an administrator to reset it/],
+  ["ro", /rugați un administrator să o reseteze/],
+  ["ru", /попросите администратора сбросить его/],
+] as const)("the staff refusal in %s", (locale, administrator) => {
+  test("offers an administrator's reset beside the password", async () => {
+    const sentence = (await getDictionary(locale)).errors.external_signin_staff_account;
+
+    expect(sentence).toMatch(administrator);
+  });
+});
+
 describe.each(["en", "ro", "ru"] as const)("the sign-in lede in %s", (locale) => {
   // Self sign-up and Microsoft both exist; the lede must not say every account
   // is handed out by an organisation.

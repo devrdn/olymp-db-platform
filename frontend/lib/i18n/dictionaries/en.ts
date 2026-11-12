@@ -2807,7 +2807,7 @@ const en = {
     signup_full: "Too many sign-ups are waiting right now. Try again later.",
     reset_link_invalid: "This link can no longer be used. Ask for a new one.",
     external_signin_failed: "Signing in with Microsoft did not work. Try again.",
-    external_signin_staff_account: "This address belongs to an organiser's or administrator's account. Sign in with its password.",
+    external_signin_staff_account: "This address belongs to an organiser's or administrator's account. Sign in with its password, or ask an administrator to reset it.",
     external_signin_closed: "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
