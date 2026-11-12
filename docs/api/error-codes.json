@@ -674,6 +674,10 @@
       "meaning": "No event registration with that identifier."
     },
     {
+      "code": "reset_link_invalid",
+      "meaning": "The password reset link cannot be used: it is unknown, already used, replaced by a newer one, past its thirty minutes, or its account can no longer be reached by email. Deliberately one answer. Ask for a new link."
+    },
+    {
       "code": "reset_read_only",
       "meaning": "The participant asked for their database back as the contest started it, and this contest is read-only: nothing they run can change it, so there is nothing to reset. A rule of the contest, not a fault; nothing was copied."
     },
@@ -759,7 +763,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form and of each self-service sign-up endpoint, per address and per email, refused attempts included. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Try again later."
     },
     {
       "code": "too_many_connections",

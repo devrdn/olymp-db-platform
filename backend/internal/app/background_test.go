@@ -592,3 +592,29 @@ func TestTheSignupSweepRemovesWhatExpiredByTheTick(t *testing.T) {
 		t.Errorf("run() = %v, want the sweep's failure", err)
 	}
 }
+
+func TestThePasswordResetSweepRemovesWhatExpiredByTheTick(t *testing.T) {
+	var asked time.Time
+	before := time.Now()
+	job := sweepPasswordResets(quiet(), func(_ context.Context, now time.Time) (int64, error) {
+		asked = now
+		return 2, nil
+	})
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if asked.Before(before) || asked.After(time.Now()) {
+		t.Errorf("swept as of %v, want the tick's own time", asked)
+	}
+	if job.name == "signup-sweep" || job.every != 10*time.Minute || job.atStart {
+		t.Errorf("name = %q, every = %s, atStart = %v; want its own name, ten minutes, not at startup: an expired link already opens nothing",
+			job.name, job.every, job.atStart)
+	}
+
+	failure := errors.New("the database is away")
+	failing := sweepPasswordResets(quiet(), func(context.Context, time.Time) (int64, error) { return 0, failure })
+	if err := failing.run(t.Context()); !errors.Is(err, failure) {
+		t.Errorf("run() = %v, want the sweep's failure", err)
+	}
+}

@@ -564,6 +564,74 @@ func TestChangePasswordRejectsReusingTheCurrentOne(t *testing.T) {
 	}
 }
 
+// claimed is a Claim that spends nothing and names id.
+func claimed(id uuid.UUID) func(context.Context) (uuid.UUID, bool, error) {
+	return func(context.Context) (uuid.UUID, bool, error) { return id, true, nil }
+}
+
+func TestSetPasswordByLinkSetsThePasswordAndVerifiesTheEmail(t *testing.T) {
+	f := newFixture(t)
+	user := f.repo.Add(users.User{Login: "petrov", Email: "petrov@example.edu", FullName: "Pyotr Petrov",
+		PasswordHash: passwordtest.Hash(t, "forgotten password"), MustChangePassword: true})
+	at := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+
+	done, err := f.service.SetPasswordByLink(context.Background(), users.PasswordByLinkCommand{
+		PasswordHash: passwordtest.Hash(t, "a brand new password"), At: at, Claim: claimed(user.ID),
+	})
+	if err != nil || !done {
+		t.Fatalf("SetPasswordByLink() = %v, %v; want it done", done, err)
+	}
+
+	after, _ := f.repo.Get(user.ID)
+	if !passwordtest.Matches(t, after.PasswordHash, "a brand new password") {
+		t.Error("the new password does not verify against the stored digest")
+	}
+	if after.MustChangePassword {
+		t.Error("the owner chose this password, yet the account must change it")
+	}
+	if after.EmailVerifiedAt == nil || !after.EmailVerifiedAt.Equal(at) {
+		t.Errorf("email verified at %v, want %v: following the link proved the inbox", after.EmailVerifiedAt, at)
+	}
+	if after.SessionGeneration <= user.SessionGeneration {
+		t.Error("the session generation was not advanced, so every session survives")
+	}
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("recorded %d audit entries, want one", len(f.sink.entries))
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserPasswordResetByLink || entry.EntityID != user.ID.String() ||
+		entry.ActorID == nil || *entry.ActorID != user.ID {
+		t.Errorf("entry = %+v, want %s on the account by its owner", entry, audit.ActionUserPasswordResetByLink)
+	}
+}
+
+func TestSetPasswordByLinkChangesNothingWhenTheClaimIsRefused(t *testing.T) {
+	f := newFixture(t)
+	user := f.repo.Add(users.User{Login: "petrov", Email: "petrov@example.edu", FullName: "Pyotr Petrov",
+		PasswordHash: passwordtest.Hash(t, "forgotten password")})
+	claimRan := false
+
+	done, err := f.service.SetPasswordByLink(context.Background(), users.PasswordByLinkCommand{
+		PasswordHash: passwordtest.Hash(t, "a brand new password"), At: time.Now(),
+		Claim: func(context.Context) (uuid.UUID, bool, error) {
+			claimRan = true
+			return uuid.Nil, false, nil
+		},
+	})
+	if err != nil || done {
+		t.Fatalf("SetPasswordByLink() = %v, %v; want it refused without an error", done, err)
+	}
+
+	after, _ := f.repo.Get(user.ID)
+	if !claimRan || f.uow.Calls != 1 {
+		t.Errorf("claim ran %v in %d units of work, want once inside the one", claimRan, f.uow.Calls)
+	}
+	if !passwordtest.Matches(t, after.PasswordHash, "forgotten password") || after.EmailVerifiedAt != nil ||
+		after.SessionGeneration != user.SessionGeneration || len(f.sink.entries) != 0 {
+		t.Errorf("account = %+v, %d audit entries; want nothing changed", after, len(f.sink.entries))
+	}
+}
+
 func TestResetPasswordIssuesANewOneTimePassword(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "forgotten password")
@@ -1473,6 +1541,12 @@ func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
 		}},
 		{name: "ResetPassword", run: func(f *accessFixture, target, _ users.User) error {
 			_, err := f.service.ResetPassword(context.Background(), f.admin.ID, target.ID, users.Delivery{})
+			return err
+		}},
+		{name: "SetPasswordByLink", run: func(f *accessFixture, target, _ users.User) error {
+			_, err := f.service.SetPasswordByLink(context.Background(), users.PasswordByLinkCommand{
+				PasswordHash: "a new digest", At: time.Now(), Claim: claimed(target.ID),
+			})
 			return err
 		}},
 		{name: "BulkResetPassword", both: true, run: func(f *accessFixture, target, other users.User) error {
