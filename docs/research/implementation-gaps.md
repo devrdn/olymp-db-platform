@@ -633,7 +633,7 @@ Recorded so a reader does not mistake them for oversights. None has code.
 | Achievements and levels | `docs/ARCHITECTURE.md:4173-4183` (§15 item 15) |
 | Several tasks in one contest | `docs/ARCHITECTURE.md:4184-4191` (§15 item 17) |
 | Manual review by a jury (`submissions.review_status`) | `docs/ARCHITECTURE.md:4240-4241` |
-| University SSO (LDAP, OAuth) | `docs/ARCHITECTURE.md:4242-4243` |
+| University SSO (LDAP, OAuth) | `docs/ARCHITECTURE.md:4242-4243`. Since built for Microsoft, as OpenID Connect (`backend/internal/microsoft`, ARCHITECTURE.md section 7); LDAP stays absent |
 | Content versioning of stories and wordings | `docs/ARCHITECTURE.md:2443-2450` |
 | Erasure of personal data from the audit payload | `docs/ARCHITECTURE.md:2487-2492` |
 | Schema per participant ("Plan B") | `docs/ARCHITECTURE.md:607-611` |

@@ -191,6 +191,10 @@ access of its own.
 | `auth` | Sign-in, sessions, brute-force throttling, the RBAC middleware |
 | `rbac` | Whether an identity may perform an action here: global roles and contest roles (section 7) |
 | `users` | Accounts, their global roles, account administration |
+| `signup` | A person creating their own account with a password and an emailed code (section 7) |
+| `recovery` | A forgotten password reset through an emailed link (section 7) |
+| `federation` | Which account a sign-in through an external provider enters, whatever the provider (section 7) |
+| `microsoft` | The Microsoft provider: its sign-in flow, its token, and whether it vouches for the email (section 7) |
 | `contests` | Contests, stories, questions and reference answers; the contest's SQL policy; appointing managers; the lifecycle (draft → published → running → finished) and the clock; enrolment — self-service for `open`, by a manager for `invite_only` — and the participation gate; taking answers, checking them, scoring |
 | `sqlpolicy` | What a participant's SQL may do, and whether a query stays inside it; the same description drives the template's grants (section 4.1) |
 | `provisioning` | How a contest's game is described and built, and creating and removing participants' game databases from its template: a worker queue plus a pool of spares (section 4.2) |
@@ -1770,11 +1774,12 @@ it, with the number of questions waiting beside it while the contest runs.
 
 ## 7. Authentication and authorisation
 
-- **Sign-in:** a login and a password (argon2id, per-user salt). Against
-  guessing: rate limits by address and by login — a fixed window rather than a
-  sliding one or an exponential delay, for the reason given in section 7.2 —
-  and one answer, "wrong login or password", that never reveals whether an
-  account exists.
+- **Sign-in:** a login and a password (argon2id, per-user salt), or an
+  external provider where the installation connects one (below). Against
+  password guessing: rate limits by address and by login — a fixed window
+  rather than a sliding one or an exponential delay, for the reason given in
+  section 7.2 — and one answer, "wrong login or password", that never
+  reveals whether an account exists.
 - **Sessions:** a random 256-bit identifier in an httpOnly, Secure,
   SameSite=Lax cookie; the session's data in the cache with a TTL (twelve
   hours, say) extended by activity. Signing out, and blocking an account,
@@ -1813,14 +1818,108 @@ it, with the number of questions waiting beside it while the contest runs.
     without touching code.
   - Appointing and removing managers happens only through the interface, and
     every change lands in `audit_log`: who, whom, on which contest.
-- **Accounts are created by an administrator** — a CSV import of a group's
-  roster, with one-time passwords that must be changed at first sign-in.
-  Self-registration of accounts is disabled at this stage: a smaller attack
-  surface. Enrolling in a contest is a separate mechanism (section 7.1).
+- **Accounts are made by staff, or by people themselves where the
+  installation allows it.** Staff create them one at a time or by a CSV
+  import of a roster, each with a one-time password changed at the first
+  sign-in. Three self-service ways in sit beside that, each off until the
+  installation's configuration turns it on (backend/README.md,
+  "Self-service accounts"), and an installation that sets nothing keeps
+  staff-made accounts only. Enrolling in a contest is a separate mechanism
+  (section 7.1). What the three share:
+  - **A verified address.** `users.email_verified_at` is when the platform
+    last had proof that the person owns the account's `email`: a confirmed
+    sign-up code, a followed reset link, or an external sign-in whose
+    provider vouches for the address. Migration 000054 counted every address
+    held at the time as verified, since staff had entered them; an account
+    made later by staff, an import or the event form starts unverified,
+    until its owner proves the address. An administrator who edits an
+    account's address leaves the mark as it was, so the edited address
+    counts as verified. Addresses
+    compare without regard to case, under a unique index on `lower(email)`
+    over live accounts.
+  - **No answer tells a known address from an unknown one.** Sign-up and
+    recovery answer every address alike and in the same time; a login, which
+    the leaderboards show anyway, may be refused as taken.
+  - **Staff accounts are never reached through email.** An account holding
+    any permission (an organiser or an administrator) never receives a reset
+    link and is never entered or linked through an external provider: an
+    address somebody typed must not become a way into a permission. It keeps
+    its password and the administrator's reset.
+  - **Creating an account is one switch.** `SELF_SIGNUP_ENABLED` governs
+    both the password sign-up and the accounts an external sign-in creates.
+  - **Sign-up with a password** (`internal/signup`). The form (full name,
+    login, email, password) stores a *pending sign-up*, not an account, and
+    mails a six-digit code; confirming it in the browser that started it (a
+    random token in a cookie, stored hashed) creates a verified `student`
+    account and signs it in. The code is stored salted and hashed, confirms
+    for 30 minutes, and allows 5 tries in all however often it is resent; a
+    new one may be sent 60 seconds after the last. At most 10 000 sign-ups
+    wait at once, and the expired ones are swept every ten minutes. An
+    address an account already holds gets the same answer after the same
+    work, the password hash included, and the same row, but its owner is
+    mailed "you already have an account" and the code reaches nobody. The
+    login is 3 to 64 lowercase letters, digits, hyphens or underscores,
+    starting with a letter or a digit; the full name is written as a name
+    (letters, marks, spaces, hyphens, apostrophes and periods, no period
+    directly before a letter), since it greets the reader of a message sent
+    to whatever address was typed; the password has at least 12 characters.
+    Each route spends its address budget (120 in ten minutes) before the
+    email's (5 an hour), and both before the hash. It needs mail.
+  - **Recovery by link** (`internal/recovery`). A request names a login or
+    an address and is answered at once, before anything is looked up; the
+    lookup, the link and the message run in the background, at most eight
+    at a time. A link goes to an active student account with an address,
+    verified or not, since following it is the proof; a new link replaces
+    the previous one. Its token is 32 random bytes, stored as a SHA-256,
+    valid for 30 minutes and spent by its first use. Completing it sets the
+    password, marks the address verified, clears the one-time-password flag
+    and ends every session; it is refused when the account has since become
+    staff, been blocked or deleted, or changed its address. Each route spends
+    its address budget (30 in ten minutes) first, and a request also the
+    identifier's (5 an hour). It exists whenever mail does.
+  - **External sign-in** (`internal/federation`). It knows no provider: an
+    adapter verifies the provider's answer and hands over the claims (the
+    issuer and subject that name the person, an email, a name, a login
+    hint, and whether the provider vouches for the email). Federation then
+    enters the account the identity is linked to; or, for a vouched address,
+    links the live account holding it and marks the address verified; or
+    creates a `student` account with no password, carrying the address only
+    when vouched for and a login derived from the hint or the name. It
+    refuses a staff account, a blocked or deleted one, a creation while
+    `SELF_SIGNUP_ENABLED` is off, and a link by email to an account already
+    linked to another identity of the same issuer, since a provider may
+    give a mailbox to somebody new. An address that is not vouched for is
+    kept only on the identity, never on the account, and never links.
+    Deleting an account deletes its identities. Another provider is another
+    adapter, with no change to federation.
+  - **Microsoft, the first adapter** (`internal/microsoft`). The
+    authorisation-code flow with PKCE and a client secret, against the
+    authority `MICROSOFT_TENANT` names. The state, nonce, PKCE verifier and
+    return path travel in an `HttpOnly` cookie sealed with a key derived from
+    `DEVICE_COOKIE_SECRET`, for ten minutes, and Microsoft is asked
+    `prompt=select_account`, so a live Microsoft session on a shared machine
+    never signs the next person in unasked. The ID token's RS256 signature is
+    checked against Microsoft's published keys, fetched on the first token
+    and again for an unknown key ID at most once a minute, so the API starts
+    without reaching Microsoft; then the audience, the expiry, the nonce, an
+    issuer that is the token's own tenant's (under `common` any tenant's key
+    signs), and a tenant `MICROSOFT_TENANT` admits. The identity is the
+    issuer and the object ID (`oid`), never `sub`, which differs for every
+    application registration, so an installation can change its
+    registration without losing its links. Microsoft vouches for the email
+    of a member of `MICROSOFT_HOME_TENANT_ID` (a guest, marked by an `idp`
+    other than the issuer or by `acct` = 1, is not one), of anybody whose
+    token carries `xms_edov`, and of a personal account; a home member's
+    token without an `email` uses its `preferred_username`, and nobody
+    else's does. Any organisation can create a tenant and put any address on
+    its users, so no other tenant's email is evidence. Both routes spend the
+    address's budget (120 in ten minutes) before reading the request, and so
+    before the token exchange, and every failure lands on `/login?error=`
+    with a declared code.
 
 ## 7.1 Reaching a contest: enrolment and address restrictions
 
-Both settings live in the contest's form and are set by a system
+These settings live in the contest's form and are set by a system
 administrator or by the contest's owner or manager; changes are written to
 `audit_log`.
 
@@ -1835,6 +1934,27 @@ The type decides only **who creates** the row in `registrations`; from there
 both paths are identical — provisioning, the start, the clock. The type can be
 changed before the start, and every addition or removal by a manager is an
 audit event.
+
+**The installation's email domain (`settings.trusted_domain_only`):**
+
+Off by default. On, self-enrolment admits only an account with a verified
+address (section 7) in `TRUSTED_EMAIL_DOMAIN` or one of its subdomains:
+`example.edu` admits `ana@example.edu` and `ana@cs.example.edu`, never
+`ana@notexample.edu`. The domain is one setting of the installation rather
+than a field of the contest, and the interface writes it into its texts from
+`GET /auth/methods`, so no domain is ever typed into a contest or the code.
+
+- **Refused at enrolment**, under the contest's lock, with
+  `contest_trusted_email_required` (403), which the interface words as an
+  invitation to sign up or sign in with such an address.
+- **Staff are not held to it.** An owner or a manager adding a participant,
+  one at a time or from a roster, may add anybody: their choice beats the
+  rule. The participant list of every contest marks each participant
+  without a verified address in the domain, so the exception stays
+  visible.
+- **It cannot be switched on without a domain**
+  (`contest_trusted_domain_unset`). A contest that already has it keeps it
+  if the domain is later unset, and then admits nobody by self-enrolment.
 
 **Address restrictions (`contests.allowed_cidrs`):**
 
@@ -3987,15 +4107,19 @@ the name and the contacts change; the rules of typography and colour do not.
 
 The requirement: an olympiad's participants receive their sign-in details
 without an organiser handing each one-time password over by hand, before
-the olympiad of 2 November 2026. The installation sends email through the
-university's Microsoft 365 relay, as one mailbox, in one language chosen for
-the whole installation. What is built: the SMTP transport, an outbox with
-its sender, the texts in English, Romanian and Russian, a test message for
-the administrator, and the sign-in details on the four routes that issue a
-one-time password (creating an account, importing a roster, a reset, the bulk
-reset). A reset by link and contest notifications are the next messages
-(section 15, items 50 and 51). How to configure and operate it is
-[backend/README.md, "Email"](../backend/README.md#email).
+the olympiad of 2 November 2026. The installation sends email through one
+SMTP relay, as one mailbox, in one language chosen for the whole
+installation, except that a sign-up's messages and a reset link follow the
+language the reader's browser asks for. What is built: the SMTP transport,
+an outbox with its sender, the texts in English, Romanian and Russian, a
+test message for the administrator, the sign-in details on the five routes
+that issue a one-time password (creating an account, importing a roster, a
+reset and the bulk reset, which staff call, and the event's public
+registration form, which also mails the entrance code), and the messages of
+the self-service accounts of section 7: the sign-up code, the note to an
+address that already has an account, and the reset link. Contest
+notifications are the next messages (section 15, item 51). How to configure
+and operate it is [backend/README.md, "Email"](../backend/README.md#email).
 
 **The boundary runs in three places.** `internal/platform/mail` speaks SMTP,
 through `github.com/wneessen/go-mail`: it sends one message, once, and
@@ -4036,7 +4160,8 @@ ten-second tick covers a wake that came too early.
 **A password sits in a body only while it may still be sent.** Emailing a
 one-time password puts it in plain text in the core database and in the
 student's mailbox; the maintainer chose it with that caveat in view, and a
-reset by link is the later answer (item 50). What bounds it: the body is
+reset by link (section 7) now lets an owner with an address choose a password
+that no message carries. What bounds it: the body is
 erased the moment the message is sent or abandoned, and the table refuses a
 finished row that keeps one; a message queued 24 hours ago is never sent and
 its body is erased, whatever the relay is doing, and with mail off a sweep
@@ -4165,6 +4290,8 @@ to look and which variable governs what.
 | Under individual timing, a participant's clock starts on the first read of the content, not on an event subscription | 8 | — |
 | The scheduler ends a contest no earlier than the grace expires, by the same condition that closes submission | 8 | `DEADLINE_GRACE` |
 | A contest's staff and its participants do not overlap | 7 | — |
+| Self-service sign-up, recovery by link and external sign-in: one answer for every address, staff never reached through email, an email believed only when its provider vouches for it | 7 | `SELF_SIGNUP_ENABLED`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT`, `MICROSOFT_HOME_TENANT_ID` |
+| A contest admitting only verified addresses of the installation's domain | 7.1 | `TRUSTED_EMAIL_DOMAIN` |
 | `ends_at` and `starts_at` are immobile on a running contest where a fact already computed from them has occurred (the freeze, the ICPC penalty) | 6.1.1 | — |
 | Trusted proxies narrowed to two fixed addresses; the secret the interface proves an address with | 7.2 | `TRUSTED_PROXIES`, `INGRESS_SECRET` |
 | Refusing to start outside development on a placeholder from `.env.example` | 7.2 | — |
@@ -4719,10 +4846,9 @@ an item of the list below.
 1. **Email, first by a date:** OAuth for the Microsoft 365 relay (52), which
    must land before the end of December 2026, when Microsoft turns basic
    authentication for SMTP AUTH off by default and the relay may stop taking
-   the mailbox's password; then a password reset by link (50) and contest
-   notifications (51), both built on the outbox of section 10.2. Until 50
-   and 51 exist, an administrator resets a password and emails the new one,
-   and a contest is announced by other means.
+   the mailbox's password; then contest notifications (51), built on the
+   outbox of section 10.2. Until they exist, a contest is announced by other
+   means.
 2. **The organiser's workflow:** the start waiting until every copy is
    current (23); the staff reports (28), and
    `reports.view` removed (29); a contest list for a manager without
@@ -5100,15 +5226,6 @@ Product decisions the items below are built on.
   theme, density and language switches, from the product's own components;
   until it exists, CI's lint, contrast and error-code checks hold the design
   system on their own.
-- [ ] **50. A password reset by link** (section 10.2). A participant who
-  forgot their password asks an administrator, who resets it and may email
-  the new one. A link to a short-lived, single-use token, stored only as a
-  hash, would let them choose a password themselves and keep every password
-  out of the outbox and out of mailboxes. It is a new message kind and its
-  texts on the outbox as built, plus a public request route that answers the
-  same whether or not the account exists, throttled by address before
-  account (CLAUDE.md, rules 4 and 5), and the screen that takes the new
-  password.
 - [ ] **51. Contest notifications** (section 10.2). Nothing tells a
   participant that a contest they are registered for was published, moved,
   is about to start, or has revealed its results. Each notice is a message
@@ -5212,6 +5329,13 @@ Product decisions the items below are built on.
   the requesting participant's own copy is read, a few at a time
   (`maxCopyReads`), and answers that participant alone: it is never saved and
   never shared; a cache that cannot be read is logged once per contest.
+- [x] **50. A password reset by link** (sections 7 and 10.2). A student
+  who forgot their password asks for a single-use link, stored only as a
+  hash and valid for thirty minutes, and chooses the new password
+  themselves; no password passes through the outbox. The request answers
+  alike for every account, before any lookup, and is throttled by address
+  before account (CLAUDE.md, rules 4 and 5). Staff accounts never get a
+  link.
 
 ## 16. Assumptions
 
@@ -5221,5 +5345,5 @@ Product decisions the items below are built on.
   gains a `team_id` (section 15, item 10).
 - Answers are checked automatically against a reference. Manual review by a
   jury is a possible extension (`submissions.review_status`).
-- Integration with a university SSO (LDAP, OAuth) is not required now; the
-  `auth` module is isolated, and adding a provider would not touch the rest.
+- External sign-in is OpenID Connect, with Microsoft as its one provider
+  (section 7); a directory such as LDAP is not required.

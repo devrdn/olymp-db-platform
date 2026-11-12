@@ -233,7 +233,33 @@ window multiplies it.
 
    It should list no rows.
 
-**7. Create the participants' accounts.** On **Accounts** (`/users`), choose
+**7. Decide how participants get in.** An account reaches the platform in
+one of four ways, and the installation's settings decide which exist
+([Self-service accounts](../../backend/README.md#self-service-accounts)):
+
+| Way | Who makes the account | Exists when |
+|---|---|---|
+| **Accounts made by staff**, one at a time or by importing a roster (below) | an administrator, with a one-time password | always |
+| **Create an account** on the sign-in page | the person, with a password of their own and a code mailed to their address | `SELF_SIGNUP_ENABLED` and mail are on |
+| **Sign in with Microsoft** | nobody, when the address Microsoft vouches for is already an account's; otherwise the first sign-in makes one, with a generated login and no password | the installation is [connected](../../backend/README.md#connecting-microsoft-sign-in); new accounts only with `SELF_SIGNUP_ENABLED` |
+| **The event's registration form** (`/register`) | the form, with a one-time password and an entrance code | `EVENT_REGISTRATION_ENABLED` is on |
+
+- An account still has to join the contest: by enrolling itself where
+  **Enrolment** is open, or by staff finding it on **People**, **Add
+  participants**. An account that made itself has a login its owner chose,
+  or one generated from their Microsoft username or name; the picker finds
+  it by name or address too.
+- A staff-made account still on its one-time password stays on it after a
+  Microsoft sign-in: the platform asks for the password to be changed, which
+  takes the one-time one. Hand it over as usual, or have the person use
+  **Forgot password?** (mail on), which replaces it.
+- Staff accounts never sign in with Microsoft and never get a reset link:
+  an organiser or administrator signs in with their password.
+- With mail on, anyone with an address on a student account can reset a
+  forgotten password themselves from **Forgot password?**; the link lasts
+  thirty minutes.
+
+For accounts made by staff: on **Accounts** (`/users`), choose
 **Import a roster** and paste one line per person: login, full name and,
 optionally, email, separated by commas; only an account with an address can be
 emailed. Tick no role: a participant needs none. At most 500 lines a time; a
@@ -281,6 +307,30 @@ setup in particular: `no_game` (the game is not built, still building, or
 failed) and `staff_registered` (a participant's account administers every
 contest). Content freezes at the start; the window, the network, the CSV
 download and the diagram stay editable while the contest runs.
+
+**A contest only for the installation's own domain.** Where
+`TRUSTED_EMAIL_DOMAIN` is set, say to `example.edu`, **Who may enter, and
+from where** offers **Only verified @example.edu addresses**. With it on,
+an account enrolling itself needs a confirmed address in that domain or one
+of its subdomains (`ana@cs.example.edu` counts); anybody else is refused
+with "This contest is open only to people with a verified address in this
+site's own email domain. Sign up or sign in with such an address." An
+address is confirmed by a sign-up code, a followed reset link or a
+Microsoft sign-in that vouches for it. Every address held when the release
+that brings this was installed counts as confirmed; an account made after
+it by staff, an import or the event form starts unconfirmed, until its owner
+does one of those.
+
+- It binds self-enrolment only. Staff adding people on **People**, one at
+  a time or from a list, may add anybody. The participant list marks each
+  participant without a verified address there as "not a verified
+  @example.edu address", so an exception stays visible; it does so in every
+  contest once the domain is set, the switch on or off.
+- It needs **Enrolment** open to matter; an invitation-only contest is
+  already limited to the people staff add.
+- Without a domain the switch is not offered. A contest that had it on
+  before the domain was removed keeps it, says so beside the switch, and
+  admits nobody by self-enrolment until it is switched off.
 
 **9. Run the load test at the beta's size.** At a quiet time, never during
 somebody else's contest. `consoleload -profile beta` drives forty synthetic
@@ -431,6 +481,10 @@ Behaviour of the product that surprises people on the day:
   (`staff_cannot_participate`), and an administrator on
   the roster holds publication back (`staff_registered`). Test as a
   participant with a plain account.
+- **A contest only for the installation's domain** refuses a self-enrolment
+  without a confirmed address there (`contest_trusted_email_required`). The
+  person signs up or signs in with such an address, or you add them on
+  **People** ([step 8](#a-week-before)).
 - **A participant can reset their own database** in a `read_write` contest:
   **Reset database** on the play screen puts every table back as the contest
   started it. Answers, score, notes, tabs and the query log stay. Three resets
