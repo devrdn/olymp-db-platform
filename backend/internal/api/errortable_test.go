@@ -18,6 +18,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
+	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
@@ -609,6 +610,50 @@ func TestEveryRegistrationsErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 			wrapped, ok := answer(t, registrationsErrors, fmt.Errorf("%w: while registering", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+func TestEverySignupErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		signup.ErrNotAvailable: {status: http.StatusNotFound, code: "signup_not_available",
+			message: "self-service sign-up is not available"},
+		signup.ErrWrongCode: {status: http.StatusBadRequest, code: "signup_wrong_code",
+			message: "the code is not the one that was sent"},
+		signup.ErrCodeExpired: {status: http.StatusGone, code: "signup_code_expired",
+			message: "The code has expired or was tried too often; sign up again"},
+		signup.ErrTooSoon: {status: http.StatusTooManyRequests, code: "signup_too_soon",
+			message: "a code was sent less than a minute ago", retryAfter: "60"},
+		signup.ErrFull: {status: http.StatusServiceUnavailable, code: "signup_full",
+			message: "too many sign-ups are waiting for their code; try later"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range signup.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, signupErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, signupErrors, fmt.Errorf("%w: while signing up", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
 					wrapped, ok, expected.status, expected.code)

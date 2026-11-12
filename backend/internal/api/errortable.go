@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
+	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
@@ -298,6 +299,23 @@ var registrationsErrors = errorTable{
 	{err: registrations.ErrFull, status: http.StatusConflict, code: codeRegistrationFull},
 	{err: registrations.ErrNotFound, status: http.StatusNotFound, code: codeRegistrationNotFound},
 }
+
+// signupErrors answers every error in signup.Errors() (walked by
+// TestEverySignupErrorHasItsAnswer).
+var signupErrors = errorTable{
+	// 404, like the routes that are not mounted when sign-up is off.
+	{err: signup.ErrNotAvailable, status: http.StatusNotFound, code: codeSignupNotAvailable},
+	{err: signup.ErrWrongCode, status: http.StatusBadRequest, code: codeSignupWrongCode},
+	{err: signup.ErrCodeExpired, status: http.StatusGone, code: codeSignupCodeExpired,
+		message: signupExpiredMessage},
+	{err: signup.ErrTooSoon, status: http.StatusTooManyRequests, code: codeSignupTooSoon,
+		retryAfter: signup.ResendCooldown},
+	{err: signup.ErrFull, status: http.StatusServiceUnavailable, code: codeSignupFull},
+}
+
+// signupExpiredMessage is written out because a spent sign-up whose address
+// an account took since is answered with it too (signupAnswers).
+const signupExpiredMessage = "The code has expired or was tried too often; sign up again"
 
 // contestsErrors answers every error in contests.Errors() (walked by
 // TestEveryContestsErrorHasItsAnswer). Staff routes answer account refusals

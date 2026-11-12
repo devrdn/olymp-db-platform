@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// CookieWriter writes and clears the session cookie. Secure is configured
+// CookieWriter writes and clears the session, device and sign-up cookies. Secure is configured
 // once per deployment rather than inferred from a forwarded header, which
 // could silently drop it in production.
 type CookieWriter struct {
@@ -42,6 +42,24 @@ func (c CookieWriter) Clear(w http.ResponseWriter) {
 // fact that this browser is the owner's.
 func (c CookieWriter) SetDevice(w http.ResponseWriter, token string, ttl time.Duration) {
 	http.SetCookie(w, c.cookie(DeviceCookieName, token, int(ttl.Seconds())))
+}
+
+// SignupName is the name of the cookie that binds a pending sign-up to the
+// browser that started it, prefixed as SessionName is.
+func (c CookieWriter) SignupName() string {
+	if c.secure {
+		return "__Host-dbcontest_signup"
+	}
+	return "dbcontest_signup"
+}
+
+// SetSignup writes the sign-up cookie with the session cookie's protections.
+func (c CookieWriter) SetSignup(w http.ResponseWriter, token string, ttl time.Duration) {
+	http.SetCookie(w, c.cookie(c.SignupName(), token, int(ttl.Seconds())))
+}
+
+func (c CookieWriter) ClearSignup(w http.ResponseWriter) {
+	http.SetCookie(w, c.cookie(c.SignupName(), "", -1))
 }
 
 func (c CookieWriter) cookie(name, value string, maxAge int) *http.Cookie {

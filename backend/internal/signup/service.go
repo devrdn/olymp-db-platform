@@ -156,7 +156,7 @@ func (s *Service) Start(ctx context.Context, cmd StartCommand) (StartResult, err
 }
 
 func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
-	if !s.available() {
+	if !s.Offered() {
 		return "", ErrNotAvailable
 	}
 	login, fullName := strings.ToLower(strings.TrimSpace(cmd.Login)), strings.TrimSpace(cmd.FullName)
@@ -283,7 +283,7 @@ func (s *Service) message(ctx context.Context, p Pending, code, lang string) (ma
 // row stays locked from the read to the commit, so two confirmations of one
 // code make one account.
 func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, error) {
-	if !s.available() {
+	if !s.Offered() {
 		return users.User{}, ErrNotAvailable
 	}
 	email, err := normalizeEmail(cmd.Email)
@@ -373,7 +373,7 @@ func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
 // holds. It takes the token Start answered; a missing or other one counts a
 // try and answers ErrWrongCode. An address with no sign-up gets nothing.
 func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
-	if !s.available() {
+	if !s.Offered() {
 		return ErrNotAvailable
 	}
 	email, err := normalizeEmail(cmd.Email)
@@ -429,7 +429,9 @@ func (s *Service) Sweep(ctx context.Context, now time.Time) (int64, error) {
 	return s.cfg.Store.Sweep(ctx, now)
 }
 
-func (s *Service) available() bool { return s.cfg.Enabled && s.cfg.Outbox.Enabled() }
+// Offered reports whether the installation offers sign-up: the switch is on
+// and mail is, so a code can reach someone.
+func (s *Service) Offered() bool { return s.cfg.Enabled && s.cfg.Outbox.Enabled() }
 
 // normalizeEmail trims and lowercases an address, refusing one longer than an
 // account's: lowercasing can lengthen a letter in bytes.

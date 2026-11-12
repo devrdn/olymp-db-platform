@@ -722,6 +722,26 @@
       "meaning": "This participant's browser has sent more signal batches this minute than the installation allows, refused batches included. Nothing was stored; keep the batch and send it again after `Retry-After`."
     },
     {
+      "code": "signup_code_expired",
+      "meaning": "The sign-up can no longer be confirmed: thirty minutes passed since its code was mailed, its five tries are spent, or it can no longer finish. Start the sign-up again."
+    },
+    {
+      "code": "signup_full",
+      "meaning": "As many sign-ups as the installation holds (10000) are waiting for their code, so a new one is refused. Nothing was stored; try later."
+    },
+    {
+      "code": "signup_not_available",
+      "meaning": "This installation does not offer self-service sign-up: SELF_SIGNUP_ENABLED is off, or email is, so no code could reach anyone. Nothing was stored."
+    },
+    {
+      "code": "signup_too_soon",
+      "meaning": "A code for this sign-up was mailed less than a minute ago. Retry-After says when another may be sent."
+    },
+    {
+      "code": "signup_wrong_code",
+      "meaning": "The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try at a waiting sign-up counts against its five."
+    },
+    {
       "code": "staff_cannot_participate",
       "meaning": "This account staffs the contest (owner or manager) or once did, so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard, and revoking the role does not undo that."
     },
@@ -739,7 +759,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the event registration form's limit, per address and per email, refused attempts included. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form and of each self-service sign-up endpoint, per address and per email, refused attempts included. Try again later."
     },
     {
       "code": "too_many_connections",

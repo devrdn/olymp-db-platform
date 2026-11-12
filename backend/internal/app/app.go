@@ -586,6 +586,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		UnitOfWork: storage.NewUnitOfWork(pool),
 	})
 	a.tasks = append(a.tasks, sweepSignups(log, signups.Sweep))
+	// Mounts its routes only while the switch and mail are both on.
+	modules = append(modules, api.NewSignupHandler(signups, authService, limiter, authMiddleware, cookies, log))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only

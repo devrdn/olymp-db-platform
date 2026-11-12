@@ -760,6 +760,23 @@ func TestSweepRemovesExpiredRows(t *testing.T) {
 	}
 }
 
+func TestSignupIsOfferedOnlyWithTheSwitchAndMailOn(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		enabled, mail bool
+	}{
+		{"both on", true, true},
+		{"switch off", false, true},
+		{"mail off", true, false},
+	} {
+		f := signuptest.NewFixture(t, func(cfg *signup.Config) { cfg.Enabled = c.enabled })
+		f.Outbox.Off = !c.mail
+		if got, want := f.Service.Offered(), c.enabled && c.mail; got != want {
+			t.Errorf("%s: Offered() = %v, want %v", c.name, got, want)
+		}
+	}
+}
+
 func TestStartIsNotAvailableWithMailOffOrTheSwitchOff(t *testing.T) {
 	for name, setup := range map[string]func(*signuptest.Fixture){
 		"switch off": nil,
