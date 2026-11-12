@@ -16,7 +16,9 @@ CREATE TABLE pending_signups (
     full_name     text NOT NULL CHECK (char_length(full_name) <= 200),
     password_hash text NOT NULL,
     -- A random salt followed by SHA-256 of the salt and the code.
-    code_hash     bytea NOT NULL,
+    code_hash     bytea NOT NULL CHECK (octet_length(code_hash) = 48),
+    -- SHA-256 of the token Start handed the browser that started it.
+    token_hash    bytea NOT NULL CHECK (octet_length(token_hash) = 32),
     tries         smallint NOT NULL DEFAULT 0,
     sent_at       timestamptz NOT NULL,
     expires_at    timestamptz NOT NULL,

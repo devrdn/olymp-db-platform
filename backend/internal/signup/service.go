@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -37,7 +38,7 @@ type Store interface {
 	// ends, which ctx must carry; false when there is none.
 	Take(ctx context.Context, email string) (Pending, bool, error)
 	CountTry(ctx context.Context, id uuid.UUID) error
-	// Renew stores a new code and its times, and clears the tries.
+	// Renew stores a new code and its times; the tries and the token stay.
 	Renew(ctx context.Context, id uuid.UUID, codeHash []byte, sentAt, expiresAt time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	// Sweep deletes every sign-up expired at now.
@@ -123,8 +124,20 @@ type StartCommand struct {
 	FullName, Login, Email, Password, Lang string
 }
 
+// StartResult is what the browser that started a sign-up keeps: Confirm and
+// Resend take its token, so a later Start for the same address, which
+// replaces the row and its token, cannot be finished with the code mailed
+// to someone else.
+type StartResult struct {
+	Token string
+}
+
 type ConfirmCommand struct {
-	Email, Code string
+	Email, Code, Token string
+}
+
+type ResendCommand struct {
+	Email, Token, Lang string
 }
 
 // Start validates the form, stores a pending sign-up with a code and mails
@@ -133,66 +146,82 @@ type ConfirmCommand struct {
 // is mailed the existing-account message and the code reaches nobody, so no
 // answer of Start, Confirm or Resend tells the two apart. A taken login is
 // refused openly: logins are public on the leaderboards.
-func (s *Service) Start(ctx context.Context, cmd StartCommand) error {
+func (s *Service) Start(ctx context.Context, cmd StartCommand) (StartResult, error) {
+	token, err := s.start(ctx, cmd)
+	if err != nil {
+		return StartResult{}, err
+	}
+	return StartResult{Token: token}, nil
+}
+
+func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	if !s.available() {
-		return ErrNotAvailable
+		return "", ErrNotAvailable
 	}
 	login, fullName := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName)
 	email, err := normalizeEmail(cmd.Email)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := users.ValidateAccount(login, fullName, email); err != nil {
-		return err
+		return "", err
 	}
 	// The name greets the reader of a message sent to whatever address was
 	// typed.
 	if !users.IsWrittenAsAName(fullName) {
-		return fmt.Errorf("%w: the full name must be letters, spaces, hyphens, apostrophes or periods", users.ErrInvalidAccount)
+		return "", fmt.Errorf("%w: the full name must be letters, spaces, hyphens, apostrophes or periods", users.ErrInvalidAccount)
 	}
 	if err := users.ValidatePassword(cmd.Password); err != nil {
-		return err
+		return "", err
 	}
 
 	// Everything is refused before the hash, alike for a known address.
-	now := s.cfg.Now()
-	if err := s.refuseTakenLogin(ctx, login, email, now); err != nil {
-		return err
+	checkedAt := s.cfg.Now()
+	if err := s.refuseTakenLogin(ctx, login, email, checkedAt); err != nil {
+		return "", err
 	}
-	waiting, err := s.cfg.Store.Waiting(ctx, email, now)
+	waiting, err := s.cfg.Store.Waiting(ctx, email, checkedAt)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if waiting >= MaxPending {
-		return ErrFull
+		return "", ErrFull
 	}
 	passwordHash, err := s.cfg.Hasher.Hash(ctx, cmd.Password)
 	if err != nil {
-		return fmt.Errorf("hash the password: %w", err)
+		return "", fmt.Errorf("hash the password: %w", err)
 	}
 
+	// The code's window opens once the hash, which may wait for a slot, is
+	// done.
+	now := s.cfg.Now()
 	code, codeHash, err := s.drawCode()
 	if err != nil {
-		return err
+		return "", err
 	}
-	message, err := s.message(ctx, email, fullName, code, cmd.Lang)
+	token, tokenHash, err := s.drawToken()
 	if err != nil {
-		return err
+		return "", err
+	}
+	p := Pending{
+		Email: email, Login: login, FullName: fullName, PasswordHash: passwordHash,
+		CodeHash: codeHash, TokenHash: tokenHash, SentAt: now, ExpiresAt: now.Add(CodeLifetime),
+	}
+	message, err := s.message(ctx, p, code, cmd.Lang)
+	if err != nil {
+		return "", err
 	}
 	err = s.cfg.UnitOfWork.Do(ctx, func(ctx context.Context) error {
-		if err := s.cfg.Store.Put(ctx, Pending{
-			Email: email, Login: login, FullName: fullName, PasswordHash: passwordHash,
-			CodeHash: codeHash, SentAt: now, ExpiresAt: now.Add(CodeLifetime),
-		}, MaxPending, now); err != nil {
+		if err := s.cfg.Store.Put(ctx, p, MaxPending, now); err != nil {
 			return err
 		}
 		return s.cfg.Outbox.EnqueueMany(ctx, []mailing.Message{message})
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	s.cfg.Outbox.Wake()
-	return nil
+	return token, nil
 }
 
 // refuseTakenLogin refuses a login an account or another address's unexpired
@@ -214,15 +243,15 @@ func (s *Service) refuseTakenLogin(ctx context.Context, login, email string, now
 // message is the code for a new address and, for one a live account holds,
 // the existing-account message to its owner, naming the owner's own account
 // and nothing the form carried.
-func (s *Service) message(ctx context.Context, email, fullName, code, lang string) (mailing.Message, error) {
+func (s *Service) message(ctx context.Context, p Pending, code, lang string) (mailing.Message, error) {
 	language, installation, err := s.letterhead(ctx, lang)
 	if err != nil {
 		return mailing.Message{}, err
 	}
-	owner, err := s.cfg.Directory.ByEmail(ctx, email)
+	owner, err := s.cfg.Directory.ByEmail(ctx, p.Email)
 	switch {
 	case errors.Is(err, users.ErrNotFound):
-		return s.codeMessage(email, fullName, code, language, installation)
+		return s.codeMessage(p, code, language, installation)
 	case err != nil:
 		return mailing.Message{}, err
 	}
@@ -238,8 +267,9 @@ func (s *Service) message(ctx context.Context, email, fullName, code, lang strin
 	}, nil
 }
 
-// Confirm makes the account of the email's sign-up when code is its code,
-// and spends the sign-up. Every try counts, a malformed code included. The
+// Confirm makes the account of the email's sign-up when code is its code and
+// token the one its Start answered, and spends the sign-up. Every try at a
+// live sign-up counts, a malformed code or a missing token included. The
 // row stays locked from the read to the commit, so two confirmations of one
 // code make one account.
 func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, error) {
@@ -269,7 +299,7 @@ func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, 
 			refusal = ErrCodeExpired
 			return nil
 		}
-		if !codeMatches(p.CodeHash, cmd.Code) {
+		if !tokenMatches(p.TokenHash, cmd.Token) || !codeMatches(p.CodeHash, cmd.Code) {
 			refusal = ErrWrongCode
 			return s.cfg.Store.CountTry(ctx, p.ID)
 		}
@@ -328,14 +358,15 @@ func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
 }
 
 // Resend stores a new code for the email's sign-up, replacing the old one
-// and its tries, and mails it, or the existing-account message again to the
-// owner of an address a live account holds. An address with no sign-up gets
-// nothing.
-func (s *Service) Resend(ctx context.Context, email, lang string) error {
+// and opening a new window but keeping the tries, and mails it, or the existing-account message again to the
+// owner of an address a live account holds. It takes the token Start
+// answered; a missing or other one counts a try and answers ErrWrongCode. An
+// address with no sign-up gets nothing.
+func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 	if !s.available() {
 		return ErrNotAvailable
 	}
-	email, err := normalizeEmail(email)
+	email, err := normalizeEmail(cmd.Email)
 	if err != nil {
 		return nil
 	}
@@ -356,11 +387,14 @@ func (s *Service) Resend(ctx context.Context, email, lang string) error {
 		case p.spent(now):
 			refusal = ErrCodeExpired
 			return nil
+		case !tokenMatches(p.TokenHash, cmd.Token):
+			refusal = ErrWrongCode
+			return s.cfg.Store.CountTry(ctx, p.ID)
 		case now.Before(p.SentAt.Add(ResendCooldown)):
 			refusal = ErrTooSoon
 			return nil
 		}
-		message, err := s.message(ctx, p.Email, p.FullName, code, lang)
+		message, err := s.message(ctx, p, code, cmd.Lang)
 		if err != nil {
 			return err
 		}
@@ -414,15 +448,15 @@ func (s *Service) letterhead(ctx context.Context, lang string) (mailing.Language
 	return language, values[settings.KeyName], nil
 }
 
-func (s *Service) codeMessage(to, fullName, code string, lang mailing.Language, installation string) (mailing.Message, error) {
+func (s *Service) codeMessage(p Pending, code string, lang mailing.Language, installation string) (mailing.Message, error) {
 	text, err := s.cfg.Texts.SignupCode(lang, mailing.SignupCodeData{
-		Installation: installation, FullName: fullName, Code: code,
+		Installation: installation, FullName: p.FullName, Login: p.Login, Code: code,
 	})
 	if err != nil {
 		return mailing.Message{}, fmt.Errorf("write the code message: %w", err)
 	}
 	return mailing.Message{
-		Kind: mailing.KindSignupCode, UserID: uuid.Nil, To: to, Subject: text.Subject, Body: text.Body,
+		Kind: mailing.KindSignupCode, UserID: uuid.Nil, To: p.Email, Subject: text.Subject, Body: text.Body,
 	}, nil
 }
 
@@ -451,6 +485,28 @@ func (s *Service) drawCode() (string, []byte, error) {
 			return code, append(salt, codeDigest(salt, code)...), nil
 		}
 	}
+}
+
+// drawToken returns a token for the browser and its SHA-256, which is all
+// that is stored: the token is random enough to need no salt.
+func (s *Service) drawToken() (string, []byte, error) {
+	raw := make([]byte, TokenBytes)
+	if _, err := io.ReadFull(s.cfg.Random, raw); err != nil {
+		return "", nil, fmt.Errorf("draw a token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	digest := sha256.Sum256([]byte(token))
+	return token, digest[:], nil
+}
+
+// tokenMatches compares in constant time. A candidate of another length
+// cannot match, and is not hashed.
+func tokenMatches(stored []byte, candidate string) bool {
+	if len(stored) != sha256.Size || len(candidate) != base64.RawURLEncoding.EncodedLen(TokenBytes) {
+		return false
+	}
+	digest := sha256.Sum256([]byte(candidate))
+	return subtle.ConstantTimeCompare(stored, digest[:]) == 1
 }
 
 func codeDigest(salt []byte, code string) []byte {

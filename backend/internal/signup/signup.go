@@ -1,11 +1,13 @@
 // Package signup lets a person create their own account with a password: a
 // sign-up waits, as a pending row and not an account, until the person types
-// the six-digit code mailed to the address, and only then becomes a verified
-// student account. An address that already has an account is answered exactly
-// as a new one is, and its owner is mailed instead.
+// the six-digit code mailed to the address, in the browser that started it,
+// and only then becomes a verified student account. An address that already
+// has an account is answered exactly as a new one is, and its owner is mailed
+// instead.
 //
 // It does not serve HTTP or throttle callers (internal/api does, before the
-// password hash), does not sign the new account in (auth does), and does not
+// password hash, and keeps Start's token for the browser), does not sign the
+// new account in (auth does), and does not
 // decide whether sign-up is offered: the deployment does, with
 // SELF_SIGNUP_ENABLED and mail.
 package signup
@@ -22,13 +24,16 @@ const (
 	CodeDigits = 6
 	// CodeLifetime is how long a code confirms, from when it was mailed.
 	CodeLifetime = 30 * time.Minute
-	// MaxTries is how many codes one mailed code may be tried with; the next
-	// try is answered as expired, the right code included.
+	// MaxTries is how many tries a sign-up gets in all, however many codes it
+	// is sent; the next try is answered as expired, the right code included.
 	MaxTries = 5
 	// ResendCooldown is how long after a code was mailed another may be.
 	ResendCooldown = 60 * time.Second
 	// MaxPending bounds the unexpired sign-ups held at once.
 	MaxPending = 10_000
+	// TokenBytes is the randomness of the token binding a sign-up to the
+	// browser that started it.
+	TokenBytes = 32
 )
 
 var (
@@ -60,7 +65,9 @@ type Pending struct {
 	// PasswordHash is the chosen password, hashed when the sign-up started.
 	PasswordHash string
 	// CodeHash is a random salt followed by SHA-256 of the salt and the code.
-	CodeHash  []byte
+	CodeHash []byte
+	// TokenHash is SHA-256 of the token Start answered.
+	TokenHash []byte
 	Tries     int
 	SentAt    time.Time
 	ExpiresAt time.Time

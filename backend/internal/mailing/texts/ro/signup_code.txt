@@ -2,10 +2,10 @@ Subject: Codul de înregistrare pentru {{.Installation}}
 
 Bună ziua, {{.FullName}},
 
-Folosiți acest cod pentru a confirma adresa de e-mail și a finaliza înregistrarea în {{.Installation}}.
+Folosiți acest cod pentru a confirma adresa de e-mail și a finaliza înregistrarea în {{.Installation}} cu numele de utilizator {{.Login}}.
 
 Codul dumneavoastră: {{.Code}}
 
-Codul este valabil 30 de minute. Dacă nu ați încercat să vă înregistrați, ignorați acest mesaj.
+Codul este valabil 30 de minute. Dacă nu ați trimis chiar acum această înregistrare, ignorați acest mesaj: fără cod nu se creează niciun cont.
 
 Acesta este un mesaj automat; vă rugăm să nu răspundeți.

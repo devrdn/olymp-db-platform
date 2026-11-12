@@ -185,7 +185,7 @@ func (s *Store) CountTry(_ context.Context, id uuid.UUID) error {
 
 func (s *Store) Renew(_ context.Context, id uuid.UUID, codeHash []byte, sentAt, expiresAt time.Time) error {
 	return s.update(id, func(p *signup.Pending) {
-		p.CodeHash, p.SentAt, p.ExpiresAt, p.Tries = slices.Clone(codeHash), sentAt, expiresAt, 0
+		p.CodeHash, p.SentAt, p.ExpiresAt = slices.Clone(codeHash), sentAt, expiresAt
 	})
 }
 
@@ -252,14 +252,19 @@ func (o *Outbox) Queued() []mailing.Message {
 	return slices.Clone(o.queued)
 }
 
-// Hasher is the real hasher, counting what it is asked to hash.
+// Hasher is the real hasher, counting what it is asked to hash. During, when
+// set, runs inside each hash, as time passing while it works.
 type Hasher struct {
-	inner *password.Hasher
-	calls atomic.Int64
+	inner  *password.Hasher
+	calls  atomic.Int64
+	During func()
 }
 
 func (h *Hasher) Hash(ctx context.Context, plaintext string) (string, error) {
 	h.calls.Add(1)
+	if h.During != nil {
+		h.During()
+	}
 	return h.inner.Hash(ctx, plaintext)
 }
 
