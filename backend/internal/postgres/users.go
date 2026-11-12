@@ -393,13 +393,13 @@ func (r *Users) SetStatus(ctx context.Context, ids []uuid.UUID, status string, c
 	return nil
 }
 
-// SetPassword stores a new digest.
+// SetPassword stores a new digest; an empty one stores NULL, no password.
 func (r *Users) SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error {
 	return r.exec(ctx, `
 		UPDATE users
 		SET password_hash = $2, must_change_password = $3,
 		    password_changed_at = now(), updated_at = now()
-		WHERE id = $1`, id, hash, mustChange)
+		WHERE id = $1`, id, nullIfEmpty(hash), mustChange)
 }
 
 // SetPasswordMany stores a digest per account and marks each one as carrying

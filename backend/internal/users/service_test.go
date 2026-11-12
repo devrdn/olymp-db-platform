@@ -426,7 +426,7 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
 	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
 
-	if err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), at); err != nil {
+	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), at); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 
@@ -449,6 +449,137 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	}
 	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true {
 		t.Errorf("payload = %v, want the provider and a trusted email", entry.Payload)
+	}
+}
+
+// oneTimeStudent is a staff-made student still on the one-time password it
+// was issued.
+func (f *fixture) oneTimeStudent(t *testing.T) users.User {
+	t.Helper()
+	return f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, "issued one-time password"), MustChangePassword: true,
+		SessionGeneration: 3,
+	})
+}
+
+func assertOneTimePasswordRetired(t *testing.T, f *fixture, before, returned users.User) {
+	t.Helper()
+	stored, _ := f.repo.Get(before.ID)
+	if stored.HasPassword() || stored.MustChangePassword {
+		t.Errorf("stored hash %q, must change %v: want no password and no forced change", stored.PasswordHash, stored.MustChangePassword)
+	}
+	if stored.SessionGeneration <= before.SessionGeneration {
+		t.Errorf("session generation %d, want past %d: sessions opened with the one-time password must end", stored.SessionGeneration, before.SessionGeneration)
+	}
+	if returned.HasPassword() || returned.MustChangePassword || returned.SessionGeneration != stored.SessionGeneration {
+		t.Errorf("returned %+v, want the account as stored after the change", returned)
+	}
+	var retired []audit.Entry
+	for _, e := range f.sink.entries {
+		if e.Action == audit.ActionUserOneTimePasswordRetire {
+			retired = append(retired, e)
+		}
+	}
+	if len(retired) != 1 || retired[0].ActorID != nil || retired[0].EntityID != before.ID.String() ||
+		retired[0].Payload["provider"] != users.ProviderMicrosoft {
+		t.Errorf("retirement entries = %+v, want one for the account, by its owner, naming the provider", retired)
+	}
+}
+
+// The person signed in through the provider because they never had the
+// password; leaving it would send them to a change form asking for it.
+func TestLinkingRetiresAnUnusedOneTimePassword(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.oneTimeStudent(t)
+
+	linked, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+	if err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+
+	assertOneTimePasswordRetired(t, f, ana, linked)
+	if f.uow.Calls != 1 {
+		t.Errorf("units of work = %d, want the link and the retirement in one", f.uow.Calls)
+	}
+}
+
+func TestLinkingKeepsAPasswordTheOwnerChose(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, "a password ana chose"),
+	})
+
+	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+
+	if stored, _ := f.repo.Get(ana.ID); stored.PasswordHash != ana.PasswordHash || stored.SessionGeneration != ana.SessionGeneration {
+		t.Errorf("stored %+v, want the chosen password and the sessions kept", stored)
+	}
+	if got := f.sink.actions(); !slices.Equal(got, []string{audit.ActionUserExternalIdentityLink}) {
+		t.Errorf("audit = %v, want the link only", got)
+	}
+}
+
+func TestEnteringALinkedAccountRetiresItsUnusedOneTimePassword(t *testing.T) {
+	f := newFixture(t)
+	ana := f.oneTimeStudent(t)
+
+	entered, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft)
+	if err != nil {
+		t.Fatalf("RetireOneTimePassword() = %v", err)
+	}
+
+	assertOneTimePasswordRetired(t, f, ana, entered)
+}
+
+func TestEnteringALinkedAccountWithAChosenPasswordWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	ana := f.addUser(t, "ana", "a password ana chose")
+
+	entered, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft)
+	if err != nil {
+		t.Fatalf("RetireOneTimePassword() = %v", err)
+	}
+
+	if entered.PasswordHash != ana.PasswordHash || len(f.sink.entries) != 0 {
+		t.Errorf("returned %+v with audit %v, want the account unchanged and nothing recorded", entered, f.sink.actions())
+	}
+}
+
+// The account is re-read under the lock, as LinkExternal does: one made
+// staff or blocked since the caller's read keeps its password.
+func TestRetiringRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
+	for name, tc := range map[string]struct {
+		account users.User
+		want    error
+	}{
+		"made staff": {users.User{Roles: []string{"organizer"}}, users.ErrStaffNotLinkable},
+		"blocked":    {users.User{Status: users.StatusBlocked}, users.ErrAccountBlocked},
+		"deleted":    {users.User{Status: users.StatusDeleted}, users.ErrAccountDeleted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.repo.GrantRole("organizer", "contests.manage")
+			account := tc.account
+			account.Login, account.FullName, account.MustChangePassword = "ana", "Ana", true
+			account.PasswordHash = passwordtest.Hash(t, "issued one-time password")
+			if account.Roles == nil {
+				account.Roles = []string{users.RoleStudent}
+			}
+			ana := f.repo.Add(account)
+
+			if _, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft); !errors.Is(err, tc.want) {
+				t.Errorf("RetireOneTimePassword() = %v, want %v", err, tc.want)
+			}
+			if stored, _ := f.repo.Get(ana.ID); stored.PasswordHash != ana.PasswordHash {
+				t.Error("the password was dropped")
+			}
+		})
 	}
 }
 
@@ -480,7 +611,7 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 			locked := 0
 			f.repo.OnLock = func(uuid.UUID) { locked++ }
 
-			err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+			_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
 
 			if !errors.Is(err, tc.want) {
 				t.Errorf("LinkExternal() = %v, want %v", err, tc.want)
@@ -513,7 +644,7 @@ func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-after"), time.Now())
+	_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-after"), time.Now())
 
 	if !errors.Is(err, users.ErrIssuerAlreadyLinked) {
 		t.Errorf("LinkExternal() = %v, want ErrIssuerAlreadyLinked", err)
@@ -539,7 +670,7 @@ func TestLinkExternalLinksAnIdentityOfAnotherIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
+	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
@@ -553,7 +684,7 @@ func TestLinkExternalRefusesAnInvalidIdentity(t *testing.T) {
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
 	identity := microsoftIdentity("")
 
-	if err := f.service.LinkExternal(t.Context(), ana.ID, identity, time.Now()); !errors.Is(err, users.ErrInvalidAccount) {
+	if _, err := f.service.LinkExternal(t.Context(), ana.ID, identity, time.Now()); !errors.Is(err, users.ErrInvalidAccount) {
 		t.Errorf("LinkExternal() = %v, want ErrInvalidAccount", err)
 	}
 }

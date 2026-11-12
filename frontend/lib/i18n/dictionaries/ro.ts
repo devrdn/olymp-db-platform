@@ -1942,6 +1942,7 @@ const ro = {
       "user.sign_in_details_emailed": "A pus în coada de trimitere datele de autentificare prin e-mail",
       "user.external_sign_up": "Și-a creat un cont la prima autentificare printr-un serviciu extern",
       "user.external_identity_link": "Și-a legat contul de autentificarea printr-un serviciu extern",
+      "user.one_time_password_retire": "S-a autentificat printr-un serviciu extern, care a anulat o parolă de unică folosință nefolosită",
       "contest.create": "A creat o olimpiadă",
       "contest.update": "A modificat o olimpiadă",
       "contest.delete": "A șters o olimpiadă",
