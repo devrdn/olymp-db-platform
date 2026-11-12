@@ -85,6 +85,9 @@ type SignupExistingData struct {
 	Installation string
 	FullName     string
 	Login        string
+	// ResetByAdministrator replaces the forgotten-password link with asking
+	// an administrator, for an account password recovery does not serve.
+	ResetByAdministrator bool
 }
 
 // PasswordResetData is what a person resetting their password needs.

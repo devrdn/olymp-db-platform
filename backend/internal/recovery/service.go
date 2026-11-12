@@ -256,14 +256,7 @@ func (s *Service) find(ctx context.Context, loginOrEmail string) (users.User, bo
 	case err != nil:
 		return users.User{}, false, err
 	}
-	return account, reachable(account), nil
-}
-
-// reachable is an account a link may be mailed to and followed for: a live,
-// active student with an address. Staff are never reached through email: an
-// address someone typed must not become a way into a permission.
-func reachable(u users.User) bool {
-	return u.IsActive() && !u.IsStaff() && u.Email != ""
+	return account, account.ReachableByEmail(), nil
 }
 
 // Complete sets newPassword on the account of token's link, marks its
@@ -318,7 +311,7 @@ func (s *Service) Complete(ctx context.Context, token, newPassword string) error
 			case err != nil:
 				return uuid.Nil, false, err
 			}
-			if !reachable(account) || strings.ToLower(account.Email) != link.Email {
+			if !account.ReachableByEmail() || strings.ToLower(account.Email) != link.Email {
 				return uuid.Nil, false, nil
 			}
 			return account.ID, true, nil

@@ -441,6 +441,33 @@ func TestTheExistingAccountMessageSaysToIgnoreItAndHoldsNoCode(t *testing.T) {
 	}
 }
 
+// An account recovery never serves (staff, or blocked) must not be sent to
+// a page that waits for a link that never comes.
+func TestTheExistingAccountMessageSendsAnAccountRecoveryCannotServeToAnAdministrator(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	phrases := map[mailing.Language]string{
+		mailing.English:  "ask an administrator to reset it",
+		mailing.Romanian: "rugați un administrator să o reseteze",
+		mailing.Russian:  "попросите администратора сбросить его",
+	}
+	data := signupExistingData()
+	data.ResetByAdministrator = true
+
+	for _, lang := range mailing.Languages() {
+		text, err := texts.SignupExisting(lang, data)
+		if err != nil {
+			t.Fatalf("%s: SignupExisting() = %v", lang, err)
+		}
+		if !strings.Contains(text.Body, phrases[lang]) || strings.Contains(text.Body, "/forgot") {
+			t.Errorf("%s: body should send the reader to an administrator, not to /forgot:\n%s", lang, text.Body)
+		}
+		ordinary, _ := texts.SignupExisting(lang, signupExistingData())
+		if !strings.Contains(ordinary.Body, publicURL+"/forgot") || strings.Contains(ordinary.Body, phrases[lang]) {
+			t.Errorf("%s: a student's body should link the forgot page:\n%s", lang, ordinary.Body)
+		}
+	}
+}
+
 // A code can reach someone who did not start the sign-up it confirms, so the
 // message names the login it would create and says to ignore it otherwise.
 func TestTheCodeMessageNamesTheLoginAndSaysToIgnoreItIfThatWasNotYou(t *testing.T) {

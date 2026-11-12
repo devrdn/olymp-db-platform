@@ -157,6 +157,39 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	}
 }
 
+// Recovery never serves staff or a blocked account, so the existing-account
+// message must not send them to it.
+func TestTheExistingAccountMessageSendsAnAccountRecoveryCannotServeToAnAdministrator(t *testing.T) {
+	for name, tc := range map[string]struct {
+		owner       users.User
+		toForgotten bool
+	}{
+		"a student": {users.User{Roles: []string{users.RoleStudent}}, true},
+		"staff":     {users.User{Roles: []string{"organizer"}}, false},
+		"blocked":   {users.User{Roles: []string{users.RoleStudent}, Status: users.StatusBlocked}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := signuptest.NewFixture(t, nil)
+			f.Users.GrantRole("organizer", "contests.manage")
+			owner := tc.owner
+			owner.Login, owner.Email, owner.FullName, owner.PasswordHash = "ana.owner", "ana@example.edu", "Ana Owner", "x"
+			f.Users.Add(owner)
+
+			if _, err := f.Service.Start(t.Context(), start("ana@example.edu", "someone-else")); err != nil {
+				t.Fatalf("Start() = %v", err)
+			}
+
+			queued := f.Outbox.Queued()
+			if len(queued) != 1 || queued[0].Kind != mailing.KindSignupExisting {
+				t.Fatalf("queued %+v, want the existing-account message", queued)
+			}
+			if got := strings.Contains(queued[0].Body, "/forgot"); got != tc.toForgotten {
+				t.Errorf("links the forgot page: %v, want %v:\n%s", got, tc.toForgotten, queued[0].Body)
+			}
+		})
+	}
+}
+
 var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 func TestStartReturnsATokenForAKnownEmailToo(t *testing.T) {

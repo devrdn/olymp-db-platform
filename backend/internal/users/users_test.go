@@ -116,3 +116,20 @@ func TestANameIsWrittenOnlyWithWhatNamesAreWrittenWith(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyALiveStudentWithAnAddressIsReachableByEmail(t *testing.T) {
+	for name, tc := range map[string]struct {
+		user users.User
+		want bool
+	}{
+		"a student":        {users.User{Status: users.StatusActive, Email: "ana@example.edu"}, true},
+		"staff":            {users.User{Status: users.StatusActive, Email: "ana@example.edu", Permissions: []string{"contests.manage"}}, false},
+		"blocked":          {users.User{Status: users.StatusBlocked, Email: "ana@example.edu"}, false},
+		"deleted":          {users.User{Status: users.StatusDeleted, Email: "ana@example.edu"}, false},
+		"without an email": {users.User{Status: users.StatusActive}, false},
+	} {
+		if got := tc.user.ReachableByEmail(); got != tc.want {
+			t.Errorf("%s: ReachableByEmail() = %v, want %v", name, got, tc.want)
+		}
+	}
+}

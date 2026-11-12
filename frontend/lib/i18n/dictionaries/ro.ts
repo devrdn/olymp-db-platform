@@ -80,6 +80,7 @@ const ro = {
       sentTitle: "Verificați e-mailul",
       sent: "Dacă ce ați scris se potrivește cu un cont care are adresă de e-mail, un link pentru a seta o parolă nouă este pe drum spre acea adresă. Linkul funcționează o singură dată, pentru un timp limitat.",
       unavailable: "Recuperarea parolei prin e-mail nu este disponibilă aici. Cereți organizatorilor să vă reseteze parola.",
+      staff: "Conturile de organizator și de administrator nu se resetează prin e-mail: le resetează un administrator.",
       backToSignIn: "Înapoi la autentificare",
     },
     reset: {

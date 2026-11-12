@@ -6,7 +6,7 @@ Cineva a încercat să se înregistreze în {{.Installation}} cu această adres�
 
 Utilizator: {{.Login}}
 Pagina de autentificare: {{.SignInURL}}
-Dacă ați uitat parola: {{.ForgotURL}}
+{{if .ResetByAdministrator}}Dacă ați uitat parola, rugați un administrator să o reseteze.{{else}}Dacă ați uitat parola: {{.ForgotURL}}{{end}}
 
 Dacă nu ați fost dumneavoastră, ignorați acest mesaj; nimic nu s-a schimbat.
 

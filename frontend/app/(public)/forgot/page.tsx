@@ -24,6 +24,8 @@ export default async function ForgotPage() {
         <div className="flex flex-col justify-center gap-8 xl:py-24">
           <h1 className="max-w-head text-display text-balance text-ink">{t.title}</h1>
           <p className="max-w-lede text-lede text-ink-2">{t.lede}</p>
+          {/* Recovery never serves staff; the sentence names no account. */}
+          {offered ? <p className="max-w-body text-body text-ink-3">{t.staff}</p> : null}
         </div>
 
         <div aria-hidden className="hidden bg-line xl:block" />

@@ -6,7 +6,7 @@ Someone asked to sign up for {{.Installation}} with this email address, but it a
 
 Login: {{.Login}}
 Sign-in page: {{.SignInURL}}
-If you have forgotten your password: {{.ForgotURL}}
+{{if .ResetByAdministrator}}If you have forgotten your password, ask an administrator to reset it.{{else}}If you have forgotten your password: {{.ForgotURL}}{{end}}
 
 If this was not you, ignore this message; nothing has changed.
 
