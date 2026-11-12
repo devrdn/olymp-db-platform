@@ -109,16 +109,19 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	if hashes := f.Hasher.Calls(); hashes != 1 {
 		t.Errorf("spent %d password hashes, want the one a new sign-up spends", hashes)
 	}
-	if rows := f.Store.Rows(); len(rows) != 0 {
-		t.Errorf("stored %+v, want nothing for a known email", rows)
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "ana@example.edu" || rows[0].Login != "someone-else" {
+		t.Errorf("pending = %+v, want the row a new email gets", rows)
 	}
 	queued := f.Outbox.Queued()
 	if len(queued) != 1 {
-		t.Fatalf("queued %d messages, want the existing-account one", len(queued))
+		t.Fatalf("queued %d messages, want only the existing-account one", len(queued))
 	}
 	m := queued[0]
 	if m.Kind != mailing.KindSignupExisting || m.To != owner.Email || m.UserID != owner.ID {
 		t.Errorf("message = %s to %q for %v, want %s to the owner", m.Kind, m.To, m.UserID, mailing.KindSignupExisting)
+	}
+	if codePattern.MatchString(m.Body) {
+		t.Errorf("the owner's message carries a code:\n%s", m.Body)
 	}
 	if !strings.Contains(m.Body, "ana.owner") || !strings.Contains(m.Body, "Ana Owner") || strings.Contains(m.Body, "someone-else") {
 		t.Errorf("body should name the owner's account and nothing the form typed:\n%s", m.Body)
@@ -126,6 +129,103 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	if f.Outbox.Wakes == 0 {
 		t.Error("the sender was not woken")
 	}
+}
+
+// knownAndNew starts one sign-up for an address an account holds and one
+// for a fresh address.
+func knownAndNew(t *testing.T, f *signuptest.Fixture) []string {
+	t.Helper()
+	f.Users.Add(users.User{Login: "owner", Email: "known@example.edu", FullName: "Owner", PasswordHash: "x"})
+	for _, cmd := range []signup.StartCommand{start("known@example.edu", "known"), start("new@example.edu", "new")} {
+		if err := f.Service.Start(t.Context(), cmd); err != nil {
+			t.Fatalf("Start(%s) = %v", cmd.Email, err)
+		}
+	}
+	return []string{"known@example.edu", "new@example.edu"}
+}
+
+func TestConfirmAnswersTheSameForAKnownEmail(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	emails := knownAndNew(t, f)
+
+	for try := 1; try <= signup.MaxTries+1; try++ {
+		want := signup.ErrWrongCode
+		if try > signup.MaxTries {
+			want = signup.ErrCodeExpired
+		}
+		for _, email := range emails {
+			// No code is 1 000 000; malformed codes count like wrong ones.
+			if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: email, Code: "1000000"}); !errors.Is(err, want) {
+				t.Errorf("try %d for %s = %v, want %v", try, email, err, want)
+			}
+		}
+	}
+
+	f2 := signuptest.NewFixture(t, nil)
+	emails = knownAndNew(t, f2)
+	f2.Clock.Advance(signup.CodeLifetime)
+	for _, email := range emails {
+		if _, err := f2.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: email, Code: "123456"}); !errors.Is(err, signup.ErrCodeExpired) {
+			t.Errorf("thirty minutes on, %s = %v, want ErrCodeExpired", email, err)
+		}
+	}
+}
+
+func TestResendAnswersTheSameForAKnownEmail(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	emails := knownAndNew(t, f)
+
+	for _, email := range emails {
+		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrTooSoon) {
+			t.Errorf("Resend(%s) at once = %v, want ErrTooSoon", email, err)
+		}
+	}
+	f.Clock.Advance(signup.ResendCooldown)
+	for _, email := range emails {
+		if err := f.Service.Resend(t.Context(), email, "en"); err != nil {
+			t.Errorf("Resend(%s) after the cooldown = %v, want nil", email, err)
+		}
+	}
+	for _, email := range emails {
+		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrTooSoon) {
+			t.Errorf("Resend(%s) again at once = %v, want ErrTooSoon", email, err)
+		}
+	}
+
+	kinds := map[string][]mailing.Kind{}
+	for _, m := range f.Outbox.Queued() {
+		kinds[m.To] = append(kinds[m.To], m.Kind)
+	}
+	if got := kinds["known@example.edu"]; len(got) != 2 || got[0] != mailing.KindSignupExisting || got[1] != mailing.KindSignupExisting {
+		t.Errorf("the owner was sent %v, want the existing-account message twice and never a code", got)
+	}
+	if got := kinds["new@example.edu"]; len(got) != 2 || got[0] != mailing.KindSignupCode || got[1] != mailing.KindSignupCode {
+		t.Errorf("the new address was sent %v, want a code twice", got)
+	}
+	f.Clock.Advance(signup.CodeLifetime)
+	for _, email := range emails {
+		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrCodeExpired) {
+			t.Errorf("Resend(%s) once expired = %v, want ErrCodeExpired", email, err)
+		}
+	}
+}
+
+func TestStartRefusesAFullNameThatIsNotWrittenAsAName(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	for _, name := range []string{"Visit evil.example now", "https://evil.example", "Ana2", "win $100"} {
+		cmd := start("ana@example.edu", "ana")
+		cmd.FullName = name
+		if err := f.Service.Start(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Start(name %q) = %v, want ErrInvalidAccount", name, err)
+		}
+	}
+	if len(f.Outbox.Queued()) != 0 || f.Hasher.Calls() != 0 {
+		t.Error("a refused name was mailed or hashed")
+	}
+	cmd := start("ana@example.edu", "ana")
+	cmd.FullName = "Ana-Maria O'Neil Jr."
+	started(t, f, cmd)
 }
 
 func TestStartRefusesATakenLogin(t *testing.T) {

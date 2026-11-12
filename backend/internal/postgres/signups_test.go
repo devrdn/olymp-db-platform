@@ -206,6 +206,17 @@ func TestTheTableRefusesAnEmailTheDomainWouldNotStore(t *testing.T) {
 	})
 }
 
+// The check judges ASCII letters only, which every collation lowercases alike;
+// beyond them PostgreSQL's lower() follows the database's collation and could
+// refuse what Go's lowercasing stored.
+func TestTheEmailCheckDoesNotDependOnTheCollation(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		if err := NewSignups(testPool).Put(ctx, pendingSignup("Élise@example.edu", "elise"), signup.MaxPending, signupClock); err != nil {
+			t.Errorf("Put() of an address with a non-ASCII capital = %v, want the check to leave it to the domain", err)
+		}
+	})
+}
+
 // Two confirmations of one code must not both find the row: the second waits
 // for the first's transaction and then finds nothing.
 func TestSignupsTakeLocksTheRowUntilTheTransactionEnds(t *testing.T) {

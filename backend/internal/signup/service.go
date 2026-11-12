@@ -127,11 +127,12 @@ type ConfirmCommand struct {
 	Email, Code string
 }
 
-// Start validates the form and mails a code to the address; the account is
-// made by Confirm. For an address that already has an account it stores
-// nothing and mails the owner instead, after the same password hash, so the
-// answer and its time do not tell the two apart. A taken login is refused
-// openly: logins are public on the leaderboards.
+// Start validates the form, stores a pending sign-up with a code and mails
+// the code to the address; the account is made by Confirm. An address that
+// already has an account gets the same work and the same row, but its owner
+// is mailed the existing-account message and the code reaches nobody, so no
+// answer of Start, Confirm or Resend tells the two apart. A taken login is
+// refused openly: logins are public on the leaderboards.
 func (s *Service) Start(ctx context.Context, cmd StartCommand) error {
 	if !s.available() {
 		return ErrNotAvailable
@@ -144,11 +145,16 @@ func (s *Service) Start(ctx context.Context, cmd StartCommand) error {
 	if err := users.ValidateAccount(login, fullName, email); err != nil {
 		return err
 	}
+	// The name greets the reader of a message sent to whatever address was
+	// typed.
+	if !users.IsWrittenAsAName(fullName) {
+		return fmt.Errorf("%w: the full name must be letters, spaces, hyphens, apostrophes or periods", users.ErrInvalidAccount)
+	}
 	if err := users.ValidatePassword(cmd.Password); err != nil {
 		return err
 	}
 
-	// Everything refused before the hash is refused for a known address too.
+	// Everything is refused before the hash, alike for a known address.
 	now := s.cfg.Now()
 	if err := s.refuseTakenLogin(ctx, login, email, now); err != nil {
 		return err
@@ -165,23 +171,11 @@ func (s *Service) Start(ctx context.Context, cmd StartCommand) error {
 		return fmt.Errorf("hash the password: %w", err)
 	}
 
-	lang, installation, err := s.letterhead(ctx, cmd.Lang)
-	if err != nil {
-		return err
-	}
-	owner, err := s.cfg.Directory.ByEmail(ctx, email)
-	if err == nil {
-		return s.tellTheOwner(ctx, owner, lang, installation)
-	}
-	if !errors.Is(err, users.ErrNotFound) {
-		return err
-	}
-
 	code, codeHash, err := s.drawCode()
 	if err != nil {
 		return err
 	}
-	message, err := s.codeMessage(email, fullName, code, lang, installation)
+	message, err := s.message(ctx, email, fullName, code, cmd.Lang)
 	if err != nil {
 		return err
 	}
@@ -217,23 +211,31 @@ func (s *Service) refuseTakenLogin(ctx context.Context, login, email string, now
 	return nil
 }
 
-// tellTheOwner mails the owner of an address someone signed up with. It
-// names the owner's own account and nothing the form carried.
-func (s *Service) tellTheOwner(ctx context.Context, owner users.User, lang mailing.Language, installation string) error {
-	text, err := s.cfg.Texts.SignupExisting(lang, mailing.SignupExistingData{
+// message is the code for a new address and, for one a live account holds,
+// the existing-account message to its owner, naming the owner's own account
+// and nothing the form carried.
+func (s *Service) message(ctx context.Context, email, fullName, code, lang string) (mailing.Message, error) {
+	language, installation, err := s.letterhead(ctx, lang)
+	if err != nil {
+		return mailing.Message{}, err
+	}
+	owner, err := s.cfg.Directory.ByEmail(ctx, email)
+	switch {
+	case errors.Is(err, users.ErrNotFound):
+		return s.codeMessage(email, fullName, code, language, installation)
+	case err != nil:
+		return mailing.Message{}, err
+	}
+	text, err := s.cfg.Texts.SignupExisting(language, mailing.SignupExistingData{
 		Installation: installation, FullName: owner.FullName, Login: owner.Login,
 	})
 	if err != nil {
-		return fmt.Errorf("write the existing-account message: %w", err)
+		return mailing.Message{}, fmt.Errorf("write the existing-account message: %w", err)
 	}
-	if err := s.cfg.Outbox.EnqueueMany(ctx, []mailing.Message{{
+	return mailing.Message{
 		Kind: mailing.KindSignupExisting, UserID: owner.ID, To: owner.Email,
 		Subject: text.Subject, Body: text.Body,
-	}}); err != nil {
-		return err
-	}
-	s.cfg.Outbox.Wake()
-	return nil
+	}, nil
 }
 
 // Confirm makes the account of the email's sign-up when code is its code,
@@ -325,8 +327,10 @@ func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
 	return nil
 }
 
-// Resend mails a new code for the email's sign-up, which replaces the old
-// one with its tries. An address with no sign-up gets nothing.
+// Resend stores a new code for the email's sign-up, replacing the old one
+// and its tries, and mails it, or the existing-account message again to the
+// owner of an address a live account holds. An address with no sign-up gets
+// nothing.
 func (s *Service) Resend(ctx context.Context, email, lang string) error {
 	if !s.available() {
 		return ErrNotAvailable
@@ -334,10 +338,6 @@ func (s *Service) Resend(ctx context.Context, email, lang string) error {
 	email, err := normalizeEmail(email)
 	if err != nil {
 		return nil
-	}
-	language, installation, err := s.letterhead(ctx, lang)
-	if err != nil {
-		return err
 	}
 	code, codeHash, err := s.drawCode()
 	if err != nil {
@@ -360,7 +360,7 @@ func (s *Service) Resend(ctx context.Context, email, lang string) error {
 			refusal = ErrTooSoon
 			return nil
 		}
-		message, err := s.codeMessage(p.Email, p.FullName, code, language, installation)
+		message, err := s.message(ctx, p.Email, p.FullName, code, lang)
 		if err != nil {
 			return err
 		}

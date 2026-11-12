@@ -8,7 +8,10 @@ SET lock_timeout = '5s';
 
 CREATE TABLE pending_signups (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    email         text NOT NULL UNIQUE CHECK (email = lower(email) AND char_length(email) <= 254),
+    -- Lowercased by the domain. The check judges ASCII letters only: beyond
+    -- them lower() follows the database's collation, which may not agree
+    -- with the domain's lowercasing.
+    email         text NOT NULL UNIQUE CHECK (email = lower(email COLLATE "C") AND char_length(email) <= 254),
     login         text NOT NULL CHECK (char_length(login) <= 100),
     full_name     text NOT NULL CHECK (char_length(full_name) <= 200),
     password_hash text NOT NULL,
