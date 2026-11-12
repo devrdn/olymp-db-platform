@@ -37,7 +37,7 @@ export default async function ResetPage(props: PageProps<"/reset">) {
         <div className="flex flex-col justify-center xl:py-24">
           {/* A token no link could carry is answered as an unusable link, without asking the API. */}
           {isResetToken(token) ? (
-            <ResetForm t={t} errors={dict.errors} token={token} />
+            <ResetForm t={t} passwordHint={dict.auth.signUp.passwordHint} errors={dict.errors} token={token} />
           ) : (
             <div className="flex max-w-96 flex-col gap-4">
               <p className="text-body text-ink-2">{dict.errors.reset_link_invalid}</p>
