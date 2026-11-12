@@ -13,6 +13,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
@@ -1075,6 +1076,161 @@ func TestTwoConcurrentCreationsOfOneIdentityKeepOneAccount(t *testing.T) {
 	}
 	if n := countLogins(t, tag); n != 1 {
 		t.Errorf("accounts = %d, want one", n)
+	}
+}
+
+// externalStudent commits a student account holding the tag's address.
+func externalStudent(t *testing.T, tag string) users.User {
+	t.Helper()
+	ctx := context.Background()
+	repo := NewUsers(testPool)
+	u, err := repo.Create(ctx, users.User{Login: tag + "-ana", Email: tag + "@example.edu", FullName: "Ana", Status: users.StatusActive})
+	if err != nil {
+		t.Fatalf("create the account: %v", err)
+	}
+	if err := repo.ReplaceRoles(ctx, u.ID, []string{users.RoleStudent}); err != nil {
+		t.Fatalf("make it a student: %v", err)
+	}
+	return u
+}
+
+func externalLink(tag string) users.ExternalIdentity {
+	return users.ExternalIdentity{Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example/v2.0", Subject: "sub-" + tag, Email: tag + "@example.edu"}
+}
+
+func countIdentities(t *testing.T, userID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM external_identities WHERE user_id = $1`, userID).Scan(&n); err != nil {
+		t.Fatalf("count the identities: %v", err)
+	}
+	return n
+}
+
+// grantingAccounts commits a staff role for the account just before the link,
+// as an administrator acting between Resolve's read and the link.
+type grantingAccounts struct {
+	*users.Service
+	t *testing.T
+}
+
+func (a grantingAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) error {
+	if err := a.ReplaceRoles(context.Background(), uuid.Nil, id, []string{users.RoleAdmin}); err != nil {
+		a.t.Fatalf("grant the role: %v", err)
+	}
+	return a.Service.LinkExternal(ctx, id, identity, at)
+}
+
+func TestARoleGrantedBeforeTheLinkRefusesIt(t *testing.T) {
+	tag := "ext-grant-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	resolver := federation.NewService(federation.Config{
+		Policy:        federation.Policy{CreateAccounts: true},
+		Store:         NewUsers(testPool),
+		Accounts:      grantingAccounts{Service: service, t: t},
+		PendingLogins: NewSignups(testPool),
+	})
+	identity := externalLink(tag)
+
+	_, err := resolver.Resolve(t.Context(), federation.Claims{
+		Provider: identity.Provider, Issuer: identity.Issuer, Subject: identity.Subject,
+		Email: identity.Email, Name: "Ana", EmailTrusted: true,
+	})
+
+	if !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want the account left unlinked", n)
+	}
+	if n := countLogins(t, tag); n != 1 {
+		t.Errorf("accounts = %d, want no second one", n)
+	}
+}
+
+// A role change still open when the link starts commits first, and the link
+// sees it: every role change writes the account's row, which the lock waits
+// for.
+func TestLinkExternalWaitsForARoleChangeInFlight(t *testing.T) {
+	tag := "ext-inflight-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	ctx := context.Background()
+
+	admin, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Rollback(ctx) }()
+	// What users.Service.ReplaceRoles writes, held open.
+	if _, err := admin.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE code = $2`, ana.ID, users.RoleAdmin); err != nil {
+		t.Fatalf("grant the role: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE users SET session_generation = session_generation + 1 WHERE id = $1`, ana.ID); err != nil {
+		t.Fatalf("bump the sessions: %v", err)
+	}
+
+	linked := make(chan error, 1)
+	go func() { linked <- service.LinkExternal(ctx, ana.ID, externalLink(tag), time.Now()) }()
+
+	select {
+	case err := <-linked:
+		t.Fatalf("LinkExternal returned %v with the role change still open", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := admin.Commit(ctx); err != nil {
+		t.Fatalf("commit the role change: %v", err)
+	}
+	select {
+	case err := <-linked:
+		if !errors.Is(err, users.ErrStaffNotLinkable) {
+			t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LinkExternal did not return after the role change committed")
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want none", n)
+	}
+}
+
+// FOR NO KEY UPDATE: a row that only references the account, such as a role
+// assignment or a submission, is not held up by the lock.
+func TestLockDoesNotHoldUpRowsReferencingTheAccount(t *testing.T) {
+	tag := "ext-keyshare-" + uuid.NewString()[:8]
+	externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	ctx := context.Background()
+
+	locked, release, held := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		held <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if err := NewUsers(testPool).Lock(ctx, ana.ID); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-held:
+		t.Fatalf("Lock() = %v", err)
+	}
+
+	insert, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := testPool.Exec(insert, `
+		INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE code = 'organizer'`, ana.ID)
+	close(release)
+	if err != nil {
+		t.Errorf("a row referencing the locked account waited or failed: %v", err)
+	}
+	if err := <-held; err != nil {
+		t.Errorf("the lock's transaction = %v", err)
 	}
 }
 

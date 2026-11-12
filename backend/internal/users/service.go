@@ -314,8 +314,8 @@ type CreateExternalCommand struct {
 
 // CreateExternal makes a student account with no password and links the
 // identity to it, in one transaction: a refused link, as when the same person
-// signs in twice at once, leaves no account behind. The audit entry has no
-// actor.
+// signs in twice at once, leaves no account behind. The audit entry, in the
+// same transaction, has no actor.
 func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand) (User, error) {
 	if s.identities == nil {
 		return User{}, errNoIdentityStore
@@ -360,10 +360,10 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 		if err := s.identities.LinkExternalIdentity(ctx, identity); err != nil {
 			return err
 		}
-		return s.record(ctx, uuid.Nil, audit.ActionUserCreate, created.ID, map[string]any{
-			"login":    created.Login,
-			"roles":    roles,
-			"provider": identity.Provider,
+		return s.record(ctx, uuid.Nil, audit.ActionUserExternalSignUp, created.ID, map[string]any{
+			"login":         created.Login,
+			"provider":      identity.Provider,
+			"email_trusted": email != "",
 		})
 	})
 	if err != nil {
@@ -372,9 +372,13 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 	return created, nil
 }
 
-// LinkExternal ties the identity to an existing account and records its email
-// as verified at verifiedAt, in one transaction. Whether the account may be
-// reached this way is the caller's decision.
+// LinkExternal ties the identity to an existing account and records the
+// identity's email as verified at verifiedAt, in one transaction. The account
+// is locked and read again first, so a change committed since the caller's
+// read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
+// ErrStaffNotLinkable, and ErrNotFound when the account no longer holds the
+// identity's email, which is what vouched for linking it. As for
+// CreateExternal, the owner made the change, so the audit entry has no actor.
 func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) error {
 	if s.identities == nil {
 		return errNoIdentityStore
@@ -384,10 +388,33 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		return err
 	}
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, userID); err != nil {
+			return err
+		}
+		u, err := s.repo.ByID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		switch {
+		case u.Status == StatusDeleted:
+			return ErrAccountDeleted
+		case !u.IsActive():
+			return ErrAccountBlocked
+		case u.IsStaff():
+			return ErrStaffNotLinkable
+		case identity.Email == "" || !strings.EqualFold(u.Email, identity.Email):
+			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
+		}
 		if err := s.identities.LinkExternalIdentity(ctx, identity); err != nil {
 			return err
 		}
-		return s.repo.MarkEmailVerified(ctx, userID, verifiedAt)
+		if err := s.repo.MarkEmailVerified(ctx, userID, verifiedAt); err != nil {
+			return err
+		}
+		return s.record(ctx, uuid.Nil, audit.ActionUserExternalIdentityLink, userID, map[string]any{
+			"provider":      identity.Provider,
+			"email_trusted": true,
+		})
 	})
 }
 

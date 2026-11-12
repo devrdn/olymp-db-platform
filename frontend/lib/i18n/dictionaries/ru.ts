@@ -1874,6 +1874,8 @@ const ru = {
       "user.password_reset_by_link": "Задал новый пароль по ссылке из письма",
       "user.sign_in_unlock": "Снял блокировку входа",
       "user.sign_in_details_emailed": "Поставил в очередь письмо с данными для входа",
+      "user.external_sign_up": "Создал учётную запись при первом входе через внешний сервис",
+      "user.external_identity_link": "Привязал свою учётную запись ко входу через внешний сервис",
       "contest.create": "Создал олимпиаду",
       "contest.update": "Изменил олимпиаду",
       "contest.delete": "Удалил олимпиаду",

@@ -41,6 +41,12 @@ const (
 	// queued to its address, in the transaction that issued the password; it
 	// carries neither the password nor the message.
 	ActionUserSignInDetailsEmailed = "user.sign_in_details_emailed"
+	// ActionUserExternalSignUp records an account created by its owner's
+	// first sign-in through an external provider; ActionUserExternalIdentityLink
+	// records such a sign-in linked to an existing account by its trusted
+	// email. Both carry the provider and whether the email was trusted.
+	ActionUserExternalSignUp       = "user.external_sign_up"
+	ActionUserExternalIdentityLink = "user.external_identity_link"
 
 	ActionContestCreate       = "contest.create"
 	ActionContestUpdate       = "contest.update"
@@ -168,6 +174,7 @@ var actions = []string{
 	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
 	ActionUserPasswordReset, ActionPasswordChange, ActionUserPasswordResetByLink,
 	ActionUserSignInUnlock, ActionUserSignInDetailsEmailed,
+	ActionUserExternalSignUp, ActionUserExternalIdentityLink,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,

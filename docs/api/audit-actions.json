@@ -16,6 +16,8 @@
     "user.password_reset_by_link",
     "user.sign_in_unlock",
     "user.sign_in_details_emailed",
+    "user.external_sign_up",
+    "user.external_identity_link",
     "contest.create",
     "contest.update",
     "contest.delete",

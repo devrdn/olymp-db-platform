@@ -1876,6 +1876,8 @@ const ro = {
       "user.password_reset_by_link": "Și-a setat o parolă nouă printr-un link primit pe e-mail",
       "user.sign_in_unlock": "A deblocat autentificarea unui cont",
       "user.sign_in_details_emailed": "A pus în coada de trimitere datele de autentificare prin e-mail",
+      "user.external_sign_up": "Și-a creat un cont la prima autentificare printr-un serviciu extern",
+      "user.external_identity_link": "Și-a legat contul de autentificarea printr-un serviciu extern",
       "contest.create": "A creat o olimpiadă",
       "contest.update": "A modificat o olimpiadă",
       "contest.delete": "A șters o olimpiadă",

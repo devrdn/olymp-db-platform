@@ -470,3 +470,126 @@ func TestALinkThatLosesARaceEntersTheWinner(t *testing.T) {
 		t.Errorf("identity last used %v, want %v", used, now)
 	}
 }
+
+func TestAnAccountMadeStaffBeforeTheLinkIsRefused(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.accounts.before = func() {
+		if err := f.repo.ReplaceRoles(t.Context(), ana.ID, []string{"organizer"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+}
+
+// claimingAccounts answers CreateExternal as the unique email index does when
+// a live account took the address after Resolve looked: appear, when set, is
+// that account.
+type claimingAccounts struct {
+	federation.Accounts
+	repo    *userstest.Repository
+	appear  *users.User
+	creates int
+}
+
+func (a *claimingAccounts) CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error) {
+	a.creates++
+	if a.appear != nil {
+		a.repo.Add(*a.appear)
+		a.appear = nil
+	}
+	if cmd.Email != "" {
+		if _, err := a.repo.ByEmail(ctx, cmd.Email); err == nil {
+			return users.User{}, users.ErrEmailTaken
+		}
+	}
+	return a.Accounts.CreateExternal(ctx, cmd)
+}
+
+func TestAnAccountThatTakesTheEmailDuringCreationIsLinkedInstead(t *testing.T) {
+	f := newFixture(t)
+	ana := users.User{ID: uuid.New(), Login: "confirmed", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}}
+	accounts := &claimingAccounts{Accounts: f.accounts, repo: f.repo, appear: &ana}
+	f.accounts = &hookedAccounts{Accounts: accounts}
+
+	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want the account that took the address", got.ID, err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want sub-ana linked to it", linked)
+	}
+	if n := f.accountCount(); n != 0 {
+		t.Errorf("accounts created = %d, want none", n)
+	}
+}
+
+func TestAStaffAccountThatTakesTheEmailDuringCreationIsRefused(t *testing.T) {
+	f := newFixture(t)
+	staff := users.User{ID: uuid.New(), Login: "organizer", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}}
+	f.accounts = &hookedAccounts{Accounts: &claimingAccounts{Accounts: f.accounts, repo: f.repo, appear: &staff}}
+
+	if _, err := f.service().Resolve(t.Context(), trusted("sub-ana")); !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+	if linked := f.repo.Identities(staff.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+}
+
+// Resolution is re-run once; a second refusal is the answer.
+func TestATakenEmailTwiceIsTheAnswer(t *testing.T) {
+	f := newFixture(t)
+	accounts := &claimingAccounts{Accounts: f.accounts, repo: f.repo}
+	f.store.Store = vanishingEmails{f.repo}
+	f.repo.Add(users.User{Login: "holder", FullName: "Holder", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.accounts = &hookedAccounts{Accounts: accounts}
+
+	if _, err := f.service().Resolve(t.Context(), trusted("sub-ana")); !errors.Is(err, users.ErrEmailTaken) {
+		t.Errorf("Resolve() = %v, want ErrEmailTaken", err)
+	}
+	if accounts.creates != 2 {
+		t.Errorf("creations tried = %d, want the first and one more", accounts.creates)
+	}
+}
+
+// vanishingEmails never finds an account by email, as though each one were
+// gone again by the time Resolve looked.
+type vanishingEmails struct{ federation.Store }
+
+func (vanishingEmails) ByEmail(context.Context, string) (users.User, error) {
+	return users.User{}, users.ErrNotFound
+}
+
+// The account Resolve found by its address moved to another before the link:
+// the address is then nobody's, and a new account takes it.
+func TestAnAccountReaddressedBeforeTheLinkIsNotLinked(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.accounts.before = func() {
+		if err := f.repo.UpdateProfile(t.Context(), ana.ID, "Ana", "elsewhere@example.edu"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+	if err != nil {
+		t.Fatalf("Resolve() = %v", err)
+	}
+
+	if got.ID == ana.ID || len(f.repo.Identities(ana.ID)) != 0 {
+		t.Error("the identity was linked to an account no longer holding the address")
+	}
+	if stored, _ := f.repo.Get(got.ID); stored.Email != "ana@example.edu" || stored.EmailVerifiedAt == nil {
+		t.Errorf("new account %+v, want the trusted address, verified", stored)
+	}
+}
