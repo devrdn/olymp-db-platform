@@ -2,6 +2,8 @@ package recovery_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"errors"
 	"regexp"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/recovery/recoverytest"
 	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
 )
 
 const newPassword = "a long enough new password"
@@ -80,8 +83,8 @@ func TestRequestMailsALinkToAStudentWithAnEmail(t *testing.T) {
 				t.Fatalf("%d links stored, want one", len(rows))
 			}
 			l := rows[0]
-			if l.UserID != account.ID || l.Email != "ana@example.edu" || len(l.TokenHash) != 32 ||
-				bytes.Contains(l.TokenHash, []byte(token)) {
+			digest := sha256.Sum256([]byte(token))
+			if l.UserID != account.ID || l.Email != "ana@example.edu" || !bytes.Equal(l.TokenHash, digest[:]) {
 				t.Errorf("link = %+v, want the account, its address and the token's SHA-256", l)
 			}
 			if want := f.Clock.Now().Add(recovery.LinkLifetime); !l.ExpiresAt.Equal(want) {
@@ -380,4 +383,158 @@ func TestNewServiceRefusesAMissingPart(t *testing.T) {
 		}
 	}()
 	recoverytest.NewFixture(t, func(c *recovery.Config) { c.Store = nil })
+}
+
+// gated is a fixture whose lookups wait at the returned gate.
+func gated(t *testing.T) (*recoverytest.Fixture, *recoverytest.GatedDirectory) {
+	t.Helper()
+	gate := recoverytest.NewGate()
+	var dir *recoverytest.GatedDirectory
+	f := recoverytest.NewFixture(t, func(c *recovery.Config) {
+		dir = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
+		c.Directory = dir
+	})
+	// Registered after the fixture's Stop, so it runs first and Stop can end.
+	t.Cleanup(gate.Release)
+	return f, dir
+}
+
+// arrive waits for n lookups to reach the gate.
+func arrive(t *testing.T, gate *recoverytest.Gate, n int) {
+	t.Helper()
+	for i := range n {
+		select {
+		case <-gate.Entered():
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d requests reached the lookup", i, n)
+		}
+	}
+}
+
+func stop(t *testing.T, f *recoverytest.Fixture) {
+	t.Helper()
+	if err := f.Service.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+}
+
+func TestSubmitRequestsALinkOutlivingTheCallersContext(t *testing.T) {
+	f := recoverytest.NewFixture(t, nil)
+	student(t, f, "ana", "ana@example.edu")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if !f.Service.Submit(ctx, recovery.RequestCommand{LoginOrEmail: "ana", Lang: "en"}) {
+		t.Fatal("Submit() refused the request")
+	}
+	stop(t, f)
+
+	tokenIn(t, f)
+	if rows := f.Store.Rows(); len(rows) != 1 {
+		t.Errorf("%d links stored, want the one requested", len(rows))
+	}
+}
+
+func TestARequestInTheBackgroundHasItsOwnDeadline(t *testing.T) {
+	f, dir := gated(t)
+	before := time.Now()
+	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	arrive(t, dir.Gate, 1)
+	dir.Gate.Release()
+	stop(t, f)
+
+	deadlines := dir.Deadlines()
+	if len(deadlines) != 1 || deadlines[0].Before(before.Add(recovery.RequestTimeout)) ||
+		deadlines[0].After(time.Now().Add(recovery.RequestTimeout)) {
+		t.Errorf("deadlines = %v, want one %s after the hand-off", deadlines, recovery.RequestTimeout)
+	}
+}
+
+func TestSubmitHoldsAtMostEightRequestsAndDropsTheRest(t *testing.T) {
+	f, dir := gated(t)
+	student(t, f, "ana", "ana@example.edu")
+	for i := range recovery.MaxInFlight {
+		if !f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+			t.Fatalf("request %d was dropped below the bound", i)
+		}
+	}
+	arrive(t, dir.Gate, recovery.MaxInFlight)
+
+	if f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+		t.Error("a request past the bound was taken")
+	}
+	if log := f.Log.String(); !strings.Contains(log, "level=WARN") || !strings.Contains(log, "dropped") {
+		t.Errorf("log = %q, want a warning that a request was dropped", log)
+	}
+	dir.Gate.Release()
+	stop(t, f)
+	if q := f.Outbox.Queued(); len(q) != recovery.MaxInFlight {
+		t.Errorf("queued %d messages, want one for each request taken", len(q))
+	}
+}
+
+func TestSubmitLogsAFailureNobodyIsWaitingFor(t *testing.T) {
+	f := recoverytest.NewFixture(t, nil)
+	student(t, f, "ana", "ana@example.edu")
+	f.Store.ReplaceErr = errors.New("the database is away")
+
+	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	stop(t, f)
+
+	if log := f.Log.String(); !strings.Contains(log, "level=ERROR") || !strings.Contains(log, "the database is away") {
+		t.Errorf("log = %q, want the failure at error", log)
+	}
+	if q := f.Outbox.Queued(); len(q) != 0 {
+		t.Errorf("queued %d messages, want the failed one rolled back", len(q))
+	}
+}
+
+func TestStopWaitsForRequestsInFlightUntilItsDeadline(t *testing.T) {
+	f, dir := gated(t)
+	student(t, f, "ana", "ana@example.edu")
+	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	arrive(t, dir.Gate, 1)
+
+	short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := f.Service.Stop(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Stop() with a request held = %v, want its deadline", err)
+	}
+	if f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+		t.Error("a stopped service took a request")
+	}
+
+	dir.Gate.Release()
+	stop(t, f)
+	if q := f.Outbox.Queued(); len(q) != 1 {
+		t.Errorf("queued %d messages, want the request in flight finished", len(q))
+	}
+}
+
+func TestCompleteReadsTheAccountOnlyOnceItHoldsIt(t *testing.T) {
+	changes := map[string]func(u *users.User){
+		"readdressed": func(u *users.User) { u.Email = "someone.else@example.edu" },
+		"made staff":  func(u *users.User) { u.Roles = []string{recoverytest.StaffRole} },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			f := recoverytest.NewFixture(t, nil)
+			account := student(t, f, "ana", "ana@example.edu")
+			token := requested(t, f, "ana")
+			// The change commits while the completion waits for the row.
+			f.Users.OnLock = func(id uuid.UUID) {
+				changed, _ := f.Users.Get(id)
+				change(&changed)
+				f.Users.Add(changed)
+			}
+
+			if err := f.Service.Complete(t.Context(), token, newPassword); !errors.Is(err, recovery.ErrInvalidLink) {
+				t.Fatalf("Complete() = %v, want ErrInvalidLink", err)
+			}
+			after, _ := f.Users.Get(account.ID)
+			if after.EmailVerifiedAt != nil || passwordtest.Matches(t, after.PasswordHash, newPassword) {
+				t.Errorf("account = %+v, want neither verified nor reset", after)
+			}
+		})
+	}
 }

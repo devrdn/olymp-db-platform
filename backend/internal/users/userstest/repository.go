@@ -19,7 +19,10 @@ type Repository struct {
 	byID        map[uuid.UUID]users.User
 	permissions map[string][]string
 	// Err, when set, is returned by every method.
-	Err                      error
+	Err error
+	// OnLock, when set, runs as Lock takes an account, as a change another
+	// transaction committed while Lock waited for the row.
+	OnLock                   func(id uuid.UUID)
 	CountActiveWithRoleCalls int
 }
 
@@ -99,6 +102,24 @@ func (r *Repository) ByEmail(_ context.Context, email string) (users.User, error
 
 func (r *Repository) MarkEmailVerified(_ context.Context, id uuid.UUID, at time.Time) error {
 	return r.mutate(id, func(u *users.User) { u.EmailVerifiedAt = &at })
+}
+
+// Lock stands in for the row lock: it holds nothing, and runs OnLock.
+func (r *Repository) Lock(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	err, hook := r.Err, r.OnLock
+	_, ok := r.byID[id]
+	r.mu.Unlock()
+	switch {
+	case err != nil:
+		return err
+	case !ok:
+		return users.ErrNotFound
+	}
+	if hook != nil {
+		hook(id)
+	}
+	return nil
 }
 
 func (r *Repository) ByID(_ context.Context, id uuid.UUID) (users.User, error) {

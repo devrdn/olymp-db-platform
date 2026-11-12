@@ -27,6 +27,25 @@ type task struct {
 	run  func(context.Context) error
 }
 
+// worker is background work that requests hand over, such as the password
+// reset requests, and so must outlive the listeners' drain: it is stopped
+// after them, within what is left of the shutdown timeout.
+type worker struct {
+	name string
+	// stop takes no more work and waits for what is in flight until ctx ends.
+	stop func(ctx context.Context) error
+}
+
+// stopWorkers stops each worker in turn, logging one that did not finish
+// in time; its leftover work is abandoned with the process.
+func stopWorkers(ctx context.Context, log *slog.Logger, workers []worker) {
+	for _, w := range workers {
+		if err := w.stop(ctx); err != nil {
+			log.WarnContext(ctx, "a background worker did not finish before shutdown", "worker", w.name, "error", err)
+		}
+	}
+}
+
 // runPeriodically runs the task until the context is cancelled. A failure,
 // including at startup, is logged and the next tick still happens: these jobs
 // are housekeeping, not conditions for running.

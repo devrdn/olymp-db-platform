@@ -618,3 +618,34 @@ func TestThePasswordResetSweepRemovesWhatExpiredByTheTick(t *testing.T) {
 		t.Errorf("run() = %v, want the sweep's failure", err)
 	}
 }
+
+func TestStoppingWorkersGivesEachTheShutdownDeadlineAndLogsOneThatOverstays(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	var stopped []string
+	workers := []worker{
+		{name: "slow", stop: func(ctx context.Context) error {
+			if got, _ := ctx.Deadline(); !got.Equal(want) {
+				t.Errorf("slow was given deadline %v, want the shutdown's %v", got, want)
+			}
+			stopped = append(stopped, "slow")
+			return context.DeadlineExceeded
+		}},
+		{name: "quick", stop: func(context.Context) error {
+			stopped = append(stopped, "quick")
+			return nil
+		}},
+	}
+
+	stopWorkers(ctx, log, workers)
+
+	if strings.Join(stopped, ",") != "slow,quick" {
+		t.Errorf("stopped %v, want every worker, the one that overstayed included", stopped)
+	}
+	if out := buf.String(); !strings.Contains(out, "worker=slow") || strings.Contains(out, "worker=quick") {
+		t.Errorf("log = %q, want only the worker that overstayed", out)
+	}
+}

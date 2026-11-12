@@ -1,12 +1,14 @@
 // Package recovery lets the owner of a student account who forgot its
 // password set a new one through a single-use link mailed to the account's
 // address. Following the link proves the inbox, so completing it also marks
-// the address verified, and it ends every session. A request is answered
-// alike whether or not an account was reached: unknown, staff, deleted,
+// the address verified, and it ends every session. Unknown, staff, deleted,
 // blocked and email-less accounts get nothing, and staff never get a link.
+// Submit runs a request in the background, a bounded number at a time, so
+// its caller answers before anything is looked up and alike for every
+// account.
 //
 // It does not serve HTTP or throttle callers (internal/api does, before the
-// lookup and before the password hash), and does not sign the person in:
+// hand-off and before the password hash), and does not sign the person in:
 // they sign in with the new password.
 package recovery
 

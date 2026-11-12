@@ -8,6 +8,7 @@ package recoverytest
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/google/uuid"
 )
 
 // PublicURL is the address the fixture's links open.
@@ -39,10 +41,13 @@ type Fixture struct {
 	Hasher  *Hasher
 	Audit   *Audit
 	Clock   *Clock
+	// Log is what the service logged, at Info and above.
+	Log *Log
 }
 
 // NewFixture builds a service with mail on; edit, when given, changes the
-// configuration first.
+// configuration first. The service is stopped when the test ends, so no
+// request outlives it.
 func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 	t.Helper()
 	repo := userstest.New()
@@ -54,6 +59,7 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 	hasher := &Hasher{inner: passwordtest.NewHasher()}
 	trail := &Audit{}
 	uow := &UnitOfWork{store: store, outbox: outbox}
+	log := &Log{}
 	cfg := recovery.Config{
 		Store:     store,
 		Directory: repo,
@@ -67,15 +73,97 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 		},
 		UnitOfWork: uow,
 		PublicURL:  PublicURL,
+		Log:        slog.New(slog.NewTextHandler(log, nil)),
 		Now:        clock.Now,
 	}
 	if edit != nil {
 		edit(&cfg)
 	}
+	service := recovery.NewService(cfg)
+	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 	return &Fixture{
-		Service: recovery.NewService(cfg), Store: store, Outbox: outbox,
-		Users: repo, Hasher: hasher, Audit: trail, Clock: clock,
+		Service: service, Store: store, Outbox: outbox,
+		Users: repo, Hasher: hasher, Audit: trail, Clock: clock, Log: log,
 	}
+}
+
+// Log is a log destination safe for the service's goroutines.
+type Log struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *Log) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *Log) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// Gate holds whoever reaches it until it is released, telling the test each
+// arrival.
+type Gate struct {
+	entered  chan struct{}
+	released chan struct{}
+	once     sync.Once
+}
+
+func NewGate() *Gate {
+	return &Gate{entered: make(chan struct{}, 64), released: make(chan struct{})}
+}
+
+// Entered receives once per arrival.
+func (g *Gate) Entered() <-chan struct{} { return g.entered }
+
+func (g *Gate) Release() { g.once.Do(func() { close(g.released) }) }
+
+func (g *Gate) pass() {
+	g.entered <- struct{}{}
+	<-g.released
+}
+
+// GatedDirectory is a directory whose lookups by login and email wait at
+// Gate, noting the deadline each one was given.
+type GatedDirectory struct {
+	recovery.Directory
+	Gate *Gate
+
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (d *GatedDirectory) ByLogin(ctx context.Context, login string) (users.User, error) {
+	d.arrive(ctx)
+	return d.Directory.ByLogin(ctx, login)
+}
+
+func (d *GatedDirectory) ByEmail(ctx context.Context, email string) (users.User, error) {
+	d.arrive(ctx)
+	return d.Directory.ByEmail(ctx, email)
+}
+
+func (d *GatedDirectory) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
+	return d.Directory.ByID(ctx, id)
+}
+
+// Deadlines are the deadlines of the lookups so far; a zero time is none.
+func (d *GatedDirectory) Deadlines() []time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.deadlines)
+}
+
+func (d *GatedDirectory) arrive(ctx context.Context) {
+	deadline, _ := ctx.Deadline()
+	d.mu.Lock()
+	d.deadlines = append(d.deadlines, deadline)
+	d.mu.Unlock()
+	d.Gate.pass()
 }
 
 type Clock struct {
@@ -101,6 +189,8 @@ type Store struct {
 	mu    sync.Mutex
 	rows  []recovery.Link
 	calls int
+	// ReplaceErr, when set, is what Replace fails with.
+	ReplaceErr error
 }
 
 var _ recovery.Store = (*Store)(nil)
@@ -122,6 +212,9 @@ func (s *Store) Replace(_ context.Context, l recovery.Link) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	if s.ReplaceErr != nil {
+		return s.ReplaceErr
+	}
 	s.rows = slices.DeleteFunc(s.rows, func(r recovery.Link) bool { return r.UserID == l.UserID })
 	s.rows = append(s.rows, l)
 	return nil

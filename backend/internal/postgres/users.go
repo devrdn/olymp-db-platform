@@ -140,6 +140,26 @@ func (r *Users) ByEmail(ctx context.Context, email string) (users.User, error) {
 	return scanUser(row)
 }
 
+// Lock holds the account's row until the transaction in ctx ends, so a
+// change to its address, status or roles (each writes the row) waits for it.
+// It reads nothing: under READ COMMITTED a later statement takes a fresh
+// snapshot and sees what committed while Lock waited, which a read joined to
+// the lock would not for the roles.
+func (r *Users) Lock(ctx context.Context, id uuid.UUID) error {
+	if !storage.InTx(ctx) {
+		return errors.New("locking an account must run inside a transaction")
+	}
+	var locked uuid.UUID
+	err := r.querier(ctx).QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return users.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock the account: %w", err)
+	}
+	return nil
+}
+
 // MarkEmailVerified records when the account proved its email.
 func (r *Users) MarkEmailVerified(ctx context.Context, id uuid.UUID, at time.Time) error {
 	return r.exec(ctx, `UPDATE users SET email_verified_at = $2, updated_at = now() WHERE id = $1`, id, at)
