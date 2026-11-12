@@ -159,6 +159,8 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure and name it `__Host-dbcontest_session`, which no other host can set; off, it is `dbcontest_session` |
 | `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
+| `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account with a password and a code mailed to their address; it also needs mail |
+| `TRUSTED_EMAIL_DOMAIN` | no | empty | the bare lowercase domain (such as `example.edu`) whose addresses, and its subdomains', the installation trusts; anything but a domain name refuses start-up |
 
 ### The mail relay
 

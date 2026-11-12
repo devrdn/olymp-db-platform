@@ -1,0 +1,496 @@
+package signup_test
+
+import (
+	"errors"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/db-contest/backend/internal/signup"
+	"github.com/devrdn/db-contest/backend/internal/signup/signuptest"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
+)
+
+const chosenPassword = "a long enough chosen password"
+
+func start(email, login string) signup.StartCommand {
+	return signup.StartCommand{
+		FullName: "Ana Popescu", Login: login, Email: email, Password: chosenPassword, Lang: "en",
+	}
+}
+
+var codePattern = regexp.MustCompile(`\b\d{6}\b`)
+
+// codeIn reads the code out of the message that carries it.
+func codeIn(t *testing.T, m mailing.Message) string {
+	t.Helper()
+	if m.Kind != mailing.KindSignupCode {
+		t.Fatalf("message is %s, want %s", m.Kind, mailing.KindSignupCode)
+	}
+	code := codePattern.FindString(m.Body)
+	if code == "" {
+		t.Fatalf("no six-digit code in the body:\n%s", m.Body)
+	}
+	return code
+}
+
+// started runs Start and returns the code it mailed.
+func started(t *testing.T, f *signuptest.Fixture, cmd signup.StartCommand) string {
+	t.Helper()
+	if err := f.Service.Start(t.Context(), cmd); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	queued := f.Outbox.Queued()
+	if len(queued) == 0 {
+		t.Fatal("Start queued nothing")
+	}
+	return codeIn(t, queued[len(queued)-1])
+}
+
+// otherCode is a well-formed code that is not code.
+func otherCode(code string) string {
+	if code == "000000" {
+		return "000001"
+	}
+	return "000000"
+}
+
+func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	code := started(t, f, start("ana@example.edu", "ana"))
+
+	queued := f.Outbox.Queued()
+	if len(queued) != 1 {
+		t.Fatalf("queued %d messages, want the code", len(queued))
+	}
+	if m := queued[0]; m.To != "ana@example.edu" || m.UserID != uuid.Nil {
+		t.Errorf("message to %q, account %v; want the typed address and no account", m.To, m.UserID)
+	}
+	if f.Outbox.Wakes == 0 {
+		t.Error("the sender was not woken")
+	}
+
+	rows := f.Store.Rows()
+	if len(rows) != 1 {
+		t.Fatalf("%d pending sign-ups, want one", len(rows))
+	}
+	p := rows[0]
+	if p.Email != "ana@example.edu" || p.Login != "ana" || p.FullName != "Ana Popescu" || p.Tries != 0 {
+		t.Errorf("pending = %+v, want the form as typed and no tries", p)
+	}
+	if !passwordtest.Matches(t, p.PasswordHash, chosenPassword) {
+		t.Error("the stored digest does not match the chosen password")
+	}
+	if strings.Contains(string(p.CodeHash), code) {
+		t.Error("the code is stored in clear")
+	}
+	if !p.ExpiresAt.Equal(f.Clock.Now().Add(signup.CodeLifetime)) || !p.SentAt.Equal(f.Clock.Now()) {
+		t.Errorf("sent %v, expires %v; want now and %s later", p.SentAt, p.ExpiresAt, signup.CodeLifetime)
+	}
+
+	if _, err := f.Users.ByLogin(t.Context(), "ana"); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("ByLogin(ana) = %v, want no account before the code is confirmed", err)
+	}
+}
+
+func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	owner := f.Users.Add(users.User{Login: "ana.owner", Email: "Ana@Example.edu", FullName: "Ana Owner", PasswordHash: "x"})
+
+	if err := f.Service.Start(t.Context(), start("ana@example.edu", "someone-else")); err != nil {
+		t.Fatalf("Start() for a known email = %v, want the answer a new one gets", err)
+	}
+
+	if hashes := f.Hasher.Calls(); hashes != 1 {
+		t.Errorf("spent %d password hashes, want the one a new sign-up spends", hashes)
+	}
+	if rows := f.Store.Rows(); len(rows) != 0 {
+		t.Errorf("stored %+v, want nothing for a known email", rows)
+	}
+	queued := f.Outbox.Queued()
+	if len(queued) != 1 {
+		t.Fatalf("queued %d messages, want the existing-account one", len(queued))
+	}
+	m := queued[0]
+	if m.Kind != mailing.KindSignupExisting || m.To != owner.Email || m.UserID != owner.ID {
+		t.Errorf("message = %s to %q for %v, want %s to the owner", m.Kind, m.To, m.UserID, mailing.KindSignupExisting)
+	}
+	if !strings.Contains(m.Body, "ana.owner") || !strings.Contains(m.Body, "Ana Owner") || strings.Contains(m.Body, "someone-else") {
+		t.Errorf("body should name the owner's account and nothing the form typed:\n%s", m.Body)
+	}
+	if f.Outbox.Wakes == 0 {
+		t.Error("the sender was not woken")
+	}
+}
+
+func TestStartRefusesATakenLogin(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	f.Users.Add(users.User{Login: "Ana", FullName: "Ana", PasswordHash: "x"})
+
+	if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, users.ErrLoginTaken) {
+		t.Errorf("Start() with an account's login = %v, want ErrLoginTaken", err)
+	}
+
+	started(t, f, start("first@example.edu", "maria"))
+	if err := f.Service.Start(t.Context(), start("second@example.edu", "MARIA")); !errors.Is(err, users.ErrLoginTaken) {
+		t.Errorf("Start() with a pending sign-up's login = %v, want ErrLoginTaken", err)
+	}
+	if hashes := f.Hasher.Calls(); hashes != 1 {
+		t.Errorf("spent %d hashes, want only the accepted sign-up's: a taken login is refused before hashing", hashes)
+	}
+
+	f.Clock.Advance(signup.CodeLifetime)
+	started(t, f, start("second@example.edu", "maria"))
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "second@example.edu" {
+		t.Errorf("pending = %+v, want the expired holder replaced by the new sign-up", rows)
+	}
+}
+
+func TestStartLowercasesTheEmail(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	started(t, f, start("  Ana@Example.EDU ", "ana"))
+
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "ana@example.edu" {
+		t.Errorf("pending = %+v, want the email trimmed and lowercased", rows)
+	}
+	if to := f.Outbox.Queued()[0].To; to != "ana@example.edu" {
+		t.Errorf("code sent to %q, want the lowercased address", to)
+	}
+}
+
+func TestStartAgainReplacesThePendingSignUp(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	first := started(t, f, start("ana@example.edu", "ana"))
+
+	second := started(t, f, start("ana@example.edu", "ana2"))
+
+	rows := f.Store.Rows()
+	if len(rows) != 1 || rows[0].Login != "ana2" {
+		t.Fatalf("pending = %+v, want one row with the second form", rows)
+	}
+	if first != second {
+		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: first}); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("the first code still confirms: %v", err)
+		}
+	}
+}
+
+func TestStartRefusesWhatAnAccountWouldRefuse(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(*signup.StartCommand)
+		want error
+	}{
+		"no email":       {func(c *signup.StartCommand) { c.Email = " " }, users.ErrInvalidAccount},
+		"not an email":   {func(c *signup.StartCommand) { c.Email = "Ana <ana@example.edu>" }, users.ErrInvalidAccount},
+		"long email":     {func(c *signup.StartCommand) { c.Email = strings.Repeat("a", 250) + "@example.edu" }, users.ErrInvalidAccount},
+		"no login":       {func(c *signup.StartCommand) { c.Login = "" }, users.ErrInvalidAccount},
+		"long login":     {func(c *signup.StartCommand) { c.Login = strings.Repeat("a", users.MaxLoginLength+1) }, users.ErrInvalidAccount},
+		"no name":        {func(c *signup.StartCommand) { c.FullName = "  " }, users.ErrInvalidAccount},
+		"long name":      {func(c *signup.StartCommand) { c.FullName = strings.Repeat("a", users.MaxFullNameLength+1) }, users.ErrInvalidAccount},
+		"short password": {func(c *signup.StartCommand) { c.Password = "short" }, users.ErrWeakPassword},
+		"huge password":  {func(c *signup.StartCommand) { c.Password = strings.Repeat("a", 2000) }, users.ErrWeakPassword},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := signuptest.NewFixture(t, nil)
+			cmd := start("ana@example.edu", "ana")
+			tc.edit(&cmd)
+
+			if err := f.Service.Start(t.Context(), cmd); !errors.Is(err, tc.want) {
+				t.Errorf("Start() = %v, want %v", err, tc.want)
+			}
+			if len(f.Store.Rows()) != 0 || len(f.Outbox.Queued()) != 0 || f.Hasher.Calls() != 0 {
+				t.Error("a refused form stored, mailed or hashed something")
+			}
+		})
+	}
+}
+
+func TestTheCodeIsWrittenInTheReadersLanguage(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	cmd := start("ana@example.edu", "ana")
+	cmd.Lang = "ro"
+	started(t, f, cmd)
+	cmd = start("maria@example.edu", "maria")
+	cmd.Lang = "xx"
+	started(t, f, cmd)
+
+	queued := f.Outbox.Queued()
+	if !strings.Contains(queued[0].Subject, "Codul de înregistrare") {
+		t.Errorf("subject %q, want the Romanian one", queued[0].Subject)
+	}
+	if !strings.Contains(queued[1].Subject, "sign-up code") {
+		t.Errorf("subject %q, want the installation's language for an unknown one", queued[1].Subject)
+	}
+}
+
+func TestConfirmCreatesAVerifiedStudentAndSpendsTheRow(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	code := started(t, f, start("ana@example.edu", "ana"))
+	f.Clock.Advance(time.Minute)
+
+	created, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: " ANA@example.edu", Code: code})
+	if err != nil {
+		t.Fatalf("Confirm() = %v", err)
+	}
+
+	stored, ok := f.Users.Get(created.ID)
+	if !ok {
+		t.Fatal("the account was not stored")
+	}
+	if stored.Login != "ana" || stored.Email != "ana@example.edu" || stored.FullName != "Ana Popescu" {
+		t.Errorf("account = %+v, want the pending sign-up's details", stored)
+	}
+	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(f.Clock.Now()) {
+		t.Errorf("email verified at %v, want the confirmation's time %v", stored.EmailVerifiedAt, f.Clock.Now())
+	}
+	if stored.MustChangePassword || !passwordtest.Matches(t, stored.PasswordHash, chosenPassword) {
+		t.Error("the account should sign in with the chosen password, without changing it")
+	}
+	if len(stored.Roles) != 1 || stored.Roles[0] != users.RoleStudent {
+		t.Errorf("roles = %v, want only %s", stored.Roles, users.RoleStudent)
+	}
+	if rows := f.Store.Rows(); len(rows) != 0 {
+		t.Errorf("pending = %+v, want the row spent", rows)
+	}
+
+	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrWrongCode) {
+		t.Errorf("a second Confirm() = %v, want ErrWrongCode", err)
+	}
+}
+
+func TestAWrongCodeCountsAndTheSixthTryIsExpired(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	code := started(t, f, start("ana@example.edu", "ana"))
+
+	for try := 1; try <= signup.MaxTries; try++ {
+		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: otherCode(code)}); !errors.Is(err, signup.ErrWrongCode) {
+			t.Fatalf("try %d with a wrong code = %v, want ErrWrongCode", try, err)
+		}
+		if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Tries != try {
+			t.Fatalf("after try %d the row holds %+v, want the try counted", try, rows)
+		}
+	}
+
+	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrCodeExpired) {
+		t.Errorf("the sixth try, with the right code = %v, want ErrCodeExpired", err)
+	}
+	if _, err := f.Users.ByLogin(t.Context(), "ana"); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("ByLogin(ana) = %v, want no account", err)
+	}
+}
+
+func TestAMalformedCodeIsAWrongOneAndCounts(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	started(t, f, start("ana@example.edu", "ana"))
+
+	for _, code := range []string{"", "12345", "1234567", "12a456", strings.Repeat("1", 10_000)} {
+		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("Confirm(%.8q) = %v, want ErrWrongCode", code, err)
+		}
+	}
+	if rows := f.Store.Rows(); rows[0].Tries != signup.MaxTries {
+		t.Errorf("tries = %d, want every malformed code counted", rows[0].Tries)
+	}
+}
+
+func TestConfirmOfAnEmailWithNoSignUpIsAWrongCode(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	f.Users.Add(users.User{Login: "ana", Email: "ana@example.edu", FullName: "Ana", PasswordHash: "x"})
+
+	for _, email := range []string{"ana@example.edu", "nobody@example.edu", strings.Repeat("a", 300)} {
+		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: email, Code: "123456"}); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("Confirm(%.20q) = %v, want ErrWrongCode, whether or not an account holds the address", email, err)
+		}
+	}
+}
+
+func TestACodeExpiresAfterThirtyMinutes(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	late := started(t, f, start("late@example.edu", "late"))
+	f.Clock.Advance(signup.CodeLifetime - time.Second)
+	onTime := started(t, f, start("ontime@example.edu", "ontime"))
+	f.Clock.Advance(time.Second)
+
+	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "late@example.edu", Code: late}); !errors.Is(err, signup.ErrCodeExpired) {
+		t.Errorf("Confirm() thirty minutes on = %v, want ErrCodeExpired", err)
+	}
+	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ontime@example.edu", Code: onTime}); err != nil {
+		t.Errorf("Confirm() a second on = %v, want the account", err)
+	}
+	if signup.CodeLifetime != 30*time.Minute {
+		t.Errorf("CodeLifetime = %s, want 30m", signup.CodeLifetime)
+	}
+}
+
+func TestConfirmAfterTheLoginWasTakenCreatesNothing(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	code := started(t, f, start("ana@example.edu", "ana"))
+	taken := f.Users.Add(users.User{Login: "ANA", FullName: "Made by an administrator", PasswordHash: "x"})
+
+	_, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code})
+	if !errors.Is(err, users.ErrLoginTaken) {
+		t.Fatalf("Confirm() = %v, want ErrLoginTaken", err)
+	}
+
+	if found, _ := f.Users.ByLogin(t.Context(), "ana"); found.ID != taken.ID {
+		t.Errorf("login ana resolves to %v, want only the administrator's account", found.ID)
+	}
+	if rows := f.Store.Rows(); len(rows) != 0 {
+		t.Errorf("pending = %+v, want the row spent", rows)
+	}
+}
+
+func TestConfirmAfterTheEmailWasTakenCreatesNothing(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	code := started(t, f, start("ana@example.edu", "ana"))
+	f.Users.Add(users.User{Login: "someone", Email: "Ana@example.edu", FullName: "Someone", PasswordHash: "x"})
+
+	_, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code})
+	if !errors.Is(err, users.ErrEmailTaken) {
+		t.Fatalf("Confirm() = %v, want ErrEmailTaken", err)
+	}
+	if _, err := f.Users.ByLogin(t.Context(), "ana"); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("ByLogin(ana) = %v, want no account", err)
+	}
+	if rows := f.Store.Rows(); len(rows) != 0 {
+		t.Errorf("pending = %+v, want the row spent", rows)
+	}
+}
+
+func TestResendWaitsSixtySeconds(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	first := started(t, f, start("ana@example.edu", "ana"))
+
+	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrTooSoon) {
+		t.Errorf("Resend() at once = %v, want ErrTooSoon", err)
+	}
+	f.Clock.Advance(signup.ResendCooldown - time.Second)
+	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrTooSoon) {
+		t.Errorf("Resend() a second early = %v, want ErrTooSoon", err)
+	}
+	if n := len(f.Outbox.Queued()); n != 1 {
+		t.Fatalf("queued %d messages during the cooldown, want only the first code", n)
+	}
+
+	f.Clock.Advance(time.Second)
+	if err := f.Service.Resend(t.Context(), " ANA@example.edu", "en"); err != nil {
+		t.Fatalf("Resend() after the cooldown = %v", err)
+	}
+	queued := f.Outbox.Queued()
+	if len(queued) != 2 {
+		t.Fatalf("queued %d messages, want a second code", len(queued))
+	}
+	second := codeIn(t, queued[1])
+	if p := f.Store.Rows()[0]; !p.ExpiresAt.Equal(f.Clock.Now().Add(signup.CodeLifetime)) {
+		t.Errorf("a resent code expires %v, want %s from now", p.ExpiresAt, signup.CodeLifetime)
+	}
+
+	if first != second {
+		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: first}); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("the replaced code = %v, want ErrWrongCode", err)
+		}
+	}
+	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: second}); err != nil {
+		t.Errorf("the resent code = %v, want the account", err)
+	}
+	if signup.ResendCooldown != 60*time.Second {
+		t.Errorf("ResendCooldown = %s, want 60s", signup.ResendCooldown)
+	}
+}
+
+func TestResendOfAnEmailWithNoSignUpSendsNothing(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	if err := f.Service.Resend(t.Context(), "nobody@example.edu", "en"); err != nil {
+		t.Errorf("Resend() = %v, want nil", err)
+	}
+	if n := len(f.Outbox.Queued()); n != 0 {
+		t.Errorf("queued %d messages for an address with no sign-up", n)
+	}
+}
+
+func TestResendOfAnExpiredCodeSaysToStartAgain(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	started(t, f, start("ana@example.edu", "ana"))
+	f.Clock.Advance(signup.CodeLifetime)
+
+	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrCodeExpired) {
+		t.Errorf("Resend() = %v, want ErrCodeExpired", err)
+	}
+}
+
+func TestStartRefusesPastTenThousandPending(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	f.Users.Add(users.User{Login: "owner", Email: "owner@example.edu", FullName: "Owner", PasswordHash: "x"})
+	f.Store.Fill(signup.MaxPending, f.Clock.Now().Add(signup.CodeLifetime))
+
+	if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
+		t.Errorf("Start() past the cap = %v, want ErrFull", err)
+	}
+	if err := f.Service.Start(t.Context(), start("owner@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
+		t.Errorf("Start() for a known email past the cap = %v, want the ErrFull a new one gets", err)
+	}
+	if f.Hasher.Calls() != 0 {
+		t.Error("a full store still spent a password hash")
+	}
+
+	f.Clock.Advance(signup.CodeLifetime)
+	started(t, f, start("ana@example.edu", "ana"))
+	if signup.MaxPending != 10_000 {
+		t.Errorf("MaxPending = %d, want 10 000", signup.MaxPending)
+	}
+}
+
+func TestSweepRemovesExpiredRows(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	started(t, f, start("old@example.edu", "old"))
+	f.Clock.Advance(10 * time.Minute)
+	started(t, f, start("new@example.edu", "new"))
+	f.Clock.Advance(signup.CodeLifetime - 10*time.Minute)
+
+	swept, err := f.Service.Sweep(t.Context(), f.Clock.Now())
+	if err != nil {
+		t.Fatalf("Sweep() = %v", err)
+	}
+
+	if swept != 1 {
+		t.Errorf("swept %d rows, want the expired one", swept)
+	}
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "new@example.edu" {
+		t.Errorf("pending = %+v, want only the live sign-up", rows)
+	}
+}
+
+func TestStartIsNotAvailableWithMailOffOrTheSwitchOff(t *testing.T) {
+	for name, setup := range map[string]func(*signuptest.Fixture){
+		"switch off": nil,
+		"mail off":   func(f *signuptest.Fixture) { f.Outbox.Off = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := signuptest.NewFixture(t, func(c *signup.Config) { c.Enabled = name != "switch off" })
+			if setup != nil {
+				setup(f)
+			}
+
+			if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrNotAvailable) {
+				t.Errorf("Start() = %v, want ErrNotAvailable", err)
+			}
+			if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: "123456"}); !errors.Is(err, signup.ErrNotAvailable) {
+				t.Errorf("Confirm() = %v, want ErrNotAvailable", err)
+			}
+			if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrNotAvailable) {
+				t.Errorf("Resend() = %v, want ErrNotAvailable", err)
+			}
+			if len(f.Store.Rows()) != 0 || f.Hasher.Calls() != 0 {
+				t.Error("an unavailable sign-up stored or hashed something")
+			}
+		})
+	}
+}

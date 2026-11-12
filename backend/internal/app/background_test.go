@@ -566,3 +566,29 @@ func TestTheCoverSweepRemovesWhatNoContestNamesOnItsOwn(t *testing.T) {
 			job.every, job.atStart, abandonedUploadsEvery)
 	}
 }
+
+func TestTheSignupSweepRemovesWhatExpiredByTheTick(t *testing.T) {
+	var asked time.Time
+	before := time.Now()
+	job := sweepSignups(quiet(), func(_ context.Context, now time.Time) (int64, error) {
+		asked = now
+		return 3, nil
+	})
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if asked.Before(before) || asked.After(time.Now()) {
+		t.Errorf("swept as of %v, want the tick's own time", asked)
+	}
+	if job.every != 10*time.Minute || job.atStart {
+		t.Errorf("every = %s, atStart = %v; want ten minutes, not at startup: an expired row is already ignored",
+			job.every, job.atStart)
+	}
+
+	failure := errors.New("the database is away")
+	failing := sweepSignups(quiet(), func(context.Context, time.Time) (int64, error) { return 0, failure })
+	if err := failing.run(t.Context()); !errors.Is(err, failure) {
+		t.Errorf("run() = %v, want the sweep's failure", err)
+	}
+}

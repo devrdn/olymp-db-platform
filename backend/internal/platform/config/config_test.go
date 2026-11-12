@@ -491,6 +491,73 @@ func TestTheEventRegistrationFormIsClosedUnlessTheDeploymentOpensIt(t *testing.T
 	}
 }
 
+func TestSelfSignupIsOffByDefault(t *testing.T) {
+	setRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.SelfSignupEnabled {
+		t.Error("SelfSignupEnabled = true with nothing set, want sign-up closed")
+	}
+
+	t.Setenv("SELF_SIGNUP_ENABLED", "true")
+	if cfg, err = Load(); err != nil || !cfg.SelfSignupEnabled {
+		t.Errorf("SELF_SIGNUP_ENABLED=true: enabled=%v err=%v, want sign-up open", cfg.SelfSignupEnabled, err)
+	}
+
+	t.Setenv("SELF_SIGNUP_ENABLED", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted SELF_SIGNUP_ENABLED=sometimes")
+	}
+}
+
+func TestTheTrustedDomainIsEmptyByDefault(t *testing.T) {
+	setRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.TrustedEmailDomain != "" {
+		t.Errorf("TrustedEmailDomain = %q with nothing set, want empty", cfg.TrustedEmailDomain)
+	}
+
+	for _, domain := range []string{"example.edu", "stud.example.edu", "x-1.example.edu"} {
+		t.Setenv("TRUSTED_EMAIL_DOMAIN", domain)
+		if cfg, err = Load(); err != nil || cfg.TrustedEmailDomain != domain {
+			t.Errorf("TRUSTED_EMAIL_DOMAIN=%s: domain=%q err=%v, want it kept", domain, cfg.TrustedEmailDomain, err)
+		}
+	}
+}
+
+func TestAMalformedTrustedDomainRefusesStartUp(t *testing.T) {
+	setRequired(t)
+
+	for _, domain := range []string{
+		"edu",
+		"Example.edu",
+		"https://example.edu",
+		"user@example.edu",
+		"@example.edu",
+		"example.edu.",
+		".example.edu",
+		"example..edu",
+		"example.edu/path",
+		"exa mple.edu",
+		"-example.edu",
+		"example-.edu",
+		strings.Repeat("a", 63) + "." + strings.Repeat("b", 64),
+		strings.Repeat(strings.Repeat("a", 62)+".", 4) + "edu",
+	} {
+		t.Setenv("TRUSTED_EMAIL_DOMAIN", domain)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() accepted TRUSTED_EMAIL_DOMAIN=%q", domain)
+		}
+	}
+}
+
 func TestTrustedProxiesDefaultToNone(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
