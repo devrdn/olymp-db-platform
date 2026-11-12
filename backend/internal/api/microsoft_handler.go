@@ -125,8 +125,18 @@ func (h *MicrosoftHandler) callback(w http.ResponseWriter, r *http.Request) {
 	if result.DeviceToken != "" {
 		h.cfg.Cookies.SetDevice(w, result.DeviceToken, h.cfg.Auth.DeviceCookieLifetime())
 	}
+	// Federation drops a one-time password it finds; one still held answers
+	// every other screen with password_change_required.
+	if result.MustChangePassword {
+		redirect(w, passwordChangePage)
+		return
+	}
 	redirect(w, st.Return)
 }
+
+// passwordChangePage is the interface's password change screen
+// (frontend/app/(account)/password).
+const passwordChangePage = "/password"
 
 // state opens the one state cookie and checks that Microsoft sent back the
 // state it holds, so a callback this browser did not start is refused.

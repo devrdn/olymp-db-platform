@@ -47,6 +47,9 @@ const (
 	// email. Both carry the provider and whether the email was trusted.
 	ActionUserExternalSignUp       = "user.external_sign_up"
 	ActionUserExternalIdentityLink = "user.external_identity_link"
+	// ActionUserOneTimePasswordRetire records an external sign-in dropping the
+	// one-time password of the account it entered; it carries the provider.
+	ActionUserOneTimePasswordRetire = "user.one_time_password_retire"
 
 	ActionContestCreate       = "contest.create"
 	ActionContestUpdate       = "contest.update"
@@ -174,7 +177,7 @@ var actions = []string{
 	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
 	ActionUserPasswordReset, ActionPasswordChange, ActionUserPasswordResetByLink,
 	ActionUserSignInUnlock, ActionUserSignInDetailsEmailed,
-	ActionUserExternalSignUp, ActionUserExternalIdentityLink,
+	ActionUserExternalSignUp, ActionUserExternalIdentityLink, ActionUserOneTimePasswordRetire,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,

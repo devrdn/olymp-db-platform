@@ -212,7 +212,7 @@ type Repository interface {
 	// path passes a slice of one, so the two cannot drift.
 	SetStatus(ctx context.Context, ids []uuid.UUID, status string, change StatusChange) error
 	// SetPassword stores a new digest and sets the one-time-password flag to
-	// mustChange.
+	// mustChange. An empty digest leaves the account without a password.
 	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
 	// SetPasswordMany stores a digest per account, each marked one-time.
 	SetPasswordMany(ctx context.Context, creds []Credential) error

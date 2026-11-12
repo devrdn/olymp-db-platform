@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/google/uuid"
 )
 
 // Made-up tenants and application; none exists at Microsoft.
@@ -39,6 +41,7 @@ type microsoftFixture struct {
 	provider *microsofttest.Provider
 	repo     *userstest.Repository
 	sessions *auth.SessionStore
+	auth     *auth.Service
 	logs     *logBuffer
 	router   http.Handler
 }
@@ -46,6 +49,8 @@ type microsoftFixture struct {
 type microsoftOptions struct {
 	createAccounts bool
 	noClient       bool
+	// accounts, when set, wraps the account service federation uses.
+	accounts func(*users.Service) federation.Accounts
 }
 
 func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture {
@@ -72,8 +77,12 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 		Sessions: sessions, Users: repo,
 		Authorizer: rbac.New(noRoles{}), Cookies: cookies, Logger: log,
 	})
-	accounts := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
+	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
 		WithExternalIdentities(repo)
+	var accounts federation.Accounts = service
+	if opts.accounts != nil {
+		accounts = opts.accounts(service)
+	}
 
 	var client *microsoft.Client
 	if !opts.noClient {
@@ -99,7 +108,7 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 		}),
 		Auth: authService, Limiter: limiter, Middleware: mw, Cookies: cookies, Log: log,
 	}).Mount(router)
-	return &microsoftFixture{provider: p, repo: repo, sessions: sessions, logs: logs, router: router}
+	return &microsoftFixture{provider: p, repo: repo, sessions: sessions, auth: authService, logs: logs, router: router}
 }
 
 type noPendingLogins struct{}
@@ -395,6 +404,68 @@ func TestAnOffSiteReturnPathLandsAtTheRoot(t *testing.T) {
 
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
 		t.Errorf("callback = %d to %q, want 302 to /", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// A roster-made student signs in with Microsoft because they never had the
+// one-time password; it must not stand between them and every screen.
+func TestASignInToAnAccountOnItsOneTimePasswordDropsIt(t *testing.T) {
+	const issued = "issued one-time password"
+	f := newMicrosoftFixture(t, microsoftOptions{})
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, issued), MustChangePassword: true,
+	})
+	s := f.start(t, "192.0.2.1", "/my")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/my" {
+		t.Fatalf("callback = %d to %q, want 302 to the return path (%s)", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	principal, err := f.sessions.Get(t.Context(), sessionOf(t, rec).Value)
+	if err != nil || principal.UserID != ana.ID {
+		t.Fatalf("session %+v, %v; want ana's", principal, err)
+	}
+	stored, _ := f.repo.Get(ana.ID)
+	if stored.HasPassword() || stored.MustChangePassword {
+		t.Errorf("stored hash %q, must change %v: want no password and no forced change", stored.PasswordHash, stored.MustChangePassword)
+	}
+	if principal.Generation != stored.SessionGeneration {
+		t.Errorf("session at generation %d, account at %d: the new session must outlive the retirement", principal.Generation, stored.SessionGeneration)
+	}
+	if _, err := f.auth.Login(t.Context(), auth.LoginCommand{Login: "ana", Password: issued, IP: "192.0.2.1"}); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("a password sign-in with the dropped password = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+// unretiringAccounts enters a linked account without dropping its one-time
+// password, as if it had been issued again between the drop and the sign-in.
+type unretiringAccounts struct{ *users.Service }
+
+func (a unretiringAccounts) RetireOneTimePassword(ctx context.Context, id uuid.UUID, _ string) (users.User, error) {
+	return a.ByID(ctx, id)
+}
+
+func TestAnAccountThatMustChangeItsPasswordLandsOnThePasswordScreen(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{accounts: func(s *users.Service) federation.Accounts {
+		return unretiringAccounts{s}
+	}})
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, "issued again"), MustChangePassword: true,
+	})
+	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: f.provider.Issuer(msHomeTenant), Subject: msObjectID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(t, "192.0.2.1", "/my")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/password" {
+		t.Errorf("callback = %d to %q, want 302 to /password", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

@@ -920,6 +920,31 @@ func TestMarkEmailVerifiedStampsTheAccount(t *testing.T) {
 	})
 }
 
+// An account without a password holds NULL, as one made by an external
+// sign-in does, never an empty digest.
+func TestSetPasswordWithNoDigestStoresNone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		created := makeUser(t, ctx, "drop-the-password")
+
+		if err := repo.SetPassword(ctx, created.ID, "", false); err != nil {
+			t.Fatalf("SetPassword() = %v", err)
+		}
+
+		var isNull bool
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT password_hash IS NULL FROM users WHERE id = $1`, created.ID).Scan(&isNull); err != nil {
+			t.Fatal(err)
+		}
+		if !isNull {
+			t.Error("password_hash holds a value, want NULL")
+		}
+		if stored, _ := repo.ByID(ctx, created.ID); stored.HasPassword() || stored.MustChangePassword {
+			t.Errorf("stored %+v, want no password and no forced change", stored)
+		}
+	})
+}
+
 func TestUpdateProfileClearsTheVerifiedMarkUnlessToldToKeepIt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -1146,7 +1171,7 @@ type grantingAccounts struct {
 	t *testing.T
 }
 
-func (a grantingAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) error {
+func (a grantingAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) (users.User, error) {
 	if err := a.ReplaceRoles(context.Background(), uuid.Nil, id, []string{users.RoleAdmin}); err != nil {
 		a.t.Fatalf("grant the role: %v", err)
 	}
@@ -1205,7 +1230,10 @@ func TestLinkExternalWaitsForARoleChangeInFlight(t *testing.T) {
 	}
 
 	linked := make(chan error, 1)
-	go func() { linked <- service.LinkExternal(ctx, ana.ID, externalLink(tag), time.Now()) }()
+	go func() {
+		_, err := service.LinkExternal(ctx, ana.ID, externalLink(tag), time.Now())
+		linked <- err
+	}()
 
 	select {
 	case err := <-linked:
@@ -1303,7 +1331,8 @@ func TestTwoConcurrentLinksOfOneIssuerLinkOne(t *testing.T) {
 			<-start
 			identity := externalLink(tag)
 			identity.Subject = subject
-			errs <- service.LinkExternal(context.Background(), ana.ID, identity, time.Now())
+			_, err := service.LinkExternal(context.Background(), ana.ID, identity, time.Now())
+			errs <- err
 		}()
 	}
 	close(start)

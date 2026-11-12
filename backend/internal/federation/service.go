@@ -30,9 +30,12 @@ type Store interface {
 // refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
 // users.ErrNotFound when the account no longer holds the identity's email, and
 // users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
+// LinkExternal and RetireOneTimePassword drop a one-time password and return
+// the account as it then stands, whose session generation a sign-in must use.
 type Accounts interface {
 	CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error)
-	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) error
+	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) (users.User, error)
+	RetireOneTimePassword(ctx context.Context, userID uuid.UUID, provider string) (users.User, error)
 }
 
 // PendingLogins reports the logins sign-ups waiting for their code hold
@@ -139,6 +142,9 @@ func refuse(u users.User) error {
 	return nil
 }
 
+// enter signs into a linked account. One still on its one-time password
+// loses it, as a link by email does; the read decides whether to ask, so an
+// ordinary sign-in writes nothing more (CLAUDE.md rule 6).
 func (s *Service) enter(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
 	if err := refuse(u); err != nil {
 		return users.User{}, err
@@ -146,7 +152,14 @@ func (s *Service) enter(ctx context.Context, u users.User, identity users.Extern
 	if err := s.cfg.Store.TouchExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject, s.cfg.Now()); err != nil {
 		return users.User{}, err
 	}
-	return u, nil
+	if !u.MustChangePassword {
+		return u, nil
+	}
+	u, err := s.cfg.Accounts.RetireOneTimePassword(ctx, u.ID, identity.Provider)
+	if errors.Is(err, users.ErrStaffNotLinkable) {
+		return users.User{}, ErrStaffAccount
+	}
+	return u, err
 }
 
 // known enters the account another request linked the identity to while this
@@ -163,8 +176,7 @@ func (s *Service) link(ctx context.Context, u users.User, identity users.Externa
 	if err := refuse(u); err != nil {
 		return users.User{}, err
 	}
-	at := s.cfg.Now()
-	err := s.cfg.Accounts.LinkExternal(ctx, u.ID, identity, at)
+	linked, err := s.cfg.Accounts.LinkExternal(ctx, u.ID, identity, s.cfg.Now())
 	switch {
 	case errors.Is(err, users.ErrExternalIdentityTaken):
 		return s.known(ctx, identity)
@@ -175,8 +187,7 @@ func (s *Service) link(ctx context.Context, u users.User, identity users.Externa
 	case err != nil:
 		return users.User{}, err
 	}
-	u.EmailVerifiedAt = &at
-	return u, nil
+	return linked, nil
 }
 
 // Login generation: the base is cut to maxLoginBase so that any suffix keeps

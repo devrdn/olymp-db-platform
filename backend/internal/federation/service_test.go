@@ -71,7 +71,7 @@ func (a *hookedAccounts) CreateExternal(ctx context.Context, cmd users.CreateExt
 	return a.Accounts.CreateExternal(ctx, cmd)
 }
 
-func (a *hookedAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) error {
+func (a *hookedAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) (users.User, error) {
 	a.fire()
 	return a.Accounts.LinkExternal(ctx, id, identity, at)
 }
@@ -171,6 +171,57 @@ func TestATrustedEmailLinksToTheExistingStudent(t *testing.T) {
 	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(now) {
 		t.Errorf("email verified at %v, want %v", stored.EmailVerifiedAt, now)
 	}
+	if got.EmailVerifiedAt == nil || !got.EmailVerifiedAt.Equal(now) {
+		t.Errorf("returned account verified at %v, want %v", got.EmailVerifiedAt, now)
+	}
+}
+
+// oneTimeStudent is a staff-made student still on its issued one-time
+// password, which the person signing in through the provider never had.
+func (f *fixture) oneTimeStudent(t *testing.T) users.User {
+	t.Helper()
+	return f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: "issued-one-time-password-hash", MustChangePassword: true, SessionGeneration: 3,
+	})
+}
+
+func assertEnteredWithoutTheOneTimePassword(t *testing.T, f *fixture, ana, got users.User) {
+	t.Helper()
+	stored, _ := f.repo.Get(ana.ID)
+	if stored.HasPassword() || stored.MustChangePassword {
+		t.Errorf("stored hash %q, must change %v: want the one-time password dropped", stored.PasswordHash, stored.MustChangePassword)
+	}
+	// The session opens at the returned generation, so it must be the one
+	// stored, or it is dead on arrival.
+	if got.ID != ana.ID || got.MustChangePassword || got.SessionGeneration != stored.SessionGeneration {
+		t.Errorf("returned %+v, want ana's account as stored after the change (generation %d)", got, stored.SessionGeneration)
+	}
+}
+
+func TestAKnownIdentityEntersItsAccountWithoutTheOneTimePassword(t *testing.T) {
+	f := newFixture(t)
+	ana := f.oneTimeStudent(t)
+	f.link(t, ana, "sub-ana")
+
+	got, err := f.service().Resolve(t.Context(), claims("sub-ana"))
+	if err != nil {
+		t.Fatalf("Resolve() = %v", err)
+	}
+
+	assertEnteredWithoutTheOneTimePassword(t, f, ana, got)
+}
+
+func TestATrustedEmailLinksAnAccountWithoutItsOneTimePassword(t *testing.T) {
+	f := newFixture(t)
+	ana := f.oneTimeStudent(t)
+
+	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+	if err != nil {
+		t.Fatalf("Resolve() = %v", err)
+	}
+
+	assertEnteredWithoutTheOneTimePassword(t, f, ana, got)
 	if got.EmailVerifiedAt == nil || !got.EmailVerifiedAt.Equal(now) {
 		t.Errorf("returned account verified at %v, want %v", got.EmailVerifiedAt, now)
 	}

@@ -380,32 +380,33 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 // identity's email, which is what vouched for linking it, and
 // ErrIssuerAlreadyLinked when the account already holds another identity at
 // the same issuer: a provider may reassign a mailbox, and the address must
-// not carry its new holder into the previous one's account. As for
-// CreateExternal, the owner made the change, so the audit entry has no actor.
-func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) error {
+// not carry its new holder into the previous one's account. An account still
+// on its one-time password loses it, as RetireOneTimePassword says. It
+// returns the account as it then stands. As for CreateExternal, the owner
+// made the change, so the audit entries have no actor.
+func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) (User, error) {
 	if s.identities == nil {
-		return errNoIdentityStore
+		return User{}, errNoIdentityStore
 	}
 	identity.UserID = userID
 	if err := identity.Validate(); err != nil {
-		return err
+		return User{}, err
 	}
-	return s.uow.Do(ctx, func(ctx context.Context) error {
+	var u User
+	retired := false
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.Lock(ctx, userID); err != nil {
 			return err
 		}
-		u, err := s.repo.ByID(ctx, userID)
+		var err error
+		u, err = s.repo.ByID(ctx, userID)
 		if err != nil {
 			return err
 		}
-		switch {
-		case u.Status == StatusDeleted:
-			return ErrAccountDeleted
-		case !u.IsActive():
-			return ErrAccountBlocked
-		case u.IsStaff():
-			return ErrStaffNotLinkable
-		case identity.Email == "" || !strings.EqualFold(u.Email, identity.Email):
+		if err := refuseExternalEntry(u); err != nil {
+			return err
+		}
+		if identity.Email == "" || !strings.EqualFold(u.Email, identity.Email) {
 			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
 		}
 		other, err := s.identities.HoldsOtherIdentityAt(ctx, userID, identity.Provider, identity.Issuer, identity.Subject)
@@ -421,11 +422,91 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		if err := s.repo.MarkEmailVerified(ctx, userID, verifiedAt); err != nil {
 			return err
 		}
-		return s.record(ctx, uuid.Nil, audit.ActionUserExternalIdentityLink, userID, map[string]any{
+		u.EmailVerifiedAt = &verifiedAt
+		if err := s.record(ctx, uuid.Nil, audit.ActionUserExternalIdentityLink, userID, map[string]any{
 			"provider":      identity.Provider,
 			"email_trusted": true,
-		})
+		}); err != nil {
+			return err
+		}
+		if !u.MustChangePassword {
+			return nil
+		}
+		retired = true
+		return s.retireOneTimePassword(ctx, &u, identity.Provider)
 	})
+	if err != nil {
+		return User{}, err
+	}
+	if retired {
+		s.forget(ctx, userID)
+	}
+	return u, nil
+}
+
+// RetireOneTimePassword drops the one-time password of an account a sign-in
+// through provider has entered, and returns the account as it now stands. It
+// writes nothing for an account whose owner chose its password. The account
+// is locked and read again first, and refused as LinkExternal refuses it:
+// ErrAccountDeleted, ErrAccountBlocked or ErrStaffNotLinkable.
+func (s *Service) RetireOneTimePassword(ctx context.Context, userID uuid.UUID, provider string) (User, error) {
+	var u User
+	retired := false
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, userID); err != nil {
+			return err
+		}
+		var err error
+		if u, err = s.repo.ByID(ctx, userID); err != nil {
+			return err
+		}
+		if err := refuseExternalEntry(u); err != nil {
+			return err
+		}
+		if !u.MustChangePassword {
+			return nil
+		}
+		retired = true
+		return s.retireOneTimePassword(ctx, &u, provider)
+	})
+	if err != nil {
+		return User{}, err
+	}
+	if retired {
+		s.forget(ctx, userID)
+	}
+	return u, nil
+}
+
+// retireOneTimePassword runs inside the caller's transaction. The provider
+// vouched for the person, who never had the issued password; kept, it would
+// send them to a change form that asks for it, and cleared alone, the flag
+// would leave a handed-out secret valid. Sessions opened with it end. The
+// owner made the change, so the entry has no actor.
+func (s *Service) retireOneTimePassword(ctx context.Context, u *User, provider string) error {
+	if err := s.repo.SetPassword(ctx, u.ID, "", false); err != nil {
+		return err
+	}
+	generation, err := s.repo.BumpSessionGeneration(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash, u.MustChangePassword, u.SessionGeneration = "", false, generation
+	return s.record(ctx, uuid.Nil, audit.ActionUserOneTimePasswordRetire, u.ID, map[string]any{"provider": provider})
+}
+
+// refuseExternalEntry says why an account read under its lock cannot be
+// entered or linked through an external provider, if it cannot.
+func refuseExternalEntry(u User) error {
+	switch {
+	case u.Status == StatusDeleted:
+		return ErrAccountDeleted
+	case !u.IsActive():
+		return ErrAccountBlocked
+	case u.IsStaff():
+		return ErrStaffNotLinkable
+	}
+	return nil
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
