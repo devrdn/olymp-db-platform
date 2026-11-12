@@ -154,7 +154,7 @@ func cookieNamed(t *testing.T, rec *httptest.ResponseRecorder, name string) *htt
 func (f *microsoftFixture) signIn(t *testing.T, from string, s started, claims map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	claims["nonce"] = s.query.Get("nonce")
-	f.provider.Issue("code-"+s.query.Get("state"), f.provider.Sign(t, claims))
+	f.provider.Issue("code-"+s.query.Get("state"), f.provider.Sign(t, claims), s.query.Get("code_challenge"))
 	return f.callback(from, "code=code-"+s.query.Get("state")+"&state="+s.query.Get("state"), s.cookie)
 }
 
@@ -303,6 +303,24 @@ func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
 	}
 	if n := f.provider.Exchanges(); n != 0 {
 		t.Errorf("%d codes were exchanged for refused callbacks, want none", n)
+	}
+}
+
+// A code Microsoft issued to another sign-in (its PKCE challenge) cannot be
+// redeemed from this browser, even with this browser's nonce in the token.
+func TestACodeIssuedToAnotherSignInCannotBeRedeemed(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	victim := f.start(t, "192.0.2.1", "/")
+	attacker := f.start(t, "192.0.2.1", "/")
+	claims := f.claims(msHomeTenant)
+	claims["nonce"] = attacker.query.Get("nonce")
+	f.provider.Issue("stolen", f.provider.Sign(t, claims), victim.query.Get("code_challenge"))
+
+	rec := f.callback("192.0.2.1", "code=stolen&state="+attacker.query.Get("state"), attacker.cookie)
+
+	assertLandsOnSignIn(t, rec, "external_signin_failed")
+	if f.provider.Exchanges() != 1 || f.repo.Len() != 0 {
+		t.Errorf("exchanges %d, accounts %d; want the one refused exchange and no account", f.provider.Exchanges(), f.repo.Len())
 	}
 }
 

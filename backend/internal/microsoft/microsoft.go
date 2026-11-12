@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -87,8 +88,8 @@ type Config struct {
 	// Tenant is common, organizations, consumers or one tenant ID: the
 	// authority asked, and who the callback admits.
 	Tenant string
-	// HomeTenant is the installation's own tenant ID, whose emails are
-	// trusted; empty trusts no tenant as such.
+	// HomeTenant is the installation's own tenant ID, whose members' emails
+	// are trusted; empty trusts no tenant as such.
 	HomeTenant string
 	// RedirectURL is the callback's absolute address, as registered.
 	RedirectURL string
@@ -125,8 +126,7 @@ func New(cfg Config) (*Client, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	authority := base + "/" + cfg.Tenant
 
-	keys := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), cfg.HTTPClient),
-		authority+"/discovery/v2.0/keys")
+	keys := newKeySet(authority+"/discovery/v2.0/keys", cfg.HTTPClient, cfg.Now)
 	// The issuer differs for every tenant under common, so go-oidc cannot
 	// check it; Exchange checks it against the token's own tenant.
 	verifier := oidc.NewVerifier("", keys, &oidc.Config{
@@ -245,7 +245,10 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 // AuthCodeURL is where the browser is sent to sign in: the configured
 // authority, asking for st's state and nonce with st's PKCE challenge.
 func (c *Client) AuthCodeURL(st State) string {
-	return c.oauth.AuthCodeURL(st.State, oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce))
+	// select_account: on a shared machine a live Microsoft session would
+	// otherwise sign the next person in without asking.
+	return c.oauth.AuthCodeURL(st.State, oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce),
+		oauth2.SetAuthURLParam("prompt", "select_account"))
 }
 
 // idTokenClaims is what the connector reads of a v2.0 ID token.
@@ -257,12 +260,15 @@ type idTokenClaims struct {
 	PreferredUsername string          `json:"preferred_username"`
 	Name              string          `json:"name"`
 	DomainVerified    json.RawMessage `json:"xms_edov"`
+	// IdentityProvider is absent or iss for the tenant's own members, and
+	// names the home of a guest.
+	IdentityProvider string `json:"idp"`
 }
 
 // Exchange trades the code for an ID token, verifies it against st, and
-// returns the claims federation resolves. The token's signature, audience
-// and expiry are go-oidc's checks; its issuer, nonce and tenant are checked
-// here.
+// returns the claims federation resolves. The signature is checked against
+// the published keys (keySet), the audience and expiry by go-oidc, and the
+// issuer, nonce and tenant here.
 func (c *Client) Exchange(ctx context.Context, code string, st State) (federation.Claims, error) {
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, c.http)
 	token, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(st.Verifier))
@@ -296,6 +302,10 @@ func (c *Client) Exchange(ctx context.Context, code string, st State) (federatio
 	if !admits(c.tenant, claims.TenantID) {
 		return federation.Claims{}, fmt.Errorf("%w: tenant %s", ErrTenantNotAllowed, claims.TenantID)
 	}
+	if len(claims.IdentityProvider) > federation.MaxIssuerLength || !utf8.ValidString(claims.IdentityProvider) ||
+		strings.ContainsFunc(claims.IdentityProvider, unicode.IsControl) {
+		return federation.Claims{}, fmt.Errorf("%w: the identity provider is not a bounded name", ErrInvalidToken)
+	}
 	if !tenantID.MatchString(claims.ObjectID) {
 		return federation.Claims{}, fmt.Errorf("%w: the token carries no object ID", federation.ErrInvalidClaims)
 	}
@@ -309,9 +319,12 @@ func (c *Client) Exchange(ctx context.Context, code string, st State) (federatio
 // there if it is not an address.
 func (c *Client) federated(t idTokenClaims) federation.Claims {
 	email := t.Email
-	home := c.home != "" && t.TenantID == c.home
-	// The home tenant's usernames are its addresses; another tenant's are
-	// whatever it chose and never taken for an email.
+	// A guest carries the home tenant's tid with an address the tenant never
+	// verified, so only the tenant's own members are vouched for by it.
+	guest := t.IdentityProvider != "" && t.IdentityProvider != t.Issuer
+	home := c.home != "" && t.TenantID == c.home && !guest
+	// The home tenant's usernames are its members' addresses; anyone else's
+	// are whatever their tenant chose and never taken for an email.
 	if email == "" && home {
 		email = t.PreferredUsername
 	}
