@@ -1,5 +1,9 @@
+import { redirect } from "next/navigation";
+
 import { Band } from "@/components/layout/band";
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
+import { destinationAfterLogin } from "@/lib/auth/destination";
+import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { externalSignInError, signInErrors } from "./codes";
@@ -32,6 +36,19 @@ export default async function LoginPage(props: PageProps<"/login">) {
 
   /** Where an external sign-in ends when it is refused; the same rule as above. */
   const external = externalSignInError(params.error);
+
+  /**
+   * A Microsoft sign-in without a return path ends here, signed in; it goes on
+   * as a password sign-in would. A refusal stays, to be read. An account
+   * still on its one-time password is sent to `/password` by the API.
+   */
+  if (params.error === undefined) {
+    const identity = await fetchIdentity().catch(() => null);
+    // redirect() throws, so it stays outside any try/catch.
+    if (identity) {
+      redirect(destinationAfterLogin({ mustChangePassword: false, permissions: identity.permissions }, next));
+    }
+  }
 
   const t = dict.auth.signIn;
 

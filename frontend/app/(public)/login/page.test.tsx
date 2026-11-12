@@ -2,11 +2,23 @@ import { render, screen } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
+import { IdentityUnavailableError, type CurrentIdentity } from "@/lib/auth/session";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 // A Server Component: the API and the request are faked.
-const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
+const { serverRequest, fetchIdentity, redirect } = vi.hoisted(() => ({
+  serverRequest: vi.fn(),
+  fetchIdentity: vi.fn(),
+  redirect: vi.fn((target: string) => {
+    throw new Error(`NEXT_REDIRECT ${target}`);
+  }),
+}));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth/session")>()),
+  fetchIdentity,
+}));
+vi.mock("next/navigation", () => ({ redirect }));
 vi.mock("./actions", () => ({ signInAction: vi.fn() }));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
@@ -23,6 +35,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   serverRequest.mockReset();
+  redirect.mockClear();
+  fetchIdentity.mockReset();
+  fetchIdentity.mockResolvedValue(null);
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -143,5 +158,56 @@ describe.each(["en", "ro", "ru"] as const)("the sign-in lede in %s", (locale) =>
     const lede = (await getDictionary(locale)).auth.signIn.lede;
 
     expect(lede).not.toMatch(/department|catedr|кафедр/i);
+  });
+});
+
+/**
+ * A Microsoft sign-in without a return path ends here, signed in. The page
+ * sends the visitor on as a password sign-in would, so where an account lands
+ * is decided by one rule.
+ */
+describe("the sign-in page for a visitor already signed in", () => {
+  function signedIn(permissions: string[]): CurrentIdentity {
+    return { id: "u-1", login: "ana", fullName: "Ana", roles: [], permissions };
+  }
+
+  test("sends a participant to their contests", async () => {
+    methods(false, false, true);
+    fetchIdentity.mockResolvedValue(signedIn([]));
+
+    await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /my");
+  });
+
+  test("sends staff to the constructor", async () => {
+    methods(false, false, true);
+    fetchIdentity.mockResolvedValue(signedIn(["contest.create"]));
+
+    await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /contests");
+  });
+
+  test("resumes the interrupted page", async () => {
+    methods(false, false, true);
+    fetchIdentity.mockResolvedValue(signedIn([]));
+
+    await expect(renderPage({ next: "/contests/abc/play" })).rejects.toThrow("NEXT_REDIRECT /contests/abc/play");
+  });
+
+  /** A refused external sign-in may come back to a browser still signed in. */
+  test("stays to say why an external sign-in was refused", async () => {
+    methods(false, false, true);
+    fetchIdentity.mockResolvedValue(signedIn([]));
+    await renderPage({ error: "external_signin_failed" });
+
+    expect(redirect).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(en.errors.external_signin_failed);
+  });
+
+  test("shows the form when the API cannot say who the visitor is", async () => {
+    methods(false, false, true);
+    fetchIdentity.mockRejectedValue(new IdentityUnavailableError(502));
+    await renderPage();
+
+    expect(redirect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: en.auth.signIn.submit })).toBeInTheDocument();
   });
 });

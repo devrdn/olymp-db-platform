@@ -22,6 +22,11 @@ const StateLifetime = 10 * time.Minute
 // MaxReturnPathLength bounds the page a sign-in returns to, in bytes.
 const MaxReturnPathLength = 512
 
+// DefaultReturnPath is the interface's sign-in page, where a sign-in without
+// a usable return path ends: it sends a signed-in visitor on as a password
+// sign-in would, so where an account lands is decided in one place.
+const DefaultReturnPath = "/login"
+
 const (
 	// stateKeyLabel derives the state key from DEVICE_COOKIE_SECRET, so a
 	// state cookie can never pass for a device cookie or the reverse.
@@ -41,7 +46,7 @@ type State struct {
 }
 
 // NewState draws a fresh state, nonce and verifier for a sign-in returning
-// to returnPath, or to / when that path is not this site's.
+// to returnPath, or to DefaultReturnPath when that path is not this site's.
 func NewState(returnPath string) (State, error) {
 	state, err := random()
 	if err != nil {
@@ -62,17 +67,18 @@ func random() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// ReturnPath is raw when it is a path on this site, and / otherwise: it must
+// ReturnPath is raw when it is a path on this site, and DefaultReturnPath
+// otherwise: it must
 // start with one slash, not two (another host), and be printable ASCII
 // without a space or a backslash, which browsers read as a slash. A browser
 // percent-encodes anything else in a path, so nothing it sends is lost.
 func ReturnPath(raw string) string {
 	if len(raw) > MaxReturnPathLength || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
-		return "/"
+		return DefaultReturnPath
 	}
 	for i := 0; i < len(raw); i++ {
 		if raw[i] <= ' ' || raw[i] > '~' || raw[i] == '\\' {
-			return "/"
+			return DefaultReturnPath
 		}
 	}
 	return raw

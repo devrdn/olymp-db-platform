@@ -396,14 +396,20 @@ func TestARefusedAccountLandsOnItsCode(t *testing.T) {
 	}
 }
 
-func TestAnOffSiteReturnPathLandsAtTheRoot(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
-	s := f.start(t, "192.0.2.1", "//evil.example/steal")
+// The sign-in page sends a signed-in visitor where a password sign-in would,
+// so the destination rule lives in one place.
+func TestAnOffSiteOrMissingReturnPathLandsOnTheSignInPage(t *testing.T) {
+	for name, returnPath := range map[string]string{"off-site": "//evil.example/steal", "missing": ""} {
+		t.Run(name, func(t *testing.T) {
+			f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+			s := f.start(t, "192.0.2.1", returnPath)
 
-	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+			rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
 
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
-		t.Errorf("callback = %d to %q, want 302 to /", rec.Code, rec.Header().Get("Location"))
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+				t.Errorf("callback = %d to %q, want 302 to /login", rec.Code, rec.Header().Get("Location"))
+			}
+		})
 	}
 }
 
