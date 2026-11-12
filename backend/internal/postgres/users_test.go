@@ -941,9 +941,8 @@ func TestAnExternalIdentityIsUniquePerIssuerAndSubject(t *testing.T) {
 		}
 		// Last, because the refused insert aborts the test transaction.
 		err = repo.LinkExternalIdentity(ctx, microsoftIdentity(second.ID, "sub-1"))
-		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolation {
-			t.Errorf("a second account linking the same identity = %v, want a unique violation", err)
+		if !errors.Is(err, users.ErrExternalIdentityTaken) {
+			t.Errorf("a second account linking the same identity = %v, want ErrExternalIdentityTaken", err)
 		}
 	})
 }
@@ -990,6 +989,93 @@ func TestDeletingAnAccountForgetsItsExternalIdentities(t *testing.T) {
 			t.Errorf("relinking the released identity = %v", err)
 		}
 	})
+}
+
+// externalAccounts is the account service over the real database, outside
+// any test transaction, so its own units of work commit and roll back; t's
+// cleanup deletes every account whose login starts with tag.
+func externalAccounts(t *testing.T, tag string) *users.Service {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM users WHERE login LIKE $1`, escapeLike(tag)+"%")
+	})
+	repo := NewUsers(testPool)
+	return users.NewService(repo, audit.New(NewAuditSink(testPool)), storage.NewUnitOfWork(testPool), passwordtest.NewHasher()).
+		WithExternalIdentities(repo)
+}
+
+func externalCommand(login, subject string) users.CreateExternalCommand {
+	return users.CreateExternalCommand{
+		Login: login, FullName: "Ana Popescu",
+		Identity: users.ExternalIdentity{Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example/v2.0", Subject: subject},
+	}
+}
+
+func countLogins(t *testing.T, tag string) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM users WHERE login LIKE $1`, escapeLike(tag)+"%").Scan(&n); err != nil {
+		t.Fatalf("count the accounts: %v", err)
+	}
+	return n
+}
+
+func TestCreateExternalOfATakenIdentityLeavesNoAccount(t *testing.T) {
+	tag := "ext-rollback-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	subject := "sub-" + tag
+	if _, err := service.CreateExternal(t.Context(), externalCommand(tag+"-a", subject)); err != nil {
+		t.Fatalf("first CreateExternal() = %v", err)
+	}
+
+	_, err := service.CreateExternal(t.Context(), externalCommand(tag+"-b", subject))
+
+	if !errors.Is(err, users.ErrExternalIdentityTaken) {
+		t.Fatalf("second CreateExternal() = %v, want ErrExternalIdentityTaken", err)
+	}
+	if n := countLogins(t, tag); n != 1 {
+		t.Errorf("accounts = %d, want only the first: the refused link must take its account with it", n)
+	}
+}
+
+// Two first sign-ins of one person: both create an account, and the unique
+// identity lets exactly one keep it.
+func TestTwoConcurrentCreationsOfOneIdentityKeepOneAccount(t *testing.T) {
+	tag := "ext-race-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	subject := "sub-" + tag
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, login := range []string{tag + "-a", tag + "-b"} {
+		go func() {
+			<-start
+			_, err := service.CreateExternal(context.Background(), externalCommand(login, subject))
+			errs <- err
+		}()
+	}
+	close(start)
+
+	var won, taken int
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			won++
+		case errors.Is(err, users.ErrExternalIdentityTaken):
+			taken++
+		default:
+			t.Errorf("CreateExternal() = %v", err)
+		}
+	}
+	if won != 1 || taken != 1 {
+		t.Errorf("won %d, refused as taken %d; want one of each", won, taken)
+	}
+	if n := countLogins(t, tag); n != 1 {
+		t.Errorf("accounts = %d, want one", n)
+	}
 }
 
 // A change another transaction holds when Lock starts commits before Lock

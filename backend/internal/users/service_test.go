@@ -297,6 +297,152 @@ func TestCreateVerifiedRefusesATakenLogin(t *testing.T) {
 	}
 }
 
+func microsoftIdentity(subject string) users.ExternalIdentity {
+	return users.ExternalIdentity{
+		Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: subject,
+		Email: "ana@example.edu",
+	}
+}
+
+func externalCommand(login string) users.CreateExternalCommand {
+	return users.CreateExternalCommand{
+		Login: login, FullName: "Ana Popescu", Email: "ana@example.edu",
+		VerifiedAt: time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC),
+		Identity:   microsoftIdentity("sub-ana"),
+	}
+}
+
+func TestCreateExternalMakesAStudentWithoutAPasswordLinkedToTheIdentity(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	cmd := externalCommand("ana")
+
+	created, err := f.service.CreateExternal(t.Context(), cmd)
+	if err != nil {
+		t.Fatalf("CreateExternal() = %v", err)
+	}
+
+	stored, _ := f.repo.Get(created.ID)
+	if stored.HasPassword() || stored.MustChangePassword {
+		t.Errorf("has password = %v, must change = %v; want neither", stored.HasPassword(), stored.MustChangePassword)
+	}
+	if stored.Email != "ana@example.edu" || stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(cmd.VerifiedAt) {
+		t.Errorf("email %q verified at %v, want ana@example.edu verified at %v", stored.Email, stored.EmailVerifiedAt, cmd.VerifiedAt)
+	}
+	if !slices.Equal(stored.Roles, []string{users.RoleStudent}) {
+		t.Errorf("roles = %v, want only %s", stored.Roles, users.RoleStudent)
+	}
+	linked := f.repo.Identities(created.ID)
+	if len(linked) != 1 || linked[0].Subject != "sub-ana" || linked[0].UserID != created.ID {
+		t.Errorf("identities = %+v, want sub-ana linked to the new account", linked)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("units of work = %d, want the account and its link in one", f.uow.Calls)
+	}
+	if len(f.sink.entries) != 1 || f.sink.entries[0].Action != audit.ActionUserCreate || f.sink.entries[0].ActorID != nil {
+		t.Errorf("audit = %+v, want one creation with a nil actor", f.sink.entries)
+	}
+}
+
+func TestCreateExternalWithoutAnEmailLeavesTheAccountWithout(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	cmd := externalCommand("ana")
+	cmd.Email, cmd.VerifiedAt = "", time.Time{}
+
+	created, err := f.service.CreateExternal(t.Context(), cmd)
+	if err != nil {
+		t.Fatalf("CreateExternal() = %v", err)
+	}
+
+	stored, _ := f.repo.Get(created.ID)
+	if stored.Email != "" || stored.EmailVerifiedAt != nil {
+		t.Errorf("email %q verified at %v, want none", stored.Email, stored.EmailVerifiedAt)
+	}
+	if linked := f.repo.Identities(created.ID); len(linked) != 1 || linked[0].Email != "ana@example.edu" {
+		t.Errorf("identities = %+v, want the claimed address kept on the identity", linked)
+	}
+}
+
+func TestCreateExternalRefusesWhatCreateRefuses(t *testing.T) {
+	for name, edit := range map[string]func(*users.CreateExternalCommand){
+		"no login":         func(c *users.CreateExternalCommand) { c.Login = "" },
+		"no name":          func(c *users.CreateExternalCommand) { c.FullName = "" },
+		"not an email":     func(c *users.CreateExternalCommand) { c.Email = "Ana <ana@example.edu>" },
+		"unknown provider": func(c *users.CreateExternalCommand) { c.Identity.Provider = "elsewhere" },
+		"no subject":       func(c *users.CreateExternalCommand) { c.Identity.Subject = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			cmd := externalCommand("ana")
+			edit(&cmd)
+
+			if _, err := f.service.CreateExternal(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("CreateExternal() = %v, want ErrInvalidAccount", err)
+			}
+			if f.uow.Calls != 0 {
+				t.Errorf("units of work = %d, want none", f.uow.Calls)
+			}
+		})
+	}
+}
+
+func TestCreateExternalRefusesATakenLogin(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	f.addUser(t, "ana", "irrelevant password")
+
+	if _, err := f.service.CreateExternal(t.Context(), externalCommand("ana")); !errors.Is(err, users.ErrLoginTaken) {
+		t.Errorf("CreateExternal() = %v, want ErrLoginTaken", err)
+	}
+}
+
+func TestCreateExternalOfALinkedIdentityIsRefusedAsTaken(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	if _, err := f.service.CreateExternal(t.Context(), externalCommand("ana")); err != nil {
+		t.Fatalf("first CreateExternal() = %v", err)
+	}
+
+	if _, err := f.service.CreateExternal(t.Context(), externalCommand("ana-2")); !errors.Is(err, users.ErrExternalIdentityTaken) {
+		t.Errorf("second CreateExternal() = %v, want ErrExternalIdentityTaken", err)
+	}
+}
+
+func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+
+	if err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), at); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+
+	stored, _ := f.repo.Get(ana.ID)
+	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(at) {
+		t.Errorf("email verified at %v, want %v", stored.EmailVerifiedAt, at)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, want sub-ana", linked)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("units of work = %d, want the link and the verification in one", f.uow.Calls)
+	}
+}
+
+func TestLinkExternalRefusesAnInvalidIdentity(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	identity := microsoftIdentity("")
+
+	if err := f.service.LinkExternal(t.Context(), ana.ID, identity, time.Now()); !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("LinkExternal() = %v, want ErrInvalidAccount", err)
+	}
+}
+
 func TestBlockRetiresEverySessionOfTheAccount(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")

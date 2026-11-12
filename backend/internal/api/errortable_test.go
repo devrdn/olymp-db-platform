@@ -212,6 +212,8 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "Email is off on this installation, so sign-in details cannot be emailed"},
 		users.ErrUnknownRole: {status: http.StatusBadRequest, code: "unknown_role",
 			message: "One of the roles does not exist"},
+		users.ErrExternalIdentityTaken: {status: http.StatusInternalServerError, code: "internal_error",
+			message: "Internal server error", logged: true},
 	}
 
 	declared := map[string]bool{}
