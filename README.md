@@ -16,7 +16,9 @@ questions. A SQL console with syntax highlighting, several tabs, a query
 history and a result table you can open a row in. Notes that stay where they
 were left. Answers checked the moment they are submitted, with attempts and
 penalties as the organiser configured them. A profile that keeps their own
-contests, their report and their history.
+contests, their report and their history. Where the installation allows it,
+an account they make themselves, with a password confirmed by email or with
+their Microsoft account, and a forgotten password reset by an emailed link.
 
 **For an organiser.** A contest builder: the story in Markdown, the questions
 and their reference answers, and the game database itself — written as a SQL

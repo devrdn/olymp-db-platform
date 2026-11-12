@@ -55,7 +55,7 @@ through these endpoints is drawn in [03-flows.md](03-flows.md).
 
 | Actor | Who it is | How the code recognises it |
 |---|---|---|
-| Anonymous visitor | Anyone without a session, including someone who opens a public leaderboard link | No session cookie. The route is mounted without `Authenticate`; the frontend guard ([`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts)) lets `/`, `/login`, `/healthz` and `/contests/{contestID}/leaderboard` through |
+| Anonymous visitor | Anyone without a session, including someone who opens a public leaderboard link | No session cookie. The route is mounted without `Authenticate`; the frontend guard ([`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts)) lets `/`, `/login`, `/healthz`, `/register`, `/signup`, `/signup/confirm`, `/forgot`, `/reset` and `/contests/{contestID}/leaderboard` through |
 | Participant | A signed-in account with a registration in a contest, usually holding the `student` role | A session, plus a row in `registrations` read by the gate. The `student` role holds no permission at all |
 | Contest staff: owner | The account that created the contest | A row in `contest_managers` with role `owner` (`rbac.RoleOwner`) |
 | Contest staff: manager | An account the owner appointed | A row in `contest_managers` with role `manager` (`rbac.RoleManager`) |
@@ -79,12 +79,16 @@ flowchart LR
         uc3(["See a contest cover"])
         uc4(["Read the installation name and logo"])
         uc5(["Sign in"])
+        uc6(["Create an account"])
+        uc7(["Reset a forgotten password"])
     end
     visitor --> uc1
     visitor --> uc2
     visitor --> uc3
     visitor --> uc4
     visitor --> uc5
+    visitor --> uc6
+    visitor --> uc7
 ```
 
 - The landing page reads `showcase`; the public table reads `leaderboard`;
@@ -92,6 +96,11 @@ flowchart LR
   (`public_handler.go`, `leaderboard_handler.go`).
 - Sign-in is `auth.Service`, throttled per address and per login
   (CLAUDE.md, security rules 4 and 5).
+- Creating an account, recovering a password and signing in with Microsoft
+  exist only where the installation turns them on
+  ([backend/README.md, "Self-service accounts"](../../backend/README.md#self-service-accounts));
+  off, their routes are not mounted. How each decides is
+  [ARCHITECTURE.md, section 7](../ARCHITECTURE.md#7-authentication-and-authorisation).
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
@@ -100,6 +109,11 @@ flowchart LR
 | See a contest cover | `/` (recent contests), the story on `/contests/{contestID}/play` | `GET /public/contests/{contestID}/cover` | `covers` | None; a draft's cover is refused |
 | Read the installation's name and images | every shell | `GET /settings`, `GET /settings/images/{kind}` | `settings` | None |
 | Sign in | `/login` | `POST /auth/login` | `auth` | Correct login and password; throttled (`too_many_attempts`, `sign_in_busy`) |
+| See which ways in the installation offers | `/login` | `GET /auth/methods` | `api` | None |
+| Create an account with a password | `/signup`, `/signup/confirm` | `POST /public/signup`, `POST /public/signup/confirm`, `POST /public/signup/resend` | `signup` | `SELF_SIGNUP_ENABLED` and mail; throttled by address, then by email (`too_many_attempts`); the confirmation in the browser that started it |
+| Reset a forgotten password | `/forgot`, `/reset` | `POST /public/password/forgot`, `POST /public/password/reset` | `recovery` | Mail; a link only for a student account with an address; throttled by address, then by what was typed (`too_many_attempts`) |
+| Sign in with Microsoft | `/login` | `GET /auth/microsoft/start`, `GET /auth/microsoft/callback` | `microsoft`, `federation` | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`; never a staff account; throttled by address; a failure returns to `/login?error=` |
+| Register for the event | `/register` | `POST /public/registrations` | `registrations` | `EVENT_REGISTRATION_ENABLED` |
 | Read the running version | API only | `GET /version` | `api` | None |
 
 ## Participant: around a contest

@@ -159,11 +159,11 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure and name it `__Host-dbcontest_session`, which no other host can set; off, it is `dbcontest_session` |
 | `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
-| `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account with a password and a code mailed to their address, through `POST /api/v1/public/signup`, `/signup/confirm` and `/signup/resend`; it also needs mail, and without either the routes do not exist |
-| `TRUSTED_EMAIL_DOMAIN` | no | empty | the bare lowercase domain (such as `example.edu`) whose addresses, and its subdomains', the installation trusts; anything but a domain name refuses start-up |
-| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` |
+| `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account: with a password and a code mailed to their address (`POST /api/v1/public/signup`, `/signup/confirm` and `/signup/resend`, which also need mail and otherwise do not exist), and by a first sign-in with Microsoft. Off, Microsoft still signs people into accounts that exist ([Self-service accounts](#self-service-accounts)) |
+| `TRUSTED_EMAIL_DOMAIN` | no | empty | the installation's own email domain, bare and lowercase (such as `example.edu`); with it set, a contest can admit to self-enrolment only accounts with a verified address in it or a subdomain. Anything but a domain name refuses start-up |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)) |
 | `MICROSOFT_TENANT` | no | `common` | who may sign in with Microsoft: `common` (any account), `organizations` (work and school), `consumers` (personal) or one tenant ID |
-| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account |
+| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account; a tenant `MICROSOFT_TENANT` never admits refuses start-up |
 
 ### The mail relay
 
@@ -194,13 +194,6 @@ which reconnect.
 | `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
 | `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
 | `PUBLIC_URL` | with mail or Microsoft sign-in | — | the site's absolute `https://` address, for the links in messages and the Microsoft redirect (`http://` only in `development`) |
-
-Mail also turns on password recovery, whatever `SELF_SIGNUP_ENABLED` says:
-`POST /api/v1/public/password/forgot` mails a student account a single-use
-link to `PUBLIC_URL` followed by `/reset?token=…`, valid for thirty minutes,
-and `POST /api/v1/public/password/reset` sets the new password through it,
-marks the address verified and ends every session. Staff accounts never get
-a link. With mail off the routes do not exist.
 
 USM's relay is Microsoft 365 (Exchange Online) SMTP AUTH client submission,
 through the mailbox `noreply-olymp@usm.md`; the mailbox's password comes from
@@ -234,6 +227,264 @@ PUBLIC_URL=https://olympdb.usm.md
   `deploy/.env`, so a password containing one goes in single quotes:
   `SMTP_PASSWORD='…'`. Unquoted, it reaches the relay altered, and the
   relay answers 535.
+
+### Self-service accounts
+
+Out of the box every account is made by staff, and people sign in with a
+password. Each other way in is the installation's choice:
+
+| Way in | Turned on by | Also needs |
+|---|---|---|
+| **Create an account** (`/signup`): a password of one's own, confirmed by a six-digit code mailed to the address | `SELF_SIGNUP_ENABLED=true` | mail |
+| **Forgot password?** (`/forgot`): a single-use link mailed to the account's address, opening `/reset` | mail, nothing else | — |
+| **Sign in with Microsoft** | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` | `PUBLIC_URL` and an application registration ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)); it creates accounts only while `SELF_SIGNUP_ENABLED` is on |
+| **A contest only for the installation's domain**: a switch in the contest's settings | `TRUSTED_EMAIL_DOMAIN` | — |
+
+- **Recovery comes with mail.** An installation that already sends mail
+  offers **Forgot password?** from the release that brings it, with no new
+  setting. The routes are `POST /api/v1/public/password/forgot` and
+  `/password/reset`; with mail off they do not exist. Staff accounts never
+  get a link.
+- **The sign-in page offers only what is on.** It asks
+  `GET /api/v1/auth/methods`, which needs no session and is not cached, and
+  shows the sign-up link, the recovery link and the Microsoft button
+  accordingly. The contest settings and the participant list take the domain
+  from the same answer.
+- **A change takes effect when the API is recreated**, with the command in
+  [The mail relay](#the-mail-relay).
+- **What the audit trail records.** A password sign-up is `user.create` with
+  no actor; a first Microsoft sign-in that made an account is
+  `user.external_sign_up`, one linked to an existing account
+  `user.external_identity_link`; a password set through a mailed link is
+  `user.password_reset_by_link`. The sign-in that follows a confirmed
+  sign-up, and a sign-in with Microsoft, are `auth.login` with `method`
+  `signup` or `microsoft`; a password sign-in carries no method.
+
+How each way in decides who gets in, and why, is
+[ARCHITECTURE.md, section 7](../docs/ARCHITECTURE.md#7-authentication-and-authorisation);
+how organisers let participants in and use the contest switch is
+[Running a contest, steps 7 and 8](../docs/guide/07-running-a-contest.md#a-week-before).
+
+**Upgrading to the release that brings them.** Its migration compares
+addresses without regard to case, and refuses to run while two live
+accounts hold addresses that differ only in case. List them first, on the
+host, with the names from `deploy/.env`, and correct one of each pair on
+**Accounts**:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec -T pg-core \
+  psql --username=<CORE_DB_USER> --dbname=<CORE_DB_NAME> -c "
+    SELECT lower(email), count(*) FROM users
+    WHERE status <> 'deleted' AND email IS NOT NULL
+    GROUP BY 1 HAVING count(*) > 1"
+```
+
+The same migration counts every address an account holds at that moment as
+verified, since staff entered them. An account made later by staff, an
+import or the event form starts with its address unverified, until its owner
+follows a reset link or signs in with a Microsoft account that vouches for
+it.
+
+### Connecting Microsoft sign-in
+
+Sign-in with Microsoft is OpenID Connect with an authorisation code, a client
+secret and PKCE, run by the API (`internal/microsoft`); the browser only
+follows redirects. It needs one application registration in Microsoft Entra
+ID, in any tenant, and four settings.
+
+#### The settings
+
+| Variable | What to put there |
+|---|---|
+| `MICROSOFT_CLIENT_ID` | the registration's **Application (client) ID** |
+| `MICROSOFT_CLIENT_SECRET` | the **Value** of one of its client secrets |
+| `MICROSOFT_TENANT` | who may sign in, from the table below |
+| `MICROSOFT_HOME_TENANT_ID` | the **Tenant ID** of the installation's own organisation, if it has one: its members' addresses are believed, and may sign in to the accounts that already hold them. Empty believes no tenant as such |
+
+`MICROSOFT_HOME_TENANT_ID` admits nobody by itself; `MICROSOFT_TENANT`
+decides who signs in, and a home tenant it never admits refuses start-up.
+Believe only a tenant whose administrators you trust: it vouches for
+whatever address it gives its members.
+
+| `MICROSOFT_TENANT` | Who may sign in | Supported account types of the registration |
+|---|---|---|
+| `common` (the default) | any work or school account and any personal Microsoft account | Accounts in any organizational directory and personal Microsoft accounts |
+| `organizations` | any work or school account, no personal one | Accounts in any organizational directory, or the wider type above |
+| `consumers` | personal Microsoft accounts only (Outlook.com, Hotmail, Live) | Personal Microsoft accounts only, or the widest type |
+| one tenant ID, such as `3f2a1c9e-7b4d-4e8a-9c61-0d5b2e7f8a14` | that tenant's members and guests, nobody else | Accounts in this organizational directory only, when the registration is in that tenant; any organizational directory when it is in another |
+
+With a tenant ID, `MICROSOFT_HOME_TENANT_ID` defaults to it. Any
+organisation's tenant, including one made by anybody in a few minutes, can
+sign in under `common` and `organizations`, which is why an address is
+believed only on the conditions in
+[ARCHITECTURE.md, section 7](../docs/ARCHITECTURE.md#7-authentication-and-authorisation).
+
+#### Registering the application
+
+In the Microsoft Entra admin center, signed in to the tenant that will hold
+the registration (the organisation's own, or for a trial any tenant you
+control, a personal Azure one included):
+
+1. **App registrations**, **New registration**. The name is what people see
+   when Microsoft asks for their consent, so use the installation's.
+2. **Supported account types**: the row of the table above for the chosen
+   `MICROSOFT_TENANT`.
+3. **Redirect URI**: platform **Web**, the address
+   `https://<site>/api/v1/auth/microsoft/callback`, which is `PUBLIC_URL`
+   followed by that path, character for character: for
+   `PUBLIC_URL=https://contest.example.edu` it is
+   `https://contest.example.edu/api/v1/auth/microsoft/callback`.
+4. **Register.** The overview shows the **Application (client) ID**. Its
+   **Directory (tenant) ID** is the tenant holding the registration, which is
+   the home tenant only when that is the organisation's own.
+5. **Authentication**: leave the implicit grant's tokens unticked; the
+   platform redeems a code.
+6. **API permissions**: Microsoft Graph, delegated, `openid`, `email` and
+   `profile`, the scopes the platform asks for. The `User.Read` a new
+   registration starts with is not used and can be removed.
+7. **Token configuration**, **Add optional claim**, token type **ID**:
+   `email`, `acct` and `xms_edov` (next section). If the list does not offer
+   one, add it to `optionalClaims.idToken` in the **Manifest**.
+8. **Certificates & secrets**, **New client secret** (below).
+
+For a test on a development machine, add a second Web redirect URI
+`http://localhost:3000/api/v1/auth/microsoft/callback` and run the API with
+`ENV=development` and `PUBLIC_URL=http://localhost:3000`, where the interface
+serves `/api` itself. Entra accepts plain `http` only for `localhost`, and
+the API accepts it only in development.
+
+#### The optional claims
+
+The platform reads three claims an ID token carries reliably only when the
+registration asks for them, and each changes what it can believe:
+
+- **`email`.** The address. The platform asks for the `email` scope too; the
+  claim is what makes work and school accounts carry it. A token without one
+  is not refused: a member of the home tenant is then known by their sign-in
+  name, which in that tenant is their address, and anybody else's account is
+  made without an address, so it cannot recover a password by email and
+  never satisfies a contest's domain switch.
+- **`xms_edov`.** Microsoft's statement that the person's tenant has
+  verified the domain of their address. It is what lets a member of another
+  organisation's tenant be believed; without it, only the home tenant and
+  personal accounts are.
+- **`acct`.** 0 for a member of the tenant, 1 for a guest. A guest of the
+  home tenant carries the home tenant's ID with an address the tenant never
+  verified; Microsoft names a guest's own home in `idp` only sometimes, and
+  sends `acct`, once asked for, every time. Without it, a guest whose token
+  lacks `idp` would be taken for a member, and could sign in to the account
+  holding that address. It matters whenever `MICROSOFT_HOME_TENANT_ID` is
+  set.
+
+#### The client secret
+
+**New client secret** asks for a description and an expiry. Copy the
+**Value** column into `MICROSOFT_CLIENT_SECRET` at once: it is shown only
+then, and the **Secret ID** beside it is not the secret. The portal suggests
+180 days and allows up to 24 months, unless the tenant's policy allows less.
+Put the expiry in a calendar. On that day every sign-in with Microsoft
+fails: people read "Signing in with Microsoft did not work", and the API's
+log warns `a Microsoft sign-in was refused` with Microsoft's `AADSTS7000222`
+(an invalid value is `AADSTS7000215`).
+
+To rotate without anybody being refused, use the fact that a registration
+holds several secrets, each valid until its own expiry:
+
+1. **New client secret**, and copy its value.
+2. Put it in `MICROSOFT_CLIENT_SECRET` in `deploy/.env`, and recreate the API
+   with the command in [The mail relay](#the-mail-relay). During a contest,
+   do it at a break.
+3. Sign in once with Microsoft.
+4. Delete the old secret.
+
+A sign-in started before the recreation finishes after it: its state
+travels in a cookie sealed with `DEVICE_COOKIE_SECRET`, which does not
+change.
+
+#### Consent
+
+At a person's first sign-in Microsoft asks them to let the application read
+their name and address. Many organisations let their users consent only to
+applications from a verified publisher, or not at all; their people meet
+Microsoft's "Need admin approval" page and cannot sign in until an
+administrator of *their* tenant consents for everyone in it. That
+administrator opens, signed in to their tenant:
+
+```
+https://login.microsoftonline.com/<their tenant ID>/adminconsent?client_id=<MICROSOFT_CLIENT_ID>&redirect_uri=https://<site>/api/v1/auth/microsoft/callback
+```
+
+Microsoft then sends the browser to the platform without a sign-in, so it
+lands on the sign-in page with "Signing in with Microsoft did not work"; the
+consent is given all the same. In the tenant holding the registration,
+**API permissions**, **Grant admin consent** does the same. Verifying the
+publisher (**Branding & properties**, with a Microsoft partner account) lets
+the people of tenants that allow consent to verified publishers consent for
+themselves.
+
+#### Moving to another registration
+
+A Microsoft identity is recorded by its issuer, which is the person's own
+tenant (`https://login.microsoftonline.com/<their tenant ID>/v2.0`), and its
+object ID (`oid`), which Microsoft keeps the same for every application.
+Neither belongs to the registration, so an installation can start on a
+temporary registration and move to the permanent one by changing only
+`MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`: everyone already linked
+signs in to the same account afterwards. Give the new registration the same
+redirect URI, permissions and optional claims; a tenant that consented to the
+old one consents again, since consent is given to a client ID. A temporary
+registration outside the organisation's own tenant, used with that tenant's
+ID as `MICROSOFT_TENANT`, needs the "any organizational directory" account
+type and, usually, that tenant's administrator's consent.
+
+#### The callback in the access log
+
+Caddy logs every request as JSON on its standard output (the `log` block of
+`deploy/Caddyfile`), with the query string, so the callback's line carries
+Microsoft's one-time `code` and the `state`. The code is redeemed at once,
+cannot be redeemed twice, and is useless without both the client secret and
+the PKCE verifier that only the person's browser holds, sealed in its state
+cookie. Nobody reading the log can sign in with it. To keep both out of the
+log anyway, replace that block with:
+
+```caddyfile
+log {
+	output stdout
+	format filter {
+		request>uri query {
+			replace code REDACTED
+			replace state REDACTED
+		}
+		wrap json
+	}
+}
+```
+
+and recreate Caddy
+(`VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d --no-deps --force-recreate caddy`).
+The file is tracked, so carry the change across each release's checkout. An
+edge proxy in front of Caddy, if there is one, logs the same line under its
+own configuration.
+
+#### What a person sees
+
+A sign-in with Microsoft that does not succeed brings the person back to the
+sign-in page with one of these sentences. The API's log says why: a warning
+`a Microsoft sign-in was refused`, or an error `a Microsoft sign-in failed`
+when Microsoft's signing keys could not be fetched.
+
+| Code in `/login?error=` | The person reads | What happened |
+|---|---|---|
+| `external_signin_failed` | "Signing in with Microsoft did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; `MICROSOFT_TENANT` does not admit their tenant; the account is already linked to another identity of the same tenant; or more than 120 Microsoft sign-ins came from their address in ten minutes |
+| `external_signin_staff_account` | "This address belongs to an organiser's or administrator's account. Sign in with its password." | the address, or the account the identity is linked to, holds a staff role: staff never sign in through Microsoft |
+| `external_signin_closed` | "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
+| `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |
+
+Some refusals stay on Microsoft's own page and never reach the platform:
+`AADSTS50011` (the redirect URI is not exactly the registered one),
+`AADSTS700016` (the registration is not in the tenant `MICROSOFT_TENANT`
+names), `AADSTS50020` (a single-tenant registration and a person from
+another tenant), and "Need admin approval".
 
 ## Running locally
 
@@ -305,8 +556,10 @@ the `{contestID}` in the path. `router.go` registers only `/version` itself
 and mounts the handlers that `internal/app` assembles, so any other route
 missing from a `Mount` does not exist.
 
-A few routes answer without a session: sign-in, the installation's name and
-images (the sign-in screen wears them), the landing page's reads under
+A few routes answer without a session: sign-in, the ways in the
+installation offers (`/auth/methods`) and the ones it has switched on
+([Self-service accounts](#self-service-accounts)), the installation's name
+and images (the sign-in screen wears them), the landing page's reads under
 `/public`, a contest's public leaderboard and its cover. `GET /contests` is
 scoped by who is asking, and `POST /contests/{id}/enroll` is open to any
 signed-in account, with the contest's own rules deciding.
@@ -456,19 +709,24 @@ a table kept for a year.
 
 ## Email
 
-The API writes two messages today: an account's sign-in details, and the test
-message an administrator sends themselves. The test message goes to the relay
-at once and the screen shows the relay's answer; every other message is queued
-in the outbox and leaves in the background, at the pace the relay allows. The
+The API writes an account's sign-in details, the test message an
+administrator sends themselves, the event registration's entrance code, and
+the messages of [self-service accounts](#self-service-accounts): a sign-up's
+code, the note to the owner of an address somebody tried to sign up with,
+and a password reset link. The test message goes to the relay at once and
+the screen shows the relay's answer; every other message is queued in the
+outbox and leaves in the background, at the pace the relay allows. The
 relay is set up in [The mail relay](#the-mail-relay); why the design is what
 it is, and its known limits, are in [ARCHITECTURE.md, section
 10.2](../docs/ARCHITECTURE.md#102-email).
 
 Every message is plain text, written in English, Romanian and Russian
-(`internal/mailing/texts`, one template per message and language), and the
-installation sends all of its email in the one language chosen on the
-Installation screen (`installation.mail_language`, Romanian until somebody
-changes it). The sign-in link in a message is `PUBLIC_URL` followed by
+(`internal/mailing/texts`, one template per message and language). A
+sign-up's messages and a reset link are written in the language the
+reader's browser asks for, when it is one of the three; every other message,
+and those when it is not, in the one language chosen on the Installation
+screen (`installation.mail_language`, Romanian until somebody changes it).
+The sign-in link in a message is `PUBLIC_URL` followed by
 `/login`.
 
 ### What an administrator sees
