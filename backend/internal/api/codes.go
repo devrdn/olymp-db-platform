@@ -256,7 +256,7 @@ var (
 	codeInvalidCredentials = httpx.NewCode("invalid_credentials",
 		"The login or the password is wrong. Deliberately the same answer for both, so the endpoint cannot be used to discover which logins exist.")
 	codeAccountBlocked = httpx.NewCode("account_blocked",
-		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not.")
+		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password, or after an external provider vouched for the person: the owner may know, a guesser may not. After an external sign-in it arrives as ?error= on the sign-in page, for a deleted account as well.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
 		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Try again later.")
 	codeSignInBusy = httpx.NewCode("sign_in_busy",
@@ -513,4 +513,14 @@ var (
 	// answer too_many_attempts.
 	codeResetLinkInvalid = httpx.NewCode("reset_link_invalid",
 		"The password reset link cannot be used: it is unknown, already used, replaced by a newer one, past its thirty minutes, or its account can no longer be reached by email. Deliberately one answer. Ask for a new link.")
+
+	// --- Sign-in through an external provider -------------------------------
+	// Never a JSON answer: the browser arrives at the sign-in page with the
+	// code in ?error=. A blocked or deleted account arrives as account_blocked.
+	codeExternalSignInFailed = httpx.NewCode("external_signin_failed",
+		"Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, the installation does not admit that provider's tenant, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again.")
+	codeExternalSignInStaffAccount = httpx.NewCode("external_signin_staff_account",
+		"The address the provider vouches for belongs to an organiser's or administrator's account, which is never entered through an external provider. Sign in with that account's password.")
+	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
+		"The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored.")
 )

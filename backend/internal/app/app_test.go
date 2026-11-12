@@ -2,10 +2,13 @@ package app
 
 import (
 	"errors"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
@@ -101,4 +104,29 @@ func jobNames(jobs []task) []string {
 		names = append(names, job.name)
 	}
 	return names
+}
+
+func TestTheMicrosoftClientIsBuiltOnlyWhenConfigured(t *testing.T) {
+	off, err := newMicrosoftClient(config.Config{MicrosoftTenant: "common"})
+	if err != nil || off != nil {
+		t.Errorf("without a client: %v, %v; want no connector", off, err)
+	}
+
+	on, err := newMicrosoftClient(config.Config{
+		MicrosoftClientID: "11111111-2222-4333-8444-555555555555", MicrosoftClientSecret: "a-test-client-secret",
+		MicrosoftTenant: "common", PublicURL: "https://contest.example.edu",
+	})
+	if err != nil || on == nil {
+		t.Fatalf("newMicrosoftClient() = %v, %v", on, err)
+	}
+	authorize, err := url.Parse(on.AuthCodeURL(microsoft.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := authorize.Query().Get("redirect_uri"); got != "https://contest.example.edu/api/v1/auth/microsoft/callback" {
+		t.Errorf("redirect_uri = %q, want the public URL's callback", got)
+	}
+	if got := authorize.Host + authorize.Path; got != "login.microsoftonline.com/common/oauth2/v2.0/authorize" {
+		t.Errorf("authorize endpoint = %q, want Microsoft's for the configured tenant", got)
+	}
 }

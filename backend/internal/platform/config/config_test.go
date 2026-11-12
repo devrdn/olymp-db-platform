@@ -2019,3 +2019,163 @@ func TestADevelopmentRelayMayBePlainAndLocal(t *testing.T) {
 		t.Errorf("Load() with credentials and SMTP_TLS=none = %v, want an error naming SMTP_TLS", err)
 	}
 }
+
+// Made-up identifiers; none exists at Microsoft.
+const (
+	testClientID   = "11111111-2222-4333-8444-555555555555"
+	testTenantID   = "0a0a0a0a-1b1b-4c2c-8d3d-4e4e4e4e4e4e"
+	otherTenantID  = "f0f0f0f0-e1e1-4d2d-9c3c-b4b4b4b4b4b4"
+	consumerTenant = "9188040d-6c67-4c5b-b112-36a304b66dad"
+)
+
+// productionMicrosoft is a production configuration with mail off and the
+// Microsoft connector on, every Microsoft variable set so none is inherited
+// from the shell.
+func productionMicrosoft(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENV", "production")
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+	t.Setenv("SMTP_HOST", "")
+	t.Setenv("PUBLIC_URL", "https://contest.example.edu")
+	t.Setenv("MICROSOFT_CLIENT_ID", testClientID)
+	t.Setenv("MICROSOFT_CLIENT_SECRET", "a-real-client-secret")
+	t.Setenv("MICROSOFT_TENANT", "")
+	t.Setenv("MICROSOFT_HOME_TENANT_ID", "")
+}
+
+func TestTheMicrosoftConnectorIsOffWithoutAClient(t *testing.T) {
+	productionMicrosoft(t)
+	t.Setenv("MICROSOFT_CLIENT_ID", "")
+	t.Setenv("MICROSOFT_CLIENT_SECRET", "")
+	t.Setenv("PUBLIC_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without a Microsoft client = %v", err)
+	}
+	if cfg.MicrosoftEnabled() {
+		t.Error("MicrosoftEnabled() = true without a client")
+	}
+	if cfg.MicrosoftTenant != "common" {
+		t.Errorf("MicrosoftTenant = %q, want the default common", cfg.MicrosoftTenant)
+	}
+}
+
+func TestTheMicrosoftConnectorIsReadWithItsDefaults(t *testing.T) {
+	productionMicrosoft(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if !cfg.MicrosoftEnabled() || cfg.MicrosoftClientID != testClientID || cfg.MicrosoftClientSecret != "a-real-client-secret" {
+		t.Errorf("connector = %v, %q; want it on with the configured client", cfg.MicrosoftEnabled(), cfg.MicrosoftClientID)
+	}
+	if cfg.MicrosoftTenant != "common" || cfg.MicrosoftHomeTenantID != "" {
+		t.Errorf("tenant %q, home %q; want common and none", cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID)
+	}
+	if cfg.PublicURL != "https://contest.example.edu" {
+		t.Errorf("PublicURL = %q, want it read for the redirect without mail", cfg.PublicURL)
+	}
+
+	for _, tenant := range []string{"organizations", "consumers", "common"} {
+		t.Setenv("MICROSOFT_TENANT", tenant)
+		if cfg, err = Load(); err != nil || cfg.MicrosoftTenant != tenant {
+			t.Errorf("MICROSOFT_TENANT=%s: %q, %v", tenant, cfg.MicrosoftTenant, err)
+		}
+	}
+	t.Setenv("MICROSOFT_TENANT", "organizations")
+	t.Setenv("MICROSOFT_HOME_TENANT_ID", testTenantID)
+	if cfg, err = Load(); err != nil || cfg.MicrosoftHomeTenantID != testTenantID {
+		t.Errorf("home tenant = %q, %v; want %s", cfg.MicrosoftHomeTenantID, err, testTenantID)
+	}
+}
+
+func TestTheHomeTenantDefaultsToASingleTenant(t *testing.T) {
+	productionMicrosoft(t)
+	t.Setenv("MICROSOFT_TENANT", testTenantID)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.MicrosoftTenant != testTenantID || cfg.MicrosoftHomeTenantID != testTenantID {
+		t.Errorf("tenant %q, home %q; want both %s", cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID, testTenantID)
+	}
+}
+
+func TestAClientIDWithoutASecretRefusesStartUp(t *testing.T) {
+	for _, tc := range []struct{ name, value, named string }{
+		{"MICROSOFT_CLIENT_SECRET", "", "MICROSOFT_CLIENT_SECRET"},
+		{"MICROSOFT_CLIENT_ID", "", "MICROSOFT_CLIENT_ID"},
+	} {
+		t.Run(tc.name+" empty", func(t *testing.T) {
+			productionMicrosoft(t)
+			t.Setenv(tc.name, tc.value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.named) {
+				t.Fatalf("Load() = %v, want an error naming %s", err, tc.named)
+			}
+		})
+	}
+}
+
+func TestAMalformedMicrosoftSettingRefusesStartUp(t *testing.T) {
+	for _, tc := range []struct{ name, value, named string }{
+		{"MICROSOFT_CLIENT_ID", "my-app", "MICROSOFT_CLIENT_ID"},
+		{"MICROSOFT_CLIENT_ID", strings.ToUpper(testClientID) + "x", "MICROSOFT_CLIENT_ID"},
+		{"MICROSOFT_CLIENT_SECRET", "change-me", "MICROSOFT_CLIENT_SECRET"},
+		{"MICROSOFT_CLIENT_SECRET", strings.Repeat("s", 513), "MICROSOFT_CLIENT_SECRET"},
+		{"MICROSOFT_CLIENT_SECRET", "with a\nnewline", "MICROSOFT_CLIENT_SECRET"},
+		{"MICROSOFT_TENANT", "everyone", "MICROSOFT_TENANT"},
+		{"MICROSOFT_TENANT", "Common", "MICROSOFT_TENANT"},
+		{"MICROSOFT_TENANT", "example.edu", "MICROSOFT_TENANT"},
+		{"MICROSOFT_TENANT", testTenantID[:35], "MICROSOFT_TENANT"},
+		{"MICROSOFT_HOME_TENANT_ID", "common", "MICROSOFT_HOME_TENANT_ID"},
+		{"MICROSOFT_HOME_TENANT_ID", "example.edu", "MICROSOFT_HOME_TENANT_ID"},
+		{"PUBLIC_URL", "", "PUBLIC_URL"},
+		{"PUBLIC_URL", "http://contest.example.edu", "PUBLIC_URL"},
+	} {
+		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
+			productionMicrosoft(t)
+			t.Setenv(tc.name, tc.value)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tc.named) {
+				t.Fatalf("Load() = %v, want an error naming %s", err, tc.named)
+			}
+			if strings.Contains(err.Error(), "a-real-client-secret") {
+				t.Errorf("the refusal repeats the secret: %q", err)
+			}
+		})
+	}
+}
+
+func TestAHomeTenantTheTenantNeverAdmitsRefusesStartUp(t *testing.T) {
+	for _, tc := range []struct{ tenant, home string }{
+		{testTenantID, otherTenantID},
+		{"consumers", testTenantID},
+		{"organizations", consumerTenant},
+	} {
+		productionMicrosoft(t)
+		t.Setenv("MICROSOFT_TENANT", tc.tenant)
+		t.Setenv("MICROSOFT_HOME_TENANT_ID", tc.home)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MICROSOFT_HOME_TENANT_ID") {
+			t.Errorf("tenant %s, home %s: Load() = %v, want a refusal naming MICROSOFT_HOME_TENANT_ID", tc.tenant, tc.home, err)
+		}
+	}
+}
+
+func TestATenantIDIsReadInAnyCase(t *testing.T) {
+	productionMicrosoft(t)
+	t.Setenv("MICROSOFT_TENANT", strings.ToUpper(testTenantID))
+	t.Setenv("MICROSOFT_CLIENT_ID", strings.ToUpper(testClientID))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.MicrosoftTenant != testTenantID || cfg.MicrosoftClientID != testClientID {
+		t.Errorf("tenant %q, client %q; want them as tokens write them, in lowercase", cfg.MicrosoftTenant, cfg.MicrosoftClientID)
+	}
+}

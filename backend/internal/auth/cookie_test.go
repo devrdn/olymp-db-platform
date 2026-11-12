@@ -180,3 +180,35 @@ func TestTheSignupCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testing.T) {
 		}
 	}
 }
+
+func TestTheMicrosoftStateCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testing.T) {
+	for _, c := range []struct {
+		secure bool
+		name   string
+	}{
+		{true, "__Host-dbcontest_ms_state"},
+		{false, "dbcontest_ms_state"},
+	} {
+		writer := NewCookieWriter(c.secure)
+		if got := writer.MicrosoftStateName(); got != c.name {
+			t.Errorf("secure=%v: MicrosoftStateName() = %q, want %q", c.secure, got, c.name)
+		}
+
+		rec := httptest.NewRecorder()
+		writer.SetMicrosoftState(rec, "sealed-state", 10*time.Minute)
+		cookie := sessionCookie(t, rec, c.name)
+		if !cookie.HttpOnly || cookie.Secure != c.secure || cookie.SameSite != http.SameSiteLaxMode ||
+			cookie.Path != "/" || cookie.Domain != "" {
+			t.Errorf("secure=%v: cookie = %+v, want HttpOnly, Secure as configured, SameSite=Lax, Path=/, no Domain", c.secure, cookie)
+		}
+		if cookie.MaxAge != 10*60 || cookie.Value != "sealed-state" {
+			t.Errorf("secure=%v: MaxAge = %d, Value = %q, want ten minutes of the state", c.secure, cookie.MaxAge, cookie.Value)
+		}
+
+		rec = httptest.NewRecorder()
+		writer.ClearMicrosoftState(rec)
+		if cleared := sessionCookie(t, rec, c.name); cleared.MaxAge >= 0 || cleared.Value != "" {
+			t.Errorf("secure=%v: cleared cookie = %+v, want it emptied and expired", c.secure, cleared)
+		}
+	}
+}

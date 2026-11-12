@@ -472,6 +472,13 @@ services:
       EVENT_REGISTRATION_ENABLED: ${EVENT_REGISTRATION_ENABLED:-false}
       SELF_SIGNUP_ENABLED: ${SELF_SIGNUP_ENABLED:-false}
       TRUSTED_EMAIL_DOMAIN: ${TRUSTED_EMAIL_DOMAIN:-}
+      # Sign-in with Microsoft, on only with both the client ID and its
+      # secret; the secret travels in the environment like SMTP_PASSWORD,
+      # never in a command line.
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
+      MICROSOFT_HOME_TENANT_ID: ${MICROSOFT_HOME_TENANT_ID:-}
       SESSION_TTL: ${SESSION_TTL:-12h}
       # How long a session may exist from sign-in, however actively it is
       # used (5m to 168h). SESSION_TTL above slides with activity and so never

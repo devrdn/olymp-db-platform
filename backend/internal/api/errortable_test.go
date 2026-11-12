@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,9 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -705,5 +709,62 @@ func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
 			}
 		})
+	}
+}
+
+// A sign-in through a provider is a browser navigation, so each refusal is a
+// code on the sign-in page's address rather than a JSON answer.
+func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
+	want := map[error]string{
+		federation.ErrStaffAccount:     "external_signin_staff_account",
+		federation.ErrSignupClosed:     "external_signin_closed",
+		federation.ErrInvalidClaims:    "external_signin_failed",
+		federation.ErrIdentityConflict: "external_signin_failed",
+		microsoft.ErrSignInRefused:     "external_signin_failed",
+		microsoft.ErrExchangeFailed:    "external_signin_failed",
+		microsoft.ErrInvalidToken:      "external_signin_failed",
+		microsoft.ErrTenantNotAllowed:  "external_signin_failed",
+		microsoft.ErrStateInvalid:      "external_signin_failed",
+		microsoft.ErrStateExpired:      "external_signin_failed",
+		users.ErrAccountBlocked:        "account_blocked",
+		users.ErrAccountDeleted:        "account_blocked",
+		auth.ErrAccountBlocked:         "account_blocked",
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	reached := append(append(federation.Errors(), microsoft.Errors()...),
+		users.ErrAccountBlocked, users.ErrAccountDeleted, auth.ErrAccountBlocked)
+	for _, err := range reached {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected redirect written for %q: add one beside its row", err)
+			}
+			got, listed := externalSignInCode(err)
+			if !listed {
+				t.Error("the table has no row for it, so it would be logged as an unexpected failure")
+			}
+			if got.String() != expected {
+				t.Errorf("redirected with %q, want %q", got, expected)
+			}
+			if wrapped, _ := externalSignInCode(fmt.Errorf("%w: while signing in", err)); wrapped.String() != expected {
+				t.Errorf("wrapped, redirected with %q, want %q", wrapped, expected)
+			}
+			if !declared[expected] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", expected)
+			}
+		})
+	}
+
+	// What federation passes through from users after its retries, and
+	// anything else, is a failed sign-in, never a raw error.
+	for _, err := range []error{users.ErrEmailTaken, users.ErrLoginTaken, users.ErrNotFound, errors.New("the database is down")} {
+		if got, listed := externalSignInCode(err); got.String() != "external_signin_failed" || listed {
+			t.Errorf("%q: redirected with %q (listed %v), want external_signin_failed, unlisted", err, got, listed)
+		}
 	}
 }

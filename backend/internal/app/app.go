@@ -19,11 +19,13 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/covers"
+	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -77,6 +79,29 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 		From:     cfg.SMTPFrom,
 		TLS:      cfg.SMTPTLS,
 	})
+}
+
+// microsoftCallbackPath is where Microsoft sends the browser back, below
+// PUBLIC_URL; the application registration names the same address.
+const microsoftCallbackPath = "/api/v1/auth/microsoft/callback"
+
+// newMicrosoftClient builds the Microsoft connector, or nil when no client is
+// configured.
+func newMicrosoftClient(cfg config.Config) (*microsoft.Client, error) {
+	if !cfg.MicrosoftEnabled() {
+		return nil, nil
+	}
+	client, err := microsoft.New(microsoft.Config{
+		ClientID:     cfg.MicrosoftClientID,
+		ClientSecret: cfg.MicrosoftClientSecret,
+		Tenant:       cfg.MicrosoftTenant,
+		HomeTenant:   cfg.MicrosoftHomeTenantID,
+		RedirectURL:  cfg.PublicURL + microsoftCallbackPath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign-in with Microsoft: %w", err)
+	}
+	return client, nil
 }
 
 // mailStore is the outbox table, as the outbox and its dispatcher use it.
@@ -609,6 +634,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	a.tasks = append(a.tasks, sweepPasswordResets(log, recoveries.Sweep))
 	a.workers = append(a.workers, worker{name: "password-reset-requests", stop: recoveries.Stop})
 	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, log))
+
+	// Sign-in with Microsoft mounts its routes only with a client; it creates
+	// accounts only while SELF_SIGNUP_ENABLED is on.
+	microsoftClient, err := newMicrosoftClient(cfg)
+	if err != nil {
+		a.close()
+		return nil, err
+	}
+	modules = append(modules, api.NewMicrosoftHandler(api.MicrosoftSignIn{
+		Client: microsoftClient,
+		States: microsoft.NewStateSealer(cfg.DeviceCookieSecret, nil),
+		Accounts: federation.NewService(federation.Config{
+			Policy:        federation.Policy{CreateAccounts: cfg.SelfSignupEnabled},
+			Store:         userRepo,
+			Accounts:      userService,
+			PendingLogins: postgres.NewSignups(pool),
+		}),
+		Auth: authService, Limiter: limiter, Middleware: authMiddleware, Cookies: cookies, Log: log,
+	}))
+	modules = append(modules, api.NewAuthMethodsHandler(signups, recoveries, microsoftClient != nil, cfg.TrustedEmailDomain))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only
