@@ -96,3 +96,23 @@ func TestExternalIdentityValidateBoundsEveryField(t *testing.T) {
 		}
 	}
 }
+
+// A name greets the reader of mail sent to any address, so it may carry
+// nothing a link or a pitch needs.
+func TestANameIsWrittenOnlyWithWhatNamesAreWrittenWith(t *testing.T) {
+	for _, taken := range []string{
+		"Ana-Maria Popescu", "O'Neil", "D’Artagnan", "Jr.", "J. R. R. Tolkien", "Ștefan Țurcan", "Алёна", "Zoë", "René",
+	} {
+		if !users.IsWrittenAsAName(taken) {
+			t.Errorf("IsWrittenAsAName(%q) = false, want it taken", taken)
+		}
+	}
+	for _, refused := range []string{
+		"", "https://evil.example", "click here!", "win $100", "Ana2", "a/b", "Ana<b>", "Ana:", "Ana@x", "Ana_B",
+		"Ana B", "Ana\tB", "evil.com", "Ștefan.Țurcan", "J.R.", "Visit evil.example now", "\xff",
+	} {
+		if users.IsWrittenAsAName(refused) {
+			t.Errorf("IsWrittenAsAName(%q) = true, want it refused", refused)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -138,6 +139,35 @@ func (u User) HasVerifiedEmailIn(domain string) bool {
 	_, host, ok := strings.Cut(strings.ToLower(u.Email), "@")
 	domain = strings.ToLower(domain)
 	return ok && (host == domain || strings.HasSuffix(host, "."+domain))
+}
+
+// IsWrittenAsAName reports whether s holds only what a person's name is
+// written with: letters, marks, spaces, hyphens, apostrophes and periods. A
+// name greets the reader of mail sent to an address anyone may type, so it
+// must not carry a link or a pitch; a period directly followed by a letter is
+// refused too, since mail clients turn "evil.com" into a link, while "Jr."
+// and "J. R. R." stay. It does not bound the length.
+func IsWrittenAsAName(s string) bool {
+	return s != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, notOfAName) && !periodBeforeLetter(s)
+}
+
+func notOfAName(r rune) bool {
+	switch r {
+	case ' ', '-', '\'', '’', '.':
+		return false
+	}
+	return !unicode.IsLetter(r) && !unicode.IsMark(r)
+}
+
+func periodBeforeLetter(s string) bool {
+	afterPeriod := false
+	for _, r := range s {
+		if afterPeriod && unicode.IsLetter(r) {
+			return true
+		}
+		afterPeriod = r == '.'
+	}
+	return false
 }
 
 // Has reports whether the account's roles grant a permission. For the request's
