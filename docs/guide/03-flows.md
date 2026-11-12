@@ -265,10 +265,12 @@ flowchart TD
     open -->|"yes"| cidr{"AllowsAddress: client address inside allowed_cidrs"}
     cidr -->|"no"| denied["audit contest.access_denied, ErrAddressNotAllowed"]
     cidr -->|"yes"| staffcheck{"Not contest staff and no contest.admin_all"}
+    staffcheck -->|"yes"| trusted{"trusted_domain_only: a verified address in TRUSTED_EMAIL_DOMAIN"}
+    trusted -->|"no"| trustedno["ErrTrustedEmailRequired"]
     staff(("Contest staff")) -->|"POST /contests/ID/participants with user_ids or logins"| add["contests.Service.AddParticipants"]
     add --> rows["Each entry: skip unknown, blocked, staff or already enrolled"]
     staffcheck -->|"no"| staffno["ErrStaffCannotParticipate"]
-    staffcheck -->|"yes"| insert["registrations.Add, audit"]
+    trusted -->|"yes"| insert["registrations.Add, audit"]
     rows --> insert
     insert -->|"unique index"| dup["ErrAlreadyEnrolled"]
     insert --> trigger["PoolTrigger.Trigger after commit, published or running only"]

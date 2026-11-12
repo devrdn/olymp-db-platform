@@ -2443,6 +2443,8 @@ const en = {
     unknown_role: "One of the roles does not exist. Reload the page and choose again.",
     owner_immutable: "A contest owner cannot be removed.",
     address_not_allowed: "Access is allowed only from the university network.",
+    contest_trusted_email_required: "This contest is open only to people with a verified address in the university's email domain. Sign up or sign in with such an address.",
+    contest_trusted_domain_unset: "This installation has no university email domain set, so a contest cannot be limited to it.",
     staff_cannot_participate: "This account is staff or former staff of this contest, so it cannot also register as a participant.",
     participant_cannot_be_staff: "This account already takes part in the contest, so it cannot also be appointed to its staff.",
     invalid_transition: "That transition is not possible from the current state.",

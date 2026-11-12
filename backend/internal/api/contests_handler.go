@@ -224,6 +224,7 @@ type SettingsResponse struct {
 	EnrollmentDeadline   string `json:"enrollment_deadline,omitempty"`
 	QueryRateLimitPerMin int    `json:"query_rate_limit_per_min"`
 	GracePeriodMin       int    `json:"grace_period_min"`
+	TrustedDomainOnly    bool   `json:"trusted_domain_only"`
 }
 
 // LanguageResponse is one language a contest is offered in.
@@ -296,6 +297,7 @@ func toContestResponse(c contests.Contest) ContestResponse {
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
 			QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
 			GracePeriodMin:       c.Settings.GracePeriodMin,
+			TrustedDomainOnly:    c.Settings.TrustedDomainOnly,
 		},
 		Leaderboard: LeaderboardSettingsResponse{
 			FreezeMin:  c.LeaderboardFreezeMin,
@@ -972,6 +974,7 @@ func (req contestRequest) settings() (contests.Settings, error) {
 		EnrollmentDeadline:   deadline,
 		QueryRateLimitPerMin: req.Settings.QueryRateLimitPerMin,
 		GracePeriodMin:       req.Settings.GracePeriodMin,
+		TrustedDomainOnly:    req.Settings.TrustedDomainOnly,
 	}, nil
 }
 

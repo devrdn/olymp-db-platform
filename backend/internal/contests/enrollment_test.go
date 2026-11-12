@@ -901,3 +901,142 @@ func TestARosterSkipsAnAccountWithAdminAll(t *testing.T) {
 		t.Errorf("the student was not registered: %v", err)
 	}
 }
+
+const trustedDomain = "example.edu"
+
+func domainOnlyContest(f *conteststest.Fixture) contests.Contest {
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	c.Settings.TrustedDomainOnly = true
+	return f.Contests.Put(c)
+}
+
+func accountWithEmail(f *conteststest.Fixture, login, email string, verified bool) users.User {
+	u := users.User{Login: login, FullName: login, Status: users.StatusActive, Email: email}
+	if verified {
+		at := f.Now.Add(-time.Hour)
+		u.EmailVerifiedAt = &at
+	}
+	return f.Users.Add(u)
+}
+
+func TestADomainOnlyContestRefusesAnUnverifiedAddress(t *testing.T) {
+	for name, tc := range map[string]struct {
+		email    string
+		verified bool
+		domain   string
+	}{
+		"an unverified address of the domain":  {"ada@example.edu", false, trustedDomain},
+		"a verified address of another domain": {"ada@example.com", true, trustedDomain},
+		"no address at all":                    {"", false, trustedDomain},
+		"a look-alike domain":                  {"ada@notexample.edu", true, trustedDomain},
+		"no domain configured":                 {"ada@example.edu", true, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			f.Service.WithTrustedDomain(tc.domain)
+			c := domainOnlyContest(f)
+			student := accountWithEmail(f, "ada", tc.email, tc.verified)
+
+			_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+				UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+			})
+
+			if !errors.Is(err, contests.ErrTrustedEmailRequired) {
+				t.Fatalf("Enroll() = %v, want ErrTrustedEmailRequired", err)
+			}
+			if _, err := f.Registrations.ByUser(context.Background(), c.ID, student.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+				t.Errorf("the refused account was registered anyway: %v", err)
+			}
+			if f.Audit.Recorded(audit.ActionParticipantEnroll) {
+				t.Errorf("a refused enrolment was audited as done: %v", f.Audit.Actions())
+			}
+			if len(f.PoolTrigger.Triggered) != 0 {
+				t.Errorf("triggered = %v, want none for a refused enrolment", f.PoolTrigger.Triggered)
+			}
+		})
+	}
+}
+
+func TestADomainOnlyContestAcceptsAVerifiedSubdomainAddress(t *testing.T) {
+	for name, email := range map[string]string{
+		"the domain itself": "Ada@Example.EDU",
+		"a subdomain":       "ada@cs.example.edu",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			f.Service.WithTrustedDomain(trustedDomain)
+			c := domainOnlyContest(f)
+			student := accountWithEmail(f, "ada", email, true)
+
+			if _, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+				UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+			}); err != nil {
+				t.Fatalf("Enroll() = %v", err)
+			}
+		})
+	}
+}
+
+func TestAContestWithoutTheSettingAdmitsAnyVerifiedOrNotAddress(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Service.WithTrustedDomain(trustedDomain)
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	student := accountWithEmail(f, "ada", "ada@example.com", false)
+
+	if _, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	}); err != nil {
+		t.Fatalf("Enroll() = %v", err)
+	}
+}
+
+func TestADomainOnlyContestStillLetsStaffAddAnyone(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Service.WithTrustedDomain(trustedDomain)
+	c := domainOnlyContest(f)
+	outsider := accountWithEmail(f, "ada", "ada@example.com", false)
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, UserIDs: []uuid.UUID{outsider.ID},
+	})
+
+	if err != nil || result.Added != 1 {
+		t.Fatalf("AddParticipants() = %+v, %v, want the outsider added", result, err)
+	}
+}
+
+func TestTheParticipantListMarksAnUntrustedEmail(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Service.WithTrustedDomain(trustedDomain)
+	c := f.SeedContest(contests.StatusPublished)
+	inside := accountWithEmail(f, "ada", "ada@cs.example.edu", true)
+	unverified := accountWithEmail(f, "ben", "ben@example.edu", false)
+	outside := accountWithEmail(f, "cy", "cy@example.com", true)
+	for _, u := range []users.User{inside, unverified, outside} {
+		if _, err := f.Registrations.Add(context.Background(), c.ID, u.ID); err != nil {
+			t.Fatalf("Add(%s) = %v", u.Login, err)
+		}
+	}
+
+	found, _, err := f.Service.Participants(context.Background(), c.ID, contests.ParticipantFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("Participants() = %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, p := range found {
+		got[p.Login] = f.Service.HasTrustedEmail(p)
+	}
+	want := map[string]bool{"ada": true, "ben": false, "cy": false}
+	if len(got) != len(want) || got["ada"] != true || got["ben"] != false || got["cy"] != false {
+		t.Errorf("trusted = %v, want %v", got, want)
+	}
+
+	f.Service.WithTrustedDomain("")
+	if f.Service.HasTrustedEmail(found[0]) {
+		t.Error("an installation with no domain marked a participant trusted")
+	}
+}

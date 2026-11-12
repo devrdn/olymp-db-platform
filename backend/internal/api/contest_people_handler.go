@@ -130,8 +130,16 @@ func toParticipantResponse(p contests.Participant) ParticipantResponse {
 	}
 }
 
+// participantListItem adds what only the staff list reports.
+type participantListItem struct {
+	ParticipantResponse
+	// TrustedEmail is whether the account holds a verified address in the
+	// installation's email domain; false when the installation has none.
+	TrustedEmail bool `json:"trusted_email"`
+}
+
 type participantListResponse struct {
-	Items []ParticipantResponse `json:"items"`
+	Items []participantListItem `json:"items"`
 	Total int                   `json:"total"`
 }
 
@@ -152,9 +160,12 @@ func (h *ContestsHandler) listParticipants(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	items := make([]ParticipantResponse, 0, len(found))
+	items := make([]participantListItem, 0, len(found))
 	for _, p := range found {
-		items = append(items, toParticipantResponse(p))
+		items = append(items, participantListItem{
+			ParticipantResponse: toParticipantResponse(p),
+			TrustedEmail:        h.service.HasTrustedEmail(p),
+		})
 	}
 	httpx.JSON(w, r, http.StatusOK, participantListResponse{Items: items, Total: total})
 }

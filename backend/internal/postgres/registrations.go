@@ -77,7 +77,7 @@ func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contest
 	// The search lands in an ILIKE pattern (CLAUDE.md rule 3).
 	args := []any{contestID, f.Status, escapeLike(f.Query)}
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT `+participantColumns+`, COUNT(*) OVER() AS total`+participantListFrom+`
+		SELECT `+participantColumns+`, COALESCE(u.email, ''), u.email_verified_at, COUNT(*) OVER() AS total`+participantListFrom+`
 		ORDER BY u.login
 		LIMIT $4 OFFSET $5`,
 		append(args, f.Limit, f.Offset)...)
@@ -92,7 +92,7 @@ func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contest
 	)
 	for rows.Next() {
 		var p contests.Participant
-		if err := rows.Scan(append(participantScanTargets(&p), &total)...); err != nil {
+		if err := rows.Scan(append(participantScanTargets(&p), &p.Email, &p.EmailVerifiedAt, &total)...); err != nil {
 			return nil, 0, fmt.Errorf("scan participant: %w", err)
 		}
 		found = append(found, p)

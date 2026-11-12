@@ -19,9 +19,12 @@ import (
 type RegistrationTarget struct {
 	Repo contests.RegistrationRepository
 	// NewUser's login and full name are what a participant carries.
-	NewUser       func(login, fullName string) uuid.UUID
-	NewContest    func() uuid.UUID
-	GrantAdminAll func(user uuid.UUID)
+	NewUser func(login, fullName string) uuid.UUID
+	// NewUserWithEmail's address is what List reports as the participant's
+	// Email; verified says whether the account has proved it.
+	NewUserWithEmail func(login, email string, verified bool) uuid.UUID
+	NewContest       func() uuid.UUID
+	GrantAdminAll    func(user uuid.UUID)
 	// RecordWork leaves a note or a query behind the registration, for
 	// HasWork to find.
 	RecordWork func(registration uuid.UUID)
@@ -626,6 +629,37 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				if !slices.Equal(got, tc.want) || total != 5 {
 					t.Errorf("%s: List() = %v of %d, want %v of 5", tc.name, got, total, tc.want)
 				}
+			}
+		})
+	})
+
+	t.Run("List carries each participant's address and whether it is verified", func(t *testing.T) {
+		each(t, func(ctx context.Context, target RegistrationTarget) {
+			contest := target.NewContest()
+			add(t, ctx, target, contest, target.NewUserWithEmail("ada", "ada@cs.example.edu", true))
+			add(t, ctx, target, contest, target.NewUserWithEmail("ben", "ben@example.edu", false))
+			enrol(t, ctx, target, contest, "cy")
+
+			found, _, err := target.Repo.List(ctx, contest, contests.ParticipantFilter{Limit: 10})
+			if err != nil {
+				t.Fatalf("List() = %v", err)
+			}
+
+			type seen struct {
+				email    string
+				verified bool
+			}
+			got := map[string]seen{}
+			for _, p := range found {
+				got[p.Login] = seen{p.Email, p.EmailVerifiedAt != nil}
+			}
+			want := map[string]seen{
+				"ada": {"ada@cs.example.edu", true},
+				"ben": {"ben@example.edu", false},
+				"cy":  {"", false},
+			}
+			if len(got) != len(want) || got["ada"] != want["ada"] || got["ben"] != want["ben"] || got["cy"] != want["cy"] {
+				t.Errorf("List() carried %v, want %v", got, want)
 			}
 		})
 	})

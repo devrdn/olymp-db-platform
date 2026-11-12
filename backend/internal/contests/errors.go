@@ -16,7 +16,7 @@ func Errors() []error {
 		ErrFreezeAlreadyReached, ErrICPCStartLocked, ErrOwnerImmutable,
 		ErrAlreadyEnrolled, ErrEnrollmentClosed, ErrParticipantStarted,
 		ErrStaffCannotParticipate, ErrParticipantCannotBeStaff,
-		ErrAddressNotAllowed,
+		ErrAddressNotAllowed, ErrTrustedEmailRequired, ErrTrustedDomainUnset,
 		ErrNotAParticipant, ErrContestNotRunning, ErrContestEnded, ErrParticipantFinished, ErrDeadlinePassed,
 		ErrInvalidContest, ErrInvalidQuestion, ErrInvalidAnswer,
 		ErrInvalidPolicy, ErrInvalidRole, ErrUnknownLanguage,

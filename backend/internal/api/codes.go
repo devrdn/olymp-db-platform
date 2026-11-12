@@ -331,6 +331,10 @@ var (
 		"The contest is not accepting sign-ups: it does not invite them, it is in the wrong state, or the deadline has passed.")
 	codeAddressNotAllowed = httpx.NewCode("address_not_allowed",
 		"The contest restricts participation to certain networks and this request did not come from one. Applies to participants only; staff are never checked against it.")
+	codeTrustedEmailRequired = httpx.NewCode("contest_trusted_email_required",
+		"The contest is open only to accounts with a verified address in the installation's email domain, and this account has none. Applies to self-enrolment only; staff adding a participant are never checked against it.")
+	codeTrustedDomainUnset = httpx.NewCode("contest_trusted_domain_unset",
+		"The contest cannot be limited to the installation's email domain because the installation has not configured one.")
 	codeStaffCannotParticipate = httpx.NewCode("staff_cannot_participate",
 		"This account staffs the contest (owner or manager) or once did, so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard, and revoking the role does not undo that.")
 	codeParticipantCannotBeStaff = httpx.NewCode("participant_cannot_be_staff",

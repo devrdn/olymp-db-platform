@@ -437,7 +437,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// against the grace actually in force.
 		DefaultGraceMin: cfg.GameInstanceGraceMin,
 		PoolTrigger:     poolTrigger,
-	})
+	}).WithTrustedDomain(cfg.TrustedEmailDomain)
 
 	// The scheduler moves contests published → running → finished. It holds
 	// the same publish gate as Service.Transition before starting a contest,
