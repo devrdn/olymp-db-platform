@@ -162,11 +162,11 @@ func (h *MicrosoftHandler) admit(w http.ResponseWriter, r *http.Request, subject
 // fail sends the browser to the sign-in page with err's code. Neither the
 // code nor a token is ever logged: no error here carries one.
 func (h *MicrosoftHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	code, listed := externalSignInCode(err)
-	if listed {
-		h.cfg.Log.WarnContext(r.Context(), "a Microsoft sign-in was refused", "error", err)
-	} else {
+	code, outage, _ := externalSignInCode(err)
+	if outage {
 		h.cfg.Log.ErrorContext(r.Context(), "a Microsoft sign-in failed", "error", err)
+	} else {
+		h.cfg.Log.WarnContext(r.Context(), "a Microsoft sign-in was refused", "error", err)
 	}
 	redirect(w, signInPage(code))
 }

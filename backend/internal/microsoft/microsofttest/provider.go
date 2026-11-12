@@ -62,6 +62,9 @@ type Provider struct {
 	tokens     map[string]issued
 	bodies     map[string][]byte
 	rotated    bool
+	keysGate   chan struct{}
+	keysStatus int
+	keysBody   []byte
 	requests   int
 	exchanges  int
 	keyFetches int
@@ -91,6 +94,21 @@ func (p *Provider) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/discovery/v2.0/keys"):
 		p.mu.Lock()
 		p.keyFetches++
+		gate, status, body := p.keysGate, p.keysStatus, p.keysBody
+		p.mu.Unlock()
+		if gate != nil {
+			<-gate
+		}
+		switch {
+		case status != 0:
+			w.WriteHeader(status)
+			return
+		case body != nil:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+			return
+		}
+		p.mu.Lock()
 		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
 			Key: &p.published.PublicKey, KeyID: KeyID, Algorithm: string(jose.RS256), Use: "sig",
 		}}}
@@ -232,6 +250,39 @@ func (p *Provider) Exchanges() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.exchanges
+}
+
+// HoldKeys makes requests for the signing keys wait, counted as they
+// arrive, until release is called.
+func (p *Provider) HoldKeys() (release func()) {
+	gate := make(chan struct{})
+	p.mu.Lock()
+	p.keysGate = gate
+	p.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			p.keysGate = nil
+			p.mu.Unlock()
+			close(gate)
+		})
+	}
+}
+
+// FailKeys makes the signing keys answer status; 0 serves them again.
+func (p *Provider) FailKeys(status int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.keysStatus = status
+}
+
+// ServeKeys makes the signing keys answer body as it is; nil serves the
+// real set again.
+func (p *Provider) ServeKeys(body []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.keysBody = body
 }
 
 // KeyFetches counts the requests for the signing keys.

@@ -1,6 +1,7 @@
 package microsoft_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/x509"
@@ -9,6 +10,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +131,145 @@ func TestAnUnknownKeyIDCannotMakeItRefetchWithoutBound(t *testing.T) {
 	}
 	if n := p.KeyFetches(); n != 2 {
 		t.Errorf("a known kid fetched the keys again (%d)", n)
+	}
+}
+
+func validToken(t *testing.T, p *microsofttest.Provider) string {
+	t.Helper()
+	return p.Sign(t, p.Claims(clientID, homeTenant, objectID, "the-nonce"))
+}
+
+// A browser leaving mid-fetch must not cost everybody else the keys: the
+// fetch is the key set's, not the first caller's.
+func TestACancelledCallerDoesNotCancelTheKeyFetch(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+	release := p.HoldKeys()
+	defer release()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p.Issue("first", validToken(t, p), microsofttest.Challenge(strings.Repeat("v", 43)))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.Exchange(ctx, "first", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+	}()
+	waitFor(t, func() bool { return p.KeyFetches() == 1 })
+	cancel()
+	release()
+	<-done
+
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
+		t.Errorf("Exchange() after the first caller left = %v, want the fetched keys to verify it", err)
+	}
+	if n := p.KeyFetches(); n != 1 {
+		t.Errorf("the keys were fetched %d times, want once", n)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestAFailedKeyFetchIsRetriedAfterABackoff(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	at := &clock{now: time.Now()}
+	c := newClient(t, p, func(cfg *microsoft.Config) { cfg.Now = at.Now })
+	p.FailKeys(http.StatusServiceUnavailable)
+
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+		t.Fatalf("Exchange() while the keys are down = %v, want ErrKeysUnavailable", err)
+	}
+	at.now = at.now.Add(microsoft.KeyFetchBackoff / 2)
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+		t.Errorf("Exchange() within the backoff = %v, want ErrKeysUnavailable, not an invalid token", err)
+	}
+	if n := p.KeyFetches(); n != 1 {
+		t.Errorf("the keys were fetched %d times within the backoff, want once", n)
+	}
+
+	p.FailKeys(0)
+	at.now = at.now.Add(microsoft.KeyFetchBackoff)
+	if microsoft.KeyFetchBackoff*3/2 >= microsoft.KeyRefreshInterval {
+		t.Fatal("the backoff must be shorter than the refresh interval")
+	}
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
+		t.Errorf("Exchange() after the backoff = %v, want the keys fetched again", err)
+	}
+	if n := p.KeyFetches(); n != 2 {
+		t.Errorf("the keys were fetched %d times, want a retry after the backoff", n)
+	}
+}
+
+func TestAFetchWithoutAUsableKeyKeepsTheHeldKeys(t *testing.T) {
+	for name, body := range map[string]string{
+		"no keys":       `{"keys":[]}`,
+		"no key list":   `{}`,
+		"only unusable": `{"keys":[{"kty":"oct","k":"c2VjcmV0","kid":"x"},{"kty":"RSA","use":"enc","kid":"y","n":"AQAB","e":"AQAB"}]}`,
+		"not a key set": `[]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := microsofttest.NewProvider(t)
+			at := &clock{now: time.Now()}
+			c := newClient(t, p, func(cfg *microsoft.Config) { cfg.Now = at.Now })
+			if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
+				t.Fatalf("first Exchange() = %v", err)
+			}
+
+			p.ServeKeys([]byte(body))
+			at.now = at.now.Add(microsoft.KeyRefreshInterval)
+			unknown := p.SignWithNextKey(t, "unknown", p.Claims(clientID, homeTenant, objectID, "the-nonce"))
+			if _, err := exchangeToken(t, c, p, unknown); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+				t.Errorf("Exchange() when the set came back unusable = %v, want ErrKeysUnavailable", err)
+			}
+			if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
+				t.Errorf("Exchange() under the held key = %v, want the held set kept", err)
+			}
+
+			p.ServeKeys(nil)
+			p.Rotate()
+			at.now = at.now.Add(microsoft.KeyFetchBackoff)
+			rotated := p.SignWithNextKey(t, microsofttest.NextKeyID, p.Claims(clientID, homeTenant, objectID, "the-nonce"))
+			if _, err := exchangeToken(t, c, p, rotated); err != nil {
+				t.Errorf("Exchange() after the backoff = %v, want the retry to bring the rotated key", err)
+			}
+		})
+	}
+}
+
+func TestConcurrentMissesShareOneFetch(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+	release := p.HoldKeys()
+	defer release()
+
+	const callers = 8
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		code := fmt.Sprintf("code-%d", i)
+		p.Issue(code, validToken(t, p), microsofttest.Challenge(strings.Repeat("v", 43)))
+		go func() {
+			_, err := c.Exchange(t.Context(), code, microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+			errs <- err
+		}()
+	}
+	// Every caller has its token and is waiting on the held keys.
+	waitFor(t, func() bool { return p.Exchanges() == callers && p.KeyFetches() >= 1 })
+	time.Sleep(20 * time.Millisecond)
+	release()
+	for i := 0; i < callers; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("Exchange() = %v", err)
+		}
+	}
+	if n := p.KeyFetches(); n != 1 {
+		t.Errorf("%d concurrent misses fetched the keys %d times, want once", callers, n)
 	}
 }

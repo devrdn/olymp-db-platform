@@ -60,6 +60,9 @@ var (
 	// ErrExchangeFailed means the token endpoint refused the code, could not
 	// be reached, or answered without an ID token.
 	ErrExchangeFailed = errors.New("the authorisation code could not be exchanged")
+	// ErrKeysUnavailable means Microsoft's signing keys could not be fetched,
+	// so no token can be verified: an outage, not a forgery.
+	ErrKeysUnavailable = errors.New("the signing keys could not be fetched")
 	// ErrInvalidToken refuses an ID token that is not signed by Microsoft,
 	// is for another application, has expired, does not carry this sign-in's
 	// nonce, or names an issuer other than its own tenant's.
@@ -77,7 +80,7 @@ var (
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1). A
 // token without an object ID is federation.ErrInvalidClaims.
 func Errors() []error {
-	return []error{ErrSignInRefused, ErrExchangeFailed, ErrInvalidToken, ErrTenantNotAllowed, ErrStateInvalid, ErrStateExpired}
+	return []error{ErrSignInRefused, ErrExchangeFailed, ErrKeysUnavailable, ErrInvalidToken, ErrTenantNotAllowed, ErrStateInvalid, ErrStateExpired}
 }
 
 // tenantID is a tenant or object ID as Microsoft writes it in a token.
@@ -107,6 +110,7 @@ type Config struct {
 type Client struct {
 	oauth    oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	keys     *keySet
 	http     *http.Client
 	base     string
 	tenant   string
@@ -148,6 +152,7 @@ func New(cfg Config) (*Client, error) {
 			},
 		},
 		verifier: verifier,
+		keys:     keys,
 		http:     cfg.HTTPClient,
 		base:     base,
 		tenant:   cfg.Tenant,
@@ -263,7 +268,13 @@ type idTokenClaims struct {
 	// IdentityProvider is absent or iss for the tenant's own members, and
 	// names the home of a guest.
 	IdentityProvider string `json:"idp"`
+	// AccountType is 1 for a guest and 0 for a member, when present.
+	AccountType json.RawMessage `json:"acct"`
 }
+
+// maxAccountTypeLength bounds acct as written in the token; 0 and 1 need a
+// few bytes in any form.
+const maxAccountTypeLength = 16
 
 // Exchange trades the code for an ID token, verifies it against st, and
 // returns the claims federation resolves. The signature is checked against
@@ -279,7 +290,10 @@ func (c *Client) Exchange(ctx context.Context, code string, st State) (federatio
 	if raw == "" {
 		return federation.Claims{}, fmt.Errorf("%w: the answer carries no ID token", ErrExchangeFailed)
 	}
-	idToken, err := c.verifier.Verify(oidc.ClientContext(ctx, c.http), raw)
+	if err := c.keys.Prepare(ctx, raw); err != nil {
+		return federation.Claims{}, err
+	}
+	idToken, err := c.verifier.Verify(ctx, raw)
 	if err != nil {
 		return federation.Claims{}, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
@@ -306,6 +320,9 @@ func (c *Client) Exchange(ctx context.Context, code string, st State) (federatio
 		strings.ContainsFunc(claims.IdentityProvider, unicode.IsControl) {
 		return federation.Claims{}, fmt.Errorf("%w: the identity provider is not a bounded name", ErrInvalidToken)
 	}
+	if len(claims.AccountType) > maxAccountTypeLength {
+		return federation.Claims{}, fmt.Errorf("%w: the account type is not a bounded value", ErrInvalidToken)
+	}
 	if !tenantID.MatchString(claims.ObjectID) {
 		return federation.Claims{}, fmt.Errorf("%w: the token carries no object ID", federation.ErrInvalidClaims)
 	}
@@ -321,7 +338,9 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 	email := t.Email
 	// A guest carries the home tenant's tid with an address the tenant never
 	// verified, so only the tenant's own members are vouched for by it.
-	guest := t.IdentityProvider != "" && t.IdentityProvider != t.Issuer
+	// idp names a guest's home only when Microsoft emits it, so acct = 1
+	// marks a guest as well.
+	guest := t.IdentityProvider != "" && t.IdentityProvider != t.Issuer || isOne(t.AccountType)
 	home := c.home != "" && t.TenantID == c.home && !guest
 	// The home tenant's usernames are its members' addresses; anyone else's
 	// are whatever their tenant chose and never taken for an email.
@@ -341,6 +360,16 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 		LoginHint:    cut(hint, federation.MaxLoginHintLength),
 		EmailTrusted: email != "" && (home || domainVerified(t.DomainVerified) || t.TenantID == ConsumerTenant),
 	}
+}
+
+// isOne reports whether raw is the number 1 or the string "1".
+func isOne(raw json.RawMessage) bool {
+	var n float64
+	if json.Unmarshal(raw, &n) == nil {
+		return n == 1
+	}
+	var s string
+	return json.Unmarshal(raw, &s) == nil && s == "1"
 }
 
 // domainVerified reads xms_edov, Microsoft's statement that the tenant owns

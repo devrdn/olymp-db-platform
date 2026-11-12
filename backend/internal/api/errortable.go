@@ -341,38 +341,41 @@ var recoveryErrors = errorTable{
 // externalSignInRedirects answers what a sign-in through a provider meets:
 // federation.Errors(), microsoft.Errors() and the account refusals (walked
 // by TestEveryExternalSignInErrorHasItsRedirect). The browser is sent to the
-// sign-in page with the code, since the callback is a navigation.
+// sign-in page with the code, since the callback is a navigation. An outage
+// is logged as an error, a refusal as a warning.
 var externalSignInRedirects = []struct {
-	err  error
-	code httpx.Code
+	err    error
+	code   httpx.Code
+	outage bool
 }{
-	{federation.ErrStaffAccount, codeExternalSignInStaffAccount},
-	{federation.ErrSignupClosed, codeExternalSignInClosed},
+	{err: federation.ErrStaffAccount, code: codeExternalSignInStaffAccount},
+	{err: federation.ErrSignupClosed, code: codeExternalSignInClosed},
 	// A deleted account is answered as a blocked one, as the password
 	// sign-in answers it.
-	{users.ErrAccountBlocked, codeAccountBlocked},
-	{users.ErrAccountDeleted, codeAccountBlocked},
-	{auth.ErrAccountBlocked, codeAccountBlocked},
-	{federation.ErrInvalidClaims, codeExternalSignInFailed},
-	{federation.ErrIdentityConflict, codeExternalSignInFailed},
-	{microsoft.ErrSignInRefused, codeExternalSignInFailed},
-	{microsoft.ErrExchangeFailed, codeExternalSignInFailed},
-	{microsoft.ErrInvalidToken, codeExternalSignInFailed},
-	{microsoft.ErrTenantNotAllowed, codeExternalSignInFailed},
-	{microsoft.ErrStateInvalid, codeExternalSignInFailed},
-	{microsoft.ErrStateExpired, codeExternalSignInFailed},
+	{err: users.ErrAccountBlocked, code: codeAccountBlocked},
+	{err: users.ErrAccountDeleted, code: codeAccountBlocked},
+	{err: auth.ErrAccountBlocked, code: codeAccountBlocked},
+	{err: federation.ErrInvalidClaims, code: codeExternalSignInFailed},
+	{err: federation.ErrIdentityConflict, code: codeExternalSignInFailed},
+	{err: microsoft.ErrSignInRefused, code: codeExternalSignInFailed},
+	{err: microsoft.ErrExchangeFailed, code: codeExternalSignInFailed},
+	{err: microsoft.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},
+	{err: microsoft.ErrInvalidToken, code: codeExternalSignInFailed},
+	{err: microsoft.ErrTenantNotAllowed, code: codeExternalSignInFailed},
+	{err: microsoft.ErrStateInvalid, code: codeExternalSignInFailed},
+	{err: microsoft.ErrStateExpired, code: codeExternalSignInFailed},
 }
 
-// externalSignInCode is the code err sends the browser back with, and
-// whether a row named it; anything unlisted is a failed sign-in too, but one
-// an operator must hear about.
-func externalSignInCode(err error) (httpx.Code, bool) {
+// externalSignInCode is the code err sends the browser back with, whether
+// it is an outage, and whether a row named it; anything unlisted is a
+// failed sign-in an operator must hear about.
+func externalSignInCode(err error) (code httpx.Code, outage, listed bool) {
 	for _, row := range externalSignInRedirects {
 		if errors.Is(err, row.err) {
-			return row.code, true
+			return row.code, row.outage, true
 		}
 	}
-	return codeExternalSignInFailed, false
+	return codeExternalSignInFailed, true, false
 }
 
 // contestsErrors answers every error in contests.Errors() (walked by
