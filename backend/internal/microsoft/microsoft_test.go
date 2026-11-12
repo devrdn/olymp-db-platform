@@ -86,8 +86,6 @@ func TestTheAuthorizeURLNamesTheTenantAndAsksWithPKCE(t *testing.T) {
 		"client_id": clientID, "redirect_uri": redirectURL, "response_type": "code",
 		"scope": "openid email profile", "state": "the-state", "nonce": "the-nonce",
 		"code_challenge_method": "S256", "code_challenge": base64.RawURLEncoding.EncodeToString(sum[:]),
-		// Shared machines: a live Microsoft session must not sign the next
-		// person in unasked.
 		"prompt": "select_account",
 	}
 	for key, value := range want {
@@ -598,5 +596,53 @@ func TestAnIdentityProviderOutOfBoundsIsRefused(t *testing.T) {
 		if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
 			t.Errorf("idp %.20q: Exchange() = %v, want ErrInvalidToken", idp, err)
 		}
+	}
+}
+
+func TestAnAccountTypeOfGuestIsNotTrustedByTenant(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for _, acct := range []any{1, "1", 1.0} {
+		got := trustOf(t, p, c, func(m map[string]any) { m["acct"] = acct; m["email"] = "ana@example.edu" })
+		if got.EmailTrusted {
+			t.Errorf("acct %#v: %+v, want the email untrusted", acct, got)
+		}
+		got = trustOf(t, p, c, func(m map[string]any) { m["acct"] = acct; m["preferred_username"] = "ana@example.edu" })
+		if got.Email != "" || got.EmailTrusted {
+			t.Errorf("acct %#v without email: %+v, want its username not taken for an email", acct, got)
+		}
+		got = trustOf(t, p, c, func(m map[string]any) { m["acct"] = acct; m["email"] = "ana@example.edu"; m["xms_edov"] = true })
+		if !got.EmailTrusted {
+			t.Errorf("acct %#v with xms_edov: %+v, want the email trusted", acct, got)
+		}
+	}
+}
+
+func TestAnAccountTypeOfMemberChangesNothing(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for _, acct := range []any{0, "0", nil} {
+		got := trustOf(t, p, c, func(m map[string]any) {
+			if acct != nil {
+				m["acct"] = acct
+			}
+			m["email"] = "ana@example.edu"
+		})
+		if !got.EmailTrusted {
+			t.Errorf("acct %#v: %+v, want a member's email trusted", acct, got)
+		}
+	}
+}
+
+func TestAnAccountTypeOutOfBoundsIsRefused(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+	claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
+	claims["acct"] = strings.Repeat("1", 100)
+
+	if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+		t.Errorf("Exchange() with a 100-byte acct = %v, want ErrInvalidToken", err)
 	}
 }

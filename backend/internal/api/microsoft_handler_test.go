@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +39,7 @@ type microsoftFixture struct {
 	provider *microsofttest.Provider
 	repo     *userstest.Repository
 	sessions *auth.SessionStore
+	logs     *logBuffer
 	router   http.Handler
 }
 
@@ -57,7 +57,8 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
-	log := logging.New("error", io.Discard)
+	logs := &logBuffer{}
+	log := logging.New("warn", logs)
 	sessions := auth.NewSessionStore(c, time.Hour)
 	limiter := auth.NewLimiter(c)
 	authService := auth.NewService(auth.ServiceConfig{
@@ -98,7 +99,7 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 		}),
 		Auth: authService, Limiter: limiter, Middleware: mw, Cookies: cookies, Log: log,
 	}).Mount(router)
-	return &microsoftFixture{provider: p, repo: repo, sessions: sessions, router: router}
+	return &microsoftFixture{provider: p, repo: repo, sessions: sessions, logs: logs, router: router}
 }
 
 type noPendingLogins struct{}
@@ -324,6 +325,21 @@ func TestACodeIssuedToAnotherSignInCannotBeRedeemed(t *testing.T) {
 	}
 }
 
+// An outage of Microsoft's keys is the installation's to hear about, not a
+// forged token.
+func TestAKeyOutageIsLoggedAsAnError(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f.provider.FailKeys(http.StatusServiceUnavailable)
+	s := f.start(t, "192.0.2.1", "/")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_failed")
+	if !f.logs.loggedError("signing keys could not be fetched") {
+		t.Error("the key outage was not logged as an error")
+	}
+}
+
 func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {
 	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
@@ -335,6 +351,9 @@ func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {
 	assertLandsOnSignIn(t, rec, "external_signin_failed")
 	if f.repo.Len() != 0 {
 		t.Errorf("%d accounts exist after a refused token, want none", f.repo.Len())
+	}
+	if f.logs.loggedError("") {
+		t.Error("a refused token was logged as an error, as an outage would be")
 	}
 }
 

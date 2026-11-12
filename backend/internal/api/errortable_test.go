@@ -715,20 +715,28 @@ func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
 // A sign-in through a provider is a browser navigation, so each refusal is a
 // code on the sign-in page's address rather than a JSON answer.
 func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
-	want := map[error]string{
-		federation.ErrStaffAccount:     "external_signin_staff_account",
-		federation.ErrSignupClosed:     "external_signin_closed",
-		federation.ErrInvalidClaims:    "external_signin_failed",
-		federation.ErrIdentityConflict: "external_signin_failed",
-		microsoft.ErrSignInRefused:     "external_signin_failed",
-		microsoft.ErrExchangeFailed:    "external_signin_failed",
-		microsoft.ErrInvalidToken:      "external_signin_failed",
-		microsoft.ErrTenantNotAllowed:  "external_signin_failed",
-		microsoft.ErrStateInvalid:      "external_signin_failed",
-		microsoft.ErrStateExpired:      "external_signin_failed",
-		users.ErrAccountBlocked:        "account_blocked",
-		users.ErrAccountDeleted:        "account_blocked",
-		auth.ErrAccountBlocked:         "account_blocked",
+	type redirect struct {
+		code string
+		// outage is logged as an error: the installation's problem, not the
+		// caller's.
+		outage bool
+	}
+	failed := redirect{code: "external_signin_failed"}
+	want := map[error]redirect{
+		federation.ErrStaffAccount:     {code: "external_signin_staff_account"},
+		federation.ErrSignupClosed:     {code: "external_signin_closed"},
+		federation.ErrInvalidClaims:    failed,
+		federation.ErrIdentityConflict: failed,
+		microsoft.ErrSignInRefused:     failed,
+		microsoft.ErrExchangeFailed:    failed,
+		microsoft.ErrKeysUnavailable:   {code: "external_signin_failed", outage: true},
+		microsoft.ErrInvalidToken:      failed,
+		microsoft.ErrTenantNotAllowed:  failed,
+		microsoft.ErrStateInvalid:      failed,
+		microsoft.ErrStateExpired:      failed,
+		users.ErrAccountBlocked:        {code: "account_blocked"},
+		users.ErrAccountDeleted:        {code: "account_blocked"},
+		auth.ErrAccountBlocked:         {code: "account_blocked"},
 	}
 
 	declared := map[string]bool{}
@@ -744,27 +752,28 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 			if !known {
 				t.Fatalf("no expected redirect written for %q: add one beside its row", err)
 			}
-			got, listed := externalSignInCode(err)
+			code, outage, listed := externalSignInCode(err)
 			if !listed {
 				t.Error("the table has no row for it, so it would be logged as an unexpected failure")
 			}
-			if got.String() != expected {
-				t.Errorf("redirected with %q, want %q", got, expected)
+			if got := (redirect{code: code.String(), outage: outage}); got != expected {
+				t.Errorf("redirected with %+v, want %+v", got, expected)
 			}
-			if wrapped, _ := externalSignInCode(fmt.Errorf("%w: while signing in", err)); wrapped.String() != expected {
-				t.Errorf("wrapped, redirected with %q, want %q", wrapped, expected)
+			if wrapped, _, _ := externalSignInCode(fmt.Errorf("%w: while signing in", err)); wrapped.String() != expected.code {
+				t.Errorf("wrapped, redirected with %q, want %q", wrapped, expected.code)
 			}
-			if !declared[expected] {
-				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", expected)
+			if !declared[expected.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", expected.code)
 			}
 		})
 	}
 
 	// What federation passes through from users after its retries, and
-	// anything else, is a failed sign-in, never a raw error.
+	// anything else, is a failed sign-in an operator hears about, never a
+	// raw error.
 	for _, err := range []error{users.ErrEmailTaken, users.ErrLoginTaken, users.ErrNotFound, errors.New("the database is down")} {
-		if got, listed := externalSignInCode(err); got.String() != "external_signin_failed" || listed {
-			t.Errorf("%q: redirected with %q (listed %v), want external_signin_failed, unlisted", err, got, listed)
+		if code, outage, listed := externalSignInCode(err); code.String() != "external_signin_failed" || !outage || listed {
+			t.Errorf("%q: redirected with %q (outage %v, listed %v), want external_signin_failed, an outage, unlisted", err, code, outage, listed)
 		}
 	}
 }

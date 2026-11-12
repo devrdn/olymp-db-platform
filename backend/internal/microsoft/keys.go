@@ -12,17 +12,25 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
-// KeyRefreshInterval is the least time between two fetches of the signing
-// keys. A token under an unknown key ID triggers a fetch, as key rotation
-// requires, but no more often than this, so unknown key IDs cannot turn
-// callbacks into requests to Microsoft.
-const KeyRefreshInterval = time.Minute
+// Fetches of the signing keys. A token under a key ID the set does not hold
+// triggers a fetch, as key rotation requires, but no sooner than
+// KeyRefreshInterval after a fetch that brought keys, so unknown key IDs
+// cannot turn callbacks into requests to Microsoft; after a failed one the
+// next is allowed after KeyFetchBackoff, so an outage is not prolonged.
+const (
+	KeyRefreshInterval = time.Minute
+	KeyFetchBackoff    = 5 * time.Second
+)
 
-var errUnknownKey = errors.New("no published key verifies the token")
+var (
+	errUnknownKey  = errors.New("no published key verifies the token")
+	errNoUsableKey = errors.New("the key set holds no usable signing key")
+)
 
 // keySet is Microsoft's signing keys for one authority, fetched on the
-// first token and again for a key ID it does not hold. It implements
-// oidc.KeySet.
+// first token and again for a key ID it does not hold. Exchange calls
+// Prepare, which may fetch; VerifySignature (oidc.KeySet) reads only what is
+// held, since go-oidc would flatten a fetch failure into an invalid token.
 type keySet struct {
 	url    string
 	client *http.Client
@@ -31,9 +39,11 @@ type keySet struct {
 	mu   sync.RWMutex
 	keys []jose.JSONWebKey
 
-	// fetchMu serialises fetches; tokens under a held key never wait on it.
+	// fetchMu serialises fetches, so concurrent misses share one; tokens
+	// under a held key never wait on it.
 	fetchMu   sync.Mutex
-	fetchedAt time.Time
+	nextFetch time.Time
+	lastErr   error
 }
 
 func newKeySet(url string, client *http.Client, now func() time.Time) *keySet {
@@ -43,9 +53,70 @@ func newKeySet(url string, client *http.Client, now func() time.Time) *keySet {
 	return &keySet{url: url, client: client, now: now}
 }
 
-// VerifySignature returns the payload of raw, signed RS256 by a published
-// key under its key ID.
-func (s *keySet) VerifySignature(ctx context.Context, raw string) ([]byte, error) {
+func (s *keySet) held() []jose.JSONWebKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.keys
+}
+
+// Prepare fetches the keys when raw names a key ID the set does not hold
+// and a fetch is allowed. It returns ErrKeysUnavailable when the keys could
+// not be fetched, now or at the last try within the backoff; a token it
+// cannot parse is left to VerifySignature to refuse.
+func (s *keySet) Prepare(ctx context.Context, raw string) error {
+	jws, err := parse(raw)
+	if err != nil {
+		return nil
+	}
+	kid := jws.Signatures[0].Header.KeyID
+	if kid == "" || holds(s.held(), kid) {
+		return nil
+	}
+
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
+	if holds(s.held(), kid) {
+		return nil
+	}
+	if s.now().Before(s.nextFetch) {
+		if s.lastErr != nil {
+			return fmt.Errorf("%w: %w", ErrKeysUnavailable, s.lastErr)
+		}
+		return nil
+	}
+	// The fetch is the set's, shared by every caller waiting on it: one
+	// browser leaving must not cancel it. The client's timeout bounds it.
+	fetched, err := s.fetch(context.WithoutCancel(ctx))
+	if err == nil && len(fetched) == 0 {
+		err = errNoUsableKey
+	}
+	if err != nil {
+		// The held keys stay: an empty or broken answer must not undo a
+		// good set.
+		s.nextFetch, s.lastErr = s.now().Add(KeyFetchBackoff), err
+		return fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
+	}
+	s.nextFetch, s.lastErr = s.now().Add(KeyRefreshInterval), nil
+	s.mu.Lock()
+	s.keys = fetched
+	s.mu.Unlock()
+	return nil
+}
+
+// VerifySignature returns the payload of raw, signed RS256 by a held key
+// under its key ID.
+func (s *keySet) VerifySignature(_ context.Context, raw string) ([]byte, error) {
+	jws, err := parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload, ok := verifyWith(jws, s.held(), jws.Signatures[0].Header.KeyID); ok {
+		return payload, nil
+	}
+	return nil, errUnknownKey
+}
+
+func parse(raw string) (*jose.JSONWebSignature, error) {
 	jws, err := jose.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil {
 		return nil, fmt.Errorf("parse the token: %w", err)
@@ -53,46 +124,7 @@ func (s *keySet) VerifySignature(ctx context.Context, raw string) ([]byte, error
 	if len(jws.Signatures) != 1 {
 		return nil, errors.New("the token does not carry exactly one signature")
 	}
-	kid := jws.Signatures[0].Header.KeyID
-
-	s.mu.RLock()
-	held := s.keys
-	s.mu.RUnlock()
-	if payload, ok := verifyWith(jws, held, kid); ok {
-		return payload, nil
-	}
-	held, err = s.refresh(ctx, kid)
-	if err != nil {
-		return nil, err
-	}
-	if payload, ok := verifyWith(jws, held, kid); ok {
-		return payload, nil
-	}
-	return nil, errUnknownKey
-}
-
-// refresh fetches the keys unless they were fetched within
-// KeyRefreshInterval, or another fetch meanwhile brought kid; a failed
-// fetch spends the interval too.
-func (s *keySet) refresh(ctx context.Context, kid string) ([]jose.JSONWebKey, error) {
-	s.fetchMu.Lock()
-	defer s.fetchMu.Unlock()
-
-	s.mu.RLock()
-	held := s.keys
-	s.mu.RUnlock()
-	if holds(held, kid) || (!s.fetchedAt.IsZero() && s.now().Before(s.fetchedAt.Add(KeyRefreshInterval))) {
-		return held, nil
-	}
-	s.fetchedAt = s.now()
-	fetched, err := s.fetch(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch the signing keys: %w", err)
-	}
-	s.mu.Lock()
-	s.keys = fetched
-	s.mu.Unlock()
-	return fetched, nil
+	return jws, nil
 }
 
 func (s *keySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
