@@ -95,7 +95,14 @@ const nextConfig: NextConfig = {
           { key: "Strict-Transport-Security", value: strictTransportSecurity },
         ];
 
-    return [{ source: "/:path*", headers }];
+    return [
+      { source: "/:path*", headers },
+      /**
+       * A reset link carries its token in the address, so nothing the page
+       * requests may repeat it. Last, because a later rule's header wins.
+       */
+      { source: "/reset", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
+    ];
   },
 
   /**

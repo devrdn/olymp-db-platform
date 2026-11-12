@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 
-import { cookieSecure } from "./cookie-policy";
+import { browserCookieOptions, cookieSecure } from "./cookie-policy";
 
 const original = { ...process.env };
 
@@ -76,4 +76,29 @@ describe("cookieSecure", () => {
       expect(() => cookieSecure()).toThrow(/COOKIE_SECURE/);
     },
   );
+});
+
+describe("browserCookieOptions", () => {
+  test("keeps the API's lifetime and path, and sets the protections from this deployment", () => {
+    setEnv("COOKIE_SECURE", "true");
+
+    expect(browserCookieOptions({ name: "dbcontest_signup", value: "tok", path: "/", maxAge: 1800 })).toEqual({
+      path: "/",
+      maxAge: 1800,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+    });
+  });
+
+  /** A clearing answer is `Max-Age=0`, which must reach the browser as such. */
+  test("keeps a clearing lifetime of zero", () => {
+    setEnv("COOKIE_SECURE", "false");
+
+    expect(browserCookieOptions({ name: "dbcontest_signup", value: "", maxAge: 0 })).toMatchObject({
+      path: "/",
+      maxAge: 0,
+      secure: false,
+    });
+  });
 });

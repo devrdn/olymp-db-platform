@@ -16,9 +16,11 @@ const PUBLIC_PATHS = ["/", "/login"];
  * Reachable without a session, nothing beneath them. `/healthz` is the
  * container's liveness probe; redirected to sign-in, each probe would also
  * cost the API a settings read. `/register` is the event registration form,
- * filled in by people who have no account yet.
+ * filled in by people who have no account yet. Signing up, confirming it,
+ * asking for a reset link and following one are how somebody without a
+ * session gets one.
  */
-const PUBLIC_EXACT = ["/healthz", "/register"];
+const PUBLIC_EXACT = ["/healthz", "/register", "/signup", "/signup/confirm", "/forgot", "/reset"];
 
 /**
  * A contest's public table (docs/ARCHITECTURE.md §10). A whole-path pattern:

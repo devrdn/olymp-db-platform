@@ -1,4 +1,5 @@
 import { Band } from "@/components/layout/band";
+import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { SignInForm } from "./sign-in-form";
@@ -14,9 +15,10 @@ export async function generateMetadata() {
  * columns divided by a hairline, not a background change.
  */
 export default async function LoginPage(props: PageProps<"/login">) {
-  const [params, dict] = await Promise.all([
+  const [params, dict, methods] = await Promise.all([
     props.searchParams,
     activeDictionary(),
+    fetchAuthMethods(),
   ]);
   const next = typeof params.next === "string" ? params.next : undefined;
 
@@ -56,7 +58,12 @@ export default async function LoginPage(props: PageProps<"/login">) {
             </p>
           ) : null}
 
-          <SignInForm dict={{ auth: dict.auth, errors: dict.errors }} next={next} />
+          {/* When the API cannot say what it offers, neither link shows; sign-in works without them. */}
+          <SignInForm
+            dict={{ auth: dict.auth, errors: dict.errors }}
+            next={next}
+            offers={{ signUp: methods?.passwordSignup ?? false, forgot: methods?.passwordReset ?? false }}
+          />
         </div>
       </div>
     </Band>
