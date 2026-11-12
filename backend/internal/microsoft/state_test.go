@@ -126,26 +126,31 @@ func TestTheStateKeyIsDerivedFromTheSecret(t *testing.T) {
 	}
 }
 
+// Anything but a path on this site returns to the sign-in page, which sends a
+// signed-in visitor on as a password sign-in would.
 func TestTheReturnPathStaysOnThisSite(t *testing.T) {
+	if microsoft.DefaultReturnPath != "/login" {
+		t.Errorf("DefaultReturnPath = %q, want /login", microsoft.DefaultReturnPath)
+	}
 	for raw, want := range map[string]string{
-		"":                       "/",
+		"":                       microsoft.DefaultReturnPath,
 		"/":                      "/",
 		"/contests/42":           "/contests/42",
 		"/contests?tab=mine#top": "/contests?tab=mine#top",
-		"//evil.example":         "/",
-		"///evil.example":        "/",
-		"/\\evil.example":        "/",
-		"\\\\evil.example":       "/",
-		"https://evil.example/":  "/",
-		"evil.example":           "/",
-		"javascript:alert(1)":    "/",
-		"/ok\r\nSet-Cookie: x=y": "/",
-		"/tab\there":             "/",
-		"/del\x7f":               "/",
-		"/a b":                   "/",
-		"/caf\u00e9":             "/",
+		"//evil.example":         microsoft.DefaultReturnPath,
+		"///evil.example":        microsoft.DefaultReturnPath,
+		"/\\evil.example":        microsoft.DefaultReturnPath,
+		"\\\\evil.example":       microsoft.DefaultReturnPath,
+		"https://evil.example/":  microsoft.DefaultReturnPath,
+		"evil.example":           microsoft.DefaultReturnPath,
+		"javascript:alert(1)":    microsoft.DefaultReturnPath,
+		"/ok\r\nSet-Cookie: x=y": microsoft.DefaultReturnPath,
+		"/tab\there":             microsoft.DefaultReturnPath,
+		"/del\x7f":               microsoft.DefaultReturnPath,
+		"/a b":                   microsoft.DefaultReturnPath,
+		"/caf\u00e9":             microsoft.DefaultReturnPath,
 		"/caf%C3%A9?q=%20":       "/caf%C3%A9?q=%20",
-		"/" + strings.Repeat("a", microsoft.MaxReturnPathLength): "/",
+		"/" + strings.Repeat("a", microsoft.MaxReturnPathLength): microsoft.DefaultReturnPath,
 	} {
 		if got := microsoft.ReturnPath(raw); got != want {
 			t.Errorf("ReturnPath(%.40q) = %q, want %q", raw, got, want)
