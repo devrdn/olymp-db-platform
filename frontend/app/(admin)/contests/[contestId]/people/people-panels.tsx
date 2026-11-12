@@ -168,6 +168,7 @@ export function ParticipantPanel({
   locale,
   scoring,
   trustedDomain = "",
+  trustedDomainOnly = false,
   dict,
 }: {
   contestId: string;
@@ -176,6 +177,11 @@ export function ParticipantPanel({
   locale: Locale;
   /** The site's email domain from `/auth/methods`; "" when it has none or could not say. */
   trustedDomain?: string;
+  /**
+   * The contest admits only that domain to self-enrolment. Only then are the
+   * exceptions marked: in an open contest most participants would be.
+   */
+  trustedDomainOnly?: boolean;
   // ICPC ranks by solved count, then penalty (docs/ARCHITECTURE.md §6.1.1);
   // `total_score` is always 0 there, so its column is hidden.
   scoring: Scoring;
@@ -184,9 +190,10 @@ export function ParticipantPanel({
   const t = dict.workspace.people;
   const showScore = scoring !== "icpc";
   // A replacer function, so a `$` in the domain is not read as a pattern.
-  const untrusted = trustedDomain
-    ? t.participants.untrustedEmail.replace("{domain}", () => trustedDomain)
-    : null;
+  const untrusted =
+    trustedDomainOnly && trustedDomain
+      ? t.participants.untrustedEmail.replace("{domain}", () => trustedDomain)
+      : null;
 
   return (
     <section className="flex flex-col gap-5">
