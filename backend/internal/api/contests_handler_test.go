@@ -1374,7 +1374,7 @@ func TestTheTrustedDomainSettingRoundTripsAndNeedsADomain(t *testing.T) {
 	}
 }
 
-func TestAnEnrolmentRefusedForItsAddressAnswers403(t *testing.T) {
+func TestAnEnrolmentRefusedForItsEmailAnswers403(t *testing.T) {
 	f := newContestFixture(t)
 	f.service.WithTrustedDomain("example.edu")
 	c := f.stores.SeedContest(contests.StatusPublished)

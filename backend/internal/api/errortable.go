@@ -110,11 +110,6 @@ var standingErrors = errorTable{
 	// bare 403.
 	{err: contests.ErrAddressNotAllowed, status: http.StatusForbidden, code: codeAddressNotAllowed,
 		message: "This contest is only available from the university network"},
-	// Explicit: the person can act on it by signing in with a different address.
-	{err: contests.ErrTrustedEmailRequired, status: http.StatusForbidden, code: codeTrustedEmailRequired,
-		message: "This contest is open only to people with a verified address in the installation's email domain"},
-	{err: contests.ErrTrustedDomainUnset, status: http.StatusBadRequest, code: codeTrustedDomainUnset,
-		message: "This installation has no trusted email domain, so a contest cannot be limited to it"},
 }
 
 // queryproxyErrors answers every error in queryproxy.Errors(), met when
@@ -423,6 +418,11 @@ var contestsErrors = joined(errorTable{
 	{err: contests.ErrOwnerImmutable, status: http.StatusConflict, code: codeOwnerImmutable},
 	{err: contests.ErrAlreadyEnrolled, status: http.StatusConflict, code: codeAlreadyEnrolled},
 	{err: contests.ErrEnrollmentClosed, status: http.StatusConflict, code: codeEnrollmentClosed},
+	// Explicit: the person can act on it by signing in with a different address.
+	{err: contests.ErrTrustedEmailRequired, status: http.StatusForbidden, code: codeTrustedEmailRequired,
+		message: "This contest is open only to people with a verified address in the installation's email domain"},
+	{err: contests.ErrTrustedDomainUnset, status: http.StatusBadRequest, code: codeTrustedDomainUnset,
+		message: "This installation has no trusted email domain, so a contest cannot be limited to it"},
 	{err: contests.ErrParticipantStarted, status: http.StatusConflict, code: codeParticipantStarted},
 	{err: contests.ErrStaffCannotParticipate, status: http.StatusConflict, code: codeStaffCannotParticipate},
 	{err: contests.ErrParticipantCannotBeStaff, status: http.StatusConflict, code: codeParticipantCannotBeStaff},
