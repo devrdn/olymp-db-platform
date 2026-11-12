@@ -42,13 +42,21 @@ describe("SignUpForm, before anything has been submitted", () => {
   });
 
   /** The rules are said before anyone breaks them. */
-  test("states the login and full-name rules up front", () => {
+  test("states the login, full-name and password rules up front", () => {
     renderForm();
 
     expect(screen.getByLabelText(en.auth.signUp.login)).toHaveAccessibleDescription(en.auth.signUp.loginHint);
     expect(screen.getByLabelText(en.auth.signUp.fullName)).toHaveAccessibleDescription(
       en.auth.signUp.fullNameHint,
     );
+    expect(screen.getByLabelText(en.auth.signUp.password)).toHaveAccessibleDescription(
+      en.auth.signUp.passwordHint,
+    );
+  });
+
+  /** `users.MinPasswordLength`: the hint gives the real minimum. */
+  test("gives the password minimum the API applies", () => {
+    expect(en.auth.signUp.passwordHint).toContain("12");
   });
 
   test("lowers the login's case as it is typed", async () => {
@@ -126,15 +134,21 @@ describe("SignUpForm, a refused sign-up", () => {
   });
 
   /** The form's own check knows which field broke which rule. */
-  test("turns the broken rule itself into the message, under its field", async () => {
-    signUpAction.mockResolvedValue({ code: "invalid_request", field: "login", values: { login: "a.b" } });
+  test.each([
+    ["login", "login", "loginHint"],
+    ["fullName", "fullName", "fullNameHint"],
+    ["fullNameLength", "fullName", "fullNameTooLong"],
+    ["passwordLength", "password", "passwordHint"],
+  ] as const)("says what %s broke, under its field and nowhere else", async (broken, field, text) => {
+    signUpAction.mockResolvedValue({ code: "invalid_request", broken, values: { login: "a.b" } });
     renderForm();
 
     await submit();
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(en.auth.signUp.loginHint);
-    expect(screen.getByLabelText(en.auth.signUp.login)).toHaveAttribute("aria-invalid", "true");
+    expect(alert).toHaveTextContent(en.auth.signUp[text]);
+    expect(screen.getByLabelText(en.auth.signUp[field])).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(en.auth.signUp[field])).toHaveAccessibleDescription(en.auth.signUp[text]);
     expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 

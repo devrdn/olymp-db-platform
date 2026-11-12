@@ -2,12 +2,12 @@ import { describe, expect, test } from "vitest";
 
 import {
   checkSignup,
+  fullNameFits,
   isPlainLogin,
   isSignupCode,
   isWrittenAsName,
   normalizeCode,
   normalizeLogin,
-  showableEmail,
 } from "./signup-rules";
 
 const filled = {
@@ -40,12 +40,21 @@ describe("the full-name rule", () => {
     },
   );
 
-  test.each(["", "Ana1", "ana@example.com", "J.R. Tolkien", "<b>Ana</b>", "A".repeat(201)])("refuses %s", (name) => {
+  test.each(["", "Ana1", "ana@example.com", "J.R. Tolkien", "<b>Ana</b>"])("refuses %s", (name) => {
     expect(isWrittenAsName(name)).toBe(false);
   });
+});
 
-  test("counts the bound in characters, not bytes", () => {
-    expect(isWrittenAsName("Ș".repeat(200))).toBe(true);
+/** `users.MaxFullNameLength` is checked with `len`, which counts UTF-8 bytes. */
+describe("the full-name bound", () => {
+  test("holds 200 bytes", () => {
+    expect(fullNameFits("A".repeat(200))).toBe(true);
+    expect(fullNameFits("A".repeat(201))).toBe(false);
+  });
+
+  test("counts a Cyrillic letter as the two bytes it takes", () => {
+    expect(fullNameFits("Я".repeat(100))).toBe(true);
+    expect(fullNameFits("Я".repeat(101))).toBe(false);
   });
 });
 
@@ -59,24 +68,48 @@ describe("checkSignup", () => {
     });
   });
 
-  test("blames the login when it breaks the rule", () => {
-    expect(checkSignup({ ...filled, login: "a.b" })).toEqual({ ok: false, code: "invalid_request", field: "login" });
+  test("names the login rule when the login breaks it", () => {
+    expect(checkSignup({ ...filled, login: "a.b" })).toEqual({ ok: false, code: "invalid_request", broken: "login" });
   });
 
-  test("blames the full name when it is not written as a name", () => {
+  test("names the full-name rule when the name is not written as one", () => {
     expect(checkSignup({ ...filled, fullName: "Ana 2" })).toEqual({
       ok: false,
       code: "invalid_request",
-      field: "fullName",
+      broken: "fullName",
     });
   });
 
-  test("says the two passwords differ before anything else about them", () => {
+  test("says a long Cyrillic name is too long, not that it breaks the rule", () => {
+    const name = "Александра Константиновна Преображенская-Воскресенская ".repeat(3).trim();
+    expect([...name].length).toBeLessThanOrEqual(200);
+
+    expect(checkSignup({ ...filled, fullName: name })).toEqual({
+      ok: false,
+      code: "invalid_request",
+      broken: "fullNameLength",
+    });
+  });
+
+  /** `users.MinPasswordLength` counts characters (runes), and is the policy's only rule. */
+  test("names the password minimum when the password is shorter than 12 characters", () => {
+    expect(checkSignup({ ...filled, password: "elevenchars", confirm: "elevenchars" })).toEqual({
+      ok: false,
+      code: "weak_password",
+      broken: "passwordLength",
+    });
+  });
+
+  test("counts the password minimum in characters", () => {
+    expect(checkSignup({ ...filled, password: "țțțțțțțțțțțț", confirm: "țțțțțțțțțțțț" }).ok).toBe(true);
+  });
+
+  test("says the two passwords differ", () => {
     expect(checkSignup({ ...filled, confirm: "something else" })).toEqual({ ok: false, code: "password_mismatch" });
   });
 
-  test("leaves the email and the password's strength to the API", () => {
-    expect(checkSignup({ ...filled, email: "not an address", password: "short", confirm: "short" }).ok).toBe(true);
+  test("leaves the email to the API", () => {
+    expect(checkSignup({ ...filled, email: "not an address" }).ok).toBe(true);
   });
 });
 
@@ -92,16 +125,5 @@ describe("the confirmation code", () => {
     ["12a456", false],
   ])("%s is a code: %s", (code, expected) => {
     expect(isSignupCode(code)).toBe(expected);
-  });
-});
-
-describe("showableEmail", () => {
-  test("shows an address", () => {
-    expect(showableEmail("ana@example.com")).toBe("ana@example.com");
-  });
-
-  /** The address bar may only select a sentence, never write one. */
-  test.each(["Call 0800 now", "", "a".repeat(250) + "@x.md", "ana@example.com\nsee"])("withholds %j", (raw) => {
-    expect(showableEmail(raw)).toBeUndefined();
   });
 });

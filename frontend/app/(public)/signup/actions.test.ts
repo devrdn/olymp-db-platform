@@ -90,16 +90,37 @@ describe("signUpAction", () => {
     });
   });
 
-  /** The token lives only in the cookie: never in the address it is sent to next. */
-  test("goes on to the confirmation with the address the code went to, and nothing else", async () => {
+  /** Neither the token nor the address goes into the address bar. */
+  test("goes on to the confirmation with nothing in the address", async () => {
     fetchMock.mockResolvedValueOnce(
       answer(202, { status: "code_sent", email: "ana@example.com" }, "__Host-dbcontest_signup=tok; Path=/"),
     );
 
     await expect(signUpAction({}, form(filled))).rejects.toThrow(/NEXT_REDIRECT/);
 
-    expect(redirect).toHaveBeenCalledWith("/signup/confirm?email=ana%40example.com");
-    expect(redirect.mock.calls[0][0]).not.toContain("tok");
+    expect(redirect).toHaveBeenCalledWith("/signup/confirm");
+  });
+
+  test("keeps the address the code went to in a cookie of the sign-up pages", async () => {
+    fetchMock.mockResolvedValueOnce(answer(202, { status: "code_sent", email: "ana@example.com" }));
+
+    await expect(signUpAction({}, form(filled))).rejects.toThrow(/NEXT_REDIRECT/);
+
+    expect(jar.set).toHaveBeenCalledWith("__Secure-dbcontest_signup_email", "ana@example.com", {
+      path: "/signup",
+      maxAge: 1800,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+    });
+  });
+
+  test("keeps no address when the API refused the sign-up", async () => {
+    fetchMock.mockResolvedValueOnce(answer(409, { error: { code: "login_taken", message: "taken" } }));
+
+    await signUpAction({}, form(filled));
+
+    expect(jar.set).not.toHaveBeenCalled();
   });
 
   test("refuses a login that breaks the rule without asking the API, keeping what was typed", async () => {
@@ -108,7 +129,7 @@ describe("signUpAction", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(state).toEqual({
       code: "invalid_request",
-      field: "login",
+      broken: "login",
       values: { fullName: "Ana Popescu", login: "a.b", email: "Ana@Example.com" },
     });
   });

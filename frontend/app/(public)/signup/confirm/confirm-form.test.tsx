@@ -27,17 +27,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderForm(email: string | undefined = "ana@example.com") {
-  return render(<ConfirmForm t={en.auth.confirm} errors={en.errors} email={email} />);
+function renderForm() {
+  return render(<ConfirmForm t={en.auth.confirm} errors={en.errors} />);
 }
 
 const waitingFor = (seconds: number) => en.auth.confirm.resendIn.replace("{seconds}", String(seconds));
 
 describe("ConfirmForm, the fields", () => {
-  test("labels the address and the code from the dictionary, with the address filled in", () => {
-    renderForm();
+  /** The address is the server's, from its cookie; nothing in the page can choose another. */
+  test("asks only for the code, labelled from the dictionary", () => {
+    const { container } = renderForm();
 
-    expect(screen.getByLabelText(en.auth.confirm.email)).toHaveValue("ana@example.com");
+    expect(container.querySelector('[name="email"]')).toBeNull();
     const code = screen.getByLabelText(en.auth.confirm.code);
     expect(code).toHaveAttribute("autocomplete", "one-time-code");
     expect(code).toHaveAttribute("inputmode", "numeric");
@@ -55,7 +56,7 @@ describe("ConfirmForm, a refused confirmation", () => {
     "account_blocked",
     "unreachable",
   ] as const)("says what %s means in the interface's own words", async (code) => {
-    confirmSignupAction.mockResolvedValue({ code, values: { email: "ana@example.com" } });
+    confirmSignupAction.mockResolvedValue({ code });
     renderForm();
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.confirm.submit }));
@@ -71,7 +72,6 @@ describe("ConfirmForm, a refused confirmation", () => {
     await screen.findByRole("alert");
 
     expect(screen.getByLabelText(en.auth.confirm.code)).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByLabelText(en.auth.confirm.email)).not.toHaveAttribute("aria-invalid");
   });
 
   /** An expired sign-up cannot be revived; the way on is to start again. */
@@ -99,7 +99,7 @@ describe("ConfirmForm, a new code", () => {
     expect(screen.getByRole("button", { name: en.auth.confirm.resend })).toBeEnabled();
   });
 
-  test("asks for a new code for the address in the field and counts down again", async () => {
+  test("asks for a new code and counts down again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     resendCodeAction.mockResolvedValue({ sent: true });
     renderForm();
@@ -107,7 +107,7 @@ describe("ConfirmForm, a new code", () => {
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.confirm.resend }));
 
-    expect(resendCodeAction).toHaveBeenCalledWith("ana@example.com");
+    expect(resendCodeAction).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("status")).toHaveTextContent(en.auth.confirm.resent);
     expect(screen.getByRole("button", { name: waitingFor(60) })).toBeDisabled();
   });
@@ -122,6 +122,17 @@ describe("ConfirmForm, a new code", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.signup_too_soon);
     expect(screen.getByRole("button", { name: waitingFor(37) })).toBeDisabled();
+  });
+
+  test("offers to sign up again when the sign-up a new code was asked for is gone", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    resendCodeAction.mockResolvedValue({ sent: false, code: "signup_code_expired" });
+    renderForm();
+    act(() => vi.advanceTimersByTime(60_000));
+
+    await userEvent.click(screen.getByRole("button", { name: en.auth.confirm.resend }));
+
+    expect(await screen.findByRole("link", { name: en.auth.confirm.startOver })).toHaveAttribute("href", "/signup");
   });
 
   test("says why when a new code was refused, and lets the person try again", async () => {

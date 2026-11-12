@@ -1,12 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, useTransition, type RefObject } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
-import { EMAIL_MAX_CHARS, RESEND_COOLDOWN_SECONDS } from "@/lib/auth/signup-rules";
+import { RESEND_COOLDOWN_SECONDS } from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -17,45 +17,36 @@ type Text = Dictionary["auth"]["confirm"];
 /** The one message the blamed fields point at. */
 const FAILURE_ID = "confirm-failure";
 
-/** Which fields a refusal concerns; a refusal about the sign-up itself blames none. */
-const BLAMED: Record<string, readonly ("email" | "code")[]> = {
-  signup_wrong_code: ["code"],
-  invalid_request: ["email", "code"],
-};
+/** The refusals about what was typed; the others are about the sign-up itself. */
+const BLAMES_CODE = new Set(["signup_wrong_code", "invalid_request"]);
+
+/** An expired sign-up cannot be revived, and a missing one was never here: the way on is a new one. */
+const START_AGAIN = "signup_code_expired";
 
 /**
- * The code form, and below it a new code once the cooldown has passed. What
- * it says never depends on whether the address has an account: the API
+ * The code form, and below it a new code once the cooldown has passed. The
+ * address is the server's, read from its cookie, so nothing here names it.
+ * What it says never depends on whether the address has an account: the API
  * answers alike, and so does this.
  */
-export function ConfirmForm({ t, errors, email }: { t: Text; errors: Dictionary["errors"]; email?: string }) {
+export function ConfirmForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
   const [state, formAction, pending] = useActionState<ConfirmState, FormData>(confirmSignupAction, {});
 
   const failure = state.code ? messageForCode(state.code, errors) : null;
-  const blamed = state.code ? (BLAMED[state.code] ?? []) : [];
-  const wiring = (field: "email" | "code") =>
-    blamed.includes(field) ? { invalid: true, describedBy: FAILURE_ID } : { invalid: false };
-
-  const form = useRef<HTMLFormElement>(null);
+  const blamesCode = Boolean(state.code && BLAMES_CODE.has(state.code));
 
   return (
     <div className="flex w-full max-w-96 flex-col gap-10">
-      <form ref={form} action={formAction} className="flex flex-col gap-7" noValidate>
-        <Field id="email" label={t.email} {...wiring("email")}>
-          <Input
-            name="email"
-            type="email"
-            autoComplete="email"
-            inputMode="email"
-            maxLength={EMAIL_MAX_CHARS}
-            defaultValue={state.values?.email ?? email}
-            required
-          />
-        </Field>
-
+      <form action={formAction} className="flex flex-col gap-7" noValidate>
         {/* In the flow: positioned absolutely, a wrapped message would overlap the button. */}
         <div className="flex flex-col gap-1.5">
-          <Field id="code" label={t.code} hint={t.codeHint} {...wiring("code")}>
+          <Field
+            id="code"
+            label={t.code}
+            hint={t.codeHint}
+            invalid={blamesCode}
+            describedBy={blamesCode ? FAILURE_ID : undefined}
+          >
             <Input
               name="code"
               autoComplete="one-time-code"
@@ -71,12 +62,7 @@ export function ConfirmForm({ t, errors, email }: { t: Text; errors: Dictionary[
             </p>
           ) : null}
 
-          {/* An expired sign-up cannot be revived; the way on is a new one. */}
-          {state.code === "signup_code_expired" ? (
-            <InlineLink href="/signup" className="self-start">
-              {t.startOver}
-            </InlineLink>
-          ) : null}
+          {state.code === START_AGAIN ? <StartOver t={t} /> : null}
         </div>
 
         <Button type="submit" disabled={pending} className="self-start">
@@ -84,7 +70,7 @@ export function ConfirmForm({ t, errors, email }: { t: Text; errors: Dictionary[
         </Button>
       </form>
 
-      <Resend t={t} errors={errors} addressIn={form} />
+      <Resend t={t} errors={errors} />
     </div>
   );
 }
@@ -95,15 +81,7 @@ export function ConfirmForm({ t, errors, email }: { t: Text; errors: Dictionary[
  * soon. Counted against the clock rather than by ticks, so a throttled
  * background tab does not stretch the wait.
  */
-function Resend({
-  t,
-  errors,
-  addressIn,
-}: {
-  t: Text;
-  errors: Dictionary["errors"];
-  addressIn: RefObject<HTMLFormElement | null>;
-}) {
+function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
   const [until, setUntil] = useState(() => Date.now() + RESEND_COOLDOWN_SECONDS * 1000);
   const [now, setNow] = useState(() => Date.now());
   const [outcome, setOutcome] = useState<ResendOutcome | null>(null);
@@ -125,9 +103,8 @@ function Resend({
   };
 
   const resend = () => {
-    const email = String(new FormData(addressIn.current ?? undefined).get("email") ?? "");
     startSending(async () => {
-      const answer = await resendCodeAction(email);
+      const answer = await resendCodeAction();
       setOutcome(answer);
       if (answer.sent) wait(RESEND_COOLDOWN_SECONDS);
       else if (answer.code === "signup_too_soon") wait(answer.retryAfterSeconds ?? RESEND_COOLDOWN_SECONDS);
@@ -145,12 +122,24 @@ function Resend({
           {t.resent}
         </p>
       ) : outcome ? (
-        <p role="alert" className="text-small text-bad">
-          {messageForCode(outcome.code, errors)}
-        </p>
+        <>
+          <p role="alert" className="text-small text-bad">
+            {messageForCode(outcome.code, errors)}
+          </p>
+          {outcome.code === START_AGAIN ? <StartOver t={t} /> : null}
+        </>
       ) : null}
 
       <p className="text-small text-ink-3">{t.note}</p>
     </div>
+  );
+}
+
+/** Exported for the page, which offers it when there is nothing to confirm. */
+export function StartOver({ t }: { t: Text }) {
+  return (
+    <InlineLink href="/signup" className="self-start">
+      {t.startOver}
+    </InlineLink>
   );
 }
