@@ -7,9 +7,8 @@
 //
 // It does not serve HTTP or throttle callers (internal/api does, before the
 // password hash, and keeps Start's token for the browser), does not sign the
-// new account in (auth does), and does not
-// decide whether sign-up is offered: the deployment does, with
-// SELF_SIGNUP_ENABLED and mail.
+// new account in (auth does), and does not decide whether sign-up is offered:
+// the deployment does, with SELF_SIGNUP_ENABLED and mail.
 package signup
 
 import (
