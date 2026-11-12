@@ -22,7 +22,9 @@ beforeEach(() => {
 });
 
 function renderForm() {
-  return render(<ResetForm t={en.auth.reset} errors={en.errors} token={TOKEN} />);
+  return render(
+    <ResetForm t={en.auth.reset} passwordHint={en.auth.signUp.passwordHint} errors={en.errors} token={TOKEN} />,
+  );
 }
 
 const submit = () => userEvent.click(screen.getByRole("button", { name: en.auth.reset.submit }));
@@ -34,6 +36,13 @@ describe("ResetForm", () => {
     for (const label of [en.auth.reset.next, en.auth.reset.confirm]) {
       expect(screen.getByLabelText(label)).toHaveAttribute("autocomplete", "new-password");
     }
+  });
+
+  /** The person learns the rule before choosing, not from a refusal. */
+  test("states the password rule under the new password", () => {
+    renderForm();
+
+    expect(screen.getByLabelText(en.auth.reset.next)).toHaveAccessibleDescription(en.auth.signUp.passwordHint);
   });
 
   test("submits the link's token without showing it", async () => {

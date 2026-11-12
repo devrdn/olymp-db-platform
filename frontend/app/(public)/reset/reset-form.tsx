@@ -22,10 +22,21 @@ const BLAMED: Record<string, readonly ("next" | "confirm")[]> = {
 };
 
 /**
- * The new password, twice. The link's token rides in a hidden field, never
- * shown; a link that can no longer be used offers a new one.
+ * The new password, twice, under the rule sign-up states. The link's token
+ * rides in a hidden field, never shown; a link that can no longer be used
+ * offers a new one.
  */
-export function ResetForm({ t, errors, token }: { t: Text; errors: Dictionary["errors"]; token: string }) {
+export function ResetForm({
+  t,
+  passwordHint,
+  errors,
+  token,
+}: {
+  t: Text;
+  passwordHint: string;
+  errors: Dictionary["errors"];
+  token: string;
+}) {
   const [state, formAction, pending] = useActionState<ResetState, FormData>(resetPasswordAction, {});
 
   const failure = state.code ? messageForCode(state.code, errors) : null;
@@ -37,7 +48,7 @@ export function ResetForm({ t, errors, token }: { t: Text; errors: Dictionary["e
     <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
       <input type="hidden" name="token" value={token} />
 
-      <Field id="password" label={t.next} {...wiring("next")}>
+      <Field id="password" label={t.next} hint={passwordHint} {...wiring("next")}>
         <Input name="password" type="password" autoComplete="new-password" required />
       </Field>
 
