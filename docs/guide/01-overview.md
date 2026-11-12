@@ -142,6 +142,7 @@ collects the worst of them.
 | Account | A person who can sign in. Status `active`, `blocked` or `deleted` (kept for the audit trail, restorable). | `users.User` in [`users.go`](../../backend/internal/users/users.go) |
 | Registration | One account's participation in one contest; the unit the console, rate limits, workspace and game database are keyed by. Status `registered`, `active`, `finished` or `disqualified`. `Participant.ID` is the registration, not the user. | `contests.Participant` in [`enrollment.go`](../../backend/internal/contests/enrollment.go); table `registrations` |
 | Enrollment | Who creates the registration, and nothing else: `open` lets a student sign themselves up (`POST /contests/{contestID}/enroll`), `invite_only` means staff add them. After that both paths are the same. | `EnrollmentOpen`, `EnrollmentInviteOnly`, `Service.Enroll` |
+| `trusted_domain_only` | Limits self-enrolment to accounts with a verified address in `TRUSTED_EMAIL_DOMAIN` (the domain or a subdomain); staff adding by hand or roster are never checked. Refused at `Service.Enroll` with `contest_trusted_email_required`; switching it on without a domain is `contest_trusted_domain_unset`. | `Settings.TrustedDomainOnly`, `ErrTrustedEmailRequired`, `ErrTrustedDomainUnset` |
 | Roster import | Staff adding many participants at once, by login or id, up to 1000 entries. Partial success: each unusable row comes back with a reason (`unknown_account`, `already_enrolled`, ...). | `Service.AddParticipants`; `POST /contests/{contestID}/participants` (`participant.manage`) |
 | Account import | Creating accounts for a whole group with one-time passwords. A different operation from the roster import, on a different route. | `users.Service.Import`; `POST /users/import` (`users.manage`) |
 | `allowed_cidrs` | Networks a participant must be on, for an on-site olympiad. Checked against the address resolved through `TRUSTED_PROXIES`; staff are never checked. A refusal is `address_not_allowed`. | `Contest.AllowedCIDRs`, `Contest.AllowsAddress` |
@@ -161,8 +162,6 @@ The gate's refusals and their API codes, from
 | `ErrParticipantFinished` | `contest_finished` | This registration is `finished`. |
 | `ErrDeadlinePassed` | `deadline_passed` | This participant's own deadline plus grace has passed, or their individual window closed before they started. |
 | `ErrAddressNotAllowed` | `address_not_allowed` | The caller is outside `allowed_cidrs`. |
-| `ErrTrustedEmailRequired` | `contest_trusted_email_required` | Self-enrolment into a contest with `trusted_domain_only` by an account without a verified address in `TRUSTED_EMAIL_DOMAIN`. |
-| `ErrTrustedDomainUnset` | `contest_trusted_domain_unset` | `trusted_domain_only` switched on while the installation has no `TRUSTED_EMAIL_DOMAIN`. |
 
 ### Staff
 
