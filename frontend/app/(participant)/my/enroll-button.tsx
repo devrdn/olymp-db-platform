@@ -29,6 +29,10 @@ export function EnrollButton({ contestId, dict }: { contestId: string; dict: Pic
   const failure = state.code
     ? (messageForCode(state.code, dict.errors))
     : null;
+  // Only this refusal is about the domain. A replacer function, so a `$` in
+  // the domain is not read as a pattern.
+  const domain = state.code === "contest_trusted_email_required" ? state.domain : undefined;
+  const accepted = domain ? t.trustedDomain.replace("{domain}", () => domain) : null;
 
   return (
     <form action={formAction} className="flex flex-col items-start gap-1.5">
@@ -39,9 +43,10 @@ export function EnrollButton({ contestId, dict }: { contestId: string; dict: Pic
       </Button>
 
       {failure ? (
-        <p role="alert" className="max-w-48 text-small text-balance text-bad">
-          {failure}
-        </p>
+        <div role="alert" className="flex max-w-48 flex-col gap-1 text-small text-balance">
+          <p className="text-bad">{failure}</p>
+          {accepted ? <p className="text-ink-2">{accepted}</p> : null}
+        </div>
       ) : null}
     </form>
   );

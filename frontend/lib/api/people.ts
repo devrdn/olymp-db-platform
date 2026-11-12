@@ -48,6 +48,9 @@ export const participantSchema = z
     started_at: z.string().optional(),
     finished_at: z.string().optional(),
     total_score: z.number(),
+    // Whether the account holds a verified address in the site's domain; only
+    // the staff list sends it, and a missing one is unknown, not unverified.
+    trusted_email: z.boolean().optional(),
   })
   .transform((raw) => ({
     registrationId: raw.registration_id,
@@ -58,6 +61,7 @@ export const participantSchema = z
     startedAt: raw.started_at,
     finishedAt: raw.finished_at,
     totalScore: raw.total_score,
+    trustedEmail: raw.trusted_email,
   }));
 
 export type Participant = z.infer<typeof participantSchema>;

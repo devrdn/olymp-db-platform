@@ -177,6 +177,64 @@ function Choices<T extends string>({
 }
 
 /**
+ * Limits self-enrolment to verified addresses in the site's domain. Offered
+ * where the site has a domain, or where the contest already holds the limit,
+ * so it can be lifted after the domain is unset. It is absent only while off,
+ * and an absent box is read as off, so every save still carries the value.
+ */
+function TrustedDomainSwitch({
+  on,
+  domain,
+  editable,
+  dict,
+}: {
+  on: boolean;
+  /** The site's domain; "" when it has none, null when it could not say. */
+  domain: string | null;
+  editable: boolean;
+  dict: Dictionary;
+}) {
+  const t = dict.workspace.settings.access;
+  const hintId = useId();
+  const unsetId = useId();
+
+  if (!on && !domain) return null;
+
+  // A replacer function, so a `$` in the domain is not read as a pattern.
+  const label = domain ? t.trustedDomainOnly.replace("{domain}", () => domain) : t.trustedDomainOnlyNoDomain;
+  const unset = on && domain === "";
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label
+        className={cn(
+          "flex items-center gap-3 text-control",
+          editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
+        )}
+      >
+        <input
+          type="checkbox"
+          name="trustedDomainOnly"
+          defaultChecked={on}
+          disabled={!editable}
+          aria-describedby={unset ? `${hintId} ${unsetId}` : hintId}
+          className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+        />
+        {label}
+      </label>
+      <p id={hintId} className="max-w-body text-small text-ink-3">
+        {t.trustedDomainOnlyHint}
+      </p>
+      {unset ? (
+        <p id={unsetId} className="max-w-body text-small text-warn">
+          {t.trustedDomainUnset}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The contest's fields. While the contest runs settings stay editable but the
  * shape freezes; frozen controls stay in the form, disabled.
  */
@@ -184,11 +242,14 @@ export function ContestPanel({
   contest,
   editable,
   shapeOpen,
+  trustedDomain = null,
   dict,
 }: {
   contest: Contest;
   editable: boolean;
   shapeOpen: boolean;
+  /** The site's email domain from `/auth/methods`; "" for none, null when unknown. */
+  trustedDomain?: string | null;
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings;
@@ -458,6 +519,13 @@ export function ContestPanel({
             disabled={!editable}
           />
         </fieldset>
+
+        <TrustedDomainSwitch
+          on={contest.settings.trustedDomainOnly}
+          domain={trustedDomain}
+          editable={editable}
+          dict={dict}
+        />
 
         <Field id="allowedCidrs" label={t.access.network} hint={t.access.networkHint}>
           <Input

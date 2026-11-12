@@ -26,17 +26,17 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-function methods(signup: boolean, reset: boolean) {
+function methods(signup: boolean, reset: boolean, microsoft = false) {
   serverRequest.mockImplementation(async (path: string) => {
     if (path === "/auth/methods") {
-      return { password_signup: signup, password_reset: reset, microsoft: false, trusted_email_domain: "" };
+      return { password_signup: signup, password_reset: reset, microsoft, trusted_email_domain: "" };
     }
     throw new Error(`unexpected ${path}`);
   });
 }
 
-async function renderPage() {
-  render(await LoginPage({ params: Promise.resolve({}), searchParams: Promise.resolve({}) } as PageProps<"/login">));
+async function renderPage(search: Record<string, string | string[]> = {}) {
+  render(await LoginPage({ params: Promise.resolve({}), searchParams: Promise.resolve(search) } as PageProps<"/login">));
 }
 
 const signUpLink = () => screen.queryByRole("link", { name: en.auth.signIn.signUp });
@@ -75,5 +75,73 @@ describe("the sign-in page's other ways in", () => {
     expect(signUpLink()).not.toBeInTheDocument();
     expect(forgotLink()).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.auth.signIn.submit })).toBeInTheDocument();
+  });
+});
+
+describe("the sign-in page's Microsoft offer", () => {
+  const microsoft = () => screen.queryByRole("link", { name: en.auth.signIn.microsoft });
+
+  test("offers it when the installation has Microsoft configured, returning to the interrupted page", async () => {
+    methods(false, false, true);
+    await renderPage({ next: "/contests/abc/play" });
+
+    expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start?return=%2Fcontests%2Fabc%2Fplay");
+  });
+
+  test("does not offer it otherwise", async () => {
+    methods(true, true, false);
+    await renderPage();
+
+    expect(microsoft()).not.toBeInTheDocument();
+  });
+
+  test("does not offer it when the API cannot say", async () => {
+    serverRequest.mockRejectedValue(new ApiError("unreachable", 502, "down"));
+    await renderPage();
+
+    expect(microsoft()).not.toBeInTheDocument();
+  });
+});
+
+describe("the sign-in page after an external sign-in came back refused", () => {
+  test.each([
+    "external_signin_failed",
+    "external_signin_staff_account",
+    "external_signin_closed",
+    "account_blocked",
+  ] as const)("says what %s means", async (code) => {
+    methods(false, false, true);
+    await renderPage({ error: code });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(en.errors[code]);
+  });
+
+  /** The address may select a sentence, never supply text. */
+  test.each(["invalid_credentials", "<b>Your account is suspended</b>", "fallback", "constructor"])(
+    "shows nothing for %j, and never the value itself",
+    async (value) => {
+      methods(false, false, true);
+      await renderPage({ error: value });
+
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(value);
+    },
+  );
+
+  test("shows nothing for a repeated parameter", async () => {
+    methods(false, false, true);
+    await renderPage({ error: ["external_signin_failed", "external_signin_closed"] });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the sign-in lede in %s", (locale) => {
+  // Self sign-up and Microsoft both exist; the lede must not say every account
+  // is handed out by an organisation.
+  test("makes no claim about who hands out the login", async () => {
+    const lede = (await getDictionary(locale)).auth.signIn.lede;
+
+    expect(lede).not.toMatch(/department|catedr|кафедр/i);
   });
 });

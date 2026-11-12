@@ -121,6 +121,10 @@ export async function saveSettingsAction(
       enrollment_deadline: moment(form.get("enrollmentDeadline")) ?? "",
       query_rate_limit_per_min: Number.isFinite(rate) && rate >= 0 ? Math.floor(rate) : 0,
       grace_period_min: Number.isFinite(grace) && grace >= 0 ? Math.floor(grace) : 0,
+      // The request replaces `settings` whole and the API cannot tell a
+      // missing key from false, so it goes on every save; the panel leaves the
+      // box out only while the limit is off.
+      trusted_domain_only: form.get("trustedDomainOnly") === "on",
     },
   };
   if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;

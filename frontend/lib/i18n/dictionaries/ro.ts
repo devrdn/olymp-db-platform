@@ -15,7 +15,7 @@ const ro = {
   auth: {
     signIn: {
       title: "Autentificare",
-      lede: "Utilizatorul și parola vă sunt date de catedră.",
+      lede: "Autentificați-vă ca să participați la o olimpiadă sau ca s-o organizați.",
       login: "Utilizator",
       password: "Parolă",
       submit: "Intrați",
@@ -25,6 +25,7 @@ const ro = {
       forgot: "Ați uitat parola?",
       noAccount: "Nu aveți încă un cont?",
       signUp: "Creați un cont",
+      microsoft: "Intrați cu Microsoft",
     },
     changePassword: {
       title: "Schimbați parola",
@@ -1075,6 +1076,7 @@ const ro = {
         help: "Toți cei înscriși și unde a ajuns fiecare.",
         countLabel: "înscriși",
         notStarted: "nu a început",
+        untrustedEmail: "fără adresă @{domain} verificată",
         remove: "Eliminați",
         disqualify: "Descalificați",
         confirmDisqualify: "Descalificați acest participant? Tot ce a făcut rămâne în evidență.",
@@ -1176,6 +1178,10 @@ const ro = {
         resultDownloadHint: "Activat implicit. O modificare ajunge la pagina deja deschisă a unui participant la următoarea reîncărcare. Dezactivarea doar ascunde butonul „Descărcați CSV”: rândurile pot fi în continuare selectate și copiate din tabel.",
         schemaDiagram: "Participanții pot deschide schema ca diagramă",
         schemaDiagramHint: "Activat implicit. O modificare ajunge la pagina deja deschisă a unui participant la următoarea reîncărcare. Dezactivarea doar elimină butonul „Diagramă”: tabelele, coloanele și cheile străine rămân listate în panoul schemei.",
+        trustedDomainOnly: "Doar adrese @{domain} verificate",
+        trustedDomainOnlyNoDomain: "Doar adrese verificate din domeniul propriu al site-ului",
+        trustedDomainOnlyHint: "Se aplică atunci când participanții se înscriu singuri: contul are nevoie de o adresă confirmată în acest domeniu sau într-unul dintre subdomeniile lui. Persoanele pe care le adăugați aici, una câte una sau dintr-o listă, nu sunt verificate.",
+        trustedDomainUnset: "Acest site nu are setat un domeniu de e-mail, așa că, cât timp opțiunea este activă, nimeni nu se poate înscrie singur la olimpiadă.",
       },
       languages: {
         heading: "Limbi",
@@ -1865,6 +1871,7 @@ const ro = {
     join: "Înscrieți-vă",
     joining: "Se înscrie",
     joined: "Sunteți înscris.",
+    trustedDomain: "Domeniul acceptat este {domain}.",
     openConsole: "Deschideți",
     waitingRoom: "Așteptați începutul",
     enrolled: "Sunteți înscris",

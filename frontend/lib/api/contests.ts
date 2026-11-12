@@ -134,11 +134,14 @@ export const settingsSchema = z
     enrollment_deadline: z.string().optional(),
     query_rate_limit_per_min: z.number(),
     grace_period_min: z.number(),
+    // Defaulted to off for a server older than the limit.
+    trusted_domain_only: z.boolean().default(false),
   })
   .transform((raw) => ({
     enrollmentDeadline: raw.enrollment_deadline,
     queryRateLimitPerMin: raw.query_rate_limit_per_min,
     gracePeriodMin: raw.grace_period_min,
+    trustedDomainOnly: raw.trusted_domain_only,
   }));
 
 export type ContestSettings = z.infer<typeof settingsSchema>;

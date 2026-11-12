@@ -8,6 +8,7 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 const signInAction = vi.hoisted(() => vi.fn());
 vi.mock("./actions", () => ({ signInAction }));
 
+import { signInErrors } from "./codes";
 import { SignInForm } from "./sign-in-form";
 
 let en: Dictionary;
@@ -16,10 +17,15 @@ beforeAll(async () => {
   en = await getDictionary("en");
 });
 
+/** What the page hands the form: its own texts and the sentences it can show. */
+const slice = () => ({ signIn: en.auth.signIn, errors: signInErrors(en.errors) });
+
+const NONE = { signUp: false, forgot: false, microsoft: false };
+
 describe("SignInForm, a rejected sign-in", () => {
   test("announces the failure in the interface's own words, not the server's", async () => {
     signInAction.mockResolvedValue({ code: "invalid_credentials" });
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
 
@@ -32,7 +38,7 @@ describe("SignInForm, a rejected sign-in", () => {
    */
   test("marks both fields invalid and points them at the message", async () => {
     signInAction.mockResolvedValue({ code: "invalid_credentials" });
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
     await screen.findByRole("alert");
@@ -47,7 +53,7 @@ describe("SignInForm, a rejected sign-in", () => {
   /** A busy server never checked the password, so it must not say "wrong login or password". */
   test("tells the visitor to retry when the server is too busy to check", async () => {
     signInAction.mockResolvedValue({ code: "sign_in_busy" });
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
 
@@ -59,7 +65,7 @@ describe("SignInForm, a rejected sign-in", () => {
   test("does not mark the fields invalid when the server was too busy to check them", async () => {
     // Nothing typed was wrong, so no field is invalid.
     signInAction.mockResolvedValue({ code: "sign_in_busy" });
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
     await screen.findByRole("alert");
@@ -71,7 +77,7 @@ describe("SignInForm, a rejected sign-in", () => {
 
   test("falls back to a general message for a code the dictionary does not know", async () => {
     signInAction.mockResolvedValue({ code: "meteor_strike" });
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
 
@@ -81,7 +87,7 @@ describe("SignInForm, a rejected sign-in", () => {
 
 describe("SignInForm, before anything has been submitted", () => {
   test("marks neither field invalid", () => {
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     for (const label of [en.auth.signIn.login, en.auth.signIn.password]) {
       expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-invalid");
@@ -92,7 +98,7 @@ describe("SignInForm, before anything has been submitted", () => {
 describe("SignInForm, carrying the interrupted journey", () => {
   test("submits the path the guard captured", async () => {
     signInAction.mockResolvedValue({});
-    render(<SignInForm dict={en} next="/contests?status=draft" />);
+    render(<SignInForm dict={slice()} next="/contests?status=draft" />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
 
@@ -102,7 +108,7 @@ describe("SignInForm, carrying the interrupted journey", () => {
 
   test("submits nothing extra when there was no interrupted journey", async () => {
     signInAction.mockResolvedValue({});
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
 
@@ -113,16 +119,63 @@ describe("SignInForm, carrying the interrupted journey", () => {
 
 describe("SignInForm, the other ways in", () => {
   test("offers neither link unless told the installation has them", () => {
-    render(<SignInForm dict={en} />);
+    render(<SignInForm dict={slice()} />);
 
     expect(screen.queryByRole("link", { name: en.auth.signIn.signUp })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.auth.signIn.forgot })).not.toBeInTheDocument();
   });
 
   test("offers each link it is told of", () => {
-    render(<SignInForm dict={en} offers={{ signUp: true, forgot: true }} />);
+    render(<SignInForm dict={slice()} offers={{ ...NONE, signUp: true, forgot: true }} />);
 
     expect(screen.getByRole("link", { name: en.auth.signIn.signUp })).toHaveAttribute("href", "/signup");
     expect(screen.getByRole("link", { name: en.auth.signIn.forgot })).toHaveAttribute("href", "/forgot");
+  });
+});
+
+describe("SignInForm, signing in with Microsoft", () => {
+  const microsoft = () => screen.queryByRole("link", { name: en.auth.signIn.microsoft });
+
+  test("is not offered unless the installation has Microsoft configured", () => {
+    render(<SignInForm dict={slice()} offers={{ ...NONE, signUp: true, forgot: true }} />);
+
+    expect(microsoft()).not.toBeInTheDocument();
+  });
+
+  test("is a plain link to the API's start route, with no return when there is no journey", () => {
+    render(<SignInForm dict={slice()} offers={{ ...NONE, microsoft: true }} />);
+
+    expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start");
+  });
+
+  test("returns to the page the guard interrupted", () => {
+    render(<SignInForm dict={slice()} next="/contests?status=draft" offers={{ ...NONE, microsoft: true }} />);
+
+    expect(microsoft()).toHaveAttribute(
+      "href",
+      "/api/v1/auth/microsoft/start?return=%2Fcontests%3Fstatus%3Ddraft",
+    );
+  });
+
+  test.each(["//evil.example", "https://evil.example/", "/\\evil.example", "/my contests"])(
+    "never passes the hostile next %j on",
+    (next) => {
+      render(<SignInForm dict={slice()} next={next} offers={{ ...NONE, microsoft: true }} />);
+
+      expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start");
+    },
+  );
+});
+
+describe("signInErrors", () => {
+  test("carries the sentences a password sign-in can end in, and the fallback, not every sentence", () => {
+    const picked = signInErrors(en.errors);
+
+    expect(picked.invalid_credentials).toBe(en.errors.invalid_credentials);
+    expect(picked.sign_in_busy).toBe(en.errors.sign_in_busy);
+    expect(picked.account_blocked).toBe(en.errors.account_blocked);
+    expect(picked.too_many_attempts).toBe(en.errors.too_many_attempts);
+    expect(picked.fallback).toBe(en.errors.fallback);
+    expect(Object.keys(picked).length).toBeLessThan(Object.keys(en.errors).length / 10);
   });
 });
