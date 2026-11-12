@@ -341,66 +341,35 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 		s.upgradeHash(ctx, user, cmd.Password)
 	}
 
-	token, err := s.sessions.Create(ctx, Principal{
-		UserID:     user.ID,
-		Login:      user.Login,
-		Generation: user.SessionGeneration,
+	var deviceToken string
+	token, err := s.completeSignIn(ctx, user, cmd.PreviousToken, cmd.IP, cmd.UserAgent, nil, func() {
+		if trusted && s.devices.DueForRenewal(device) {
+			// Renewed past half its lifetime under the same device id, and only
+			// after the right password, so a copied cookie never extends itself
+			// and the device's counts carry over.
+			var err error
+			if deviceToken, err = s.devices.Issue(user, device.ID); err != nil {
+				s.log.WarnContext(ctx, "could not renew a device cookie", "error", err)
+				deviceToken = ""
+			}
+		}
+		if !trusted {
+			// Success clears this address's guessing counter, but not the
+			// account-wide ceiling, which would hand a distributed guess a fresh
+			// budget each time the owner signs in.
+			if err := s.resetAccountAddress(ctx, cmd, gen); err != nil {
+				s.log.WarnContext(ctx, "could not reset the login throttle", "error", err)
+			}
+
+			deviceToken = s.issueDeviceToken(ctx, user)
+		}
+		// A trusted success resets nothing, or the account's own cookie could
+		// sign in without limit, each time taking a slot, a session and an audit
+		// row.
 	})
 	if err != nil {
 		return LoginResult{}, err
 	}
-
-	// End the browser's previous session, or monitoring would see a second
-	// device. Done after the new session exists, so a failed sign-in signs
-	// nobody out; best-effort.
-	if cmd.PreviousToken != "" && cmd.PreviousToken != token {
-		if err := s.sessions.Delete(ctx, cmd.PreviousToken); err != nil {
-			s.log.WarnContext(ctx, "could not end the replaced session", "error", err)
-		}
-	}
-
-	now := time.Now().UTC()
-	if err := s.users.RecordLogin(ctx, user.ID, now); err != nil {
-		// The session is valid; a missing timestamp is not worth failing it.
-		s.log.WarnContext(ctx, "could not stamp last login", "user_id", user.ID, "error", err)
-	}
-
-	var deviceToken string
-	if trusted && s.devices.DueForRenewal(device) {
-		// Renewed past half its lifetime under the same device id, and only
-		// after the right password, so a copied cookie never extends itself
-		// and the device's counts carry over.
-		if deviceToken, err = s.devices.Issue(user, device.ID); err != nil {
-			s.log.WarnContext(ctx, "could not renew a device cookie", "error", err)
-			deviceToken = ""
-		}
-	}
-	if !trusted {
-		// Success clears this address's guessing counter, but not the
-		// account-wide ceiling, which would hand a distributed guess a fresh
-		// budget each time the owner signs in.
-		if err := s.resetAccountAddress(ctx, cmd, gen); err != nil {
-			s.log.WarnContext(ctx, "could not reset the login throttle", "error", err)
-		}
-
-		// A failure to issue the cookie costs only the trust.
-		if deviceToken, err = s.devices.Issue(user, DeviceID{}); err != nil {
-			s.log.WarnContext(ctx, "could not issue a device cookie", "error", err)
-			deviceToken = ""
-		}
-	}
-	// A trusted success resets nothing, or the account's own cookie could
-	// sign in without limit, each time taking a slot, a session and an audit
-	// row.
-
-	s.record(ctx, audit.Entry{
-		ActorID:   &user.ID,
-		Action:    audit.ActionAuthLogin,
-		Entity:    "user",
-		EntityID:  user.ID.String(),
-		IP:        cmd.IP,
-		UserAgent: cmd.UserAgent,
-	})
 
 	return LoginResult{
 		Token:              token,
@@ -408,6 +377,106 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 		MustChangePassword: user.MustChangePassword,
 		DeviceToken:        deviceToken,
 	}, nil
+}
+
+// Sign-in methods SignInAs accepts, recorded in the auth.login audit payload.
+const (
+	MethodSignup    = "signup"
+	MethodMicrosoft = "microsoft"
+)
+
+// ErrUnknownSignInMethod is a programming error: no request reaches it, so it
+// has no HTTP answer.
+var ErrUnknownSignInMethod = errors.New("unknown sign-in method")
+
+type SignInAsCommand struct {
+	User   users.User
+	Method string
+	IP     string
+	// UserAgent is recorded in the audit trail.
+	UserAgent string
+	// PreviousToken is the session cookie sent by a browser already signed
+	// in; the new session ends it.
+	PreviousToken string
+}
+
+// SignInAs opens a session for an account already proven by something other
+// than its password. It does no password work and so no throttling of its own:
+// the caller must rate-limit before calling it. A blocked or deleted account is
+// refused with ErrAccountBlocked.
+func (s *Service) SignInAs(ctx context.Context, cmd SignInAsCommand) (LoginResult, error) {
+	if cmd.Method != MethodSignup && cmd.Method != MethodMicrosoft {
+		return LoginResult{}, ErrUnknownSignInMethod
+	}
+	if !cmd.User.IsActive() {
+		return LoginResult{}, ErrAccountBlocked
+	}
+
+	var deviceToken string
+	token, err := s.completeSignIn(ctx, cmd.User, cmd.PreviousToken, cmd.IP, cmd.UserAgent,
+		map[string]any{"method": cmd.Method},
+		func() { deviceToken = s.issueDeviceToken(ctx, cmd.User) })
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	return LoginResult{
+		Token:              token,
+		User:               cmd.User,
+		MustChangePassword: cmd.User.MustChangePassword,
+		DeviceToken:        deviceToken,
+	}, nil
+}
+
+// completeSignIn is what follows a proven identity: a session at the
+// account's generation, the replaced session's end, the login stamp, the
+// caller's device handling and the audit entry.
+func (s *Service) completeSignIn(ctx context.Context, user users.User, previousToken, ip, userAgent string, payload map[string]any, afterStamp func()) (string, error) {
+	token, err := s.sessions.Create(ctx, Principal{
+		UserID:     user.ID,
+		Login:      user.Login,
+		Generation: user.SessionGeneration,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// End the browser's previous session, or monitoring would see a second
+	// device. Done after the new session exists, so a failed sign-in signs
+	// nobody out; best-effort.
+	if previousToken != "" && previousToken != token {
+		if err := s.sessions.Delete(ctx, previousToken); err != nil {
+			s.log.WarnContext(ctx, "could not end the replaced session", "error", err)
+		}
+	}
+
+	if err := s.users.RecordLogin(ctx, user.ID, time.Now().UTC()); err != nil {
+		// The session is valid; a missing timestamp is not worth failing it.
+		s.log.WarnContext(ctx, "could not stamp last login", "user_id", user.ID, "error", err)
+	}
+
+	afterStamp()
+
+	s.record(ctx, audit.Entry{
+		ActorID:   &user.ID,
+		Action:    audit.ActionAuthLogin,
+		Entity:    "user",
+		EntityID:  user.ID.String(),
+		Payload:   payload,
+		IP:        ip,
+		UserAgent: userAgent,
+	})
+	return token, nil
+}
+
+// issueDeviceToken returns "" on failure, which costs only the trust.
+func (s *Service) issueDeviceToken(ctx context.Context, user users.User) string {
+	token, err := s.devices.Issue(user, DeviceID{})
+	if err != nil {
+		s.log.WarnContext(ctx, "could not issue a device cookie", "error", err)
+		return ""
+	}
+	return token
 }
 
 // Logout ends a session. An unknown token is not an error.
