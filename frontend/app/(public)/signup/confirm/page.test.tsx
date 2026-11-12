@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
+const { jar } = vi.hoisted(() => ({ jar: { get: vi.fn() } }));
+vi.mock("next/headers", () => ({ cookies: async () => jar }));
 vi.mock("./actions", () => ({ confirmSignupAction: vi.fn(), resendCodeAction: vi.fn() }));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
@@ -17,36 +19,33 @@ beforeAll(async () => {
   en = await getDictionary("en");
 });
 
-async function renderWith(searchParams: Record<string, string>) {
-  render(
-    await ConfirmPage({
-      params: Promise.resolve({}),
-      searchParams: Promise.resolve(searchParams),
-    } as PageProps<"/signup/confirm">),
+beforeEach(() => {
+  vi.stubEnv("COOKIE_SECURE", "false");
+  jar.get.mockReset();
+});
+
+function browserHoldsAddress(email: string | undefined) {
+  jar.get.mockImplementation((name: string) =>
+    name === "dbcontest_signup_email" && email ? { name, value: email } : undefined,
   );
 }
 
 describe("the confirmation page", () => {
   /** It names the inbox to look in, and never whether an account holds it. */
-  test("names the address the code went to", async () => {
-    await renderWith({ email: "ana@example.com" });
+  test("names the address the code went to, read from its cookie", async () => {
+    browserHoldsAddress("ana@example.com");
+    render(await ConfirmPage());
 
     expect(screen.getByText(en.auth.confirm.lede.replace("{email}", "ana@example.com"))).toBeInTheDocument();
-    expect(screen.getByLabelText(en.auth.confirm.email)).toHaveValue("ana@example.com");
-  });
-
-  /** The address bar may select a sentence, never write one. */
-  test("does not repeat text the address bar invented", async () => {
-    await renderWith({ email: "Call 0800 123 now to claim your prize" });
-
-    expect(screen.getByText(en.auth.confirm.ledeNoEmail)).toBeInTheDocument();
-    expect(screen.queryByText(/0800/)).not.toBeInTheDocument();
-  });
-
-  test("still asks for the code when the address is missing", async () => {
-    await renderWith({});
-
-    expect(screen.getByText(en.auth.confirm.ledeNoEmail)).toBeInTheDocument();
     expect(screen.getByLabelText(en.auth.confirm.code)).toBeInTheDocument();
+  });
+
+  test("offers to start again, and asks for no code, when the browser holds no address", async () => {
+    browserHoldsAddress(undefined);
+    render(await ConfirmPage());
+
+    expect(screen.getByText(en.auth.confirm.nothingToConfirm)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.auth.confirm.startOver })).toHaveAttribute("href", "/signup");
+    expect(screen.queryByLabelText(en.auth.confirm.code)).not.toBeInTheDocument();
   });
 });

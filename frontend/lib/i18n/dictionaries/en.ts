@@ -54,13 +54,15 @@ const en = {
       title: "Create an account",
       lede: "Sign up with your email address. A six-digit code sent there confirms it.",
       fullName: "Full name",
-      fullNameHint: "Letters, spaces, hyphens, apostrophes and periods, up to 200 characters.",
+      fullNameHint: "Letters, spaces, hyphens, apostrophes and periods.",
+      fullNameTooLong: "That name is too long. Shorten it.",
       login: "Login",
       loginHint:
         "3 to 64 characters: lowercase Latin letters, digits, _ and -, starting with a letter or a digit. Capitals become lowercase as you type.",
       email: "Email",
       emailHint: "The code that confirms the account is sent here.",
       password: "Password",
+      passwordHint: "At least 12 characters.",
       confirm: "Repeat the password",
       submit: "Create the account",
       submitting: "Sending the code",
@@ -70,8 +72,6 @@ const en = {
     confirm: {
       title: "Confirm your email",
       lede: "Check the inbox of {email}. Enter the six-digit code from the message here, in this browser.",
-      ledeNoEmail: "Enter the six-digit code from the email, in the browser where you signed up.",
-      email: "Email",
       code: "Code",
       codeHint: "Six digits.",
       submit: "Confirm",
@@ -82,6 +82,7 @@ const en = {
       resent: "A new code is on its way.",
       note: "No message? Look in the spam folder, or ask for a new code once a minute has passed.",
       startOver: "Sign up again",
+      nothingToConfirm: "No sign-up is waiting for a code in this browser. Sign up to get one.",
     },
     forgot: {
       title: "Forgot your password?",

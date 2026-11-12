@@ -40,13 +40,15 @@ const ro = {
       title: "Creați un cont",
       lede: "Înregistrați-vă cu adresa de e-mail. Un cod de șase cifre trimis acolo o confirmă.",
       fullName: "Nume complet",
-      fullNameHint: "Litere, spații, cratime, apostrofuri și puncte, până la 200 de caractere.",
+      fullNameHint: "Litere, spații, cratime, apostrofuri și puncte.",
+      fullNameTooLong: "Numele este prea lung. Scurtați-l.",
       login: "Utilizator",
       loginHint:
         "Între 3 și 64 de caractere: litere latine mici, cifre, _ și -, începând cu o literă sau o cifră. Majusculele devin minuscule pe măsură ce scrieți.",
       email: "E-mail",
       emailHint: "Aici se trimite codul care confirmă contul.",
       password: "Parolă",
+      passwordHint: "Cel puțin 12 caractere.",
       confirm: "Repetați parola",
       submit: "Creați contul",
       submitting: "Se trimite codul",
@@ -56,8 +58,6 @@ const ro = {
     confirm: {
       title: "Confirmați adresa de e-mail",
       lede: "Verificați căsuța {email}. Introduceți aici, în acest browser, codul de șase cifre din mesaj.",
-      ledeNoEmail: "Introduceți codul de șase cifre din e-mail, în browserul în care v-ați înregistrat.",
-      email: "E-mail",
       code: "Cod",
       codeHint: "Șase cifre.",
       submit: "Confirmați",
@@ -68,6 +68,7 @@ const ro = {
       resent: "Un cod nou este pe drum.",
       note: "Nu ați primit mesajul? Verificați dosarul de spam sau cereți un cod nou după ce trece un minut.",
       startOver: "Înregistrați-vă din nou",
+      nothingToConfirm: "În acest browser nu așteaptă nicio înregistrare un cod. Înregistrați-vă pentru a primi unul.",
     },
     forgot: {
       title: "Ați uitat parola?",

@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
-import { EMAIL_MAX_CHARS, FULL_NAME_MAX_CHARS, LOGIN_MAX_CHARS, type SignupField } from "@/lib/auth/signup-rules";
+import {
+  EMAIL_MAX_CHARS,
+  FULL_NAME_MAX_BYTES,
+  LOGIN_MAX_CHARS,
+  RULE_FIELD,
+  type BrokenRule,
+  type SignupField,
+} from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -29,6 +36,14 @@ const BLAMED: Record<string, readonly SignupField[]> = {
   invalid_request: ["fullName", "login", "email"],
 };
 
+/** What each rule the form's own check can find broken says, under its field. */
+const RULE_TEXT: Record<BrokenRule, keyof Text> = {
+  fullName: "fullNameHint",
+  fullNameLength: "fullNameTooLong",
+  login: "loginHint",
+  passwordLength: "passwordHint",
+};
+
 /**
  * The sign-up form; the Server Action works without JavaScript too. The rules
  * stay under their fields from the start, and a rule this side found broken
@@ -48,8 +63,8 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
     if (state.values) setLogin(state.values.login);
   }
 
-  const ruleBroken = state.field;
-  const failure = state.code && !ruleBroken ? messageForCode(state.code, errors) : null;
+  const broken = state.broken;
+  const failure = state.code && !broken ? messageForCode(state.code, errors) : null;
   const blamed = failure && state.code ? (BLAMED[state.code] ?? []) : [];
 
   const wiring = (field: SignupField) =>
@@ -57,7 +72,7 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
 
   /** A field's rule, as its hint or, once broken, as its message. */
   const rule = (field: SignupField, hint: string) =>
-    ruleBroken === field ? { error: hint } : { hint };
+    broken && RULE_FIELD[broken] === field ? { error: t[RULE_TEXT[broken]] } : { hint };
 
   return (
     <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
@@ -65,7 +80,8 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
         <Input
           name="full_name"
           autoComplete="name"
-          maxLength={FULL_NAME_MAX_CHARS}
+          // A character is at least one byte, so this never cuts off a name that fits.
+          maxLength={FULL_NAME_MAX_BYTES}
           defaultValue={values?.fullName}
           required
         />
@@ -96,7 +112,7 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
         />
       </Field>
 
-      <Field id="password" label={t.password} {...wiring("password")}>
+      <Field id="password" label={t.password} {...rule("password", t.passwordHint)} {...wiring("password")}>
         <Input name="password" type="password" autoComplete="new-password" required />
       </Field>
 
