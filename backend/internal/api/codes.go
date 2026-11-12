@@ -258,7 +258,7 @@ var (
 	codeAccountBlocked = httpx.NewCode("account_blocked",
 		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
-		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the event registration form's limit, per address and per email, refused attempts included. Try again later.")
+		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form and of each self-service sign-up endpoint, per address and per email, refused attempts included. Try again later.")
 	codeSignInBusy = httpx.NewCode("sign_in_busy",
 		"The service is already checking as many passwords as it will at once, and none came free in time, or this address already has as many sign-ins waiting as it may. The password was not evaluated — neither accepted nor judged wrong. A sign-in attempt refused this way has spent the budget it pays before waiting (its address's, or a trusted browser's own) but nothing of the account's own attempt limits, so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
@@ -491,4 +491,19 @@ var (
 		"The event holds its 5000 registrations, so a new email is refused. An email already registered is still answered, as a repeat.")
 	codeRegistrationNotFound = httpx.NewCode("registration_not_found",
 		"No event registration with that identifier.")
+
+	// --- Self-service sign-up ------------------------------------------------
+	// One code per signup.Service refusal (CLAUDE.md rule 1). No answer tells
+	// an address that has an account from one that has none; the endpoints'
+	// rate limits answer too_many_attempts.
+	codeSignupNotAvailable = httpx.NewCode("signup_not_available",
+		"This installation does not offer self-service sign-up: SELF_SIGNUP_ENABLED is off, or email is, so no code could reach anyone. Nothing was stored.")
+	codeSignupWrongCode = httpx.NewCode("signup_wrong_code",
+		"The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try at a waiting sign-up counts against its five.")
+	codeSignupCodeExpired = httpx.NewCode("signup_code_expired",
+		"The sign-up can no longer be confirmed: thirty minutes passed since its code was mailed, its five tries are spent, or it can no longer finish. Start the sign-up again.")
+	codeSignupTooSoon = httpx.NewCode("signup_too_soon",
+		"A code for this sign-up was mailed less than a minute ago. Retry-After says when another may be sent.")
+	codeSignupFull = httpx.NewCode("signup_full",
+		"As many sign-ups as the installation holds (10000) are waiting for their code, so a new one is refused. Nothing was stored; try later.")
 )

@@ -146,3 +146,37 @@ func TestTheDeviceCookieIsHttpOnlySameSiteAndLongLived(t *testing.T) {
 		t.Errorf("Value = %q", cookie.Value)
 	}
 }
+
+// The sign-up cookie takes the session cookie's prefix rule and protections:
+// it is what binds a pending sign-up to the browser that started it.
+func TestTheSignupCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testing.T) {
+	for _, c := range []struct {
+		secure bool
+		name   string
+	}{
+		{true, "__Host-dbcontest_signup"},
+		{false, "dbcontest_signup"},
+	} {
+		writer := NewCookieWriter(c.secure)
+		if got := writer.SignupName(); got != c.name {
+			t.Errorf("secure=%v: SignupName() = %q, want %q", c.secure, got, c.name)
+		}
+
+		rec := httptest.NewRecorder()
+		writer.SetSignup(rec, "signup-token", 30*time.Minute)
+		cookie := sessionCookie(t, rec, c.name)
+		if !cookie.HttpOnly || cookie.Secure != c.secure || cookie.SameSite != http.SameSiteLaxMode ||
+			cookie.Path != "/" || cookie.Domain != "" {
+			t.Errorf("secure=%v: cookie = %+v, want HttpOnly, Secure as configured, SameSite=Lax, Path=/, no Domain", c.secure, cookie)
+		}
+		if cookie.MaxAge != 30*60 || cookie.Value != "signup-token" {
+			t.Errorf("secure=%v: MaxAge = %d, Value = %q, want thirty minutes of the token", c.secure, cookie.MaxAge, cookie.Value)
+		}
+
+		rec = httptest.NewRecorder()
+		writer.ClearSignup(rec)
+		if cleared := sessionCookie(t, rec, c.name); cleared.MaxAge >= 0 || cleared.Value != "" {
+			t.Errorf("secure=%v: cleared cookie = %+v, want it emptied and expired", c.secure, cleared)
+		}
+	}
+}
