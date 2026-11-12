@@ -44,13 +44,14 @@ type SignupHandler struct {
 	signups *signup.Service
 	auth    *auth.Service
 	limiter *auth.Limiter
+	mail    *MailBudget
 	mw      *auth.Middleware
 	cookies auth.CookieWriter
 	log     *slog.Logger
 }
 
-func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter *auth.Limiter, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
-	return &SignupHandler{signups: signups, auth: authService, limiter: limiter, mw: mw, cookies: cookies, log: log}
+func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter *auth.Limiter, mail *MailBudget, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
+	return &SignupHandler{signups: signups, auth: authService, limiter: limiter, mail: mail, mw: mw, cookies: cookies, log: log}
 }
 
 // Mount registers the routes under /public/, which needs no session, only
@@ -96,7 +97,7 @@ type signupConfirmedResponse struct {
 
 // The address is spent before the body is read, and the email, an unbounded
 // key, only once bounded and for a caller the address admitted (CLAUDE.md
-// rule 5); both before the password hash.
+// rule 5); then the installation's mail budget; all before the password hash.
 func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, "signup:ip:"+addressKey(r), SignupsPerAddress, signupAddressWindow) {
 		return
@@ -115,6 +116,9 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.admit(w, r, "signup:email:"+email, SignupsPerEmail, signupEmailWindow) {
+		return
+	}
+	if !admitMail(w, r, h.mail, h.log) {
 		return
 	}
 
@@ -190,6 +194,9 @@ func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.admit(w, r, "signup_resend:email:"+email, SignupsPerEmail, signupEmailWindow) {
+		return
+	}
+	if !admitMail(w, r, h.mail, h.log) {
 		return
 	}
 

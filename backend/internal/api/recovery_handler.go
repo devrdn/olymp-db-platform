@@ -40,11 +40,12 @@ const recoveryBodyBytes = 8 << 10
 type RecoveryHandler struct {
 	recoveries *recovery.Service
 	limiter    *auth.Limiter
+	mail       *MailBudget
 	log        *slog.Logger
 }
 
-func NewRecoveryHandler(recoveries *recovery.Service, limiter *auth.Limiter, log *slog.Logger) *RecoveryHandler {
-	return &RecoveryHandler{recoveries: recoveries, limiter: limiter, log: log}
+func NewRecoveryHandler(recoveries *recovery.Service, limiter *auth.Limiter, mail *MailBudget, log *slog.Logger) *RecoveryHandler {
+	return &RecoveryHandler{recoveries: recoveries, limiter: limiter, mail: mail, log: log}
 }
 
 // Mount registers the routes under /public/ only while mail is on, whatever
@@ -78,7 +79,8 @@ type forgotResponse struct {
 
 // The address is spent before the body is read, and the identifier, an
 // unbounded key, only once bounded and for a caller the address admitted
-// (CLAUDE.md rule 5). The lookup, the link and the mail happen after the
+// (CLAUDE.md rule 5); then the installation's mail budget, whether or not the
+// identifier names an account. The lookup, the link and the mail happen after the
 // answer, so neither its time nor a failure tells whether an account was
 // reached.
 func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +97,9 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.admit(w, r, "password_forgot:account:"+typed, RecoveriesPerAccount, recoveryAccountWindow) {
+		return
+	}
+	if !admitMail(w, r, h.mail, h.log) {
 		return
 	}
 
