@@ -357,8 +357,8 @@ type Config struct {
 	// MicrosoftTenant is common, organizations, consumers or one tenant ID:
 	// who may sign in through Microsoft.
 	MicrosoftTenant string
-	// MicrosoftHomeTenantID is the installation's own tenant, whose emails
-	// are trusted; empty trusts no tenant as such.
+	// MicrosoftHomeTenantID is the installation's own tenant, whose members'
+	// emails are trusted; empty trusts no tenant as such.
 	MicrosoftHomeTenantID string
 }
 

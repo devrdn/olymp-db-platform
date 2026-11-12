@@ -163,7 +163,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `TRUSTED_EMAIL_DOMAIN` | no | empty | the bare lowercase domain (such as `example.edu`) whose addresses, and its subdomains', the installation trusts; anything but a domain name refuses start-up |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` |
 | `MICROSOFT_TENANT` | no | `common` | who may sign in with Microsoft: `common` (any account), `organizations` (work and school), `consumers` (personal) or one tenant ID |
-| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose emails are trusted and may link an existing account |
+| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account |
 
 ### The mail relay
 

@@ -6,6 +6,9 @@ package microsofttest
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,26 +25,30 @@ import (
 // ConsumerTenant is the tenant of every personal Microsoft account.
 const ConsumerTenant = "9188040d-6c67-4c5b-b112-36a304b66dad"
 
-const keyID = "published-key"
+// KeyID names the key the provider publishes from the start; NextKeyID the
+// one Rotate publishes beside it.
+const (
+	KeyID     = "published-key"
+	NextKeyID = "next-key"
+)
 
 var (
-	keysOnce         sync.Once
-	published, other *rsa.PrivateKey
+	keysOnce               sync.Once
+	published, next, other *rsa.PrivateKey
 )
 
 // keys are generated once per test binary: an RSA key costs tens of
 // milliseconds.
-func keys() (*rsa.PrivateKey, *rsa.PrivateKey) {
+func keys() (*rsa.PrivateKey, *rsa.PrivateKey, *rsa.PrivateKey) {
 	keysOnce.Do(func() {
-		var err error
-		if published, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
-			panic(err)
-		}
-		if other, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
-			panic(err)
+		for _, k := range []**rsa.PrivateKey{&published, &next, &other} {
+			var err error
+			if *k, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+				panic(err)
+			}
 		}
 	})
-	return published, other
+	return published, next, other
 }
 
 // Provider serves /{tenant}/oauth2/v2.0/token and
@@ -49,20 +56,27 @@ func keys() (*rsa.PrivateKey, *rsa.PrivateKey) {
 type Provider struct {
 	URL string
 
-	published, other *rsa.PrivateKey
+	published, next, other *rsa.PrivateKey
 
-	mu        sync.Mutex
-	tokens    map[string]string
-	bodies    map[string][]byte
-	requests  int
-	exchanges int
-	lastForm  url.Values
+	mu         sync.Mutex
+	tokens     map[string]issued
+	bodies     map[string][]byte
+	rotated    bool
+	requests   int
+	exchanges  int
+	keyFetches int
+	lastForm   url.Values
+}
+
+// issued is a code's ID token and the PKCE challenge it was issued for.
+type issued struct {
+	idToken, challenge string
 }
 
 func NewProvider(t testing.TB) *Provider {
 	t.Helper()
-	p := &Provider{tokens: map[string]string{}, bodies: map[string][]byte{}}
-	p.published, p.other = keys()
+	p := &Provider{tokens: map[string]issued{}, bodies: map[string][]byte{}}
+	p.published, p.next, p.other = keys()
 	server := httptest.NewServer(http.HandlerFunc(p.serve))
 	t.Cleanup(server.Close)
 	p.URL = server.URL
@@ -75,9 +89,17 @@ func (p *Provider) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	switch {
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/discovery/v2.0/keys"):
+		p.mu.Lock()
+		p.keyFetches++
 		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
-			Key: &p.published.PublicKey, KeyID: keyID, Algorithm: string(jose.RS256), Use: "sig",
+			Key: &p.published.PublicKey, KeyID: KeyID, Algorithm: string(jose.RS256), Use: "sig",
 		}}}
+		if p.rotated {
+			set.Keys = append(set.Keys, jose.JSONWebKey{
+				Key: &p.next.PublicKey, KeyID: NextKeyID, Algorithm: string(jose.RS256), Use: "sig",
+			})
+		}
+		p.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(set)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/oauth2/v2.0/token"):
@@ -96,7 +118,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.exchanges++
 	p.lastForm = r.PostForm
-	idToken, known := p.tokens[code]
+	grant, known := p.tokens[code]
 	body, raw := p.bodies[code]
 	p.mu.Unlock()
 
@@ -107,12 +129,21 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	case !known || r.PostForm.Get("grant_type") != "authorization_code":
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"unknown code"}`))
+	case subtle.ConstantTimeCompare([]byte(Challenge(r.PostForm.Get("code_verifier"))), []byte(grant.challenge)) != 1:
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"the code_verifier does not match the code_challenge"}`))
 	default:
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "access-" + code, "token_type": "Bearer", "expires_in": 3600,
-			"scope": "openid email profile", "id_token": idToken,
+			"scope": "openid email profile", "id_token": grant.idToken,
 		})
 	}
+}
+
+// Challenge is the S256 PKCE challenge of verifier.
+func Challenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // Claims is a valid claim set for one person at tenant tid, as the v2.0
@@ -133,20 +164,37 @@ func (p *Provider) Issuer(tid string) string { return p.URL + "/" + tid + "/v2.0
 // Sign signs claims with the key the provider publishes.
 func (p *Provider) Sign(t testing.TB, claims map[string]any) string {
 	t.Helper()
-	return sign(t, p.published, claims)
+	return sign(t, p.published, KeyID, claims)
 }
 
 // SignWithUnpublishedKey signs under the published key's ID with a key the
 // provider never published, as a forger would.
 func (p *Provider) SignWithUnpublishedKey(t testing.TB, claims map[string]any) string {
 	t.Helper()
-	return sign(t, p.other, claims)
+	return sign(t, p.other, KeyID, claims)
 }
 
-func sign(t testing.TB, key *rsa.PrivateKey, claims map[string]any) string {
+// SignWithNextKey signs with the key Rotate publishes, under kid.
+func (p *Provider) SignWithNextKey(t testing.TB, kid string, claims map[string]any) string {
+	t.Helper()
+	return sign(t, p.next, kid, claims)
+}
+
+// PublishedKey is the public half of the key published under KeyID.
+func (p *Provider) PublishedKey() *rsa.PublicKey { return &p.published.PublicKey }
+
+// Rotate publishes the next key under NextKeyID beside the first, as
+// Microsoft announces a key before it signs with it.
+func (p *Provider) Rotate() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rotated = true
+}
+
+func sign(t testing.TB, key *rsa.PrivateKey, kid string, claims map[string]any) string {
 	t.Helper()
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
-		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", keyID))
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", kid))
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
@@ -157,11 +205,12 @@ func sign(t testing.TB, key *rsa.PrivateKey, claims map[string]any) string {
 	return token
 }
 
-// Issue makes the token endpoint answer code with idToken.
-func (p *Provider) Issue(code, idToken string) {
+// Issue makes the token endpoint answer code with idToken, for a request
+// whose code_verifier matches challenge (S256), and refuse it otherwise.
+func (p *Provider) Issue(code, idToken, challenge string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.tokens[code] = idToken
+	p.tokens[code] = issued{idToken: idToken, challenge: challenge}
 }
 
 // Answer makes the token endpoint answer code with body as it is.
@@ -183,6 +232,13 @@ func (p *Provider) Exchanges() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.exchanges
+}
+
+// KeyFetches counts the requests for the signing keys.
+func (p *Provider) KeyFetches() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.keyFetches
 }
 
 // LastTokenRequest is the form of the last request to the token endpoint.

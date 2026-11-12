@@ -63,7 +63,7 @@ func exchange(t *testing.T, c *microsoft.Client, p *microsofttest.Provider, clai
 
 func exchangeToken(t *testing.T, c *microsoft.Client, p *microsofttest.Provider, idToken string) (federation.Claims, error) {
 	t.Helper()
-	p.Issue("the-code", idToken)
+	p.Issue("the-code", idToken, microsofttest.Challenge(strings.Repeat("v", 43)))
 	return c.Exchange(t.Context(), "the-code", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
 }
 
@@ -86,6 +86,9 @@ func TestTheAuthorizeURLNamesTheTenantAndAsksWithPKCE(t *testing.T) {
 		"client_id": clientID, "redirect_uri": redirectURL, "response_type": "code",
 		"scope": "openid email profile", "state": "the-state", "nonce": "the-nonce",
 		"code_challenge_method": "S256", "code_challenge": base64.RawURLEncoding.EncodeToString(sum[:]),
+		// Shared machines: a live Microsoft session must not sign the next
+		// person in unasked.
+		"prompt": "select_account",
 	}
 	for key, value := range want {
 		if got := u.Query().Get(key); got != value {
@@ -522,4 +525,78 @@ type noPending struct{}
 
 func (noPending) LoginHeld(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
+}
+
+func TestTheExchangeSendsTheVerifierTheChallengeWasMadeFrom(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+	p.Issue("the-code", p.Sign(t, p.Claims(clientID, homeTenant, objectID, "the-nonce")), microsofttest.Challenge(strings.Repeat("w", 43)))
+
+	_, err := c.Exchange(t.Context(), "the-code", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+	if !errors.Is(err, microsoft.ErrExchangeFailed) {
+		t.Errorf("Exchange() with another sign-in's verifier = %v, want ErrExchangeFailed", err)
+	}
+}
+
+func guest(m map[string]any) {
+	// A guest is homed in another tenant, and the token says so in idp.
+	m["idp"] = "https://sts.windows.net/" + otherTenant + "/"
+}
+
+func TestAGuestOfTheHomeTenantIsNotTrustedByTenant(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for _, idp := range []string{"https://sts.windows.net/" + otherTenant + "/", "live.com", p.Issuer(otherTenant)} {
+		got := trustOf(t, p, c, func(m map[string]any) { m["idp"] = idp; m["email"] = "ana@example.edu" })
+		if got.EmailTrusted {
+			t.Errorf("guest from %s: %+v, want the email untrusted", idp, got)
+		}
+		got = trustOf(t, p, c, func(m map[string]any) { m["idp"] = idp; m["preferred_username"] = "ana@example.edu" })
+		if got.Email != "" || got.EmailTrusted {
+			t.Errorf("guest from %s without email: %+v, want its username not taken for an email", idp, got)
+		}
+	}
+}
+
+func TestAMemberOfTheHomeTenantIsTrusted(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for name, edit := range map[string]func(map[string]any){
+		"no idp":           func(m map[string]any) {},
+		"idp equal to iss": func(m map[string]any) { m["idp"] = p.Issuer(homeTenant) },
+	} {
+		got := trustOf(t, p, c, func(m map[string]any) { edit(m); m["email"] = "ana@example.edu" })
+		if !got.EmailTrusted {
+			t.Errorf("%s: %+v, want a member's email trusted", name, got)
+		}
+		got = trustOf(t, p, c, func(m map[string]any) { edit(m); m["preferred_username"] = "ion@example.edu" })
+		if !got.EmailTrusted || got.Email != "ion@example.edu" {
+			t.Errorf("%s without email: %+v, want the member's username as a trusted email", name, got)
+		}
+	}
+}
+
+func TestAGuestWithAVerifiedDomainIsTrusted(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	got := trustOf(t, p, c, func(m map[string]any) { guest(m); m["email"] = "ana@example.edu"; m["xms_edov"] = true })
+	if !got.EmailTrusted {
+		t.Errorf("guest with xms_edov: %+v, want the email trusted", got)
+	}
+}
+
+func TestAnIdentityProviderOutOfBoundsIsRefused(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for _, idp := range []string{strings.Repeat("a", 256), "live.com\n", "live\x00.com"} {
+		claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
+		claims["idp"] = idp
+		if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+			t.Errorf("idp %.20q: Exchange() = %v, want ErrInvalidToken", idp, err)
+		}
+	}
 }
