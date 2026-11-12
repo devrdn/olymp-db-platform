@@ -421,6 +421,68 @@ func TestTakenAmongFindsRestoreConflicts(t *testing.T) {
 	})
 }
 
+// Addresses are unique without regard to case since migration 000054, so a
+// live "ivanov@" holds what a deleted "Ivanov@" would take back.
+func TestTakenAmongComparesEmailsWithoutCase(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		deleted := func(login, email string) users.User {
+			u := makeUser(t, ctx, login)
+			if _, err := repo.querier(ctx).Exec(ctx, `UPDATE users SET email = $2 WHERE id = $1`, u.ID, email); err != nil {
+				t.Fatalf("set email: %v", err)
+			}
+			if err := repo.SetStatus(ctx, []uuid.UUID{u.ID}, users.StatusDeleted,
+				users.StatusChange{Reason: "mistake", By: u.ID, At: time.Now()}); err != nil {
+				t.Fatalf("SetStatus() = %v", err)
+			}
+			return u
+		}
+		recased := deleted("taken-case-ivanov", "Ivanov.Case@Example.com")
+		elsewhere := deleted("taken-case-sidorov", "sidorov.case@example.com")
+		if _, err := repo.Create(ctx, users.User{
+			Login: "taken-case-petrov", Email: "ivanov.case@example.com",
+			FullName: "Petrov", PasswordHash: "x", Status: users.StatusActive,
+		}); err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		taken, err := repo.TakenAmong(ctx, []uuid.UUID{recased.ID, elsewhere.ID})
+		if err != nil {
+			t.Fatalf("TakenAmong() = %v", err)
+		}
+		if len(taken) != 1 || taken[0].ID != recased.ID || !taken[0].Email || taken[0].Login {
+			t.Errorf("TakenAmong() = %+v, want only %v, by its email", taken, recased.ID)
+		}
+	})
+}
+
+// CLAUDE.md rule 7: the email half of the restore check is served by the
+// index that enforces the rule it checks.
+func TestTakenAmongUsesTheEmailIndex(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		q := NewUsers(testPool).querier(ctx)
+		if _, err := q.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+			t.Fatalf("disable seq scan: %v", err)
+		}
+		rows, err := q.Query(ctx, `EXPLAIN `+takenAmongQuery, []uuid.UUID{uuid.New()})
+		if err != nil {
+			t.Fatalf("EXPLAIN: %v", err)
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(line + "\n")
+		}
+		if !strings.Contains(plan.String(), "users_email_lower_key") {
+			t.Errorf("the plan does not use users_email_lower_key:\n%s", plan.String())
+		}
+	})
+}
+
 func TestTakenAmongReportsAnEmailCollisionSeparately(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)

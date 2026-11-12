@@ -483,25 +483,29 @@ func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, 
 	return count, nil
 }
 
+// takenAmongQuery compares as the unique indexes do, without regard to case,
+// so the email half is served by users_email_lower_key.
+const takenAmongQuery = `
+	SELECT id, login_taken, email_taken FROM (
+		SELECT d.id AS id,
+			EXISTS (
+				SELECT 1 FROM users a
+				WHERE a.status <> 'deleted' AND lower(a.login) = lower(d.login)
+			) AS login_taken,
+			EXISTS (
+				SELECT 1 FROM users a
+				WHERE a.status <> 'deleted' AND lower(a.email) = lower(d.email)
+			) AS email_taken
+		FROM users d
+		WHERE d.id = ANY($1) AND d.status = 'deleted'
+	) conflicts
+	WHERE login_taken OR email_taken`
+
 // TakenAmong returns the deleted accounts among ids whose login or email a
 // live account now holds. A bulk restore checks it up front, so one collision
 // does not abort the whole transaction.
 func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]users.TakenConflict, error) {
-	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT id, login_taken, email_taken FROM (
-			SELECT d.id AS id,
-				EXISTS (
-					SELECT 1 FROM users a
-					WHERE a.status <> 'deleted' AND lower(a.login) = lower(d.login)
-				) AS login_taken,
-				EXISTS (
-					SELECT 1 FROM users a
-					WHERE a.status <> 'deleted' AND a.email IS NOT NULL AND a.email = d.email
-				) AS email_taken
-			FROM users d
-			WHERE d.id = ANY($1) AND d.status = 'deleted'
-		) conflicts
-		WHERE login_taken OR email_taken`, ids)
+	rows, err := r.querier(ctx).Query(ctx, takenAmongQuery, ids)
 	if err != nil {
 		return nil, fmt.Errorf("check restore conflicts: %w", err)
 	}
