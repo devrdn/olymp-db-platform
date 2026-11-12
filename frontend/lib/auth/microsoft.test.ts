@@ -37,6 +37,19 @@ describe("microsoftStartHref", () => {
     expect(href).not.toContain("evil");
   });
 
+  // The password path refuses these as destinations, and so must this one: the
+  // sign-in form again, or its own `?error=`, after a sign-in that worked.
+  test.each(["/login", "/login/x", "/login?error=external_signin_failed", "/login#top", "/"])(
+    "never returns to %j, where a password sign-in would not go either",
+    (next) => {
+      expect(microsoftStartHref(next)).toBe(MICROSOFT_START);
+    },
+  );
+
+  test("still returns to a path that merely starts with the same letters", () => {
+    expect(microsoftStartHref("/loginhelp")).toBe(`${MICROSOFT_START}?return=%2Floginhelp`);
+  });
+
   test("keeps the longest path the backend accepts", () => {
     const longest = `/${"a".repeat(511)}`;
 

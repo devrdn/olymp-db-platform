@@ -1,5 +1,7 @@
 import { API_PREFIX } from "@/lib/api/client";
 
+import { resumable } from "./destination";
+
 /**
  * Signing in with Microsoft starts on the API, which redirects to Microsoft;
  * the callback ends at the return path or at `/login?error=<code>`.
@@ -10,16 +12,15 @@ export const MICROSOFT_START = `${API_PREFIX}/auth/microsoft/start`;
 const MAX_RETURN_PATH_LENGTH = 512;
 
 /**
- * The backend's own rule (`microsoft.ReturnPath`): one leading slash, not two,
- * and printable ASCII with no space or backslash, which browsers read as a
- * slash. Anything else is left off, rather than relying on the backend's
- * fallback to `/`.
+ * Where a password sign-in may resume (`resumable`), and within the backend's
+ * own rule (`microsoft.ReturnPath`): printable ASCII with no space or
+ * backslash, which browsers read as a slash. Anything else is left off, rather
+ * than relying on the backend's fallback to `/`.
  */
 function returnable(next: string): boolean {
   return (
+    resumable(next) !== null &&
     next.length <= MAX_RETURN_PATH_LENGTH &&
-    next.startsWith("/") &&
-    !next.startsWith("//") &&
     /^[\x21-\x7e]*$/.test(next) &&
     !next.includes("\\")
   );

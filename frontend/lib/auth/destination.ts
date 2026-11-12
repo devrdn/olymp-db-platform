@@ -27,7 +27,7 @@ const SIGN_IN = "/login";
  * protocol-relative to browsers and refused. `/` (the showcase) and `/login`
  * are refused as pointless destinations.
  */
-function resumable(next: string | undefined): string | null {
+export function resumable(next: string | undefined): string | null {
   if (!next || next[0] !== "/") return null;
   if (next[1] === "/" || next[1] === "\\") return null;
   // A newline or a NUL in a Location header is a response-splitting attempt.
