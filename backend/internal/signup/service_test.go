@@ -38,17 +38,43 @@ func codeIn(t *testing.T, m mailing.Message) string {
 	return code
 }
 
-// started runs Start and returns the code it mailed.
-func started(t *testing.T, f *signuptest.Fixture, cmd signup.StartCommand) string {
+// begun is what one Start handed out: the token it answered, and the code
+// it mailed, empty when the message went to an account's owner instead.
+type begun struct {
+	email, code, token string
+}
+
+func (b begun) confirm(code string) signup.ConfirmCommand {
+	return signup.ConfirmCommand{Email: b.email, Code: code, Token: b.token}
+}
+
+func (b begun) resend() signup.ResendCommand {
+	return signup.ResendCommand{Email: b.email, Token: b.token, Lang: "en"}
+}
+
+// begin runs Start and returns what it handed out.
+func begin(t *testing.T, f *signuptest.Fixture, cmd signup.StartCommand) begun {
 	t.Helper()
-	if err := f.Service.Start(t.Context(), cmd); err != nil {
+	res, err := f.Service.Start(t.Context(), cmd)
+	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
 	queued := f.Outbox.Queued()
 	if len(queued) == 0 {
 		t.Fatal("Start queued nothing")
 	}
-	return codeIn(t, queued[len(queued)-1])
+	b := begun{email: cmd.Email, token: res.Token}
+	if last := queued[len(queued)-1]; last.Kind == mailing.KindSignupCode {
+		b.code = codeIn(t, last)
+	}
+	return b
+}
+
+// startErr runs Start for its error alone.
+func startErr(t *testing.T, f *signuptest.Fixture, cmd signup.StartCommand) error {
+	t.Helper()
+	_, err := f.Service.Start(t.Context(), cmd)
+	return err
 }
 
 // otherCode is a well-formed code that is not code.
@@ -62,14 +88,14 @@ func otherCode(code string) string {
 func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 
-	code := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana.popescu"))
 
 	queued := f.Outbox.Queued()
 	if len(queued) != 1 {
 		t.Fatalf("queued %d messages, want the code", len(queued))
 	}
-	if m := queued[0]; m.To != "ana@example.edu" || m.UserID != uuid.Nil {
-		t.Errorf("message to %q, account %v; want the typed address and no account", m.To, m.UserID)
+	if m := queued[0]; m.To != "ana@example.edu" || m.UserID != uuid.Nil || !strings.Contains(m.Body, "ana.popescu") {
+		t.Errorf("message to %q, account %v; want the typed address, no account and the login it creates:\n%s", m.To, m.UserID, m.Body)
 	}
 	if f.Outbox.Wakes == 0 {
 		t.Error("the sender was not woken")
@@ -80,21 +106,21 @@ func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
 		t.Fatalf("%d pending sign-ups, want one", len(rows))
 	}
 	p := rows[0]
-	if p.Email != "ana@example.edu" || p.Login != "ana" || p.FullName != "Ana Popescu" || p.Tries != 0 {
+	if p.Email != "ana@example.edu" || p.Login != "ana.popescu" || p.FullName != "Ana Popescu" || p.Tries != 0 {
 		t.Errorf("pending = %+v, want the form as typed and no tries", p)
 	}
 	if !passwordtest.Matches(t, p.PasswordHash, chosenPassword) {
 		t.Error("the stored digest does not match the chosen password")
 	}
-	if strings.Contains(string(p.CodeHash), code) {
-		t.Error("the code is stored in clear")
+	if strings.Contains(string(p.CodeHash), b.code) || strings.Contains(string(p.TokenHash), b.token) {
+		t.Error("the code or the token is stored in clear")
 	}
 	if !p.ExpiresAt.Equal(f.Clock.Now().Add(signup.CodeLifetime)) || !p.SentAt.Equal(f.Clock.Now()) {
 		t.Errorf("sent %v, expires %v; want now and %s later", p.SentAt, p.ExpiresAt, signup.CodeLifetime)
 	}
 
-	if _, err := f.Users.ByLogin(t.Context(), "ana"); !errors.Is(err, users.ErrNotFound) {
-		t.Errorf("ByLogin(ana) = %v, want no account before the code is confirmed", err)
+	if _, err := f.Users.ByLogin(t.Context(), "ana.popescu"); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("ByLogin() = %v, want no account before the code is confirmed", err)
 	}
 }
 
@@ -102,7 +128,7 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 	owner := f.Users.Add(users.User{Login: "ana.owner", Email: "Ana@Example.edu", FullName: "Ana Owner", PasswordHash: "x"})
 
-	if err := f.Service.Start(t.Context(), start("ana@example.edu", "someone-else")); err != nil {
+	if _, err := f.Service.Start(t.Context(), start("ana@example.edu", "someone-else")); err != nil {
 		t.Fatalf("Start() for a known email = %v, want the answer a new one gets", err)
 	}
 
@@ -131,64 +157,80 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	}
 }
 
-// knownAndNew starts one sign-up for an address an account holds and one
-// for a fresh address.
-func knownAndNew(t *testing.T, f *signuptest.Fixture) []string {
-	t.Helper()
-	f.Users.Add(users.User{Login: "owner", Email: "known@example.edu", FullName: "Owner", PasswordHash: "x"})
-	for _, cmd := range []signup.StartCommand{start("known@example.edu", "known"), start("new@example.edu", "new")} {
-		if err := f.Service.Start(t.Context(), cmd); err != nil {
-			t.Fatalf("Start(%s) = %v", cmd.Email, err)
+var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+func TestStartReturnsATokenForAKnownEmailToo(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	started := knownAndNew(t, f)
+
+	if started[0].token == started[1].token {
+		t.Error("two sign-ups were handed the same token")
+	}
+	for _, b := range started {
+		if !tokenPattern.MatchString(b.token) {
+			t.Errorf("%s: token %q, want 32 bytes in unpadded base64url", b.email, b.token)
 		}
 	}
-	return []string{"known@example.edu", "new@example.edu"}
+	for _, p := range f.Store.Rows() {
+		if len(p.TokenHash) != 32 {
+			t.Errorf("%s: stored %d token bytes, want its SHA-256", p.Email, len(p.TokenHash))
+		}
+	}
+}
+
+// knownAndNew starts one sign-up for an address an account holds and one
+// for a fresh address.
+func knownAndNew(t *testing.T, f *signuptest.Fixture) []begun {
+	t.Helper()
+	f.Users.Add(users.User{Login: "owner", Email: "known@example.edu", FullName: "Owner", PasswordHash: "x"})
+	return []begun{begin(t, f, start("known@example.edu", "known")), begin(t, f, start("new@example.edu", "new"))}
 }
 
 func TestConfirmAnswersTheSameForAKnownEmail(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	emails := knownAndNew(t, f)
+	started := knownAndNew(t, f)
 
 	for try := 1; try <= signup.MaxTries+1; try++ {
 		want := signup.ErrWrongCode
 		if try > signup.MaxTries {
 			want = signup.ErrCodeExpired
 		}
-		for _, email := range emails {
+		for _, b := range started {
 			// No code is 1 000 000; malformed codes count like wrong ones.
-			if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: email, Code: "1000000"}); !errors.Is(err, want) {
-				t.Errorf("try %d for %s = %v, want %v", try, email, err, want)
+			if _, err := f.Service.Confirm(t.Context(), b.confirm("1000000")); !errors.Is(err, want) {
+				t.Errorf("try %d for %s = %v, want %v", try, b.email, err, want)
 			}
 		}
 	}
 
 	f2 := signuptest.NewFixture(t, nil)
-	emails = knownAndNew(t, f2)
+	started = knownAndNew(t, f2)
 	f2.Clock.Advance(signup.CodeLifetime)
-	for _, email := range emails {
-		if _, err := f2.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: email, Code: "123456"}); !errors.Is(err, signup.ErrCodeExpired) {
-			t.Errorf("thirty minutes on, %s = %v, want ErrCodeExpired", email, err)
+	for _, b := range started {
+		if _, err := f2.Service.Confirm(t.Context(), b.confirm("123456")); !errors.Is(err, signup.ErrCodeExpired) {
+			t.Errorf("thirty minutes on, %s = %v, want ErrCodeExpired", b.email, err)
 		}
 	}
 }
 
 func TestResendAnswersTheSameForAKnownEmail(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	emails := knownAndNew(t, f)
+	started := knownAndNew(t, f)
 
-	for _, email := range emails {
-		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrTooSoon) {
-			t.Errorf("Resend(%s) at once = %v, want ErrTooSoon", email, err)
+	for _, b := range started {
+		if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrTooSoon) {
+			t.Errorf("Resend(%s) at once = %v, want ErrTooSoon", b.email, err)
 		}
 	}
 	f.Clock.Advance(signup.ResendCooldown)
-	for _, email := range emails {
-		if err := f.Service.Resend(t.Context(), email, "en"); err != nil {
-			t.Errorf("Resend(%s) after the cooldown = %v, want nil", email, err)
+	for _, b := range started {
+		if err := f.Service.Resend(t.Context(), b.resend()); err != nil {
+			t.Errorf("Resend(%s) after the cooldown = %v, want nil", b.email, err)
 		}
 	}
-	for _, email := range emails {
-		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrTooSoon) {
-			t.Errorf("Resend(%s) again at once = %v, want ErrTooSoon", email, err)
+	for _, b := range started {
+		if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrTooSoon) {
+			t.Errorf("Resend(%s) again at once = %v, want ErrTooSoon", b.email, err)
 		}
 	}
 
@@ -203,10 +245,117 @@ func TestResendAnswersTheSameForAKnownEmail(t *testing.T) {
 		t.Errorf("the new address was sent %v, want a code twice", got)
 	}
 	f.Clock.Advance(signup.CodeLifetime)
-	for _, email := range emails {
-		if err := f.Service.Resend(t.Context(), email, "en"); !errors.Is(err, signup.ErrCodeExpired) {
-			t.Errorf("Resend(%s) once expired = %v, want ErrCodeExpired", email, err)
+	for _, b := range started {
+		if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrCodeExpired) {
+			t.Errorf("Resend(%s) once expired = %v, want ErrCodeExpired", b.email, err)
 		}
+	}
+}
+
+// Someone who types another person's address while that person is signing
+// up replaces the row, but the code then mailed confirms only in the browser
+// that started the replacement, which never sees it.
+func TestARestartedSignupCannotBeConfirmedFromTheFirstBrowser(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	first := begin(t, f, start("ana@example.edu", "ana"))
+	second := begin(t, f, start("ana@example.edu", "intruder"))
+
+	if first.token == second.token {
+		t.Fatal("the restart kept the first token")
+	}
+	for _, code := range []string{first.code, second.code} {
+		if _, err := f.Service.Confirm(t.Context(), first.confirm(code)); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("Confirm() from the first browser = %v, want ErrWrongCode", err)
+		}
+	}
+	f.Clock.Advance(signup.ResendCooldown)
+	if err := f.Service.Resend(t.Context(), first.resend()); !errors.Is(err, signup.ErrWrongCode) {
+		t.Errorf("Resend() from the first browser = %v, want ErrWrongCode", err)
+	}
+	if _, err := f.Users.ByLogin(t.Context(), "intruder"); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("ByLogin(intruder) = %v, want no account", err)
+	}
+	if _, err := f.Service.Confirm(t.Context(), second.confirm(second.code)); err != nil {
+		t.Errorf("Confirm() from the browser that restarted = %v, want the account", err)
+	}
+}
+
+func TestConfirmWithoutTheStartTokenIsAWrongCode(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	b := begin(t, f, start("ana@example.edu", "ana"))
+	other := begin(t, f, start("maria@example.edu", "maria"))
+
+	for i, token := range []string{"", other.token, b.token[:42], b.token + "A", strings.Repeat("A", 10_000)} {
+		cmd := b.confirm(b.code)
+		cmd.Token = token
+		if _, err := f.Service.Confirm(t.Context(), cmd); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("Confirm() with token %.12q = %v, want ErrWrongCode", token, err)
+		}
+		if tries := f.Store.Rows()[0].Tries; tries != i+1 {
+			t.Errorf("after %d tries the row counts %d", i+1, tries)
+		}
+	}
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); !errors.Is(err, signup.ErrCodeExpired) {
+		t.Errorf("Confirm() after five tokenless tries = %v, want ErrCodeExpired", err)
+	}
+}
+
+func TestResendNeedsTheStartToken(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	b := begin(t, f, start("ana@example.edu", "ana"))
+	f.Clock.Advance(signup.ResendCooldown)
+
+	for _, token := range []string{"", strings.Repeat("A", 43)} {
+		cmd := b.resend()
+		cmd.Token = token
+		if err := f.Service.Resend(t.Context(), cmd); !errors.Is(err, signup.ErrWrongCode) {
+			t.Errorf("Resend() with token %q = %v, want ErrWrongCode", token, err)
+		}
+	}
+	if n := len(f.Outbox.Queued()); n != 1 {
+		t.Errorf("queued %d messages, want only the first code", n)
+	}
+	if tries := f.Store.Rows()[0].Tries; tries != 2 {
+		t.Errorf("tries = %d, want both tokenless resends counted", tries)
+	}
+	if err := f.Service.Resend(t.Context(), b.resend()); err != nil {
+		t.Errorf("Resend() with the token = %v, want nil", err)
+	}
+}
+
+// A resend renews the code and its window, never the tries: one sign-up gets
+// MaxTries guesses in all, however often it asks for a code.
+func TestResendNeverResetsTheTries(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	b := begin(t, f, start("ana@example.edu", "ana"))
+	for range signup.MaxTries - 1 {
+		if _, err := f.Service.Confirm(t.Context(), b.confirm(otherCode(b.code))); !errors.Is(err, signup.ErrWrongCode) {
+			t.Fatalf("Confirm() = %v, want ErrWrongCode", err)
+		}
+	}
+	f.Clock.Advance(signup.ResendCooldown)
+	if err := f.Service.Resend(t.Context(), b.resend()); err != nil {
+		t.Fatalf("Resend() = %v", err)
+	}
+	queued := f.Outbox.Queued()
+	code := codeIn(t, queued[len(queued)-1])
+
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(otherCode(code))); !errors.Is(err, signup.ErrWrongCode) {
+		t.Errorf("the last try = %v, want ErrWrongCode", err)
+	}
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(code)); !errors.Is(err, signup.ErrCodeExpired) {
+		t.Errorf("a sixth try with the resent code = %v, want ErrCodeExpired", err)
+	}
+}
+
+func TestTheCodeIsTimedFromAfterTheHash(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	f.Hasher.During = func() { f.Clock.Advance(2 * time.Second) }
+
+	begin(t, f, start("ana@example.edu", "ana"))
+
+	if p := f.Store.Rows()[0]; !p.SentAt.Equal(f.Clock.Now()) || !p.ExpiresAt.Equal(f.Clock.Now().Add(signup.CodeLifetime)) {
+		t.Errorf("sent %v, expires %v; want the time after the hash, %v", p.SentAt, p.ExpiresAt, f.Clock.Now())
 	}
 }
 
@@ -216,7 +365,7 @@ func TestStartRefusesAFullNameThatIsNotWrittenAsAName(t *testing.T) {
 	for _, name := range []string{"Visit evil.example now", "https://evil.example", "Ana2", "win $100"} {
 		cmd := start("ana@example.edu", "ana")
 		cmd.FullName = name
-		if err := f.Service.Start(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+		if err := startErr(t, f, cmd); !errors.Is(err, users.ErrInvalidAccount) {
 			t.Errorf("Start(name %q) = %v, want ErrInvalidAccount", name, err)
 		}
 	}
@@ -225,19 +374,19 @@ func TestStartRefusesAFullNameThatIsNotWrittenAsAName(t *testing.T) {
 	}
 	cmd := start("ana@example.edu", "ana")
 	cmd.FullName = "Ana-Maria O'Neil Jr."
-	started(t, f, cmd)
+	begin(t, f, cmd)
 }
 
 func TestStartRefusesATakenLogin(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 	f.Users.Add(users.User{Login: "Ana", FullName: "Ana", PasswordHash: "x"})
 
-	if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, users.ErrLoginTaken) {
+	if err := startErr(t, f, start("ana@example.edu", "ana")); !errors.Is(err, users.ErrLoginTaken) {
 		t.Errorf("Start() with an account's login = %v, want ErrLoginTaken", err)
 	}
 
-	started(t, f, start("first@example.edu", "maria"))
-	if err := f.Service.Start(t.Context(), start("second@example.edu", "MARIA")); !errors.Is(err, users.ErrLoginTaken) {
+	begin(t, f, start("first@example.edu", "maria"))
+	if err := startErr(t, f, start("second@example.edu", "MARIA")); !errors.Is(err, users.ErrLoginTaken) {
 		t.Errorf("Start() with a pending sign-up's login = %v, want ErrLoginTaken", err)
 	}
 	if hashes := f.Hasher.Calls(); hashes != 1 {
@@ -245,7 +394,7 @@ func TestStartRefusesATakenLogin(t *testing.T) {
 	}
 
 	f.Clock.Advance(signup.CodeLifetime)
-	started(t, f, start("second@example.edu", "maria"))
+	begin(t, f, start("second@example.edu", "maria"))
 	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "second@example.edu" {
 		t.Errorf("pending = %+v, want the expired holder replaced by the new sign-up", rows)
 	}
@@ -254,7 +403,7 @@ func TestStartRefusesATakenLogin(t *testing.T) {
 func TestStartLowercasesTheEmail(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 
-	started(t, f, start("  Ana@Example.EDU ", "ana"))
+	begin(t, f, start("  Ana@Example.EDU ", "ana"))
 
 	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "ana@example.edu" {
 		t.Errorf("pending = %+v, want the email trimmed and lowercased", rows)
@@ -266,16 +415,16 @@ func TestStartLowercasesTheEmail(t *testing.T) {
 
 func TestStartAgainReplacesThePendingSignUp(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	first := started(t, f, start("ana@example.edu", "ana"))
+	first := begin(t, f, start("ana@example.edu", "ana"))
 
-	second := started(t, f, start("ana@example.edu", "ana2"))
+	second := begin(t, f, start("ana@example.edu", "ana2"))
 
 	rows := f.Store.Rows()
 	if len(rows) != 1 || rows[0].Login != "ana2" {
 		t.Fatalf("pending = %+v, want one row with the second form", rows)
 	}
-	if first != second {
-		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: first}); !errors.Is(err, signup.ErrWrongCode) {
+	if first.code != second.code {
+		if _, err := f.Service.Confirm(t.Context(), second.confirm(first.code)); !errors.Is(err, signup.ErrWrongCode) {
 			t.Errorf("the first code still confirms: %v", err)
 		}
 	}
@@ -301,11 +450,12 @@ func TestStartRefusesWhatAnAccountWouldRefuse(t *testing.T) {
 			cmd := start("ana@example.edu", "ana")
 			tc.edit(&cmd)
 
-			if err := f.Service.Start(t.Context(), cmd); !errors.Is(err, tc.want) {
+			res, err := f.Service.Start(t.Context(), cmd)
+			if !errors.Is(err, tc.want) {
 				t.Errorf("Start() = %v, want %v", err, tc.want)
 			}
-			if len(f.Store.Rows()) != 0 || len(f.Outbox.Queued()) != 0 || f.Hasher.Calls() != 0 {
-				t.Error("a refused form stored, mailed or hashed something")
+			if res.Token != "" || len(f.Store.Rows()) != 0 || len(f.Outbox.Queued()) != 0 || f.Hasher.Calls() != 0 {
+				t.Error("a refused form was answered a token, or stored, mailed or hashed something")
 			}
 		})
 	}
@@ -316,10 +466,10 @@ func TestTheCodeIsWrittenInTheReadersLanguage(t *testing.T) {
 
 	cmd := start("ana@example.edu", "ana")
 	cmd.Lang = "ro"
-	started(t, f, cmd)
+	begin(t, f, cmd)
 	cmd = start("maria@example.edu", "maria")
 	cmd.Lang = "xx"
-	started(t, f, cmd)
+	begin(t, f, cmd)
 
 	queued := f.Outbox.Queued()
 	if !strings.Contains(queued[0].Subject, "Codul de înregistrare") {
@@ -332,10 +482,12 @@ func TestTheCodeIsWrittenInTheReadersLanguage(t *testing.T) {
 
 func TestConfirmCreatesAVerifiedStudentAndSpendsTheRow(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	code := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 	f.Clock.Advance(time.Minute)
 
-	created, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: " ANA@example.edu", Code: code})
+	cmd := b.confirm(b.code)
+	cmd.Email = " ANA@example.edu"
+	created, err := f.Service.Confirm(t.Context(), cmd)
 	if err != nil {
 		t.Fatalf("Confirm() = %v", err)
 	}
@@ -360,17 +512,17 @@ func TestConfirmCreatesAVerifiedStudentAndSpendsTheRow(t *testing.T) {
 		t.Errorf("pending = %+v, want the row spent", rows)
 	}
 
-	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrWrongCode) {
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); !errors.Is(err, signup.ErrWrongCode) {
 		t.Errorf("a second Confirm() = %v, want ErrWrongCode", err)
 	}
 }
 
 func TestAWrongCodeCountsAndTheSixthTryIsExpired(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	code := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 
 	for try := 1; try <= signup.MaxTries; try++ {
-		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: otherCode(code)}); !errors.Is(err, signup.ErrWrongCode) {
+		if _, err := f.Service.Confirm(t.Context(), b.confirm(otherCode(b.code))); !errors.Is(err, signup.ErrWrongCode) {
 			t.Fatalf("try %d with a wrong code = %v, want ErrWrongCode", try, err)
 		}
 		if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Tries != try {
@@ -378,7 +530,7 @@ func TestAWrongCodeCountsAndTheSixthTryIsExpired(t *testing.T) {
 		}
 	}
 
-	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrCodeExpired) {
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); !errors.Is(err, signup.ErrCodeExpired) {
 		t.Errorf("the sixth try, with the right code = %v, want ErrCodeExpired", err)
 	}
 	if _, err := f.Users.ByLogin(t.Context(), "ana"); !errors.Is(err, users.ErrNotFound) {
@@ -388,10 +540,10 @@ func TestAWrongCodeCountsAndTheSixthTryIsExpired(t *testing.T) {
 
 func TestAMalformedCodeIsAWrongOneAndCounts(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 
 	for _, code := range []string{"", "12345", "1234567", "12a456", strings.Repeat("1", 10_000)} {
-		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code}); !errors.Is(err, signup.ErrWrongCode) {
+		if _, err := f.Service.Confirm(t.Context(), b.confirm(code)); !errors.Is(err, signup.ErrWrongCode) {
 			t.Errorf("Confirm(%.8q) = %v, want ErrWrongCode", code, err)
 		}
 	}
@@ -400,6 +552,8 @@ func TestAMalformedCodeIsAWrongOneAndCounts(t *testing.T) {
 	}
 }
 
+// An address with no row is one nobody started a sign-up for lately, known
+// or not: the answer is a wrong code either way.
 func TestConfirmOfAnEmailWithNoSignUpIsAWrongCode(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 	f.Users.Add(users.User{Login: "ana", Email: "ana@example.edu", FullName: "Ana", PasswordHash: "x"})
@@ -413,15 +567,15 @@ func TestConfirmOfAnEmailWithNoSignUpIsAWrongCode(t *testing.T) {
 
 func TestACodeExpiresAfterThirtyMinutes(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	late := started(t, f, start("late@example.edu", "late"))
+	late := begin(t, f, start("late@example.edu", "late"))
 	f.Clock.Advance(signup.CodeLifetime - time.Second)
-	onTime := started(t, f, start("ontime@example.edu", "ontime"))
+	onTime := begin(t, f, start("ontime@example.edu", "ontime"))
 	f.Clock.Advance(time.Second)
 
-	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "late@example.edu", Code: late}); !errors.Is(err, signup.ErrCodeExpired) {
+	if _, err := f.Service.Confirm(t.Context(), late.confirm(late.code)); !errors.Is(err, signup.ErrCodeExpired) {
 		t.Errorf("Confirm() thirty minutes on = %v, want ErrCodeExpired", err)
 	}
-	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ontime@example.edu", Code: onTime}); err != nil {
+	if _, err := f.Service.Confirm(t.Context(), onTime.confirm(onTime.code)); err != nil {
 		t.Errorf("Confirm() a second on = %v, want the account", err)
 	}
 	if signup.CodeLifetime != 30*time.Minute {
@@ -431,10 +585,10 @@ func TestACodeExpiresAfterThirtyMinutes(t *testing.T) {
 
 func TestConfirmAfterTheLoginWasTakenCreatesNothing(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	code := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 	taken := f.Users.Add(users.User{Login: "ANA", FullName: "Made by an administrator", PasswordHash: "x"})
 
-	_, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code})
+	_, err := f.Service.Confirm(t.Context(), b.confirm(b.code))
 	if !errors.Is(err, users.ErrLoginTaken) {
 		t.Fatalf("Confirm() = %v, want ErrLoginTaken", err)
 	}
@@ -449,10 +603,10 @@ func TestConfirmAfterTheLoginWasTakenCreatesNothing(t *testing.T) {
 
 func TestConfirmAfterTheEmailWasTakenCreatesNothing(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	code := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 	f.Users.Add(users.User{Login: "someone", Email: "Ana@example.edu", FullName: "Someone", PasswordHash: "x"})
 
-	_, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: code})
+	_, err := f.Service.Confirm(t.Context(), b.confirm(b.code))
 	if !errors.Is(err, users.ErrEmailTaken) {
 		t.Fatalf("Confirm() = %v, want ErrEmailTaken", err)
 	}
@@ -466,13 +620,13 @@ func TestConfirmAfterTheEmailWasTakenCreatesNothing(t *testing.T) {
 
 func TestResendWaitsSixtySeconds(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	first := started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 
-	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrTooSoon) {
+	if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrTooSoon) {
 		t.Errorf("Resend() at once = %v, want ErrTooSoon", err)
 	}
 	f.Clock.Advance(signup.ResendCooldown - time.Second)
-	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrTooSoon) {
+	if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrTooSoon) {
 		t.Errorf("Resend() a second early = %v, want ErrTooSoon", err)
 	}
 	if n := len(f.Outbox.Queued()); n != 1 {
@@ -480,7 +634,9 @@ func TestResendWaitsSixtySeconds(t *testing.T) {
 	}
 
 	f.Clock.Advance(time.Second)
-	if err := f.Service.Resend(t.Context(), " ANA@example.edu", "en"); err != nil {
+	cmd := b.resend()
+	cmd.Email = " ANA@example.edu"
+	if err := f.Service.Resend(t.Context(), cmd); err != nil {
 		t.Fatalf("Resend() after the cooldown = %v", err)
 	}
 	queued := f.Outbox.Queued()
@@ -492,12 +648,12 @@ func TestResendWaitsSixtySeconds(t *testing.T) {
 		t.Errorf("a resent code expires %v, want %s from now", p.ExpiresAt, signup.CodeLifetime)
 	}
 
-	if first != second {
-		if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: first}); !errors.Is(err, signup.ErrWrongCode) {
+	if b.code != second {
+		if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); !errors.Is(err, signup.ErrWrongCode) {
 			t.Errorf("the replaced code = %v, want ErrWrongCode", err)
 		}
 	}
-	if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: second}); err != nil {
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(second)); err != nil {
 		t.Errorf("the resent code = %v, want the account", err)
 	}
 	if signup.ResendCooldown != 60*time.Second {
@@ -508,7 +664,7 @@ func TestResendWaitsSixtySeconds(t *testing.T) {
 func TestResendOfAnEmailWithNoSignUpSendsNothing(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 
-	if err := f.Service.Resend(t.Context(), "nobody@example.edu", "en"); err != nil {
+	if err := f.Service.Resend(t.Context(), signup.ResendCommand{Email: "nobody@example.edu", Lang: "en"}); err != nil {
 		t.Errorf("Resend() = %v, want nil", err)
 	}
 	if n := len(f.Outbox.Queued()); n != 0 {
@@ -518,10 +674,10 @@ func TestResendOfAnEmailWithNoSignUpSendsNothing(t *testing.T) {
 
 func TestResendOfAnExpiredCodeSaysToStartAgain(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	started(t, f, start("ana@example.edu", "ana"))
+	b := begin(t, f, start("ana@example.edu", "ana"))
 	f.Clock.Advance(signup.CodeLifetime)
 
-	if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrCodeExpired) {
+	if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrCodeExpired) {
 		t.Errorf("Resend() = %v, want ErrCodeExpired", err)
 	}
 }
@@ -531,10 +687,10 @@ func TestStartRefusesPastTenThousandPending(t *testing.T) {
 	f.Users.Add(users.User{Login: "owner", Email: "owner@example.edu", FullName: "Owner", PasswordHash: "x"})
 	f.Store.Fill(signup.MaxPending, f.Clock.Now().Add(signup.CodeLifetime))
 
-	if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
+	if err := startErr(t, f, start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
 		t.Errorf("Start() past the cap = %v, want ErrFull", err)
 	}
-	if err := f.Service.Start(t.Context(), start("owner@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
+	if err := startErr(t, f, start("owner@example.edu", "ana")); !errors.Is(err, signup.ErrFull) {
 		t.Errorf("Start() for a known email past the cap = %v, want the ErrFull a new one gets", err)
 	}
 	if f.Hasher.Calls() != 0 {
@@ -542,7 +698,7 @@ func TestStartRefusesPastTenThousandPending(t *testing.T) {
 	}
 
 	f.Clock.Advance(signup.CodeLifetime)
-	started(t, f, start("ana@example.edu", "ana"))
+	begin(t, f, start("ana@example.edu", "ana"))
 	if signup.MaxPending != 10_000 {
 		t.Errorf("MaxPending = %d, want 10 000", signup.MaxPending)
 	}
@@ -550,9 +706,9 @@ func TestStartRefusesPastTenThousandPending(t *testing.T) {
 
 func TestSweepRemovesExpiredRows(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
-	started(t, f, start("old@example.edu", "old"))
+	begin(t, f, start("old@example.edu", "old"))
 	f.Clock.Advance(10 * time.Minute)
-	started(t, f, start("new@example.edu", "new"))
+	begin(t, f, start("new@example.edu", "new"))
 	f.Clock.Advance(signup.CodeLifetime - 10*time.Minute)
 
 	swept, err := f.Service.Sweep(t.Context(), f.Clock.Now())
@@ -579,13 +735,13 @@ func TestStartIsNotAvailableWithMailOffOrTheSwitchOff(t *testing.T) {
 				setup(f)
 			}
 
-			if err := f.Service.Start(t.Context(), start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrNotAvailable) {
+			if err := startErr(t, f, start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrNotAvailable) {
 				t.Errorf("Start() = %v, want ErrNotAvailable", err)
 			}
 			if _, err := f.Service.Confirm(t.Context(), signup.ConfirmCommand{Email: "ana@example.edu", Code: "123456"}); !errors.Is(err, signup.ErrNotAvailable) {
 				t.Errorf("Confirm() = %v, want ErrNotAvailable", err)
 			}
-			if err := f.Service.Resend(t.Context(), "ana@example.edu", "en"); !errors.Is(err, signup.ErrNotAvailable) {
+			if err := f.Service.Resend(t.Context(), signup.ResendCommand{Email: "ana@example.edu", Lang: "en"}); !errors.Is(err, signup.ErrNotAvailable) {
 				t.Errorf("Resend() = %v, want ErrNotAvailable", err)
 			}
 			if len(f.Store.Rows()) != 0 || f.Hasher.Calls() != 0 {

@@ -70,10 +70,12 @@ type EventRegistrationData struct {
 }
 
 // SignupCodeData is what a person who is signing up needs to prove their
-// address.
+// address. Login is the one the sign-up would create, so a reader who did
+// not just submit it can tell.
 type SignupCodeData struct {
 	Installation string
 	FullName     string
+	Login        string
 	Code         string
 }
 
@@ -167,6 +169,7 @@ func (t *Texts) SignupCode(lang Language, data SignupCodeData) (Text, error) {
 	if err := t.require(
 		detail{"installation", data.Installation},
 		detail{"full name", data.FullName},
+		detail{"login", data.Login},
 		detail{"code", data.Code},
 	); err != nil {
 		return Text{}, err

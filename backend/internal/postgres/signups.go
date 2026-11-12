@@ -31,7 +31,7 @@ func NewSignups(pool *pgxpool.Pool) *Signups {
 // indexes never fail a statement.
 const signupsLock = 0x5349474e
 
-const signupColumns = `id, email, login, full_name, password_hash, code_hash, tries, sent_at, expires_at`
+const signupColumns = `id, email, login, full_name, password_hash, code_hash, token_hash, tries, sent_at, expires_at`
 
 func (r *Signups) Waiting(ctx context.Context, email string, now time.Time) (int, error) {
 	var n int
@@ -84,13 +84,14 @@ func (r *Signups) Put(ctx context.Context, p signup.Pending, max int, now time.T
 			return signup.ErrFull
 		}
 		if _, err := q.Exec(ctx, `
-			INSERT INTO pending_signups (email, login, full_name, password_hash, code_hash, sent_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO pending_signups (email, login, full_name, password_hash, code_hash, token_hash, sent_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			ON CONFLICT (email) DO UPDATE SET
 				login = EXCLUDED.login, full_name = EXCLUDED.full_name,
-				password_hash = EXCLUDED.password_hash, code_hash = EXCLUDED.code_hash, tries = 0,
+				password_hash = EXCLUDED.password_hash, code_hash = EXCLUDED.code_hash,
+				token_hash = EXCLUDED.token_hash, tries = 0,
 				sent_at = EXCLUDED.sent_at, expires_at = EXCLUDED.expires_at, created_at = now()`,
-			p.Email, p.Login, p.FullName, p.PasswordHash, p.CodeHash, p.SentAt, p.ExpiresAt); err != nil {
+			p.Email, p.Login, p.FullName, p.PasswordHash, p.CodeHash, p.TokenHash, p.SentAt, p.ExpiresAt); err != nil {
 			return fmt.Errorf("store the pending sign-up: %w", err)
 		}
 		return nil
@@ -104,7 +105,7 @@ func (r *Signups) Take(ctx context.Context, email string) (signup.Pending, bool,
 	var p signup.Pending
 	err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx,
 		`SELECT `+signupColumns+` FROM pending_signups WHERE email = $1 FOR UPDATE`, email).
-		Scan(&p.ID, &p.Email, &p.Login, &p.FullName, &p.PasswordHash, &p.CodeHash, &p.Tries, &p.SentAt, &p.ExpiresAt)
+		Scan(&p.ID, &p.Email, &p.Login, &p.FullName, &p.PasswordHash, &p.CodeHash, &p.TokenHash, &p.Tries, &p.SentAt, &p.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return signup.Pending{}, false, nil
 	}
@@ -120,7 +121,7 @@ func (r *Signups) CountTry(ctx context.Context, id uuid.UUID) error {
 
 func (r *Signups) Renew(ctx context.Context, id uuid.UUID, codeHash []byte, sentAt, expiresAt time.Time) error {
 	return r.exec(ctx, "renew the code", `
-		UPDATE pending_signups SET code_hash = $2, tries = 0, sent_at = $3, expires_at = $4 WHERE id = $1`,
+		UPDATE pending_signups SET code_hash = $2, sent_at = $3, expires_at = $4 WHERE id = $1`,
 		id, codeHash, sentAt, expiresAt)
 }
 

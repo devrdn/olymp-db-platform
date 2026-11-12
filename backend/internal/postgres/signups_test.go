@@ -17,11 +17,30 @@ import (
 // is told the time rather than reading it.
 var signupClock = time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
 
+// signupTag sets this run's rows apart, so a row another package's test
+// committed can neither collide with them nor be counted as theirs.
+var signupTag = uuid.NewString()[:8]
+
+func addr(local string) string   { return local + "." + signupTag + "@example.edu" }
+func handle(login string) string { return login + "." + signupTag }
+
 func pendingSignup(email, login string) signup.Pending {
 	return signup.Pending{
 		Email: email, Login: login, FullName: "Ana Popescu", PasswordHash: "argon2id-digest",
-		CodeHash: bytes.Repeat([]byte{7}, 48), SentAt: signupClock, ExpiresAt: signupClock.Add(signup.CodeLifetime),
+		CodeHash: bytes.Repeat([]byte{7}, 48), TokenHash: bytes.Repeat([]byte{3}, 32),
+		SentAt: signupClock, ExpiresAt: signupClock.Add(signup.CodeLifetime),
 	}
+}
+
+// waiting is Waiting with the email aside, failing the test on an error. A
+// test compares it with what it was before the test's own rows.
+func waiting(t *testing.T, ctx context.Context, repo *Signups, email string, now time.Time) int {
+	t.Helper()
+	n, err := repo.Waiting(ctx, email, now)
+	if err != nil {
+		t.Fatalf("Waiting() = %v", err)
+	}
+	return n
 }
 
 func takeSignup(t *testing.T, ctx context.Context, repo *Signups, email string) signup.Pending {
@@ -36,13 +55,15 @@ func takeSignup(t *testing.T, ctx context.Context, repo *Signups, email string) 
 func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
-		if err := repo.Put(ctx, pendingSignup("ana@example.edu", "ana"), signup.MaxPending, signupClock); err != nil {
+		before := waiting(t, ctx, repo, "", signupClock)
+		if err := repo.Put(ctx, pendingSignup(addr("ana"), handle("ana")), signup.MaxPending, signupClock); err != nil {
 			t.Fatalf("Put() = %v", err)
 		}
-		first := takeSignup(t, ctx, repo, "ana@example.edu")
-		want := pendingSignup("ana@example.edu", "ana")
+		first := takeSignup(t, ctx, repo, addr("ana"))
+		want := pendingSignup(addr("ana"), handle("ana"))
 		if first.ID == uuid.Nil || first.Login != want.Login || first.FullName != want.FullName ||
-			first.PasswordHash != want.PasswordHash || !bytes.Equal(first.CodeHash, want.CodeHash) || first.Tries != 0 ||
+			first.PasswordHash != want.PasswordHash || !bytes.Equal(first.CodeHash, want.CodeHash) ||
+			!bytes.Equal(first.TokenHash, want.TokenHash) || first.Tries != 0 ||
 			!first.SentAt.Equal(want.SentAt) || !first.ExpiresAt.Equal(want.ExpiresAt) {
 			t.Errorf("stored %+v, want %+v", first, want)
 		}
@@ -50,17 +71,19 @@ func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
 			t.Fatalf("CountTry() = %v", err)
 		}
 
-		again := pendingSignup("ana@example.edu", "ana2")
+		again := pendingSignup(addr("ana"), handle("ana2"))
 		again.SentAt = signupClock.Add(time.Minute)
+		again.TokenHash = bytes.Repeat([]byte{4}, 32)
 		if err := repo.Put(ctx, again, signup.MaxPending, signupClock.Add(time.Minute)); err != nil {
 			t.Fatalf("Put() again = %v", err)
 		}
-		second := takeSignup(t, ctx, repo, "ana@example.edu")
-		if second.Login != "ana2" || second.Tries != 0 || !second.SentAt.Equal(again.SentAt) {
-			t.Errorf("replaced %+v, want the second form with no tries", second)
+		second := takeSignup(t, ctx, repo, addr("ana"))
+		if second.Login != handle("ana2") || second.Tries != 0 || !second.SentAt.Equal(again.SentAt) ||
+			!bytes.Equal(second.TokenHash, again.TokenHash) {
+			t.Errorf("replaced %+v, want the second form and token with no tries", second)
 		}
-		if n, err := repo.Waiting(ctx, "", signupClock); err != nil || n != 1 {
-			t.Errorf("Waiting() = %d, %v; want one row for the email", n, err)
+		if n := waiting(t, ctx, repo, "", signupClock); n != before+1 {
+			t.Errorf("Waiting() = %d, want one row for the email beyond the %d before", n, before)
 		}
 	})
 }
@@ -70,23 +93,24 @@ func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
 func TestSignupsPutRefusesAHeldLoginAndTheCap(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
-		for _, p := range []signup.Pending{pendingSignup("ana@example.edu", "ana"), pendingSignup("bob@example.edu", "bob")} {
-			if err := repo.Put(ctx, p, 2, signupClock); err != nil {
+		capacity := waiting(t, ctx, repo, "", signupClock) + 2
+		for _, p := range []signup.Pending{pendingSignup(addr("ana"), handle("ana")), pendingSignup(addr("bob"), handle("bob"))} {
+			if err := repo.Put(ctx, p, capacity, signupClock); err != nil {
 				t.Fatalf("Put(%s) = %v", p.Email, err)
 			}
 		}
 
-		if err := repo.Put(ctx, pendingSignup("eve@example.edu", "ANA"), signup.MaxPending, signupClock); !errors.Is(err, users.ErrLoginTaken) {
+		if err := repo.Put(ctx, pendingSignup(addr("eve"), handle("ANA")), signup.MaxPending, signupClock); !errors.Is(err, users.ErrLoginTaken) {
 			t.Errorf("a held login: Put() = %v, want ErrLoginTaken", err)
 		}
-		if err := repo.Put(ctx, pendingSignup("eve@example.edu", "eve"), 2, signupClock); !errors.Is(err, signup.ErrFull) {
+		if err := repo.Put(ctx, pendingSignup(addr("eve"), handle("eve")), capacity, signupClock); !errors.Is(err, signup.ErrFull) {
 			t.Errorf("past the cap: Put() = %v, want ErrFull", err)
 		}
-		if err := repo.Put(ctx, pendingSignup("ana@example.edu", "ana"), 2, signupClock); err != nil {
+		if err := repo.Put(ctx, pendingSignup(addr("ana"), handle("ana")), capacity, signupClock); err != nil {
 			t.Errorf("replacing one's own sign-up at the cap: Put() = %v", err)
 		}
-		if n, err := repo.Waiting(ctx, "bob@example.edu", signupClock); err != nil || n != 1 {
-			t.Errorf("Waiting() after the refusals = %d, %v; want the transaction alive and bob's own row aside", n, err)
+		if n := waiting(t, ctx, repo, addr("bob"), signupClock); n != capacity-1 {
+			t.Errorf("Waiting() after the refusals = %d, want the transaction alive and bob's own row aside", n)
 		}
 	})
 }
@@ -94,28 +118,29 @@ func TestSignupsPutRefusesAHeldLoginAndTheCap(t *testing.T) {
 func TestSignupsAnExpiredSignUpHoldsNothing(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
-		if err := repo.Put(ctx, pendingSignup("ana@example.edu", "ana"), signup.MaxPending, signupClock); err != nil {
+		later := signupClock.Add(signup.CodeLifetime)
+		beforeLater := waiting(t, ctx, repo, "", later)
+		if err := repo.Put(ctx, pendingSignup(addr("ana"), handle("ana")), signup.MaxPending, signupClock); err != nil {
 			t.Fatalf("Put() = %v", err)
 		}
-		later := signupClock.Add(signup.CodeLifetime)
 
-		if held, err := repo.LoginHeld(ctx, "ANA", "eve@example.edu", signupClock); err != nil || !held {
+		if held, err := repo.LoginHeld(ctx, handle("ANA"), addr("eve"), signupClock); err != nil || !held {
 			t.Errorf("LoginHeld() while live = %v, %v; want held", held, err)
 		}
-		if held, err := repo.LoginHeld(ctx, "ana", "ana@example.edu", signupClock); err != nil || held {
+		if held, err := repo.LoginHeld(ctx, handle("ana"), addr("ana"), signupClock); err != nil || held {
 			t.Errorf("LoginHeld() by the email's own sign-up = %v, %v; want free", held, err)
 		}
-		if held, err := repo.LoginHeld(ctx, "ana", "eve@example.edu", later); err != nil || held {
+		if held, err := repo.LoginHeld(ctx, handle("ana"), addr("eve"), later); err != nil || held {
 			t.Errorf("LoginHeld() once expired = %v, %v; want free", held, err)
 		}
-		if n, err := repo.Waiting(ctx, "", later); err != nil || n != 0 {
-			t.Errorf("Waiting() once expired = %d, %v; want none", n, err)
+		if n := waiting(t, ctx, repo, "", later); n != beforeLater {
+			t.Errorf("Waiting() once expired = %d, want the %d of before: the expired row does not count", n, beforeLater)
 		}
 
-		if err := repo.Put(ctx, pendingSignup("eve@example.edu", "Ana"), 1, later); err != nil {
+		if err := repo.Put(ctx, pendingSignup(addr("eve"), handle("Ana")), beforeLater+1, later); err != nil {
 			t.Fatalf("Put() over an expired holder = %v", err)
 		}
-		if _, ok, err := repo.Take(ctx, "ana@example.edu"); err != nil || ok {
+		if _, ok, err := repo.Take(ctx, addr("ana")); err != nil || ok {
 			t.Errorf("Take(the expired holder) = %v, %v; want it removed", ok, err)
 		}
 	})
@@ -124,16 +149,16 @@ func TestSignupsAnExpiredSignUpHoldsNothing(t *testing.T) {
 func TestSignupsCountTryRenewAndDelete(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
-		if err := repo.Put(ctx, pendingSignup("ana@example.edu", "ana"), signup.MaxPending, signupClock); err != nil {
+		if err := repo.Put(ctx, pendingSignup(addr("ana"), handle("ana")), signup.MaxPending, signupClock); err != nil {
 			t.Fatalf("Put() = %v", err)
 		}
-		p := takeSignup(t, ctx, repo, "ana@example.edu")
+		p := takeSignup(t, ctx, repo, addr("ana"))
 		for range 2 {
 			if err := repo.CountTry(ctx, p.ID); err != nil {
 				t.Fatalf("CountTry() = %v", err)
 			}
 		}
-		if got := takeSignup(t, ctx, repo, "ana@example.edu").Tries; got != 2 {
+		if got := takeSignup(t, ctx, repo, addr("ana")).Tries; got != 2 {
 			t.Errorf("tries = %d, want 2", got)
 		}
 
@@ -141,16 +166,16 @@ func TestSignupsCountTryRenewAndDelete(t *testing.T) {
 		if err := repo.Renew(ctx, p.ID, code, sent, sent.Add(signup.CodeLifetime)); err != nil {
 			t.Fatalf("Renew() = %v", err)
 		}
-		renewed := takeSignup(t, ctx, repo, "ana@example.edu")
-		if renewed.Tries != 0 || !bytes.Equal(renewed.CodeHash, code) || !renewed.SentAt.Equal(sent) ||
-			!renewed.ExpiresAt.Equal(sent.Add(signup.CodeLifetime)) {
-			t.Errorf("renewed %+v, want the new code and times and no tries", renewed)
+		renewed := takeSignup(t, ctx, repo, addr("ana"))
+		if renewed.Tries != 2 || !bytes.Equal(renewed.CodeHash, code) || !renewed.SentAt.Equal(sent) ||
+			!renewed.ExpiresAt.Equal(sent.Add(signup.CodeLifetime)) || !bytes.Equal(renewed.TokenHash, p.TokenHash) {
+			t.Errorf("renewed %+v, want the new code and times, the tries and the token kept", renewed)
 		}
 
 		if err := repo.Delete(ctx, p.ID); err != nil {
 			t.Fatalf("Delete() = %v", err)
 		}
-		if _, ok, err := repo.Take(ctx, "ana@example.edu"); err != nil || ok {
+		if _, ok, err := repo.Take(ctx, addr("ana")); err != nil || ok {
 			t.Errorf("Take() after Delete = %v, %v; want none", ok, err)
 		}
 	})
@@ -162,8 +187,8 @@ func TestSignupsTakeOfAnAddressNoRowCanHoldIsNone(t *testing.T) {
 		if _, ok, err := repo.Take(ctx, "bad\x00@example.edu"); err != nil || ok {
 			t.Errorf("Take(a NUL address) = %v, %v; want none", ok, err)
 		}
-		if n, err := repo.Waiting(ctx, "", signupClock); err != nil || n != 0 {
-			t.Errorf("Waiting() after it = %d, %v; want the transaction alive", n, err)
+		if _, err := repo.Waiting(ctx, "", signupClock); err != nil {
+			t.Errorf("Waiting() after it = %v; want the transaction alive", err)
 		}
 	})
 }
@@ -171,8 +196,13 @@ func TestSignupsTakeOfAnAddressNoRowCanHoldIsNone(t *testing.T) {
 func TestSignupsSweepRemovesOnlyExpiredRows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
-		old := pendingSignup("old@example.edu", "old")
-		live := pendingSignup("live@example.edu", "live")
+		old := pendingSignup(addr("old"), handle("old"))
+		var before int64
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT count(*) FROM pending_signups WHERE expires_at <= $1`, old.ExpiresAt).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		live := pendingSignup(addr("live"), handle("live"))
 		live.ExpiresAt = live.ExpiresAt.Add(time.Second)
 		for _, p := range []signup.Pending{old, live} {
 			if err := repo.Put(ctx, p, signup.MaxPending, signupClock); err != nil {
@@ -181,10 +211,10 @@ func TestSignupsSweepRemovesOnlyExpiredRows(t *testing.T) {
 		}
 
 		swept, err := repo.Sweep(ctx, old.ExpiresAt)
-		if err != nil || swept != 1 {
-			t.Fatalf("Sweep() = %d, %v; want the expired row", swept, err)
+		if err != nil || swept != before+1 {
+			t.Fatalf("Sweep() = %d, %v; want the expired row beyond the %d expired before", swept, err, before)
 		}
-		if _, ok, _ := repo.Take(ctx, "live@example.edu"); !ok {
+		if _, ok, _ := repo.Take(ctx, addr("live")); !ok {
 			t.Error("the live sign-up was swept")
 		}
 	})
@@ -196,7 +226,7 @@ func TestTheTableRefusesAnEmailTheDomainWouldNotStore(t *testing.T) {
 		if _, err := q.Exec(ctx, `SAVEPOINT uppercase`); err != nil {
 			t.Fatalf("savepoint: %v", err)
 		}
-		err := NewSignups(testPool).Put(ctx, pendingSignup("Ana@example.edu", "ana"), signup.MaxPending, signupClock)
+		err := NewSignups(testPool).Put(ctx, pendingSignup(addr("Ana"), handle("ana")), signup.MaxPending, signupClock)
 		if _, rollbackErr := q.Exec(ctx, `ROLLBACK TO SAVEPOINT uppercase`); rollbackErr != nil {
 			t.Fatalf("rollback to the savepoint: %v", rollbackErr)
 		}
@@ -206,12 +236,29 @@ func TestTheTableRefusesAnEmailTheDomainWouldNotStore(t *testing.T) {
 	})
 }
 
+func TestTheTableRefusesAHashOfTheWrongLength(t *testing.T) {
+	for name, edit := range map[string]func(*signup.Pending){
+		"code":  func(p *signup.Pending) { p.CodeHash = p.CodeHash[:47] },
+		"token": func(p *signup.Pending) { p.TokenHash = append(p.TokenHash, 0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				p := pendingSignup(addr("ana"), handle("ana"))
+				edit(&p)
+				if err := NewSignups(testPool).Put(ctx, p, signup.MaxPending, signupClock); err == nil {
+					t.Errorf("the table stored a %s hash of the wrong length", name)
+				}
+			})
+		})
+	}
+}
+
 // The check judges ASCII letters only, which every collation lowercases alike;
 // beyond them PostgreSQL's lower() follows the database's collation and could
 // refuse what Go's lowercasing stored.
 func TestTheEmailCheckDoesNotDependOnTheCollation(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
-		if err := NewSignups(testPool).Put(ctx, pendingSignup("Élise@example.edu", "elise"), signup.MaxPending, signupClock); err != nil {
+		if err := NewSignups(testPool).Put(ctx, pendingSignup(addr("Élise"), handle("elise")), signup.MaxPending, signupClock); err != nil {
 			t.Errorf("Put() of an address with a non-ASCII capital = %v, want the check to leave it to the domain", err)
 		}
 	})

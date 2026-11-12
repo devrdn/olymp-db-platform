@@ -357,7 +357,7 @@ func TestAnEventRegistrationWithoutItsCodeIsRefused(t *testing.T) {
 }
 
 func signupCodeData() mailing.SignupCodeData {
-	return mailing.SignupCodeData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Code: "482913"}
+	return mailing.SignupCodeData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil", Code: "482913"}
 }
 
 func signupExistingData() mailing.SignupExistingData {
@@ -385,7 +385,7 @@ func TestTheSelfServiceMessagesNameWhatTheyMustInEveryLanguage(t *testing.T) {
 		{
 			name:   "sign-up code",
 			render: func(l mailing.Language) (mailing.Text, error) { return texts.SignupCode(l, code) },
-			must:   []string{code.Installation, code.FullName, code.Code, "30"},
+			must:   []string{code.Installation, code.FullName, code.Login, code.Code, "30"},
 		},
 		{
 			name:   "existing account",
@@ -441,6 +441,29 @@ func TestTheExistingAccountMessageSaysToIgnoreItAndHoldsNoCode(t *testing.T) {
 	}
 }
 
+// A code can reach someone who did not start the sign-up it confirms, so the
+// message names the login it would create and says to ignore it otherwise.
+func TestTheCodeMessageNamesTheLoginAndSaysToIgnoreItIfThatWasNotYou(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	phrases := map[mailing.Language][]string{
+		mailing.English:  {"did not just submit", "ignore this message"},
+		mailing.Romanian: {"nu ați trimis chiar acum", "ignorați acest mesaj"},
+		mailing.Russian:  {"не отправляли", "проигнорируйте это письмо"},
+	}
+
+	for _, lang := range mailing.Languages() {
+		text, err := texts.SignupCode(lang, signupCodeData())
+		if err != nil {
+			t.Fatalf("%s: SignupCode() = %v", lang, err)
+		}
+		for _, phrase := range append(phrases[lang], "ana.oneil") {
+			if !strings.Contains(text.Body, phrase) {
+				t.Errorf("%s: body does not say %q:\n%s", lang, phrase, text.Body)
+			}
+		}
+	}
+}
+
 func TestTheSelfServiceMessagesCarryNoPasswordAndTheRightCommaBelow(t *testing.T) {
 	texts := mailing.NewTexts(publicURL)
 
@@ -468,6 +491,12 @@ func TestASelfServiceMessageMissingADetailIsRefused(t *testing.T) {
 			d := signupCodeData()
 			d.Code = " "
 			_, err := texts.SignupCode(mailing.English, d)
+			return err
+		},
+		"sign-up code without the login": func() error {
+			d := signupCodeData()
+			d.Login = ""
+			_, err := texts.SignupCode(mailing.Romanian, d)
 			return err
 		},
 		"sign-up code without the installation": func() error {
