@@ -39,6 +39,14 @@ describe("the forgotten-password page", () => {
     expect(screen.getByLabelText(en.auth.forgot.login)).toBeInTheDocument();
   });
 
+  /** Recovery never serves staff; saying so reveals nothing about any account. */
+  test("says that an administrator resets staff accounts", async () => {
+    offering(true);
+    render(await ForgotPage());
+
+    expect(screen.getByText(en.auth.forgot.staff)).toBeInTheDocument();
+  });
+
   test("says recovery is not offered when it is off", async () => {
     offering(false);
     render(await ForgotPage());

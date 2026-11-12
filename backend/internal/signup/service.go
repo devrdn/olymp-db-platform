@@ -267,6 +267,7 @@ func (s *Service) message(ctx context.Context, p Pending, code, lang string) (ma
 	}
 	text, err := s.cfg.Texts.SignupExisting(language, mailing.SignupExistingData{
 		Installation: installation, FullName: owner.FullName, Login: owner.Login,
+		ResetByAdministrator: !owner.ReachableByEmail(),
 	})
 	if err != nil {
 		return mailing.Message{}, fmt.Errorf("write the existing-account message: %w", err)

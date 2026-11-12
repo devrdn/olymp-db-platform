@@ -140,6 +140,14 @@ func (u User) HasPassword() bool { return u.PasswordHash != "" }
 // holds none.
 func (u User) IsStaff() bool { return len(u.Permissions) > 0 }
 
+// ReachableByEmail reports whether a password reset link may be mailed to the
+// account and followed: a live, active student with an address. Staff are
+// never reached through email, since an address someone typed must not
+// become a way into a permission; an administrator resets them.
+func (u User) ReachableByEmail() bool {
+	return u.IsActive() && !u.IsStaff() && u.Email != ""
+}
+
 // HasVerifiedEmailIn reports whether the account has proved an address in the
 // domain or one of its subdomains. An unverified address proves nothing.
 func (u User) HasVerifiedEmailIn(domain string) bool {

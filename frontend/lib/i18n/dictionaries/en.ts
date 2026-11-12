@@ -94,6 +94,7 @@ const en = {
       sentTitle: "Check your email",
       sent: "If what you typed matches an account with an email address, a link to set a new password is on its way there. The link works once, for a limited time.",
       unavailable: "Password recovery by email is not available here. Ask the organisers to reset your password.",
+      staff: "Organiser and administrator accounts are not reset by email: an administrator resets them.",
       backToSignIn: "Back to sign in",
     },
     reset: {
