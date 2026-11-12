@@ -119,6 +119,7 @@ type Service struct {
 	sleep           func(time.Duration)
 	defaultGraceMin int
 	poolTrigger     PoolTrigger
+	trustedDomain   string
 }
 
 // NewService assembles the contest service. Panics without a Gate,
@@ -226,6 +227,9 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		SchemaDiagram:        orDefaultValue(cmd.SchemaDiagram, true),
 	}
 	if err := c.Validate(); err != nil {
+		return Contest{}, err
+	}
+	if err := s.checkTrustedDomain(false, c.Settings.TrustedDomainOnly); err != nil {
 		return Contest{}, err
 	}
 	if err := s.checkLanguages(ctx, cmd.Languages); err != nil {
@@ -385,6 +389,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		return Contest{}, err
 	}
 	if err := updated.Validate(); err != nil {
+		return Contest{}, err
+	}
+	if err := s.checkTrustedDomain(current.Settings.TrustedDomainOnly, updated.Settings.TrustedDomainOnly); err != nil {
 		return Contest{}, err
 	}
 	if err := s.checkScoringKeepsBonus(ctx, current, updated); err != nil {
@@ -868,4 +875,22 @@ func defaultLanguageOf(langs []ContestLanguage) string {
 		}
 	}
 	return ""
+}
+
+// WithTrustedDomain sets the installation's email domain, the one a contest
+// limited to it admits (TRUSTED_EMAIL_DOMAIN); empty when there is none. Call
+// it while assembling the service, before it is used.
+func (s *Service) WithTrustedDomain(domain string) *Service {
+	s.trustedDomain = domain
+	return s
+}
+
+// checkTrustedDomain refuses turning the limit on where there is no domain to
+// limit to. A contest that already has it is left alone, so it stays editable
+// after the domain is unset.
+func (s *Service) checkTrustedDomain(was, now bool) error {
+	if now && !was && s.trustedDomain == "" {
+		return ErrTrustedDomainUnset
+	}
+	return nil
 }

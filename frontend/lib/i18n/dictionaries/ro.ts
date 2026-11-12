@@ -2213,6 +2213,8 @@ const ro = {
     unknown_role: "Unul dintre roluri nu există. Reîncărcați pagina și alegeți din nou.",
     owner_immutable: "Proprietarul olimpiadei nu poate fi retras.",
     address_not_allowed: "Accesul este permis doar din rețeaua universității.",
+    contest_trusted_email_required: "Această olimpiadă este deschisă doar persoanelor cu o adresă verificată în domeniul de e-mail al universității. Înregistrați-vă sau autentificați-vă cu o astfel de adresă.",
+    contest_trusted_domain_unset: "Această instalare nu are un domeniu de e-mail al universității, așa că olimpiada nu poate fi limitată la el.",
     staff_cannot_participate: "Acest cont face sau a făcut parte din echipa olimpiadei, așa că nu se poate înscrie și ca participant.",
     participant_cannot_be_staff: "Acest cont participă deja la olimpiadă, așa că nu poate fi numit și în echipa care o organizează.",
     invalid_transition: "Din starea curentă această trecere nu este posibilă.",

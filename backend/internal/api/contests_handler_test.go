@@ -1349,3 +1349,45 @@ func TestTheGeneralUpdateDoesNotTakePrizePlaces(t *testing.T) {
 		t.Errorf("status = %d (%s), want 400", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTheTrustedDomainSettingRoundTripsAndNeedsADomain(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	body := `{"settings": {"trusted_domain_only": true}}`
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("without a domain, status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "contest_trusted_domain_unset" {
+		t.Errorf("error code = %q, want contest_trusted_domain_unset", code)
+	}
+
+	f.service.WithTrustedDomain("example.edu")
+	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("with a domain, status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	settings, _ := decode(t, rec)["settings"].(map[string]any)
+	if settings["trusted_domain_only"] != true {
+		t.Errorf("settings = %v, want trusted_domain_only true", settings)
+	}
+}
+
+func TestAnEnrolmentRefusedForItsAddressAnswers403(t *testing.T) {
+	f := newContestFixture(t)
+	f.service.WithTrustedDomain("example.edu")
+	c := f.stores.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	c.Settings.TrustedDomainOnly = true
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/enroll", "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "contest_trusted_email_required" {
+		t.Errorf("error code = %q, want contest_trusted_email_required", code)
+	}
+}

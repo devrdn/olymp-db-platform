@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -241,6 +242,36 @@ func TestParticipantsAreListedWithTheirAccounts(t *testing.T) {
 	}
 	if items[0].(map[string]any)["login"] != "s.popescu" {
 		t.Errorf("login = %v, want s.popescu", items[0].(map[string]any)["login"])
+	}
+}
+
+func TestTheParticipantListMarksAnUntrustedEmail(t *testing.T) {
+	f := newContestFixture(t)
+	f.service.WithTrustedDomain("example.edu")
+	c := f.ownedContest(t, contests.StatusPublished)
+	at := time.Now()
+	f.stores.Users.Add(users.User{Login: "inside", FullName: "inside", Status: users.StatusActive,
+		Email: "inside@cs.example.edu", EmailVerifiedAt: &at})
+	f.stores.Users.Add(users.User{Login: "outside", FullName: "outside", Status: users.StatusActive,
+		Email: "outside@example.com", EmailVerifiedAt: &at})
+	if rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/participants",
+		`{"logins": ["inside", "outside"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("could not import: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/participants", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	trusted := map[string]any{}
+	items, _ := decode(t, rec)["items"].([]any)
+	for _, item := range items {
+		row := item.(map[string]any)
+		trusted[row["login"].(string)] = row["trusted_email"]
+	}
+	if trusted["inside"] != true || trusted["outside"] != false || len(trusted) != 2 {
+		t.Errorf("trusted_email = %v, want inside true and outside false", trusted)
 	}
 }
 

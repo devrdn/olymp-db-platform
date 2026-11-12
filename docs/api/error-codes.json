@@ -106,6 +106,14 @@
       "meaning": "The contest is not open to this participant now, but may be later: it has not started, has been taken back to draft, or their own window has not opened. Queries are taken only while it runs. A contest that has ended answers contest_ended instead."
     },
     {
+      "code": "contest_trusted_domain_unset",
+      "meaning": "The contest cannot be limited to the installation's email domain because the installation has not configured one."
+    },
+    {
+      "code": "contest_trusted_email_required",
+      "meaning": "The contest is open only to accounts with a verified address in the installation's email domain, and this account has none. Applies to self-enrolment only; staff adding a participant are never checked against it."
+    },
+    {
       "code": "cover_attribution_required",
       "meaning": "An uploaded cover needs a line saying whose picture it is. A contest with no uploaded cover wears a drawn one and needs none."
     },

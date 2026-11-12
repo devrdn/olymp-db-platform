@@ -161,6 +161,8 @@ The gate's refusals and their API codes, from
 | `ErrParticipantFinished` | `contest_finished` | This registration is `finished`. |
 | `ErrDeadlinePassed` | `deadline_passed` | This participant's own deadline plus grace has passed, or their individual window closed before they started. |
 | `ErrAddressNotAllowed` | `address_not_allowed` | The caller is outside `allowed_cidrs`. |
+| `ErrTrustedEmailRequired` | `contest_trusted_email_required` | Self-enrolment into a contest with `trusted_domain_only` by an account without a verified address in `TRUSTED_EMAIL_DOMAIN`. |
+| `ErrTrustedDomainUnset` | `contest_trusted_domain_unset` | `trusted_domain_only` switched on while the installation has no `TRUSTED_EMAIL_DOMAIN`. |
 
 ### Staff
 

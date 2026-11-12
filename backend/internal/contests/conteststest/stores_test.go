@@ -31,7 +31,10 @@ func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
 
 func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 	RegistrationRepositoryContract(t, func(t *testing.T, run func(context.Context, RegistrationTarget)) {
-		type account struct{ login, fullName string }
+		type account struct {
+			login, fullName, email string
+			verifiedAt             *time.Time
+		}
 		var (
 			accounts = map[uuid.UUID]account{}
 			admins   = map[uuid.UUID]bool{}
@@ -40,6 +43,9 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 		repo.Clock = func() time.Time { return FixtureNow }
 		repo.Accounts = func(_ context.Context, id uuid.UUID) (string, string) {
 			return accounts[id].login, accounts[id].fullName
+		}
+		repo.Emails = func(_ context.Context, id uuid.UUID) (string, *time.Time) {
+			return accounts[id].email, accounts[id].verifiedAt
 		}
 		known := map[uuid.UUID]bool{}
 		repo.ContestExists = func(id uuid.UUID) bool { return known[id] }
@@ -59,7 +65,17 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 			Repo: repo,
 			NewUser: func(login, fullName string) uuid.UUID {
 				id := uuid.New()
-				accounts[id] = account{login, fullName}
+				accounts[id] = account{login: login, fullName: fullName}
+				return id
+			},
+			NewUserWithEmail: func(login, email string, verified bool) uuid.UUID {
+				id := uuid.New()
+				a := account{login: login, fullName: login, email: email}
+				if verified {
+					at := FixtureNow
+					a.verifiedAt = &at
+				}
+				accounts[id] = a
 				return id
 			},
 			NewContest: func() uuid.UUID {

@@ -85,6 +85,13 @@ func NewFixture() *Fixture {
 		return user.Login, user.FullName
 	}
 	f.Registrations.Accounts = accounts
+	f.Registrations.Emails = func(ctx context.Context, id uuid.UUID) (string, *time.Time) {
+		user, err := f.Users.ByID(ctx, id)
+		if err != nil {
+			return "", nil
+		}
+		return user.Email, user.EmailVerifiedAt
+	}
 	f.Managers.Accounts = accounts
 	// The contest foreign keys are enforced. Registrations.UserExists stays
 	// nil: service paths resolve the account first, and the leaderboard and

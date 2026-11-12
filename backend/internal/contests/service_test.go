@@ -1593,3 +1593,59 @@ func TestUpdateRefusesTheSchemaDiagramOnceFinished(t *testing.T) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
 	}
 }
+
+func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
+	t.Run("at creation", func(t *testing.T) {
+		f := conteststest.NewFixture()
+		_, err := f.Service.Create(context.Background(), contests.CreateCommand{
+			ActorID: uuid.New(), Settings: contests.Settings{TrustedDomainOnly: true},
+		})
+		if !errors.Is(err, contests.ErrTrustedDomainUnset) {
+			t.Errorf("Create() = %v, want ErrTrustedDomainUnset", err)
+		}
+	})
+
+	t.Run("on update", func(t *testing.T) {
+		f := conteststest.NewFixture()
+		c := f.SeedContest(contests.StatusDraft)
+		_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{TrustedDomainOnly: true},
+		})
+		if !errors.Is(err, contests.ErrTrustedDomainUnset) {
+			t.Errorf("Update() = %v, want ErrTrustedDomainUnset", err)
+		}
+	})
+
+	t.Run("with a domain it is accepted and audited", func(t *testing.T) {
+		f := conteststest.NewFixture()
+		f.Service.WithTrustedDomain("example.edu")
+		c := f.SeedContest(contests.StatusPublished)
+		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{TrustedDomainOnly: true},
+		}); err != nil {
+			t.Fatalf("Update() = %v", err)
+		}
+		change, _ := changesIn(t, f, audit.ActionContestUpdate)["trusted_domain_only"].(map[string]any)
+		if change["from"] != false || change["to"] != true {
+			t.Errorf("trusted_domain_only change = %v, want false → true", change)
+		}
+	})
+
+	t.Run("a contest that already has it survives a later unset domain", func(t *testing.T) {
+		f := conteststest.NewFixture()
+		c := f.SeedContest(contests.StatusDraft)
+		c.Settings.TrustedDomainOnly = true
+		f.Contests.Put(c)
+
+		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+			ActorID: uuid.New(), ContestID: c.ID, QuestionMode: contests.QuestionModeSingle,
+		}); err != nil {
+			t.Errorf("Update() of another field = %v, want it saved", err)
+		}
+		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{},
+		}); err != nil {
+			t.Errorf("turning the setting off = %v, want it allowed", err)
+		}
+	})
+}

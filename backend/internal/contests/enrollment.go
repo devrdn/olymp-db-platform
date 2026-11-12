@@ -28,9 +28,17 @@ const (
 
 // Errors about taking part.
 var (
-	ErrAlreadyEnrolled     = errors.New("already taking part in this contest")
-	ErrEnrollmentClosed    = errors.New("this contest is not accepting signups")
-	ErrAddressNotAllowed   = errors.New("this contest is not available from your network")
+	ErrAlreadyEnrolled   = errors.New("already taking part in this contest")
+	ErrEnrollmentClosed  = errors.New("this contest is not accepting signups")
+	ErrAddressNotAllowed = errors.New("this contest is not available from your network")
+	// ErrTrustedEmailRequired refuses a self-enrolment into a contest limited
+	// to the installation's email domain: the account has no verified address
+	// there, or the installation has since stopped configuring a domain, in
+	// which case nobody qualifies.
+	ErrTrustedEmailRequired = errors.New("this contest is open only to a verified address of the installation's email domain")
+	// ErrTrustedDomainUnset refuses limiting a contest to a domain the
+	// installation does not have.
+	ErrTrustedDomainUnset  = errors.New("this installation has no trusted email domain, so a contest cannot be limited to it")
 	ErrParticipantNotFound = errors.New("participant not found")
 	// ErrParticipantStarted refuses deleting somebody with a record in this
 	// contest, started or not (see HasWork); excluding them is
@@ -93,6 +101,10 @@ type Participant struct {
 	FinishedAt *time.Time
 	TotalScore int
 	CreatedAt  time.Time
+	// Email and EmailVerifiedAt are read only by the participant list, for
+	// HasTrustedEmail; every other read leaves them empty.
+	Email           string
+	EmailVerifiedAt *time.Time
 }
 
 // HasStarted reports whether the participant has begun working. StartedAt
@@ -250,6 +262,12 @@ func (s *Service) EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs [
 // Participants returns a page of the contest's participants.
 func (s *Service) Participants(ctx context.Context, contestID uuid.UUID, f ParticipantFilter) ([]Participant, int, error) {
 	return s.registrations.List(ctx, contestID, f.Normalize())
+}
+
+// HasTrustedEmail reports whether a participant read by Participants holds a
+// verified address in the installation's domain; false when it has none.
+func (s *Service) HasTrustedEmail(p Participant) bool {
+	return users.User{Email: p.Email, EmailVerifiedAt: p.EmailVerifiedAt}.HasVerifiedEmailIn(s.trustedDomain)
 }
 
 // AddParticipants registers people on behalf of the contest's staff. The
@@ -420,6 +438,9 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		}
 		if self.Has(rbac.PermissionContestAdminAll) {
 			return ErrStaffCannotParticipate
+		}
+		if c.Settings.TrustedDomainOnly && !self.HasVerifiedEmailIn(s.trustedDomain) {
+			return ErrTrustedEmailRequired
 		}
 		if enrolled, err = s.registrations.Add(ctx, c.ID, cmd.UserID); err != nil {
 			return err

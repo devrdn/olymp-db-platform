@@ -208,6 +208,10 @@ type Settings struct {
 	// provisioning.Service.Reclaim). Zero means the installation default, not
 	// no grace. Writable after the contest ends through Service.ExtendGrace.
 	GracePeriodMin int `json:"grace_period_min,omitempty"`
+	// TrustedDomainOnly admits to self-enrolment only an account with a
+	// verified address in the installation's own email domain. Staff adding by
+	// hand or by roster are never held to it.
+	TrustedDomainOnly bool `json:"trusted_domain_only,omitempty"`
 }
 
 // ContestLanguage is one language a contest is offered in.
@@ -545,6 +549,7 @@ func (c Contest) auditFields() map[string]any {
 		"enrollment_deadline":      c.Settings.EnrollmentDeadline,
 		"query_rate_limit_per_min": c.Settings.QueryRateLimitPerMin,
 		"grace_period_min":         c.Settings.GracePeriodMin,
+		"trusted_domain_only":      c.Settings.TrustedDomainOnly,
 		"leaderboard_freeze_min":   c.LeaderboardFreezeMin,
 		"leaderboard_names":        c.LeaderboardNames,
 		"icpc_penalty_min":         c.ICPCPenaltyMin,

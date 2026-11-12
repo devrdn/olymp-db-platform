@@ -832,8 +832,11 @@ type PermissionLookup func(ctx context.Context, id uuid.UUID) []string
 
 // Registrations is an in-memory contests.RegistrationRepository.
 type Registrations struct {
-	byID        map[uuid.UUID]contests.Participant
-	Accounts    AccountLookup
+	byID     map[uuid.UUID]contests.Participant
+	Accounts AccountLookup
+	// Emails stands in for the join List reads the address through; nil
+	// leaves it empty.
+	Emails      func(ctx context.Context, id uuid.UUID) (string, *time.Time)
 	Permissions PermissionLookup
 	// Clock stands in for the column default now() in Add. Nil leaves
 	// CreatedAt zero.
@@ -907,7 +910,7 @@ func (r *Registrations) RegisteredWithPermission(ctx context.Context, contestID 
 	return logins[:min(len(logins), contests.MaxReportedStaff)], nil
 }
 
-func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {
+func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {
 	var matched []contests.Participant
 	for _, p := range r.byID {
 		if p.ContestID != contestID {
@@ -918,6 +921,9 @@ func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.
 		}
 		if f.Query != "" && !matchesQuery(p, f.Query) {
 			continue
+		}
+		if r.Emails != nil {
+			p.Email, p.EmailVerifiedAt = r.Emails(ctx, p.UserID)
 		}
 		matched = append(matched, p)
 	}

@@ -38,6 +38,20 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 					}
 					return created.ID
 				},
+				NewUserWithEmail: func(login, email string, verified bool) uuid.UUID {
+					created, err := accounts.Create(ctx, users.User{
+						Login: login, FullName: login, Email: email, Status: users.StatusActive, PasswordHash: "not-a-real-hash",
+					})
+					if err != nil {
+						t.Fatalf("create user %q: %v", login, err)
+					}
+					if verified {
+						if err := accounts.MarkEmailVerified(ctx, created.ID, now); err != nil {
+							t.Fatalf("verify %q: %v", login, err)
+						}
+					}
+					return created.ID
+				},
 				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
 				// The seeded admin role carries contest.admin_all.
 				GrantAdminAll: func(user uuid.UUID) {
