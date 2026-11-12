@@ -376,8 +376,11 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 // identity's email as verified at verifiedAt, in one transaction. The account
 // is locked and read again first, so a change committed since the caller's
 // read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
-// ErrStaffNotLinkable, and ErrNotFound when the account no longer holds the
-// identity's email, which is what vouched for linking it. As for
+// ErrStaffNotLinkable, ErrNotFound when the account no longer holds the
+// identity's email, which is what vouched for linking it, and
+// ErrIssuerAlreadyLinked when the account already holds another identity at
+// the same issuer: a provider may reassign a mailbox, and the address must
+// not carry its new holder into the previous one's account. As for
 // CreateExternal, the owner made the change, so the audit entry has no actor.
 func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) error {
 	if s.identities == nil {
@@ -404,6 +407,13 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 			return ErrStaffNotLinkable
 		case identity.Email == "" || !strings.EqualFold(u.Email, identity.Email):
 			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
+		}
+		other, err := s.identities.HoldsOtherIdentityAt(ctx, userID, identity.Provider, identity.Issuer, identity.Subject)
+		if err != nil {
+			return err
+		}
+		if other {
+			return ErrIssuerAlreadyLinked
 		}
 		if err := s.identities.LinkExternalIdentity(ctx, identity); err != nil {
 			return err

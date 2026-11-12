@@ -77,6 +77,9 @@ var (
 	// ErrStaffNotLinkable refuses linking an external identity to an account
 	// holding any staff permission.
 	ErrStaffNotLinkable = errors.New("a staff account cannot be linked to an external identity")
+	// ErrIssuerAlreadyLinked refuses linking an account to a second identity
+	// at an issuer it already holds one at.
+	ErrIssuerAlreadyLinked = errors.New("the account is already linked to another identity at this issuer")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -88,7 +91,7 @@ func Errors() []error {
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
-		ErrExternalIdentityTaken, ErrStaffNotLinkable,
+		ErrExternalIdentityTaken, ErrStaffNotLinkable, ErrIssuerAlreadyLinked,
 	}
 }
 
@@ -280,6 +283,9 @@ type ExternalIdentities interface {
 	// LinkExternalIdentity fails when the identity already belongs to an
 	// account, this one included.
 	LinkExternalIdentity(ctx context.Context, id ExternalIdentity) error
+	// HoldsOtherIdentityAt reports whether the account is linked to an
+	// identity at the provider's issuer with a subject other than subject.
+	HoldsOtherIdentityAt(ctx context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error)
 	// TouchExternalIdentity stamps a sign-in; a missing identity is
 	// ErrNotFound.
 	TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error

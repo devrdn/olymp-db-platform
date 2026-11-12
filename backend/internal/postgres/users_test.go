@@ -1234,6 +1234,67 @@ func TestLockDoesNotHoldUpRowsReferencingTheAccount(t *testing.T) {
 	}
 }
 
+func TestHoldsOtherIdentityAtNamesOnlyAnotherSubjectOfTheIssuer(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		ana := makeUser(t, ctx, "issuer-holder")
+		if err := repo.LinkExternalIdentity(ctx, microsoftIdentity(ana.ID, "sub-held")); err != nil {
+			t.Fatalf("LinkExternalIdentity() = %v", err)
+		}
+		for name, tc := range map[string]struct {
+			issuer, subject string
+			want            bool
+		}{
+			"another subject, same issuer": {"https://issuer.example/v2.0", "sub-new", true},
+			"the same subject":             {"https://issuer.example/v2.0", "sub-held", false},
+			"another issuer":               {"https://other.example/v2.0", "sub-new", false},
+		} {
+			got, err := repo.HoldsOtherIdentityAt(ctx, ana.ID, users.ProviderMicrosoft, tc.issuer, tc.subject)
+			if err != nil || got != tc.want {
+				t.Errorf("%s: HoldsOtherIdentityAt() = %v, %v; want %v", name, got, err, tc.want)
+			}
+		}
+	})
+}
+
+// Two sign-ins with different subjects reach one account by its address at
+// once: the lock lets one link, and the other sees it.
+func TestTwoConcurrentLinksOfOneIssuerLinkOne(t *testing.T) {
+	tag := "ext-issuer-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, subject := range []string{"sub-a-" + tag, "sub-b-" + tag} {
+		go func() {
+			<-start
+			identity := externalLink(tag)
+			identity.Subject = subject
+			errs <- service.LinkExternal(context.Background(), ana.ID, identity, time.Now())
+		}()
+	}
+	close(start)
+
+	var linked, refused int
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			linked++
+		case errors.Is(err, users.ErrIssuerAlreadyLinked):
+			refused++
+		default:
+			t.Errorf("LinkExternal() = %v", err)
+		}
+	}
+	if linked != 1 || refused != 1 {
+		t.Errorf("linked %d, refused %d; want one of each", linked, refused)
+	}
+	if n := countIdentities(t, ana.ID); n != 1 {
+		t.Errorf("identities = %d, want one", n)
+	}
+}
+
 // A change another transaction holds when Lock starts commits before Lock
 // returns, and the read that follows sees it: what the reset-link
 // completion counts on so as not to verify an address changed meanwhile.

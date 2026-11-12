@@ -27,8 +27,9 @@ type Store interface {
 // Accounts creates and links accounts (users.Service). Both refuse an
 // identity another request linked first with users.ErrExternalIdentityTaken,
 // leaving nothing behind. LinkExternal re-reads the account under a lock and
-// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels, and
-// users.ErrNotFound when the account no longer holds the identity's email.
+// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
+// users.ErrNotFound when the account no longer holds the identity's email, and
+// users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
 type Accounts interface {
 	CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error)
 	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) error
@@ -74,7 +75,7 @@ func NewService(cfg Config) *Service {
 // linked to; else, when the email is trusted, the live account holding it,
 // linked now and its email marked verified; else a new student account,
 // carrying the email only when it is trusted. It refuses ErrInvalidClaims
-// before any lookup, ErrStaffAccount, users.ErrAccountBlocked,
+// before any lookup, ErrStaffAccount, ErrIdentityConflict, users.ErrAccountBlocked,
 // users.ErrAccountDeleted, and ErrSignupClosed where an account would have to
 // be created.
 func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
@@ -169,6 +170,8 @@ func (s *Service) link(ctx context.Context, u users.User, identity users.Externa
 		return s.known(ctx, identity)
 	case errors.Is(err, users.ErrStaffNotLinkable):
 		return users.User{}, ErrStaffAccount
+	case errors.Is(err, users.ErrIssuerAlreadyLinked):
+		return users.User{}, ErrIdentityConflict
 	case err != nil:
 		return users.User{}, err
 	}

@@ -225,14 +225,17 @@ var usersErrors = errorTable{
 	// account or password changed.
 	{err: users.ErrMailOff, status: http.StatusConflict, code: codeMailOff,
 		message: "Email is off on this installation, so sign-in details cannot be emailed"},
-	// Ours if either arrives: federation answers a lost race by entering the
-	// account that won it, and a staff account with its own refusal.
+	// Ours if any of these arrives: federation answers a lost race by entering
+	// the account that won it, and the other two with refusals of its own.
 	{err: users.ErrExternalIdentityTaken, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "an external identity was linked twice"},
 	{err: users.ErrStaffNotLinkable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a staff account's refusal to link reached a handler"},
+	{err: users.ErrIssuerAlreadyLinked, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "a second identity's refusal to link reached a handler"},
 }
 
 // monitorErrors answers every error in monitor.Errors() (walked by

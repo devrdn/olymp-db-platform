@@ -62,6 +62,13 @@ func (r *Repository) Add(u users.User) users.User {
 	return u
 }
 
+// Len counts every account held, deleted ones included.
+func (r *Repository) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byID)
+}
+
 func (r *Repository) Get(id uuid.UUID) (users.User, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -511,6 +518,21 @@ func (r *Repository) LinkExternalIdentity(_ context.Context, id users.ExternalId
 	}
 	r.identities[key] = id
 	return nil
+}
+
+func (r *Repository) HoldsOtherIdentityAt(_ context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return false, r.Err
+	}
+	for key, id := range r.identities {
+		if id.UserID == userID && key.provider == provider && key.issuer == issuer && key.subject != subject {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *Repository) TouchExternalIdentity(_ context.Context, provider, issuer, subject string, at time.Time) error {

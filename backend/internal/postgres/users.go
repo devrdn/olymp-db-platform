@@ -200,6 +200,23 @@ func (r *Users) LinkExternalIdentity(ctx context.Context, id users.ExternalIdent
 	return nil
 }
 
+// HoldsOtherIdentityAt reports whether the account is linked to another
+// subject at the issuer; external_identities_user_idx serves it.
+func (r *Users) HoldsOtherIdentityAt(ctx context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error) {
+	if !storableText(issuer) || !storableText(subject) {
+		return false, nil
+	}
+	var held bool
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM external_identities
+		               WHERE user_id = $1 AND provider = $2 AND issuer = $3 AND subject <> $4)`,
+		userID, provider, issuer, subject).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("check the account's identities: %w", err)
+	}
+	return held, nil
+}
+
 // TouchExternalIdentity stamps a sign-in through the identity.
 func (r *Users) TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error {
 	tag, err := r.querier(ctx).Exec(ctx, `

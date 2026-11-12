@@ -216,6 +216,8 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "Internal server error", logged: true},
 		users.ErrStaffNotLinkable: {status: http.StatusInternalServerError, code: "internal_error",
 			message: "Internal server error", logged: true},
+		users.ErrIssuerAlreadyLinked: {status: http.StatusInternalServerError, code: "internal_error",
+			message: "Internal server error", logged: true},
 	}
 
 	declared := map[string]bool{}
