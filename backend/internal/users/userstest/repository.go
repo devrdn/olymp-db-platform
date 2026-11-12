@@ -24,12 +24,18 @@ type Repository struct {
 	// transaction committed while Lock waited for the row.
 	OnLock                   func(id uuid.UUID)
 	CountActiveWithRoleCalls int
+	identities               map[identityKey]users.ExternalIdentity
+	lastUsed                 map[identityKey]time.Time
 }
+
+type identityKey struct{ provider, issuer, subject string }
 
 func New() *Repository {
 	return &Repository{
 		byID:        map[uuid.UUID]users.User{},
 		permissions: map[string][]string{},
+		identities:  map[identityKey]users.ExternalIdentity{},
+		lastUsed:    map[identityKey]time.Time{},
 	}
 }
 
@@ -467,6 +473,96 @@ func (r *Repository) mutate(id uuid.UUID, fn func(*users.User)) error {
 	fn(&u)
 	r.byID[id] = u
 	return nil
+}
+
+func (r *Repository) ByExternalIdentity(_ context.Context, provider, issuer, subject string) (users.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return users.User{}, r.Err
+	}
+	id, ok := r.identities[identityKey{provider, issuer, subject}]
+	if !ok {
+		return users.User{}, users.ErrNotFound
+	}
+	u, ok := r.byID[id.UserID]
+	if !ok {
+		return users.User{}, users.ErrNotFound
+	}
+	return r.withPermissions(u), nil
+}
+
+// LinkExternalIdentity mirrors the unique (provider, issuer, subject) and the
+// foreign key to the account.
+func (r *Repository) LinkExternalIdentity(_ context.Context, id users.ExternalIdentity) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	key := identityKey{id.Provider, id.Issuer, id.Subject}
+	if _, taken := r.identities[key]; taken {
+		return users.ErrExternalIdentityTaken
+	}
+	if _, ok := r.byID[id.UserID]; !ok {
+		return users.ErrNotFound
+	}
+	r.identities[key] = id
+	return nil
+}
+
+func (r *Repository) TouchExternalIdentity(_ context.Context, provider, issuer, subject string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	key := identityKey{provider, issuer, subject}
+	if _, ok := r.identities[key]; !ok {
+		return users.ErrNotFound
+	}
+	r.lastUsed[key] = at
+	return nil
+}
+
+// LastUsed is the time TouchExternalIdentity last stamped; zero if never.
+func (r *Repository) LastUsed(provider, issuer, subject string) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastUsed[identityKey{provider, issuer, subject}]
+}
+
+func (r *Repository) DeleteExternalIdentities(_ context.Context, userID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	for key, id := range r.identities {
+		if id.UserID == userID {
+			delete(r.identities, key)
+			delete(r.lastUsed, key)
+		}
+	}
+	return nil
+}
+
+// Identities lists the identities linked to the account, in no order.
+func (r *Repository) Identities(userID uuid.UUID) []users.ExternalIdentity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var found []users.ExternalIdentity
+	for _, id := range r.identities {
+		if id.UserID == userID {
+			found = append(found, id)
+		}
+	}
+	return found
 }
 
 func containsFold(haystack, needle string) bool {

@@ -225,6 +225,11 @@ var usersErrors = errorTable{
 	// account or password changed.
 	{err: users.ErrMailOff, status: http.StatusConflict, code: codeMailOff,
 		message: "Email is off on this installation, so sign-in details cannot be emailed"},
+	// Ours if it arrives: federation answers a lost race by entering the
+	// account that won it.
+	{err: users.ErrExternalIdentityTaken, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "an external identity was linked twice"},
 }
 
 // monitorErrors answers every error in monitor.Errors() (walked by

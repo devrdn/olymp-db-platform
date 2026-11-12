@@ -178,12 +178,18 @@ func (r *Users) ByExternalIdentity(ctx context.Context, provider, issuer, subjec
 }
 
 // LinkExternalIdentity ties a provider identity to an account. A second link
-// of the same identity is the table's unique violation, passed through.
+// of the same identity is users.ErrExternalIdentityTaken; it aborts the
+// transaction in ctx.
 func (r *Users) LinkExternalIdentity(ctx context.Context, id users.ExternalIdentity) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO external_identities (user_id, provider, issuer, subject, email)
 		VALUES ($1, $2, $3, $4, $5)`,
 		id.UserID, id.Provider, id.Issuer, id.Subject, nullIfEmpty(id.Email))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation &&
+		pgErr.ConstraintName == "external_identities_provider_issuer_subject_key" {
+		return users.ErrExternalIdentityTaken
+	}
 	if err != nil {
 		return fmt.Errorf("link external identity: %w", err)
 	}

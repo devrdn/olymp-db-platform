@@ -71,6 +71,9 @@ var (
 	ErrAccountBlocked = errors.New("this account is blocked")
 	// ErrUnknownRole names a role code the role catalog does not hold.
 	ErrUnknownRole = errors.New("unknown role")
+	// ErrExternalIdentityTaken refuses linking an identity an account already
+	// holds, as when two first sign-ins of one person race.
+	ErrExternalIdentityTaken = errors.New("this external identity is already linked to an account")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -82,6 +85,7 @@ func Errors() []error {
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
+		ErrExternalIdentityTaken,
 	}
 }
 

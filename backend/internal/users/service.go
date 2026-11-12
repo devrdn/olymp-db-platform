@@ -235,7 +235,8 @@ func (s *Service) refuseTakenLogin(ctx context.Context, login string) error {
 }
 
 // errIncompleteVerifiedAccount means a caller of CreateVerified passed no
-// digest or no verification time: a programming error, never a person's.
+// digest or no verification time, or one of CreateExternal an email with no
+// verification time: a programming error, never a person's.
 var errIncompleteVerifiedAccount = errors.New("users: a verified account needs its password digest and verification time")
 
 // CreateVerifiedCommand is an account its owner asked for and proved the
@@ -295,6 +296,99 @@ func (s *Service) CreateVerified(ctx context.Context, cmd CreateVerifiedCommand)
 		return User{}, err
 	}
 	return created, nil
+}
+
+// errNoIdentityStore means CreateExternal or LinkExternal ran on a service
+// wired without WithExternalIdentities: a wiring fault, never a person's.
+var errNoIdentityStore = errors.New("users: linking an external identity needs WithExternalIdentities")
+
+// CreateExternalCommand is an account a person's identity at a provider asked
+// for. Email is empty when the provider did not vouch for the address, which
+// then stays on Identity only; otherwise it counts as verified at VerifiedAt.
+// Identity.UserID is ignored.
+type CreateExternalCommand struct {
+	Login, FullName, Email string
+	VerifiedAt             time.Time
+	Identity               ExternalIdentity
+}
+
+// CreateExternal makes a student account with no password and links the
+// identity to it, in one transaction: a refused link, as when the same person
+// signs in twice at once, leaves no account behind. The audit entry has no
+// actor.
+func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand) (User, error) {
+	if s.identities == nil {
+		return User{}, errNoIdentityStore
+	}
+	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
+	if err := ValidateAccount(login, fullName, email); err != nil {
+		return User{}, err
+	}
+	if err := cmd.Identity.Validate(); err != nil {
+		return User{}, err
+	}
+	if email != "" && cmd.VerifiedAt.IsZero() {
+		return User{}, errIncompleteVerifiedAccount
+	}
+	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	if err != nil {
+		return User{}, err
+	}
+	if err := s.refuseTakenLogin(ctx, login); err != nil {
+		return User{}, err
+	}
+
+	var created User
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		var err error
+		created, err = s.repo.Create(ctx, User{Login: login, Email: email, FullName: fullName, Status: StatusActive})
+		if err != nil {
+			return err
+		}
+		if email != "" {
+			if err := s.repo.MarkEmailVerified(ctx, created.ID, cmd.VerifiedAt); err != nil {
+				return err
+			}
+			created.EmailVerifiedAt = &cmd.VerifiedAt
+		}
+		if err := s.repo.ReplaceRoles(ctx, created.ID, roles); err != nil {
+			return err
+		}
+		created.Roles = roles
+		identity := cmd.Identity
+		identity.UserID = created.ID
+		if err := s.identities.LinkExternalIdentity(ctx, identity); err != nil {
+			return err
+		}
+		return s.record(ctx, uuid.Nil, audit.ActionUserCreate, created.ID, map[string]any{
+			"login":    created.Login,
+			"roles":    roles,
+			"provider": identity.Provider,
+		})
+	})
+	if err != nil {
+		return User{}, err
+	}
+	return created, nil
+}
+
+// LinkExternal ties the identity to an existing account and records its email
+// as verified at verifiedAt, in one transaction. Whether the account may be
+// reached this way is the caller's decision.
+func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) error {
+	if s.identities == nil {
+		return errNoIdentityStore
+	}
+	identity.UserID = userID
+	if err := identity.Validate(); err != nil {
+		return err
+	}
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.identities.LinkExternalIdentity(ctx, identity); err != nil {
+			return err
+		}
+		return s.repo.MarkEmailVerified(ctx, userID, verifiedAt)
+	})
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
