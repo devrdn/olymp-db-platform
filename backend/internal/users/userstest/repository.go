@@ -254,10 +254,13 @@ func (r *Repository) Search(_ context.Context, query string, limit int) ([]users
 	return found, nil
 }
 
-func (r *Repository) UpdateProfile(_ context.Context, id uuid.UUID, fullName, email string) error {
+func (r *Repository) UpdateProfile(_ context.Context, id uuid.UUID, fullName, email string, keepVerified bool) error {
 	return r.mutate(id, func(u *users.User) {
 		u.FullName = fullName
 		u.Email = email
+		if !keepVerified {
+			u.EmailVerifiedAt = nil
+		}
 		u.UpdatedAt = time.Now().UTC()
 	})
 }

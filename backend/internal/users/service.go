@@ -655,6 +655,8 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID, 
 	return IssuedPassword{ID: user.ID, Login: user.Login, OneTimePassword: oneTime, Email: emailed}, nil
 }
 
+// UpdateProfile changes an account's name and email. A new address loses the
+// verified mark until its owner proves it again.
 func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, fullName, email string) error {
 	current, err := s.repo.ByID(ctx, userID)
 	if err != nil {
@@ -671,9 +673,15 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 	}
 
 	changes := audit.Between(current.auditFields(), User{FullName: fullName, Email: email}.auditFields())
+	// Verification proves an address, not an account: another address has
+	// not been proved, while a change of letter case names the same mailbox.
+	keepVerified := strings.EqualFold(current.Email, email)
+	if current.EmailVerifiedAt != nil && !keepVerified {
+		changes.Set("email_verified", true, false)
+	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.repo.UpdateProfile(ctx, userID, fullName, email); err != nil {
+		if err := s.repo.UpdateProfile(ctx, userID, fullName, email, keepVerified); err != nil {
 			return err
 		}
 		return s.record(ctx, actorID, audit.ActionUserUpdate, userID, changes.Payload())

@@ -1829,14 +1829,14 @@ it, with the number of questions waiting beside it while the contest runs.
   - **A verified address.** `users.email_verified_at` is when the platform
     last had proof that the person owns the account's `email`: a confirmed
     sign-up code, a followed reset link, or an external sign-in whose
-    provider vouches for the address. Migration 000054 counted every address
-    held at the time as verified, since staff had entered them; an account
-    made later by staff, an import or the event form starts unverified,
-    until its owner proves the address. An administrator who edits an
-    account's address leaves the mark as it was, so the edited address
-    counts as verified. Addresses
-    compare without regard to case, under a unique index on `lower(email)`
-    over live accounts.
+    provider vouches for the address. Migration 000054 counted the address
+    of every account not deleted at the time as verified, since staff had
+    entered them; an account made later by staff, an import or the event
+    form starts unverified, until its owner proves the address. An
+    administrator who edits an account's address to another one clears the
+    mark, and the audit entry records that it was cleared; a change of
+    letter case alone keeps it. Addresses compare without regard to case,
+    under a unique index on `lower(email)` over live accounts.
   - **No answer tells a known address from an unknown one.** Sign-up and
     recovery answer every address alike and in the same time; a login, which
     the leaderboards show anyway, may be refused as taken.

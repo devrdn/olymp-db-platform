@@ -1340,6 +1340,41 @@ func TestUpdatingAProfileRecordsWhatMoved(t *testing.T) {
 	}
 }
 
+func TestChangingAnEmailClearsItsVerifiedMark(t *testing.T) {
+	f := newFixture(t)
+	verified := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	user := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &verified})
+
+	if err := f.service.UpdateProfile(t.Context(), f.actor, user.ID, "Ana", "ana.popescu@example.edu"); err != nil {
+		t.Fatalf("UpdateProfile() = %v", err)
+	}
+
+	if stored, _ := f.repo.Get(user.ID); stored.EmailVerifiedAt != nil {
+		t.Errorf("email verified at %v, want the mark cleared with the new address", stored.EmailVerifiedAt)
+	}
+	mark, ok := lastChanges(t, f, audit.ActionUserUpdate)["email_verified"].(map[string]any)
+	if !ok || mark["from"] != true || mark["to"] != false {
+		t.Errorf("email_verified = %v, want the cleared mark recorded", mark)
+	}
+}
+
+func TestChangingOnlyTheLetterCaseOfAnEmailKeepsItsVerifiedMark(t *testing.T) {
+	f := newFixture(t)
+	verified := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	user := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &verified})
+
+	if err := f.service.UpdateProfile(t.Context(), f.actor, user.ID, "Ana Popescu", "Ana@Example.edu"); err != nil {
+		t.Fatalf("UpdateProfile() = %v", err)
+	}
+
+	if stored, _ := f.repo.Get(user.ID); stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(verified) {
+		t.Errorf("email verified at %v, want %v kept", stored.EmailVerifiedAt, verified)
+	}
+	if _, present := lastChanges(t, f, audit.ActionUserUpdate)["email_verified"]; present {
+		t.Error("the audit entry records a cleared mark that was kept")
+	}
+}
+
 func TestChangingRolesRecordsThemTheSameWayAsEverythingElse(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "s.popescu", "correct horse battery staple")
