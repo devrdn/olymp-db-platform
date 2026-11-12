@@ -1639,3 +1639,17 @@ func TestAnAccountWithoutAPasswordCannotSignInWithOne(t *testing.T) {
 		t.Errorf("answered in %v; it skipped the dummy comparison", elapsed)
 	}
 }
+
+func TestTheDummyPlaintextNeverSignsIntoAnAccountWithoutAPassword(t *testing.T) {
+	f := newFixture(t)
+	external := f.repo.Add(users.User{Login: "external", FullName: "External Only", Status: users.StatusActive})
+
+	_, err := f.service.Login(context.Background(), LoginCommand{Login: "external", Password: dummyPlaintext, IP: "10.0.0.4"})
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("Login() = %v, want ErrInvalidCredentials", err)
+	}
+	if stored, _ := f.repo.Get(external.ID); stored.HasPassword() {
+		t.Error("a password was written onto an account that had none")
+	}
+}

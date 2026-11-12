@@ -62,7 +62,11 @@ const (
 
 // dummyHash is verified against when the login does not exist, so a missing
 // account costs the same time as a wrong password.
-var dummyHash = mustHash("a password nobody uses to keep the timing honest")
+var dummyHash = mustHash(dummyPlaintext)
+
+// dummyPlaintext is public, so a comparison against dummyHash must never
+// admit anybody.
+const dummyPlaintext = "a password nobody uses to keep the timing honest"
 
 var (
 	// ErrInvalidCredentials covers a wrong password and an unknown login
@@ -306,8 +310,11 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 
 	// Verify even without an account, or timing would reveal which logins
 	// exist.
+	// An account without a password is compared against the dummy and refused
+	// below whatever matched, since the dummy's plaintext is public.
+	canSignInWithPassword := found && user.HasPassword()
 	hash := dummyHash
-	if found && user.HasPassword() {
+	if canSignInWithPassword {
 		hash = user.PasswordHash
 	}
 	matched, verifyErr := slot.Verify(hash, cmd.Password)
@@ -319,7 +326,7 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 		matched = false
 	}
 
-	if !found || !matched {
+	if !canSignInWithPassword || !matched {
 		s.recordFailure(ctx, cmd, ReasonInvalidCredentials)
 		return LoginResult{}, ErrInvalidCredentials
 	}
