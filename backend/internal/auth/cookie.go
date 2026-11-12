@@ -5,9 +5,10 @@ import (
 	"time"
 )
 
-// CookieWriter writes and clears the session, device and sign-up cookies. Secure is configured
-// once per deployment rather than inferred from a forwarded header, which
-// could silently drop it in production.
+// CookieWriter writes and clears the session, device, sign-up and Microsoft
+// state cookies. Secure is configured once per deployment rather than
+// inferred from a forwarded header, which could silently drop it in
+// production.
 type CookieWriter struct {
 	secure bool
 }
@@ -60,6 +61,26 @@ func (c CookieWriter) SetSignup(w http.ResponseWriter, token string, ttl time.Du
 
 func (c CookieWriter) ClearSignup(w http.ResponseWriter) {
 	http.SetCookie(w, c.cookie(c.SignupName(), "", -1))
+}
+
+// MicrosoftStateName is the name of the cookie carrying a Microsoft sign-in
+// from its start to its callback, prefixed as SessionName is.
+func (c CookieWriter) MicrosoftStateName() string {
+	if c.secure {
+		return "__Host-dbcontest_ms_state"
+	}
+	return "dbcontest_ms_state"
+}
+
+// SetMicrosoftState writes the state cookie with the session cookie's
+// protections. SameSite=Lax still sends it on Microsoft's redirect back,
+// which is a top-level GET.
+func (c CookieWriter) SetMicrosoftState(w http.ResponseWriter, sealed string, ttl time.Duration) {
+	http.SetCookie(w, c.cookie(c.MicrosoftStateName(), sealed, int(ttl.Seconds())))
+}
+
+func (c CookieWriter) ClearMicrosoftState(w http.ResponseWriter) {
+	http.SetCookie(w, c.cookie(c.MicrosoftStateName(), "", -1))
 }
 
 func (c CookieWriter) cookie(name, value string, maxAge int) *http.Cookie {

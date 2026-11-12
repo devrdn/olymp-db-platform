@@ -3,7 +3,7 @@
   "codes": [
     {
       "code": "account_blocked",
-      "meaning": "The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not."
+      "meaning": "The account exists and the password was right, but it is blocked. Only ever sent after a correct password, or after an external provider vouched for the person: the owner may know, a guesser may not. After an external sign-in it arrives as ?error= on the sign-in page, for a deleted account as well."
     },
     {
       "code": "account_deleted",
@@ -148,6 +148,18 @@
     {
       "code": "enrollment_closed",
       "meaning": "The contest is not accepting sign-ups: it does not invite them, it is in the wrong state, or the deadline has passed."
+    },
+    {
+      "code": "external_signin_closed",
+      "meaning": "The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored."
+    },
+    {
+      "code": "external_signin_failed",
+      "meaning": "Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, the installation does not admit that provider's tenant, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again."
+    },
+    {
+      "code": "external_signin_staff_account",
+      "meaning": "The address the provider vouches for belongs to an organiser's or administrator's account, which is never entered through an external provider. Sign in with that account's password."
     },
     {
       "code": "forbidden",

@@ -161,6 +161,9 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
 | `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account with a password and a code mailed to their address, through `POST /api/v1/public/signup`, `/signup/confirm` and `/signup/resend`; it also needs mail, and without either the routes do not exist |
 | `TRUSTED_EMAIL_DOMAIN` | no | empty | the bare lowercase domain (such as `example.edu`) whose addresses, and its subdomains', the installation trusts; anything but a domain name refuses start-up |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` |
+| `MICROSOFT_TENANT` | no | `common` | who may sign in with Microsoft: `common` (any account), `organizations` (work and school), `consumers` (personal) or one tenant ID |
+| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose emails are trusted and may link an existing account |
 
 ### The mail relay
 
@@ -190,7 +193,7 @@ which reconnect.
 | `SMTP_FROM` | with mail | — | the sending address, optionally named: `Olimpiada USM <noreply-olymp@usm.md>` |
 | `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
 | `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
-| `PUBLIC_URL` | with mail | — | the site's absolute `https://` address, for the links in messages (`http://` only in `development`) |
+| `PUBLIC_URL` | with mail or Microsoft sign-in | — | the site's absolute `https://` address, for the links in messages and the Microsoft redirect (`http://` only in `development`) |
 
 Mail also turns on password recovery, whatever `SELF_SIGNUP_ENABLED` says:
 `POST /api/v1/public/password/forgot` mails a student account a single-use

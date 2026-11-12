@@ -9,9 +9,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -333,6 +336,43 @@ const signupExpiredMessage = "The code has expired or was tried too often; sign 
 // TestEveryRecoveryErrorHasItsAnswer).
 var recoveryErrors = errorTable{
 	{err: recovery.ErrInvalidLink, status: http.StatusGone, code: codeResetLinkInvalid},
+}
+
+// externalSignInRedirects answers what a sign-in through a provider meets:
+// federation.Errors(), microsoft.Errors() and the account refusals (walked
+// by TestEveryExternalSignInErrorHasItsRedirect). The browser is sent to the
+// sign-in page with the code, since the callback is a navigation.
+var externalSignInRedirects = []struct {
+	err  error
+	code httpx.Code
+}{
+	{federation.ErrStaffAccount, codeExternalSignInStaffAccount},
+	{federation.ErrSignupClosed, codeExternalSignInClosed},
+	// A deleted account is answered as a blocked one, as the password
+	// sign-in answers it.
+	{users.ErrAccountBlocked, codeAccountBlocked},
+	{users.ErrAccountDeleted, codeAccountBlocked},
+	{auth.ErrAccountBlocked, codeAccountBlocked},
+	{federation.ErrInvalidClaims, codeExternalSignInFailed},
+	{federation.ErrIdentityConflict, codeExternalSignInFailed},
+	{microsoft.ErrSignInRefused, codeExternalSignInFailed},
+	{microsoft.ErrExchangeFailed, codeExternalSignInFailed},
+	{microsoft.ErrInvalidToken, codeExternalSignInFailed},
+	{microsoft.ErrTenantNotAllowed, codeExternalSignInFailed},
+	{microsoft.ErrStateInvalid, codeExternalSignInFailed},
+	{microsoft.ErrStateExpired, codeExternalSignInFailed},
+}
+
+// externalSignInCode is the code err sends the browser back with, and
+// whether a row named it; anything unlisted is a failed sign-in too, but one
+// an operator must hear about.
+func externalSignInCode(err error) (httpx.Code, bool) {
+	for _, row := range externalSignInRedirects {
+		if errors.Is(err, row.err) {
+			return row.code, true
+		}
+	}
+	return codeExternalSignInFailed, false
 }
 
 // contestsErrors answers every error in contests.Errors() (walked by

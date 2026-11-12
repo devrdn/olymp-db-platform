@@ -347,9 +347,23 @@ type Config struct {
 	// any minute, across every replica.
 	SMTPMaxPerMinute int
 	// PublicURL is the site's absolute address with no trailing slash, for
-	// links in messages. Required with mail; https outside development.
+	// links in messages and the Microsoft redirect. Required with mail or the
+	// Microsoft connector; https outside development.
 	PublicURL string
+	// MicrosoftClientID and MicrosoftClientSecret are the application
+	// registration; the connector exists only with both.
+	MicrosoftClientID     string
+	MicrosoftClientSecret string
+	// MicrosoftTenant is common, organizations, consumers or one tenant ID:
+	// who may sign in through Microsoft.
+	MicrosoftTenant string
+	// MicrosoftHomeTenantID is the installation's own tenant, whose emails
+	// are trusted; empty trusts no tenant as such.
+	MicrosoftHomeTenantID string
 }
+
+// MicrosoftEnabled reports whether sign-in with Microsoft is configured.
+func (c Config) MicrosoftEnabled() bool { return c.MicrosoftClientID != "" }
 
 // MailEnabled reports whether a mail relay is configured.
 func (c Config) MailEnabled() bool { return c.SMTPHost != "" }
@@ -606,6 +620,9 @@ func Load() (Config, error) {
 	if err := loadMail(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadMicrosoft(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {
@@ -718,16 +735,16 @@ func loadMail(cfg *Config) error {
 		return fmt.Errorf("SMTP_MAX_PER_MINUTE: %d is outside 1-%d", cfg.SMTPMaxPerMinute, maxSMTPMaxPerMinute)
 	}
 
-	cfg.PublicURL, err = publicURL(cfg.Env)
+	cfg.PublicURL, err = publicURL(cfg.Env, "mail links point at it")
 	return err
 }
 
 // publicURL reads PUBLIC_URL: a scheme and host, optionally a path, nothing
-// a link should not repeat.
-func publicURL(env string) (string, error) {
+// a link should not repeat. why says what needs it.
+func publicURL(env, why string) (string, error) {
 	raw, err := requiredEnv("PUBLIC_URL")
 	if err != nil {
-		return "", fmt.Errorf("%w (mail links point at it)", err)
+		return "", fmt.Errorf("%w (%s)", err, why)
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" || parsed.User != nil || strings.ContainsAny(raw, "?#") {
@@ -737,6 +754,92 @@ func publicURL(env string) (string, error) {
 		return "", fmt.Errorf("PUBLIC_URL: %q must be https (http only with ENV=development)", raw)
 	}
 	return strings.TrimRight(raw, "/"), nil
+}
+
+// Microsoft tenant and application IDs are GUIDs; the authorities are
+// Microsoft's own names for groups of tenants.
+var (
+	microsoftGUID        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	microsoftAuthorities = []string{"common", "organizations", "consumers"}
+)
+
+const (
+	microsoftConsumerTenant  = "9188040d-6c67-4c5b-b112-36a304b66dad"
+	maxMicrosoftSecretLength = 512
+)
+
+// loadMicrosoft reads the Microsoft connector. Without a client ID or a
+// secret it is off; one without the other, or any value that is not what
+// it names, refuses start-up. GUIDs are lowercased, as tokens write them.
+func loadMicrosoft(cfg *Config) error {
+	cfg.MicrosoftClientID = strings.ToLower(os.Getenv("MICROSOFT_CLIENT_ID"))
+	cfg.MicrosoftClientSecret = os.Getenv("MICROSOFT_CLIENT_SECRET")
+	cfg.MicrosoftTenant = envOrDefault("MICROSOFT_TENANT", "common")
+	cfg.MicrosoftHomeTenantID = strings.ToLower(os.Getenv("MICROSOFT_HOME_TENANT_ID"))
+
+	if microsoftGUID.MatchString(strings.ToLower(cfg.MicrosoftTenant)) {
+		cfg.MicrosoftTenant = strings.ToLower(cfg.MicrosoftTenant)
+	}
+	if !slices.Contains(microsoftAuthorities, cfg.MicrosoftTenant) && !microsoftGUID.MatchString(cfg.MicrosoftTenant) {
+		return fmt.Errorf("MICROSOFT_TENANT: %q is not common, organizations, consumers or a tenant ID", cfg.MicrosoftTenant)
+	}
+	if cfg.MicrosoftHomeTenantID == "" && microsoftGUID.MatchString(cfg.MicrosoftTenant) {
+		cfg.MicrosoftHomeTenantID = cfg.MicrosoftTenant
+	}
+	if cfg.MicrosoftHomeTenantID != "" {
+		if !microsoftGUID.MatchString(cfg.MicrosoftHomeTenantID) {
+			return fmt.Errorf("MICROSOFT_HOME_TENANT_ID: %q is not a tenant ID", cfg.MicrosoftHomeTenantID)
+		}
+		if !microsoftAdmits(cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID) {
+			return fmt.Errorf("MICROSOFT_HOME_TENANT_ID: MICROSOFT_TENANT=%s never admits tenant %s", cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID)
+		}
+	}
+
+	switch {
+	case cfg.MicrosoftClientID == "" && cfg.MicrosoftClientSecret == "":
+		return nil
+	case cfg.MicrosoftClientSecret == "":
+		return errors.New("MICROSOFT_CLIENT_SECRET: required when MICROSOFT_CLIENT_ID is set")
+	case cfg.MicrosoftClientID == "":
+		return errors.New("MICROSOFT_CLIENT_ID: required when MICROSOFT_CLIENT_SECRET is set")
+	case !microsoftGUID.MatchString(cfg.MicrosoftClientID):
+		return fmt.Errorf("MICROSOFT_CLIENT_ID: %q is not an application ID", cfg.MicrosoftClientID)
+	case len(cfg.MicrosoftClientSecret) > maxMicrosoftSecretLength || !printableASCII(cfg.MicrosoftClientSecret):
+		return fmt.Errorf("MICROSOFT_CLIENT_SECRET: at most %d bytes of printable ASCII", maxMicrosoftSecretLength)
+	}
+	if err := RefusePlaceholder(cfg.Env, "MICROSOFT_CLIENT_SECRET", cfg.MicrosoftClientSecret); err != nil {
+		return err
+	}
+	if cfg.PublicURL == "" {
+		var err error
+		if cfg.PublicURL, err = publicURL(cfg.Env, "the Microsoft redirect points at it"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// microsoftAdmits reports whether the authority tenant lets tenant tid sign
+// in.
+func microsoftAdmits(tenant, tid string) bool {
+	switch tenant {
+	case "common":
+		return true
+	case "organizations":
+		return tid != microsoftConsumerTenant
+	case "consumers":
+		return tid == microsoftConsumerTenant
+	}
+	return tid == tenant
+}
+
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // maxDomainLength is the longest domain name DNS carries, in its text form.
