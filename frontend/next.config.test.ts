@@ -74,6 +74,21 @@ describe("headers", () => {
     expect(await headersFor("development")).not.toHaveProperty("Strict-Transport-Security");
   });
 
+  /** A reset link carries its token in the address; no request from that page may repeat it. */
+  it("sends no referrer at all from the reset page, in every environment", async () => {
+    for (const env of ["production", "development"]) {
+      vi.resetModules();
+      vi.stubEnv("NODE_ENV", env);
+      const { default: config } = await import("./next.config");
+      const rules = config.headers ? await config.headers() : [];
+      const reset = rules.filter((rule) => rule.source === "/reset");
+
+      expect(reset.flatMap((rule) => rule.headers)).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
+      // Later rules win, so the general one must not come after it.
+      expect(rules.indexOf(reset[0])).toBe(rules.length - 1);
+    }
+  });
+
   it("keeps the content policy beside it, and only there", async () => {
     expect(await headersFor("production")).toHaveProperty("Content-Security-Policy");
     expect(await headersFor("development")).not.toHaveProperty("Content-Security-Policy");

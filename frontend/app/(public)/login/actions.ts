@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { callerHeaders } from "@/lib/api/caller";
-import { cookieSecure } from "@/lib/auth/cookie-policy";
+import { browserCookieOptions } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
@@ -42,16 +42,7 @@ export async function signInAction(
       // The session this browser still holds, so the API ends it rather than
       // leaving it valid beside the new one.
       sessionToken: jar.get(sessionCookie().name)?.value,
-      setCookie: (cookie) =>
-        jar.set(cookie.name, cookie.value, {
-          path: cookie.path ?? "/",
-          maxAge: cookie.maxAge,
-          httpOnly: true,
-          sameSite: "lax",
-          // From the deployment, not NODE_ENV: a production build served over
-          // plain http must not set Secure, or the browser drops the cookie.
-          secure: cookieSecure(),
-        }),
+      setCookie: (cookie) => jar.set(cookie.name, cookie.value, browserCookieOptions(cookie)),
     },
   );
 

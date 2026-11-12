@@ -110,3 +110,19 @@ describe("SignInForm, carrying the interrupted journey", () => {
     expect(form.get("next")).toBeNull();
   });
 });
+
+describe("SignInForm, the other ways in", () => {
+  test("offers neither link unless told the installation has them", () => {
+    render(<SignInForm dict={en} />);
+
+    expect(screen.queryByRole("link", { name: en.auth.signIn.signUp })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: en.auth.signIn.forgot })).not.toBeInTheDocument();
+  });
+
+  test("offers each link it is told of", () => {
+    render(<SignInForm dict={en} offers={{ signUp: true, forgot: true }} />);
+
+    expect(screen.getByRole("link", { name: en.auth.signIn.signUp })).toHaveAttribute("href", "/signup");
+    expect(screen.getByRole("link", { name: en.auth.signIn.forgot })).toHaveAttribute("href", "/forgot");
+  });
+});

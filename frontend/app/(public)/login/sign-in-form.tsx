@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { InlineLink } from "@/components/ui/inline-link";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { signInAction, type SignInState } from "./actions";
@@ -13,13 +14,26 @@ import { messageForCode } from "@/lib/i18n/errors";
 /** The one message both fields point at on rejection. */
 const FAILURE_ID = "sign-in-failure";
 
+/** The other ways in the installation offers; each link shows only when it does. */
+export type SignInOffers = { signUp: boolean; forgot: boolean };
+
+const NO_OFFERS: SignInOffers = { signUp: false, forgot: false };
+
 /**
  * The page's only client component; the Server Action still works without
  * JavaScript. The API does not say which field was wrong
  * (`invalid_credentials`), so logins cannot be probed; one message is shown and
  * both fields point at it as invalid.
  */
-export function SignInForm({ dict, next }: { dict: Pick<Dictionary, "auth" | "errors">; next?: string }) {
+export function SignInForm({
+  dict,
+  next,
+  offers = NO_OFFERS,
+}: {
+  dict: Pick<Dictionary, "auth" | "errors">;
+  next?: string;
+  offers?: SignInOffers;
+}) {
   const t = dict.auth.signIn;
   const [state, formAction, pending] = useActionState<SignInState, FormData>(signInAction, {});
 
@@ -63,11 +77,24 @@ export function SignInForm({ dict, next }: { dict: Pick<Dictionary, "auth" | "er
             {failure}
           </p>
         ) : null}
+
+        {offers.forgot ? (
+          <InlineLink href="/forgot" className="self-start">
+            {t.forgot}
+          </InlineLink>
+        ) : null}
       </div>
 
       <Button type="submit" disabled={pending} className="self-start">
         {pending ? t.submitting : t.submit}
       </Button>
+
+      {/* Other ways in go below the form. */}
+      {offers.signUp ? (
+        <p className="text-small text-ink-3">
+          {t.noAccount} <InlineLink href="/signup">{t.signUp}</InlineLink>
+        </p>
+      ) : null}
     </form>
   );
 }
