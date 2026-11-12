@@ -23,8 +23,9 @@ const (
 	RecoveriesPerAddress  = 30
 	recoveryAddressWindow = 10 * time.Minute
 	// RecoveriesPerAccount is per identifier typed, lowercased, in an hour,
-	// so an inbox cannot be flooded from many addresses. An identifier that
-	// names no account spends it as well, and is answered alike.
+	// from any number of addresses. An account's login and its email are two
+	// identifiers, so its inbox gets at most twice this many links an hour.
+	// An identifier that names no account spends it as well.
 	RecoveriesPerAccount  = 5
 	recoveryAccountWindow = time.Hour
 )
@@ -69,15 +70,17 @@ type linkResetRequest struct {
 	Password string `json:"password"`
 }
 
-// forgotResponse is the one answer every admitted request gets, whether an
-// account was reached or not.
+// forgotResponse is the one answer every admitted request gets, given before
+// anything is looked up.
 type forgotResponse struct {
 	Status string `json:"status"`
 }
 
 // The address is spent before the body is read, and the identifier, an
 // unbounded key, only once bounded and for a caller the address admitted
-// (CLAUDE.md rule 5).
+// (CLAUDE.md rule 5). The lookup, the link and the mail happen after the
+// answer, so neither its time nor a failure tells whether an account was
+// reached.
 func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, "password_forgot:ip:"+addressKey(r), RecoveriesPerAddress, recoveryAddressWindow) {
 		return
@@ -95,10 +98,7 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.recoveries.Request(r.Context(), req.Login, readerMailLanguage(r)); err != nil {
-		h.fail(w, r, err)
-		return
-	}
+	h.recoveries.Submit(r.Context(), recovery.RequestCommand{LoginOrEmail: req.Login, Lang: readerMailLanguage(r)})
 	httpx.JSON(w, r, http.StatusAccepted, forgotResponse{Status: "link_sent"})
 }
 
@@ -149,8 +149,8 @@ func (h *RecoveryHandler) admit(w http.ResponseWriter, r *http.Request, subject 
 	return true
 }
 
-// recoveryAnswers is what both endpoints answer from: the link's refusal and
-// the new password's.
+// recoveryAnswers is what the reset answers from: the link's refusal and the
+// new password's.
 var recoveryAnswers = joined(recoveryErrors, usersErrors)
 
 func (h *RecoveryHandler) fail(w http.ResponseWriter, r *http.Request, err error) {

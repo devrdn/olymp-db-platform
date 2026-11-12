@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -77,11 +80,25 @@ func (f *recoveryFixture) student(login, email string) users.User {
 
 var recoveryTokenPattern = regexp.MustCompile(regexp.QuoteMeta(recovery.ResetPath) + `([A-Za-z0-9_-]+)`)
 
+// settle waits for every request handed to the background to finish; the
+// service takes no more afterwards.
+func (f *recoveryFixture) settle(t *testing.T) {
+	t.Helper()
+	if err := f.Service.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+}
+
 // lastToken reads the token out of the last message queued, which must
-// carry a link.
+// carry a link, waiting for the background request that queues it.
 func (f *recoveryFixture) lastToken(t *testing.T) string {
 	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
 	queued := f.Outbox.Queued()
+	for len(queued) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		queued = f.Outbox.Queued()
+	}
 	if len(queued) == 0 {
 		t.Fatal("nothing was queued")
 	}
@@ -98,6 +115,9 @@ func TestForgotAnswersTheSameForEveryAccount(t *testing.T) {
 	f.Users.Add(users.User{Login: "organiser", Email: "organiser@example.edu", FullName: "Org",
 		Roles: []string{recoverytest.StaffRole}, PasswordHash: "x"})
 	f.Users.Add(users.User{Login: "gone", Email: "gone@example.edu", FullName: "Gone", Status: users.StatusDeleted})
+	f.Users.Add(users.User{Login: "held", Email: "held@example.edu", FullName: "Held", Status: users.StatusBlocked,
+		Roles: []string{users.RoleStudent}, PasswordHash: "x"})
+	f.Users.Add(users.User{Login: "mailless", FullName: "No Mail", Roles: []string{users.RoleStudent}, PasswordHash: "x"})
 
 	real := f.forgot("192.0.2.1", "ana@example.edu")
 	if real.Code != http.StatusAccepted {
@@ -107,13 +127,14 @@ func TestForgotAnswersTheSameForEveryAccount(t *testing.T) {
 		t.Errorf("body = %s, want %s", real.Body.String(), want)
 	}
 	assertNoStore(t, "real", real)
-	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "gone", ""} {
+	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "gone", "held", "held@example.edu", "mailless", ""} {
 		rec := f.forgot("192.0.2.1", typed)
 		if rec.Code != real.Code || rec.Body.String() != real.Body.String() {
 			t.Errorf("forgot(%q) = %d %s, want the real account's %d %s", typed, rec.Code, rec.Body.String(), real.Code, real.Body.String())
 		}
 		assertNoStore(t, typed, rec)
 	}
+	f.settle(t)
 	if q := f.Outbox.Queued(); len(q) != 1 {
 		t.Errorf("queued %d messages, want only the real account's", len(q))
 	}
@@ -216,11 +237,10 @@ func TestForgotSpendsTheAddressBudgetFirst(t *testing.T) {
 		}
 		assertNoStore(t, "refused", rec)
 	}
-	if q := f.Outbox.Queued(); len(q) != 0 {
-		t.Errorf("queued %d messages for refused requests, want none", len(q))
-	}
 
-	if rec := f.forgot("192.0.2.2", "ana"); rec.Code != http.StatusAccepted || len(f.Outbox.Queued()) != 1 {
+	rec := f.forgot("192.0.2.2", "ana")
+	f.settle(t)
+	if rec.Code != http.StatusAccepted || len(f.Outbox.Queued()) != 1 {
 		t.Errorf("the account from a fresh address = %d with %d queued, want 202 and the link: refusals by address spent its budget",
 			rec.Code, len(f.Outbox.Queued()))
 	}
@@ -290,7 +310,83 @@ func TestTheLinkIsMailedInTheLanguageTheReaderAsksFor(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("forgot = %d, want 202", rec.Code)
 	}
+	f.settle(t)
 	if queued := f.Outbox.Queued(); len(queued) != 1 || queued[0].Subject != want.Subject {
 		t.Errorf("queued %+v, want one message with the subject %q", queued, want.Subject)
+	}
+}
+
+// gatedRecovery serves a service whose account lookups wait at the gate.
+func gatedRecovery(t *testing.T) (*recoveryFixture, *recoverytest.Gate) {
+	t.Helper()
+	gate := recoverytest.NewGate()
+	f := mountRecovery(t, recoverytest.NewFixture(t, func(c *recovery.Config) {
+		c.Directory = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
+	}))
+	// Registered after the fixture's Stop, so it runs first and Stop can end.
+	t.Cleanup(gate.Release)
+	return f, gate
+}
+
+func TestForgotAnswersWithoutWaitingForTheLookup(t *testing.T) {
+	f, gate := gatedRecovery(t)
+	f.student("ana", "ana@example.edu")
+
+	rec := f.forgot("192.0.2.1", "ana")
+
+	if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"link_sent"}` {
+		t.Fatalf("forgot = %d %s, want 202 while the lookup is held", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-gate.Entered():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the lookup")
+	}
+	if q := f.Outbox.Queued(); len(q) != 0 {
+		t.Fatalf("queued %d messages before the lookup was released", len(q))
+	}
+	gate.Release()
+	f.settle(t)
+	if q := f.Outbox.Queued(); len(q) != 1 {
+		t.Errorf("queued %d messages, want the link once the lookup finished", len(q))
+	}
+}
+
+func TestForgotAnswersAlikeWhenTheWorkerIsFull(t *testing.T) {
+	f, gate := gatedRecovery(t)
+	for i := range recovery.MaxInFlight {
+		f.forgot(fmt.Sprintf("192.0.2.%d", i+1), fmt.Sprintf("filler%d", i))
+	}
+	for range recovery.MaxInFlight {
+		select {
+		case <-gate.Entered():
+		case <-time.After(5 * time.Second):
+			t.Fatal("the fillers never reached the lookup")
+		}
+	}
+
+	rec := f.forgot("192.0.2.100", "ana")
+
+	if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"link_sent"}` {
+		t.Errorf("forgot with the worker full = %d %s, want the usual 202", rec.Code, rec.Body.String())
+	}
+	if log := f.Log.String(); !strings.Contains(log, "level=WARN") || !strings.Contains(log, "dropped") {
+		t.Errorf("log = %q, want the dropped request at warn", log)
+	}
+}
+
+func TestForgotAnswers202ForAFailureAfterTheHandOff(t *testing.T) {
+	f := newRecoveryFixture(t)
+	f.student("ana", "ana@example.edu")
+	f.Store.ReplaceErr = errors.New("the database is away")
+
+	rec := f.forgot("192.0.2.1", "ana")
+	f.settle(t)
+
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("forgot = %d %s, want 202: nobody waits for the outcome", rec.Code, rec.Body.String())
+	}
+	if log := f.Log.String(); !strings.Contains(log, "level=ERROR") || !strings.Contains(log, "the database is away") {
+		t.Errorf("log = %q, want the failure at error", log)
 	}
 }

@@ -60,6 +60,8 @@ type App struct {
 	internal *server.Server
 
 	tasks []task
+	// workers are stopped once the listeners have drained.
+	workers []worker
 
 	// closers run in reverse assembly order on shutdown.
 	closers []func()
@@ -602,8 +604,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Settings:   installation,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 		PublicURL:  cfg.PublicURL,
+		Log:        log,
 	})
 	a.tasks = append(a.tasks, sweepPasswordResets(log, recoveries.Sweep))
+	a.workers = append(a.workers, worker{name: "password-reset-requests", stop: recoveries.Stop})
 	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, log))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
@@ -681,6 +685,9 @@ func (a *App) Run(ctx context.Context) error {
 	// drain.
 	publicErr := a.public.Shutdown(shutdownCtx)
 	internalErr := a.internal.Shutdown(shutdownCtx)
+	// After the listeners, so no request hands over work once they are
+	// stopping; before close, which closes the pool they write through.
+	stopWorkers(shutdownCtx, a.log, a.workers)
 
 	if publicErr != nil {
 		return fmt.Errorf("shut down public server: %w", publicErr)

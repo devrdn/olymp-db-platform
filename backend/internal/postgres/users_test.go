@@ -991,3 +991,82 @@ func TestDeletingAnAccountForgetsItsExternalIdentities(t *testing.T) {
 		}
 	})
 }
+
+// A change another transaction holds when Lock starts commits before Lock
+// returns, and the read that follows sees it: what the reset-link
+// completion counts on so as not to verify an address changed meanwhile.
+func TestLockWaitsForAConcurrentChangeAndTheNextReadSeesIt(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	repo := NewUsers(testPool)
+	tag := uuid.NewString()[:8]
+	account, err := repo.Create(ctx, users.User{
+		Login: "lock-" + tag, Email: "before." + tag + "@example.edu", FullName: "Lock", Status: users.StatusActive,
+		PasswordHash: "x",
+	})
+	if err != nil {
+		t.Fatalf("create the account: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, account.ID) })
+
+	admin, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Rollback(ctx) }()
+	changed := "after." + tag + "@example.edu"
+	if _, err := admin.Exec(ctx, `UPDATE users SET email = $2 WHERE id = $1`, account.ID, changed); err != nil {
+		t.Fatalf("change the address: %v", err)
+	}
+
+	read := make(chan string, 1)
+	go func() {
+		var seen string
+		err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if err := repo.Lock(ctx, account.ID); err != nil {
+				return err
+			}
+			u, err := repo.ByID(ctx, account.ID)
+			seen = u.Email
+			return err
+		})
+		if err != nil {
+			t.Errorf("lock and read: %v", err)
+		}
+		read <- seen
+	}()
+
+	select {
+	case seen := <-read:
+		t.Fatalf("Lock returned with the change still open, reading %q", seen)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := admin.Commit(ctx); err != nil {
+		t.Fatalf("commit the change: %v", err)
+	}
+	select {
+	case seen := <-read:
+		if seen != changed {
+			t.Errorf("read %q after the lock, want the committed %q", seen, changed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lock did not return after the change committed")
+	}
+}
+
+func TestLockRefusesToRunOutsideATransactionAndFindsNoMissingAccount(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	repo := NewUsers(testPool)
+	if err := repo.Lock(context.Background(), uuid.New()); err == nil {
+		t.Error("Lock() outside a transaction = nil, want a refusal: the lock would end with the statement")
+	}
+	withTx(t, func(ctx context.Context) {
+		if err := repo.Lock(ctx, uuid.New()); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("Lock() of no account = %v, want ErrNotFound", err)
+		}
+	})
+}

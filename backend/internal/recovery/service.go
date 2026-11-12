@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/mailing"
@@ -40,6 +42,9 @@ type Directory interface {
 	// ByEmail ignores case and finds live accounts only.
 	ByEmail(ctx context.Context, email string) (users.User, error)
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
+	// Lock holds the account's row until the transaction in ctx ends, which
+	// ctx must carry; ErrNotFound when there is none.
+	Lock(ctx context.Context, id uuid.UUID) error
 }
 
 // Accounts sets the chosen password (users.Service).
@@ -79,6 +84,7 @@ type Config struct {
 	Texts      Texts
 	Settings   Settings
 	UnitOfWork storage.UnitOfWork
+	Log        *slog.Logger
 	// PublicURL is the address the installation is reached at, which a link
 	// opens.
 	PublicURL string
@@ -89,13 +95,19 @@ type Config struct {
 }
 
 type Service struct {
-	cfg Config
+	cfg   Config
+	slots chan struct{}
+
+	// mu orders Submit's Add against Stop's Wait.
+	mu      sync.Mutex
+	stopped bool
+	running sync.WaitGroup
 }
 
 // NewService panics on a missing part, so a wiring fault stops the boot.
 func NewService(cfg Config) *Service {
 	if cfg.Store == nil || cfg.Directory == nil || cfg.Accounts == nil || cfg.Hasher == nil ||
-		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.UnitOfWork == nil {
+		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.UnitOfWork == nil || cfg.Log == nil {
 		panic("recovery: NewService needs every part of its Config")
 	}
 	if cfg.Now == nil {
@@ -104,7 +116,75 @@ func NewService(cfg Config) *Service {
 	if cfg.Random == nil {
 		cfg.Random = rand.Reader
 	}
-	return &Service{cfg: cfg}
+	return &Service{cfg: cfg, slots: make(chan struct{}, MaxInFlight)}
+}
+
+const (
+	// MaxInFlight bounds the requests Submit runs at once; past it a request
+	// is dropped, so a burst cannot hold more database connections than this.
+	MaxInFlight = 8
+	// RequestTimeout bounds one request Submit runs.
+	RequestTimeout = 30 * time.Second
+)
+
+// RequestCommand is a request for a link. Lang is the reader's language;
+// one the texts are not written in falls back to the installation's.
+type RequestCommand struct {
+	LoginOrEmail, Lang string
+}
+
+// Submit runs Request in the background and returns at once, so the caller
+// answers before anything is looked up and alike for every account. It
+// reports whether the request was taken: one past MaxInFlight, or after
+// Stop, is dropped with a warning. The request keeps ctx's values but not
+// its cancellation, and its failure is logged, since nobody waits for it.
+func (s *Service) Submit(ctx context.Context, cmd RequestCommand) bool {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.cfg.Log.WarnContext(ctx, "dropped a password reset request: the service is stopping")
+		return false
+	}
+	select {
+	case s.slots <- struct{}{}:
+	default:
+		s.mu.Unlock()
+		s.cfg.Log.WarnContext(ctx, "dropped a password reset request: too many in flight", "limit", MaxInFlight)
+		return false
+	}
+	s.running.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			<-s.slots
+			s.running.Done()
+		}()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RequestTimeout)
+		defer cancel()
+		if err := s.Request(ctx, cmd.LoginOrEmail, cmd.Lang); err != nil {
+			s.cfg.Log.ErrorContext(ctx, "a password reset request failed", "error", err)
+		}
+	}()
+	return true
+}
+
+// Stop takes no more requests and waits for those in flight until ctx ends.
+func (s *Service) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		s.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for the password reset requests in flight: %w", ctx.Err())
+	}
 }
 
 // Request mails a link to the account loginOrEmail names, an email when it
@@ -220,6 +300,15 @@ func (s *Service) Complete(ctx context.Context, token, newPassword string) error
 		Claim: func(ctx context.Context) (uuid.UUID, bool, error) {
 			link, ok, err := s.cfg.Store.Spend(ctx, tokenHash)
 			if err != nil || !ok || !now.Before(link.ExpiresAt) {
+				return uuid.Nil, false, err
+			}
+			// Read once the row is held, so a change to the address or the
+			// roles either commits before the read or waits for this one.
+			err = s.cfg.Directory.Lock(ctx, link.UserID)
+			if errors.Is(err, users.ErrNotFound) {
+				return uuid.Nil, false, nil
+			}
+			if err != nil {
 				return uuid.Nil, false, err
 			}
 			account, err := s.cfg.Directory.ByID(ctx, link.UserID)
