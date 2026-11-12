@@ -1504,3 +1504,34 @@ func TestAnImportStoppedForLoadKeepsWhatItCreatedAndNamesTheRest(t *testing.T) {
 		t.Errorf("NotImported = %v, want %v", result.NotImported, want)
 	}
 }
+
+type identityRecorder struct {
+	users.ExternalIdentities
+	deleted []uuid.UUID
+}
+
+func (r *identityRecorder) DeleteExternalIdentities(_ context.Context, id uuid.UUID) error {
+	r.deleted = append(r.deleted, id)
+	return nil
+}
+
+func TestDeleteForgetsTheAccountsExternalIdentitiesButBlockDoesNot(t *testing.T) {
+	f := newFixture(t)
+	identities := &identityRecorder{}
+	f.service.WithExternalIdentities(identities)
+	blocked := f.addUser(t, "blocked", "pw")
+	gone := f.addUser(t, "gone", "pw")
+
+	if err := f.service.Block(context.Background(), f.actor, blocked.ID, "spam"); err != nil {
+		t.Fatalf("Block() = %v", err)
+	}
+	if len(identities.deleted) != 0 {
+		t.Fatalf("Block forgot identities of %v, want none", identities.deleted)
+	}
+	if err := f.service.Delete(context.Background(), f.actor, gone.ID, "left"); err != nil {
+		t.Fatalf("Delete() = %v", err)
+	}
+	if len(identities.deleted) != 1 || identities.deleted[0] != gone.ID {
+		t.Errorf("Delete forgot identities of %v, want %v", identities.deleted, gone.ID)
+	}
+}

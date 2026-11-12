@@ -1623,3 +1623,19 @@ func TestSigningInAgainIsNotAParallelSession(t *testing.T) {
 		t.Fatalf("signing in again wrote %d events, want none", events.count)
 	}
 }
+
+func TestAnAccountWithoutAPasswordCannotSignInWithOne(t *testing.T) {
+	f := newFixture(t)
+	f.repo.Add(users.User{Login: "external", FullName: "External Only", Status: users.StatusActive})
+
+	started := time.Now()
+	_, err := f.service.Login(context.Background(), LoginCommand{Login: "external", Password: "", IP: "10.0.0.3"})
+	elapsed := time.Since(started)
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("Login() = %v, want ErrInvalidCredentials", err)
+	}
+	if elapsed < 10*time.Millisecond {
+		t.Errorf("answered in %v; it skipped the dummy comparison", elapsed)
+	}
+}

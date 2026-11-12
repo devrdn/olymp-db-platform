@@ -4,9 +4,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/sentineltest"
 	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
 )
 
 func TestEveryExportedErrorIsListed(t *testing.T) {
@@ -33,6 +35,63 @@ func TestFilterValidateBoundsTheQueryInCharacters(t *testing.T) {
 		"over the limit, Cyrillic": strings.Repeat("ф", users.MaxQueryLength+1),
 	} {
 		if err := (users.Filter{Query: query}).Validate(); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("%s: Validate() = %v, want ErrInvalidAccount", name, err)
+		}
+	}
+}
+
+func TestHasVerifiedEmailInAcceptsTheDomainAndItsSubdomains(t *testing.T) {
+	verified := time.Now()
+	cases := []struct {
+		name   string
+		user   users.User
+		domain string
+		want   bool
+	}{
+		{"the domain itself", users.User{Email: "a@example.edu", EmailVerifiedAt: &verified}, "example.edu", true},
+		{"a subdomain", users.User{Email: "a@stud.example.edu", EmailVerifiedAt: &verified}, "example.edu", true},
+		{"another domain ending the same way", users.User{Email: "a@notexample.edu", EmailVerifiedAt: &verified}, "example.edu", false},
+		{"not verified", users.User{Email: "a@example.edu"}, "example.edu", false},
+		{"upper case", users.User{Email: "A@EXAMPLE.EDU", EmailVerifiedAt: &verified}, "example.edu", true},
+		{"an empty domain", users.User{Email: "a@example.edu", EmailVerifiedAt: &verified}, "", false},
+		{"no email", users.User{EmailVerifiedAt: &verified}, "example.edu", false},
+	}
+	for _, c := range cases {
+		if got := c.user.HasVerifiedEmailIn(c.domain); got != c.want {
+			t.Errorf("%s: HasVerifiedEmailIn(%q) = %v, want %v", c.name, c.domain, got, c.want)
+		}
+	}
+}
+
+func TestIsStaffIsAnyPermission(t *testing.T) {
+	if (users.User{Roles: []string{"student"}}).IsStaff() {
+		t.Error("an account without permissions is staff")
+	}
+	if !(users.User{Permissions: []string{"contest.view"}}).IsStaff() {
+		t.Error("an account holding a permission is not staff")
+	}
+}
+
+func TestHasPasswordIsFalseForAnAccountWithoutADigest(t *testing.T) {
+	if (users.User{}).HasPassword() || !(users.User{PasswordHash: "x"}).HasPassword() {
+		t.Error("HasPassword does not follow the digest")
+	}
+}
+
+func TestExternalIdentityValidateBoundsEveryField(t *testing.T) {
+	ok := users.ExternalIdentity{UserID: uuid.New(), Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example", Subject: "abc", Email: "a@example.edu"}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want no error", err)
+	}
+	long := strings.Repeat("a", users.MaxIdentityFieldLength+1)
+	for name, id := range map[string]users.ExternalIdentity{
+		"unknown provider": {UserID: ok.UserID, Provider: "other", Issuer: "i", Subject: "s"},
+		"empty subject":    {UserID: ok.UserID, Provider: users.ProviderMicrosoft, Issuer: "i"},
+		"long issuer":      {UserID: ok.UserID, Provider: users.ProviderMicrosoft, Issuer: long, Subject: "s"},
+		"long subject":     {UserID: ok.UserID, Provider: users.ProviderMicrosoft, Issuer: "i", Subject: long},
+		"long email":       {UserID: ok.UserID, Provider: users.ProviderMicrosoft, Issuer: "i", Subject: "s", Email: strings.Repeat("a", users.MaxEmailLength+1)},
+	} {
+		if err := id.Validate(); !errors.Is(err, users.ErrInvalidAccount) {
 			t.Errorf("%s: Validate() = %v, want ErrInvalidAccount", name, err)
 		}
 	}

@@ -48,6 +48,16 @@ type Service struct {
 	access AccessCache
 	// mail is nil when the composition root wired none (WithMail).
 	mail *Mail
+	// identities is nil when nothing links external identities.
+	identities ExternalIdentities
+}
+
+// WithExternalIdentities is for the composition root, before the service is
+// shared. Deleting an account then forgets its identities, so the same
+// person can sign up again.
+func (s *Service) WithExternalIdentities(store ExternalIdentities) *Service {
+	s.identities = store
+	return s
 }
 
 // AccessCache is auth's short-lived copy of accounts. Every operation that

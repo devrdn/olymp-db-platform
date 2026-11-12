@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -88,11 +89,14 @@ func Errors() []error {
 var Statuses = []string{StatusActive, StatusBlocked, StatusDeleted}
 
 type User struct {
-	ID       uuid.UUID
-	Login    string
-	Email    string
-	FullName string
-	Status   string
+	ID    uuid.UUID
+	Login string
+	Email string
+	// EmailVerifiedAt is when the account proved it owns Email; nil until
+	// then.
+	EmailVerifiedAt *time.Time
+	FullName        string
+	Status          string
 	// StatusReason is the administrator's explanation of the current status.
 	StatusReason    string
 	StatusChangedAt *time.Time
@@ -100,7 +104,8 @@ type User struct {
 	// StatusChangedByLogin is StatusChangedBy's login, resolved in the same
 	// query; empty when StatusChangedBy is nil.
 	StatusChangedByLogin string
-	// PasswordHash never leaves the server.
+	// PasswordHash never leaves the server. It is empty for an account that
+	// signs in only through an external provider.
 	PasswordHash string
 	// SessionGeneration retires sessions issued before its current value.
 	SessionGeneration  int64
@@ -116,6 +121,24 @@ type User struct {
 }
 
 func (u User) IsActive() bool { return u.Status == StatusActive }
+
+// HasPassword reports whether the account can sign in with a password.
+func (u User) HasPassword() bool { return u.PasswordHash != "" }
+
+// IsStaff reports whether the account holds any permission. The student role
+// holds none.
+func (u User) IsStaff() bool { return len(u.Permissions) > 0 }
+
+// HasVerifiedEmailIn reports whether the account has proved an address in the
+// domain or one of its subdomains. An unverified address proves nothing.
+func (u User) HasVerifiedEmailIn(domain string) bool {
+	if u.EmailVerifiedAt == nil || domain == "" {
+		return false
+	}
+	_, host, ok := strings.Cut(strings.ToLower(u.Email), "@")
+	domain = strings.ToLower(domain)
+	return ok && (host == domain || strings.HasSuffix(host, "."+domain))
+}
 
 // Has reports whether the account's roles grant a permission. For the request's
 // own caller, rbac.Identity.Has answers the same question.
@@ -164,9 +187,63 @@ type Repository interface {
 	// account now holds, so a move out of "deleted" is refused before the
 	// transaction, naming the field that collides.
 	TakenAmong(ctx context.Context, ids []uuid.UUID) ([]TakenConflict, error)
+	// ByEmail resolves a live account by email, ignoring case; ErrNotFound
+	// otherwise, a deleted account included.
+	ByEmail(ctx context.Context, email string) (User, error)
+	// MarkEmailVerified records when the account proved its email;
+	// ErrNotFound for a missing account.
+	MarkEmailVerified(ctx context.Context, id uuid.UUID, at time.Time) error
 	// CountActiveWithRole counts accounts holding the role that can still
 	// sign in: a blocked administrator cannot administer.
 	CountActiveWithRole(ctx context.Context, roleCode string) (int, error)
+}
+
+// Providers an account can sign in through. The column's CHECK constraint
+// holds the same list.
+const ProviderMicrosoft = "microsoft"
+
+// MaxIdentityFieldLength bounds an external identity's issuer and subject
+// (CLAUDE.md rule 2).
+const MaxIdentityFieldLength = 255
+
+// ExternalIdentity ties an account to a person's identity at a provider.
+// Issuer and Subject together name that person there, so the provider's own
+// account can change its email without cutting the link.
+type ExternalIdentity struct {
+	UserID                    uuid.UUID
+	Provider, Issuer, Subject string
+	Email                     string
+}
+
+// Validate refuses a provider this installation does not know and a field
+// that is empty or over its bound, with ErrInvalidAccount.
+func (i ExternalIdentity) Validate() error {
+	switch {
+	case i.Provider != ProviderMicrosoft:
+		return fmt.Errorf("%w: unknown identity provider %q", ErrInvalidAccount, i.Provider)
+	case i.Issuer == "" || utf8.RuneCountInString(i.Issuer) > MaxIdentityFieldLength:
+		return fmt.Errorf("%w: the issuer must be 1 to %d characters", ErrInvalidAccount, MaxIdentityFieldLength)
+	case i.Subject == "" || utf8.RuneCountInString(i.Subject) > MaxIdentityFieldLength:
+		return fmt.Errorf("%w: the subject must be 1 to %d characters", ErrInvalidAccount, MaxIdentityFieldLength)
+	case utf8.RuneCountInString(i.Email) > MaxEmailLength:
+		return fmt.Errorf("%w: the email must be at most %d characters", ErrInvalidAccount, MaxEmailLength)
+	}
+	return nil
+}
+
+// ExternalIdentities is the storage of provider identities.
+type ExternalIdentities interface {
+	// ByExternalIdentity resolves the account an identity is linked to;
+	// ErrNotFound when none is.
+	ByExternalIdentity(ctx context.Context, provider, issuer, subject string) (User, error)
+	// LinkExternalIdentity fails when the identity already belongs to an
+	// account, this one included.
+	LinkExternalIdentity(ctx context.Context, id ExternalIdentity) error
+	// TouchExternalIdentity stamps a sign-in; a missing identity is
+	// ErrNotFound.
+	TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error
+	// DeleteExternalIdentities forgets every identity of the account.
+	DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error
 }
 
 type Credential struct {

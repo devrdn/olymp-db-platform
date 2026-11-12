@@ -234,6 +234,13 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 				return err
 			}
 		}
+		if status == StatusDeleted && s.identities != nil {
+			for _, id := range changed {
+				if err := s.identities.DeleteExternalIdentities(ctx, id); err != nil {
+					return err
+				}
+			}
+		}
 		return s.audit.RecordMany(ctx, entries)
 	})
 	if err != nil {
