@@ -199,6 +199,12 @@ type Config struct {
 	// EventRegistrationEnabled opens the event's public registration form.
 	// Off by default, so a deployment with no event on serves no form.
 	EventRegistrationEnabled bool
+	// SelfSignupEnabled lets people create their own accounts. Off by
+	// default; sign-up also needs mail.
+	SelfSignupEnabled bool
+	// TrustedEmailDomain is the bare lowercase domain whose addresses, and
+	// its subdomains', the installation trusts; empty trusts none.
+	TrustedEmailDomain string
 	// TrustedProxies lists the CIDRs (or bare addresses) whose forwarded
 	// headers are believed (CLAUDE.md rule 9). Empty means the TCP peer is
 	// always the client, the safe default.
@@ -413,6 +419,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.EventRegistrationEnabled, err = boolEnv("EVENT_REGISTRATION_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.SelfSignupEnabled, err = boolEnv("SELF_SIGNUP_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.TrustedEmailDomain, err = trustedEmailDomain(os.Getenv("TRUSTED_EMAIL_DOMAIN")); err != nil {
 		return Config{}, err
 	}
 	if cfg.DeviceCookieSecret, err = deviceCookieSecret(cfg.Env); err != nil {
@@ -725,6 +737,26 @@ func publicURL(env string) (string, error) {
 		return "", fmt.Errorf("PUBLIC_URL: %q must be https (http only with ENV=development)", raw)
 	}
 	return strings.TrimRight(raw, "/"), nil
+}
+
+// maxDomainLength is the longest domain name DNS carries, in its text form.
+const maxDomainLength = 253
+
+// domainName is lowercase labels of 1-63 letters, digits and inner hyphens,
+// at least two of them, with no trailing dot.
+var domainName = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// trustedEmailDomain reads TRUSTED_EMAIL_DOMAIN. It is refused rather than
+// lowercased or trimmed: a value that needs correcting may not mean what the
+// operator thinks, and it decides who is trusted.
+func trustedEmailDomain(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if len(raw) > maxDomainLength || !domainName.MatchString(raw) {
+		return "", fmt.Errorf("TRUSTED_EMAIL_DOMAIN: %q is not a bare lowercase domain like example.edu", raw)
+	}
+	return raw, nil
 }
 
 // languageTag matches a BCP-47 tag loosely ("en", "ro", "ru-KZ"), enough to

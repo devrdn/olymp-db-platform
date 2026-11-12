@@ -149,18 +149,11 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 // letterhead read when email was asked for.
 func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letterhead) (CreateResult, error) {
 	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
-	if err := validateAccount(login, fullName, email); err != nil {
+	if err := ValidateAccount(login, fullName, email); err != nil {
 		return CreateResult{}, err
 	}
 
-	// Checked first for a clear error; the unique index is the real
-	// guarantee. A deleted account's login is free, so ByLogin returning one
-	// does not count as taken.
-	if existing, err := s.repo.ByLogin(ctx, login); err == nil {
-		if existing.Status != StatusDeleted {
-			return CreateResult{}, ErrLoginTaken
-		}
-	} else if !errors.Is(err, ErrNotFound) {
+	if err := s.refuseTakenLogin(ctx, login); err != nil {
 		return CreateResult{}, err
 	}
 
@@ -226,6 +219,82 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letter
 	}
 
 	return CreateResult{User: created, OneTimePassword: oneTime, Email: emailed}, nil
+}
+
+// refuseTakenLogin is checked before an account is made, for a clear error;
+// the unique index is the real guarantee. A deleted account's login is free.
+func (s *Service) refuseTakenLogin(ctx context.Context, login string) error {
+	existing, err := s.repo.ByLogin(ctx, login)
+	switch {
+	case err == nil && existing.Status != StatusDeleted:
+		return ErrLoginTaken
+	case err != nil && !errors.Is(err, ErrNotFound):
+		return err
+	}
+	return nil
+}
+
+// errIncompleteVerifiedAccount means a caller of CreateVerified passed no
+// digest or no verification time: a programming error, never a person's.
+var errIncompleteVerifiedAccount = errors.New("users: a verified account needs its password digest and verification time")
+
+// CreateVerifiedCommand is an account its owner asked for and proved the
+// email of. PasswordHash is the password they chose, hashed with the sign-in
+// hasher.
+type CreateVerifiedCommand struct {
+	Login, Email, FullName string
+	PasswordHash           string
+	VerifiedAt             time.Time
+}
+
+// CreateVerified makes a student account that signs in with the chosen
+// password at once, its email verified. The owner made it, so the audit
+// entry has no actor.
+func (s *Service) CreateVerified(ctx context.Context, cmd CreateVerifiedCommand) (User, error) {
+	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
+	if email == "" {
+		return User{}, fmt.Errorf("%w: email must not be empty", ErrInvalidAccount)
+	}
+	if err := ValidateAccount(login, fullName, email); err != nil {
+		return User{}, err
+	}
+	if cmd.PasswordHash == "" || cmd.VerifiedAt.IsZero() {
+		return User{}, errIncompleteVerifiedAccount
+	}
+	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	if err != nil {
+		return User{}, err
+	}
+	if err := s.refuseTakenLogin(ctx, login); err != nil {
+		return User{}, err
+	}
+
+	var created User
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		var err error
+		created, err = s.repo.Create(ctx, User{
+			Login: login, Email: email, FullName: fullName, Status: StatusActive, PasswordHash: cmd.PasswordHash,
+		})
+		if err != nil {
+			return err
+		}
+		if err := s.repo.MarkEmailVerified(ctx, created.ID, cmd.VerifiedAt); err != nil {
+			return err
+		}
+		created.EmailVerifiedAt = &cmd.VerifiedAt
+		if err := s.repo.ReplaceRoles(ctx, created.ID, roles); err != nil {
+			return err
+		}
+		created.Roles = roles
+		return s.record(ctx, uuid.Nil, audit.ActionUserCreate, created.ID, map[string]any{
+			"login": created.Login,
+			"roles": roles,
+		})
+	})
+	if err != nil {
+		return User{}, err
+	}
+	return created, nil
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
@@ -316,7 +385,7 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 	if err != nil || !matched {
 		return ErrWrongPassword
 	}
-	if err := validatePassword(cmd.NewPassword); err != nil {
+	if err := ValidatePassword(cmd.NewPassword); err != nil {
 		return err
 	}
 	if cmd.OldPassword == cmd.NewPassword {
@@ -421,7 +490,7 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 	}
 
 	fullName, email = strings.TrimSpace(fullName), strings.TrimSpace(email)
-	if err := validateAccount(current.Login, fullName, email); err != nil {
+	if err := ValidateAccount(current.Login, fullName, email); err != nil {
 		return err
 	}
 
@@ -495,11 +564,11 @@ func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, 
 	return s.audit.Record(ctx, s.entry(actorID, action, subject, payload))
 }
 
-// validateAccount checks trimmed descriptive fields. A login or name with a
+// ValidateAccount checks trimmed descriptive fields. A login or name with a
 // control character is refused: PostgreSQL cannot store a NUL, and the
 // sign-in message must not carry one. The email must parse back to exactly
 // the bare address, since net/mail also accepts a display name with brackets.
-func validateAccount(login, fullName, email string) error {
+func ValidateAccount(login, fullName, email string) error {
 	switch {
 	case login == "":
 		return fmt.Errorf("%w: login must not be empty", ErrInvalidAccount)
@@ -569,10 +638,10 @@ func validateReason(reason string) (string, error) {
 	return reason, nil
 }
 
-// validatePassword applies the policy. The maximum is the hasher's, in
+// ValidatePassword applies the policy. The maximum is the hasher's, in
 // bytes: argon2 hashes the whole input, and Hasher.Hash refuses a longer one
 // with an undeclared error, which would be answered as a server fault.
-func validatePassword(candidate string) error {
+func ValidatePassword(candidate string) error {
 	if len([]rune(candidate)) < MinPasswordLength {
 		return fmt.Errorf("%w: at least %d characters", ErrWeakPassword, MinPasswordLength)
 	}
@@ -615,6 +684,9 @@ func (s *Service) refuseIfLastAdmin(ctx context.Context, user User) error {
 }
 
 const RoleAdmin = "admin"
+
+// RoleStudent holds no permission: a participant.
+const RoleStudent = "student"
 
 type BootstrapResult struct {
 	User User

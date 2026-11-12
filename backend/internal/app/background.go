@@ -350,3 +350,20 @@ func expireMail(sweep func(context.Context) error) task {
 		run:     sweep,
 	}
 }
+
+// sweepSignups deletes the sign-ups whose code has expired
+// (signup.Service.Sweep). An expired row already holds no login and counts
+// against no cap, so nothing waits on it: not at startup, every ten minutes.
+func sweepSignups(log *slog.Logger, sweep func(context.Context, time.Time) (int64, error)) task {
+	return task{
+		name:  "signup-sweep",
+		every: 10 * time.Minute,
+		run: func(ctx context.Context) error {
+			swept, err := sweep(ctx, time.Now())
+			if swept > 0 {
+				log.InfoContext(ctx, "swept expired sign-ups", "rows", swept)
+			}
+			return err
+		},
+	}
+}

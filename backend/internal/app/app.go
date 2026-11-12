@@ -46,6 +46,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/showcase"
+	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
 )
@@ -570,6 +571,21 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		registrationsHandler = registrationsHandler.WithPublicForm()
 	}
 	modules = append(modules, registrationsHandler)
+
+	// Built whatever the switch says, so rows left from before it was turned
+	// off are still swept.
+	signups := signup.NewService(signup.Config{
+		Enabled:    cfg.SelfSignupEnabled,
+		Store:      postgres.NewSignups(pool),
+		Directory:  userRepo,
+		Accounts:   userService,
+		Hasher:     passwords,
+		Outbox:     outbox,
+		Texts:      texts,
+		Settings:   installation,
+		UnitOfWork: storage.NewUnitOfWork(pool),
+	})
+	a.tasks = append(a.tasks, sweepSignups(log, signups.Sweep))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only

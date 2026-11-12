@@ -208,6 +208,95 @@ func TestAuditOfCreationCarriesNoPassword(t *testing.T) {
 	}
 }
 
+func verifiedCommand(t *testing.T, login string) users.CreateVerifiedCommand {
+	t.Helper()
+	return users.CreateVerifiedCommand{
+		Login:        login,
+		Email:        login + "@example.edu",
+		FullName:     "Ana Popescu",
+		PasswordHash: passwordtest.Hash(t, "a password the owner chose"),
+		VerifiedAt:   time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC),
+	}
+}
+
+func TestCreateVerifiedMakesAStudentWithTheChosenPassword(t *testing.T) {
+	f := newFixture(t)
+	cmd := verifiedCommand(t, "ana")
+
+	created, err := f.service.CreateVerified(t.Context(), cmd)
+	if err != nil {
+		t.Fatalf("CreateVerified() = %v", err)
+	}
+
+	stored, ok := f.repo.Get(created.ID)
+	if !ok {
+		t.Fatal("the account was not stored")
+	}
+	if stored.Login != "ana" || stored.Email != "ana@example.edu" || stored.FullName != "Ana Popescu" {
+		t.Errorf("stored %+v, want the command's login, email and name", stored)
+	}
+	if stored.PasswordHash != cmd.PasswordHash || stored.MustChangePassword {
+		t.Errorf("hash kept = %v, must change = %v; want the chosen password, not a one-time one",
+			stored.PasswordHash == cmd.PasswordHash, stored.MustChangePassword)
+	}
+	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(cmd.VerifiedAt) {
+		t.Errorf("email verified at %v, want %v", stored.EmailVerifiedAt, cmd.VerifiedAt)
+	}
+	if !slices.Equal(stored.Roles, []string{users.RoleStudent}) {
+		t.Errorf("roles = %v, want only %s", stored.Roles, users.RoleStudent)
+	}
+}
+
+func TestCreateVerifiedIsAuditedWithoutAnActor(t *testing.T) {
+	f := newFixture(t)
+
+	created, err := f.service.CreateVerified(t.Context(), verifiedCommand(t, "ana"))
+	if err != nil {
+		t.Fatalf("CreateVerified() = %v", err)
+	}
+
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit entries = %v, want one", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserCreate || entry.ActorID != nil || entry.EntityID != created.ID.String() {
+		t.Errorf("entry = %+v, want the creation with a nil actor", entry)
+	}
+	if strings.Contains(fmt.Sprint(entry.Payload), "argon2") {
+		t.Errorf("the audit payload carries the digest: %v", entry.Payload)
+	}
+}
+
+func TestCreateVerifiedValidatesAsCreateDoes(t *testing.T) {
+	for name, edit := range map[string]func(*users.CreateVerifiedCommand){
+		"no login":      func(c *users.CreateVerifiedCommand) { c.Login = "  " },
+		"long login":    func(c *users.CreateVerifiedCommand) { c.Login = strings.Repeat("a", users.MaxLoginLength+1) },
+		"no name":       func(c *users.CreateVerifiedCommand) { c.FullName = "" },
+		"no email":      func(c *users.CreateVerifiedCommand) { c.Email = "" },
+		"not an email":  func(c *users.CreateVerifiedCommand) { c.Email = "Ana <ana@example.edu>" },
+		"control chars": func(c *users.CreateVerifiedCommand) { c.FullName = "Ana\x00" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			cmd := verifiedCommand(t, "ana")
+			edit(&cmd)
+
+			if _, err := f.service.CreateVerified(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("CreateVerified() = %v, want ErrInvalidAccount", err)
+			}
+		})
+	}
+}
+
+func TestCreateVerifiedRefusesATakenLogin(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "Ana", "irrelevant password")
+
+	if _, err := f.service.CreateVerified(t.Context(), verifiedCommand(t, "ana")); !errors.Is(err, users.ErrLoginTaken) {
+		t.Errorf("CreateVerified() = %v, want ErrLoginTaken", err)
+	}
+}
+
 func TestBlockRetiresEverySessionOfTheAccount(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
