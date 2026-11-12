@@ -13,6 +13,7 @@
     "user.roles_change",
     "user.password_reset",
     "user.password_change",
+    "user.password_reset_by_link",
     "user.sign_in_unlock",
     "user.sign_in_details_emailed",
     "contest.create",

@@ -42,6 +42,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/settings"
@@ -588,6 +589,22 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	a.tasks = append(a.tasks, sweepSignups(log, signups.Sweep))
 	// Mounts its routes only while the switch and mail are both on.
 	modules = append(modules, api.NewSignupHandler(signups, authService, limiter, authMiddleware, cookies, log))
+
+	// Built whatever mail says, so links left from before it was turned off
+	// are still swept; the routes exist only while it is on.
+	recoveries := recovery.NewService(recovery.Config{
+		Store:      postgres.NewPasswordResets(pool),
+		Directory:  userRepo,
+		Accounts:   userService,
+		Hasher:     passwords,
+		Outbox:     outbox,
+		Texts:      texts,
+		Settings:   installation,
+		UnitOfWork: storage.NewUnitOfWork(pool),
+		PublicURL:  cfg.PublicURL,
+	})
+	a.tasks = append(a.tasks, sweepPasswordResets(log, recoveries.Sweep))
+	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, log))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only

@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -654,6 +655,42 @@ func TestEverySignupErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 			wrapped, ok := answer(t, signupErrors, fmt.Errorf("%w: while signing up", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		recovery.ErrInvalidLink: {status: http.StatusGone, code: "reset_link_invalid",
+			message: "the reset link is unknown, used or expired"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range recovery.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, recoveryErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, recoveryErrors, fmt.Errorf("%w: while resetting", err))
 			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
 				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
 					wrapped, ok, expected.status, expected.code)

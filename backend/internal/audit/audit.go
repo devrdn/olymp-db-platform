@@ -30,6 +30,10 @@ const (
 	ActionUserRolesChange   = "user.roles_change"
 	ActionUserPasswordReset = "user.password_reset"
 	ActionPasswordChange    = "user.password_change"
+	// ActionUserPasswordResetByLink records an account's owner setting a new
+	// password through the link mailed to its address; the owner is the
+	// actor, proven by the inbox rather than by a session.
+	ActionUserPasswordResetByLink = "user.password_reset_by_link"
 	// ActionUserSignInUnlock records staff clearing an account's sign-in
 	// throttling, so the trail explains why a guessing limit did not hold.
 	ActionUserSignInUnlock = "user.sign_in_unlock"
@@ -162,8 +166,8 @@ var actions = []string{
 	ActionAuthLogin, ActionAuthLoginFailed, ActionAuthLogout,
 	ActionUserCreate, ActionUserUpdate, ActionUserBlock, ActionUserUnblock,
 	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
-	ActionUserPasswordReset, ActionPasswordChange, ActionUserSignInUnlock,
-	ActionUserSignInDetailsEmailed,
+	ActionUserPasswordReset, ActionPasswordChange, ActionUserPasswordResetByLink,
+	ActionUserSignInUnlock, ActionUserSignInDetailsEmailed,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,

@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/registrations"
 	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -316,6 +317,12 @@ var signupErrors = errorTable{
 // signupExpiredMessage is written out because a spent sign-up whose address
 // an account took since is answered with it too (signupAnswers).
 const signupExpiredMessage = "The code has expired or was tried too often; sign up again"
+
+// recoveryErrors answers every error in recovery.Errors() (walked by
+// TestEveryRecoveryErrorHasItsAnswer).
+var recoveryErrors = errorTable{
+	{err: recovery.ErrInvalidLink, status: http.StatusGone, code: codeResetLinkInvalid},
+}
 
 // contestsErrors answers every error in contests.Errors() (walked by
 // TestEveryContestsErrorHasItsAnswer). Staff routes answer account refusals

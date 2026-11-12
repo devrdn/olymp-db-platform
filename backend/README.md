@@ -192,6 +192,13 @@ which reconnect.
 | `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
 | `PUBLIC_URL` | with mail | — | the site's absolute `https://` address, for the links in messages (`http://` only in `development`) |
 
+Mail also turns on password recovery, whatever `SELF_SIGNUP_ENABLED` says:
+`POST /api/v1/public/password/forgot` mails a student account a single-use
+link to `PUBLIC_URL` followed by `/reset?token=…`, valid for thirty minutes,
+and `POST /api/v1/public/password/reset` sets the new password through it,
+marks the address verified and ends every session. Staff accounts never get
+a link. With mail off the routes do not exist.
+
 USM's relay is Microsoft 365 (Exchange Online) SMTP AUTH client submission,
 through the mailbox `noreply-olymp@usm.md`; the mailbox's password comes from
 the university's administrators and never enters the repository:

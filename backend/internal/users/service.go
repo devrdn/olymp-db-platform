@@ -413,6 +413,51 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 	return nil
 }
 
+// PasswordByLinkCommand is a password the account's owner chose after
+// following a link mailed to its address, hashed with the sign-in hasher.
+type PasswordByLinkCommand struct {
+	PasswordHash string
+	// At is when the link was followed, and so when the address was proved.
+	At time.Time
+	// Claim runs first, inside the transaction: it spends the link and names
+	// the account it was for, or reports false, and then what it wrote is
+	// kept and nothing else changes.
+	Claim func(ctx context.Context) (uuid.UUID, bool, error)
+}
+
+// SetPasswordByLink sets the password of the account cmd.Claim names, which
+// signs in with it at once, marks the address verified and ends every
+// session. It reports false when the claim was refused.
+func (s *Service) SetPasswordByLink(ctx context.Context, cmd PasswordByLinkCommand) (bool, error) {
+	var id uuid.UUID
+	done := false
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		var ok bool
+		var err error
+		if id, ok, err = cmd.Claim(ctx); err != nil || !ok {
+			return err
+		}
+		if err := s.repo.SetPassword(ctx, id, cmd.PasswordHash, false); err != nil {
+			return err
+		}
+		if err := s.repo.MarkEmailVerified(ctx, id, cmd.At); err != nil {
+			return err
+		}
+		if _, err := s.repo.BumpSessionGeneration(ctx, id); err != nil {
+			return err
+		}
+		done = true
+		return s.record(ctx, id, audit.ActionUserPasswordResetByLink, id, nil)
+	})
+	if err != nil {
+		return false, err
+	}
+	if done {
+		s.forget(ctx, id)
+	}
+	return done, nil
+}
+
 // ResetPassword issues a fresh one-time password for the administrator to
 // hand over, and emails it too when delivery asks.
 func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID, delivery Delivery) (IssuedPassword, error) {

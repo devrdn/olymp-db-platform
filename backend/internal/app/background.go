@@ -355,13 +355,24 @@ func expireMail(sweep func(context.Context) error) task {
 // (signup.Service.Sweep). An expired row already holds no login and counts
 // against no cap, so nothing waits on it: not at startup, every ten minutes.
 func sweepSignups(log *slog.Logger, sweep func(context.Context, time.Time) (int64, error)) task {
+	return sweepExpired(log, "signup-sweep", "swept expired sign-ups", sweep)
+}
+
+// sweepPasswordResets deletes the reset links past their lifetime
+// (recovery.Service.Sweep); an expired link already opens nothing, so, like
+// the sign-ups, not at startup and every ten minutes.
+func sweepPasswordResets(log *slog.Logger, sweep func(context.Context, time.Time) (int64, error)) task {
+	return sweepExpired(log, "password-reset-sweep", "swept expired password reset links", sweep)
+}
+
+func sweepExpired(log *slog.Logger, name, swept string, sweep func(context.Context, time.Time) (int64, error)) task {
 	return task{
-		name:  "signup-sweep",
+		name:  name,
 		every: 10 * time.Minute,
 		run: func(ctx context.Context) error {
-			swept, err := sweep(ctx, time.Now())
-			if swept > 0 {
-				log.InfoContext(ctx, "swept expired sign-ups", "rows", swept)
+			rows, err := sweep(ctx, time.Now())
+			if rows > 0 {
+				log.InfoContext(ctx, swept, "rows", rows)
 			}
 			return err
 		},
