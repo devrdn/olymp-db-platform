@@ -1,3 +1,4 @@
+import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import {
   contentEditable,
   contestCoverSchema,
@@ -25,7 +26,7 @@ import { ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, policy, cover] = await Promise.all([
+  const [contest, policy, cover, methods] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/sql-policy", (payload) => sqlPolicySchema.parse(payload)),
     // No cover is the ordinary state, read as an empty answer. This is the
@@ -33,6 +34,8 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
     loadContestResource(contestId, "/cover", (payload) => contestCoverSchema.parse(payload), {
       notFoundIsEmpty: true,
     }),
+    // Never throws; null leaves the trusted-domain switch to the contest's own value.
+    fetchAuthMethods(),
   ]);
 
   const t = dict.workspace.settings;
@@ -48,6 +51,7 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
         contest={contest}
         editable={settingsEditable(contest.status)}
         shapeOpen={shapeEditable(contest.status)}
+        trustedDomain={methods ? methods.trustedEmailDomain : null}
         dict={dict}
       />
 

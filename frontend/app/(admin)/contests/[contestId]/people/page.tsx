@@ -1,3 +1,4 @@
+import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { managerListSchema, participantListSchema } from "@/lib/api/people";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -15,7 +16,7 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
     activeDictionary(),
   ]);
 
-  const [contest, managers, participants] = await Promise.all([
+  const [contest, managers, participants, methods] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/managers", (payload) =>
       managerListSchema.parse(payload),
@@ -23,6 +24,8 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
     loadContestResource(contestId, "/participants", (payload) =>
       participantListSchema.parse(payload),
     ).catch(() => null),
+    // Names the domain in the mark for an address outside it; never throws.
+    fetchAuthMethods(),
   ]);
 
   const t = dict.workspace.people;
@@ -45,6 +48,7 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
           total={participants.total}
           locale={locale}
           scoring={contest.scoring}
+          trustedDomain={methods?.trustedEmailDomain}
           dict={dict}
         />
       ) : null}

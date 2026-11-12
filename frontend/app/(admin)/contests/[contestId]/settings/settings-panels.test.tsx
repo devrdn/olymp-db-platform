@@ -1,11 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { Contest } from "@/lib/api/contests";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
+// The real actions run in one test below, against a faked API.
+const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
+vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+
+import { saveSettingsAction } from "./actions";
 import { ContestPanel, PrizePanel } from "./settings-panels";
 
 let dict: Dictionary;
@@ -31,7 +37,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     startsAt: "2026-11-08T17:00:00Z",
     endsAt: "2026-11-08T21:30:00Z",
     allowedCidrs: [],
-    settings: { queryRateLimitPerMin: 0, gracePeriodMin: 0 },
+    settings: { queryRateLimitPerMin: 0, gracePeriodMin: 0, trustedDomainOnly: false },
     leaderboard: { freezeMin: null, names: "login", revealedAt: undefined },
     languages: [{ code: "en", isDefault: true }],
     translations: { en: { title: "Night in the archive" } },
@@ -581,5 +587,120 @@ describe.each(["en", "ro", "ru"] as const)("the prize places' rule in %s", (loca
     expect(t.hint).toMatch(words.unscored);
     expect(t.winnerHint).toMatch(words.winner);
     expect(t.help).toMatch(words.archive);
+  });
+});
+
+describe("ContestPanel, the trusted-domain limit", () => {
+  const t = () => dict.workspace.settings.access;
+  const label = (domain: string) => t().trustedDomainOnly.replace("{domain}", () => domain);
+  const limited = (on: boolean) =>
+    contest({
+      settings: { enrollmentDeadline: undefined, queryRateLimitPerMin: 0, gracePeriodMin: 0, trustedDomainOnly: on },
+    });
+
+  test("is not offered while the site has no domain and the contest is not limited", () => {
+    render(<ContestPanel contest={limited(false)} editable shapeOpen trustedDomain="" dict={dict} />);
+
+    expect(screen.queryByRole("checkbox", { name: /verified/i })).not.toBeInTheDocument();
+  });
+
+  test("names the site's domain, as the methods answer gives it, beside the enrolment", () => {
+    render(<ContestPanel contest={limited(false)} editable shapeOpen trustedDomain="example.edu" dict={dict} />);
+
+    const box = screen.getByRole("checkbox", { name: label("example.edu") });
+    expect(box).not.toBeChecked();
+    expect(box).toHaveAccessibleDescription(t().trustedDomainOnlyHint);
+    expect(screen.getByRole("checkbox", { name: "Only verified @example.edu addresses" })).toBe(box);
+  });
+
+  test("fills in a domain that looks like a replacement pattern literally", () => {
+    // A replacement string would read `$&` as "the matched text".
+    render(<ContestPanel contest={limited(false)} editable shapeOpen trustedDomain="$&.example.edu" dict={dict} />);
+
+    expect(screen.getByRole("checkbox", { name: label("$&.example.edu") })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Only verified @$&.example.edu addresses" })).toBeInTheDocument();
+  });
+
+  test("shows the limit as the contest holds it", () => {
+    render(<ContestPanel contest={limited(true)} editable shapeOpen trustedDomain="example.edu" dict={dict} />);
+
+    expect(screen.getByRole("checkbox", { name: label("example.edu") })).toBeChecked();
+    expect(screen.queryByText(t().trustedDomainUnset)).not.toBeInTheDocument();
+  });
+
+  test("still offers the limit, and says nobody can join, once the site's domain is gone", () => {
+    render(<ContestPanel contest={limited(true)} editable shapeOpen trustedDomain="" dict={dict} />);
+
+    expect(screen.getByRole("checkbox", { name: t().trustedDomainOnlyNoDomain })).toBeChecked();
+    expect(screen.getByText(t().trustedDomainUnset)).toBeInTheDocument();
+  });
+
+  test("does not claim the domain is gone when the site could not say", () => {
+    render(<ContestPanel contest={limited(true)} editable shapeOpen trustedDomain={null} dict={dict} />);
+
+    expect(screen.getByRole("checkbox", { name: t().trustedDomainOnlyNoDomain })).toBeChecked();
+    expect(screen.queryByText(t().trustedDomainUnset)).not.toBeInTheDocument();
+  });
+
+  test("submits the switch as it is set", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={limited(false)} editable shapeOpen trustedDomain="example.edu" dict={dict} />);
+
+    const box = screen.getByRole("checkbox", { name: label("example.edu") });
+    const form = box.closest("form")!;
+    expect(new FormData(form).get("trustedDomainOnly")).toBeNull();
+
+    await user.click(box);
+    expect(new FormData(form).get("trustedDomainOnly")).toBe("on");
+  });
+
+  test.each([
+    ["the site's domain is known", "example.edu"],
+    ["the site's domain is gone", ""],
+    ["the site could not say", null],
+  ])("keeps the limit on when an unrelated setting is saved and %s", async (_, domain) => {
+    const user = userEvent.setup();
+    serverRequest.mockReset();
+    serverRequest.mockResolvedValueOnce({});
+    render(<ContestPanel contest={limited(true)} editable shapeOpen trustedDomain={domain} dict={dict} />);
+
+    const rate = screen.getByLabelText(dict.workspace.settings.access.rate);
+    await user.clear(rate);
+    await user.type(rate, "12");
+
+    await saveSettingsAction({}, new FormData(rate.closest("form")!));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
+    expect(init.body.settings).toMatchObject({ query_rate_limit_per_min: 12, trusted_domain_only: true });
+  });
+
+  test("keeps the limit off when it is off and not offered", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockResolvedValueOnce({});
+    render(<ContestPanel contest={limited(false)} editable shapeOpen trustedDomain="" dict={dict} />);
+
+    const rate = screen.getByLabelText(dict.workspace.settings.access.rate);
+    await saveSettingsAction({}, new FormData(rate.closest("form")!));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
+    expect(init.body.settings).toHaveProperty("trusted_domain_only", false);
+  });
+});
+
+describe.each(["en", "ro", "ru"] as const)("the trusted-domain texts in %s", (locale) => {
+  test("leave the domain to the page, and hold a place for it where it is named", async () => {
+    const d = await getDictionary(locale);
+
+    expect(d.workspace.settings.access.trustedDomainOnly).toContain("@{domain}");
+    expect(d.workspace.people.participants.untrustedEmail).toContain("@{domain}");
+    expect(d.participant.trustedDomain).toContain("{domain}");
+    for (const text of [
+      d.workspace.settings.access.trustedDomainOnlyNoDomain,
+      d.workspace.settings.access.trustedDomainOnlyHint,
+      d.workspace.settings.access.trustedDomainUnset,
+      d.errors.contest_trusted_email_required,
+    ]) {
+      expect(text).not.toMatch(/\{domain\}|@[a-z0-9-]+\.[a-z]/i);
+    }
   });
 });

@@ -29,7 +29,7 @@ const en = {
   auth: {
     signIn: {
       title: "Sign in",
-      lede: "Your login and password come from the department.",
+      lede: "Sign in to take part in a contest or to run one.",
       login: "Login",
       password: "Password",
       submit: "Sign in",
@@ -39,6 +39,7 @@ const en = {
       forgot: "Forgot password?",
       noAccount: "No account yet?",
       signUp: "Create an account",
+      microsoft: "Sign in with Microsoft",
     },
     changePassword: {
       title: "Change your password",
@@ -1183,6 +1184,7 @@ const en = {
         help: "Everybody enrolled, and where each of them has got to.",
         countLabel: "enrolled",
         notStarted: "not started",
+        untrustedEmail: "not a verified @{domain} address",
         remove: "Remove",
         disqualify: "Disqualify",
         confirmDisqualify: "Disqualify this participant? Everything they have done stays on the record.",
@@ -1284,6 +1286,10 @@ const en = {
         resultDownloadHint: "On by default. A change reaches a page a participant already has open when they next reload it. Switching it off only hides the “Download CSV” button: the rows can still be selected and copied from the table.",
         schemaDiagram: "Participants may open the schema as a diagram",
         schemaDiagramHint: "On by default. A change reaches a page a participant already has open when they next reload it. Switching it off only removes the “Diagram” button: the tables, columns and foreign keys stay listed in the schema panel.",
+        trustedDomainOnly: "Only verified @{domain} addresses",
+        trustedDomainOnlyNoDomain: "Only verified addresses in the site's own domain",
+        trustedDomainOnlyHint: "Applies when participants join by themselves: the account needs a confirmed address in this domain or one of its subdomains. People you add here, one by one or from a list, are not checked.",
+        trustedDomainUnset: "This site has no email domain set, so while this is on nobody can join the contest by themselves.",
       },
       languages: {
         heading: "Languages",
@@ -2089,6 +2095,7 @@ const en = {
     join: "Join",
     joining: "Joining",
     joined: "You are enrolled.",
+    trustedDomain: "The accepted domain is {domain}.",
     openConsole: "Open",
     waitingRoom: "Wait for the start",
     enrolled: "You are in",

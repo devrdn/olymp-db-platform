@@ -76,3 +76,23 @@ describe("importResultSchema", () => {
     expect(parsed.skipped[0]).toEqual({ ref: "st99999", reason: "unknown_account" });
   });
 });
+
+describe("participantSchema, the staff list's verified-address flag", () => {
+  const raw = {
+    registration_id: "1f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+    user_id: "2f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+    login: "st12345",
+    full_name: "A. Student",
+    status: "registered",
+    total_score: 0,
+  };
+
+  test("reads trusted_email as the server sends it", () => {
+    expect(participantSchema.parse({ ...raw, trusted_email: false }).trustedEmail).toBe(false);
+    expect(participantSchema.parse({ ...raw, trusted_email: true }).trustedEmail).toBe(true);
+  });
+
+  test("reads a missing flag as unknown, not as unverified", () => {
+    expect(participantSchema.parse(raw).trustedEmail).toBeUndefined();
+  });
+});

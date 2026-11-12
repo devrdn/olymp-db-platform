@@ -167,12 +167,15 @@ export function ParticipantPanel({
   total,
   locale,
   scoring,
+  trustedDomain = "",
   dict,
 }: {
   contestId: string;
   participants: Participant[];
   total: number;
   locale: Locale;
+  /** The site's email domain from `/auth/methods`; "" when it has none or could not say. */
+  trustedDomain?: string;
   // ICPC ranks by solved count, then penalty (docs/ARCHITECTURE.md §6.1.1);
   // `total_score` is always 0 there, so its column is hidden.
   scoring: Scoring;
@@ -180,6 +183,10 @@ export function ParticipantPanel({
 }) {
   const t = dict.workspace.people;
   const showScore = scoring !== "icpc";
+  // A replacer function, so a `$` in the domain is not read as a pattern.
+  const untrusted = trustedDomain
+    ? t.participants.untrustedEmail.replace("{domain}", () => trustedDomain)
+    : null;
 
   return (
     <section className="flex flex-col gap-5">
@@ -235,6 +242,9 @@ export function ParticipantPanel({
                     <span className="block font-mono text-data text-ink-3">
                       {participant.login}
                     </span>
+                    {untrusted && participant.trustedEmail === false ? (
+                      <span className="mt-1 block text-small text-warn">{untrusted}</span>
+                    ) : null}
                   </td>
                   <td className={CELL}>
                     <Tag tone={STATUS_TONE[participant.status]}>

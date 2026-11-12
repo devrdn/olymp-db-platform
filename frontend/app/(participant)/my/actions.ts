@@ -2,11 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 
+import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
-export type EnrollState = { code?: string; enrolled?: boolean };
+export type EnrollState = {
+  code?: string;
+  enrolled?: boolean;
+  /** With `contest_trusted_email_required`: the site's domain, when it has one. */
+  domain?: string;
+};
 
 /**
  * Enrols the signed-in participant in a contest. The id comes from the form
@@ -33,6 +39,13 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
     // A double click or a stale list: either way the account is enrolled,
     // which is what it asked for.
     if (code === "already_enrolled") return { enrolled: true };
+
+    // The refusal's sentence cannot name the domain, so it is asked for here,
+    // only on this refusal, rather than on every load of the register.
+    if (code === "contest_trusted_email_required") {
+      const domain = (await fetchAuthMethods())?.trustedEmailDomain;
+      return domain ? { code, domain } : { code };
+    }
 
     return { code };
   }

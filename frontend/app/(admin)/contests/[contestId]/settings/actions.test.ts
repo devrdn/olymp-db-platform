@@ -211,3 +211,35 @@ describe("savePrizePlacesAction", () => {
     expect(await savePrizePlacesAction({}, form({ prizeFirst: "1" }))).toEqual({ code: "not_editable" });
   });
 });
+
+/**
+ * The request replaces the whole `settings` object, and the API cannot tell a
+ * missing `trusted_domain_only` from false: every save must carry it.
+ */
+describe("saveSettingsAction, the trusted-domain limit", () => {
+  test("sends it on when the form carries it", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ queryRateLimitPerMin: "10", trustedDomainOnly: "on" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
+    expect(init.body.settings.trusted_domain_only).toBe(true);
+  });
+
+  test("sends it off, explicitly, when the form does not", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, form({ queryRateLimitPerMin: "10" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
+    expect(init.body.settings).toHaveProperty("trusted_domain_only", false);
+  });
+
+  test("never sends a forged contest id", async () => {
+    const data = form({ trustedDomainOnly: "on" });
+    data.set("contestId", "../users");
+
+    expect(await saveSettingsAction({}, data)).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});

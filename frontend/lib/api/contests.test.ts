@@ -195,6 +195,18 @@ const detail = {
   updated_at: "2026-10-02T08:00:00Z",
 };
 
+describe("contestSchema, the trusted-domain limit", () => {
+  test("reads trusted_domain_only into the settings", () => {
+    const parsed = contestSchema.parse({ ...detail, settings: { ...detail.settings, trusted_domain_only: true } });
+
+    expect(parsed.settings.trustedDomainOnly).toBe(true);
+  });
+
+  test("reads it as off when the server leaves it out", () => {
+    expect(contestSchema.parse(detail).settings.trustedDomainOnly).toBe(false);
+  });
+});
+
 describe("contestSchema", () => {
   test("parses the staff view, every translation included", () => {
     const parsed = contestSchema.parse(detail);

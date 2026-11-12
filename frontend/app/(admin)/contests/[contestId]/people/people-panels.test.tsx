@@ -22,6 +22,7 @@ function participant(overrides: Partial<Participant> = {}): Participant {
     startedAt: "2026-11-08T19:05:00Z",
     finishedAt: undefined,
     totalScore: 40,
+    trustedEmail: true,
     ...overrides,
   };
 }
@@ -61,5 +62,48 @@ describe("ParticipantPanel, the score column", () => {
 
     expect(screen.queryByText(dict.workspace.people.columns.score)).not.toBeInTheDocument();
     expect(screen.queryByText("40")).not.toBeInTheDocument();
+  });
+});
+
+describe("ParticipantPanel, an address outside the site's domain", () => {
+  const mark = (domain: string) =>
+    dict.workspace.people.participants.untrustedEmail.replace("{domain}", () => domain);
+
+  const panel = (participants: Participant[], trustedDomain?: string) =>
+    render(
+      <ParticipantPanel
+        contestId="c1"
+        participants={participants}
+        total={participants.length}
+        locale="en"
+        scoring="points"
+        trustedDomain={trustedDomain}
+        dict={dict}
+      />,
+    );
+
+  test("marks a participant without a verified address there, naming the domain the site has", () => {
+    panel([participant({ trustedEmail: false })], "example.edu");
+
+    expect(screen.getByText(mark("example.edu"))).toBeInTheDocument();
+    expect(screen.getByText("not a verified @example.edu address")).toBeInTheDocument();
+  });
+
+  test("leaves a participant with one unmarked", () => {
+    panel([participant({ trustedEmail: true })], "example.edu");
+
+    expect(screen.queryByText(mark("example.edu"))).not.toBeInTheDocument();
+  });
+
+  test("marks nobody while the site has no domain", () => {
+    panel([participant({ trustedEmail: false })], "");
+
+    expect(screen.queryByText(/verified/i)).not.toBeInTheDocument();
+  });
+
+  test("marks nobody when the server did not say", () => {
+    panel([participant({ trustedEmail: undefined })], "example.edu");
+
+    expect(screen.queryByText(mark("example.edu"))).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { Band } from "@/components/layout/band";
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { activeDictionary } from "@/lib/i18n/server";
 
+import { externalSignInError, signInErrors } from "./codes";
 import { SignInForm } from "./sign-in-form";
 
 export async function generateMetadata() {
@@ -28,6 +29,9 @@ export default async function LoginPage(props: PageProps<"/login">) {
    * sentence, never supply text.
    */
   const passwordChanged = params.changed === "1";
+
+  /** Where an external sign-in ends when it is refused; the same rule as above. */
+  const external = externalSignInError(params.error);
 
   const t = dict.auth.signIn;
 
@@ -58,11 +62,21 @@ export default async function LoginPage(props: PageProps<"/login">) {
             </p>
           ) : null}
 
-          {/* When the API cannot say what it offers, neither link shows; sign-in works without them. */}
+          {external ? (
+            <p role="alert" className="max-w-96 border-l-2 border-bad pl-3 text-small text-ink-2">
+              {dict.errors[external]}
+            </p>
+          ) : null}
+
+          {/* When the API cannot say what it offers, no other way in shows; sign-in works without them. */}
           <SignInForm
-            dict={{ auth: dict.auth, errors: dict.errors }}
+            dict={{ signIn: t, errors: signInErrors(dict.errors) }}
             next={next}
-            offers={{ signUp: methods?.passwordSignup ?? false, forgot: methods?.passwordReset ?? false }}
+            offers={{
+              signUp: methods?.passwordSignup ?? false,
+              forgot: methods?.passwordReset ?? false,
+              microsoft: methods?.microsoft ?? false,
+            }}
           />
         </div>
       </div>

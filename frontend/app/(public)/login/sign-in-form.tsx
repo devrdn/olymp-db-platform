@@ -2,22 +2,24 @@
 
 import { useActionState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
+import { microsoftStartHref } from "@/lib/auth/microsoft";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { messageForCode } from "@/lib/i18n/errors";
 
 import { signInAction, type SignInState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import type { SignInErrors } from "./codes";
 
 /** The one message both fields point at on rejection. */
 const FAILURE_ID = "sign-in-failure";
 
 /** The other ways in the installation offers; each link shows only when it does. */
-export type SignInOffers = { signUp: boolean; forgot: boolean };
+export type SignInOffers = { signUp: boolean; forgot: boolean; microsoft: boolean };
 
-const NO_OFFERS: SignInOffers = { signUp: false, forgot: false };
+const NO_OFFERS: SignInOffers = { signUp: false, forgot: false, microsoft: false };
 
 /**
  * The page's only client component; the Server Action still works without
@@ -30,11 +32,11 @@ export function SignInForm({
   next,
   offers = NO_OFFERS,
 }: {
-  dict: Pick<Dictionary, "auth" | "errors">;
+  dict: { signIn: Dictionary["auth"]["signIn"]; errors: SignInErrors };
   next?: string;
   offers?: SignInOffers;
 }) {
-  const t = dict.auth.signIn;
+  const t = dict.signIn;
   const [state, formAction, pending] = useActionState<SignInState, FormData>(signInAction, {});
 
   const failure = state.code
@@ -85,9 +87,19 @@ export function SignInForm({
         ) : null}
       </div>
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.submitting : t.submit}
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={pending}>
+          {pending ? t.submitting : t.submit}
+        </Button>
+
+        {/* A plain link, not `next/link`: it leaves the app for the API and
+           then for Microsoft, and must not be prefetched. */}
+        {offers.microsoft ? (
+          <a href={microsoftStartHref(next)} className={buttonVariants({ variant: "secondary" })}>
+            {t.microsoft}
+          </a>
+        ) : null}
+      </div>
 
       {/* Other ways in go below the form. */}
       {offers.signUp ? (
