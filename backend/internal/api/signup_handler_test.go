@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -260,6 +261,47 @@ func TestConfirmSetsTheSessionCookie(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), session.Value) {
 		t.Errorf("the body carries the session token: %s", rec.Body.String())
+	}
+}
+
+// blockingAccounts makes the account blocked by the time it is signed in, as
+// an administrator acting between Confirm and the sign-in.
+type blockingAccounts struct{ signup.Accounts }
+
+func (a blockingAccounts) CreateVerified(ctx context.Context, cmd users.CreateVerifiedCommand) (users.User, error) {
+	u, err := a.Accounts.CreateVerified(ctx, cmd)
+	u.Status = users.StatusBlocked
+	return u, err
+}
+
+func TestConfirmOfAnAccountBlockedBeforeItsSignInAnswersBlocked(t *testing.T) {
+	f := mountSignup(t, signuptest.NewFixture(t, func(c *signup.Config) {
+		c.Accounts = blockingAccounts{c.Accounts}
+	}))
+	cookie, code := f.begin(t, "ana@example.edu", "ana")
+
+	rec := f.confirm("192.0.2.1", "ana@example.edu", code, cookie)
+
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "account_blocked" {
+		t.Errorf("= %d %s, want 403 account_blocked", rec.Code, rec.Body.String())
+	}
+	if responseCookie(rec, sessionName) != nil {
+		t.Error("a blocked account was given a session")
+	}
+}
+
+// busyHasher finds no hashing slot.
+type busyHasher struct{}
+
+func (busyHasher) Hash(context.Context, string) (string, error) { return "", password.ErrBusy }
+
+func TestStartWithoutAHashingSlotAnswersBusy(t *testing.T) {
+	f := mountSignup(t, signuptest.NewFixture(t, func(c *signup.Config) { c.Hasher = busyHasher{} }))
+
+	rec := f.start("192.0.2.1", "ana@example.edu", "ana")
+
+	if rec.Code != http.StatusServiceUnavailable || errorCode(t, rec) != "sign_in_busy" || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("= %d %s (Retry-After %q), want 503 sign_in_busy with a Retry-After", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
 	}
 }
 

@@ -164,7 +164,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 		Email: req.Email, Code: req.Code, Token: h.signupToken(r),
 	})
 	if err != nil {
-		h.fail(w, r, err)
+		h.failFrom(w, r, confirmAnswers, err)
 		return
 	}
 	// The sign-up is spent whether or not the sign-in below succeeds.
@@ -176,7 +176,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 		IP: httpx.ClientIP(r), UserAgent: r.UserAgent(), PreviousToken: previousToken,
 	})
 	if err != nil {
-		h.fail(w, r, err)
+		h.failFrom(w, r, confirmAnswers, err)
 		return
 	}
 	h.cookies.Set(w, result.Token, h.auth.Sessions().CookieLifetime())
@@ -289,17 +289,24 @@ func (h *SignupHandler) admit(w http.ResponseWriter, r *http.Request, subject st
 	return true
 }
 
-// signupAnswers is what every sign-up endpoint answers from. An account that
-// took the address after Start leaves Confirm a spent sign-up, answered as an
-// expired one: email_taken would tell whoever holds the code that the
-// address has an account.
-var signupAnswers = joined(signupErrors, usersErrors).with(errorRow{
+// signupAnswers is what Start and Resend answer from.
+var signupAnswers = joined(signupErrors, usersErrors)
+
+// confirmAnswers is what Confirm answers from. An account that took the
+// address after Start leaves Confirm a spent sign-up, answered as an expired
+// one: email_taken would tell whoever holds the code that the address has an
+// account.
+var confirmAnswers = signupAnswers.with(errorRow{
 	err: users.ErrEmailTaken, status: http.StatusGone, code: codeSignupCodeExpired,
 	message: signupExpiredMessage,
 })
 
 func (h *SignupHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	if signupAnswers.answer(w, r, h.log, err) {
+	h.failFrom(w, r, signupAnswers, err)
+}
+
+func (h *SignupHandler) failFrom(w http.ResponseWriter, r *http.Request, answers errorTable, err error) {
+	if answers.answer(w, r, h.log, err) {
 		return
 	}
 	switch {
