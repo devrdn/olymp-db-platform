@@ -2,6 +2,7 @@ package mailing_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,6 +83,23 @@ func TestEveryKindHasAName(t *testing.T) {
 	for i, kind := range mailing.Kinds() {
 		if names[i] != string(kind) {
 			t.Errorf("KindNames()[%d] = %q, want %q", i, names[i], kind)
+		}
+	}
+}
+
+// A message of any listed kind is accepted by the outbox, and with it falls
+// under the erase-after-send rule, which is kind-blind
+// (internal/postgres/mail_outbox_test.go).
+func TestTheSelfServiceKindsAreAccepted(t *testing.T) {
+	want := []mailing.Kind{mailing.KindSignupCode, mailing.KindSignupExisting, mailing.KindPasswordReset}
+	for _, kind := range want {
+		if !slices.Contains(mailing.Kinds(), kind) {
+			t.Errorf("Kinds() lacks %q", kind)
+		}
+		m := aMessage()
+		m.Kind = kind
+		if err := m.Validate(); err != nil {
+			t.Errorf("Validate() for %q = %v", kind, err)
 		}
 	}
 }

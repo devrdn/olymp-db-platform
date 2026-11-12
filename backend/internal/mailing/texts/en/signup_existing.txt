@@ -1,0 +1,13 @@
+Subject: You already have an account at {{.Installation}}
+
+Hello {{.FullName}},
+
+Someone asked to sign up for {{.Installation}} with this email address, but it already belongs to an account.
+
+Login: {{.Login}}
+Sign-in page: {{.SignInURL}}
+If you have forgotten your password: {{.ForgotURL}}
+
+If this was not you, ignore this message; nothing has changed.
+
+This is an automated message; please do not reply.

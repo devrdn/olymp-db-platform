@@ -355,3 +355,152 @@ func TestAnEventRegistrationWithoutItsCodeIsRefused(t *testing.T) {
 		t.Errorf("EventRegistration() = %v, want ErrIncompleteMessage", err)
 	}
 }
+
+func signupCodeData() mailing.SignupCodeData {
+	return mailing.SignupCodeData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Code: "482913"}
+}
+
+func signupExistingData() mailing.SignupExistingData {
+	return mailing.SignupExistingData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil"}
+}
+
+func passwordResetData() mailing.PasswordResetData {
+	return mailing.PasswordResetData{
+		Installation: "Olimpiada USM & Co",
+		FullName:     "Ana-Maria O'Neil",
+		Login:        "ana.oneil",
+		Link:         publicURL + "/reset?token=abc123",
+	}
+}
+
+func TestTheSelfServiceMessagesNameWhatTheyMustInEveryLanguage(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	code, existing, reset := signupCodeData(), signupExistingData(), passwordResetData()
+
+	messages := []struct {
+		name   string
+		render func(mailing.Language) (mailing.Text, error)
+		must   []string
+	}{
+		{
+			name:   "sign-up code",
+			render: func(l mailing.Language) (mailing.Text, error) { return texts.SignupCode(l, code) },
+			must:   []string{code.Installation, code.FullName, code.Code, "30"},
+		},
+		{
+			name:   "existing account",
+			render: func(l mailing.Language) (mailing.Text, error) { return texts.SignupExisting(l, existing) },
+			must:   []string{existing.Installation, existing.FullName, existing.Login, publicURL + "/login", publicURL + "/forgot"},
+		},
+		{
+			name:   "password reset",
+			render: func(l mailing.Language) (mailing.Text, error) { return texts.PasswordReset(l, reset) },
+			must:   []string{reset.Installation, reset.FullName, reset.Login, reset.Link, "30"},
+		},
+	}
+
+	for _, m := range messages {
+		for _, lang := range mailing.Languages() {
+			t.Run(m.name+" in "+string(lang), func(t *testing.T) {
+				text, err := m.render(lang)
+				if err != nil {
+					t.Fatalf("render = %v", err)
+				}
+				if !strings.Contains(text.Subject, "Olimpiada USM & Co") {
+					t.Errorf("subject %q does not name the installation", text.Subject)
+				}
+				for _, s := range m.must {
+					if !strings.Contains(text.Body, s) {
+						t.Errorf("body does not hold %q:\n%s", s, text.Body)
+					}
+				}
+				checkRendered(t, text)
+			})
+		}
+	}
+}
+
+// Whoever typed the address into the sign-up form must learn nothing from
+// the owner's copy, and the owner is told what to do if it was not them.
+func TestTheExistingAccountMessageSaysToIgnoreItAndHoldsNoCode(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	phrases := map[mailing.Language]string{
+		mailing.English:  "ignore this message",
+		mailing.Romanian: "ignorați acest mesaj",
+		mailing.Russian:  "проигнорируйте это письмо",
+	}
+
+	for _, lang := range mailing.Languages() {
+		text, err := texts.SignupExisting(lang, signupExistingData())
+		if err != nil {
+			t.Fatalf("%s: SignupExisting() = %v", lang, err)
+		}
+		if !strings.Contains(text.Body, phrases[lang]) {
+			t.Errorf("%s: body does not say %q:\n%s", lang, phrases[lang], text.Body)
+		}
+	}
+}
+
+func TestTheSelfServiceMessagesCarryNoPasswordAndTheRightCommaBelow(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+
+	for _, lang := range mailing.Languages() {
+		for name, render := range map[string]func() (mailing.Text, error){
+			"code":     func() (mailing.Text, error) { return texts.SignupCode(lang, signupCodeData()) },
+			"existing": func() (mailing.Text, error) { return texts.SignupExisting(lang, signupExistingData()) },
+			"reset":    func() (mailing.Text, error) { return texts.PasswordReset(lang, passwordResetData()) },
+		} {
+			text, err := render()
+			if err != nil {
+				t.Fatalf("%s %s: %v", name, lang, err)
+			}
+			if strings.ContainsAny(text.Subject+text.Body, "şŞţŢ") {
+				t.Errorf("%s %s: a letter with a cedilla instead of a comma below:\n%s", name, lang, text.Body)
+			}
+		}
+	}
+}
+
+func TestASelfServiceMessageMissingADetailIsRefused(t *testing.T) {
+	texts := mailing.NewTexts(publicURL)
+	tests := map[string]func() error{
+		"sign-up code without the code": func() error {
+			d := signupCodeData()
+			d.Code = " "
+			_, err := texts.SignupCode(mailing.English, d)
+			return err
+		},
+		"sign-up code without the installation": func() error {
+			d := signupCodeData()
+			d.Installation = ""
+			_, err := texts.SignupCode(mailing.English, d)
+			return err
+		},
+		"existing account without the login": func() error {
+			d := signupExistingData()
+			d.Login = ""
+			_, err := texts.SignupExisting(mailing.Russian, d)
+			return err
+		},
+		"reset without the link": func() error {
+			d := passwordResetData()
+			d.Link = ""
+			_, err := texts.PasswordReset(mailing.Romanian, d)
+			return err
+		},
+		"reset without the name": func() error {
+			d := passwordResetData()
+			d.FullName = ""
+			_, err := texts.PasswordReset(mailing.Romanian, d)
+			return err
+		},
+	}
+
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); !errors.Is(err, mailing.ErrIncompleteMessage) {
+				t.Errorf("error = %v, want ErrIncompleteMessage", err)
+			}
+		})
+	}
+}
