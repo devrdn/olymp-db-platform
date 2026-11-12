@@ -1871,6 +1871,7 @@ const ru = {
     joining: "Записываем",
     joined: "Вы записаны.",
     trustedDomain: "Подходит домен {domain}.",
+    trustedDomainReset: "Если у вашей учётной записи уже есть такой адрес, подтвердите его ссылкой для сброса пароля.",
     openConsole: "Открыть",
     waitingRoom: "Дождаться начала",
     enrolled: "Вы записаны",

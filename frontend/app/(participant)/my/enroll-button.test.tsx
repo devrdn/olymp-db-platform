@@ -49,6 +49,25 @@ describe("EnrollButton, refused for an address outside the site's domain", () =>
   });
 });
 
+describe("EnrollButton, refused where a reset link can confirm the address", () => {
+  test("points to the forgotten-password page", async () => {
+    enrollAction.mockResolvedValue({ code: "contest_trusted_email_required", domain: "example.edu", confirmByReset: true });
+
+    const alert = await join();
+
+    expect(screen.getByRole("link", { name: en.participant.trustedDomainReset })).toHaveAttribute("href", "/forgot");
+    expect(alert).toHaveTextContent(en.participant.trustedDomainReset);
+  });
+
+  test("does not, where recovery is off", async () => {
+    enrollAction.mockResolvedValue({ code: "contest_trusted_email_required", domain: "example.edu" });
+
+    await join();
+
+    expect(screen.queryByRole("link", { name: en.participant.trustedDomainReset })).not.toBeInTheDocument();
+  });
+});
+
 describe("EnrollButton, any other refusal", () => {
   test("shows only the refusal's own sentence", async () => {
     enrollAction.mockResolvedValue({ code: "enrollment_closed", domain: "example.edu" });
