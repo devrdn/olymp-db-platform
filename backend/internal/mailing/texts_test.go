@@ -357,16 +357,16 @@ func TestAnEventRegistrationWithoutItsCodeIsRefused(t *testing.T) {
 }
 
 func signupCodeData() mailing.SignupCodeData {
-	return mailing.SignupCodeData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil", Code: "482913"}
+	return mailing.SignupCodeData{Installation: "Example Olympiad & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil", Code: "482913"}
 }
 
 func signupExistingData() mailing.SignupExistingData {
-	return mailing.SignupExistingData{Installation: "Olimpiada USM & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil"}
+	return mailing.SignupExistingData{Installation: "Example Olympiad & Co", FullName: "Ana-Maria O'Neil", Login: "ana.oneil"}
 }
 
 func passwordResetData() mailing.PasswordResetData {
 	return mailing.PasswordResetData{
-		Installation: "Olimpiada USM & Co",
+		Installation: "Example Olympiad & Co",
 		FullName:     "Ana-Maria O'Neil",
 		Login:        "ana.oneil",
 		Link:         publicURL + "/reset?token=abc123",
@@ -406,7 +406,7 @@ func TestTheSelfServiceMessagesNameWhatTheyMustInEveryLanguage(t *testing.T) {
 				if err != nil {
 					t.Fatalf("render = %v", err)
 				}
-				if !strings.Contains(text.Subject, "Olimpiada USM & Co") {
+				if !strings.Contains(text.Subject, "Example Olympiad & Co") {
 					t.Errorf("subject %q does not name the installation", text.Subject)
 				}
 				for _, s := range m.must {
