@@ -476,7 +476,7 @@ when Microsoft's signing keys could not be fetched.
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
 | `external_signin_failed` | "Signing in with Microsoft did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; `MICROSOFT_TENANT` does not admit their tenant; the account is already linked to another identity of the same tenant; or more than 120 Microsoft sign-ins came from their address in ten minutes |
-| `external_signin_staff_account` | "This address belongs to an organiser's or administrator's account. Sign in with its password." | the address, or the account the identity is linked to, holds a staff role: staff never sign in through Microsoft |
+| `external_signin_staff_account` | "This address belongs to an organiser's or administrator's account. Sign in with its password, or ask an administrator to reset it." | the address, or the account the identity is linked to, holds a staff role: staff never sign in through Microsoft |
 | `external_signin_closed` | "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
 | `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |
 

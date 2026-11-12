@@ -167,7 +167,7 @@
     },
     {
       "code": "external_signin_staff_account",
-      "meaning": "The address the provider vouches for belongs to an organiser's or administrator's account, which is never entered through an external provider. Sign in with that account's password."
+      "meaning": "The address the provider vouches for belongs to an organiser's or administrator's account, which is never entered through an external provider. Sign in with that account's password, or have an administrator reset it."
     },
     {
       "code": "forbidden",
