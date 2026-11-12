@@ -21,7 +21,8 @@ import (
 
 // userColumns is the projection scanUser reads; every account query uses it.
 const userColumns = `
-	u.id, u.login, COALESCE(u.email, ''), u.password_hash, u.full_name, u.status,
+	u.id, u.login, COALESCE(u.email, ''), u.email_verified_at,
+	COALESCE(u.password_hash, ''), u.full_name, u.status,
 	COALESCE(u.status_reason, ''), u.status_changed_at, u.status_changed_by,
 	u.session_generation, u.must_change_password, u.password_changed_at,
 	u.last_login_at, u.created_at, u.updated_at,
@@ -65,6 +66,8 @@ const usersSearchWhere = `
 
 var _ users.Repository = (*Users)(nil)
 
+var _ users.ExternalIdentities = (*Users)(nil)
+
 var _ contests.UserDirectory = (*Users)(nil)
 
 // Users stores accounts in PostgreSQL.
@@ -85,7 +88,7 @@ func (r *Users) querier(ctx context.Context) storage.Querier {
 func scanUser(row pgx.Row) (users.User, error) {
 	var u users.User
 	err := row.Scan(
-		&u.ID, &u.Login, &u.Email, &u.PasswordHash, &u.FullName, &u.Status,
+		&u.ID, &u.Login, &u.Email, &u.EmailVerifiedAt, &u.PasswordHash, &u.FullName, &u.Status,
 		&u.StatusReason, &u.StatusChangedAt, &u.StatusChangedBy,
 		&u.SessionGeneration, &u.MustChangePassword, &u.PasswordChangedAt,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permissions,
@@ -123,6 +126,70 @@ func (r *Users) ByLogin(ctx context.Context, login string) (users.User, error) {
 		 ORDER BY (u.status = 'deleted'), u.status_changed_at DESC, u.id DESC
 		 LIMIT 1`, login)
 	return scanUser(row)
+}
+
+// ByEmail resolves a live account by email, ignoring case. The lookup is
+// served by the unique index on lower(email).
+func (r *Users) ByEmail(ctx context.Context, email string) (users.User, error) {
+	if !storableText(email) || len(email) > users.MaxEmailLength {
+		return users.User{}, users.ErrNotFound
+	}
+	row := r.querier(ctx).QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users u `+userJoin+`
+		 WHERE lower(u.email) = lower($1) AND u.status <> 'deleted'`, email)
+	return scanUser(row)
+}
+
+// MarkEmailVerified records when the account proved its email.
+func (r *Users) MarkEmailVerified(ctx context.Context, id uuid.UUID, at time.Time) error {
+	return r.exec(ctx, `UPDATE users SET email_verified_at = $2, updated_at = now() WHERE id = $1`, id, at)
+}
+
+// ByExternalIdentity resolves the account a provider identity is linked to.
+func (r *Users) ByExternalIdentity(ctx context.Context, provider, issuer, subject string) (users.User, error) {
+	if !storableText(issuer) || !storableText(subject) {
+		return users.User{}, users.ErrNotFound
+	}
+	row := r.querier(ctx).QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users u `+userJoin+`
+		 JOIN external_identities e ON e.user_id = u.id
+		 WHERE e.provider = $1 AND e.issuer = $2 AND e.subject = $3`, provider, issuer, subject)
+	return scanUser(row)
+}
+
+// LinkExternalIdentity ties a provider identity to an account. A second link
+// of the same identity is the table's unique violation, passed through.
+func (r *Users) LinkExternalIdentity(ctx context.Context, id users.ExternalIdentity) error {
+	_, err := r.querier(ctx).Exec(ctx, `
+		INSERT INTO external_identities (user_id, provider, issuer, subject, email)
+		VALUES ($1, $2, $3, $4, $5)`,
+		id.UserID, id.Provider, id.Issuer, id.Subject, nullIfEmpty(id.Email))
+	if err != nil {
+		return fmt.Errorf("link external identity: %w", err)
+	}
+	return nil
+}
+
+// TouchExternalIdentity stamps a sign-in through the identity.
+func (r *Users) TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE external_identities SET last_used_at = $4
+		WHERE provider = $1 AND issuer = $2 AND subject = $3`, provider, issuer, subject, at)
+	if err != nil {
+		return fmt.Errorf("touch external identity: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return users.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteExternalIdentities forgets every identity of the account.
+func (r *Users) DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error {
+	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM external_identities WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("delete external identities: %w", err)
+	}
+	return nil
 }
 
 // ByID resolves an account by identifier.
@@ -167,7 +234,7 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 			RETURNING *
 		)
 		SELECT `+userColumns+` FROM inserted u `+userJoin,
-		u.Login, email, u.PasswordHash, u.FullName, u.Status, u.MustChangePassword)
+		u.Login, email, nullIfEmpty(u.PasswordHash), u.FullName, u.Status, u.MustChangePassword)
 
 	created, err := scanUser(row)
 	if err != nil {
@@ -525,7 +592,7 @@ func mapUserConstraint(err error) error {
 	switch pgErr.ConstraintName {
 	case "users_login_key", "users_login_lower_key":
 		return users.ErrLoginTaken
-	case "users_email_key":
+	case "users_email_key", "users_email_lower_key":
 		return users.ErrEmailTaken
 	default:
 		return err

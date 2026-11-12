@@ -849,3 +849,145 @@ func TestSearchDoesNotComputeADiscardedCount(t *testing.T) {
 		t.Errorf("Search() sent %d statements, want exactly 1 (no discarded count(*))", got)
 	}
 }
+
+func TestByEmailIgnoresCase(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		created, err := repo.Create(ctx, users.User{Login: "by-email-a", FullName: "A", Email: "Mixed.Case@Example.edu", Status: users.StatusActive})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		found, err := repo.ByEmail(ctx, "mixed.case@EXAMPLE.EDU")
+		if err != nil || found.ID != created.ID {
+			t.Fatalf("ByEmail() = %v, %v; want the created account", found.ID, err)
+		}
+		if _, err := repo.ByEmail(ctx, "nobody@example.edu"); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("ByEmail(unknown) = %v, want ErrNotFound", err)
+		}
+		if found.HasPassword() {
+			t.Error("an account created without a digest reports a password")
+		}
+	})
+}
+
+func TestByEmailSkipsADeletedAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		created, err := repo.Create(ctx, users.User{Login: "by-email-gone", FullName: "A", Email: "gone@example.edu", Status: users.StatusActive})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+		if err := repo.SetStatus(ctx, []uuid.UUID{created.ID}, users.StatusDeleted, users.StatusChange{Reason: "x", At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+		if _, err := repo.ByEmail(ctx, "gone@example.edu"); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("ByEmail(deleted) = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestEmailsDifferingOnlyInCaseCollide(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		if _, err := repo.Create(ctx, users.User{Login: "case-a", FullName: "A", Email: "same@example.edu", Status: users.StatusActive}); err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+		_, err := repo.Create(ctx, users.User{Login: "case-b", FullName: "B", Email: "SAME@example.edu", Status: users.StatusActive})
+		if !errors.Is(err, users.ErrEmailTaken) {
+			t.Errorf("Create() = %v, want ErrEmailTaken", err)
+		}
+	})
+}
+
+func TestMarkEmailVerifiedStampsTheAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		created := makeUser(t, ctx, "verify-me")
+		at := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+
+		if err := repo.MarkEmailVerified(ctx, created.ID, at); err != nil {
+			t.Fatalf("MarkEmailVerified() = %v", err)
+		}
+		stored, _ := repo.ByID(ctx, created.ID)
+		if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(at) {
+			t.Errorf("EmailVerifiedAt = %v, want %v", stored.EmailVerifiedAt, at)
+		}
+		if err := repo.MarkEmailVerified(ctx, uuid.New(), at); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("MarkEmailVerified(unknown) = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func microsoftIdentity(userID uuid.UUID, subject string) users.ExternalIdentity {
+	return users.ExternalIdentity{UserID: userID, Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example/v2.0", Subject: subject, Email: "x@example.edu"}
+}
+
+func TestAnExternalIdentityIsUniquePerIssuerAndSubject(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "identity-first")
+		second := makeUser(t, ctx, "identity-second")
+		if err := repo.LinkExternalIdentity(ctx, microsoftIdentity(first.ID, "sub-1")); err != nil {
+			t.Fatalf("LinkExternalIdentity() = %v", err)
+		}
+
+		found, err := repo.ByExternalIdentity(ctx, users.ProviderMicrosoft, "https://issuer.example/v2.0", "sub-1")
+		if err != nil || found.ID != first.ID {
+			t.Fatalf("ByExternalIdentity() = %v, %v; want the first account", found.ID, err)
+		}
+		if _, err := repo.ByExternalIdentity(ctx, users.ProviderMicrosoft, "https://issuer.example/v2.0", "other"); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("ByExternalIdentity(unknown) = %v, want ErrNotFound", err)
+		}
+		// Last, because the refused insert aborts the test transaction.
+		err = repo.LinkExternalIdentity(ctx, microsoftIdentity(second.ID, "sub-1"))
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolation {
+			t.Errorf("a second account linking the same identity = %v, want a unique violation", err)
+		}
+	})
+}
+
+func TestTouchExternalIdentityStampsItsLastUse(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		owner := makeUser(t, ctx, "identity-touch")
+		if err := repo.LinkExternalIdentity(ctx, microsoftIdentity(owner.ID, "sub-touch")); err != nil {
+			t.Fatalf("LinkExternalIdentity() = %v", err)
+		}
+		at := time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)
+		if err := repo.TouchExternalIdentity(ctx, users.ProviderMicrosoft, "https://issuer.example/v2.0", "sub-touch", at); err != nil {
+			t.Fatalf("TouchExternalIdentity() = %v", err)
+		}
+		var got time.Time
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT last_used_at FROM external_identities WHERE user_id = $1`, owner.ID).Scan(&got); err != nil || !got.Equal(at) {
+			t.Errorf("last_used_at = %v (err %v), want %v", got, err, at)
+		}
+	})
+}
+
+func TestDeletingAnAccountForgetsItsExternalIdentities(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		service := users.NewService(repo, audit.New(NewAuditSink(testPool)), storage.NewUnitOfWork(testPool), passwordtest.NewHasher()).
+			WithExternalIdentities(repo)
+		admin := makeUser(t, ctx, "forget-admin")
+		gone := makeUser(t, ctx, "forget-gone")
+		if err := repo.LinkExternalIdentity(ctx, microsoftIdentity(gone.ID, "sub-gone")); err != nil {
+			t.Fatalf("LinkExternalIdentity() = %v", err)
+		}
+
+		if err := service.Delete(ctx, admin.ID, gone.ID, "left the university"); err != nil {
+			t.Fatalf("Delete() = %v", err)
+		}
+
+		if _, err := repo.ByExternalIdentity(ctx, users.ProviderMicrosoft, "https://issuer.example/v2.0", "sub-gone"); !errors.Is(err, users.ErrNotFound) {
+			t.Errorf("ByExternalIdentity() after delete = %v, want ErrNotFound", err)
+		}
+		// The identity is free for a new account to claim.
+		fresh := makeUser(t, ctx, "forget-fresh")
+		if err := repo.LinkExternalIdentity(ctx, microsoftIdentity(fresh.ID, "sub-gone")); err != nil {
+			t.Errorf("relinking the released identity = %v", err)
+		}
+	})
+}

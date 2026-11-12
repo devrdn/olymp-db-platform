@@ -81,6 +81,26 @@ func (r *Repository) ByLogin(_ context.Context, login string) (users.User, error
 	return users.User{}, users.ErrNotFound
 }
 
+// ByEmail mirrors the lower(email) lookup over live accounts.
+func (r *Repository) ByEmail(_ context.Context, email string) (users.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return users.User{}, r.Err
+	}
+	for _, u := range r.byID {
+		if u.Status != users.StatusDeleted && u.Email != "" && strings.EqualFold(u.Email, email) {
+			return r.withPermissions(u), nil
+		}
+	}
+	return users.User{}, users.ErrNotFound
+}
+
+func (r *Repository) MarkEmailVerified(_ context.Context, id uuid.UUID, at time.Time) error {
+	return r.mutate(id, func(u *users.User) { u.EmailVerifiedAt = &at })
+}
+
 func (r *Repository) ByID(_ context.Context, id uuid.UUID) (users.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

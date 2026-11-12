@@ -657,3 +657,74 @@ func TestTheFormerManagersMigrationRecoversRevokesFromTheAuditTrail(t *testing.T
 		t.Errorf("after rolling back 000053 the table exists = %v (err %v), want dropped", exists, err)
 	}
 }
+
+// Existing accounts that have an email are taken as verified, as the owner
+// decided; an account without one and a deleted one stay as they were.
+func TestTheSelfServiceMigrationVerifiesExistingEmails(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(53); err != nil {
+		t.Fatalf("migrate to 53: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, row := range []struct{ login, email, status string }{
+		{"with-email", "a@example.edu", "active"},
+		{"without-email", "", "active"},
+		{"deleted-with-email", "b@example.edu", "deleted"},
+	} {
+		var email *string
+		if row.email != "" {
+			email = &row.email
+		}
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO users (login, email, password_hash, full_name, status)
+			VALUES ($1, $2, 'x', 'A Person', $3)`, row.login, email, row.status); err != nil {
+			t.Fatalf("create %s: %v", row.login, err)
+		}
+	}
+
+	if err := m.Migrate(54); err != nil {
+		t.Fatalf("migrate to 54: %v", err)
+	}
+
+	verified := func(login string) bool {
+		t.Helper()
+		var at *time.Time
+		if err := conn.QueryRow(ctx, `SELECT email_verified_at FROM users WHERE login = $1`, login).Scan(&at); err != nil {
+			t.Fatalf("read %s: %v", login, err)
+		}
+		return at != nil
+	}
+	if !verified("with-email") {
+		t.Error("an account with an email was not marked verified")
+	}
+	if verified("without-email") {
+		t.Error("an account without an email was marked verified")
+	}
+	if verified("deleted-with-email") {
+		t.Error("a deleted account was marked verified")
+	}
+
+	if _, err := conn.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE login = 'with-email'`); err != nil {
+		t.Fatalf("clear a password: %v", err)
+	}
+	if err := m.Migrate(53); err == nil {
+		t.Error("rolling back 000054 with a password-less account succeeded, want a refusal")
+	}
+}

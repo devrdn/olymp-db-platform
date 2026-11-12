@@ -307,7 +307,7 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	// Verify even without an account, or timing would reveal which logins
 	// exist.
 	hash := dummyHash
-	if found {
+	if found && user.HasPassword() {
 		hash = user.PasswordHash
 	}
 	matched, verifyErr := slot.Verify(hash, cmd.Password)
