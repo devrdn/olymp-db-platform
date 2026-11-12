@@ -501,6 +501,52 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 	}
 }
 
+// A provider can hand a mailbox to someone new; the address must not carry
+// them into the previous holder's account.
+func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: microsoftIdentity("").Issuer, Subject: "sub-before",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-after"), time.Now())
+
+	if !errors.Is(err, users.ErrIssuerAlreadyLinked) {
+		t.Errorf("LinkExternal() = %v, want ErrIssuerAlreadyLinked", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-before" {
+		t.Errorf("identities = %+v, want only the first", linked)
+	}
+	if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
+		t.Error("the email was marked verified")
+	}
+	if len(f.sink.entries) != 0 {
+		t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+	}
+}
+
+func TestLinkExternalLinksAnIdentityOfAnotherIssuer(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/other-tenant/v2.0", Subject: "sub-elsewhere",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
+		t.Errorf("identities = %+v, want both", linked)
+	}
+}
+
 func TestLinkExternalRefusesAnInvalidIdentity(t *testing.T) {
 	f := newFixture(t)
 	f.service.WithExternalIdentities(f.repo)

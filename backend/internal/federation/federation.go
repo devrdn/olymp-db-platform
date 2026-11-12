@@ -41,13 +41,17 @@ var (
 	// ErrInvalidClaims refuses claims that are empty where required, over a
 	// bound, or not text.
 	ErrInvalidClaims = errors.New("the identity provider's claims are not valid")
+	// ErrIdentityConflict refuses linking by email an account already linked
+	// to another identity at the same issuer: a provider may reassign a
+	// mailbox, and its new holder must not enter the previous one's account.
+	ErrIdentityConflict = errors.New("the account is already linked to another identity at this provider")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
 // users.ErrAccountBlocked and users.ErrAccountDeleted pass through and belong
 // to users.
 func Errors() []error {
-	return []error{ErrStaffAccount, ErrSignupClosed, ErrInvalidClaims}
+	return []error{ErrStaffAccount, ErrSignupClosed, ErrInvalidClaims, ErrIdentityConflict}
 }
 
 // Claims is what the provider's adapter verified about the person.

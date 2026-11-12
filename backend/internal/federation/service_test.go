@@ -117,14 +117,9 @@ func (f *fixture) link(t *testing.T, u users.User, subject string) {
 	}
 }
 
+// accountCount counts every account in the repository, under any login.
 func (f *fixture) accountCount() int {
-	n := 0
-	for _, login := range []string{"ana", "ana-2", "ana-3", "ana.popescu", "user"} {
-		if _, err := f.repo.ByLogin(context.Background(), login); err == nil {
-			n++
-		}
-	}
-	return n
+	return f.repo.Len()
 }
 
 func claims(subject string) federation.Claims {
@@ -237,8 +232,8 @@ func TestNeverLinksAStaffAccount(t *testing.T) {
 	if len(f.repo.Identities(staff.ID)) != 0 {
 		t.Error("the staff account was linked")
 	}
-	if n := f.accountCount(); n != 0 {
-		t.Errorf("accounts created = %d, want none", n)
+	if n := f.accountCount(); n != 1 {
+		t.Errorf("accounts = %d, want only the staff one", n)
 	}
 }
 
@@ -528,8 +523,8 @@ func TestAnAccountThatTakesTheEmailDuringCreationIsLinkedInstead(t *testing.T) {
 	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
 		t.Errorf("identities = %+v, want sub-ana linked to it", linked)
 	}
-	if n := f.accountCount(); n != 0 {
-		t.Errorf("accounts created = %d, want none", n)
+	if n := f.accountCount(); n != 1 {
+		t.Errorf("accounts = %d, want only the one that took the address", n)
 	}
 }
 
@@ -591,5 +586,40 @@ func TestAnAccountReaddressedBeforeTheLinkIsNotLinked(t *testing.T) {
 	}
 	if stored, _ := f.repo.Get(got.ID); stored.Email != "ana@example.edu" || stored.EmailVerifiedAt == nil {
 		t.Errorf("new account %+v, want the trusted address, verified", stored)
+	}
+}
+
+func TestASecondIdentityOfTheSameIssuerIsNotLinkedByEmail(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-previous-holder")
+
+	_, err := f.service().Resolve(t.Context(), trusted("sub-new-holder"))
+
+	if !errors.Is(err, federation.ErrIdentityConflict) {
+		t.Errorf("Resolve() = %v, want ErrIdentityConflict", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-previous-holder" {
+		t.Errorf("identities = %+v, want only the previous holder's", linked)
+	}
+	if n := f.accountCount(); n != 1 {
+		t.Errorf("accounts = %d, want no new one", n)
+	}
+}
+
+func TestAnIdentityOfAnotherIssuerIsLinkedByEmail(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-ana")
+	c := trusted("sub-ana-elsewhere")
+	c.Issuer = "https://login.example.edu/other-tenant/v2.0"
+
+	got, err := f.service().Resolve(t.Context(), c)
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
+		t.Errorf("identities = %+v, want both issuers linked", linked)
 	}
 }
