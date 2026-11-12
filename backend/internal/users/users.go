@@ -206,7 +206,8 @@ type Repository interface {
 	ByIDs(ctx context.Context, ids []uuid.UUID) ([]User, error)
 	Create(ctx context.Context, u User) (User, error)
 	List(ctx context.Context, f Filter) ([]User, int, error)
-	UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email string) error
+	// UpdateProfile clears the email's verified mark unless keepVerified.
+	UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email string, keepVerified bool) error
 	// SetStatus moves every named account to the status. The single-account
 	// path passes a slice of one, so the two cannot drift.
 	SetStatus(ctx context.Context, ids []uuid.UUID, status string, change StatusChange) error

@@ -644,7 +644,7 @@ func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		target := makeUser(t, ctx, "search-target-ivanov")
-		if err := repo.UpdateProfile(ctx, target.ID, "Search Target Ivanov", "search-target@example.edu"); err != nil {
+		if err := repo.UpdateProfile(ctx, target.ID, "Search Target Ivanov", "search-target@example.edu", false); err != nil {
 			t.Fatalf("UpdateProfile() = %v", err)
 		}
 		makeUser(t, ctx, "search-target-other")
@@ -686,7 +686,7 @@ func TestSearchExcludesABlockedAccount(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
 		blocked := makeUser(t, ctx, "search-blocked-ivanov")
-		if err := repo.UpdateProfile(ctx, blocked.ID, "Search Blocked Ivanov", ""); err != nil {
+		if err := repo.UpdateProfile(ctx, blocked.ID, "Search Blocked Ivanov", "", false); err != nil {
 			t.Fatalf("UpdateProfile() = %v", err)
 		}
 		if err := repo.SetStatus(ctx, []uuid.UUID{blocked.ID}, users.StatusBlocked,
@@ -694,7 +694,7 @@ func TestSearchExcludesABlockedAccount(t *testing.T) {
 			t.Fatalf("SetStatus() = %v", err)
 		}
 		live := makeUser(t, ctx, "search-live-ivanov")
-		if err := repo.UpdateProfile(ctx, live.ID, "Search Live Ivanov", ""); err != nil {
+		if err := repo.UpdateProfile(ctx, live.ID, "Search Live Ivanov", "", false); err != nil {
 			t.Fatalf("UpdateProfile() = %v", err)
 		}
 
@@ -916,6 +916,38 @@ func TestMarkEmailVerifiedStampsTheAccount(t *testing.T) {
 		}
 		if err := repo.MarkEmailVerified(ctx, uuid.New(), at); !errors.Is(err, users.ErrNotFound) {
 			t.Errorf("MarkEmailVerified(unknown) = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestUpdateProfileClearsTheVerifiedMarkUnlessToldToKeepIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		at := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+		kept := makeUser(t, ctx, "readdress-kept")
+		cleared := makeUser(t, ctx, "readdress-cleared")
+		for _, id := range []uuid.UUID{kept.ID, cleared.ID} {
+			if err := repo.MarkEmailVerified(ctx, id, at); err != nil {
+				t.Fatalf("MarkEmailVerified() = %v", err)
+			}
+		}
+
+		if err := repo.UpdateProfile(ctx, kept.ID, "Kept", "Kept@Example.edu", true); err != nil {
+			t.Fatalf("UpdateProfile(keep) = %v", err)
+		}
+		if err := repo.UpdateProfile(ctx, cleared.ID, "Cleared", "elsewhere@example.edu", false); err != nil {
+			t.Fatalf("UpdateProfile(clear) = %v", err)
+		}
+
+		if stored, _ := repo.ByID(ctx, kept.ID); stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(at) {
+			t.Errorf("kept: EmailVerifiedAt = %v, want %v", stored.EmailVerifiedAt, at)
+		}
+		stored, _ := repo.ByID(ctx, cleared.ID)
+		if stored.EmailVerifiedAt != nil {
+			t.Errorf("cleared: EmailVerifiedAt = %v, want NULL", stored.EmailVerifiedAt)
+		}
+		if stored.Email != "elsewhere@example.edu" || stored.FullName != "Cleared" {
+			t.Errorf("cleared: stored %q %q, want the new profile", stored.FullName, stored.Email)
 		}
 	})
 }

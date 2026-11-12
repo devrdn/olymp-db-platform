@@ -359,15 +359,20 @@ func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.Us
 	return found, nil
 }
 
-// UpdateProfile changes the descriptive fields.
-func (r *Users) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email string) error {
+// UpdateProfile changes the descriptive fields, clearing the verified mark
+// unless keepVerified.
+func (r *Users) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email string, keepVerified bool) error {
 	var emailValue *string
 	if email != "" {
 		emailValue = &email
 	}
 	return r.exec(ctx, `
-		UPDATE users SET full_name = $2, email = $3, updated_at = now() WHERE id = $1`,
-		id, fullName, emailValue)
+		UPDATE users
+		SET full_name = $2, email = $3,
+		    email_verified_at = CASE WHEN $4 THEN email_verified_at END,
+		    updated_at = now()
+		WHERE id = $1`,
+		id, fullName, emailValue, keepVerified)
 }
 
 // SetStatus moves the named accounts to the status. A missing id is skipped,

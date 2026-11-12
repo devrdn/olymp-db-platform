@@ -571,7 +571,7 @@ func TestAnAccountReaddressedBeforeTheLinkIsNotLinked(t *testing.T) {
 	f := newFixture(t)
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
 	f.accounts.before = func() {
-		if err := f.repo.UpdateProfile(t.Context(), ana.ID, "Ana", "elsewhere@example.edu"); err != nil {
+		if err := f.repo.UpdateProfile(t.Context(), ana.ID, "Ana", "elsewhere@example.edu", false); err != nil {
 			t.Fatal(err)
 		}
 	}
