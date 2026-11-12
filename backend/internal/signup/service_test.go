@@ -88,13 +88,13 @@ func otherCode(code string) string {
 func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 
-	b := begin(t, f, start("ana@example.edu", "ana.popescu"))
+	b := begin(t, f, start("ana@example.edu", "ana-popescu"))
 
 	queued := f.Outbox.Queued()
 	if len(queued) != 1 {
 		t.Fatalf("queued %d messages, want the code", len(queued))
 	}
-	if m := queued[0]; m.To != "ana@example.edu" || m.UserID != uuid.Nil || !strings.Contains(m.Body, "ana.popescu") {
+	if m := queued[0]; m.To != "ana@example.edu" || m.UserID != uuid.Nil || !strings.Contains(m.Body, "ana-popescu") {
 		t.Errorf("message to %q, account %v; want the typed address, no account and the login it creates:\n%s", m.To, m.UserID, m.Body)
 	}
 	if f.Outbox.Wakes == 0 {
@@ -106,7 +106,7 @@ func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
 		t.Fatalf("%d pending sign-ups, want one", len(rows))
 	}
 	p := rows[0]
-	if p.Email != "ana@example.edu" || p.Login != "ana.popescu" || p.FullName != "Ana Popescu" || p.Tries != 0 {
+	if p.Email != "ana@example.edu" || p.Login != "ana-popescu" || p.FullName != "Ana Popescu" || p.Tries != 0 {
 		t.Errorf("pending = %+v, want the form as typed and no tries", p)
 	}
 	if !passwordtest.Matches(t, p.PasswordHash, chosenPassword) {
@@ -119,7 +119,7 @@ func TestStartQueuesACodeAndStoresNoAccount(t *testing.T) {
 		t.Errorf("sent %v, expires %v; want now and %s later", p.SentAt, p.ExpiresAt, signup.CodeLifetime)
 	}
 
-	if _, err := f.Users.ByLogin(t.Context(), "ana.popescu"); !errors.Is(err, users.ErrNotFound) {
+	if _, err := f.Users.ByLogin(t.Context(), "ana-popescu"); !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("ByLogin() = %v, want no account before the code is confirmed", err)
 	}
 }
@@ -375,6 +375,42 @@ func TestStartRefusesAFullNameThatIsNotWrittenAsAName(t *testing.T) {
 	cmd := start("ana@example.edu", "ana")
 	cmd.FullName = "Ana-Maria O'Neil Jr."
 	begin(t, f, cmd)
+}
+
+// The login is mailed to whatever address was typed, so it is kept to what a
+// login needs and cannot carry a link or a pitch.
+func TestStartRefusesALoginOfMoreThanPlainCharacters(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	for _, login := range []string{
+		"Claim your prize at https://evil.example/win now", "https://evil.example", "evil.example", "ana.popescu",
+		"ana popescu", "ana@example.edu", "a/b", "ana:1", "-ana", "_ana", "an", strings.Repeat("a", 65), "ană",
+	} {
+		if err := startErr(t, f, start("ana@example.edu", login)); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Start(login %q) = %v, want ErrInvalidAccount", login, err)
+		}
+	}
+	if len(f.Store.Rows()) != 0 || len(f.Outbox.Queued()) != 0 || f.Hasher.Calls() != 0 {
+		t.Error("a refused login was stored, mailed or hashed")
+	}
+
+	for _, login := range []string{"ana", "ana_popescu-2", "007", strings.Repeat("a", 64)} {
+		begin(t, f, start(login+"@example.edu", login))
+	}
+}
+
+func TestStartLowercasesTheLogin(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	b := begin(t, f, start("ana@example.edu", "  Ana-Popescu "))
+
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Login != "ana-popescu" {
+		t.Errorf("pending = %+v, want the login trimmed and lowercased", rows)
+	}
+	created, err := f.Service.Confirm(t.Context(), b.confirm(b.code))
+	if err != nil || created.Login != "ana-popescu" {
+		t.Errorf("Confirm() = %q, %v; want the lowercased login", created.Login, err)
+	}
 }
 
 func TestStartRefusesATakenLogin(t *testing.T) {

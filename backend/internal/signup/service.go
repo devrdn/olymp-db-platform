@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -158,10 +159,14 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	if !s.available() {
 		return "", ErrNotAvailable
 	}
-	login, fullName := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName)
+	login, fullName := strings.ToLower(strings.TrimSpace(cmd.Login)), strings.TrimSpace(cmd.FullName)
 	email, err := normalizeEmail(cmd.Email)
 	if err != nil {
 		return "", err
+	}
+	if !plainLogin.MatchString(login) {
+		return "", fmt.Errorf("%w: the login must be 3 to 64 lowercase letters, digits, hyphens or underscores, "+
+			"starting with a letter or a digit", users.ErrInvalidAccount)
 	}
 	if err := users.ValidateAccount(login, fullName, email); err != nil {
 		return "", err
@@ -223,6 +228,11 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	s.cfg.Outbox.Wake()
 	return token, nil
 }
+
+// plainLogin is what a self-chosen login may be. The login is mailed to
+// whatever address was typed, so it must not carry a pitch, and a dot would
+// let a mail client turn it into a link to a domain.
+var plainLogin = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
 
 // refuseTakenLogin refuses a login an account or another address's unexpired
 // sign-up holds. Put checks the sign-ups again under its lock.
@@ -358,10 +368,10 @@ func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
 }
 
 // Resend stores a new code for the email's sign-up, replacing the old one
-// and opening a new window but keeping the tries, and mails it, or the existing-account message again to the
-// owner of an address a live account holds. It takes the token Start
-// answered; a missing or other one counts a try and answers ErrWrongCode. An
-// address with no sign-up gets nothing.
+// and opening a new window but keeping the tries, and mails it, or mails the
+// existing-account message again to the owner of an address a live account
+// holds. It takes the token Start answered; a missing or other one counts a
+// try and answers ErrWrongCode. An address with no sign-up gets nothing.
 func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 	if !s.available() {
 		return ErrNotAvailable

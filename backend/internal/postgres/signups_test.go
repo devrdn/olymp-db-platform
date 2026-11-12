@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/signup"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // signupClock is a fixed instant the tests measure expiry against; the store
@@ -33,7 +34,8 @@ func pendingSignup(email, login string) signup.Pending {
 }
 
 // waiting is Waiting with the email aside, failing the test on an error. A
-// test compares it with what it was before the test's own rows.
+// test compares it with what it was before the test's own rows, inside
+// withSnapshot.
 func waiting(t *testing.T, ctx context.Context, repo *Signups, email string, now time.Time) int {
 	t.Helper()
 	n, err := repo.Waiting(ctx, email, now)
@@ -52,8 +54,31 @@ func takeSignup(t *testing.T, ctx context.Context, repo *Signups, email string) 
 	return p
 }
 
-func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
+// withSnapshot is withTx in one REPEATABLE READ snapshot, so a row another
+// package's test commits meanwhile cannot shift a count between a baseline
+// and the assertion made against it.
+func withSnapshot(t *testing.T, body func(ctx context.Context)) {
+	t.Helper()
 	withTx(t, func(ctx context.Context) {
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`); err != nil {
+			t.Fatalf("take a snapshot: %v", err)
+		}
+		body(ctx)
+	})
+}
+
+// signupCheckRefused fails t unless err is the named CHECK constraint refusing a
+// row.
+func signupCheckRefused(t *testing.T, err error, constraint string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != checkViolation || pgErr.ConstraintName != constraint {
+		t.Errorf("error = %v, want %s refusing the row (SQLSTATE 23514)", err, constraint)
+	}
+}
+
+func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
+	withSnapshot(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
 		before := waiting(t, ctx, repo, "", signupClock)
 		if err := repo.Put(ctx, pendingSignup(addr("ana"), handle("ana")), signup.MaxPending, signupClock); err != nil {
@@ -91,7 +116,7 @@ func TestSignupsPutStoresAndReplacesByEmail(t *testing.T) {
 // A refusal must not abort the caller's transaction: the next statement in it
 // still runs.
 func TestSignupsPutRefusesAHeldLoginAndTheCap(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
+	withSnapshot(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
 		capacity := waiting(t, ctx, repo, "", signupClock) + 2
 		for _, p := range []signup.Pending{pendingSignup(addr("ana"), handle("ana")), pendingSignup(addr("bob"), handle("bob"))} {
@@ -116,7 +141,7 @@ func TestSignupsPutRefusesAHeldLoginAndTheCap(t *testing.T) {
 }
 
 func TestSignupsAnExpiredSignUpHoldsNothing(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
+	withSnapshot(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
 		later := signupClock.Add(signup.CodeLifetime)
 		beforeLater := waiting(t, ctx, repo, "", later)
@@ -197,11 +222,6 @@ func TestSignupsSweepRemovesOnlyExpiredRows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewSignups(testPool)
 		old := pendingSignup(addr("old"), handle("old"))
-		var before int64
-		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
-			`SELECT count(*) FROM pending_signups WHERE expires_at <= $1`, old.ExpiresAt).Scan(&before); err != nil {
-			t.Fatal(err)
-		}
 		live := pendingSignup(addr("live"), handle("live"))
 		live.ExpiresAt = live.ExpiresAt.Add(time.Second)
 		for _, p := range []signup.Pending{old, live} {
@@ -210,9 +230,14 @@ func TestSignupsSweepRemovesOnlyExpiredRows(t *testing.T) {
 			}
 		}
 
+		// Other packages' expired rows may be swept too, so the count is a
+		// lower bound and this run's rows are checked one by one.
 		swept, err := repo.Sweep(ctx, old.ExpiresAt)
-		if err != nil || swept != before+1 {
-			t.Fatalf("Sweep() = %d, %v; want the expired row beyond the %d expired before", swept, err, before)
+		if err != nil || swept < 1 {
+			t.Fatalf("Sweep() = %d, %v; want at least the expired row", swept, err)
+		}
+		if _, ok, _ := repo.Take(ctx, addr("old")); ok {
+			t.Error("the expired sign-up was not swept")
 		}
 		if _, ok, _ := repo.Take(ctx, addr("live")); !ok {
 			t.Error("the live sign-up was swept")
@@ -230,24 +255,20 @@ func TestTheTableRefusesAnEmailTheDomainWouldNotStore(t *testing.T) {
 		if _, rollbackErr := q.Exec(ctx, `ROLLBACK TO SAVEPOINT uppercase`); rollbackErr != nil {
 			t.Fatalf("rollback to the savepoint: %v", rollbackErr)
 		}
-		if err == nil {
-			t.Error("the table stored an email that is not lowercase")
-		}
+		signupCheckRefused(t, err, "pending_signups_email_check")
 	})
 }
 
 func TestTheTableRefusesAHashOfTheWrongLength(t *testing.T) {
 	for name, edit := range map[string]func(*signup.Pending){
-		"code":  func(p *signup.Pending) { p.CodeHash = p.CodeHash[:47] },
-		"token": func(p *signup.Pending) { p.TokenHash = append(p.TokenHash, 0) },
+		"pending_signups_code_hash_check":  func(p *signup.Pending) { p.CodeHash = p.CodeHash[:47] },
+		"pending_signups_token_hash_check": func(p *signup.Pending) { p.TokenHash = append(p.TokenHash, 0) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			withTx(t, func(ctx context.Context) {
 				p := pendingSignup(addr("ana"), handle("ana"))
 				edit(&p)
-				if err := NewSignups(testPool).Put(ctx, p, signup.MaxPending, signupClock); err == nil {
-					t.Errorf("the table stored a %s hash of the wrong length", name)
-				}
+				signupCheckRefused(t, NewSignups(testPool).Put(ctx, p, signup.MaxPending, signupClock), name)
 			})
 		})
 	}
