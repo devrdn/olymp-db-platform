@@ -21,6 +21,16 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// decodeBodyWithin is decodeBody for a route whose bodies are small: it
+// refuses one over limit bytes as it arrives (CLAUDE.md rule 12).
+func decodeBodyWithin(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	if err := httpx.DecodeJSONWithin(w, r, v, limit); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return false
+	}
+	return true
+}
+
 // decodeOptionalBody is decodeBody for a route whose body may be left out,
 // which leaves v as it was. Only a body with no bytes at all counts as absent:
 // whitespace or a stray character is still a malformed one.

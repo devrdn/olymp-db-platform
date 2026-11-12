@@ -33,6 +33,11 @@ const (
 	signupEmailWindow = time.Hour
 )
 
+// signupBodyBytes bounds a sign-up body as it arrives. The password is at
+// most password.MaxLength bytes even escaped as \u00XX; the other fields
+// refuse control characters, so a legitimate body fits with room to spare.
+const signupBodyBytes = 8 << 10
+
 // signupTokenLength is the length of every token Start answers; a cookie of
 // any other length is no token.
 var signupTokenLength = base64.RawURLEncoding.EncodedLen(signup.TokenBytes)
@@ -103,7 +108,7 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req signupStartRequest
-	if !decodeBody(w, r, &req) {
+	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
 	email := signupEmail(req.Email)
@@ -141,7 +146,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req signupConfirmRequest
-	if !decodeBody(w, r, &req) {
+	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
 	email := signupEmail(req.Email)
@@ -186,7 +191,7 @@ func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req signupResendRequest
-	if !decodeBody(w, r, &req) {
+	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
 	email := signupEmail(req.Email)

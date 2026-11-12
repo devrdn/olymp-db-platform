@@ -361,6 +361,10 @@ func TestStartAnswersItsRefusals(t *testing.T) {
 	}
 }
 
+// padding is whitespace past the sign-up body bound and far within the
+// default one.
+var padding = strings.Repeat(" ", 16<<10)
+
 // Every field is bounded before it reaches the service or becomes a cache
 // key, so a refused one costs no hash and no counter.
 func TestSignupRefusesAnOverlongFieldBeforeTheService(t *testing.T) {
@@ -374,6 +378,11 @@ func TestSignupRefusesAnOverlongFieldBeforeTheService(t *testing.T) {
 		"code":          {"/public/signup/confirm", `{"email":"ana@example.edu","code":"` + long(signup.CodeDigits+1) + `"}`},
 		"confirm email": {"/public/signup/confirm", `{"email":"` + longEmail + `","code":"123456"}`},
 		"resend email":  {"/public/signup/resend", `{"email":"` + longEmail + `"}`},
+		// Within every bound once decoded; only the body's size is refused
+		// (CLAUDE.md rule 12).
+		"start body":   {"/public/signup", strings.TrimSuffix(signupForm("Ana Popescu", "ana", "ana@example.edu", signupPassword), "}") + padding + "}"},
+		"confirm body": {"/public/signup/confirm", `{"email":"ana@example.edu","code":"123456"` + padding + `}`},
+		"resend body":  {"/public/signup/resend", `{"email":"ana@example.edu"` + padding + `}`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
