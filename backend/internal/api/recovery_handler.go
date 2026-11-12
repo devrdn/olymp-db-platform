@@ -88,7 +88,7 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req forgotRequest
-	if !h.decode(w, r, &req) {
+	if !decodeBodyWithin(w, r, &req, recoveryBodyBytes) {
 		return
 	}
 	// Keyed as the service looks the account up.
@@ -114,7 +114,7 @@ func (h *RecoveryHandler) reset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req linkResetRequest
-	if !h.decode(w, r, &req) {
+	if !decodeBodyWithin(w, r, &req, recoveryBodyBytes) {
 		return
 	}
 	if !withinBounds(w, r,
@@ -129,14 +129,6 @@ func (h *RecoveryHandler) reset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *RecoveryHandler) decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := httpx.DecodeJSONWithin(w, r, v, recoveryBodyBytes); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-		return false
-	}
-	return true
 }
 
 func (h *RecoveryHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int, window time.Duration) bool {
