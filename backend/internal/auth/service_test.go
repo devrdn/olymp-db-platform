@@ -1653,3 +1653,102 @@ func TestTheDummyPlaintextNeverSignsIntoAnAccountWithoutAPassword(t *testing.T) 
 		t.Error("a password was written onto an account that had none")
 	}
 }
+
+func signInCmd(f *fixture, method string) SignInAsCommand {
+	return SignInAsCommand{User: f.user, Method: method, IP: "10.0.0.1"}
+}
+
+func TestSignInAsOpensASessionAtTheAccountsGeneration(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	generation, _ := f.repo.BumpSessionGeneration(ctx, f.user.ID)
+	user, _ := f.repo.Get(f.user.ID)
+	previous, _ := f.service.Sessions().Create(ctx, Principal{UserID: f.user.ID, Login: f.user.Login})
+
+	result, err := f.service.SignInAs(ctx, SignInAsCommand{User: user, Method: "signup", IP: "10.0.0.1", PreviousToken: previous})
+	if err != nil {
+		t.Fatalf("SignInAs() returned error: %v", err)
+	}
+
+	session, err := f.service.Sessions().Get(ctx, result.Token)
+	if err != nil {
+		t.Fatalf("the issued session is unknown: %v", err)
+	}
+	if session.Generation != generation {
+		t.Errorf("session generation = %d, want the account's %d", session.Generation, generation)
+	}
+	if _, err := f.service.Sessions().Get(ctx, previous); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("the replaced session survived: %v", err)
+	}
+	if result.User.ID != f.user.ID {
+		t.Error("the result does not name the account")
+	}
+	if result.DeviceToken == "" {
+		t.Error("no device token was issued")
+	}
+	stored, _ := f.repo.Get(f.user.ID)
+	if stored.LastLoginAt == nil {
+		t.Error("the sign-in was not stamped on the account")
+	}
+}
+
+func TestSignInAsRefusesABlockedAccount(t *testing.T) {
+	for _, status := range []string{users.StatusBlocked, users.StatusDeleted} {
+		f := newFixture(t)
+		_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, status, users.StatusChange{})
+		user, _ := f.repo.Get(f.user.ID)
+
+		result, err := f.service.SignInAs(context.Background(), SignInAsCommand{User: user, Method: "signup", IP: "10.0.0.1"})
+
+		if !errors.Is(err, ErrAccountBlocked) {
+			t.Errorf("status %v: err = %v, want ErrAccountBlocked", status, err)
+		}
+		if result.Token != "" {
+			t.Errorf("status %v: a session was issued", status)
+		}
+		if len(f.sink.actions()) != 0 {
+			t.Errorf("status %v: a refused sign-in was audited as a login", status)
+		}
+	}
+}
+
+func TestSignInAsRecordsTheMethod(t *testing.T) {
+	for _, method := range []string{"signup", "microsoft"} {
+		f := newFixture(t)
+
+		if _, err := f.service.SignInAs(context.Background(), signInCmd(f, method)); err != nil {
+			t.Fatalf("method %q: %v", method, err)
+		}
+
+		if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionAuthLogin {
+			t.Fatalf("method %q: audit actions = %v, want one %q", method, got, audit.ActionAuthLogin)
+		}
+		if got := f.sink.entries[0].Payload["method"]; got != method {
+			t.Errorf("payload method = %v, want %q", got, method)
+		}
+	}
+}
+
+func TestSignInAsRefusesAnUnknownMethod(t *testing.T) {
+	f := newFixture(t)
+
+	result, err := f.service.SignInAs(context.Background(), signInCmd(f, "magic"))
+
+	if !errors.Is(err, ErrUnknownSignInMethod) {
+		t.Errorf("err = %v, want ErrUnknownSignInMethod", err)
+	}
+	if result.Token != "" || len(f.sink.actions()) != 0 {
+		t.Error("an unknown method opened a session or wrote an audit entry")
+	}
+}
+
+func TestSignInAsOpensASessionForAnAccountWithoutAPassword(t *testing.T) {
+	f := newFixture(t)
+	user := f.repo.Add(users.User{Login: "petrov", FullName: "Petr Petrov", Status: users.StatusActive})
+
+	result, err := f.service.SignInAs(context.Background(), SignInAsCommand{User: user, Method: "microsoft", IP: "10.0.0.1"})
+
+	if err != nil || result.Token == "" {
+		t.Errorf("SignInAs() = %q, %v; want a session", result.Token, err)
+	}
+}
