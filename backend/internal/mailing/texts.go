@@ -69,8 +69,36 @@ type EventRegistrationData struct {
 	NewAccount bool
 }
 
+// SignupCodeData is what a person who is signing up needs to prove their
+// address.
+type SignupCodeData struct {
+	Installation string
+	FullName     string
+	Code         string
+}
+
+// SignupExistingData is what the owner of an account is told when someone
+// signs up with their address.
+type SignupExistingData struct {
+	Installation string
+	FullName     string
+	Login        string
+}
+
+// PasswordResetData is what a person resetting their password needs.
+type PasswordResetData struct {
+	Installation string
+	FullName     string
+	Login        string
+	// Link is the whole address of the reset page, token included.
+	Link string
+}
+
 // signInPath is the interface's sign-in route (frontend/app/(public)/login).
 const signInPath = "/login"
+
+// forgotPath is the interface's forgot-password route.
+const forgotPath = "/forgot"
 
 // Texts renders the messages the installation sends.
 type Texts struct {
@@ -133,6 +161,49 @@ func (t *Texts) EventRegistration(lang Language, data EventRegistrationData) (Te
 	}{data, t.publicURL + signInPath})
 }
 
+// SignupCode writes the message carrying a sign-up code, or refuses it like
+// SignInDetails does.
+func (t *Texts) SignupCode(lang Language, data SignupCodeData) (Text, error) {
+	if err := t.require(
+		detail{"installation", data.Installation},
+		detail{"full name", data.FullName},
+		detail{"code", data.Code},
+	); err != nil {
+		return Text{}, err
+	}
+	return render(lang, messageSignupCode, data)
+}
+
+// SignupExisting writes the message telling the owner of an account that
+// someone signed up with their address. It says nothing about who.
+func (t *Texts) SignupExisting(lang Language, data SignupExistingData) (Text, error) {
+	if err := t.require(
+		detail{"installation", data.Installation},
+		detail{"full name", data.FullName},
+		detail{"login", data.Login},
+	); err != nil {
+		return Text{}, err
+	}
+	return render(lang, messageSignupExisting, struct {
+		SignupExistingData
+		SignInURL, ForgotURL string
+	}{data, t.publicURL + signInPath, t.publicURL + forgotPath})
+}
+
+// PasswordReset writes the message carrying a password reset link, or
+// refuses it like SignInDetails does.
+func (t *Texts) PasswordReset(lang Language, data PasswordResetData) (Text, error) {
+	if err := t.require(
+		detail{"installation", data.Installation},
+		detail{"full name", data.FullName},
+		detail{"login", data.Login},
+		detail{"link", data.Link},
+	); err != nil {
+		return Text{}, err
+	}
+	return render(lang, messagePasswordReset, data)
+}
+
 type detail struct{ name, value string }
 
 // require refuses a blank detail by its name, never its value, which may be
@@ -156,6 +227,9 @@ const (
 	messageTest              = "test"
 	messageSignInDetails     = "sign_in_details"
 	messageEventRegistration = "event_registration"
+	messageSignupCode        = "signup_code"
+	messageSignupExisting    = "signup_existing"
+	messagePasswordReset     = "password_reset"
 )
 
 //go:embed texts
@@ -173,7 +247,10 @@ func parseAll() map[Language]map[string]compiled {
 	all := make(map[Language]map[string]compiled, len(Languages()))
 	for _, lang := range Languages() {
 		all[lang] = make(map[string]compiled)
-		for _, message := range []string{messageTest, messageSignInDetails, messageEventRegistration} {
+		for _, message := range []string{
+			messageTest, messageSignInDetails, messageEventRegistration,
+			messageSignupCode, messageSignupExisting, messagePasswordReset,
+		} {
 			all[lang][message] = parse(path.Join("texts", string(lang), message+".txt"))
 		}
 	}

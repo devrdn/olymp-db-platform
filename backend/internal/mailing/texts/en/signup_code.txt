@@ -1,0 +1,11 @@
+Subject: Your sign-up code for {{.Installation}}
+
+Hello {{.FullName}},
+
+Use this code to confirm your email address and finish signing up for {{.Installation}}.
+
+Your code: {{.Code}}
+
+The code is valid for 30 minutes. If you did not try to sign up, ignore this message.
+
+This is an automated message; please do not reply.

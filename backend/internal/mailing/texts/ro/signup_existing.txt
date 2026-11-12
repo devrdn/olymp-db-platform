@@ -1,0 +1,13 @@
+Subject: Aveți deja un cont în {{.Installation}}
+
+Bună ziua, {{.FullName}},
+
+Cineva a încercat să se înregistreze în {{.Installation}} cu această adresă de e-mail, dar ea aparține deja unui cont.
+
+Utilizator: {{.Login}}
+Pagina de autentificare: {{.SignInURL}}
+Dacă ați uitat parola: {{.ForgotURL}}
+
+Dacă nu ați fost dumneavoastră, ignorați acest mesaj; nimic nu s-a schimbat.
+
+Acesta este un mesaj automat; vă rugăm să nu răspundeți.

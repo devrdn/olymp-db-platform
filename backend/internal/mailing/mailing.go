@@ -39,8 +39,24 @@ const KindSignInDetails Kind = "sign_in_details"
 // sent to an address, not an account, so its UserID is uuid.Nil.
 const KindEventRegistration Kind = "event_registration"
 
+// KindSignupCode carries the code that proves a sign-up address is the
+// sender's own.
+const KindSignupCode Kind = "signup_code"
+
+// KindSignupExisting goes to the owner of an account whose address someone
+// typed into the sign-up form, in place of a code.
+const KindSignupExisting Kind = "signup_existing"
+
+// KindPasswordReset carries a password reset link.
+const KindPasswordReset Kind = "password_reset"
+
 // Kinds is every kind the outbox accepts.
-func Kinds() []Kind { return []Kind{KindSignInDetails, KindEventRegistration} }
+func Kinds() []Kind {
+	return []Kind{
+		KindSignInDetails, KindEventRegistration,
+		KindSignupCode, KindSignupExisting, KindPasswordReset,
+	}
+}
 
 // KindNames is Kinds as label values.
 func KindNames() []string {
