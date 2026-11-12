@@ -19,13 +19,13 @@ function form(id: string = contestId): FormData {
   return data;
 }
 
-/** The enrolment refuses with `code`; the methods answer names `domain`. */
-function refuses(code: string, domain: string | Error) {
+/** The enrolment refuses with `code`; the methods answer names `domain` and whether recovery is on. */
+function refuses(code: string, domain: string | Error, reset = false) {
   serverRequest.mockImplementation(async (path: string) => {
     if (path === `/contests/${contestId}/enroll`) throw new ApiError(code, 403, "refused");
     if (path === "/auth/methods") {
       if (domain instanceof Error) throw domain;
-      return { password_signup: true, password_reset: true, microsoft: false, trusted_email_domain: domain };
+      return { password_signup: true, password_reset: reset, microsoft: false, trusted_email_domain: domain };
     }
     throw new Error(`unexpected ${path}`);
   });
@@ -57,6 +57,17 @@ describe("enrollAction", () => {
     expect(await enrollAction({}, form())).toEqual({
       code: "contest_trusted_email_required",
       domain: "example.edu",
+    });
+  });
+
+  /** A staff-made account may already hold such an address, unconfirmed; a reset link confirms it. */
+  test("says whether a reset link can confirm the address", async () => {
+    refuses("contest_trusted_email_required", "example.edu", true);
+
+    expect(await enrollAction({}, form())).toEqual({
+      code: "contest_trusted_email_required",
+      domain: "example.edu",
+      confirmByReset: true,
     });
   });
 

@@ -1873,6 +1873,7 @@ const ro = {
     joining: "Se înscrie",
     joined: "Sunteți înscris.",
     trustedDomain: "Domeniul acceptat este {domain}.",
+    trustedDomainReset: "Dacă contul dumneavoastră are deja o astfel de adresă, confirmați-o printr-un link de resetare a parolei.",
     openConsole: "Deschideți",
     waitingRoom: "Așteptați începutul",
     enrolled: "Sunteți înscris",

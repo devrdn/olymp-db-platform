@@ -2097,6 +2097,7 @@ const en = {
     joining: "Joining",
     joined: "You are enrolled.",
     trustedDomain: "The accepted domain is {domain}.",
+    trustedDomainReset: "If your account already has such an address, confirm it with a password reset link.",
     openConsole: "Open",
     waitingRoom: "Wait for the start",
     enrolled: "You are in",

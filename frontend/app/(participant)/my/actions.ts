@@ -12,6 +12,11 @@ export type EnrollState = {
   enrolled?: boolean;
   /** With `contest_trusted_email_required`: the site's domain, when it has one. */
   domain?: string;
+  /**
+   * With `contest_trusted_email_required`: a reset link can confirm an
+   * address the account already holds, since recovery is on.
+   */
+  confirmByReset?: boolean;
 };
 
 /**
@@ -43,8 +48,13 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
     // The refusal's sentence cannot name the domain, so it is asked for here,
     // only on this refusal, rather than on every load of the register.
     if (code === "contest_trusted_email_required") {
-      const domain = (await fetchAuthMethods())?.trustedEmailDomain;
-      return domain ? { code, domain } : { code };
+      const methods = await fetchAuthMethods();
+      const domain = methods?.trustedEmailDomain;
+      return {
+        code,
+        ...(domain ? { domain } : {}),
+        ...(methods?.passwordReset ? { confirmByReset: true } : {}),
+      };
     }
 
     return { code };
