@@ -249,10 +249,11 @@ one of four ways, and the installation's settings decide which exist
   participants**. An account that made itself has a login its owner chose,
   or one generated from their Microsoft username or name; the picker finds
   it by name or address too.
-- A staff-made account still on its one-time password stays on it after a
-  Microsoft sign-in: the platform asks for the password to be changed, which
-  takes the one-time one. Hand it over as usual, or have the person use
-  **Forgot password?** (mail on), which replaces it.
+- A staff-made student account still on its one-time password loses it
+  when its owner signs in with Microsoft: the person is let in, and from
+  then on signs in with Microsoft, or sets a password of their own with
+  **Forgot password?** (mail on). The one-time password stops working at
+  that sign-in.
 - Staff accounts never sign in with Microsoft and never get a reset link:
   an organiser or administrator signs in with their password.
 - With mail on, anyone with an address on a student account can reset a
@@ -314,18 +315,21 @@ from where** offers **Only verified @example.edu addresses**. With it on,
 an account enrolling itself needs a confirmed address in that domain or one
 of its subdomains (`ana@cs.example.edu` counts); anybody else is refused
 with "This contest is open only to people with a verified address in this
-site's own email domain. Sign up or sign in with such an address." An
-address is confirmed by a sign-up code, a followed reset link or a
-Microsoft sign-in that vouches for it. Every address held when the release
-that brings this was installed counts as confirmed; an account made after
-it by staff, an import or the event form starts unconfirmed, until its owner
-does one of those.
+site's own email domain. Sign up or sign in with such an address." With mail
+on, the refusal also says that a password reset link confirms an address
+the account already has, and links **Forgot password?**. An address is
+confirmed by a sign-up code, a followed reset link or a Microsoft sign-in
+that vouches for it. The address of every account not deleted when the
+release that brings this was installed counts as confirmed; an account made
+after it by staff, an import or the event form starts unconfirmed, until its
+owner does one of those. An administrator who changes an account's address
+to another one leaves it unconfirmed again.
 
 - It binds self-enrolment only. Staff adding people on **People**, one at
   a time or from a list, may add anybody. The participant list marks each
   participant without a verified address there as "not a verified
-  @example.edu address", so an exception stays visible; it does so in every
-  contest once the domain is set, the switch on or off.
+  @example.edu address", so an exception stays visible; it does so only
+  while the switch is on.
 - It needs **Enrolment** open to matter; an invitation-only contest is
   already limited to the people staff add.
 - Without a domain the switch is not offered. A contest that had it on

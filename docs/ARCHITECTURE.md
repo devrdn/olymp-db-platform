@@ -1857,14 +1857,18 @@ it, with the number of questions waiting beside it while the contest runs.
     wait at once, and the expired ones are swept every ten minutes. An
     address an account already holds gets the same answer after the same
     work, the password hash included, and the same row, but its owner is
-    mailed "you already have an account" and the code reaches nobody. The
+    mailed "you already have an account" and the code reaches nobody; the
+    message links the forgotten-password page only for an account recovery
+    serves, and tells a staff or blocked owner to ask an administrator. The
     login is 3 to 64 lowercase letters, digits, hyphens or underscores,
     starting with a letter or a digit; the full name is written as a name
     (letters, marks, spaces, hyphens, apostrophes and periods, no period
     directly before a letter), since it greets the reader of a message sent
     to whatever address was typed; the password has at least 12 characters.
     Each route spends its address budget (120 in ten minutes) before the
-    email's (5 an hour), and both before the hash. It needs mail.
+    email's (5 an hour), and the two that mail (the start and a new code)
+    then the installation's self-service mail budget (below), all before the
+    hash. It needs mail.
   - **Recovery by link** (`internal/recovery`). A request names a login or
     an address and is answered at once, before anything is looked up; the
     lookup, the link and the message run in the background, at most eight
@@ -1876,7 +1880,15 @@ it, with the number of questions waiting beside it while the contest runs.
     and ends every session; it is refused when the account has since become
     staff, been blocked or deleted, or changed its address. Each route spends
     its address budget (30 in ten minutes) first, and a request also the
-    identifier's (5 an hour). It exists whenever mail does.
+    identifier's (5 an hour) and then the installation's self-service mail
+    budget. It exists whenever mail does.
+  - **One mail budget for all of self-service.** Sign-up codes,
+    existing-account notices and reset links go to typed addresses through
+    the relay every message shares, so together they may queue at most 15
+    messages a minute and 2000 a day (`api.MailBudget`, one fixed limiter
+    key per window); past it the request answers `too_many_attempts`. A few
+    addresses can then never queue more than the relay sends, and staff
+    mail keeps a share of it.
   - **External sign-in** (`internal/federation`). It knows no provider: an
     adapter verifies the provider's answer and hands over the claims (the
     issuer and subject that name the person, an email, a name, a login
@@ -1890,8 +1902,15 @@ it, with the number of questions waiting beside it while the contest runs.
     linked to another identity of the same issuer, since a provider may
     give a mailbox to somebody new. An address that is not vouched for is
     kept only on the identity, never on the account, and never links.
-    Deleting an account deletes its identities. Another provider is another
-    adapter, with no change to federation.
+    Entering a student account that still holds the one-time password staff
+    issued, by a link or through an identity linked before, drops that
+    password (the hash becomes NULL and the flag clears) and ends the
+    account's older sessions, in the same transaction, recorded as
+    `user.one_time_password_retire`: the person never had it, and kept, it
+    would send them to a change form that asks for it. From then on the
+    account signs in through the provider, or with a password its owner sets
+    by a reset link. Deleting an account deletes its identities. Another
+    provider is another adapter, with no change to federation.
   - **Microsoft, the first adapter** (`internal/microsoft`). The
     authorisation-code flow with PKCE and a client secret, against the
     authority `MICROSOFT_TENANT` names. The state, nonce, PKCE verifier and
@@ -1915,7 +1934,10 @@ it, with the number of questions waiting beside it while the contest runs.
     its users, so no other tenant's email is evidence. Both routes spend the
     address's budget (120 in ten minutes) before reading the request, and so
     before the token exchange, and every failure lands on `/login?error=`
-    with a declared code.
+    with a declared code. A sign-in without a usable return path lands on
+    `/login`, which sends a signed-in visitor on as after a password
+    sign-in; one whose account must still change its password lands on
+    `/password`.
 
 ## 7.1 Reaching a contest: enrolment and address restrictions
 
@@ -1946,12 +1968,13 @@ than a field of the contest, and the interface writes it into its texts from
 
 - **Refused at enrolment**, under the contest's lock, with
   `contest_trusted_email_required` (403), which the interface words as an
-  invitation to sign up or sign in with such an address.
+  invitation to sign up or sign in with such an address and, with mail on,
+  to confirm one the account already holds with a reset link.
 - **Staff are not held to it.** An owner or a manager adding a participant,
   one at a time or from a roster, may add anybody: their choice beats the
-  rule. The participant list of every contest marks each participant
-  without a verified address in the domain, so the exception stays
-  visible.
+  rule. The participant list of a contest with the switch on marks each
+  participant without a verified address in the domain, so the exception
+  stays visible.
 - **It cannot be switched on without a domain**
   (`contest_trusted_domain_unset`). A contest that already has it keeps it
   if the domain is later unset, and then admits nobody by self-enrolment.
