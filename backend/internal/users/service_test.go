@@ -339,8 +339,15 @@ func TestCreateExternalMakesAStudentWithoutAPasswordLinkedToTheIdentity(t *testi
 	if f.uow.Calls != 1 {
 		t.Errorf("units of work = %d, want the account and its link in one", f.uow.Calls)
 	}
-	if len(f.sink.entries) != 1 || f.sink.entries[0].Action != audit.ActionUserCreate || f.sink.entries[0].ActorID != nil {
-		t.Errorf("audit = %+v, want one creation with a nil actor", f.sink.entries)
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit = %v, want one entry", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserExternalSignUp || entry.ActorID != nil || entry.EntityID != created.ID.String() {
+		t.Errorf("entry = %+v, want the external sign-up with a nil actor", entry)
+	}
+	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true {
+		t.Errorf("payload = %v, want the provider and a trusted email", entry.Payload)
 	}
 }
 
@@ -361,6 +368,9 @@ func TestCreateExternalWithoutAnEmailLeavesTheAccountWithout(t *testing.T) {
 	}
 	if linked := f.repo.Identities(created.ID); len(linked) != 1 || linked[0].Email != "ana@example.edu" {
 		t.Errorf("identities = %+v, want the claimed address kept on the identity", linked)
+	}
+	if len(f.sink.entries) != 1 || f.sink.entries[0].Payload["email_trusted"] != false {
+		t.Errorf("audit = %+v, want one entry saying the email was not trusted", f.sink.entries)
 	}
 }
 
@@ -428,7 +438,66 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 		t.Errorf("identities = %+v, want sub-ana", linked)
 	}
 	if f.uow.Calls != 1 {
-		t.Errorf("units of work = %d, want the link and the verification in one", f.uow.Calls)
+		t.Errorf("units of work = %d, want the link, the verification and the entry in one", f.uow.Calls)
+	}
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit = %v, want one entry", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserExternalIdentityLink || entry.ActorID != nil || entry.EntityID != ana.ID.String() {
+		t.Errorf("entry = %+v, want the link with a nil actor", entry)
+	}
+	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true {
+		t.Errorf("payload = %v, want the provider and a trusted email", entry.Payload)
+	}
+}
+
+// The account is re-read under its lock: what the caller read before may no
+// longer hold.
+func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
+	for name, tc := range map[string]struct {
+		account users.User
+		want    error
+	}{
+		"made staff":  {users.User{Roles: []string{"organizer"}}, users.ErrStaffNotLinkable},
+		"blocked":     {users.User{Status: users.StatusBlocked}, users.ErrAccountBlocked},
+		"deleted":     {users.User{Status: users.StatusDeleted}, users.ErrAccountDeleted},
+		"readdressed": {users.User{Email: "someone.else@example.edu"}, users.ErrNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.repo.GrantRole("organizer", "contests.manage")
+			f.service.WithExternalIdentities(f.repo)
+			account := tc.account
+			account.Login, account.FullName = "ana", "Ana"
+			if account.Email == "" {
+				account.Email = "ana@example.edu"
+			}
+			if account.Roles == nil {
+				account.Roles = []string{users.RoleStudent}
+			}
+			ana := f.repo.Add(account)
+			locked := 0
+			f.repo.OnLock = func(uuid.UUID) { locked++ }
+
+			err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+
+			if !errors.Is(err, tc.want) {
+				t.Errorf("LinkExternal() = %v, want %v", err, tc.want)
+			}
+			if locked != 1 {
+				t.Errorf("locks taken = %d, want the account locked before it is read", locked)
+			}
+			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+				t.Errorf("identities = %+v, want none", linked)
+			}
+			if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
+				t.Error("the email was marked verified")
+			}
+			if len(f.sink.entries) != 0 {
+				t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+			}
+		})
 	}
 }
 

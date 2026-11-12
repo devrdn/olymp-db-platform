@@ -74,6 +74,9 @@ var (
 	// ErrExternalIdentityTaken refuses linking an identity an account already
 	// holds, as when two first sign-ins of one person race.
 	ErrExternalIdentityTaken = errors.New("this external identity is already linked to an account")
+	// ErrStaffNotLinkable refuses linking an external identity to an account
+	// holding any staff permission.
+	ErrStaffNotLinkable = errors.New("a staff account cannot be linked to an external identity")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -85,7 +88,7 @@ func Errors() []error {
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
-		ErrExternalIdentityTaken,
+		ErrExternalIdentityTaken, ErrStaffNotLinkable,
 	}
 }
 
@@ -224,6 +227,10 @@ type Repository interface {
 	// ByEmail resolves a live account by email, ignoring case; ErrNotFound
 	// otherwise, a deleted account included.
 	ByEmail(ctx context.Context, email string) (User, error)
+	// Lock holds the account's row until the transaction in ctx ends, which
+	// ctx must carry, so a change to its status, roles or address (each
+	// writes the row) waits for it; ErrNotFound for a missing account.
+	Lock(ctx context.Context, id uuid.UUID) error
 	// MarkEmailVerified records when the account proved its email;
 	// ErrNotFound for a missing account.
 	MarkEmailVerified(ctx context.Context, id uuid.UUID, at time.Time) error

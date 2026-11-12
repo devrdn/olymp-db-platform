@@ -145,12 +145,16 @@ func (r *Users) ByEmail(ctx context.Context, email string) (users.User, error) {
 // It reads nothing: under READ COMMITTED a later statement takes a fresh
 // snapshot and sees what committed while Lock waited, which a read joined to
 // the lock would not for the roles.
+//
+// FOR NO KEY UPDATE, not FOR UPDATE: it conflicts with every such write, but
+// not with the key-share lock an insert referencing the account takes, so a
+// submission or role assignment is not held up behind it.
 func (r *Users) Lock(ctx context.Context, id uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("locking an account must run inside a transaction")
 	}
 	var locked uuid.UUID
-	err := r.querier(ctx).QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&locked)
+	err := r.querier(ctx).QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, id).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return users.ErrNotFound
 	}

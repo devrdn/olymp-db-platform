@@ -2101,6 +2101,8 @@ const en = {
       "user.password_reset_by_link": "Set a new password through an emailed link",
       "user.sign_in_unlock": "Cleared a sign-in lockout",
       "user.sign_in_details_emailed": "Queued sign-in details by email",
+      "user.external_sign_up": "Created an account at a first sign-in through an external service",
+      "user.external_identity_link": "Linked their account to a sign-in through an external service",
       "contest.create": "Created a contest",
       "contest.update": "Changed a contest",
       "contest.delete": "Deleted a contest",

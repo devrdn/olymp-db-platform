@@ -26,7 +26,9 @@ type Store interface {
 
 // Accounts creates and links accounts (users.Service). Both refuse an
 // identity another request linked first with users.ErrExternalIdentityTaken,
-// leaving nothing behind.
+// leaving nothing behind. LinkExternal re-reads the account under a lock and
+// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels, and
+// users.ErrNotFound when the account no longer holds the identity's email.
 type Accounts interface {
 	CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error)
 	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) error
@@ -80,6 +82,13 @@ func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
 	if err != nil {
 		return users.User{}, err
 	}
+	return s.resolve(ctx, c, identity, true)
+}
+
+// resolve decides once. When the accounts changed under it (the address it
+// found moved before the link, or a live account took it before the
+// creation) and again is set, it decides once more from what is there now.
+func (s *Service) resolve(ctx context.Context, c Claims, identity users.ExternalIdentity, again bool) (users.User, error) {
 	u, err := s.cfg.Store.ByExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject)
 	switch {
 	case err == nil:
@@ -96,7 +105,11 @@ func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
 		u, err := s.cfg.Store.ByEmail(ctx, email)
 		switch {
 		case err == nil:
-			return s.link(ctx, u, identity)
+			u, err = s.link(ctx, u, identity)
+			if again && errors.Is(err, users.ErrNotFound) {
+				return s.resolve(ctx, c, identity, false)
+			}
+			return u, err
 		case !errors.Is(err, users.ErrNotFound):
 			return users.User{}, err
 		}
@@ -104,7 +117,11 @@ func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
 	if !s.cfg.Policy.CreateAccounts {
 		return users.User{}, ErrSignupClosed
 	}
-	return s.create(ctx, c, identity, email)
+	u, err = s.create(ctx, c, identity, email)
+	if again && errors.Is(err, users.ErrEmailTaken) {
+		return s.resolve(ctx, c, identity, false)
+	}
+	return u, err
 }
 
 // refuse says why the account cannot be entered through a provider, if it
@@ -150,6 +167,8 @@ func (s *Service) link(ctx context.Context, u users.User, identity users.Externa
 	switch {
 	case errors.Is(err, users.ErrExternalIdentityTaken):
 		return s.known(ctx, identity)
+	case errors.Is(err, users.ErrStaffNotLinkable):
+		return users.User{}, ErrStaffAccount
 	case err != nil:
 		return users.User{}, err
 	}
