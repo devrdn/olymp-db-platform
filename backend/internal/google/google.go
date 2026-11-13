@@ -20,7 +20,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -191,8 +190,9 @@ func (c *Client) Exchange(ctx context.Context, code string, st connector.State) 
 	if st.Nonce == "" || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(st.Nonce)) != 1 {
 		return federation.Claims{}, fmt.Errorf("%w: the nonce is not this sign-in's", connector.ErrInvalidToken)
 	}
-	if len(claims.HostedDomain) > maxHostedDomainLength || !printable(claims.HostedDomain) {
-		return federation.Claims{}, fmt.Errorf("%w: the hosted domain is not a bounded name", connector.ErrInvalidToken)
+	if claims.HostedDomain != "" && (len(claims.HostedDomain) > maxHostedDomainLength ||
+		!domain.MatchString(asciiLower(claims.HostedDomain))) {
+		return federation.Claims{}, fmt.Errorf("%w: the hosted domain is not an ASCII domain name", connector.ErrInvalidToken)
 	}
 	if claims.Subject == "" {
 		return federation.Claims{}, fmt.Errorf("%w: the token carries no subject", federation.ErrInvalidClaims)
@@ -216,7 +216,8 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 		// Google says email_verified is authoritative only for a Gmail
 		// address or a hosted domain; any other consumer account may carry a
 		// verified address it does not own.
-		EmailTrusted:  t.Email != "" && verified && (t.HostedDomain != "" || gmail(t.Email)),
+		EmailTrusted: t.Email != "" && verified && (t.HostedDomain != "" || gmail(t.Email)),
+		// Exchange let only an ASCII hd through, so EqualFold folds ASCII only.
 		HomeDirectory: c.home != "" && verified && strings.EqualFold(t.HostedDomain, c.home),
 	}
 }
@@ -242,6 +243,13 @@ func emailVerified(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &s) == nil && s == "true"
 }
 
-func printable(s string) bool {
-	return !strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) })
+// asciiLower lowercases A to Z only. Unicode folding would turn U+212A
+// KELVIN SIGN into k, on the comparison that admits staff.
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
 }
