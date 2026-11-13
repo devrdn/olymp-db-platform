@@ -185,6 +185,9 @@ describe("proxy's matcher", () => {
     // would leave a signed-out tab without one.
     ["/icon.svg", "an asset, not a screen"],
     ["/apple-icon.png", "an asset, not a screen"],
+    // The provider marks on the sign-in screen, shown before anyone is signed in.
+    ["/brand/google-g.png", "a public brand mark"],
+    ["/brand/github-mark.svg", "a public brand mark"],
   ])("leaves %s alone — %s", (path) => {
     expect(pattern.test(path)).toBe(false);
   });
@@ -192,6 +195,7 @@ describe("proxy's matcher", () => {
   test.each([
     ["/", "a screen"],
     ["/contests", "a screen"],
+    ["/brands", "a screen whose name merely starts like the brand folder"],
     ["/users/8f3a.tar.gz", "a screen whose path happens to carry dots"],
     ["/api/v1/settings", "the API's: its forwarded address is checked, sign-in is not"],
     ["/api/v1/settings/images/logo", "public on purpose, and still passed through the same check"],
