@@ -172,6 +172,16 @@ describe.each([
   });
 });
 
+describe.each(["en", "ro", "ru"] as const)("the switched-off refusal in %s", (locale) => {
+  // Recovery does not exist with mail off and refuses staff, so the sentence
+  // must not send everyone to it.
+  test("does not promise password recovery", async () => {
+    const dict = await getDictionary(locale);
+
+    expect(dict.errors.external_signin_unavailable).not.toContain(dict.auth.signIn.forgot);
+  });
+});
+
 describe.each(["en", "ro", "ru"] as const)("the sign-in lede in %s", (locale) => {
   // Self sign-up and Microsoft both exist; the lede must not say every account
   // is handed out by an organisation.

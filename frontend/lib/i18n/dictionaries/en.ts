@@ -1446,7 +1446,7 @@ const en = {
       noPublicUrl: "Set PUBLIC_URL to see this address.",
       switchOff: "Switch off",
       switchOn: "Switch on",
-      note: "Switched off, its button disappears and its sign-ins are refused. Links already made are kept, and switching it back on restores them. Someone who only ever signed in this way can set a password through password recovery when their email is verified and mail is on; staff cannot, so reset theirs yourself.",
+      note: "Switched off, its button disappears and its sign-ins are refused. Links already made are kept, and switching it back on restores them. Someone who only ever signed in this way can set a password through password recovery when their account has an email address and mail is on; staff cannot, so reset theirs yourself. If you sign in only this way yourself, do not switch it off.",
     },
     failed: {
       title: "Could not load the settings",
@@ -2827,7 +2827,7 @@ const en = {
     external_signin_failed: "Signing in through that service did not work. Try again.",
     external_signin_staff_account: "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password.",
     external_signin_closed: "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one.",
-    external_signin_unavailable: "Signing in this way is switched off here. Sign in with your password, or use “Forgot password?” to set one.",
+    external_signin_unavailable: "Signing in this way is switched off here. Sign in another way, or ask an administrator.",
     external_signin_conflict: "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
