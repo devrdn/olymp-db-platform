@@ -1,8 +1,7 @@
 // Package federation decides which account a person signing in through an
 // external identity provider enters: the account the identity is already
 // linked to, a live student account whose address the provider vouches for,
-// or a new account. A staff account is entered this way only when the adapter
-// says the person belongs to the installation's own directory.
+// or a new account.
 //
 // It knows no provider. An adapter verifies the provider's token, decides
 // whether the email in it is trusted, and hands over Claims; another provider
@@ -32,10 +31,9 @@ const (
 )
 
 var (
-	// ErrStaffAccount refuses entering or linking a staff account the
-	// provider did not vouch for as a member of the installation's own
-	// directory.
-	ErrStaffAccount = errors.New("a staff account cannot be entered through an external provider")
+	// ErrStaffAccount refuses entering or linking a staff account (see
+	// Service.refuse).
+	ErrStaffAccount = errors.New("a staff account is entered through a provider only from the installation's own directory")
 	// ErrSignupClosed means the identity has no account and the installation
 	// creates none.
 	ErrSignupClosed = errors.New("this installation does not create accounts")
@@ -69,9 +67,8 @@ type Claims struct {
 	// person owns Email. Only a trusted email is put on an account or used to
 	// find one.
 	EmailTrusted bool
-	// HomeDirectory is the adapter's statement that the provider says, at
-	// this sign-in, that the person is a member of the installation's own
-	// directory. Only an adapter sets it; it lets staff in (Service.refuse).
+	// HomeDirectory is set only by an adapter, for this sign-in; see
+	// Service.refuse.
 	HomeDirectory bool
 }
 

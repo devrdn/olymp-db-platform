@@ -404,9 +404,8 @@ type LinkExternalCommand struct {
 	Identity ExternalIdentity
 	// VerifiedAt is when the identity's email was vouched for.
 	VerifiedAt time.Time
-	// HomeDirectory is the adapter's statement, at this sign-in, that the
-	// provider says the person is a member of the installation's own
-	// directory. Only an adapter decides it.
+	// HomeDirectory is set only by an adapter, for this sign-in; see
+	// federation.Service.refuse.
 	HomeDirectory bool
 }
 
@@ -414,7 +413,7 @@ type LinkExternalCommand struct {
 // identity's email as verified at VerifiedAt, in one transaction. The account
 // is locked and read again first, so a change committed since the caller's
 // read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
-// ErrStaffNotLinkable unless HomeDirectory is set, ErrNotFound when the account no longer holds the
+// ErrStaffNotLinkable, ErrNotFound when the account no longer holds the
 // identity's email, which is what vouched for linking it, and
 // ErrIssuerAlreadyLinked when the account already holds another identity at
 // the same issuer: a provider may reassign a mailbox, and the address must
@@ -503,9 +502,7 @@ func (s *Service) retireOneTimePassword(ctx context.Context, u *User, provider s
 }
 
 // refuseExternalEntry says why an account read under its lock cannot be
-// entered or linked through an external provider, if it cannot. A blocked or
-// deleted account is refused whatever the provider says; staff only when it
-// does not vouch for the person as a member of the home directory.
+// entered or linked through an external provider, if it cannot.
 func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory bool) error {
 	switch {
 	case u.Status == StatusDeleted:

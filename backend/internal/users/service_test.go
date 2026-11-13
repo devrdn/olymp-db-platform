@@ -447,8 +447,9 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	if entry.Action != audit.ActionUserExternalIdentityLink || entry.ActorID != nil || entry.EntityID != ana.ID.String() {
 		t.Errorf("entry = %+v, want the link with a nil actor", entry)
 	}
-	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true {
-		t.Errorf("payload = %v, want the provider and a trusted email", entry.Payload)
+	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true ||
+		entry.Payload["home_directory"] != false {
+		t.Errorf("payload = %v, want the provider, a trusted email and no home directory", entry.Payload)
 	}
 }
 
@@ -624,6 +625,9 @@ func TestLinkExternalRefusesStaffOutsideTheHomeDirectory(t *testing.T) {
 	}
 	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
 		t.Errorf("identities = %+v, want none", linked)
+	}
+	if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
+		t.Error("the email was marked verified")
 	}
 	if len(f.sink.entries) != 0 {
 		t.Errorf("audit = %v, want nothing recorded", f.sink.actions())

@@ -663,6 +663,9 @@ func TestAStudentLinkedThroughGitHubAndMadeStaffIsRefused(t *testing.T) {
 	if !errors.Is(err, federation.ErrStaffAccount) {
 		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
 	}
+	if used := f.repo.LastUsed(users.ProviderGitHub, githubIssuer, "4242"); !used.IsZero() {
+		t.Errorf("a refused sign-in stamped the identity at %v", used)
+	}
 }
 
 func TestTheHomeDirectoryNeverOpensABlockedOrDeletedAccount(t *testing.T) {
@@ -680,6 +683,9 @@ func TestTheHomeDirectoryNeverOpensABlockedOrDeletedAccount(t *testing.T) {
 
 			if _, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana")); !errors.Is(err, tc.want) {
 				t.Errorf("Resolve() = %v, want %v", err, tc.want)
+			}
+			if used := f.repo.LastUsed(users.ProviderMicrosoft, issuer, "sub-ana"); !used.IsZero() {
+				t.Errorf("a refused sign-in stamped the identity at %v", used)
 			}
 		})
 	}
