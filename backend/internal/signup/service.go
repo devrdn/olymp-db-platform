@@ -279,8 +279,10 @@ func (s *Service) message(ctx context.Context, p Pending, code, lang string) (ma
 }
 
 // Confirm makes the account of the email's sign-up when code is its code and
-// token the one its Start answered, and spends the sign-up. Every try at a
-// live sign-up counts, a malformed code or a missing token included. The
+// token the one its Start answered, and spends the sign-up. Every try from
+// the browser that started it counts, a malformed code included; a missing
+// or other token counts nothing, since without it no code confirms, and
+// counting would let anyone who knows the address void the sign-up. The
 // row stays locked from the read to the commit, so two confirmations of one
 // code make one account.
 func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, error) {
@@ -310,7 +312,11 @@ func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, 
 			refusal = ErrCodeExpired
 			return nil
 		}
-		if !tokenMatches(p.TokenHash, cmd.Token) || !codeMatches(p.CodeHash, cmd.Code) {
+		if !tokenMatches(p.TokenHash, cmd.Token) {
+			refusal = ErrWrongCode
+			return nil
+		}
+		if !codeMatches(p.CodeHash, cmd.Code) {
 			refusal = ErrWrongCode
 			return s.cfg.Store.CountTry(ctx, p.ID)
 		}
@@ -371,8 +377,9 @@ func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
 // Resend stores a new code for the email's sign-up, replacing the old one
 // and opening a new window but keeping the tries, and mails it, or mails the
 // existing-account message again to the owner of an address a live account
-// holds. It takes the token Start answered; a missing or other one counts a
-// try and answers ErrWrongCode. An address with no sign-up gets nothing.
+// holds. It takes the token Start answered; a missing or other one answers
+// ErrWrongCode and counts nothing, as in Confirm. An address with no sign-up
+// gets nothing.
 func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 	if !s.Offered() {
 		return ErrNotAvailable
@@ -400,7 +407,7 @@ func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 			return nil
 		case !tokenMatches(p.TokenHash, cmd.Token):
 			refusal = ErrWrongCode
-			return s.cfg.Store.CountTry(ctx, p.ID)
+			return nil
 		case now.Before(p.SentAt.Add(ResendCooldown)):
 			refusal = ErrTooSoon
 			return nil

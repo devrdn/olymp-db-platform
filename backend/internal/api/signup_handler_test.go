@@ -305,7 +305,7 @@ func TestStartWithoutAHashingSlotAnswersBusy(t *testing.T) {
 	}
 }
 
-func TestConfirmWithoutTheSignupCookieIsAWrongCodeAndCounts(t *testing.T) {
+func TestConfirmWithoutTheSignupCookieIsAWrongCodeAndCountsNothing(t *testing.T) {
 	f := newSignupFixture(t)
 	_, code := f.begin(t, "ana@example.edu", "ana")
 
@@ -314,8 +314,8 @@ func TestConfirmWithoutTheSignupCookieIsAWrongCodeAndCounts(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "signup_wrong_code" {
 		t.Errorf("= %d %q, want 400 signup_wrong_code", rec.Code, errorCode(t, rec))
 	}
-	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Tries != 1 {
-		t.Errorf("pending = %+v, want the try counted", rows)
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Tries != 0 {
+		t.Errorf("pending = %+v, want no try counted without the cookie", rows)
 	}
 }
 
