@@ -1875,9 +1875,9 @@ it, with the number of questions waiting beside it while the contest runs.
     body is read, and so before the hash; confirming then spends the
     email's (5 an hour). The two that mail (the start and a new code) spend
     their mail budgets in the service, only once the request would mail:
-    6 a minute for the caller's address, shared by both, then the
-    installation's sign-up mail budget (below), then 5 an hour for the typed
-    email, each route its own; the start does it before the hash. A refusal
+    6 a minute and 300 a day for the caller's address, shared by both, then
+    the installation's sign-up mail budget (below), then 5 an hour for the
+    typed email, each route its own; the start does it before the hash. A refusal
     by one charges none after it, so a person the installation's budget
     turned away keeps every attempt of their own. It needs mail.
   - **Recovery by link** (`internal/recovery`). A request names a login or
@@ -1887,28 +1887,34 @@ it, with the number of questions waiting beside it while the contest runs.
     verified or not, since following it is the proof; a new link replaces
     the previous one, and a password an administrator issues or the owner
     changes deletes a waiting one in the same transaction, since the reset
-    may be because the mailbox is no longer the owner's. Its token is 32 random bytes, stored as a SHA-256,
-    valid for 30 minutes and spent by its first use. Completing it sets the
+    may be because the mailbox is no longer the owner's. Its token is 32
+    random bytes, stored as a SHA-256, valid for 30 minutes and spent by its
+    first use. Completing it sets the
     password, marks the address verified, clears the one-time-password flag
     and ends every session; it is refused when the account has since become
     staff, been blocked or deleted, or changed its address. Each route spends
     its address budget (30 in ten minutes) first, and a request also the
-    identifier's (5 an hour). The background work spends the installation's
-    recovery mail budget (below) only for a link about to be mailed; past
-    it the link is dropped and logged, and the answer, given before, is the
-    same. It exists whenever mail does.
+    identifier's (5 an hour). Then, before the hand-off and alike whatever
+    the identifier names, the service spends the address's share of
+    recovery mail (2 a minute, 100 a day) and the installation's recovery
+    mail budget (below); past either the request answers
+    `too_many_attempts`. The background work spends no budget. It exists
+    whenever mail does.
   - **Two mail budgets for self-service.** Sign-up codes and
     existing-account notices go to typed addresses, and reset links to
     accounts', through the relay every message shares. The installation
     queues at most 12 sign-up messages a minute and 5000 a day, and 6 reset
-    links a minute and 2000 a day (`mailing.Budget`, one fixed limiter key
-    per window and budget). Each is spent only just before a message is
-    queued, so a request that ends without mail spends nothing, and the two
-    count apart, so a flood of sign-ups cannot shut recovery; recovery's
-    refusal is silent, since its answer was given before the lookup. A few
-    addresses can then never queue more than the relay sends, staff mail
-    keeps a share of it, and the first refusal of each window is logged at
-    warn.
+    requests a minute and 2000 a day (`mailing.Budget`, one fixed limiter
+    key per window and budget), and the two count apart, so a flood of
+    sign-ups cannot shut recovery. Sign-up's is spent only just before a
+    message is queued, so a sign-up that ends without mail spends nothing.
+    Recovery's is spent by every admitted request, before anything is
+    looked up: spent only for a link that is mailed, it would tell a caller
+    who watches their own link whether another address has an account. Each
+    has a per-address share below the installation's, so one machine
+    cannot spend it alone. A few addresses can then never queue more than
+    the relay sends, staff mail keeps a share of it, and the first refusal
+    of each window is logged at warn.
   - **External sign-in** (`internal/federation`). It knows no provider: an
     adapter verifies the provider's answer and hands over the claims (the
     issuer and subject that name the person, an email, a name, a login
