@@ -45,6 +45,7 @@ type Directory interface {
 	// Lock holds the account's row until the transaction in ctx ends, which
 	// ctx must carry; ErrNotFound when there is none.
 	Lock(ctx context.Context, id uuid.UUID) error
+	users.ContestManagers
 }
 
 // Accounts sets the chosen password (users.Service).
@@ -256,7 +257,8 @@ func (s *Service) find(ctx context.Context, loginOrEmail string) (users.User, bo
 	case err != nil:
 		return users.User{}, false, err
 	}
-	return account, account.ReachableByEmail(), nil
+	reaches, err := users.ReachableByEmail(ctx, s.cfg.Directory, account)
+	return account, reaches, err
 }
 
 // Complete sets newPassword on the account of token's link, marks its
@@ -311,7 +313,11 @@ func (s *Service) Complete(ctx context.Context, token, newPassword string) error
 			case err != nil:
 				return uuid.Nil, false, err
 			}
-			if !account.ReachableByEmail() || strings.ToLower(account.Email) != link.Email {
+			reaches, err := users.ReachableByEmail(ctx, s.cfg.Directory, account)
+			if err != nil {
+				return uuid.Nil, false, err
+			}
+			if !reaches || strings.ToLower(account.Email) != link.Email {
 				return uuid.Nil, false, nil
 			}
 			return account.ID, true, nil

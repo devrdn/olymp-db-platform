@@ -115,6 +115,38 @@ func TestRequestIgnoresStaffAccounts(t *testing.T) {
 	}
 }
 
+// A contest's manager reads its reference answers with no global role, so a
+// link must not reach the account either.
+func TestRequestIgnoresAContestManager(t *testing.T) {
+	f := recoverytest.NewFixture(t, nil)
+	manager := student(t, f, "ana", "ana@example.edu")
+	f.Users.AppointToContest(manager.ID)
+
+	for _, typed := range []string{"ana", "ana@example.edu"} {
+		if err := f.Service.Request(t.Context(), typed, "en"); err != nil {
+			t.Errorf("Request(%q) = %v, want the answer every request gets", typed, err)
+		}
+	}
+
+	if q, rows := f.Outbox.Queued(), f.Store.Rows(); len(q) != 0 || len(rows) != 0 {
+		t.Errorf("queued %d messages and stored %d links for a contest manager, want none", len(q), len(rows))
+	}
+}
+
+func TestCompleteRefusesAnAccountMadeAContestManagerSinceTheRequest(t *testing.T) {
+	f := recoverytest.NewFixture(t, nil)
+	account := student(t, f, "ana", "ana@example.edu")
+	token := requested(t, f, "ana")
+	f.Users.AppointToContest(account.ID)
+
+	if err := f.Service.Complete(t.Context(), token, newPassword); !errors.Is(err, recovery.ErrInvalidLink) {
+		t.Fatalf("Complete() = %v, want ErrInvalidLink", err)
+	}
+	if after, _ := f.Users.Get(account.ID); passwordtest.Matches(t, after.PasswordHash, newPassword) {
+		t.Error("the password was reset")
+	}
+}
+
 func TestRequestAnswersTheSameForAnUnknownLogin(t *testing.T) {
 	f := recoverytest.NewFixture(t, nil)
 	f.Users.Add(users.User{Login: "gone", Email: "gone@example.edu", FullName: "Gone", Status: users.StatusDeleted, PasswordHash: "x"})

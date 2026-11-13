@@ -157,23 +157,28 @@ func TestStartForAKnownEmailAnswersAsForANewOne(t *testing.T) {
 	}
 }
 
-// Recovery never serves staff or a blocked account, so the existing-account
-// message must not send them to it.
+// Recovery never serves staff, a contest's manager among them, or a blocked
+// account, so the existing-account message must not send them to it.
 func TestTheExistingAccountMessageSendsAnAccountRecoveryCannotServeToAnAdministrator(t *testing.T) {
 	for name, tc := range map[string]struct {
 		owner       users.User
+		manager     bool
 		toForgotten bool
 	}{
-		"a student": {users.User{Roles: []string{users.RoleStudent}}, true},
-		"staff":     {users.User{Roles: []string{"organizer"}}, false},
-		"blocked":   {users.User{Roles: []string{users.RoleStudent}, Status: users.StatusBlocked}, false},
+		"a student":         {users.User{Roles: []string{users.RoleStudent}}, false, true},
+		"staff":             {users.User{Roles: []string{"organizer"}}, false, false},
+		"a contest manager": {users.User{Roles: []string{users.RoleStudent}}, true, false},
+		"blocked":           {users.User{Roles: []string{users.RoleStudent}, Status: users.StatusBlocked}, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := signuptest.NewFixture(t, nil)
 			f.Users.GrantRole("organizer", "contests.manage")
 			owner := tc.owner
 			owner.Login, owner.Email, owner.FullName, owner.PasswordHash = "ana.owner", "ana@example.edu", "Ana Owner", "x"
-			f.Users.Add(owner)
+			owner = f.Users.Add(owner)
+			if tc.manager {
+				f.Users.AppointToContest(owner.ID)
+			}
 
 			if _, err := f.Service.Start(t.Context(), start("ana@example.edu", "someone-else")); err != nil {
 				t.Fatalf("Start() = %v", err)

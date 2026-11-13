@@ -22,6 +22,7 @@ type Store interface {
 	TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error
 	// ByEmail ignores case and finds live accounts only.
 	ByEmail(ctx context.Context, email string) (users.User, error)
+	users.ContestManagers
 }
 
 // Accounts creates and links accounts (users.Service). Both refuse an
@@ -129,13 +130,18 @@ func (s *Service) resolve(ctx context.Context, c Claims, identity users.External
 
 // refuse says why the account cannot be entered through a provider, if it
 // cannot.
-func refuse(u users.User) error {
+func (s *Service) refuse(ctx context.Context, u users.User) error {
 	switch {
 	case u.Status == users.StatusDeleted:
 		return users.ErrAccountDeleted
 	case !u.IsActive():
 		return users.ErrAccountBlocked
-	case u.IsStaff():
+	}
+	staff, err := users.ActsAsStaff(ctx, s.cfg.Store, u)
+	if err != nil {
+		return err
+	}
+	if staff {
 		return ErrStaffAccount
 	}
 	return nil
@@ -146,7 +152,7 @@ func refuse(u users.User) error {
 // since, on purpose, and the person must change it as after a password
 // sign-in.
 func (s *Service) enter(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
-	if err := refuse(u); err != nil {
+	if err := s.refuse(ctx, u); err != nil {
 		return users.User{}, err
 	}
 	if err := s.cfg.Store.TouchExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject, s.cfg.Now()); err != nil {
@@ -166,7 +172,7 @@ func (s *Service) known(ctx context.Context, identity users.ExternalIdentity) (u
 }
 
 func (s *Service) link(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
-	if err := refuse(u); err != nil {
+	if err := s.refuse(ctx, u); err != nil {
 		return users.User{}, err
 	}
 	linked, err := s.cfg.Accounts.LinkExternal(ctx, u.ID, identity, s.cfg.Now())

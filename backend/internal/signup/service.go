@@ -52,6 +52,7 @@ type Directory interface {
 	ByLogin(ctx context.Context, login string) (users.User, error)
 	// ByEmail ignores case and finds live accounts only.
 	ByEmail(ctx context.Context, email string) (users.User, error)
+	users.ContestManagers
 }
 
 // Accounts creates the confirmed account (users.Service).
@@ -259,15 +260,22 @@ func (s *Service) message(ctx context.Context, p Pending, code, lang string) (ma
 		return mailing.Message{}, err
 	}
 	owner, err := s.cfg.Directory.ByEmail(ctx, p.Email)
-	switch {
-	case errors.Is(err, users.ErrNotFound):
-		return s.codeMessage(p, code, language, installation)
-	case err != nil:
+	known := err == nil
+	if err != nil && !errors.Is(err, users.ErrNotFound) {
 		return mailing.Message{}, err
+	}
+	// Asked for a new address too, of no account, so the queries Start makes
+	// are the same for both.
+	reachable, err := users.ReachableByEmail(ctx, s.cfg.Directory, owner)
+	if err != nil {
+		return mailing.Message{}, err
+	}
+	if !known {
+		return s.codeMessage(p, code, language, installation)
 	}
 	text, err := s.cfg.Texts.SignupExisting(language, mailing.SignupExistingData{
 		Installation: installation, FullName: owner.FullName, Login: owner.Login,
-		ResetByAdministrator: !owner.ReachableByEmail(),
+		ResetByAdministrator: !reachable,
 	})
 	if err != nil {
 		return mailing.Message{}, fmt.Errorf("write the existing-account message: %w", err)

@@ -403,7 +403,7 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		if err != nil {
 			return err
 		}
-		if err := refuseExternalEntry(u); err != nil {
+		if err := s.refuseExternalEntry(ctx, u); err != nil {
 			return err
 		}
 		if identity.Email == "" || !strings.EqualFold(u.Email, identity.Email) {
@@ -463,13 +463,18 @@ func (s *Service) retireOneTimePassword(ctx context.Context, u *User, provider s
 
 // refuseExternalEntry says why an account read under its lock cannot be
 // entered or linked through an external provider, if it cannot.
-func refuseExternalEntry(u User) error {
+func (s *Service) refuseExternalEntry(ctx context.Context, u User) error {
 	switch {
 	case u.Status == StatusDeleted:
 		return ErrAccountDeleted
 	case !u.IsActive():
 		return ErrAccountBlocked
-	case u.IsStaff():
+	}
+	staff, err := ActsAsStaff(ctx, s.repo, u)
+	if err != nil {
+		return err
+	}
+	if staff {
 		return ErrStaffNotLinkable
 	}
 	return nil
