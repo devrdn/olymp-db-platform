@@ -7,10 +7,11 @@
 // its caller answers before anything is looked up and alike for every
 // account.
 //
-// It spends the installation's budget of reset links itself, when a link is
-// about to be mailed, but does not serve HTTP or throttle callers
-// (internal/api does, before the hand-off and before the password hash),
-// and does not sign the person in: they sign in with the new password.
+// It spends the mail budgets itself, for every request and before the
+// hand-off, so a refusal depends on no account. It does not serve HTTP or
+// throttle requests (internal/api does, by address and by identifier, before
+// the hand-off and before the password hash), and does not sign the person
+// in: they sign in with the new password.
 package recovery
 
 import (
@@ -39,11 +40,20 @@ var TokenLength = base64.RawURLEncoding.EncodedLen(TokenBytes)
 // nothing about which it was.
 var ErrInvalidLink = errors.New("the reset link is unknown, used or expired")
 
+var (
+	// ErrTooManyLinks means the caller's address has asked for as many links
+	// as its share allows for now.
+	ErrTooManyLinks = errors.New("too many password reset links were asked for from this address; wait before trying again")
+	// ErrMailBudget means the installation's budget of reset links is spent
+	// for the minute or the day, whoever asks.
+	ErrMailBudget = errors.New("this site is sending too many messages just now; wait a few minutes before trying again")
+)
+
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
 // users.ErrWeakPassword and the hasher's password.ErrBusy pass through and
 // belong to those packages.
 func Errors() []error {
-	return []error{ErrInvalidLink}
+	return []error{ErrInvalidLink, ErrTooManyLinks, ErrMailBudget}
 }
 
 // Link is a reset link waiting to be followed.

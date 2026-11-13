@@ -158,7 +158,7 @@ func TestAPasswordResetByLinkOnTheRealSchemaSetsThePasswordAndVerifiesTheAddress
 		recoveries := recovery.NewService(recovery.Config{
 			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
-			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
+			Limiter: j.limiter, MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
 			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
 		})
 		const email = "journey.reset@example.edu"
@@ -253,7 +253,7 @@ func TestAnAdministratorsResetOnTheRealSchemaVoidsTheMailedLink(t *testing.T) {
 		recoveries := recovery.NewService(recovery.Config{
 			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
-			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
+			Limiter: j.limiter, MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
 			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
 		})
 		const email = "journey.voided@example.edu"
@@ -296,7 +296,7 @@ func TestAContestManagerOnTheRealSchemaIsNeitherMailedALinkNorLinked(t *testing.
 		recoveries := recovery.NewService(recovery.Config{
 			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
-			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
+			Limiter: j.limiter, MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
 			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
 		})
 		if err := recoveries.Request(ctx, email, ""); err != nil {

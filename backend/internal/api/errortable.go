@@ -338,6 +338,8 @@ const signupExpiredMessage = "The code has expired or was tried too often; sign 
 // TestEveryRecoveryErrorHasItsAnswer).
 var recoveryErrors = errorTable{
 	{err: recovery.ErrInvalidLink, status: http.StatusGone, code: codeResetLinkInvalid},
+	{err: recovery.ErrTooManyLinks, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
+	{err: recovery.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
 }
 
 // externalSignInRedirects answers what a sign-in through a provider meets:

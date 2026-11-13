@@ -258,7 +258,7 @@ var (
 	codeAccountBlocked = httpx.NewCode("account_blocked",
 		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password, or after an external provider vouched for the person: the owner may know, a guesser may not. After an external sign-in it arrives as ?error= on the sign-in page, for a deleted account as well.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
-		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Starting a sign-up and asking for a new code also spend mail budgets once the request would mail: the caller's address's, the typed email's, and the installation's for all sign-up mail, which when spent refuses everybody for the rest of its minute or day. Try again later.")
+		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Starting a sign-up and asking for a new code also spend mail budgets once the request would mail: the caller's address's, the typed email's, and the installation's for all sign-up mail. Asking for a reset link spends the caller's address's share and the installation's budget of reset requests, alike whatever it names. An installation's budget, when spent, refuses everybody for the rest of its minute or day. Try again later.")
 	codeSignInBusy = httpx.NewCode("sign_in_busy",
 		"The service is already checking as many passwords as it will at once, and none came free in time, or this address already has as many sign-ins waiting as it may. The password was not evaluated — neither accepted nor judged wrong. A sign-in attempt refused this way has spent the budget it pays before waiting (its address's, or a trusted browser's own) but nothing of the account's own attempt limits, so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
@@ -513,8 +513,8 @@ var (
 
 	// --- Password recovery ---------------------------------------------------
 	// One code per recovery.Service refusal (CLAUDE.md rule 1). A request for
-	// a link has none: every one is answered alike. The endpoints' rate limits
-	// answer too_many_attempts.
+	// a link is answered alike whatever it names; the endpoints' rate limits
+	// and the service's mail budgets answer too_many_attempts.
 	codeResetLinkInvalid = httpx.NewCode("reset_link_invalid",
 		"The password reset link cannot be used: it is unknown, already used, replaced by a newer one, past its thirty minutes, or its account can no longer be reached by email. Deliberately one answer. Ask for a new link.")
 

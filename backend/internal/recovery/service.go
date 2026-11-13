@@ -83,13 +83,23 @@ type MailBudget interface {
 	Spend(ctx context.Context) (bool, error)
 }
 
-// The installation's budget of reset links: apart from sign-up's, so a flood
-// of sign-ups at typed addresses cannot shut recovery, and small, since a
-// link goes only to an account that exists. With sign-up's twelve it leaves
-// the relay's default 25 a minute room for staff mail.
+// Limiter counts attempts per subject in a fixed window (auth.Limiter).
+type Limiter interface {
+	Spend(ctx context.Context, subject string, limit int, window time.Duration) (allowed, firstRefused bool, err error)
+}
+
+// The budgets every request for a link spends at Submit, whatever it names,
+// refusals included (CLAUDE.md rule 13). MailsPerMinute and MailsPerDay are
+// the installation's, apart from sign-up's so a flood of sign-ups cannot
+// shut recovery; with sign-up's twelve they leave the relay's default 25 a
+// minute room for staff mail. MailsPerAddressPerMinute and
+// MailsPerAddressPerDay are one caller's address's share, so one machine
+// cannot hold the installation's minute at zero.
 const (
-	MailsPerMinute = 6
-	MailsPerDay    = 2000
+	MailsPerMinute           = 6
+	MailsPerDay              = 2000
+	MailsPerAddressPerMinute = 2
+	MailsPerAddressPerDay    = 100
 )
 
 type Config struct {
@@ -100,6 +110,7 @@ type Config struct {
 	Outbox     Outbox
 	Texts      Texts
 	Settings   Settings
+	Limiter    Limiter
 	MailBudget MailBudget
 	UnitOfWork storage.UnitOfWork
 	Log        *slog.Logger
@@ -125,7 +136,7 @@ type Service struct {
 // NewService panics on a missing part, so a wiring fault stops the boot.
 func NewService(cfg Config) *Service {
 	if cfg.Store == nil || cfg.Directory == nil || cfg.Accounts == nil || cfg.Hasher == nil ||
-		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.MailBudget == nil ||
+		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.Limiter == nil || cfg.MailBudget == nil ||
 		cfg.UnitOfWork == nil || cfg.Log == nil {
 		panic("recovery: NewService needs every part of its Config")
 	}
@@ -147,17 +158,60 @@ const (
 )
 
 // RequestCommand is a request for a link. Lang is the reader's language;
-// one the texts are not written in falls back to the installation's.
+// one the texts are not written in falls back to the installation's. Sender
+// is the caller's address as a rate-limit subject (httpx.ClientSubject);
+// callers with none share one.
 type RequestCommand struct {
-	LoginOrEmail, Lang string
+	LoginOrEmail, Lang, Sender string
 }
 
-// Submit runs Request in the background and returns at once, so the caller
-// answers before anything is looked up and alike for every account. It
-// reports whether the request was taken: one past MaxInFlight, or after
-// Stop, is dropped with a warning. The request keeps ctx's values but not
-// its cancellation, and its failure is logged, since nobody waits for it.
-func (s *Service) Submit(ctx context.Context, cmd RequestCommand) bool {
+// Submit spends the budgets, then runs Request in the background and returns
+// at once, so the caller answers before anything is looked up and alike for
+// every account. Every request spends the budgets, whatever it names: a
+// budget spent only for a link that is mailed would let a caller watching
+// their own link learn whether another address has an account. A refusal
+// is ErrTooManyLinks or ErrMailBudget. It reports whether the request was
+// taken: one past MaxInFlight, or after Stop, is dropped with a warning and
+// nil. The request keeps ctx's values but not its cancellation, and its
+// failure is logged, since nobody waits for it.
+func (s *Service) Submit(ctx context.Context, cmd RequestCommand) (bool, error) {
+	if err := s.admit(ctx, cmd.Sender); err != nil {
+		return false, err
+	}
+	return s.handOff(ctx, cmd), nil
+}
+
+// admit spends the caller's address's share, its minute then its day, and
+// then the installation's budget; a refusal charges nothing after it, and
+// the address is the more bounded key (CLAUDE.md rule 5).
+func (s *Service) admit(ctx context.Context, sender string) error {
+	for _, window := range []struct {
+		name   string
+		limit  int
+		length time.Duration
+	}{
+		{"minute", MailsPerAddressPerMinute, time.Minute},
+		{"day", MailsPerAddressPerDay, 24 * time.Hour},
+	} {
+		allowed, _, err := s.cfg.Limiter.Spend(ctx, "recovery_mail:ip:"+sender+":"+window.name, window.limit, window.length)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrTooManyLinks
+		}
+	}
+	allowed, err := s.cfg.MailBudget.Spend(ctx)
+	if err != nil {
+		return fmt.Errorf("spend the recovery mail budget: %w", err)
+	}
+	if !allowed {
+		return ErrMailBudget
+	}
+	return nil
+}
+
+func (s *Service) handOff(ctx context.Context, cmd RequestCommand) bool {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -210,9 +264,7 @@ func (s *Service) Stop(ctx context.Context) error {
 // holds an @, in place of any link mailed to it before. An account a link
 // may not reach (unknown, deleted, blocked, staff or without an address)
 // gets nothing and the same nil, after the same lookup, draw and settings
-// read; no path hashes a password. Only a link about to be mailed spends the
-// mail budget; past it the link is dropped, logged and answered nil like
-// the rest, since the caller was answered before the lookup.
+// read; no path hashes a password. It spends no budget: Submit did.
 func (s *Service) Request(ctx context.Context, loginOrEmail, lang string) error {
 	account, reaches, err := s.find(ctx, loginOrEmail)
 	if err != nil {
@@ -227,14 +279,6 @@ func (s *Service) Request(ctx context.Context, loginOrEmail, lang string) error 
 		return err
 	}
 	if !reaches {
-		return nil
-	}
-	admitted, err := s.cfg.MailBudget.Spend(ctx)
-	if err != nil {
-		return fmt.Errorf("spend the recovery mail budget: %w", err)
-	}
-	if !admitted {
-		s.cfg.Log.InfoContext(ctx, "dropped a password reset link: the installation's recovery mail budget is spent")
 		return nil
 	}
 

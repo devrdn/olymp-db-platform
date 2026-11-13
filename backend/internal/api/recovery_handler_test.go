@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -37,7 +40,15 @@ type recoveryFixture struct {
 
 func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	t.Helper()
-	return mountRecovery(t, recoverytest.NewFixture(t, nil))
+	return mountRecovery(t, recoverytest.NewFixture(t, looseRecoveryBudgets))
+}
+
+// looseRecoveryBudgets keeps the service's mail budgets out of the way of a
+// test of something else; the tests of the budgets keep the real ones.
+func looseRecoveryBudgets(c *recovery.Config) {
+	c.Limiter = authtest.Unlimited{}
+	c.MailBudget = mailing.NewBudget("recovery", mailing.Limits{PerMinute: 1 << 20, PerDay: 1 << 20},
+		authtest.Unlimited{}, c.Log)
 }
 
 // mountRecovery serves the recovery routes of f's service, which decides at
@@ -323,6 +334,7 @@ func gatedRecovery(t *testing.T) (*recoveryFixture, *recoverytest.Gate) {
 	gate := recoverytest.NewGate()
 	f := mountRecovery(t, recoverytest.NewFixture(t, func(c *recovery.Config) {
 		c.Directory = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
+		looseRecoveryBudgets(c)
 	}))
 	// Registered after the fixture's Stop, so it runs first and Stop can end.
 	t.Cleanup(gate.Release)
@@ -392,24 +404,103 @@ func TestForgotAnswers202ForAFailureAfterTheHandOff(t *testing.T) {
 	}
 }
 
-// The recovery budget is spent in the background, only for a link about to
-// be mailed, so past it a request is answered as every other one is and the
-// link is dropped: a refusal would say the account exists.
-func TestAForgotPastTheRecoveryBudgetIsAnsweredAlike(t *testing.T) {
-	f := mountRecovery(t, recoverytest.NewFixture(t, func(cfg *recovery.Config) {
-		cfg.MailBudget = mailing.NewBudget("recovery", mailing.Limits{PerMinute: 1, PerDay: recovery.MailsPerDay},
-			auth.NewLimiter(cache.NewMemory(1000)), cfg.Log)
-	}))
-	f.student("ana", "ana@example.edu")
+// countedRecoveryBudget counts the installation's budget a forgot spends.
+type countedRecoveryBudget struct {
+	mu    sync.Mutex
+	spent int
+}
 
-	for i := range 3 {
-		if rec := f.forgot(fmt.Sprintf("192.0.2.%d", i+1), "ana@example.edu"); rec.Code != http.StatusAccepted {
-			t.Fatalf("forgot %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
+func (b *countedRecoveryBudget) Spend(context.Context) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.spent++
+	return true, nil
+}
+
+func (b *countedRecoveryBudget) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
+}
+
+// Every admitted forgot spends the recovery budget once, before the
+// hand-off, whatever the identifier names: answer and spending alike.
+func TestForgotSpendsTheRecoveryBudgetAlikeForEveryIdentifier(t *testing.T) {
+	budget := &countedRecoveryBudget{}
+	f := mountRecovery(t, recoverytest.NewFixture(t, func(c *recovery.Config) { c.MailBudget = budget }))
+	f.student("ana", "ana@example.edu")
+	f.Users.Add(users.User{Login: "organiser", Email: "organiser@example.edu", FullName: "Org",
+		Roles: []string{recoverytest.StaffRole}, PasswordHash: "x"})
+
+	for i, typed := range []string{"ana@example.edu", "organiser@example.edu", "nobody@example.edu"} {
+		rec := f.forgot(fmt.Sprintf("192.0.2.%d", i+1), typed)
+		if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"link_sent"}` {
+			t.Errorf("forgot(%q) = %d %s, want the one 202", typed, rec.Code, rec.Body.String())
 		}
+		if got := budget.count(); got != i+1 {
+			t.Errorf("after %q the budget spent %d, want one a request", typed, got)
+		}
+	}
+}
+
+// The review's probe: fill the minute to five with known logins, ask for the
+// address under test, then for one's own account, and watch whether one's
+// own link arrives. Run against an address with a reachable account and
+// against one with none, the attacker must see exactly the same.
+func TestTheRecoveryBudgetTellsAProbeNothingAboutAnAddress(t *testing.T) {
+	type observed struct {
+		codes   []int
+		ownLink bool
+	}
+	probe := func(t *testing.T, targetExists bool) observed {
+		f := mountRecovery(t, recoverytest.NewFixture(t, nil))
+		for i := range 5 {
+			f.student(fmt.Sprintf("known%d", i), fmt.Sprintf("known%d@example.edu", i))
+		}
+		f.student("eve", "eve@example.edu")
+		if targetExists {
+			f.student("target", "target@example.edu")
+		}
+		var seen observed
+		ask := func(from, typed string) {
+			seen.codes = append(seen.codes, f.forgot(from, typed).Code)
+		}
+		for i := range 5 {
+			ask(fmt.Sprintf("198.51.100.%d", i+1), fmt.Sprintf("known%d", i))
+		}
+		ask("198.51.100.10", "target@example.edu")
+		ask("198.51.100.11", "eve")
 		f.settle(t)
+		for _, m := range f.Outbox.Queued() {
+			seen.ownLink = seen.ownLink || m.To == "eve@example.edu"
+		}
+		return seen
 	}
 
-	if queued := f.Outbox.Queued(); len(queued) != 1 {
-		t.Errorf("queued %d messages, want the one link the budget admits", len(queued))
+	withAccount, without := probe(t, true), probe(t, false)
+
+	if !slices.Equal(withAccount.codes, without.codes) || withAccount.ownLink != without.ownLink {
+		t.Errorf("the probe saw %+v with an account and %+v without: the budget tells them apart", withAccount, without)
+	}
+	if last := withAccount.codes[len(withAccount.codes)-1]; last != http.StatusTooManyRequests || withAccount.ownLink {
+		t.Errorf("the seventh request = %d, own link %v; want 429 and no link either way", last, withAccount.ownLink)
+	}
+}
+
+// One address holds two requests a minute, so a single machine cannot hold
+// recovery's minute at zero for everybody.
+func TestOneAddressTakesAtMostItsShareOfRecovery(t *testing.T) {
+	f := mountRecovery(t, recoverytest.NewFixture(t, nil))
+	for i := range recovery.MailsPerAddressPerMinute {
+		if rec := f.forgot("192.0.2.1", fmt.Sprintf("nobody%d", i)); rec.Code != http.StatusAccepted {
+			t.Fatalf("forgot %d = %d, want 202", i, rec.Code)
+		}
+	}
+
+	if rec := f.forgot("192.0.2.1", "one-more"); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("past the address's share = %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
+	}
+	if rec := f.forgot("192.0.2.2", "one-more"); rec.Code != http.StatusAccepted {
+		t.Errorf("from another address = %d, want 202", rec.Code)
 	}
 }
