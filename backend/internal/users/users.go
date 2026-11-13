@@ -281,9 +281,17 @@ type Repository interface {
 	ContestManagers
 }
 
-// Providers an account can sign in through. The column's CHECK constraint
-// holds the same list.
-const ProviderMicrosoft = "microsoft"
+// Providers an account can sign in through. The CHECK constraint on
+// external_identities.provider holds the same list.
+const (
+	ProviderMicrosoft = "microsoft"
+	ProviderGoogle    = "google"
+	ProviderGitHub    = "github"
+)
+
+// Providers lists every provider an identity may belong to, in the order the
+// sign-in page offers them.
+var Providers = []string{ProviderMicrosoft, ProviderGoogle, ProviderGitHub}
 
 // MaxIdentityFieldLength bounds an external identity's issuer and subject
 // (CLAUDE.md rule 2).
@@ -302,7 +310,7 @@ type ExternalIdentity struct {
 // that is empty or over its bound, with ErrInvalidAccount.
 func (i ExternalIdentity) Validate() error {
 	switch {
-	case i.Provider != ProviderMicrosoft:
+	case !slices.Contains(Providers, i.Provider):
 		return fmt.Errorf("%w: unknown identity provider %q", ErrInvalidAccount, i.Provider)
 	case i.Issuer == "" || utf8.RuneCountInString(i.Issuer) > MaxIdentityFieldLength:
 		return fmt.Errorf("%w: the issuer must be 1 to %d characters", ErrInvalidAccount, MaxIdentityFieldLength)

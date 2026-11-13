@@ -1043,6 +1043,24 @@ func microsoftIdentity(userID uuid.UUID, subject string) users.ExternalIdentity 
 	return users.ExternalIdentity{UserID: userID, Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example/v2.0", Subject: subject, Email: "x@example.edu"}
 }
 
+func TestAnIdentityOfEveryProviderIsStored(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		ana := makeUser(t, ctx, "every-provider")
+		for _, provider := range users.Providers {
+			issuer := "https://" + provider + ".example"
+			id := users.ExternalIdentity{UserID: ana.ID, Provider: provider, Issuer: issuer, Subject: "sub-" + provider}
+			if err := repo.LinkExternalIdentity(ctx, id); err != nil {
+				t.Fatalf("LinkExternalIdentity(%s) = %v", provider, err)
+			}
+			found, err := repo.ByExternalIdentity(ctx, provider, issuer, "sub-"+provider)
+			if err != nil || found.ID != ana.ID {
+				t.Errorf("ByExternalIdentity(%s) = %v, %v; want the account", provider, found.ID, err)
+			}
+		}
+	})
+}
+
 func TestAnExternalIdentityIsUniquePerIssuerAndSubject(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)

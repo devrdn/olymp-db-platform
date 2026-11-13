@@ -1729,6 +1729,25 @@ func TestSignInAsRecordsTheMethod(t *testing.T) {
 	}
 }
 
+func TestSignInAsAcceptsEveryProvider(t *testing.T) {
+	for _, provider := range users.Providers {
+		f := newFixture(t)
+
+		if _, err := f.service.SignInAs(context.Background(), signInCmd(f, provider)); err != nil {
+			t.Fatalf("provider %q: %v", provider, err)
+		}
+
+		if got := f.sink.entries[0].Payload["method"]; got != provider {
+			t.Errorf("payload method = %v, want %q", got, provider)
+		}
+	}
+
+	f := newFixture(t)
+	if _, err := f.service.SignInAs(context.Background(), signInCmd(f, "okta")); !errors.Is(err, ErrUnknownSignInMethod) {
+		t.Errorf("okta: err = %v, want ErrUnknownSignInMethod", err)
+	}
+}
+
 func TestSignInAsRefusesAnUnknownMethod(t *testing.T) {
 	f := newFixture(t)
 
