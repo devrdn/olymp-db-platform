@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,8 +62,12 @@ func TestATokenUnderAKeyIDNotPublishedIsRefused(t *testing.T) {
 	j := newJWKS(t)
 	ks := newKeySet(j, nil)
 
-	if err := verify(t.Context(), ks, j.tokenUnder(t, "never-published")); err == nil {
+	err := verify(t.Context(), ks, j.tokenUnder(t, "never-published"))
+	if err == nil {
 		t.Error("a token under an unpublished kid was verified")
+	}
+	if errors.Is(err, connector.ErrKeysUnavailable) {
+		t.Errorf("verify = %v, want a refusal of the token, not an outage", err)
 	}
 }
 
@@ -115,8 +120,12 @@ func TestAnUnknownKeyIDCannotMakeItRefetchWithoutBound(t *testing.T) {
 	}
 
 	for i := 0; i < 20; i++ {
-		if err := verify(t.Context(), ks, j.tokenUnder(t, fmt.Sprintf("unknown-%d", i))); err == nil {
+		err := verify(t.Context(), ks, j.tokenUnder(t, fmt.Sprintf("unknown-%d", i)))
+		if err == nil {
 			t.Fatal("a token under an unknown kid was verified")
+		}
+		if errors.Is(err, connector.ErrKeysUnavailable) {
+			t.Fatalf("verify = %v, want a refusal of the token, not an outage", err)
 		}
 	}
 	if n := j.KeyFetches(); n != 1 {
@@ -125,7 +134,10 @@ func TestAnUnknownKeyIDCannotMakeItRefetchWithoutBound(t *testing.T) {
 
 	at.now = at.now.Add(connector.KeyRefreshInterval)
 	for i := 0; i < 20; i++ {
-		_ = verify(t.Context(), ks, j.tokenUnder(t, "unknown-later"))
+		err := verify(t.Context(), ks, j.tokenUnder(t, "unknown-later"))
+		if err == nil || errors.Is(err, connector.ErrKeysUnavailable) {
+			t.Fatalf("verify after the interval = %v, want a refusal of the token, not an outage", err)
+		}
 	}
 	if n := j.KeyFetches(); n != 2 {
 		t.Errorf("after the interval the keys were fetched %d times in all, want one more", n)
@@ -249,10 +261,19 @@ func TestConcurrentMissesShareOneFetch(t *testing.T) {
 	defer release()
 
 	const callers = 8
+	token := j.token(t)
 	errs := make(chan error, callers)
+	var started sync.WaitGroup
+	started.Add(callers)
 	for i := 0; i < callers; i++ {
-		go func() { errs <- verify(t.Context(), ks, j.token(t)) }()
+		go func() {
+			started.Done()
+			errs <- verify(t.Context(), ks, token)
+		}()
 	}
+	// Every caller is about to miss while the one fetch is held, so a second
+	// fetch would show here rather than after the first had finished.
+	started.Wait()
 	waitFor(t, func() bool { return j.KeyFetches() >= 1 })
 	time.Sleep(20 * time.Millisecond)
 	release()
