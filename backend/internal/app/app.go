@@ -704,6 +704,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Auth: authService, Limiter: limiter, Middleware: authMiddleware, Cookies: cookies, Log: log,
 		Switches: installation,
 	}))
+	modules = append(modules, api.NewIntegrationsHandler(api.Integrations{
+		Providers: providers, PublicURL: cfg.PublicURL, Switches: installation,
+		Middleware: authMiddleware, Log: log,
+	}))
 	modules = append(modules, api.NewAuthMethodsHandler(api.AuthMethods{
 		Signups: signups, Recoveries: recoveries,
 		Providers: configuredProviderIDs(providers), Switches: installation,
