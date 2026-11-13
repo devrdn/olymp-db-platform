@@ -678,6 +678,17 @@ func TestAMemberOfTheHomeTenantIsTheHomeDirectory(t *testing.T) {
 	}
 }
 
+// An idp naming the token's own issuer names the member's home, not another.
+func TestAMemberWhoseIdentityProviderIsTheIssuerIsTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	got := trustOf(t, p, c, func(m map[string]any) { m["idp"] = m["iss"]; m["acct"] = 0; m["email"] = "ana@example.edu" })
+	if !got.HomeDirectory || !got.EmailTrusted {
+		t.Errorf("home member with idp = iss and acct 0: %+v, want the home directory and the email trusted", got)
+	}
+}
+
 // A guest of the home tenant can carry neither idp nor acct, so membership
 // is only ever read from acct = 0.
 func TestAHomeTenantTokenWithoutAnAccountTypeIsNotTheHomeDirectory(t *testing.T) {
