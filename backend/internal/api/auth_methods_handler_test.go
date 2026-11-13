@@ -1,12 +1,14 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,5 +160,67 @@ func TestAnUnreadableSwitchHidesTheButtons(t *testing.T) {
 	}
 	if !logs.loggedError("could not read the sign-in switches") {
 		t.Error("the read error was not logged")
+	}
+}
+
+// slowSwitches blocks every read until release is closed or the read's
+// context ends.
+type slowSwitches struct {
+	release chan struct{}
+	entered chan struct{}
+	reads   atomic.Int32
+}
+
+func (s *slowSwitches) DisabledSignInProviders(ctx context.Context) (map[string]bool, error) {
+	s.reads.Add(1)
+	s.entered <- struct{}{}
+	select {
+	case <-s.release:
+		return map[string]bool{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestConcurrentAuthMethodsRequestsShareOneRead(t *testing.T) {
+	switches := &slowSwitches{release: make(chan struct{}), entered: make(chan struct{}, 4)}
+	router := chi.NewRouter()
+	api.NewAuthMethodsHandler(api.AuthMethods{
+		Signups: offered(false), Recoveries: offered(false),
+		Providers: []string{"google"}, Switches: switches,
+	}).Mount(router)
+
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() { code, _ := getMethods(t, router); codes <- code }()
+	}
+	<-switches.entered
+	time.Sleep(50 * time.Millisecond)
+	close(switches.release)
+
+	for range 2 {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("status %d, want 200", code)
+		}
+	}
+	if n := switches.reads.Load(); n != 1 {
+		t.Errorf("%d reads for two concurrent requests, want 1", n)
+	}
+}
+
+func TestASlowSwitchReadAnswersWithoutProviders(t *testing.T) {
+	switches := &slowSwitches{release: make(chan struct{}), entered: make(chan struct{}, 4)}
+	logs := &logBuffer{}
+	router := chi.NewRouter()
+	api.NewAuthMethodsHandler(api.AuthMethods{
+		Signups: offered(true), Recoveries: offered(false),
+		Providers: []string{"google"}, Switches: switches,
+		Log: logging.New("warn", logs), ReadTimeout: 20 * time.Millisecond,
+	}).Mount(router)
+
+	status, body := getMethods(t, router)
+
+	if status != http.StatusOK || !reflect.DeepEqual(body["providers"], []any{}) || body["password_signup"] != true {
+		t.Errorf("status %d body %v, want 200, no providers, password fields intact", status, body)
 	}
 }
