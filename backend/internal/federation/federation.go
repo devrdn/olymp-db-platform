@@ -38,7 +38,7 @@ var (
 	// creates none.
 	ErrSignupClosed = errors.New("this installation does not create accounts")
 	// ErrInvalidClaims refuses claims that are empty where required, over a
-	// bound, or not text.
+	// bound, or not text, and a trusted email that is not an address.
 	ErrInvalidClaims = errors.New("the identity provider's claims are not valid")
 	// ErrIdentityConflict refuses linking by email an account already linked
 	// to another identity at the same issuer: a provider may reassign a
@@ -80,7 +80,9 @@ type Policy struct {
 }
 
 // identity validates the claims and returns the identity they name, its email
-// trimmed and lowercased.
+// trimmed and lowercased. An untrusted email that is not a bounded address is
+// dropped rather than refused: it is never used, so it must not stop a
+// sign-in.
 func (c Claims) identity() (users.ExternalIdentity, error) {
 	for _, f := range []struct {
 		name, value string
@@ -89,23 +91,41 @@ func (c Claims) identity() (users.ExternalIdentity, error) {
 		{"provider", c.Provider, MaxProviderLength},
 		{"issuer", c.Issuer, MaxIssuerLength},
 		{"subject", c.Subject, MaxSubjectLength},
-		{"email", c.Email, MaxEmailLength},
 		{"name", c.Name, MaxNameLength},
 		{"login hint", c.LoginHint, MaxLoginHintLength},
 	} {
-		if len(f.value) > f.max || !utf8.ValidString(f.value) || strings.ContainsFunc(f.value, unicode.IsControl) {
+		if !boundedText(f.value, f.max) {
 			return users.ExternalIdentity{}, fmt.Errorf("%w: the %s must be at most %d bytes of text", ErrInvalidClaims, f.name, f.max)
 		}
 	}
-	email := strings.ToLower(strings.TrimSpace(c.Email))
-	if email != "" {
-		if parsed, err := mail.ParseAddress(email); err != nil || parsed.Address != email {
-			return users.ExternalIdentity{}, fmt.Errorf("%w: the email is not an address", ErrInvalidClaims)
-		}
+	email, ok := address(c.Email)
+	switch {
+	case !ok && c.EmailTrusted:
+		return users.ExternalIdentity{}, fmt.Errorf("%w: the email is not an address of at most %d bytes", ErrInvalidClaims, MaxEmailLength)
+	case !ok:
+		email = ""
 	}
 	identity := users.ExternalIdentity{Provider: c.Provider, Issuer: c.Issuer, Subject: c.Subject, Email: email}
 	if err := identity.Validate(); err != nil {
 		return users.ExternalIdentity{}, fmt.Errorf("%w: %v", ErrInvalidClaims, err)
 	}
 	return identity, nil
+}
+
+func boundedText(s string, limit int) bool {
+	return len(s) <= limit && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// address returns raw trimmed and lowercased, and whether it is empty or a
+// bare address of at most MaxEmailLength bytes.
+func address(raw string) (string, bool) {
+	if !boundedText(raw, MaxEmailLength) {
+		return "", false
+	}
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if email == "" {
+		return "", true
+	}
+	parsed, err := mail.ParseAddress(email)
+	return email, err == nil && parsed.Address == email
 }

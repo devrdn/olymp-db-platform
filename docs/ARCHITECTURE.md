@@ -1935,7 +1935,9 @@ it, with the number of questions waiting beside it while the contest runs.
     `SELF_SIGNUP_ENABLED` is off, and a link by email to an account already
     linked to another identity of the same issuer, since a provider may
     give a mailbox to somebody new. An address that is not vouched for is
-    kept only on the identity, never on the account, and never links.
+    kept only on the identity, never on the account, and never links; one
+    that is not a bounded address is dropped instead, so it never stops the
+    sign-in, while a vouched-for one refuses it.
     Linking a student account that still holds the one-time password staff
     issued drops that password (the hash becomes NULL and the flag clears)
     and ends the account's older sessions, in the same transaction,
