@@ -234,33 +234,43 @@ window multiplies it.
    It should list no rows.
 
 **7. Decide how participants get in.** An account reaches the platform in
-one of four ways, and the installation's settings decide which exist
+one of four ways (the third is one per connected provider), and the
+installation's settings decide which exist
 ([Self-service accounts](../../backend/README.md#self-service-accounts)):
 
 | Way | Who makes the account | Exists when |
 |---|---|---|
 | **Accounts made by staff**, one at a time or by importing a roster (below) | an administrator, with a one-time password | always |
 | **Create an account** on the sign-in page | the person, with a password of their own and a code mailed to their address | `SELF_SIGNUP_ENABLED` and mail are on |
-| **Sign in with Microsoft** | nobody, when the address Microsoft vouches for is already an account's; otherwise the first sign-in makes one, with a generated login and no password | the installation is [connected](../../backend/README.md#connecting-microsoft-sign-in); new accounts only with `SELF_SIGNUP_ENABLED` |
+| **Continue with Microsoft, Google or GitHub** | nobody, when the address the provider vouches for is already an account's; otherwise the first sign-in makes one, with a generated login and no password | the installation is connected to the provider ([Microsoft](../../backend/README.md#connecting-microsoft-sign-in), [Google](../../backend/README.md#connecting-google-sign-in), [GitHub](../../backend/README.md#connecting-github-sign-in)) and an administrator has not switched it off; new accounts only with `SELF_SIGNUP_ENABLED` |
 | **The event's registration form** (`/register`) | the form, with a one-time password and an entrance code | `EVENT_REGISTRATION_ENABLED` is on |
 
 - An account still has to join the contest: by enrolling itself where
   **Enrolment** is open, or by staff finding it on **People**, **Add
   participants**. An account that made itself has a login its owner chose,
-  or one generated from their Microsoft username or name; the picker finds
+  or one generated from their provider username, email or name; the picker finds
   it by name or address too.
 - A staff-made student account still on its one-time password loses it
-  when its owner first signs in with Microsoft, which links the two: the
-  person is let in, and from then on signs in with Microsoft, or sets a
+  when its owner first signs in with a provider, which links the two: the
+  person is let in, and from then on signs in with it, or sets a
   password of their own with **Forgot password?** (mail on). The one-time
   password stops working at that sign-in. A one-time password an
-  administrator issues after the link stays: the next Microsoft sign-in
+  administrator issues after the link stays: the next sign-in through the provider
   asks the person to change it, as a password sign-in would.
-- Staff accounts never sign in with Microsoft and never get a reset link:
-  an organiser or administrator signs in with their password. That includes
+- Staff accounts never get a reset link, and enter through a provider only
+  when the provider says, at that sign-in, that the person belongs to the
+  installation's own directory: a member of the Microsoft tenant named by
+  `MICROSOFT_HOME_TENANT_ID` (not a guest), or a Google account of
+  `GOOGLE_HOME_DOMAIN` with a verified email. GitHub never does. Anyone
+  else signs in with their password. That includes
   an account appointed to manage a contest on **People**, even with no role
   on **Accounts**, for as long as one of its contests is not archived: it
   reads the reference answers. An administrator resets its password.
+- An administrator can switch a connected provider off on **Integrations**
+  (`/integrations`). Its button disappears and its sign-ins are refused, and
+  the links already made are kept. Someone who only ever signed in that way
+  sets a password with **Forgot password?** when their email is verified
+  and mail is on; a staff account is reset by an administrator.
 - With mail on, anyone with an address on a student account can reset a
   forgotten password themselves from **Forgot password?**; the link lasts
   thirty minutes.
@@ -335,7 +345,7 @@ with "This contest is open only to people with a verified address in this
 site's own email domain. Sign up or sign in with such an address." With mail
 on, the refusal also says that a password reset link confirms an address
 the account already has, and links **Forgot password?**. An address is
-confirmed by a sign-up code, a followed reset link or a Microsoft sign-in
+confirmed by a sign-up code, a followed reset link or a sign-in through a provider
 that vouches for it. The address of every account not deleted when the
 release that brings this was installed counts as confirmed; an account made
 after it by staff, an import or the event form starts unconfirmed, until its

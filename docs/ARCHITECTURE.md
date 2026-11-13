@@ -194,7 +194,10 @@ access of its own.
 | `signup` | A person creating their own account with a password and an emailed code (section 7) |
 | `recovery` | A forgotten password reset through an emailed link (section 7) |
 | `federation` | Which account a sign-in through an external provider enters, whatever the provider (section 7) |
-| `microsoft` | The Microsoft provider: its sign-in flow, its token, and whether it vouches for the email (section 7) |
+| `connector` | What every provider's adapter shares: the sign-in state and its sealed cookie, an OpenID Connect provider's signing keys, the bounded HTTP client for calls to a provider (section 7) |
+| `microsoft` | The Microsoft provider: its sign-in flow, its token, and whether it vouches for the email and for membership of the installation's directory (section 7) |
+| `google` | The Google provider, on the same terms (section 7) |
+| `github` | The GitHub provider: OAuth 2.0 and two API reads, since GitHub issues no ID token (section 7) |
 | `contests` | Contests, stories, questions and reference answers; the contest's SQL policy; appointing managers; the lifecycle (draft → published → running → finished) and the clock; enrolment — self-service for `open`, by a manager for `invite_only` — and the participation gate; taking answers, checking them, scoring |
 | `sqlpolicy` | What a participant's SQL may do, and whether a query stays inside it; the same description drives the template's grants (section 4.1) |
 | `provisioning` | How a contest's game is described and built, and creating and removing participants' game databases from its template: a worker queue plus a pool of spares (section 4.2) |
@@ -1845,9 +1848,11 @@ it, with the number of questions waiting beside it while the contest runs.
     owning a contest that is not archived, which lets it read the reference
     answers with no global role, never receives a reset link, is told to ask
     an administrator in the existing-account message, and is never entered
-    or linked through an external provider: an address somebody typed must
-    not become a way into that power (`users.ActsAsStaff`). It keeps its
-    password and the administrator's reset. The contest check is one probe
+    or linked through an external provider unless the provider says, at that
+    sign-in, that the person belongs to the installation's own directory
+    (below): an address somebody typed must not become a way into that
+    power (`users.ActsAsStaff`). It keeps its password and the
+    administrator's reset. The contest check is one probe
     of `contest_managers_user_id_idx`, made only by recovery, a sign-up's
     start or new code (for a new address too, so the two take the same
     queries) and an external sign-in.
@@ -1918,12 +1923,15 @@ it, with the number of questions waiting beside it while the contest runs.
   - **External sign-in** (`internal/federation`). It knows no provider: an
     adapter verifies the provider's answer and hands over the claims (the
     issuer and subject that name the person, an email, a name, a login
-    hint, and whether the provider vouches for the email). Federation then
+    hint, whether the provider vouches for the email, and whether it says
+    the person belongs to the installation's own directory: the
+    `HomeDirectory` claim, set only by an adapter). Federation then
     enters the account the identity is linked to; or, for a vouched address,
     links the live account holding it and marks the address verified; or
     creates a `student` account with no password, carrying the address only
     when vouched for and a login derived from the hint or the name. It
-    refuses a staff account, a blocked or deleted one, a creation while
+    refuses a staff account unless `HomeDirectory` is set for this sign-in,
+    a blocked or deleted one whatever the provider says, a creation while
     `SELF_SIGNUP_ENABLED` is off, and a link by email to an account already
     linked to another identity of the same issuer, since a provider may
     give a mailbox to somebody new. An address that is not vouched for is
@@ -1939,11 +1947,38 @@ it, with the number of questions waiting beside it while the contest runs.
     account signs in through the provider, or with a password its owner sets
     by a reset link. Deleting an account deletes its identities. Another
     provider is another adapter, with no change to federation.
-  - **Microsoft, the first adapter** (`internal/microsoft`). The
+
+    **Staff and the home directory.** A staff account is entered or linked
+    through a provider only when the adapter says the provider, at this
+    sign-in, puts the person in the installation's own directory. That is
+    checked at every sign-in, a linked identity included, and again under
+    the lock that links the account (`users.Service.LinkExternal`), so a
+    role granted between the read and the link is still caught. The
+    adapters decide it so: Microsoft, a member (not a guest) of
+    `MICROSOFT_HOME_TENANT_ID`; Google, an account whose `hd` claim is
+    `GOOGLE_HOME_DOMAIN` with a verified email; GitHub, never, because it
+    vouches for no organisation's directory. The flag travels unchanged
+    from the adapter through `federation.Claims` and
+    `users.LinkExternalCommand` to that locked re-read, and is recorded
+    as `home_directory` in the link's audit entry.
+  - **The shared connector** (`internal/connector`). Every adapter runs the
+    same flow: the authorisation code with PKCE, and a state, nonce, PKCE
+    verifier and return path in an `HttpOnly` cookie sealed with a key derived
+    from `DEVICE_COOKIE_SECRET`, for ten minutes, one cookie per provider
+    (`dbcontest_<provider>_state`, `__Host-dbcontest_<provider>_state` where
+    cookies are `Secure`) so a sign-in begun with one provider cannot be
+    finished at another's callback. Every call to a provider goes through
+    one client that times out after ten seconds and refuses a response past
+    256 KiB as it arrives. Each provider has its own routes,
+    `GET /api/v1/auth/<provider>/start` and `/callback`, which exist only
+    when the provider is configured, and one redirect URI,
+    `PUBLIC_URL` followed by `/api/v1/auth/<provider>/callback`. Both
+    routes of each provider spend the address's budget (120 in ten minutes,
+    counted per provider and per route) before reading the switch, the
+    cookie or anything else, and refusals count.
+  - **Microsoft** (`internal/microsoft`). The
     authorisation-code flow with PKCE and a client secret, against the
-    authority `MICROSOFT_TENANT` names. The state, nonce, PKCE verifier and
-    return path travel in an `HttpOnly` cookie sealed with a key derived from
-    `DEVICE_COOKIE_SECRET`, for ten minutes, and Microsoft is asked
+    authority `MICROSOFT_TENANT` names. Microsoft is asked
     `prompt=select_account`, so a live Microsoft session on a shared machine
     never signs the next person in unasked. The ID token's RS256 signature is
     checked against Microsoft's published keys, fetched on the first token
@@ -1959,13 +1994,54 @@ it, with the number of questions waiting beside it while the contest runs.
     token carries `xms_edov`, and of a personal account; a home member's
     token without an `email` uses its `preferred_username`, and nobody
     else's does. Any organisation can create a tenant and put any address on
-    its users, so no other tenant's email is evidence. Both routes spend the
-    address's budget (120 in ten minutes) before reading the request, and so
-    before the token exchange, and every failure lands on `/login?error=`
-    with a declared code. A sign-in without a usable return path lands on
-    `/login`, which sends a signed-in visitor on as after a password
-    sign-in; one whose account must still change its password lands on
-    `/password`.
+    its users, so no other tenant's email is evidence. `HomeDirectory` is
+    set for that same member of the home tenant, and for nobody else: not a
+    guest, not a verified domain of another tenant, not a personal account.
+    A guest is told apart by the `idp` claim or `acct` = 1, so the
+    registration must emit the `acct` optional claim for the staff rule to
+    hold.
+  - **Google** (`internal/google`). OpenID Connect with the scopes
+    `openid`, `email` and `profile`, asked `prompt=select_account`. The ID
+    token is checked as Microsoft's is, against Google's keys, for the
+    issuer `https://accounts.google.com` (written with or without the
+    scheme). The identity is that issuer and the token's `sub`. Google's
+    email is trusted only when `email_verified` is true and the address is
+    on `gmail.com` or `googlemail.com` or the account has a Workspace
+    domain (`hd`): `email_verified` is not evidence for any other address
+    Google lets an account carry. Otherwise the person enters or creates
+    an account without an email. `HomeDirectory` is set when
+    `GOOGLE_HOME_DOMAIN` is set, the email is verified and `hd` equals it
+    ignoring case.
+  - **GitHub** (`internal/github`). OAuth 2.0 with PKCE and the scope
+    `user:email`. GitHub issues no ID token, so after the exchange the
+    adapter reads `/user` and `/user/emails`. The identity is the numeric
+    account id, as a decimal string, under `https://github.com`. Only the
+    primary address is considered, and it is trusted only when GitHub
+    marks it verified. Where the emails cannot be read (the scope is
+    withheld, answers 403 or 404) the person signs in without an email.
+    `HomeDirectory` is never set.
+  - **The administrator's switch.** Each configured provider can be switched
+    off on **Integrations** (`/integrations`, which reads
+    `GET /api/v1/integrations` and writes
+    `PUT /api/v1/integrations/{provider}` with `{"enabled": bool}`; both
+    need `settings.manage`). The switch is the setting
+    `auth.<provider>.disabled`, outside the settings catalogue, and a
+    change is audited as `settings.sign_in_provider`. Off, the button is
+    gone, `start` and `callback` answer `/login?error=external_signin_unavailable`,
+    and the links already made are kept, so switching it on restores them.
+    An account that was only ever entered through the provider can set a
+    password by recovery when its email is verified and mail is on; a staff
+    account is reset by an administrator. `GET /api/v1/auth/methods` lists
+    the configured and enabled providers in the fixed order Microsoft,
+    Google, GitHub (`providers`, and the older boolean `microsoft`, which
+    follows the switch) and reuses the switches for at most five seconds
+    per process, since every visitor to the sign-in page reads it; `start`
+    and `callback` read them from the database every time, so a switch-off
+    refuses the next request, not the next cache expiry. Every failure of
+    a callback lands on `/login?error=` with a declared code. A sign-in
+    without a usable return path lands on `/login`, which sends a
+    signed-in visitor on as after a password sign-in; one whose account
+    must still change its password lands on `/password`.
 
 ## 7.1 Reaching a contest: enrolment and address restrictions
 
@@ -4341,7 +4417,7 @@ to look and which variable governs what.
 | Under individual timing, a participant's clock starts on the first read of the content, not on an event subscription | 8 | — |
 | The scheduler ends a contest no earlier than the grace expires, by the same condition that closes submission | 8 | `DEADLINE_GRACE` |
 | A contest's staff and its participants do not overlap | 7 | — |
-| Self-service sign-up, recovery by link and external sign-in: one answer for every address, staff never reached through email, an email believed only when its provider vouches for it | 7 | `SELF_SIGNUP_ENABLED`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT`, `MICROSOFT_HOME_TENANT_ID` |
+| Self-service sign-up, recovery by link and external sign-in: one answer for every address, staff never reached through email and through a provider only from the installation's own directory, an email believed only when its provider vouches for it, each provider switchable off by an administrator | 7 | `SELF_SIGNUP_ENABLED`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT`, `MICROSOFT_HOME_TENANT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_HOME_DOMAIN`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` |
 | A contest admitting only verified addresses of the installation's domain | 7.1 | `TRUSTED_EMAIL_DOMAIN` |
 | `ends_at` and `starts_at` are immobile on a running contest where a fact already computed from them has occurred (the freeze, the ICPC penalty) | 6.1.1 | — |
 | Trusted proxies narrowed to two fixed addresses; the secret the interface proves an address with | 7.2 | `TRUSTED_PROXIES`, `INGRESS_SECRET` |
@@ -5396,5 +5472,5 @@ Product decisions the items below are built on.
   gains a `team_id` (section 15, item 10).
 - Answers are checked automatically against a reference. Manual review by a
   jury is a possible extension (`submissions.review_status`).
-- External sign-in is OpenID Connect, with Microsoft as its one provider
-  (section 7); a directory such as LDAP is not required.
+- External sign-in is OpenID Connect for Microsoft and Google and OAuth 2.0
+  for GitHub (section 7); a directory such as LDAP is not required.

@@ -159,11 +159,14 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure and name it `__Host-dbcontest_session`, which no other host can set; off, it is `dbcontest_session` |
 | `EVENT_REGISTRATION_ENABLED` | no | `false` | serve the event's public registration form, `POST /api/v1/public/registrations`; off, the route does not exist, while the organizers' list and arrival mark stay |
-| `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account: with a password and a code mailed to their address (`POST /api/v1/public/signup`, `/signup/confirm` and `/signup/resend`, which also need mail and otherwise do not exist), and by a first sign-in with Microsoft. Off, Microsoft still signs people into accounts that exist ([Self-service accounts](#self-service-accounts)) |
+| `SELF_SIGNUP_ENABLED` | no | `false` | let people create their own student account: with a password and a code mailed to their address (`POST /api/v1/public/signup`, `/signup/confirm` and `/signup/resend`, which also need mail and otherwise do not exist), and by a first sign-in with a provider (Microsoft, Google, GitHub). Off, a provider still signs people into accounts that exist ([Self-service accounts](#self-service-accounts)) |
 | `TRUSTED_EMAIL_DOMAIN` | no | empty | the installation's own email domain, bare and lowercase (such as `example.edu`); with it set, a contest can admit to self-enrolment only accounts with a verified address in it or a subdomain. Anything but a domain name refuses start-up |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)) |
 | `MICROSOFT_TENANT` | no | `common` | who may sign in with Microsoft: `common` (any account), `organizations` (work and school), `consumers` (personal) or one tenant ID |
-| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account; a tenant `MICROSOFT_TENANT` never admits refuses start-up |
+| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account; a tenant `MICROSOFT_TENANT` never admits refuses start-up. A staff account enters through Microsoft only as a member of this tenant |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | no | empty | the OAuth client for sign-in with Google (`GET /api/v1/auth/google/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/google/callback` ([Connecting Google sign-in](#connecting-google-sign-in)) |
+| `GOOGLE_HOME_DOMAIN` | no | empty | the installation's own Google Workspace domain, bare (such as `example.edu`), compared ignoring case: an account of it with a verified email may enter or link a staff account. Empty means no domain is its own; anything but a domain name refuses start-up |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | no | empty | the OAuth app for sign-in with GitHub (`GET /api/v1/auth/github/start` and `/callback`), on the same terms as Google's pair, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/github/callback` ([Connecting GitHub sign-in](#connecting-github-sign-in)). GitHub never admits staff |
 
 ### The mail relay
 
@@ -193,7 +196,7 @@ which reconnect.
 | `SMTP_FROM` | with mail | — | the sending address, optionally named: `Olimpiada USM <noreply-olymp@usm.md>` |
 | `SMTP_TLS` | no | `starttls` | `starttls` (refuses a relay that does not offer it), `tls` for implicit TLS, `none` only with `ENV=development` and never with credentials |
 | `SMTP_MAX_PER_MINUTE` | no | `25` | messages handed to the relay in any minute, across every replica (1-600) |
-| `PUBLIC_URL` | with mail or Microsoft sign-in | — | the site's absolute `https://` address, for the links in messages and the Microsoft redirect (`http://` only in `development`) |
+| `PUBLIC_URL` | with mail or a sign-in provider | — | the site's absolute `https://` address, for the links in messages and the providers' redirects (`http://` only in `development`) |
 
 USM's relay is Microsoft 365 (Exchange Online) SMTP AUTH client submission,
 through the mailbox `noreply-olymp@usm.md`; the mailbox's password comes from
@@ -237,7 +240,9 @@ password. Each other way in is the installation's choice:
 |---|---|---|
 | **Create an account** (`/signup`): a password of one's own, confirmed by a six-digit code mailed to the address | `SELF_SIGNUP_ENABLED=true` | mail |
 | **Forgot password?** (`/forgot`): a single-use link mailed to the account's address, opening `/reset` | mail, nothing else | — |
-| **Sign in with Microsoft** | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` | `PUBLIC_URL` and an application registration ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)); it creates accounts only while `SELF_SIGNUP_ENABLED` is on |
+| **Continue with Microsoft** | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` | `PUBLIC_URL` and an application registration ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)); it creates accounts only while `SELF_SIGNUP_ENABLED` is on |
+| **Continue with Google** | `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` | `PUBLIC_URL` and an OAuth client ([Connecting Google sign-in](#connecting-google-sign-in)); creates accounts on the same terms |
+| **Continue with GitHub** | `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` | `PUBLIC_URL` and an OAuth app ([Connecting GitHub sign-in](#connecting-github-sign-in)); creates accounts on the same terms |
 | **A contest only for the installation's domain**: a switch in the contest's settings | `TRUSTED_EMAIL_DOMAIN` | — |
 
 - **Recovery comes with mail.** An installation that already sends mail
@@ -247,9 +252,12 @@ password. Each other way in is the installation's choice:
   get a link, and neither does an account that manages or owns a contest
   that is not archived, global role or not.
 - **The sign-in page offers only what is on.** It asks
-  `GET /api/v1/auth/methods`, which needs no session and is not cached, and
-  shows the sign-up link, the recovery link and the Microsoft button
-  accordingly. The contest settings and the participant list take the domain
+  `GET /api/v1/auth/methods`, which needs no session and is not cached by
+  the browser, and shows the sign-up link, the recovery link and one
+  **Continue with** button for each connected provider an administrator has
+  not switched off, in the order Microsoft, Google, GitHub. The API reuses
+  the switches behind that answer for at most five seconds
+  ([Switching a provider off](#switching-a-provider-off)). The contest settings and the participant list take the domain
   from the same answer.
 - **A change takes effect when the API is recreated**, with the command in
   [The mail relay](#the-mail-relay).
@@ -276,24 +284,27 @@ password. Each other way in is the installation's choice:
   - Past any of them the request answers `too_many_attempts` (429). The
     first refusal of each budget's minute or day is logged at warn with the
     budget's name.
-- **A Microsoft sign-in that links an account drops its unused one-time
+- **A provider sign-in that links an account drops its unused one-time
   password.** When it links a student account through its address while the
   account still holds the one-time password staff issued, the password is
   removed and every older session ends, in the same transaction. The person
   never had that password; kept, it would send them to a change form that
-  asks for it. The account then signs in through Microsoft, or with a
+  asks for it. The account then signs in through the provider, or with a
   password its owner sets through **Forgot password?**; a password sign-in
   is refused, as for any account without one. A one-time password an
-  administrator issues after the link is kept: the next Microsoft sign-in
-  lands on the change form, as a password sign-in does.
+  administrator issues after the link is kept: the next sign-in through the
+  provider lands on the change form, as a password sign-in does.
 - **What the audit trail records.** A password sign-up is `user.create` with
-  no actor; a first Microsoft sign-in that made an account is
+  no actor; a first provider sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account
   `user.external_identity_link`, and a one-time password it dropped
   `user.one_time_password_retire`; a password set through a mailed link is
   `user.password_reset_by_link`. The sign-in that follows a confirmed
-  sign-up, and a sign-in with Microsoft, are `auth.login` with `method`
-  `signup` or `microsoft`; a password sign-in carries no method.
+  sign-up, and a sign-in through a provider, are `auth.login` with `method`
+  `signup`, `microsoft`, `google` or `github`; a password sign-in carries
+  no method. A link records whether the provider put the person in the
+  installation's own directory (`home_directory`), and an administrator
+  switching a provider on or off is `settings.sign_in_provider`.
 
 How each way in decides who gets in, and why, is
 [ARCHITECTURE.md, section 7](../docs/ARCHITECTURE.md#7-authentication-and-authorisation);
@@ -317,7 +328,7 @@ docker compose -f deploy/docker-compose.yml exec -T pg-core \
 The same migration counts the address of every account not deleted at that
 moment as verified, since staff entered them. An account made later by
 staff, an import or the event form starts with its address unverified, until
-its owner follows a reset link or signs in with a Microsoft account that
+its owner follows a reset link or signs in through a provider that
 vouches for it. An administrator who changes an account's address to another
 one clears its verified mark.
 
@@ -410,7 +421,10 @@ registration asks for them, and each changes what it can believe:
   sends `acct`, once asked for, every time. Without it, a guest whose token
   lacks `idp` would be taken for a member, and could sign in to the account
   holding that address. It matters whenever `MICROSOFT_HOME_TENANT_ID` is
-  set.
+  set. It is also what keeps a guest from entering a staff account: a staff
+  account enters through Microsoft only as a member of the home tenant, and
+  a guest is recognised by `idp` differing from the issuer or by `acct` = 1,
+  so emit `acct`.
 
 #### The client secret
 
@@ -514,17 +528,19 @@ in a query string is redacted too.
 
 #### What a person sees
 
-A sign-in with Microsoft that does not succeed brings the person back to the
-sign-in page with one of these sentences. The API's log says why: a warning
+A sign-in through any provider that does not succeed brings the person back
+to the sign-in page with one of these sentences, which name no provider. The API's log says why: a warning
 `a sign-in was refused`, or an error `a sign-in failed`, both with
-`provider=microsoft`, when Microsoft's signing keys could not be fetched.
+`provider=microsoft` (or `google`, `github`); the error is for an outage, such as
+signing keys that could not be fetched.
 
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
-| `external_signin_failed` | "Signing in with Microsoft did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 Microsoft sign-ins came from their address in ten minutes |
-| `external_signin_staff_account` | "This address belongs to an organiser's or administrator's account. Sign in with its password, or ask an administrator to reset it." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived: staff never sign in through Microsoft |
-| `external_signin_conflict` | "You cannot sign in here with this Microsoft account: your account on this site is linked to a different Microsoft account, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same tenant, as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
-| `external_signin_closed` | "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
+| `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 sign-ins through the provider came from their address in ten minutes |
+| `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` (a guest, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
+| `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
+| `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
+| `external_signin_unavailable` | "Signing in this way is switched off here. Sign in with your password, or use “Forgot password?” to set one." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |
 | `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |
 
 Some refusals stay on Microsoft's own page and never reach the platform:
@@ -532,6 +548,128 @@ Some refusals stay on Microsoft's own page and never reach the platform:
 `AADSTS700016` (the registration is not in the tenant `MICROSOFT_TENANT`
 names), `AADSTS50020` (a single-tenant registration and a person from
 another tenant), and "Need admin approval".
+
+### Connecting Google sign-in
+
+Sign-in with Google is OpenID Connect with an authorisation code, a client
+secret and PKCE, run by the API (`internal/google`). It needs one OAuth
+client in a Google Cloud project, and three settings.
+
+| Variable | What to put there |
+|---|---|
+| `GOOGLE_CLIENT_ID` | the OAuth client's **Client ID** |
+| `GOOGLE_CLIENT_SECRET` | its **Client secret** |
+| `GOOGLE_HOME_DOMAIN` | the installation's own Google Workspace domain, bare, such as `example.edu`, if it has one. Empty means no domain is its own |
+
+The ID and the secret are both or neither; with only one, or without
+`PUBLIC_URL`, start-up is refused.
+
+In the Google Cloud console, in a project the organisation controls:
+
+1. **APIs & Services**, **OAuth consent screen**: name the application (what
+   people see when Google asks for their consent) and set its audience. An
+   organisation's Workspace can make it internal to that organisation; any
+   other installation makes it external.
+2. **Credentials**, **Create credentials**, **OAuth client ID**, type **Web
+   application**.
+3. **Authorized redirect URIs**: `PUBLIC_URL` followed by
+   `/api/v1/auth/google/callback`, character for character: for
+   `PUBLIC_URL=https://contest.example.edu` it is
+   `https://contest.example.edu/api/v1/auth/google/callback`. For a test on a
+   development machine add
+   `http://localhost:3000/api/v1/auth/google/callback` and run the API with
+   `ENV=development` and `PUBLIC_URL=http://localhost:3000`.
+4. Copy the **Client ID** and **Client secret** into `deploy/.env` and
+   recreate the API with the command in [The mail relay](#the-mail-relay).
+
+The platform asks for the scopes `openid`, `email` and `profile`, and asks
+Google to let the person choose the account each time.
+
+#### What the platform believes
+
+- **The identity** is Google's `sub` under `https://accounts.google.com`, so
+  a person keeps their account when they change their address.
+- **The email** is believed only when Google's `email_verified` is true and
+  the address is on `gmail.com` or `googlemail.com`, or the account belongs
+  to a Workspace domain (the `hd` claim). For any other address Google lets
+  an account carry, the person is entered or an account is created without
+  an email: it cannot recover a password by email and never satisfies a
+  contest's domain switch.
+- **Staff** enter or link only when `GOOGLE_HOME_DOMAIN` is set, the email is
+  verified and `hd` equals that domain, ignoring case. This is read at every
+  sign-in. Without `GOOGLE_HOME_DOMAIN`, no Google account is a staff
+  account's way in.
+
+A refused sign-in is one of the sentences in
+[What a person sees](#what-a-person-sees), with `provider=google` in the
+log.
+
+### Connecting GitHub sign-in
+
+Sign-in with GitHub is OAuth 2.0 with an authorisation code, a client secret
+and PKCE, run by the API (`internal/github`). GitHub issues no ID token, so
+the API reads the person's account and emails with the access token. It
+needs one OAuth app and two settings.
+
+| Variable | What to put there |
+|---|---|
+| `GITHUB_CLIENT_ID` | the OAuth app's **Client ID** |
+| `GITHUB_CLIENT_SECRET` | one of its **Client secrets** |
+
+The pair is both or neither, and `PUBLIC_URL` is required with it. In
+GitHub, **Settings**, **Developer settings**, **OAuth Apps**, **New OAuth
+App** (an organisation's settings hold apps of its own):
+
+1. **Authorization callback URL**: `PUBLIC_URL` followed by
+   `/api/v1/auth/github/callback`, such as
+   `https://contest.example.edu/api/v1/auth/github/callback`. An OAuth app
+   has one callback, so a test on a development machine uses an app of its
+   own with `http://localhost:3000/api/v1/auth/github/callback`.
+2. **Generate a new client secret** and copy it at once.
+3. Put both values in `deploy/.env` and recreate the API with the command in
+   [The mail relay](#the-mail-relay).
+
+The platform asks for the scope `user:email`.
+
+#### What the platform believes
+
+- **The identity** is the account's numeric id under `https://github.com`,
+  not its login, which a person can change.
+- **The email** is the primary address, believed only when GitHub marks it
+  verified. When the emails cannot be read (an organisation withholds the
+  scope, and GitHub answers 403 or 404) the person signs in without an
+  email, with the consequences listed for Google above.
+- **Staff** never enter through GitHub: it vouches for no organisation's
+  directory. A staff account signs in with its password.
+
+A refused sign-in is one of the sentences in
+[What a person sees](#what-a-person-sees), with `provider=github` in the
+log.
+
+### Switching a provider off
+
+On **Integrations** (`/integrations`, for anyone with `settings.manage`) an
+administrator sees each provider, whether it is configured, the redirect URI
+to register and, for one that is not configured, the variables that would
+configure it. A configured provider has a switch. The credentials stay in
+the environment; only the switch is stored, as the setting
+`auth.<provider>.disabled`, and a change is audited as
+`settings.sign_in_provider`.
+
+Switched off, a provider:
+
+- shows no button once the sign-in page asks again: `/auth/methods` reuses
+  the switches for at most five seconds per process;
+- refuses `start` and `callback` at once, since both read the switch every
+  time, sending the person to the sign-in page with
+  `external_signin_unavailable`, so a sign-in begun a moment earlier does not
+  finish;
+- keeps every link already made, so switching it back on restores them.
+
+An account that was entered only through that provider has no password. Its
+owner can set one with **Forgot password?** when the address is verified and
+mail is on. A staff account never gets a reset link: an administrator resets
+its password.
 
 ## Running locally
 
