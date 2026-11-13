@@ -245,7 +245,7 @@ export function SqlTabStrip({
                     }
                     finishRename(tab, event.currentTarget.value);
                   }}
-                  className="min-w-0 border border-edge bg-bg px-1 font-sans text-control-sm text-ink outline-none"
+                  className="min-w-0 border border-edge bg-bg px-1 font-sans text-control-sm text-ink"
                 />
               ) : (
                 <span className="truncate">{tab.title}</span>

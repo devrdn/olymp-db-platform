@@ -617,7 +617,7 @@ function ResultTable({
               // rather than wrap.
               style={{ height: `${ROW_REM}rem` }}
               className={cn(
-                "border-b border-edge outline-none",
+                "border-b border-edge",
                 selection.selected === index
                   ? "bg-accent-wash"
                   : "hover:bg-sunk focus-visible:bg-sunk",

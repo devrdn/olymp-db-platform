@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
-import { Button } from "./button";
+import { Button, buttonVariants } from "./button";
 
 describe("the button", () => {
   test("is a native button, so the browser's own semantics apply", () => {
@@ -47,6 +47,25 @@ describe("the button", () => {
     const button = screen.getByRole("button", { name: "Delete" });
     expect(button.className).toContain("bg-bad-wash");
     expect(button.className).toContain("h-7");
+  });
+});
+
+/**
+ * `outline-none` on a control silences the global `:focus-visible` ring
+ * (globals.css), leaving a keyboard user with no sign of where they are.
+ */
+describe("the button's keyboard focus", () => {
+  const variants = ["primary", "secondary", "quiet", "danger"] as const;
+
+  test.each(variants)("the %s button never switches the outline off", (variant) => {
+    const classes = buttonVariants({ variant }).split(/\s+/);
+
+    expect(classes).not.toContain("outline-none");
+    expect(classes.filter((c) => /^(focus-visible:)?outline-(none|0|hidden)$/.test(c))).toEqual([]);
+  });
+
+  test("a link styled as a button inherits the same classes, so the same ring", () => {
+    expect(buttonVariants({ variant: "secondary" })).not.toMatch(/(^|\s)outline-none(\s|$)/);
   });
 });
 

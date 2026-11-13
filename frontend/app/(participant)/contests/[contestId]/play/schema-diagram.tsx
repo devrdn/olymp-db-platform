@@ -409,7 +409,7 @@ function TableBox({
         role: "group",
         "aria-label": node.name,
         "aria-roledescription": t.table,
-        className: "group cursor-move font-mono text-data outline-none",
+        className: "group cursor-move font-mono text-data",
       };
   return (
     <g transform={`translate(${node.x} ${node.y})`} {...box}>

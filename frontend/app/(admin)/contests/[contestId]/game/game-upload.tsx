@@ -584,7 +584,7 @@ export function GameUpload({
                   min={1}
                   value={gotoValue}
                   onChange={(event) => setGotoValue(event.target.value)}
-                  className="h-7 w-24 border border-line-2 bg-transparent px-2 text-control-sm text-ink outline-none"
+                  className="h-7 w-24 border border-line-2 bg-transparent px-2 text-control-sm text-ink"
                 />
                 <button type="submit" className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}>
                   {tu.gotoButton}
