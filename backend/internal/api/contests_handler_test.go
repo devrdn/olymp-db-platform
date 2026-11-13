@@ -904,6 +904,7 @@ func TestANetworkTypedWithHostBitsIsSavedAsTheNetworkItNames(t *testing.T) {
 			Policies:      postgres.NewSQLPolicies(pool),
 			Languages:     postgres.NewLanguages(pool),
 			Users:         accounts,
+			Appointees:    accounts,
 			Audit:         audit.New(postgres.NewAuditSink(pool)),
 			UnitOfWork:    storage.NewUnitOfWork(pool),
 			Gate:          contests.NewGate(0),

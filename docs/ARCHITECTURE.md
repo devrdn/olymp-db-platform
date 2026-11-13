@@ -1955,10 +1955,13 @@ it, with the number of questions waiting beside it while the contest runs.
     through a provider only when the adapter says the provider, at this
     sign-in, puts the person in the installation's own directory. That is
     checked at every sign-in, a linked identity included, and again under
-    the lock that links the account (`users.Service.LinkExternal`), so a
-    role granted between the read and the link is still caught. The
-    adapters decide it so: Microsoft, a member of
-    `MICROSOFT_HOME_TENANT_ID` whose token says so with `acct` = 0; Google, an account whose `hd` claim is
+    the lock that links the account (`users.Service.LinkExternal`). A
+    change of roles and an appointment to a contest's staff both write the
+    account's row in their transaction and raise its session generation,
+    so one made between the read and the link is still caught, and a
+    session opened before it, through any provider, ends. The adapters
+    decide it so: Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose
+    token says so with `acct` = 0; Google, an account whose `hd` claim is
     `GOOGLE_HOME_DOMAIN` with a verified email; GitHub, never, because it
     vouches for no organisation's directory. The flag travels unchanged
     from the adapter through `federation.Claims` and
@@ -2162,10 +2165,10 @@ than the remaining lifetime in the first place.
 
 **Sessions are revoked through a generation counter.**
 `users.session_generation` rises on a block, a password change, a password
-reset and a change of roles, and a session records the generation it was
-issued under. A mismatch means the session is dead. That is "sign out
-everywhere", implemented without an index of live sessions over a plain
-key-value interface.
+reset, a change of roles and an appointment to a contest's staff, and a
+session records the generation it was issued under. A mismatch means the
+session is dead. That is "sign out everywhere", implemented without an index
+of live sessions over a plain key-value interface.
 
 The account itself is **checked on every request**, so a block takes effect on
 the next request rather than when the session happens to expire. So that this

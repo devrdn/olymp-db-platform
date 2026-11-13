@@ -10,6 +10,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/google/uuid"
 )
 
@@ -1032,6 +1033,7 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 		Questions: questions, Registrations: registrations, Submissions: submissions,
 		GameReadiness: conteststest.NewGames(),
 		Covers:        conteststest.NewCovers(),
+		Appointees:    userstest.New(),
 		UnitOfWork:    &conteststest.UnitOfWork{},
 		Gate:          contests.NewGate(0),
 		Now:           func() time.Time { return conteststest.FixtureNow },

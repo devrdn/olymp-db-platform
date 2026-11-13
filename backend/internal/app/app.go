@@ -506,6 +506,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Covers:        postgres.NewCovers(pool),
 		Gate:          gate,
 		Users:         userRepo,
+		Appointees:    userRepo,
 		Audit:         auditRecorder,
 		UnitOfWork:    storage.NewUnitOfWork(pool),
 		Logger:        log,
@@ -514,6 +515,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		DefaultGraceMin: cfg.GameInstanceGraceMin,
 		PoolTrigger:     poolTrigger,
 	}).WithTrustedDomain(cfg.TrustedEmailDomain)
+	if accounts != nil {
+		contestService.WithAccessCache(accounts)
+	}
 
 	// The scheduler moves contests published → running → finished. It holds
 	// the same publish gate as Service.Transition before starting a contest,

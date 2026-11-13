@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
@@ -17,6 +20,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/signup"
@@ -351,4 +355,143 @@ func oneTimeStudent(t *testing.T, ctx context.Context, j journey, login, email s
 		t.Fatal(err)
 	}
 	return stored
+}
+
+// appointments is the contest service as internal/app composes it for staff
+// changes, with trail as its audit sink.
+func appointments(trail audit.Sink, access contests.AccessCache) *contests.Service {
+	service := contests.NewService(contests.ServiceConfig{
+		Contests:      NewContests(testPool),
+		Managers:      NewContestManagers(testPool),
+		Registrations: NewRegistrations(testPool),
+		Users:         NewUsers(testPool),
+		Appointees:    NewUsers(testPool),
+		Audit:         audit.New(trail),
+		UnitOfWork:    storage.NewUnitOfWork(testPool),
+		Gate:          contests.NewGate(0),
+		GameReadiness: NewGameInstances(testPool),
+		Covers:        NewCovers(testPool),
+	})
+	if access != nil {
+		service.WithAccessCache(access)
+	}
+	return service
+}
+
+// A session opened while the account did not act as staff, through whichever
+// provider admitted it, ends with the appointment, even with the account
+// cached for authentication.
+func TestAnAppointmentOnTheRealSchemaEndsTheSessionsOpenedBefore(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		owner := makeUser(t, ctx, "journey-appoint-owner")
+		ana := makeUser(t, ctx, "journey-appoint")
+		contest := makeContest(t, ctx, owner.ID)
+
+		c := cache.NewMemory(1000)
+		t.Cleanup(func() { _ = c.Close() })
+		log := logging.New("error", io.Discard)
+		sessions := auth.NewSessionStore(c, time.Hour)
+		accounts := auth.NewAccountCache(c, time.Minute, log)
+		cookies := auth.NewCookieWriter(false)
+		mw := auth.NewMiddleware(auth.MiddlewareConfig{
+			Sessions: sessions, Users: repo, Accounts: accounts, Cookies: cookies, Logger: log,
+		})
+		token, err := sessions.Create(ctx, auth.Principal{UserID: ana.ID, Login: ana.Login, Generation: ana.SessionGeneration})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stillValid := func() bool {
+			t.Helper()
+			r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/me", nil)
+			r.AddCookie(&http.Cookie{Name: cookies.SessionName(), Value: token})
+			valid, err := mw.SessionStillValid(r)
+			if err != nil {
+				t.Fatalf("SessionStillValid() = %v", err)
+			}
+			return valid
+		}
+		if !stillValid() {
+			t.Fatal("the session is refused before the appointment")
+		}
+
+		if err := appointments(NewAuditSink(testPool), accounts).GrantManager(ctx, owner.ID, contest, ana.ID, rbac.RoleManager); err != nil {
+			t.Fatalf("GrantManager() = %v", err)
+		}
+
+		if stillValid() {
+			t.Error("the session opened before the appointment is still admitted")
+		}
+	})
+}
+
+// heldTrail holds the appointment's transaction open at its audit entry, the
+// last write before the commit, until release is closed. It writes nothing,
+// so the committed accounts can be deleted afterwards.
+type heldTrail struct {
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (h heldTrail) Append(context.Context, audit.Entry) error {
+	close(h.reached)
+	<-h.release
+	return nil
+}
+
+func (h heldTrail) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	return h.Append(ctx, audit.Entry{})
+}
+
+// An appointment still open when a link starts commits first, and the link
+// sees it: the appointment holds the account's row.
+func TestLinkExternalWaitsForAnAppointmentInFlight(t *testing.T) {
+	tag := "ext-appoint-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	ctx := context.Background()
+	owner, err := NewUsers(testPool).Create(ctx, users.User{Login: tag + "-owner", FullName: "Owner", Status: users.StatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contest := makeContest(t, ctx, owner.ID)
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM contests WHERE id = $1`, contest) })
+
+	trail := heldTrail{reached: make(chan struct{}), release: make(chan struct{})}
+	appointed := make(chan error, 1)
+	go func() {
+		appointed <- appointments(trail, nil).GrantManager(ctx, owner.ID, contest, ana.ID, rbac.RoleManager)
+	}()
+	select {
+	case <-trail.reached:
+	case err := <-appointed:
+		t.Fatalf("GrantManager() = %v before it reached its audit entry", err)
+	}
+
+	linked := make(chan error, 1)
+	go func() {
+		_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
+		linked <- err
+	}()
+	select {
+	case err := <-linked:
+		close(trail.release)
+		t.Fatalf("LinkExternal returned %v with the appointment still open", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(trail.release)
+	if err := <-appointed; err != nil {
+		t.Fatalf("GrantManager() = %v", err)
+	}
+	select {
+	case err := <-linked:
+		if !errors.Is(err, users.ErrStaffNotLinkable) {
+			t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LinkExternal did not return after the appointment committed")
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want none", n)
+	}
 }

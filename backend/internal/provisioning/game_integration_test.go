@@ -368,6 +368,7 @@ func TestAScriptSavedInTheCoreDatabaseLeavesNothingOnTheGameClusterOnceItsDraftI
 		GameDatabases: databases,
 		GameReadiness: postgres.NewGameInstances(testPool),
 		Covers:        postgres.NewCovers(testPool),
+		Appointees:    postgres.NewUsers(testPool),
 		Gate:          contests.NewGate(0),
 		Audit:         audit.New(unreadTrail{}),
 		UnitOfWork:    storage.NewUnitOfWork(testPool),

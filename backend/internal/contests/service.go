@@ -42,6 +42,19 @@ type UserDirectory interface {
 	Search(ctx context.Context, query string, limit int) ([]users.User, error)
 }
 
+// AppointeeSessions retires the sessions of an account appointed to a
+// contest's staff (internal/postgres.Users). Both join the transaction in ctx.
+type AppointeeSessions interface {
+	// Lock holds the account's row until the transaction ends.
+	Lock(ctx context.Context, id uuid.UUID) error
+	BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64, error)
+}
+
+// AccessCache is auth's short-lived copy of accounts (users.AccessCache).
+type AccessCache interface {
+	Forget(ctx context.Context, ids []uuid.UUID)
+}
+
 // ServiceConfig collects the storage a Service needs, as interfaces declared
 // in this package so the rules are testable without a database.
 type ServiceConfig struct {
@@ -54,6 +67,8 @@ type ServiceConfig struct {
 	Policies      PolicyStore
 	Languages     LanguageCatalog
 	Users         UserDirectory
+	// Appointees is required: GrantManager retires the appointee's sessions.
+	Appointees AppointeeSessions
 	// Game reads the SQL a contest's game is built from, for ExportPackage.
 	// Optional: without a game cluster, a package simply carries no game.
 	Game GameSource
@@ -105,6 +120,8 @@ type Service struct {
 	policies        PolicyStore
 	languages       LanguageCatalog
 	users           UserDirectory
+	appointees      AppointeeSessions
+	access          AccessCache
 	game            GameSource
 	gameDatabases   GameDropper
 	submissions     SubmissionRepository
@@ -123,7 +140,7 @@ type Service struct {
 }
 
 // NewService assembles the contest service. Panics without a Gate,
-// GameReadiness or a covers store.
+// GameReadiness, a covers store or Appointees.
 func NewService(cfg ServiceConfig) *Service {
 	if cfg.Gate == nil {
 		panic("contests: NewService needs the participation gate")
@@ -133,6 +150,9 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 	if cfg.Covers == nil {
 		panic("contests: NewService needs the covers store the publish gate reads")
+	}
+	if cfg.Appointees == nil {
+		panic("contests: NewService needs to retire the sessions of an account appointed to the staff")
 	}
 	now := cfg.Now
 	if now == nil {
@@ -156,6 +176,7 @@ func NewService(cfg ServiceConfig) *Service {
 		policies:        cfg.Policies,
 		languages:       cfg.Languages,
 		users:           cfg.Users,
+		appointees:      cfg.Appointees,
 		game:            cfg.Game,
 		gameDatabases:   cfg.GameDatabases,
 		submissions:     cfg.Submissions,
@@ -883,6 +904,23 @@ func defaultLanguageOf(langs []ContestLanguage) string {
 func (s *Service) WithTrustedDomain(domain string) *Service {
 	s.trustedDomain = domain
 	return s
+}
+
+// WithAccessCache is for the composition root, before the service is shared;
+// without one nothing caches accounts.
+func (s *Service) WithAccessCache(c AccessCache) *Service {
+	s.access = c
+	return s
+}
+
+// forget tells the access cache the accounts changed, once the change has
+// committed: earlier, a request could cache the old row again. The caller's
+// cancellation is ignored, so a hang-up cannot leave the old state cached.
+func (s *Service) forget(ctx context.Context, ids ...uuid.UUID) {
+	if s.access == nil || len(ids) == 0 {
+		return
+	}
+	s.access.Forget(context.WithoutCancel(ctx), ids)
 }
 
 // checkTrustedDomain refuses turning the limit on where there is no domain to

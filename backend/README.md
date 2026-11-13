@@ -913,8 +913,9 @@ into a denial of service against its owner. A cache failure refuses the attempt
 holds only its SHA-256. A dump yields digests, which cannot authenticate.
 
 **Sessions outliving their welcome.** `users.session_generation` advances on
-block, password change, password reset and role change; a session records the
-generation it was issued at, so all of them die at once. The account is also
+block, password change, password reset, role change and appointment to a
+contest's staff; a session records the generation it was issued at, so all of
+them die at once. The account is also
 re-read on every request, so blocking takes effect on the next request rather
 than whenever the session lapses. That costs one indexed query, which is the
 right trade at this scale.
