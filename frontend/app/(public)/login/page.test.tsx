@@ -161,9 +161,9 @@ describe("the sign-in page after an external sign-in came back refused", () => {
  * the refusal must give it a way forward.
  */
 describe.each([
-  ["en", /ask an administrator to reset it/],
-  ["ro", /rugați un administrator să îl reseteze/],
-  ["ru", /попросите администратора сбросить его/],
+  ["en", /ask an administrator to reset its password/],
+  ["ro", /rugați un administrator să îi reseteze parola/],
+  ["ru", /попросите администратора сбросить её пароль/],
 ] as const)("the staff refusal in %s", (locale, administrator) => {
   test("offers an administrator's reset beside the password", async () => {
     const sentence = (await getDictionary(locale)).errors.external_signin_staff_account;
