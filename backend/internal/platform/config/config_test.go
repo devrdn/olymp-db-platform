@@ -2179,3 +2179,139 @@ func TestATenantIDIsReadInAnyCase(t *testing.T) {
 		t.Errorf("tenant %q, client %q; want them as tokens write them, in lowercase", cfg.MicrosoftTenant, cfg.MicrosoftClientID)
 	}
 }
+
+// productionProviders is a production configuration with mail and every
+// sign-in provider off, every provider variable set so none is inherited
+// from the shell.
+func productionProviders(t *testing.T) {
+	t.Helper()
+	productionMicrosoft(t)
+	for _, name := range []string{
+		"MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET",
+		"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_HOME_DOMAIN",
+		"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET",
+	} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestGoogleAndGitHubAreOffWithoutAClient(t *testing.T) {
+	productionProviders(t)
+	t.Setenv("PUBLIC_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without a client = %v", err)
+	}
+	if cfg.GoogleEnabled() || cfg.GitHubEnabled() {
+		t.Errorf("GoogleEnabled() = %v, GitHubEnabled() = %v; want both off", cfg.GoogleEnabled(), cfg.GitHubEnabled())
+	}
+}
+
+func TestAClientWithoutItsSecretRefusesStartUp(t *testing.T) {
+	for _, tc := range []struct{ set, missing string }{
+		{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"},
+		{"GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_ID"},
+		{"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
+		{"GITHUB_CLIENT_SECRET", "GITHUB_CLIENT_ID"},
+	} {
+		t.Run(tc.set, func(t *testing.T) {
+			productionProviders(t)
+			t.Setenv(tc.set, "a-real-value")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.missing+": required") {
+				t.Fatalf("Load() = %v, want an error naming %s", err, tc.missing)
+			}
+		})
+	}
+}
+
+func TestAProviderClientIsReadWhole(t *testing.T) {
+	productionProviders(t)
+	t.Setenv("GOOGLE_CLIENT_ID", "app.apps.example")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "a-real-google-secret")
+	t.Setenv("GOOGLE_HOME_DOMAIN", "Example.EDU")
+	t.Setenv("GITHUB_CLIENT_ID", "Iv1.abc123")
+	t.Setenv("GITHUB_CLIENT_SECRET", "a-real-github-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if !cfg.GoogleEnabled() || !cfg.GitHubEnabled() {
+		t.Fatalf("GoogleEnabled() = %v, GitHubEnabled() = %v; want both on", cfg.GoogleEnabled(), cfg.GitHubEnabled())
+	}
+	if cfg.GoogleClientID != "app.apps.example" || cfg.GoogleClientSecret != "a-real-google-secret" ||
+		cfg.GitHubClientID != "Iv1.abc123" || cfg.GitHubClientSecret != "a-real-github-secret" {
+		t.Errorf("clients read as %q %q %q %q", cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GitHubClientID, cfg.GitHubClientSecret)
+	}
+	if cfg.GoogleHomeDomain != "example.edu" {
+		t.Errorf("GoogleHomeDomain = %q, want it lowercased", cfg.GoogleHomeDomain)
+	}
+}
+
+func TestAMalformedGoogleHomeDomainRefusesStartUp(t *testing.T) {
+	for _, domain := range []string{"@example.edu", "example..edu", "exa mple.edu", "example", strings.Repeat("a", 250) + ".edu"} {
+		t.Run(domain, func(t *testing.T) {
+			productionProviders(t)
+			t.Setenv("GOOGLE_CLIENT_ID", "app.apps.example")
+			t.Setenv("GOOGLE_CLIENT_SECRET", "a-real-google-secret")
+			t.Setenv("GOOGLE_HOME_DOMAIN", domain)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "GOOGLE_HOME_DOMAIN") {
+				t.Fatalf("Load() = %v, want an error naming GOOGLE_HOME_DOMAIN", err)
+			}
+		})
+	}
+}
+
+func TestAMalformedProviderClientRefusesStartUp(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"GOOGLE_CLIENT_ID", strings.Repeat("i", 256)},
+		{"GOOGLE_CLIENT_ID", "has space"},
+		{"GITHUB_CLIENT_ID", "new\nline"},
+		{"GOOGLE_CLIENT_SECRET", strings.Repeat("s", 513)},
+		{"GITHUB_CLIENT_SECRET", "with a\nnewline"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			productionProviders(t)
+			t.Setenv("GOOGLE_CLIENT_ID", "app.apps.example")
+			t.Setenv("GOOGLE_CLIENT_SECRET", "a-real-google-secret")
+			t.Setenv("GITHUB_CLIENT_ID", "Iv1.abc123")
+			t.Setenv("GITHUB_CLIENT_SECRET", "a-real-github-secret")
+			t.Setenv(tc.name, tc.value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("Load() = %v, want an error naming %s", err, tc.name)
+			}
+			if strings.Contains(err.Error(), "a-real-") {
+				t.Errorf("the refusal repeats a secret: %q", err)
+			}
+		})
+	}
+}
+
+func TestAConfiguredProviderNeedsThePublicURL(t *testing.T) {
+	for _, provider := range []string{"GOOGLE", "GITHUB"} {
+		t.Run(provider, func(t *testing.T) {
+			productionProviders(t)
+			t.Setenv(provider+"_CLIENT_ID", "app-id")
+			t.Setenv(provider+"_CLIENT_SECRET", "a-real-secret")
+			t.Setenv("PUBLIC_URL", "")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PUBLIC_URL") {
+				t.Fatalf("Load() = %v, want an error naming PUBLIC_URL", err)
+			}
+		})
+	}
+}
+
+func TestAPlaceholderProviderSecretRefusesStartUp(t *testing.T) {
+	for _, provider := range []string{"GOOGLE", "GITHUB"} {
+		t.Run(provider, func(t *testing.T) {
+			productionProviders(t)
+			t.Setenv(provider+"_CLIENT_ID", "app-id")
+			t.Setenv(provider+"_CLIENT_SECRET", "change-me")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), provider+"_CLIENT_SECRET") {
+				t.Fatalf("Load() = %v, want a refusal naming %s_CLIENT_SECRET", err, provider)
+			}
+		})
+	}
+}

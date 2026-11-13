@@ -347,8 +347,8 @@ type Config struct {
 	// any minute, across every replica.
 	SMTPMaxPerMinute int
 	// PublicURL is the site's absolute address with no trailing slash, for
-	// links in messages and the Microsoft redirect. Required with mail or the
-	// Microsoft connector; https outside development.
+	// links in messages and the sign-in redirects. Required with mail or any
+	// sign-in provider; https outside development.
 	PublicURL string
 	// MicrosoftClientID and MicrosoftClientSecret are the application
 	// registration; the connector exists only with both.
@@ -360,10 +360,27 @@ type Config struct {
 	// MicrosoftHomeTenantID is the installation's own tenant, whose members'
 	// emails are trusted; empty trusts no tenant as such.
 	MicrosoftHomeTenantID string
+	// GoogleClientID and GoogleClientSecret are the OAuth client; the
+	// connector exists only with both.
+	GoogleClientID     string
+	GoogleClientSecret string
+	// GoogleHomeDomain is the installation's own Google Workspace domain,
+	// whose members' emails are trusted; empty trusts no domain as such.
+	GoogleHomeDomain string
+	// GitHubClientID and GitHubClientSecret are the OAuth app; the connector
+	// exists only with both.
+	GitHubClientID     string
+	GitHubClientSecret string
 }
 
 // MicrosoftEnabled reports whether sign-in with Microsoft is configured.
 func (c Config) MicrosoftEnabled() bool { return c.MicrosoftClientID != "" }
+
+// GoogleEnabled reports whether sign-in with Google is configured.
+func (c Config) GoogleEnabled() bool { return c.GoogleClientID != "" }
+
+// GitHubEnabled reports whether sign-in with GitHub is configured.
+func (c Config) GitHubEnabled() bool { return c.GitHubClientID != "" }
 
 // MailEnabled reports whether a mail relay is configured.
 func (c Config) MailEnabled() bool { return c.SMTPHost != "" }
@@ -623,6 +640,12 @@ func Load() (Config, error) {
 	if err := loadMicrosoft(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadGoogle(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadGitHub(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {
@@ -813,6 +836,58 @@ func loadMicrosoft(cfg *Config) error {
 	if cfg.PublicURL == "" {
 		var err error
 		if cfg.PublicURL, err = publicURL(cfg.Env, "the Microsoft redirect points at it"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	maxClientIDLength     = 255
+	maxClientSecretLength = 512
+)
+
+// loadGoogle reads the Google connector. Without a client ID or a secret it
+// is off; with only one of them start-up is refused.
+func loadGoogle(cfg *Config) error {
+	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
+	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
+	home := strings.ToLower(os.Getenv("GOOGLE_HOME_DOMAIN"))
+	if home != "" && (len(home) > maxDomainLength || !domainName.MatchString(home)) {
+		return fmt.Errorf("GOOGLE_HOME_DOMAIN: %q is not a bare domain like example.edu", home)
+	}
+	cfg.GoogleHomeDomain = home
+	return loadOAuthClient(cfg, "GOOGLE", cfg.GoogleClientID, cfg.GoogleClientSecret)
+}
+
+// loadGitHub reads the GitHub connector, off without both client variables.
+func loadGitHub(cfg *Config) error {
+	cfg.GitHubClientID = os.Getenv("GITHUB_CLIENT_ID")
+	cfg.GitHubClientSecret = os.Getenv("GITHUB_CLIENT_SECRET")
+	return loadOAuthClient(cfg, "GITHUB", cfg.GitHubClientID, cfg.GitHubClientSecret)
+}
+
+// loadOAuthClient checks one provider's client pair, named by its variable
+// prefix, and requires PUBLIC_URL when the pair is set.
+func loadOAuthClient(cfg *Config, prefix, id, secret string) error {
+	switch {
+	case id == "" && secret == "":
+		return nil
+	case secret == "":
+		return fmt.Errorf("%s_CLIENT_SECRET: required when %s_CLIENT_ID is set", prefix, prefix)
+	case id == "":
+		return fmt.Errorf("%s_CLIENT_ID: required when %s_CLIENT_SECRET is set", prefix, prefix)
+	case len(id) > maxClientIDLength || !printableASCII(id) || strings.Contains(id, " "):
+		return fmt.Errorf("%s_CLIENT_ID: at most %d bytes of printable ASCII without spaces", prefix, maxClientIDLength)
+	case len(secret) > maxClientSecretLength || !printableASCII(secret):
+		return fmt.Errorf("%s_CLIENT_SECRET: at most %d bytes of printable ASCII", prefix, maxClientSecretLength)
+	}
+	if err := RefusePlaceholder(cfg.Env, prefix+"_CLIENT_SECRET", secret); err != nil {
+		return err
+	}
+	if cfg.PublicURL == "" {
+		var err error
+		if cfg.PublicURL, err = publicURL(cfg.Env, "the "+prefix+" redirect points at it"); err != nil {
 			return err
 		}
 	}
