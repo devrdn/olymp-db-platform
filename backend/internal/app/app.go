@@ -23,6 +23,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
+	"github.com/devrdn/db-contest/backend/internal/github"
+	"github.com/devrdn/db-contest/backend/internal/google"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
@@ -84,12 +86,12 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 
 // warnSignupWithoutMail says at start-up that SELF_SIGNUP_ENABLED is on
 // while mail is off: no code can reach anyone, so password sign-up does not
-// exist and only a first Microsoft sign-in creates accounts, which nothing
+// exist and only a first sign-in through an external provider creates accounts, which nothing
 // else would tell the operator.
 func warnSignupWithoutMail(log *slog.Logger, selfSignup, mailOn bool) {
 	if selfSignup && !mailOn {
 		log.Warn("SELF_SIGNUP_ENABLED is on but mail is off (SMTP_HOST is empty): password sign-up is not offered, " +
-			"and only a first sign-in through Microsoft, when connected, creates accounts")
+			"and only a first sign-in through a connected external provider creates accounts")
 	}
 }
 
@@ -100,6 +102,12 @@ func selfServiceMail(limiter *auth.Limiter, log *slog.Logger) (signups, recoveri
 	return mailing.NewBudget("signup", mailing.Limits{PerMinute: signup.MailsPerMinute, PerDay: signup.MailsPerDay}, limiter, log),
 		mailing.NewBudget("recovery", mailing.Limits{PerMinute: recovery.MailsPerMinute, PerDay: recovery.MailsPerDay}, limiter, log)
 }
+
+var (
+	_ api.SignInConnector = (*microsoft.Client)(nil)
+	_ api.SignInConnector = (*google.Client)(nil)
+	_ api.SignInConnector = (*github.Client)(nil)
+)
 
 // signInProviders lists the sign-in providers in the order they are offered,
 // each with a connector only when it is configured. A connector is assigned
@@ -124,17 +132,40 @@ func signInProviders(cfg config.Config) ([]api.SignInProvider, error) {
 		}
 		microsoftProvider.Connector = client
 	}
-	return []api.SignInProvider{
-		microsoftProvider,
-		{
-			ID: users.ProviderGoogle, States: connector.NewStateSealer(secret, users.ProviderGoogle, nil),
-			Variables: []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"},
-		},
-		{
-			ID: users.ProviderGitHub, States: connector.NewStateSealer(secret, users.ProviderGitHub, nil),
-			Variables: []string{"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
-		},
-	}, nil
+	googleProvider := api.SignInProvider{
+		ID:        users.ProviderGoogle,
+		States:    connector.NewStateSealer(secret, users.ProviderGoogle, nil),
+		Variables: []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"},
+	}
+	if cfg.GoogleEnabled() {
+		client, err := google.New(google.Config{
+			ClientID:     cfg.GoogleClientID,
+			ClientSecret: cfg.GoogleClientSecret,
+			HomeDomain:   cfg.GoogleHomeDomain,
+			RedirectURL:  cfg.PublicURL + api.CallbackPath(users.ProviderGoogle),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sign-in with Google: %w", err)
+		}
+		googleProvider.Connector = client
+	}
+	githubProvider := api.SignInProvider{
+		ID:        users.ProviderGitHub,
+		States:    connector.NewStateSealer(secret, users.ProviderGitHub, nil),
+		Variables: []string{"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
+	}
+	if cfg.GitHubEnabled() {
+		client, err := github.New(github.Config{
+			ClientID:     cfg.GitHubClientID,
+			ClientSecret: cfg.GitHubClientSecret,
+			RedirectURL:  cfg.PublicURL + api.CallbackPath(users.ProviderGitHub),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sign-in with GitHub: %w", err)
+		}
+		githubProvider.Connector = client
+	}
+	return []api.SignInProvider{microsoftProvider, googleProvider, githubProvider}, nil
 }
 
 // configuredProviderIDs are the providers that have a connector, in order.

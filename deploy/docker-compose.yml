@@ -479,6 +479,13 @@ services:
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
       MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
       MICROSOFT_HOME_TENANT_ID: ${MICROSOFT_HOME_TENANT_ID:-}
+      # Sign-in with Google and with GitHub, each on only with both its client
+      # ID and its secret.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_HOME_DOMAIN: ${GOOGLE_HOME_DOMAIN:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       SESSION_TTL: ${SESSION_TTL:-12h}
       # How long a session may exist from sign-in, however actively it is
       # used (5m to 168h). SESSION_TTL above slides with activity and so never

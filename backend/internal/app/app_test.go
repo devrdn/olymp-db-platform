@@ -169,25 +169,33 @@ func TestEachConnectorIsBuiltOnlyWhenConfigured(t *testing.T) {
 		}
 	}
 
-	on, err := signInProviders(config.Config{
-		MicrosoftClientID: "11111111-2222-4333-8444-555555555555", MicrosoftClientSecret: "a-test-client-secret",
-		MicrosoftTenant: "common", PublicURL: "https://contest.example.edu",
-	})
-	if err != nil || on[0].Connector == nil {
-		t.Fatalf("signInProviders() = %v, %v; want a Microsoft connector", on, err)
-	}
-	if on[1].Connector != nil || on[2].Connector != nil {
-		t.Error("an unconfigured provider got a connector")
-	}
-	authorize, err := url.Parse(on[0].Connector.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := authorize.Query().Get("redirect_uri"); got != "https://contest.example.edu/api/v1/auth/microsoft/callback" {
-		t.Errorf("redirect_uri = %q, want the public URL's callback", got)
-	}
-	if got := authorize.Host + authorize.Path; got != "login.microsoftonline.com/common/oauth2/v2.0/authorize" {
-		t.Errorf("authorize endpoint = %q, want Microsoft's for the configured tenant", got)
+	for i, tc := range []struct {
+		id  string
+		cfg config.Config
+	}{
+		{"microsoft", config.Config{MicrosoftClientID: "11111111-2222-4333-8444-555555555555", MicrosoftClientSecret: "a-test-client-secret", MicrosoftTenant: "common"}},
+		{"google", config.Config{GoogleClientID: "app.apps.example", GoogleClientSecret: "a-test-client-secret"}},
+		{"github", config.Config{GitHubClientID: "Iv1.abc123", GitHubClientSecret: "a-test-client-secret"}},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			tc.cfg.PublicURL = "https://contest.example.edu"
+			on, err := signInProviders(tc.cfg)
+			if err != nil {
+				t.Fatalf("signInProviders() = %v", err)
+			}
+			for j, p := range on {
+				if (p.Connector != nil) != (j == i) {
+					t.Errorf("%s: connector present = %v, want %v", p.ID, p.Connector != nil, j == i)
+				}
+			}
+			authorize, err := url.Parse(on[i].Connector.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := authorize.Query().Get("redirect_uri"), "https://contest.example.edu/api/v1/auth/"+tc.id+"/callback"; got != want {
+				t.Errorf("redirect_uri = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
