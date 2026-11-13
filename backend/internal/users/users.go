@@ -154,8 +154,8 @@ type ContestManagers interface {
 // external provider, since an address someone typed must not become a way
 // into that power; an administrator resets them. It asks contests whatever u
 // holds, so its time tells one account from another no more than the read
-// that found u. It costs a query: for recovery and external sign-in, not for
-// every request.
+// that found u. It costs a query: for recovery, sign-up and external
+// sign-in, not for every request.
 func ActsAsStaff(ctx context.Context, contests ContestManagers, u User) (bool, error) {
 	manages, err := contests.ManagesContest(ctx, u.ID)
 	if err != nil {
