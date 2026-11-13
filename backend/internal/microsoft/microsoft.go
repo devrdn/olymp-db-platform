@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -63,7 +64,8 @@ type Config struct {
 	// authority asked, and who the callback admits.
 	Tenant string
 	// HomeTenant is the installation's own tenant ID, whose members' emails
-	// are trusted; empty trusts no tenant as such.
+	// are trusted and whose members (acct = 0) may enter staff accounts;
+	// empty trusts no tenant as such. It is never ConsumerTenant.
 	HomeTenant string
 	// RedirectURL is the callback's absolute address, as registered.
 	RedirectURL string
@@ -143,6 +145,9 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("microsoft: the tenant %q is not common, organizations, consumers or a tenant ID", cfg.Tenant)
 	case cfg.HomeTenant != "" && !tenantID.MatchString(cfg.HomeTenant):
 		return fmt.Errorf("microsoft: the home tenant %q is not a tenant ID", cfg.HomeTenant)
+	case cfg.HomeTenant == ConsumerTenant:
+		// Anyone can make a personal account on any address.
+		return errors.New("microsoft: the personal-account tenant is never an installation's own directory")
 	case cfg.HomeTenant != "" && !admits(cfg.Tenant, cfg.HomeTenant):
 		return fmt.Errorf("microsoft: the tenant %q never admits the home tenant", cfg.Tenant)
 	}
@@ -269,7 +274,7 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 	// verified, so only the tenant's own members are vouched for by it.
 	// idp names a guest's home only when Microsoft emits it, so acct = 1
 	// marks a guest as well.
-	guest := t.IdentityProvider != "" && t.IdentityProvider != t.Issuer || isOne(t.AccountType)
+	guest := t.IdentityProvider != "" && t.IdentityProvider != t.Issuer || accountTypeIs(t.AccountType, "1")
 	home := c.home != "" && t.TenantID == c.home && !guest
 	// The home tenant's usernames are its members' addresses; anyone else's
 	// are whatever their tenant chose and never taken for an email.
@@ -289,19 +294,27 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 		LoginHint:    connector.Cut(hint, federation.MaxLoginHintLength),
 		EmailTrusted: email != "" && (home || domainVerified(t.DomainVerified) || t.TenantID == ConsumerTenant),
 		// A verified domain of another tenant vouches for the address, not
-		// for membership of this installation's directory.
-		HomeDirectory: home,
+		// for membership of this installation's directory. A guest may carry
+		// neither idp nor acct, so staff are admitted only on acct = 0, which
+		// Microsoft emits once the registration asks for that optional claim.
+		HomeDirectory: home && accountTypeIs(t.AccountType, "0"),
 	}
 }
 
-// isOne reports whether raw is the number 1 or the string "1".
-func isOne(raw json.RawMessage) bool {
-	var n float64
-	if json.Unmarshal(raw, &n) == nil {
-		return n == 1
+// accountTypeIs reports whether acct, absent or written as a number or a
+// string, is the digit want.
+func accountTypeIs(raw json.RawMessage, want string) bool {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return false
 	}
-	var s string
-	return json.Unmarshal(raw, &s) == nil && s == "1"
+	switch v := v.(type) {
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64) == want
+	case string:
+		return v == want
+	}
+	return false
 }
 
 // domainVerified reads xms_edov, Microsoft's statement that the tenant owns

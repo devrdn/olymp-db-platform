@@ -1954,8 +1954,8 @@ it, with the number of questions waiting beside it while the contest runs.
     checked at every sign-in, a linked identity included, and again under
     the lock that links the account (`users.Service.LinkExternal`), so a
     role granted between the read and the link is still caught. The
-    adapters decide it so: Microsoft, a member (not a guest) of
-    `MICROSOFT_HOME_TENANT_ID`; Google, an account whose `hd` claim is
+    adapters decide it so: Microsoft, a member of
+    `MICROSOFT_HOME_TENANT_ID` whose token says so with `acct` = 0; Google, an account whose `hd` claim is
     `GOOGLE_HOME_DOMAIN` with a verified email; GitHub, never, because it
     vouches for no organisation's directory. The flag travels unchanged
     from the adapter through `federation.Claims` and
@@ -1995,11 +1995,15 @@ it, with the number of questions waiting beside it while the contest runs.
     token without an `email` uses its `preferred_username`, and nobody
     else's does. Any organisation can create a tenant and put any address on
     its users, so no other tenant's email is evidence. `HomeDirectory` is
-    set for that same member of the home tenant, and for nobody else: not a
-    guest, not a verified domain of another tenant, not a personal account.
-    A guest is told apart by the `idp` claim or `acct` = 1, so the
-    registration must emit the `acct` optional claim for the staff rule to
-    hold.
+    set only for a home member whose token carries `acct` = 0 and no `idp`
+    naming another home: not a guest, not a verified domain of another
+    tenant, not a personal account. A guest's token can lack both `idp` and
+    `acct`, so membership is never inferred from their absence: without the
+    `acct` optional claim on the registration, no staff account enters
+    through Microsoft. The personal-account tenant is refused as
+    `MICROSOFT_HOME_TENANT_ID` at start-up, set or defaulted from
+    `MICROSOFT_TENANT`, since anyone can make a personal account on any
+    address.
   - **Google** (`internal/google`). OpenID Connect with the scopes
     `openid`, `email` and `profile`, asked `prompt=select_account`. The ID
     token is checked as Microsoft's is, against Google's keys, for the
