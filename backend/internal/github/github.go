@@ -166,7 +166,9 @@ func (c *Client) primaryEmail(ctx context.Context, token string) (string, bool, 
 		Primary  bool   `json:"primary"`
 		Verified bool   `json:"verified"`
 	}
-	status, err := c.get(ctx, token, "/user/emails", &emails)
+	// The largest page GitHub serves; its default of thirty can leave the
+	// primary address on a page never read.
+	status, err := c.get(ctx, token, "/user/emails?per_page=100", &emails)
 	switch {
 	case status == http.StatusForbidden || status == http.StatusNotFound:
 		return "", false, nil
