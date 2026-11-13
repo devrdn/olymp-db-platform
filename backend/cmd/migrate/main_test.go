@@ -12,6 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // scratchDatabase creates an empty _test database next to CORE_DB_DSN's and
@@ -726,5 +727,81 @@ func TestTheSelfServiceMigrationVerifiesExistingEmails(t *testing.T) {
 	}
 	if err := m.Migrate(53); err == nil {
 		t.Error("rolling back 000054 with a password-less account succeeded, want a refusal")
+	}
+}
+
+func TestTheSignInProvidersMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(56); err != nil {
+		t.Fatalf("migrate to 56: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO users (login, password_hash, full_name, status)
+		VALUES ('ana', 'x', 'Ana Person', 'active')`); err != nil {
+		t.Fatalf("create the account: %v", err)
+	}
+	link := func(provider string) error {
+		_, err := conn.Exec(ctx, `
+			INSERT INTO external_identities (user_id, provider, issuer, subject)
+			SELECT id, $1, 'https://'||$1||'.example', 'sub-'||$1 FROM users WHERE login = 'ana'`, provider)
+		return err
+	}
+	violatesCheck := func(err error) bool {
+		var pgErr *pgconn.PgError
+		return errors.As(err, &pgErr) && pgErr.Code == "23514"
+	}
+
+	if err := link("google"); !violatesCheck(err) {
+		t.Fatalf("a google identity at 56 = %v, want a check violation", err)
+	}
+	if err := m.Migrate(57); err != nil {
+		t.Fatalf("migrate to 57: %v", err)
+	}
+	if err := link("microsoft"); err != nil {
+		t.Fatalf("a microsoft identity at 57: %v", err)
+	}
+	if err := link("google"); err != nil {
+		t.Fatalf("a google identity at 57: %v", err)
+	}
+
+	if err := m.Migrate(56); err == nil {
+		t.Fatal("rolling back 000057 with a google identity succeeded, want a refusal")
+	}
+	// The refusal rolled the statements back, so the schema is still at 57;
+	// only the version marker is left dirty, as after any failed step.
+	if err := link("github"); err != nil {
+		t.Fatalf("a github identity after the refused rollback: %v", err)
+	}
+	if err := m.Force(57); err != nil {
+		t.Fatalf("clear the dirty marker: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, `DELETE FROM external_identities WHERE provider <> 'microsoft'`); err != nil {
+		t.Fatalf("remove the other identities: %v", err)
+	}
+	if err := m.Migrate(56); err != nil {
+		t.Fatalf("migrate back to 56: %v", err)
+	}
+	var kept int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM external_identities WHERE provider = 'microsoft'`).Scan(&kept); err != nil || kept != 1 {
+		t.Errorf("microsoft identities after the round trip = %d, %v; want 1", kept, err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
 // The Microsoft endpoints' budget, each on its own, refusals included
@@ -114,7 +115,7 @@ func (h *MicrosoftHandler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	previousToken, _ := h.cfg.Middleware.SessionToken(r)
 	result, err := h.cfg.Auth.SignInAs(r.Context(), auth.SignInAsCommand{
-		User: account, Method: auth.MethodMicrosoft,
+		User: account, Method: users.ProviderMicrosoft,
 		IP: httpx.ClientIP(r), UserAgent: r.UserAgent(), PreviousToken: previousToken,
 	})
 	if err != nil {

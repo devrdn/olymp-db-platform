@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -379,11 +380,10 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	}, nil
 }
 
-// Sign-in methods SignInAs accepts, recorded in the auth.login audit payload.
-const (
-	MethodSignup    = "signup"
-	MethodMicrosoft = "microsoft"
-)
+// MethodSignup is the SignInAs method of a freshly confirmed sign-up; any id in
+// users.Providers is the method of a provider sign-in. The method is recorded
+// in the auth.login audit payload.
+const MethodSignup = "signup"
 
 // ErrUnknownSignInMethod is a programming error: no request reaches it, so it
 // has no HTTP answer.
@@ -405,7 +405,7 @@ type SignInAsCommand struct {
 // the caller must rate-limit before calling it. A blocked or deleted account is
 // refused with ErrAccountBlocked.
 func (s *Service) SignInAs(ctx context.Context, cmd SignInAsCommand) (LoginResult, error) {
-	if cmd.Method != MethodSignup && cmd.Method != MethodMicrosoft {
+	if cmd.Method != MethodSignup && !slices.Contains(users.Providers, cmd.Method) {
 		return LoginResult{}, ErrUnknownSignInMethod
 	}
 	if !cmd.User.IsActive() {

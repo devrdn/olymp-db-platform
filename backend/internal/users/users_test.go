@@ -98,6 +98,21 @@ func TestExternalIdentityValidateBoundsEveryField(t *testing.T) {
 	}
 }
 
+func TestAnIdentityOfEveryKnownProviderIsValid(t *testing.T) {
+	for _, provider := range users.Providers {
+		id := users.ExternalIdentity{UserID: uuid.New(), Provider: provider, Issuer: "https://issuer.example", Subject: "abc"}
+		if err := id.Validate(); err != nil {
+			t.Errorf("%s: Validate() = %v, want no error", provider, err)
+		}
+	}
+	for _, provider := range []string{"okta", ""} {
+		id := users.ExternalIdentity{UserID: uuid.New(), Provider: provider, Issuer: "https://issuer.example", Subject: "abc"}
+		if err := id.Validate(); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("%q: Validate() = %v, want ErrInvalidAccount", provider, err)
+		}
+	}
+}
+
 // A name greets the reader of mail sent to any address, so it may carry
 // nothing a link or a pitch needs.
 func TestANameIsWrittenOnlyWithWhatNamesAreWrittenWith(t *testing.T) {
