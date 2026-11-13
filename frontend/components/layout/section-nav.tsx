@@ -30,7 +30,7 @@ export function SectionNav({ items }: { items: { href: string; label: string }[]
             // behaviour, so a reduced-motion preference is not overridden.
             onFocus={(event) => event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
             className={cn(
-              "truncate px-2 py-1 text-control max-narrow:flex max-narrow:min-h-11 max-narrow:items-center transition-colors duration-(--t-input) ease-standard",
+              "truncate px-2 py-1 text-control max-narrow:flex max-narrow:min-h-11 max-narrow:scroll-mx-1.5 max-narrow:items-center transition-colors duration-(--t-input) ease-standard",
               current ? "text-ink" : "text-ink-3 hover:text-ink-2",
             )}
           >
