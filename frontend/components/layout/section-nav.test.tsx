@@ -33,4 +33,14 @@ describe("SectionNav", () => {
     expect(nav.querySelectorAll("a")).toHaveLength(items.length);
     for (const link of screen.getAllByRole("link")) expect(link).not.toHaveAttribute("tabindex", "-1");
   });
+
+  test("scrolls a focused link fully into view inside its scroller", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(<SectionNav items={items} />);
+
+    screen.getByRole("link", { name: "Audit" }).focus();
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  });
 });
