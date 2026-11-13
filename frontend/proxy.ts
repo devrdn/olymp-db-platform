@@ -44,7 +44,7 @@ export function proxy(request: NextRequest) {
 }
 
 /**
- * Every route except the framework's assets. `/api/*` is matched only for
+ * Every route except the framework's assets and the public brand marks. `/api/*` is matched only for
  * header cleanup: the reverse proxy (deploy/Caddyfile) or the rewrite sends it
  * to the API, which guards it (including public logos the sign-in page shows),
  * so `proxy` returns before the guard for that prefix in any letter case.
@@ -54,6 +54,6 @@ export function proxy(request: NextRequest) {
  */
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|apple-icon\\.png|robots\\.txt|sitemap\\.xml).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|apple-icon\\.png|robots\\.txt|sitemap\\.xml|brand/).*)",
   ],
 };
