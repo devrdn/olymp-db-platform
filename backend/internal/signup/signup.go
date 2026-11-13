@@ -40,15 +40,17 @@ const (
 // The mail budgets Start and Resend spend, refusals included (CLAUDE.md rule
 // 13). MailsPerMinute and MailsPerDay are the installation's, which with
 // recovery's six a minute leave the relay's default 25 room for staff mail;
-// MailsPerAddress is per minute for one caller's address, Start and Resend
-// together, so one machine takes half the installation's minute at most;
+// MailsPerAddress and MailsPerAddressPerDay are one caller's address's
+// share, Start and Resend together, so one machine takes half the
+// installation's minute at most and cannot reach its daily ceiling alone;
 // MailsPerEmail is per hour for one typed address, for Start and for Resend
 // each.
 const (
-	MailsPerMinute  = 12
-	MailsPerDay     = 5000
-	MailsPerAddress = 6
-	MailsPerEmail   = 5
+	MailsPerMinute        = 12
+	MailsPerDay           = 5000
+	MailsPerAddress       = 6
+	MailsPerAddressPerDay = 300
+	MailsPerEmail         = 5
 )
 
 var (

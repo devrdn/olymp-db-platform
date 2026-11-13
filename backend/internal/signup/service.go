@@ -472,19 +472,29 @@ func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 
 // admitMail spends the budgets of a message about to be queued, once
 // nothing that would refuse the request without mail is left: the caller's
-// address, shared by Start and Resend, then the installation's, then the
-// email's for the endpoint. Each is more bounded than the next (CLAUDE.md
+// address, its minute then its day, shared by Start and Resend, then the
+// installation's, then the email's for the endpoint. Each is more bounded than the next (CLAUDE.md
 // rule 5), and an earlier refusal charges nothing later, so the installation
 // refusing a person costs them none of their own attempts.
 func (s *Service) admitMail(ctx context.Context, endpoint, sender, email string) error {
-	allowed, _, err := s.cfg.Limiter.Spend(ctx, "signup_mail:ip:"+sender, MailsPerAddress, time.Minute)
+	for _, window := range []struct {
+		subject string
+		limit   int
+		length  time.Duration
+	}{
+		{"signup_mail:ip:" + sender, MailsPerAddress, time.Minute},
+		{"signup_mail:ip:" + sender + ":day", MailsPerAddressPerDay, 24 * time.Hour},
+	} {
+		allowed, _, err := s.cfg.Limiter.Spend(ctx, window.subject, window.limit, window.length)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrTooManyCodes
+		}
+	}
+	allowed, err := s.cfg.MailBudget.Spend(ctx)
 	if err != nil {
-		return err
-	}
-	if !allowed {
-		return ErrTooManyCodes
-	}
-	if allowed, err = s.cfg.MailBudget.Spend(ctx); err != nil {
 		return fmt.Errorf("spend the sign-up mail budget: %w", err)
 	}
 	if !allowed {
