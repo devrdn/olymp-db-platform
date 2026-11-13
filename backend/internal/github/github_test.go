@@ -128,6 +128,23 @@ func TestTheExchangeSendsTheVerifierAndTheSecret(t *testing.T) {
 			t.Errorf("token request %s = %q, want %q", key, got, value)
 		}
 	}
+	// GitHub answers form-encoded unless asked for JSON, and these tests
+	// must keep running the form branch the deployment takes.
+	if accept := p.LastRequest("/login/oauth/access_token").Header.Get("Accept"); strings.Contains(accept, "application/json") {
+		t.Errorf("token request Accept = %q, want no application/json", accept)
+	}
+}
+
+// GitHub pages /user/emails at thirty; an account with more addresses than
+// that must still find its primary one.
+func TestTheEmailsAreAskedAHundredAPage(t *testing.T) {
+	p := githubtest.NewProvider(t)
+	if _, err := exchange(t, newClient(t, p), p, person(), []map[string]any{primary("ana@example.edu", true)}); err != nil {
+		t.Fatalf("Exchange() = %v", err)
+	}
+	if got := p.LastRequest("/user/emails").URL.Query().Get("per_page"); got != "100" {
+		t.Errorf("/user/emails per_page = %q, want 100", got)
+	}
 }
 
 func TestTheAPICallsCarryTheTokenAndTheVersion(t *testing.T) {
