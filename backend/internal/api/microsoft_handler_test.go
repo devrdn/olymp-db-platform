@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/microsoft/microsofttest"
@@ -94,7 +95,7 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 	router := chi.NewRouter()
 	api.NewMicrosoftHandler(api.MicrosoftSignIn{
 		Client: client,
-		States: microsoft.NewStateSealer([]byte(strings.Repeat("k", 32)), nil),
+		States: connector.NewStateSealer([]byte(strings.Repeat("k", 32)), users.ProviderMicrosoft, nil),
 		Accounts: federation.NewService(federation.Config{
 			Policy: federation.Policy{CreateAccounts: opts.createAccounts},
 			Store:  repo, Accounts: service, PendingLogins: noPendingLogins{},
@@ -321,8 +322,8 @@ func TestAForeignTenantNeverEntersAStaffAccount(t *testing.T) {
 func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
 	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
-	other := microsoft.NewStateSealer([]byte(strings.Repeat("o", 32)), nil)
-	forged := &http.Cookie{Name: msStateCookieName, Value: other.Seal(microsoft.State{
+	other := connector.NewStateSealer([]byte(strings.Repeat("o", 32)), users.ProviderMicrosoft, nil)
+	forged := &http.Cookie{Name: msStateCookieName, Value: other.Seal(connector.State{
 		State: s.query.Get("state"), Nonce: s.query.Get("nonce"), Verifier: strings.Repeat("v", 43), Return: "/",
 	})}
 	code := "code=a-code&state=" + s.query.Get("state")

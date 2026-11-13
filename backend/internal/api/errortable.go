@@ -11,6 +11,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
@@ -343,10 +344,10 @@ var recoveryErrors = errorTable{
 }
 
 // externalSignInRedirects answers what a sign-in through a provider meets:
-// federation.Errors(), microsoft.Errors() and the account refusals (walked
-// by TestEveryExternalSignInErrorHasItsRedirect). The browser is sent to the
-// sign-in page with the code, since the callback is a navigation. An outage
-// is logged as an error, a refusal as a warning.
+// federation.Errors(), connector.Errors(), microsoft.Errors() and the account
+// refusals (walked by TestEveryExternalSignInErrorHasItsRedirect). The browser
+// is sent to the sign-in page with the code, since the callback is a
+// navigation. An outage is logged as an error, a refusal as a warning.
 var externalSignInRedirects = []struct {
 	err    error
 	code   httpx.Code
@@ -363,13 +364,13 @@ var externalSignInRedirects = []struct {
 	// Refused on every try, so the person is sent to an administrator, not
 	// back to the button.
 	{err: federation.ErrIdentityConflict, code: codeExternalSignInConflict},
-	{err: microsoft.ErrSignInRefused, code: codeExternalSignInFailed},
-	{err: microsoft.ErrExchangeFailed, code: codeExternalSignInFailed},
-	{err: microsoft.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},
-	{err: microsoft.ErrInvalidToken, code: codeExternalSignInFailed},
+	{err: connector.ErrSignInRefused, code: codeExternalSignInFailed},
+	{err: connector.ErrExchangeFailed, code: codeExternalSignInFailed},
+	{err: connector.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},
+	{err: connector.ErrInvalidToken, code: codeExternalSignInFailed},
 	{err: microsoft.ErrTenantNotAllowed, code: codeExternalSignInConflict},
-	{err: microsoft.ErrStateInvalid, code: codeExternalSignInFailed},
-	{err: microsoft.ErrStateExpired, code: codeExternalSignInFailed},
+	{err: connector.ErrStateInvalid, code: codeExternalSignInFailed},
+	{err: connector.ErrStateExpired, code: codeExternalSignInFailed},
 }
 
 // externalSignInCode is the code err sends the browser back with, whether

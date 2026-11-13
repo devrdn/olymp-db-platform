@@ -1,4 +1,4 @@
-package microsoft
+package connector
 
 import (
 	"bytes"
@@ -28,9 +28,10 @@ const MaxReturnPathLength = 512
 const DefaultReturnPath = "/login"
 
 const (
-	// stateKeyLabel derives the state key from DEVICE_COOKIE_SECRET, so a
-	// state cookie can never pass for a device cookie or the reverse.
-	stateKeyLabel = "microsoft-state"
+	// stateKeyLabelSuffix follows the provider's name in the label the state
+	// key is derived under, so a state cookie can never pass for a device
+	// cookie or for another provider's.
+	stateKeyLabelSuffix = "-state"
 	// maxSealedLength is what a browser keeps of one cookie; a longer value
 	// was not sealed here.
 	maxSealedLength = 4096
@@ -40,7 +41,7 @@ const (
 )
 
 // State is what a sign-in carries from start to callback: the state and
-// nonce sent to Microsoft, the PKCE verifier, and the page to return to.
+// nonce sent to the provider, the PKCE verifier, and the page to return to.
 type State struct {
 	State, Nonce, Verifier, Return string
 }
@@ -90,14 +91,14 @@ type StateSealer struct {
 	now func() time.Time
 }
 
-// NewStateSealer keys the sealer with HMAC-SHA256(secret, "microsoft-state");
+// NewStateSealer keys the sealer with HMAC-SHA256(secret, provider+"-state");
 // secret is DEVICE_COOKIE_SECRET. now nil is time.Now.
-func NewStateSealer(secret []byte, now func() time.Time) *StateSealer {
+func NewStateSealer(secret []byte, provider string, now func() time.Time) *StateSealer {
 	if now == nil {
 		now = time.Now
 	}
 	derive := hmac.New(sha256.New, secret)
-	derive.Write([]byte(stateKeyLabel))
+	derive.Write([]byte(provider + stateKeyLabelSuffix))
 	return &StateSealer{key: derive.Sum(nil), now: now}
 }
 

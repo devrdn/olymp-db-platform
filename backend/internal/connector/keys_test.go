@@ -1,4 +1,4 @@
-package microsoft_test
+package connector_test
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/microsoft/microsofttest"
 )
@@ -53,7 +54,7 @@ func TestTheCallbackRefusesAnotherAlgorithm(t *testing.T) {
 		"none":                                  unsigned(t, map[string]any{"alg": "none", "typ": "JWT", "kid": microsofttest.KeyID}, claims, func(string) string { return "" }),
 		"none, no kid":                          unsigned(t, map[string]any{"alg": "none"}, claims, func(string) string { return "" }),
 	} {
-		if _, err := exchangeToken(t, c, p, token); !errors.Is(err, microsoft.ErrInvalidToken) {
+		if _, err := exchangeToken(t, c, p, token); !errors.Is(err, connector.ErrInvalidToken) {
 			t.Errorf("%s: Exchange() = %v, want ErrInvalidToken", name, err)
 		}
 	}
@@ -64,7 +65,7 @@ func TestATokenUnderAKeyIDNotPublishedIsRefused(t *testing.T) {
 	c := newClient(t, p, nil)
 
 	token := p.SignWithNextKey(t, "never-published", p.Claims(clientID, homeTenant, objectID, "the-nonce"))
-	if _, err := exchangeToken(t, c, p, token); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchangeToken(t, c, p, token); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() under an unpublished kid = %v, want ErrInvalidToken", err)
 	}
 }
@@ -86,7 +87,7 @@ func TestARotatedKeyIsPickedUpOnce(t *testing.T) {
 	}
 
 	p.Rotate()
-	at.now = at.now.Add(microsoft.KeyRefreshInterval)
+	at.now = at.now.Add(connector.KeyRefreshInterval)
 	for i := 0; i < 3; i++ {
 		token := p.SignWithNextKey(t, microsofttest.NextKeyID, p.Claims(clientID, homeTenant, objectID, "the-nonce"))
 		if _, err := exchangeToken(t, c, p, token); err != nil {
@@ -108,7 +109,7 @@ func TestAnUnknownKeyIDCannotMakeItRefetchWithoutBound(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		token := p.SignWithNextKey(t, fmt.Sprintf("unknown-%d", i), p.Claims(clientID, homeTenant, objectID, "the-nonce"))
-		if _, err := exchangeToken(t, c, p, token); !errors.Is(err, microsoft.ErrInvalidToken) {
+		if _, err := exchangeToken(t, c, p, token); !errors.Is(err, connector.ErrInvalidToken) {
 			t.Fatalf("Exchange() under an unknown kid = %v, want ErrInvalidToken", err)
 		}
 	}
@@ -116,7 +117,7 @@ func TestAnUnknownKeyIDCannotMakeItRefetchWithoutBound(t *testing.T) {
 		t.Errorf("twenty unknown kids within the interval fetched the keys %d times, want only the first fetch", n)
 	}
 
-	at.now = at.now.Add(microsoft.KeyRefreshInterval)
+	at.now = at.now.Add(connector.KeyRefreshInterval)
 	for i := 0; i < 20; i++ {
 		token := p.SignWithNextKey(t, "unknown-later", p.Claims(clientID, homeTenant, objectID, "the-nonce"))
 		_, _ = exchangeToken(t, c, p, token)
@@ -152,7 +153,7 @@ func TestACancelledCallerDoesNotCancelTheKeyFetch(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = c.Exchange(ctx, "first", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+		_, _ = c.Exchange(ctx, "first", connector.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
 	}()
 	waitFor(t, func() bool { return p.KeyFetches() == 1 })
 	cancel()
@@ -184,11 +185,11 @@ func TestAFailedKeyFetchIsRetriedAfterABackoff(t *testing.T) {
 	c := newClient(t, p, func(cfg *microsoft.Config) { cfg.Now = at.Now })
 	p.FailKeys(http.StatusServiceUnavailable)
 
-	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, connector.ErrKeysUnavailable) {
 		t.Fatalf("Exchange() while the keys are down = %v, want ErrKeysUnavailable", err)
 	}
-	at.now = at.now.Add(microsoft.KeyFetchBackoff / 2)
-	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+	at.now = at.now.Add(connector.KeyFetchBackoff / 2)
+	if _, err := exchangeToken(t, c, p, validToken(t, p)); !errors.Is(err, connector.ErrKeysUnavailable) {
 		t.Errorf("Exchange() within the backoff = %v, want ErrKeysUnavailable, not an invalid token", err)
 	}
 	if n := p.KeyFetches(); n != 1 {
@@ -196,8 +197,8 @@ func TestAFailedKeyFetchIsRetriedAfterABackoff(t *testing.T) {
 	}
 
 	p.FailKeys(0)
-	at.now = at.now.Add(microsoft.KeyFetchBackoff)
-	if microsoft.KeyFetchBackoff*3/2 >= microsoft.KeyRefreshInterval {
+	at.now = at.now.Add(connector.KeyFetchBackoff)
+	if connector.KeyFetchBackoff*3/2 >= connector.KeyRefreshInterval {
 		t.Fatal("the backoff must be shorter than the refresh interval")
 	}
 	if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
@@ -224,9 +225,9 @@ func TestAFetchWithoutAUsableKeyKeepsTheHeldKeys(t *testing.T) {
 			}
 
 			p.ServeKeys([]byte(body))
-			at.now = at.now.Add(microsoft.KeyRefreshInterval)
+			at.now = at.now.Add(connector.KeyRefreshInterval)
 			unknown := p.SignWithNextKey(t, "unknown", p.Claims(clientID, homeTenant, objectID, "the-nonce"))
-			if _, err := exchangeToken(t, c, p, unknown); !errors.Is(err, microsoft.ErrKeysUnavailable) {
+			if _, err := exchangeToken(t, c, p, unknown); !errors.Is(err, connector.ErrKeysUnavailable) {
 				t.Errorf("Exchange() when the set came back unusable = %v, want ErrKeysUnavailable", err)
 			}
 			if _, err := exchangeToken(t, c, p, validToken(t, p)); err != nil {
@@ -235,7 +236,7 @@ func TestAFetchWithoutAUsableKeyKeepsTheHeldKeys(t *testing.T) {
 
 			p.ServeKeys(nil)
 			p.Rotate()
-			at.now = at.now.Add(microsoft.KeyFetchBackoff)
+			at.now = at.now.Add(connector.KeyFetchBackoff)
 			rotated := p.SignWithNextKey(t, microsofttest.NextKeyID, p.Claims(clientID, homeTenant, objectID, "the-nonce"))
 			if _, err := exchangeToken(t, c, p, rotated); err != nil {
 				t.Errorf("Exchange() after the backoff = %v, want the retry to bring the rotated key", err)
@@ -256,7 +257,7 @@ func TestConcurrentMissesShareOneFetch(t *testing.T) {
 		code := fmt.Sprintf("code-%d", i)
 		p.Issue(code, validToken(t, p), microsofttest.Challenge(strings.Repeat("v", 43)))
 		go func() {
-			_, err := c.Exchange(t.Context(), code, microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+			_, err := c.Exchange(t.Context(), code, connector.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
 			errs <- err
 		}()
 	}
