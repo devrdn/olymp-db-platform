@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/signup"
@@ -1013,3 +1014,38 @@ func TestTheMailBudgetsAreSized(t *testing.T) {
 			signup.MailsPerMinute, signup.MailsPerDay, signup.MailsPerAddress, signup.MailsPerEmail)
 	}
 }
+
+// One address may not reach the installation's daily ceiling alone: past
+// its own day it is refused however many minutes pass.
+func TestOneAddressHasADailyShareOfTheMail(t *testing.T) {
+	limiter := &authtest.Limiter{}
+	f := signuptest.NewFixture(t, func(cfg *signup.Config) {
+		cfg.Limiter, cfg.MailBudget, cfg.Hasher = limiter, &switchedBudget{}, instantHasher{}
+	})
+	for i := range signup.MailsPerAddressPerDay {
+		if i%signup.MailsPerAddress == 0 {
+			limiter.Pass(time.Minute)
+		}
+		cmd := start(fmt.Sprintf("person%d@example.edu", i), fmt.Sprintf("person%d", i))
+		cmd.Sender = "hall"
+		if err := startErr(t, f, cmd); err != nil {
+			t.Fatalf("start %d = %v", i, err)
+		}
+	}
+	limiter.Pass(time.Minute)
+
+	cmd := start("one.more@example.edu", "one-more")
+	cmd.Sender = "hall"
+	if err := startErr(t, f, cmd); !errors.Is(err, signup.ErrTooManyCodes) {
+		t.Errorf("past the address's day = %v, want ErrTooManyCodes", err)
+	}
+	if signup.MailsPerAddressPerDay != 300 {
+		t.Errorf("MailsPerAddressPerDay = %d, want 300", signup.MailsPerAddressPerDay)
+	}
+}
+
+// instantHasher stands in for argon2 where a test makes hundreds of
+// sign-ups and the hash is not what it checks.
+type instantHasher struct{}
+
+func (instantHasher) Hash(context.Context, string) (string, error) { return "hashed", nil }
