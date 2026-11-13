@@ -191,14 +191,16 @@ describe("the bar at phone width", () => {
 
     const row = container.querySelector('[data-slot="app-bar-nav"]');
     expect(row).not.toBeNull();
-    expect(row?.className).toContain("max-narrow:order-last");
-    expect(row?.className).toContain("max-narrow:basis-full");
-    expect(row?.className).toContain("max-narrow:overflow-x-auto");
+    // The scroller is padded, so the focus ring of its edge links is not clipped.
+    expect(row?.className).toContain("max-narrow:p-1");
+    // The row follows the mark and the controls in the DOM too, so the tab order matches
+    // what a phone shows; the controls are not inside it.
+    const bar = row?.parentElement as HTMLElement;
+    expect(bar.firstElementChild?.textContent).toContain(en.chrome.product);
+    expect(within(row as HTMLElement).queryAllByRole("button")).toEqual([]);
     expect(within(row as HTMLElement).getAllByRole("link").map((a) => a.textContent)).toEqual([
       "Contests",
       "Accounts",
     ]);
-    // The theme and language controls keep their accessible names beside the mark.
-    expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
   });
 });

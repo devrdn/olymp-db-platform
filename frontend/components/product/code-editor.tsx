@@ -378,7 +378,7 @@ export function CodeEditor({
             fallbackTouchedRef.current = true;
           }}
           onInput={(event) => report(event.currentTarget.value)}
-          className="absolute inset-0 h-full w-full resize-none border border-edge bg-sunk p-3 font-mono text-body text-ink"
+          className="absolute inset-0 h-full w-full resize-none border border-edge bg-sunk p-3 font-mono text-body text-ink focus-visible:-outline-offset-2"
         />
       )}
     </div>

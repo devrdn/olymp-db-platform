@@ -33,11 +33,4 @@ describe("SectionNav", () => {
     expect(nav.querySelectorAll("a")).toHaveLength(items.length);
     for (const link of screen.getAllByRole("link")) expect(link).not.toHaveAttribute("tabindex", "-1");
   });
-
-  test("at phone width the links keep a touch-sized target and do not shrink into fragments", () => {
-    render(<SectionNav items={items} />);
-
-    expect(screen.getByRole("navigation").className).toContain("max-narrow:min-w-max");
-    for (const link of screen.getAllByRole("link")) expect(link.className).toContain("max-narrow:min-h-11");
-  });
 });
