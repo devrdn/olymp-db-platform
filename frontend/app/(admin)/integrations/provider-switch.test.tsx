@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe("ProviderSwitch", () => {
   test("an enabled provider offers to switch off and submits the opposite", async () => {
-    render(<ProviderSwitch provider="microsoft" enabled dict={en} />);
+    render(<ProviderSwitch provider="microsoft" enabled labelledBy="integration-microsoft" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOff }));
 
@@ -34,7 +34,7 @@ describe("ProviderSwitch", () => {
   });
 
   test("a disabled provider offers to switch on and submits the opposite", async () => {
-    render(<ProviderSwitch provider="google" enabled={false} dict={en} />);
+    render(<ProviderSwitch provider="google" enabled={false} labelledBy="integration-google" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOn }));
 
@@ -46,7 +46,7 @@ describe("ProviderSwitch", () => {
 
   test("says why it failed, in the dictionary's words", async () => {
     switchProviderAction.mockResolvedValueOnce({ code: "not_found" });
-    render(<ProviderSwitch provider="google" enabled dict={en} />);
+    render(<ProviderSwitch provider="google" enabled labelledBy="integration-google" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOff }));
 
