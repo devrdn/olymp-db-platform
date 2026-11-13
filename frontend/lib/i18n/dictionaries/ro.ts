@@ -1337,7 +1337,7 @@ const ro = {
       noPublicUrl: "Setați PUBLIC_URL pentru a vedea această adresă.",
       switchOff: "Dezactivează",
       switchOn: "Activează",
-      note: "Dezactivat, butonul său dispare, iar autentificările prin el sunt refuzate. Legăturile deja făcute se păstrează, iar reactivarea le restabilește. Cine s-a autentificat doar astfel poate seta o parolă prin recuperarea parolei, dacă e-mailul îi este verificat și poșta este activată; personalul nu poate, așa că resetați-i parola chiar dumneavoastră.",
+      note: "Dezactivat, butonul său dispare, iar autentificările prin el sunt refuzate. Legăturile deja făcute se păstrează, iar reactivarea le restabilește. Cine s-a autentificat doar astfel poate seta o parolă prin recuperarea parolei, dacă contul are o adresă de e-mail și poșta este activată; personalul nu poate, așa că resetați-i parola chiar dumneavoastră. Dacă vă autentificați doar astfel, nu dezactivați acest mod.",
     },
     failed: {
       title: "Nu s-au putut încărca setările",
@@ -2600,7 +2600,7 @@ const ro = {
     external_signin_failed: "Autentificarea prin acel serviciu nu a reușit. Încercați din nou.",
     external_signin_staff_account: "Acesta este contul unui organizator sau administrator. Autentificați-vă cu parola lui sau prin contul propriei organizații ori rugați un administrator să îi reseteze parola.",
     external_signin_closed: "Acel cont nu este legat de niciun cont de aici, iar conturi noi nu se pot crea. Cereți unul organizatorilor.",
-    external_signin_unavailable: "Autentificarea în acest mod este oprită aici. Intrați cu parola sau folosiți „Ați uitat parola?” ca să setați una.",
+    external_signin_unavailable: "Autentificarea în acest mod este oprită aici. Intrați în alt mod sau adresați-vă unui administrator.",
     external_signin_conflict: "Nu vă puteți autentifica aici cu acel cont: contul dumneavoastră de pe acest site este legat de alt cont de la același serviciu sau organizația dumneavoastră nu este admisă. Adresați-vă unui administrator.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
