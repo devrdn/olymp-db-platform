@@ -121,7 +121,7 @@ export function SchemaPanel({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t.search}
-              className="min-w-0 flex-1 bg-transparent font-mono text-data text-ink outline-none placeholder:text-ink-3"
+              className="min-w-0 flex-1 bg-transparent font-mono text-data text-ink placeholder:text-ink-3"
             />
             {/* Decorative: reading "command K" after the placeholder is noise. */}
             <span aria-hidden="true" className="shrink-0 font-mono text-label text-ink-3">
