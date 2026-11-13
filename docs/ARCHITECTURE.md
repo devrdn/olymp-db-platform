@@ -1855,7 +1855,7 @@ it, with the number of questions waiting beside it while the contest runs.
     administrator's reset. The contest check is one probe
     of `contest_managers_user_id_idx`, made only by recovery, a sign-up's
     start or new code (for a new address too, so the two take the same
-    queries) and an external sign-in.
+    queries) and an external sign-in that does not carry `HomeDirectory`.
   - **Creating an account is one switch.** `SELF_SIGNUP_ENABLED` governs
     both the password sign-up and the accounts an external sign-in creates.
   - **Sign-up with a password** (`internal/signup`). The form (full name,
@@ -2030,14 +2030,21 @@ it, with the number of questions waiting beside it while the contest runs.
     gone, `start` and `callback` answer `/login?error=external_signin_unavailable`,
     and the links already made are kept, so switching it on restores them.
     An account that was only ever entered through the provider can set a
-    password by recovery when its email is verified and mail is on; a staff
+    password by recovery when it has an address on the account (an account
+    entered with no trusted email has none) and mail is on; a staff
     account is reset by an administrator. `GET /api/v1/auth/methods` lists
     the configured and enabled providers in the fixed order Microsoft,
-    Google, GitHub (`providers`, and the older boolean `microsoft`, which
+    Google, GitHub (`providers`, and the boolean `microsoft`, which
     follows the switch) and reuses the switches for at most five seconds
     per process, since every visitor to the sign-in page reads it; `start`
     and `callback` read them from the database every time, so a switch-off
-    refuses the next request, not the next cache expiry. Every failure of
+    refuses the next request, not the next cache expiry. When the switches
+    cannot be read, `/auth/methods` lists no providers (logged "could not
+    read the sign-in switches") and `start` and `callback` refuse with
+    `external_signin_failed`, logged at error. The integrations routes
+    answer 404 `not_found` for an unknown or unconfigured provider and 400
+    `invalid_request` for a body without a boolean `enabled` or with unknown
+    fields. Every failure of
     a callback lands on `/login?error=` with a declared code. A sign-in
     without a usable return path lands on `/login`, which sends a
     signed-in visitor on as after a password sign-in; one whose account

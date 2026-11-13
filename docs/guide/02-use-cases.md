@@ -96,8 +96,8 @@ flowchart LR
   (`public_handler.go`, `leaderboard_handler.go`).
 - Sign-in is `auth.Service`, throttled per address and per login
   (CLAUDE.md, security rules 4 and 5).
-- Creating an account, recovering a password and signing in with Microsoft
-  exist only where the installation turns them on
+- Creating an account, recovering a password and signing in through a provider
+  (Microsoft, Google, GitHub) exist only where the installation turns them on
   ([backend/README.md, "Self-service accounts"](../../backend/README.md#self-service-accounts));
   off, their routes are not mounted. How each decides is
   [ARCHITECTURE.md, section 7](../ARCHITECTURE.md#7-authentication-and-authorisation).
@@ -112,7 +112,9 @@ flowchart LR
 | See which ways in the installation offers | `/login` | `GET /auth/methods` | `api` | None |
 | Create an account with a password | `/signup`, `/signup/confirm` | `POST /public/signup`, `POST /public/signup/confirm`, `POST /public/signup/resend` | `signup` | `SELF_SIGNUP_ENABLED` and mail; throttled by address, then by email (`too_many_attempts`); the confirmation in the browser that started it |
 | Reset a forgotten password | `/forgot`, `/reset` | `POST /public/password/forgot`, `POST /public/password/reset` | `recovery` | Mail; a link only for a student account with an address; throttled by address, then by what was typed (`too_many_attempts`) |
-| Sign in with Microsoft | `/login` | `GET /auth/microsoft/start`, `GET /auth/microsoft/callback` | `microsoft`, `federation` | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`; never a staff account; throttled by address; a failure returns to `/login?error=` |
+| Sign in with Microsoft | `/login` | `GET /auth/microsoft/start`, `GET /auth/microsoft/callback` | `microsoft`, `connector`, `federation` | `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`; not switched off; a staff account only as a member of `MICROSOFT_HOME_TENANT_ID`; throttled by address; a failure returns to `/login?error=` |
+| Sign in with Google | `/login` | `GET /auth/google/start`, `GET /auth/google/callback` | `google`, `connector`, `federation` | `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; not switched off; a staff account only from `GOOGLE_HOME_DOMAIN` with a verified email; throttled by address; a failure returns to `/login?error=` |
+| Sign in with GitHub | `/login` | `GET /auth/github/start`, `GET /auth/github/callback` | `github`, `connector`, `federation` | `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; not switched off; never a staff account; throttled by address; a failure returns to `/login?error=` |
 | Register for the event | `/register` | `POST /public/registrations` | `registrations` | `EVENT_REGISTRATION_ENABLED` |
 | Read the running version | API only | `GET /version` | `api` | None |
 
@@ -408,6 +410,7 @@ flowchart LR
 | Change global roles | `/users/{userID}` | `PUT /users/{userID}/roles` | `users` | `users.manage`; never removes the last account able to manage accounts |
 | Read the audit trail | `/audit` | `GET /audit`, `GET /audit/actions` | `audit` | `audit.view` |
 | Brand the installation | `/settings` | `GET /settings/all`, `PUT /settings`, `PUT`, `DELETE /settings/images/{kind}` | `settings` | `settings.manage` |
+| See the sign-in providers and switch one on or off | `/integrations` | `GET /integrations`, `PUT /integrations/{provider}` | `settings` | `settings.manage`; a provider that is configured; the switch is audited (`settings.sign_in_provider`) |
 | Send oneself the test email | `/settings` | `POST /settings/mail-test` | `mailing` | `settings.manage`; only to the caller's own address, three a minute |
 | Act on any contest as its staff | every `/contests/{contestID}/...` staff screen | every contest-scoped route | `rbac` | `contest.admin_all` |
 

@@ -536,7 +536,7 @@ signing keys that could not be fetched.
 
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
-| `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 sign-ins through the provider came from their address in ten minutes |
+| `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 requests to the provider's `start` or `callback` (counted apart per provider and per route, refusals included) came from their address in ten minutes |
 | `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` (a guest, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
 | `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
 | `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
@@ -566,12 +566,15 @@ The ID and the secret are both or neither; with only one, or without
 
 In the Google Cloud console, in a project the organisation controls:
 
-1. **APIs & Services**, **OAuth consent screen**: name the application (what
-   people see when Google asks for their consent) and set its audience. An
-   organisation's Workspace can make it internal to that organisation; any
-   other installation makes it external.
-2. **Credentials**, **Create credentials**, **OAuth client ID**, type **Web
-   application**.
+1. The OAuth consent screen (**Google Auth Platform**, **Branding** and
+   **Audience** in the current console; **APIs & Services**, **OAuth consent
+   screen** in older ones): name the application (what people see when
+   Google asks for their consent) and set its audience. An organisation's
+   Workspace can make it internal to that organisation; any other
+   installation makes it external, and an external app in Testing admits
+   only the test users listed on it until it is published.
+2. An OAuth client (**Clients**, or **Credentials**, **Create credentials**,
+   **OAuth client ID**), type **Web application**.
 3. **Authorized redirect URIs**: `PUBLIC_URL` followed by
    `/api/v1/auth/google/callback`, character for character: for
    `PUBLIC_URL=https://contest.example.edu` it is
@@ -585,7 +588,7 @@ In the Google Cloud console, in a project the organisation controls:
 The platform asks for the scopes `openid`, `email` and `profile`, and asks
 Google to let the person choose the account each time.
 
-#### What the platform believes
+#### What the platform believes from Google
 
 - **The identity** is Google's `sub` under `https://accounts.google.com`, so
   a person keeps their account when they change their address.
@@ -618,7 +621,9 @@ needs one OAuth app and two settings.
 
 The pair is both or neither, and `PUBLIC_URL` is required with it. In
 GitHub, **Settings**, **Developer settings**, **OAuth Apps**, **New OAuth
-App** (an organisation's settings hold apps of its own):
+App** (an organisation's settings hold apps of its own). The form asks for
+an application name, which people see when GitHub asks for their consent,
+and a homepage URL, for which `PUBLIC_URL` serves:
 
 1. **Authorization callback URL**: `PUBLIC_URL` followed by
    `/api/v1/auth/github/callback`, such as
@@ -631,7 +636,7 @@ App** (an organisation's settings hold apps of its own):
 
 The platform asks for the scope `user:email`.
 
-#### What the platform believes
+#### What the platform believes from GitHub
 
 - **The identity** is the account's numeric id under `https://github.com`,
   not its login, which a person can change.
@@ -666,9 +671,18 @@ Switched off, a provider:
   finish;
 - keeps every link already made, so switching it back on restores them.
 
+A switch that cannot be read is not taken as off: `start` and `callback`
+refuse with `external_signin_failed`, logged at error, and `/auth/methods`
+lists no providers, logging "could not read the sign-in switches".
+
+`PUT /api/v1/integrations/{provider}` takes `{"enabled": true}` or
+`{"enabled": false}`. It answers 404 `not_found` for a provider that is
+unknown or not configured, and 400 `invalid_request` for a body without a
+boolean `enabled` or with any other field.
+
 An account that was entered only through that provider has no password. Its
-owner can set one with **Forgot password?** when the address is verified and
-mail is on. A staff account never gets a reset link: an administrator resets
+owner can set one with **Forgot password?** when the account has an address
+(an account entered with no trusted email has none) and mail is on. A staff account never gets a reset link: an administrator resets
 its password.
 
 ## Running locally

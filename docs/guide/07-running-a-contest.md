@@ -269,8 +269,8 @@ installation's settings decide which exist
 - An administrator can switch a connected provider off on **Integrations**
   (`/integrations`). Its button disappears and its sign-ins are refused, and
   the links already made are kept. Someone who only ever signed in that way
-  sets a password with **Forgot password?** when their email is verified
-  and mail is on; a staff account is reset by an administrator.
+  sets a password with **Forgot password?** when the account has an
+  address (an account entered with no trusted email has none) and mail is on; a staff account is reset by an administrator.
 - With mail on, anyone with an address on a student account can reset a
   forgotten password themselves from **Forgot password?**; the link lasts
   thirty minutes.
