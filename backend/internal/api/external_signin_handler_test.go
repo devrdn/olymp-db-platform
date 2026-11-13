@@ -872,6 +872,16 @@ func TestStartingTheHandlerRefusesAProviderItCannotServe(t *testing.T) {
 	}
 }
 
+func TestStartingTheHandlerRefusesAConnectorWithoutSwitches(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("NewExternalSignInHandler did not panic")
+		}
+	}()
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize"}
+	api.NewExternalSignInHandler(api.ExternalSignIn{Providers: []api.SignInProvider{stubProvider(users.ProviderGoogle, stub)}})
+}
+
 func assertLocation(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 	t.Helper()
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {

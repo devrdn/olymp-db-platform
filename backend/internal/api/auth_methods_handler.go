@@ -61,7 +61,8 @@ type providerInfo struct {
 }
 
 // AuthMethods is what the methods handler is built from. Providers are the
-// configured provider ids, in the order they are offered; Now nil is
+// configured provider ids, in the order they are offered; Switches and Log
+// are required, and NewAuthMethodsHandler panics without them; Now nil is
 // time.Now and ReadTimeout zero is authMethodsReadTimeout.
 type AuthMethods struct {
 	Signups, Recoveries offerer
@@ -74,6 +75,9 @@ type AuthMethods struct {
 }
 
 func NewAuthMethodsHandler(cfg AuthMethods) *AuthMethodsHandler {
+	if cfg.Switches == nil || cfg.Log == nil {
+		panic("api: the auth methods handler needs the sign-in switches and a log")
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -104,11 +108,13 @@ func (h *AuthMethodsHandler) body(r *http.Request) authMethodsResponse {
 			}
 		}
 	}
+	microsoft := slices.ContainsFunc(listed, func(p providerInfo) bool { return p.ID == users.ProviderMicrosoft })
 	return authMethodsResponse{
-		PasswordSignup: h.cfg.Signups.Offered(),
-		PasswordReset:  h.cfg.Recoveries.Offered(),
-		Microsoft:      slices.ContainsFunc(listed, func(p providerInfo) bool { return p.ID == users.ProviderMicrosoft }),
-		Providers:      listed, TrustedEmailDomain: h.cfg.TrustedEmailDomain,
+		PasswordSignup:     h.cfg.Signups.Offered(),
+		PasswordReset:      h.cfg.Recoveries.Offered(),
+		Microsoft:          microsoft,
+		Providers:          listed,
+		TrustedEmailDomain: h.cfg.TrustedEmailDomain,
 	}
 }
 
