@@ -2015,7 +2015,9 @@ it, with the number of questions waiting beside it while the contest runs.
     Google lets an account carry. Otherwise the person enters or creates
     an account without an email. `HomeDirectory` is set when
     `GOOGLE_HOME_DOMAIN` is set, the email is verified and `hd` equals it
-    ignoring case.
+    ignoring ASCII case. An `hd` that is not an ASCII domain name refuses
+    the token, since Unicode case folding would take a look-alike letter
+    for one of the home domain's.
   - **GitHub** (`internal/github`). OAuth 2.0 with PKCE and the scope
     `user:email`. GitHub issues no ID token, so after the exchange the
     adapter reads `/user` and `/user/emails`. The identity is the numeric

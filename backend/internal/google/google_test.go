@@ -334,15 +334,47 @@ func TestAnotherOrNoHostedDomainIsNotHome(t *testing.T) {
 	}
 }
 
+func TestTheHomeDirectoryNeedsEmailVerifiedPresent(t *testing.T) {
+	got := with(t, func(m map[string]any) { m["hd"] = "example.edu"; delete(m, "email_verified") }, func(c *google.Config) { c.HomeDomain = "example.edu" })
+
+	if got.HomeDirectory {
+		t.Errorf("claims = %+v, want no home directory without email_verified", got)
+	}
+}
+
+// Unicode case folding takes U+212A KELVIN SIGN for k and U+017F for s, so
+// only an ASCII hosted domain may be compared with the home domain.
+func TestAHostedDomainThatIsNotAnASCIIDomainIsRefused(t *testing.T) {
+	p := googletest.NewProvider(t)
+	c := newClient(t, p, func(c *google.Config) { c.HomeDomain = "kelvin.school.example.edu" })
+
+	for name, hd := range map[string]string{
+		"a kelvin sign":      "\u212aelvin.school.example.edu",
+		"a long s":           "kelvin.\u017fchool.example.edu",
+		"a replacement char": "kelvin.school.example\ufffd.edu",
+		"one label":          "localhost",
+		"a trailing dot":     "kelvin.school.example.edu.",
+		"an underscore":      "kelvin_school.example.edu",
+		"a space":            "kelvin school.example.edu",
+		"a leading hyphen":   "-kelvin.school.example.edu",
+	} {
+		claims := p.Claims(clientID, subject, "the-nonce")
+		claims["hd"] = hd
+		if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
+			t.Errorf("%s: Exchange() = %v, want ErrInvalidToken", name, err)
+		}
+	}
+}
+
 func TestAnOverlongHostedDomainIsRefused(t *testing.T) {
 	p := googletest.NewProvider(t)
 	c := newClient(t, p, nil)
 
 	for name, hd := range map[string]string{
-		"too long":   strings.Repeat("a", 254),
+		"too long":   strings.Repeat("a.", 126) + "ab",
 		"a control":  "example.edu\n",
 		"a bell":     "exam\x07ple.edu",
-		"a line sep": "example .edu",
+		"a line sep": "example\u2028.edu",
 	} {
 		claims := p.Claims(clientID, subject, "the-nonce")
 		claims["hd"] = hd
@@ -351,7 +383,7 @@ func TestAnOverlongHostedDomainIsRefused(t *testing.T) {
 		}
 	}
 	claims := p.Claims(clientID, subject, "the-nonce")
-	claims["hd"] = strings.Repeat("a", 253)
+	claims["hd"] = strings.Repeat("a.", 126) + "a"
 	if _, err := exchange(t, c, p, claims); err != nil {
 		t.Errorf("a hosted domain of 253 bytes: Exchange() = %v", err)
 	}
@@ -366,7 +398,7 @@ func TestAnOverlongNameIsCutToItsBound(t *testing.T) {
 	if len(got.Name) > federation.MaxNameLength || len(got.LoginHint) > federation.MaxLoginHintLength {
 		t.Errorf("name %d bytes, hint %d bytes; want them within federation's bounds", len(got.Name), len(got.LoginHint))
 	}
-	if !strings.HasPrefix(got.Name, "ăă") || strings.ContainsRune(got.Name, '�') {
+	if !strings.HasPrefix(got.Name, "ăă") || strings.ContainsRune(got.Name, '\uFFFD') {
 		t.Errorf("name of %d bytes cut mid-letter or lost", len(got.Name))
 	}
 }
