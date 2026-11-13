@@ -33,6 +33,21 @@ describe("the result panel", () => {
     expect(within(table).getByRole("columnheader", { name: "note" })).toBeInTheDocument();
   });
 
+  // The rows sit inside a scroller that would clip a ring drawn outside them.
+  test("the focusable row draws its focus ring inside itself, and the header row is not focusable", () => {
+    show({
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"], ["2"]], truncated: false, rows_affected: 0 },
+    });
+
+    const focusable = within(screen.getByRole("table"))
+      .getAllByRole("row")
+      .filter((row) => row.getAttribute("tabindex") === "0");
+    expect(focusable).toHaveLength(1);
+    expect(focusable[0].className).toContain("focus-visible:-outline-offset-2");
+    expect(screen.getAllByRole("row")[0]).not.toHaveAttribute("tabindex");
+  });
+
   // NULL and the empty string are different things in SQL, and a participant
   // debugging a left join is looking at exactly that column.
   test("shows a null as a null rather than as an empty cell", () => {

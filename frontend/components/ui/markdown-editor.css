@@ -52,9 +52,9 @@
   outline: none;
 }
 
-/* The surface has no box of its own, so the ring goes on the editor around it,
-   and only for keyboard focus. */
-.milkdown:has(.ProseMirror:focus-visible) {
+/* The surface has no box of its own, so the ring goes on the editor around it
+   whenever it holds focus. */
+.milkdown:focus-within {
   outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
