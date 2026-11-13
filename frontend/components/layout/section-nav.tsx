@@ -25,6 +25,10 @@ export function SectionNav({ items }: { items: { href: string; label: string }[]
             key={item.href}
             href={item.href}
             aria-current={current ? "page" : undefined}
+            // Chromium leaves a partly visible focus target where it is, so a link
+            // cut off by the narrow scroller's edge is scrolled fully in. Default
+            // behaviour, so a reduced-motion preference is not overridden.
+            onFocus={(event) => event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
             className={cn(
               "truncate px-2 py-1 text-control max-narrow:flex max-narrow:min-h-11 max-narrow:items-center transition-colors duration-(--t-input) ease-standard",
               current ? "text-ink" : "text-ink-3 hover:text-ink-2",
