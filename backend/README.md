@@ -244,7 +244,8 @@ password. Each other way in is the installation's choice:
   offers **Forgot password?** from the release that brings it, with no new
   setting. The routes are `POST /api/v1/public/password/forgot` and
   `/password/reset`; with mail off they do not exist. Staff accounts never
-  get a link.
+  get a link, and neither does an account that manages or owns a contest
+  that is not archived, global role or not.
 - **The sign-in page offers only what is on.** It asks
   `GET /api/v1/auth/methods`, which needs no session and is not cached, and
   shows the sign-up link, the recovery link and the Microsoft button

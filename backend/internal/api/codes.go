@@ -524,7 +524,7 @@ var (
 	codeExternalSignInFailed = httpx.NewCode("external_signin_failed",
 		"Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, the installation does not admit that provider's tenant, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again.")
 	codeExternalSignInStaffAccount = httpx.NewCode("external_signin_staff_account",
-		"The address the provider vouches for belongs to an organiser's or administrator's account, which is never entered through an external provider. Sign in with that account's password, or have an administrator reset it.")
+		"The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is never entered through an external provider. Sign in with that account's password, or have an administrator reset it.")
 	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
 		"The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored.")
 )

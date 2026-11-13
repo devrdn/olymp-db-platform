@@ -26,17 +26,38 @@ type Repository struct {
 	CountActiveWithRoleCalls int
 	identities               map[identityKey]users.ExternalIdentity
 	lastUsed                 map[identityKey]time.Time
+	// contestStaff are the accounts that manage or own a contest that is not
+	// archived.
+	contestStaff map[uuid.UUID]bool
 }
 
 type identityKey struct{ provider, issuer, subject string }
 
 func New() *Repository {
 	return &Repository{
-		byID:        map[uuid.UUID]users.User{},
-		permissions: map[string][]string{},
-		identities:  map[identityKey]users.ExternalIdentity{},
-		lastUsed:    map[identityKey]time.Time{},
+		byID:         map[uuid.UUID]users.User{},
+		permissions:  map[string][]string{},
+		identities:   map[identityKey]users.ExternalIdentity{},
+		lastUsed:     map[identityKey]time.Time{},
+		contestStaff: map[uuid.UUID]bool{},
 	}
+}
+
+// AppointToContest makes the account a manager of a contest that is not
+// archived, which gives it no global role.
+func (r *Repository) AppointToContest(id uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.contestStaff[id] = true
+}
+
+func (r *Repository) ManagesContest(_ context.Context, id uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Err != nil {
+		return false, r.Err
+	}
+	return r.contestStaff[id], nil
 }
 
 func (r *Repository) GrantRole(roleCode string, permissions ...string) {

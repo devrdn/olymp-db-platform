@@ -234,6 +234,54 @@ func TestAMicrosoftSignInOnTheRealSchemaLinksTheRosterAccountAndDropsItsOneTimeP
 	})
 }
 
+// A contest's manager holds no global role, yet reads the reference answers:
+// on the real schema the account gets no reset link and is not linked or
+// entered through a trusted address.
+func TestAContestManagerOnTheRealSchemaIsNeitherMailedALinkNorLinked(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		j := newJourney(t)
+		const email = "journey.manager@example.edu"
+		manager := oneTimeStudent(t, ctx, j, "journey-manager", email)
+		contest := makeContest(t, ctx, manager.ID)
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`INSERT INTO contest_managers (contest_id, user_id, role, granted_by) VALUES ($1, $2, 'manager', $2)`,
+			contest, manager.ID); err != nil {
+			t.Fatal(err)
+		}
+
+		recoveries := recovery.NewService(recovery.Config{
+			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
+			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
+			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
+		})
+		if err := recoveries.Request(ctx, email, ""); err != nil {
+			t.Fatalf("Request() = %v", err)
+		}
+		var queued int
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT count(*) FROM mail_outbox WHERE recipient = $1`, email).Scan(&queued); err != nil {
+			t.Fatal(err)
+		}
+		if queued != 0 {
+			t.Errorf("queued %d messages to the manager, want no reset link", queued)
+		}
+
+		resolver := federation.NewService(federation.Config{
+			Policy: federation.Policy{CreateAccounts: true}, Store: j.repo, Accounts: j.accounts,
+			PendingLogins: NewSignups(testPool),
+		})
+		if _, err := resolver.Resolve(ctx, federation.Claims{
+			Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example/v2.0", Subject: "sub-journey-manager",
+			Email: email, Name: "Ana Popescu", EmailTrusted: true,
+		}); !errors.Is(err, federation.ErrStaffAccount) {
+			t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+		}
+		if stored, _ := j.repo.ByID(ctx, manager.ID); !stored.MustChangePassword || stored.EmailVerifiedAt != nil {
+			t.Errorf("stored %+v, want the account untouched", stored)
+		}
+	})
+}
+
 const oneTimePassword = "an issued one-time password"
 
 // oneTimeStudent is a staff-made student holding a one-time password.

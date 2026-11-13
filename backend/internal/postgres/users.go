@@ -164,6 +164,23 @@ func (r *Users) Lock(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ManagesContest reports whether the account manages or owns a contest that
+// is not archived. An owner is a row of contest_managers as well, so one
+// probe of contest_managers_user_id_idx answers both.
+func (r *Users) ManagesContest(ctx context.Context, id uuid.UUID) (bool, error) {
+	var manages bool
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM contest_managers m
+			JOIN contests c ON c.id = m.contest_id
+			WHERE m.user_id = $1 AND c.status <> 'archived'
+		)`, id).Scan(&manages)
+	if err != nil {
+		return false, fmt.Errorf("check the account's contests: %w", err)
+	}
+	return manages, nil
+}
+
 // MarkEmailVerified records when the account proved its email.
 func (r *Users) MarkEmailVerified(ctx context.Context, id uuid.UUID, at time.Time) error {
 	return r.exec(ctx, `UPDATE users SET email_verified_at = $2, updated_at = now() WHERE id = $1`, id, at)

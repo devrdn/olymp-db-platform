@@ -574,6 +574,24 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 	}
 }
 
+// A contest's manager reads its reference answers with no global role, so a
+// trusted address must not carry anyone into the account.
+func TestLinkExternalRefusesAContestManager(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.repo.AppointToContest(ana.ID)
+
+	_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+
+	if !errors.Is(err, users.ErrStaffNotLinkable) {
+		t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+}
+
 // A provider can hand a mailbox to someone new; the address must not carry
 // them into the previous holder's account.
 func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {

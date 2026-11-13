@@ -257,7 +257,10 @@ one of four ways, and the installation's settings decide which exist
   administrator issues after the link stays: the next Microsoft sign-in
   asks the person to change it, as a password sign-in would.
 - Staff accounts never sign in with Microsoft and never get a reset link:
-  an organiser or administrator signs in with their password.
+  an organiser or administrator signs in with their password. That includes
+  an account appointed to manage a contest on **People**, even with no role
+  on **Accounts**, for as long as one of its contests is not archived: it
+  reads the reference answers. An administrator resets its password.
 - With mail on, anyone with an address on a student account can reset a
   forgotten password themselves from **Forgot password?**; the link lasts
   thirty minutes.

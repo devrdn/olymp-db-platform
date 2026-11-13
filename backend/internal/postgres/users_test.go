@@ -1496,3 +1496,44 @@ func TestLockRefusesToRunOutsideATransactionAndFindsNoMissingAccount(t *testing.
 		}
 	})
 }
+
+// Owning a contest is a row in contest_managers too; an archived contest
+// gives its staff nothing more to read.
+func TestManagesContestCountsEveryContestThatIsNotArchived(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		q := storage.QuerierFrom(ctx, testPool)
+		repo := NewUsers(testPool)
+		author := makeUser(t, ctx, "mc-author")
+		appoint := func(login, role, status string) users.User {
+			t.Helper()
+			u := makeUser(t, ctx, login)
+			contest := makeContest(t, ctx, author.ID)
+			if _, err := q.Exec(ctx, `UPDATE contests SET status = $2 WHERE id = $1`, contest, status); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := q.Exec(ctx,
+				`INSERT INTO contest_managers (contest_id, user_id, role, granted_by) VALUES ($1, $2, $3, $4)`,
+				contest, u.ID, role, author.ID); err != nil {
+				t.Fatal(err)
+			}
+			return u
+		}
+
+		for name, tc := range map[string]struct {
+			user users.User
+			want bool
+		}{
+			"a manager of a draft":      {appoint("mc-draft", "manager", "draft"), true},
+			"a manager of a finished":   {appoint("mc-finished", "manager", "finished"), true},
+			"an owner":                  {appoint("mc-owner", "owner", "running"), true},
+			"a manager of archived one": {appoint("mc-archived", "manager", "archived"), false},
+			"nobody's staff":            {makeUser(t, ctx, "mc-student"), false},
+			"no account":                {users.User{}, false},
+		} {
+			got, err := repo.ManagesContest(ctx, tc.user.ID)
+			if err != nil || got != tc.want {
+				t.Errorf("%s: ManagesContest() = %v, %v, want %v", name, got, err, tc.want)
+			}
+		}
+	})
+}

@@ -1841,10 +1841,15 @@ it, with the number of questions waiting beside it while the contest runs.
     recovery answer every address alike and in the same time; a login, which
     the leaderboards show anyway, may be refused as taken.
   - **Staff accounts are never reached through email.** An account holding
-    any permission (an organiser or an administrator) never receives a reset
-    link and is never entered or linked through an external provider: an
-    address somebody typed must not become a way into a permission. It keeps
-    its password and the administrator's reset.
+    any global permission (an organiser or an administrator), or managing or
+    owning a contest that is not archived, which lets it read the reference
+    answers with no global role, never receives a reset link, is told to ask
+    an administrator in the existing-account message, and is never entered
+    or linked through an external provider: an address somebody typed must
+    not become a way into that power (`users.ActsAsStaff`). It keeps its
+    password and the administrator's reset. The contest check is one probe
+    of `contest_managers_user_id_idx`, made only by recovery, a sign-up for
+    a known address and an external sign-in.
   - **Creating an account is one switch.** `SELF_SIGNUP_ENABLED` governs
     both the password sign-up and the accounts an external sign-in creates.
   - **Sign-up with a password** (`internal/signup`). The form (full name,

@@ -297,6 +297,33 @@ func TestNeverLinksAStaffAccount(t *testing.T) {
 	}
 }
 
+// A contest's manager reads its reference answers with no global role.
+func TestNeverLinksAContestManager(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.repo.AppointToContest(ana.ID)
+
+	_, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if !errors.Is(err, federation.ErrStaffAccount) {
+		t.Fatalf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+	if len(f.repo.Identities(ana.ID)) != 0 {
+		t.Error("the contest manager's account was linked")
+	}
+}
+
+func TestAKnownIdentityOfAnAccountMadeAContestManagerIsRefused(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-ana")
+	f.repo.AppointToContest(ana.ID)
+
+	if _, err := f.service().Resolve(t.Context(), claims("sub-ana")); !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+}
+
 // Call 9 holds over time: an account promoted after its identity was linked
 // is no longer entered through it.
 func TestAKnownIdentityOfAnAccountMadeStaffIsRefused(t *testing.T) {

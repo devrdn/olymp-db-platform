@@ -136,16 +136,43 @@ func (u User) IsActive() bool { return u.Status == StatusActive }
 // HasPassword reports whether the account can sign in with a password.
 func (u User) HasPassword() bool { return u.PasswordHash != "" }
 
-// IsStaff reports whether the account holds any permission. The student role
-// holds none.
+// IsStaff reports whether the account holds any global permission. The
+// student role holds none. A contest's manager or owner may hold none either;
+// where an address could open the account, ActsAsStaff decides.
 func (u User) IsStaff() bool { return len(u.Permissions) > 0 }
 
+// ContestManagers says which accounts run a contest (Repository).
+type ContestManagers interface {
+	// ManagesContest reports whether the account manages or owns a contest
+	// that is not archived; false for an id no account has.
+	ManagesContest(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
+// ActsAsStaff reports whether u holds a global permission or manages or owns
+// a contest that is not archived, which reads its reference answers with no
+// global role. Staff are never reached through email nor entered through an
+// external provider, since an address someone typed must not become a way
+// into that power; an administrator resets them. It asks contests whatever u
+// holds, so its time tells one account from another no more than the read
+// that found u. It costs a query: for recovery and external sign-in, not for
+// every request.
+func ActsAsStaff(ctx context.Context, contests ContestManagers, u User) (bool, error) {
+	manages, err := contests.ManagesContest(ctx, u.ID)
+	if err != nil {
+		return false, fmt.Errorf("check whether the account runs a contest: %w", err)
+	}
+	return u.IsStaff() || manages, nil
+}
+
 // ReachableByEmail reports whether a password reset link may be mailed to the
-// account and followed: a live, active student with an address. Staff are
-// never reached through email, since an address someone typed must not
-// become a way into a permission; an administrator resets them.
-func (u User) ReachableByEmail() bool {
-	return u.IsActive() && !u.IsStaff() && u.Email != ""
+// account and followed: a live, active account with an address that does not
+// act as staff (ActsAsStaff).
+func ReachableByEmail(ctx context.Context, contests ContestManagers, u User) (bool, error) {
+	staff, err := ActsAsStaff(ctx, contests, u)
+	if err != nil {
+		return false, err
+	}
+	return u.IsActive() && !staff && u.Email != "", nil
 }
 
 // HasVerifiedEmailIn reports whether the account has proved an address in the
@@ -249,6 +276,7 @@ type Repository interface {
 	// CountActiveWithRole counts accounts holding the role that can still
 	// sign in: a blocked administrator cannot administer.
 	CountActiveWithRole(ctx context.Context, roleCode string) (int, error)
+	ContestManagers
 }
 
 // Providers an account can sign in through. The column's CHECK constraint

@@ -1,6 +1,7 @@
 package users_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -119,17 +120,77 @@ func TestANameIsWrittenOnlyWithWhatNamesAreWrittenWith(t *testing.T) {
 
 func TestOnlyALiveStudentWithAnAddressIsReachableByEmail(t *testing.T) {
 	for name, tc := range map[string]struct {
-		user users.User
-		want bool
+		user    users.User
+		manages bool
+		want    bool
 	}{
-		"a student":        {users.User{Status: users.StatusActive, Email: "ana@example.edu"}, true},
-		"staff":            {users.User{Status: users.StatusActive, Email: "ana@example.edu", Permissions: []string{"contests.manage"}}, false},
-		"blocked":          {users.User{Status: users.StatusBlocked, Email: "ana@example.edu"}, false},
-		"deleted":          {users.User{Status: users.StatusDeleted, Email: "ana@example.edu"}, false},
-		"without an email": {users.User{Status: users.StatusActive}, false},
+		"a student":         {users.User{Status: users.StatusActive, Email: "ana@example.edu"}, false, true},
+		"staff":             {users.User{Status: users.StatusActive, Email: "ana@example.edu", Permissions: []string{"contests.manage"}}, false, false},
+		"a contest manager": {users.User{Status: users.StatusActive, Email: "ana@example.edu"}, true, false},
+		"blocked":           {users.User{Status: users.StatusBlocked, Email: "ana@example.edu"}, false, false},
+		"deleted":           {users.User{Status: users.StatusDeleted, Email: "ana@example.edu"}, false, false},
+		"without an email":  {users.User{Status: users.StatusActive}, false, false},
 	} {
-		if got := tc.user.ReachableByEmail(); got != tc.want {
-			t.Errorf("%s: ReachableByEmail() = %v, want %v", name, got, tc.want)
+		got, err := users.ReachableByEmail(t.Context(), managing(tc.manages), tc.user)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ReachableByEmail() = %v, %v, want %v", name, got, err, tc.want)
 		}
 	}
+}
+
+func TestAContestManagerActsAsStaffWithoutAGlobalRole(t *testing.T) {
+	for name, tc := range map[string]struct {
+		user    users.User
+		manages bool
+		want    bool
+	}{
+		"a student":         {users.User{}, false, false},
+		"a global role":     {users.User{Permissions: []string{"contests.manage"}}, false, true},
+		"a contest manager": {users.User{}, true, true},
+	} {
+		got, err := users.ActsAsStaff(t.Context(), managing(tc.manages), tc.user)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ActsAsStaff() = %v, %v, want %v", name, got, err, tc.want)
+		}
+	}
+}
+
+// The lookup runs for every account, so its time does not tell a student
+// from staff or from nobody.
+func TestReachableByEmailAsksAboutContestsWhateverTheAccount(t *testing.T) {
+	for name, u := range map[string]users.User{
+		"nobody":  {},
+		"blocked": {Status: users.StatusBlocked, Email: "ana@example.edu"},
+		"staff":   {Status: users.StatusActive, Email: "ana@example.edu", Permissions: []string{"contests.manage"}},
+	} {
+		asked := &askedContests{}
+		if _, err := users.ReachableByEmail(t.Context(), asked, u); err != nil || asked.calls != 1 {
+			t.Errorf("%s: asked %d times (%v), want once", name, asked.calls, err)
+		}
+	}
+}
+
+func TestReachableByEmailPassesALookupFailureOn(t *testing.T) {
+	failure := errors.New("database down")
+	_, err := users.ReachableByEmail(t.Context(), failingContests{failure}, users.User{Status: users.StatusActive, Email: "ana@example.edu"})
+	if !errors.Is(err, failure) {
+		t.Errorf("ReachableByEmail() = %v, want the lookup's failure", err)
+	}
+}
+
+type managing bool
+
+func (m managing) ManagesContest(context.Context, uuid.UUID) (bool, error) { return bool(m), nil }
+
+type askedContests struct{ calls int }
+
+func (a *askedContests) ManagesContest(context.Context, uuid.UUID) (bool, error) {
+	a.calls++
+	return false, nil
+}
+
+type failingContests struct{ err error }
+
+func (f failingContests) ManagesContest(context.Context, uuid.UUID) (bool, error) {
+	return false, f.err
 }
