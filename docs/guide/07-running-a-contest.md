@@ -265,12 +265,17 @@ one of four ways, and the installation's settings decide which exist
   forgotten password themselves from **Forgot password?**; the link lasts
   thirty minutes.
 - **Create an account** is not for a hall signing up at once. The
-  installation mails about 12 sign-up codes a minute, and at most 6 of them
-  to people behind one address, as a hall behind one router is; past that
-  the form says to wait and try again. Sixty people in one room take about
-  ten minutes. For a large on-site event, import a roster instead (below)
-  and hand out the sign-in details. Reset links have a budget of their own,
-  so a wave of sign-ups does not hold up **Forgot password?**.
+  installation mails about 12 sign-up codes a minute, and people behind one
+  address, as a hall behind one router is, get at most 6 of them a minute
+  and 300 a day. The room also shares 120 tries at the form in ten minutes,
+  refused ones included; past any of these the form says to wait and try
+  again. Sixty people in one room take ten minutes at best, and much longer
+  when they retry, since every retry spends one of the room's tries. For a
+  large on-site event, import a roster instead (below) and hand out the
+  sign-in details.
+- **Forgot password?** has a budget of its own, so a wave of sign-ups does
+  not hold it up, but one address may ask for only 2 links a minute: a room
+  that forgot its passwords is quicker served by an administrator's reset.
 
 For accounts made by staff: on **Accounts** (`/users`), choose
 **Import a roster** and paste one line per person: login, full name and,

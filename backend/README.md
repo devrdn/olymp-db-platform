@@ -257,20 +257,25 @@ password. Each other way in is the installation's choice:
   existing-account notices go to whatever address was typed, and reset links
   to an account's address, through the same relay as every other message.
   The installation queues at most 12 sign-up messages a minute and 5000 a
-  day, and at most 6 reset links a minute and 2000 a day; together 18 a
-  minute leaves room under the default `SMTP_MAX_PER_MINUTE` of 25 for
+  day, and admits at most 6 reset requests a minute and 2000 a day; together
+  18 a minute leaves room under the default `SMTP_MAX_PER_MINUTE` of 25 for
   sign-in details and other staff mail, and 7000 a day stays under a
-  typical mailbox's daily limit of 10 000 recipients. Each budget is spent
-  only when a message is about to be queued, so a request refused for
-  anything else spends none, and the two count apart, so a flood of
-  sign-ups does not stop recovery. Starting a sign-up and asking for a new code also share a
-  budget of 6 a minute per address, which holds one machine to half the
-  installation's minute, and each has 5 an hour per typed address, which a
-  refusal by the installation's budget does not charge. Past a sign-up
-  budget the request answers `too_many_attempts` (429); past the recovery
-  budget the link is dropped and logged, and the request is answered as
-  every other one is. The first refusal of each budget's minute or day is
-  logged at warn with the budget's name.
+  typical mailbox's daily limit of 10 000 recipients. The two count apart,
+  so a flood of sign-ups does not stop recovery.
+  - Sign-up's budget is spent only when a message is about to be queued, so
+    a request refused for anything else spends none. Starting a sign-up and
+    asking for a new code also share 6 a minute and 300 a day per address,
+    which holds one machine to half the installation's minute and well
+    under its day, and each has 5 an hour per typed address, which a
+    refusal by the installation's budget does not charge.
+  - Recovery's budget is spent by every request the forgot route admits,
+    before anything is looked up, whether or not it names an account: a
+    budget spent only for links actually mailed would let someone watching
+    their own link learn whether another address has an account. One
+    address may make 2 such requests a minute and 100 a day.
+  - Past any of them the request answers `too_many_attempts` (429). The
+    first refusal of each budget's minute or day is logged at warn with the
+    budget's name.
 - **A Microsoft sign-in that links an account drops its unused one-time
   password.** When it links a student account through its address while the
   account still holds the one-time password staff issued, the password is
@@ -498,14 +503,14 @@ log {
 }
 ```
 
-The filter matches the parameter's name on every path, so another `token`
-in a query string is redacted too.
-
 and recreate Caddy
 (`VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d --no-deps --force-recreate caddy`).
 The file is tracked, so carry the change across each release's checkout. An
 edge proxy in front of Caddy, if there is one, logs the same line under its
 own configuration.
+
+The filter matches the parameter's name on every path, so another `token`
+in a query string is redacted too.
 
 #### What a person sees
 
