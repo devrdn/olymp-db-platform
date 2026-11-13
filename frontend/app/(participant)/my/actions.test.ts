@@ -25,7 +25,7 @@ function refuses(code: string, domain: string | Error, reset = false) {
     if (path === `/contests/${contestId}/enroll`) throw new ApiError(code, 403, "refused");
     if (path === "/auth/methods") {
       if (domain instanceof Error) throw domain;
-      return { password_signup: true, password_reset: reset, microsoft: false, trusted_email_domain: domain };
+      return { password_signup: true, password_reset: reset, microsoft: false, trusted_email_domain: domain, providers: [] };
     }
     throw new Error(`unexpected ${path}`);
   });

@@ -41,10 +41,10 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-function methods(signup: boolean, reset: boolean, microsoft = false) {
+function methods(signup: boolean, reset: boolean, providers: string[] = []) {
   serverRequest.mockImplementation(async (path: string) => {
     if (path === "/auth/methods") {
-      return { password_signup: signup, password_reset: reset, microsoft, trusted_email_domain: "" };
+      return { password_signup: signup, password_reset: reset, microsoft: providers.includes("microsoft"), trusted_email_domain: "", providers: providers.map((id) => ({ id })) };
     }
     throw new Error(`unexpected ${path}`);
   });
@@ -93,28 +93,31 @@ describe("the sign-in page's other ways in", () => {
   });
 });
 
-describe("the sign-in page's Microsoft offer", () => {
-  const microsoft = () => screen.queryByRole("link", { name: en.auth.signIn.microsoft });
+describe("the sign-in page's providers", () => {
+  const providerLinks = () => screen.queryAllByRole("link", { name: /^Continue with / });
 
-  test("offers it when the installation has Microsoft configured, returning to the interrupted page", async () => {
-    methods(false, false, true);
+  test("offers each one the installation has, returning to the interrupted page", async () => {
+    methods(false, false, ["google"]);
     await renderPage({ next: "/contests/abc/play" });
 
-    expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start?return=%2Fcontests%2Fabc%2Fplay");
+    const links = providerLinks();
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("Continue with Google");
+    expect(links[0]).toHaveAttribute("href", "/api/v1/auth/google/start?return=%2Fcontests%2Fabc%2Fplay");
   });
 
-  test("does not offer it otherwise", async () => {
-    methods(true, true, false);
+  test("offers none otherwise", async () => {
+    methods(true, true);
     await renderPage();
 
-    expect(microsoft()).not.toBeInTheDocument();
+    expect(providerLinks()).toHaveLength(0);
   });
 
-  test("does not offer it when the API cannot say", async () => {
+  test("offers none when the API cannot say", async () => {
     serverRequest.mockRejectedValue(new ApiError("unreachable", 502, "down"));
     await renderPage();
 
-    expect(microsoft()).not.toBeInTheDocument();
+    expect(providerLinks()).toHaveLength(0);
   });
 });
 
@@ -124,9 +127,10 @@ describe("the sign-in page after an external sign-in came back refused", () => {
     "external_signin_staff_account",
     "external_signin_closed",
     "external_signin_conflict",
+    "external_signin_unavailable",
     "account_blocked",
   ] as const)("says what %s means", async (code) => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     await renderPage({ error: code });
 
     expect(screen.getByRole("alert")).toHaveTextContent(en.errors[code]);
@@ -136,7 +140,7 @@ describe("the sign-in page after an external sign-in came back refused", () => {
   test.each(["invalid_credentials", "<b>Your account is suspended</b>", "fallback", "constructor"])(
     "shows nothing for %j, and never the value itself",
     async (value) => {
-      methods(false, false, true);
+      methods(false, false, ["microsoft"]);
       await renderPage({ error: value });
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -145,7 +149,7 @@ describe("the sign-in page after an external sign-in came back refused", () => {
   );
 
   test("shows nothing for a repeated parameter", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     await renderPage({ error: ["external_signin_failed", "external_signin_closed"] });
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -158,7 +162,7 @@ describe("the sign-in page after an external sign-in came back refused", () => {
  */
 describe.each([
   ["en", /ask an administrator to reset it/],
-  ["ro", /rugați un administrator să o reseteze/],
+  ["ro", /rugați un administrator să îl reseteze/],
   ["ru", /попросите администратора сбросить его/],
 ] as const)("the staff refusal in %s", (locale, administrator) => {
   test("offers an administrator's reset beside the password", async () => {
@@ -189,21 +193,21 @@ describe("the sign-in page for a visitor already signed in", () => {
   }
 
   test("sends a participant to their contests", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     fetchIdentity.mockResolvedValue(signedIn([]));
 
     await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /my");
   });
 
   test("sends staff to the constructor", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     fetchIdentity.mockResolvedValue(signedIn(["contest.create"]));
 
     await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /contests");
   });
 
   test("resumes the interrupted page", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     fetchIdentity.mockResolvedValue(signedIn([]));
 
     await expect(renderPage({ next: "/contests/abc/play" })).rejects.toThrow("NEXT_REDIRECT /contests/abc/play");
@@ -211,7 +215,7 @@ describe("the sign-in page for a visitor already signed in", () => {
 
   /** A refused external sign-in may come back to a browser still signed in. */
   test("stays to say why an external sign-in was refused", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     fetchIdentity.mockResolvedValue(signedIn([]));
     await renderPage({ error: "external_signin_failed" });
 
@@ -220,7 +224,7 @@ describe("the sign-in page for a visitor already signed in", () => {
   });
 
   test("shows the form when the API cannot say who the visitor is", async () => {
-    methods(false, false, true);
+    methods(false, false, ["microsoft"]);
     fetchIdentity.mockRejectedValue(new IdentityUnavailableError(502));
     await renderPage();
 

@@ -29,6 +29,7 @@ const offering = (reset: boolean) =>
     password_reset: reset,
     microsoft: false,
     trusted_email_domain: "",
+    providers: [],
   });
 
 describe("the forgotten-password page", () => {

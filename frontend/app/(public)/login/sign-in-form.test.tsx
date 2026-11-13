@@ -20,7 +20,7 @@ beforeAll(async () => {
 /** What the page hands the form: its own texts and the sentences it can show. */
 const slice = () => ({ signIn: en.auth.signIn, errors: signInErrors(en.errors) });
 
-const NONE = { signUp: false, forgot: false, microsoft: false };
+const NONE = { signUp: false, forgot: false, providers: [] };
 
 describe("SignInForm, a rejected sign-in", () => {
   test("announces the failure in the interface's own words, not the server's", async () => {
@@ -133,36 +133,50 @@ describe("SignInForm, the other ways in", () => {
   });
 });
 
-describe("SignInForm, signing in with Microsoft", () => {
-  const microsoft = () => screen.queryByRole("link", { name: en.auth.signIn.microsoft });
+describe("SignInForm, the providers under the password form", () => {
+  const ALL = ["microsoft", "google", "github"] as const;
+  const NAMES = { microsoft: "Microsoft", google: "Google", github: "GitHub" };
+  const providerLinks = () => screen.queryAllByRole("link", { name: /^Continue with / });
 
-  test("is not offered unless the installation has Microsoft configured", () => {
+  test("shows no divider and no provider link without providers", () => {
     render(<SignInForm dict={slice()} offers={{ ...NONE, signUp: true, forgot: true }} />);
 
-    expect(microsoft()).not.toBeInTheDocument();
+    expect(providerLinks()).toHaveLength(0);
+    expect(screen.queryByText(en.auth.signIn.or)).not.toBeInTheDocument();
   });
 
-  test("is a plain link to the API's start route, with no return when there is no journey", () => {
-    render(<SignInForm dict={slice()} offers={{ ...NONE, microsoft: true }} />);
+  test("shows an or divider and one link per provider, in the order given", () => {
+    render(<SignInForm dict={slice()} offers={{ ...NONE, providers: [...ALL] }} />);
 
-    expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start");
+    expect(screen.getByText(en.auth.signIn.or)).toBeInTheDocument();
+    const links = providerLinks();
+    expect(links.map((link) => link.textContent)).toEqual([
+      "Continue with Microsoft",
+      "Continue with Google",
+      "Continue with GitHub",
+    ]);
+    links.forEach((link, i) => {
+      expect(link).toHaveAccessibleName(`Continue with ${NAMES[ALL[i]]}`);
+      expect(link).not.toHaveAttribute("aria-label");
+      expect(link.querySelector("svg")).not.toBeNull();
+      expect(link).toHaveAttribute("href", `/api/v1/auth/${ALL[i]}/start`);
+    });
   });
 
   test("returns to the page the guard interrupted", () => {
-    render(<SignInForm dict={slice()} next="/contests?status=draft" offers={{ ...NONE, microsoft: true }} />);
+    render(<SignInForm dict={slice()} next="/contests?status=draft" offers={{ ...NONE, providers: [...ALL] }} />);
 
-    expect(microsoft()).toHaveAttribute(
-      "href",
-      "/api/v1/auth/microsoft/start?return=%2Fcontests%3Fstatus%3Ddraft",
-    );
+    for (const [i, link] of providerLinks().entries()) {
+      expect(link).toHaveAttribute("href", `/api/v1/auth/${ALL[i]}/start?return=%2Fcontests%3Fstatus%3Ddraft`);
+    }
   });
 
   test.each(["//evil.example", "https://evil.example/", "/\\evil.example", "/my contests"])(
     "never passes the hostile next %j on",
     (next) => {
-      render(<SignInForm dict={slice()} next={next} offers={{ ...NONE, microsoft: true }} />);
+      render(<SignInForm dict={slice()} next={next} offers={{ ...NONE, providers: ["google"] }} />);
 
-      expect(microsoft()).toHaveAttribute("href", "/api/v1/auth/microsoft/start");
+      expect(providerLinks()[0]).toHaveAttribute("href", "/api/v1/auth/google/start");
     },
   );
 });

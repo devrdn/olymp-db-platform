@@ -31,6 +31,7 @@ const offering = (signup: boolean) =>
     password_reset: true,
     microsoft: false,
     trusted_email_domain: "",
+    providers: [],
   });
 
 describe("the sign-up page", () => {

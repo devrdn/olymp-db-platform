@@ -7,7 +7,7 @@ vi.mock("./server", () => ({ serverRequest }));
 
 import { authMethodsSchema, fetchAuthMethods } from "./auth-methods";
 
-const body = { password_signup: true, password_reset: false, microsoft: false, trusted_email_domain: "" };
+const body = { password_signup: true, password_reset: false, microsoft: false, trusted_email_domain: "", providers: [] };
 
 beforeEach(() => {
   serverRequest.mockReset();
@@ -21,7 +21,23 @@ describe("the ways in", () => {
       passwordReset: false,
       microsoft: false,
       trustedEmailDomain: "example.md",
+      providers: [],
     });
+  });
+
+  test("keeps the providers it knows, in the fixed order, and drops the rest", () => {
+    const parsed = authMethodsSchema.parse({
+      ...body,
+      providers: [{ id: "github" }, { id: "okta" }, { id: "microsoft" }],
+    });
+
+    expect(parsed.providers).toEqual(["microsoft", "github"]);
+  });
+
+  test("are not the contract without a providers list", () => {
+    const { providers: _omitted, ...without } = body;
+
+    expect(authMethodsSchema.safeParse(without).success).toBe(false);
   });
 
   test("are asked of the API", async () => {
@@ -36,6 +52,14 @@ describe("the ways in", () => {
     serverRequest.mockRejectedValueOnce(new ApiError("unreachable", 502, "down"));
 
     expect(await fetchAuthMethods()).toBeNull();
+  });
+
+  test("are unknown, and warned about, when the answer has no providers list", async () => {
+    const { providers: _omitted, ...without } = body;
+    serverRequest.mockResolvedValueOnce(without);
+
+    expect(await fetchAuthMethods()).toBeNull();
+    expect(console.warn).toHaveBeenCalled();
   });
 
   test("are unknown when the answer is not the contract", async () => {

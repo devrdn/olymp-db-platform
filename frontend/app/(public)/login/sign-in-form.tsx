@@ -6,7 +6,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
-import { microsoftStartHref } from "@/lib/auth/microsoft";
+import { ProviderLogo } from "@/components/product/provider-logo";
+import { externalStartHref, PROVIDER_NAMES, type ProviderId } from "@/lib/auth/external";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
 
@@ -16,10 +17,10 @@ import type { SignInErrors } from "./codes";
 /** The one message both fields point at on rejection. */
 const FAILURE_ID = "sign-in-failure";
 
-/** The other ways in the installation offers; each link shows only when it does. */
-export type SignInOffers = { signUp: boolean; forgot: boolean; microsoft: boolean };
+/** The other ways in the installation offers; each shows only when it does. */
+export type SignInOffers = { signUp: boolean; forgot: boolean; providers: ProviderId[] };
 
-const NO_OFFERS: SignInOffers = { signUp: false, forgot: false, microsoft: false };
+const NO_OFFERS: SignInOffers = { signUp: false, forgot: false, providers: [] };
 
 /**
  * The page's only client component; the Server Action still works without
@@ -91,15 +92,32 @@ export function SignInForm({
         <Button type="submit" disabled={pending}>
           {pending ? t.submitting : t.submit}
         </Button>
-
-        {/* A plain link, not `next/link`: it leaves the app for the API and
-           then for Microsoft, and must not be prefetched. */}
-        {offers.microsoft ? (
-          <a href={microsoftStartHref(next)} className={buttonVariants({ variant: "secondary" })}>
-            {t.microsoft}
-          </a>
-        ) : null}
       </div>
+
+      {offers.providers.length > 0 ? (
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-3 text-small text-ink-3" aria-hidden>
+            <span className="h-px flex-1 bg-line" />
+            <span>{t.or}</span>
+            <span className="h-px flex-1 bg-line" />
+          </div>
+
+          {/* Plain links, not `next/link`: each leaves the app for the API and
+             then for the provider, and must not be prefetched. */}
+          <div className="flex flex-col gap-3">
+            {offers.providers.map((id) => (
+              <a
+                key={id}
+                href={externalStartHref(id, next)}
+                className={buttonVariants({ variant: "secondary", className: "w-full" })}
+              >
+                <ProviderLogo provider={id} />
+                {t.continueWith.replace("{name}", PROVIDER_NAMES[id])}
+              </a>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Other ways in go below the form. */}
       {offers.signUp ? (

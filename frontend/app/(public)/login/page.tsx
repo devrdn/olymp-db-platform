@@ -38,7 +38,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
   const external = externalSignInError(params.error);
 
   /**
-   * A Microsoft sign-in without a return path ends here, signed in; it goes on
+   * An external sign-in without a return path ends here, signed in; it goes on
    * as a password sign-in would. A refusal stays, to be read. An account
    * still on its one-time password is sent to `/password` by the API.
    */
@@ -92,7 +92,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
             offers={{
               signUp: methods?.passwordSignup ?? false,
               forgot: methods?.passwordReset ?? false,
-              microsoft: methods?.microsoft ?? false,
+              providers: methods?.providers ?? [],
             }}
           />
         </div>
