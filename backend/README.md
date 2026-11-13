@@ -163,7 +163,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `TRUSTED_EMAIL_DOMAIN` | no | empty | the installation's own email domain, bare and lowercase (such as `example.edu`); with it set, a contest can admit to self-enrolment only accounts with a verified address in it or a subdomain. Anything but a domain name refuses start-up |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | no | empty | the application registration for sign-in with Microsoft (`GET /api/v1/auth/microsoft/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/microsoft/callback` ([Connecting Microsoft sign-in](#connecting-microsoft-sign-in)) |
 | `MICROSOFT_TENANT` | no | `common` | who may sign in with Microsoft: `common` (any account), `organizations` (work and school), `consumers` (personal) or one tenant ID |
-| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account; a tenant `MICROSOFT_TENANT` never admits refuses start-up. A staff account enters through Microsoft only as a member of this tenant |
+| `MICROSOFT_HOME_TENANT_ID` | no | `MICROSOFT_TENANT` when it is a tenant ID | the installation's own tenant, whose members' emails (not its guests') are trusted and may link an existing account; a tenant `MICROSOFT_TENANT` never admits refuses start-up, and so does the personal-account tenant, set or defaulted. A staff account enters through Microsoft only as a member of this tenant whose token carries the `acct` optional claim as 0 ([The optional claims](#the-optional-claims)) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | no | empty | the OAuth client for sign-in with Google (`GET /api/v1/auth/google/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/google/callback` ([Connecting Google sign-in](#connecting-google-sign-in)) |
 | `GOOGLE_HOME_DOMAIN` | no | empty | the installation's own Google Workspace domain, bare (such as `example.edu`), compared ignoring case: an account of it with a verified email may enter or link a staff account. Empty means no domain is its own; anything but a domain name refuses start-up |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | no | empty | the OAuth app for sign-in with GitHub (`GET /api/v1/auth/github/start` and `/callback`), on the same terms as Google's pair, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/github/callback` ([Connecting GitHub sign-in](#connecting-github-sign-in)). GitHub never admits staff |
@@ -346,7 +346,7 @@ ID, in any tenant, and four settings.
 | `MICROSOFT_CLIENT_ID` | the registration's **Application (client) ID** |
 | `MICROSOFT_CLIENT_SECRET` | the **Value** of one of its client secrets |
 | `MICROSOFT_TENANT` | who may sign in, from the table below |
-| `MICROSOFT_HOME_TENANT_ID` | the **Tenant ID** of the installation's own organisation, if it has one: its members' addresses are believed, and may sign in to the accounts that already hold them. Empty believes no tenant as such |
+| `MICROSOFT_HOME_TENANT_ID` | the **Tenant ID** of the installation's own organisation, if it has one: its members' addresses are believed, and may sign in to the accounts that already hold them, staff accounts included when the token carries `acct` (below). Empty believes no tenant as such |
 
 `MICROSOFT_HOME_TENANT_ID` admits nobody by itself; `MICROSOFT_TENANT`
 decides who signs in, and a home tenant it never admits refuses start-up.
@@ -360,10 +360,14 @@ whatever address it gives its members.
 | `consumers` | personal Microsoft accounts only (Outlook.com, Hotmail, Live) | Personal Microsoft accounts only, or the widest type |
 | one tenant ID, such as `3f2a1c9e-7b4d-4e8a-9c61-0d5b2e7f8a14` | that tenant's members and guests, nobody else | Accounts in this organizational directory only, when the registration is in that tenant; any organizational directory when it is in another |
 
-With a tenant ID, `MICROSOFT_HOME_TENANT_ID` defaults to it. Any
-organisation's tenant, including one made by anybody in a few minutes, can
-sign in under `common` and `organizations`, which is why an address is
-believed only on the conditions in
+With a tenant ID, `MICROSOFT_HOME_TENANT_ID` defaults to it. Personal
+accounts are never the installation's own directory, since anyone can make
+one on any address: the personal-account tenant
+(`9188040d-6c67-4c5b-b112-36a304b66dad`) refuses start-up both as
+`MICROSOFT_HOME_TENANT_ID` and as `MICROSOFT_TENANT`, where `consumers`
+admits the same accounts. Any organisation's tenant, including one made by
+anybody in a few minutes, can sign in under `common` and `organizations`,
+which is why an address is believed only on the conditions in
 [ARCHITECTURE.md, section 7](../docs/ARCHITECTURE.md#7-authentication-and-authorisation).
 
 #### Registering the application
@@ -419,12 +423,13 @@ registration asks for them, and each changes what it can believe:
   home tenant carries the home tenant's ID with an address the tenant never
   verified; Microsoft names a guest's own home in `idp` only sometimes, and
   sends `acct`, once asked for, every time. Without it, a guest whose token
-  lacks `idp` would be taken for a member, and could sign in to the account
-  holding that address. It matters whenever `MICROSOFT_HOME_TENANT_ID` is
-  set. It is also what keeps a guest from entering a staff account: a staff
-  account enters through Microsoft only as a member of the home tenant, and
-  a guest is recognised by `idp` differing from the issuer or by `acct` = 1,
-  so emit `acct`.
+  lacks `idp` would be taken for a member, and could sign in to the student
+  account holding that address. It matters whenever
+  `MICROSOFT_HOME_TENANT_ID` is set. Staff sign-in through Microsoft needs
+  it: a staff account enters only when the token says `acct` = 0 (and no
+  `idp` names another home), so without the claim (**Token configuration**,
+  **Add optional claim**, **ID**, `acct`) only accounts that are not staff
+  enter through Microsoft.
 
 #### The client secret
 
@@ -537,7 +542,7 @@ signing keys that could not be fetched.
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
 | `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 requests to the provider's `start` or `callback` (counted apart per provider and per route, refusals included) came from their address in ten minutes |
-| `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` (a guest, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
+| `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose token carries `acct` = 0 (a guest, a token without `acct`, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
 | `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
 | `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
 | `external_signin_unavailable` | "Signing in this way is switched off here. Sign in with your password, or use “Forgot password?” to set one." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |

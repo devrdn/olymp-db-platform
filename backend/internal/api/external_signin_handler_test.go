@@ -374,8 +374,10 @@ func TestAHomeTenantMemberSignsIntoAStaffAccount(t *testing.T) {
 	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	org := f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
 	s := f.start(t, "192.0.2.1", "/contests/42")
+	claims := f.claims(msHomeTenant)
+	claims["acct"] = 0
 
-	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+	rec := f.signIn(t, "192.0.2.1", s, claims)
 
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/contests/42" {
 		t.Fatalf("callback = %d to %q, want 302 to the return path (%s)", rec.Code, rec.Header().Get("Location"), rec.Body.String())
@@ -383,6 +385,21 @@ func TestAHomeTenantMemberSignsIntoAStaffAccount(t *testing.T) {
 	principal, err := f.sessions.Get(t.Context(), sessionOf(t, rec).Value)
 	if err != nil || principal.UserID != org.ID {
 		t.Errorf("session = %+v, %v; want the organizer's", principal, err)
+	}
+}
+
+// Without acct a guest of the home tenant looks like a member, so the token
+// must say it is one before a staff account opens.
+func TestAHomeTenantTokenWithoutAnAccountTypeNeverEntersAStaffAccount(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	org := f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
+	s := f.start(t, "192.0.2.1", "/")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_staff_account")
+	if ids := f.repo.Identities(org.ID); len(ids) != 0 {
+		t.Errorf("the organizer's account was linked: %+v", ids)
 	}
 }
 

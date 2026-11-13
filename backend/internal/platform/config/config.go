@@ -358,7 +358,8 @@ type Config struct {
 	// who may sign in through Microsoft.
 	MicrosoftTenant string
 	// MicrosoftHomeTenantID is the installation's own tenant, whose members'
-	// emails are trusted; empty trusts no tenant as such.
+	// emails are trusted and whose members may enter staff accounts; empty
+	// trusts no tenant as such. It is never the personal-account tenant.
 	MicrosoftHomeTenantID string
 	// GoogleClientID and GoogleClientSecret are the OAuth client; the
 	// connector exists only with both.
@@ -806,12 +807,20 @@ func loadMicrosoft(cfg *Config) error {
 	if !slices.Contains(microsoftAuthorities, cfg.MicrosoftTenant) && !microsoftGUID.MatchString(cfg.MicrosoftTenant) {
 		return fmt.Errorf("MICROSOFT_TENANT: %q is not common, organizations, consumers or a tenant ID", cfg.MicrosoftTenant)
 	}
+	// Anyone can make a personal account on any address, so that tenant is
+	// never the installation's own directory.
+	if cfg.MicrosoftHomeTenantID == "" && cfg.MicrosoftTenant == microsoftConsumerTenant {
+		return errors.New("MICROSOFT_TENANT: the personal-account tenant would become the home tenant; use consumers")
+	}
 	if cfg.MicrosoftHomeTenantID == "" && microsoftGUID.MatchString(cfg.MicrosoftTenant) {
 		cfg.MicrosoftHomeTenantID = cfg.MicrosoftTenant
 	}
 	if cfg.MicrosoftHomeTenantID != "" {
 		if !microsoftGUID.MatchString(cfg.MicrosoftHomeTenantID) {
 			return fmt.Errorf("MICROSOFT_HOME_TENANT_ID: %q is not a tenant ID", cfg.MicrosoftHomeTenantID)
+		}
+		if cfg.MicrosoftHomeTenantID == microsoftConsumerTenant {
+			return errors.New("MICROSOFT_HOME_TENANT_ID: the personal-account tenant is never an installation's own directory")
 		}
 		if !microsoftAdmits(cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID) {
 			return fmt.Errorf("MICROSOFT_HOME_TENANT_ID: MICROSOFT_TENANT=%s never admits tenant %s", cfg.MicrosoftTenant, cfg.MicrosoftHomeTenantID)

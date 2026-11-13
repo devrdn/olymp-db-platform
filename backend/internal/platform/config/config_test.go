@@ -2166,6 +2166,25 @@ func TestAHomeTenantTheTenantNeverAdmitsRefusesStartUp(t *testing.T) {
 	}
 }
 
+// Anyone can make a personal account on any address, so the personal-account
+// tenant is never the installation's own directory, set or defaulted.
+func TestThePersonalAccountTenantIsNeverTheHomeTenant(t *testing.T) {
+	for _, tc := range []struct{ tenant, home, named string }{
+		{"common", consumerTenant, "MICROSOFT_HOME_TENANT_ID"},
+		{"consumers", consumerTenant, "MICROSOFT_HOME_TENANT_ID"},
+		{"common", strings.ToUpper(consumerTenant), "MICROSOFT_HOME_TENANT_ID"},
+		{consumerTenant, "", "MICROSOFT_TENANT"},
+		{strings.ToUpper(consumerTenant), "", "MICROSOFT_TENANT"},
+	} {
+		productionMicrosoft(t)
+		t.Setenv("MICROSOFT_TENANT", tc.tenant)
+		t.Setenv("MICROSOFT_HOME_TENANT_ID", tc.home)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.named) {
+			t.Errorf("tenant %s, home %q: Load() = %v, want a refusal naming %s", tc.tenant, tc.home, err, tc.named)
+		}
+	}
+}
+
 func TestATenantIDIsReadInAnyCase(t *testing.T) {
 	productionMicrosoft(t)
 	t.Setenv("MICROSOFT_TENANT", strings.ToUpper(testTenantID))

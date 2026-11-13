@@ -260,7 +260,8 @@ installation's settings decide which exist
 - Staff accounts never get a reset link, and enter through a provider only
   when the provider says, at that sign-in, that the person belongs to the
   installation's own directory: a member of the Microsoft tenant named by
-  `MICROSOFT_HOME_TENANT_ID` (not a guest), or a Google account of
+  `MICROSOFT_HOME_TENANT_ID` (not a guest, and only once the registration
+  emits the `acct` claim), or a Google account of
   `GOOGLE_HOME_DOMAIN` with a verified email. GitHub never does. Anyone
   else signs in with their password. That includes
   an account appointed to manage a contest on **People**, even with no role
