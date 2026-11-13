@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/url"
@@ -9,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/connector"
+	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -111,6 +114,33 @@ func jobNames(jobs []task) []string {
 		names = append(names, job.name)
 	}
 	return names
+}
+
+// idleConnector stands for a configured provider; the list only asks whether
+// there is one.
+type idleConnector struct{}
+
+func (idleConnector) AuthCodeURL(connector.State) string { return "" }
+
+func (idleConnector) Exchange(context.Context, string, connector.State) (federation.Claims, error) {
+	return federation.Claims{}, nil
+}
+
+func TestConfiguredProviderIDsListsOnlyThoseWithAConnector(t *testing.T) {
+	stub := idleConnector{}
+	for name, tc := range map[string]struct {
+		providers []api.SignInProvider
+		want      []string
+	}{
+		"Microsoft only": {[]api.SignInProvider{{ID: "microsoft", Connector: stub}, {ID: "google"}, {ID: "github"}}, []string{"microsoft"}},
+		"none":           {[]api.SignInProvider{{ID: "microsoft"}, {ID: "google"}}, []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := configuredProviderIDs(tc.providers); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("configuredProviderIDs() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestEachConnectorIsBuiltOnlyWhenConfigured(t *testing.T) {

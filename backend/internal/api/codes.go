@@ -529,4 +529,6 @@ var (
 		"The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is entered through a provider only from the installation's own directory. Otherwise sign in with that account's password, or have an administrator reset it.")
 	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
 		"The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored.")
+	codeExternalSignInUnavailable = httpx.NewCode("external_signin_unavailable",
+		"Signing in through this external provider is switched off on this installation. Sign in another way: an account entered only through it can set a password by password recovery, and staff ask an administrator.")
 )

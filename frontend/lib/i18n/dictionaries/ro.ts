@@ -1996,6 +1996,7 @@ const ro = {
       "event_registration.check_in": "A marcat sau a anulat sosirea unei persoane înregistrate",
       "settings.change": "A schimbat setările instalării",
       "settings.mail_test": "Și-a trimis un e-mail de test",
+      "settings.sign_in_provider": "A pornit sau a oprit autentificarea printr-un serviciu extern",
     },
     failureReasons: {
       invalid_credentials: "Utilizator sau parolă greșită",
@@ -2582,6 +2583,7 @@ const ro = {
     external_signin_failed: "Autentificarea cu Microsoft nu a reușit. Încercați din nou.",
     external_signin_staff_account: "Această adresă aparține contului unui organizator sau administrator. Autentificați-vă cu parola lui sau rugați un administrator să o reseteze.",
     external_signin_closed: "Acest cont Microsoft nu este legat de niciun cont de aici, iar conturi noi nu se pot crea. Cereți unul organizatorilor.",
+    external_signin_unavailable: "Autentificarea în acest mod este oprită aici. Intrați cu parola sau folosiți „Ați uitat parola?” ca să setați una.",
     external_signin_conflict: "Nu vă puteți autentifica aici cu acest cont Microsoft: contul dumneavoastră de pe acest site este legat de alt cont Microsoft sau organizația dumneavoastră nu este admisă. Adresați-vă unui administrator.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",

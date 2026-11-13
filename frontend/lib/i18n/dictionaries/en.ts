@@ -2221,6 +2221,7 @@ const en = {
       "event_registration.check_in": "Marked or cleared a registered guest's arrival",
       "settings.change": "Changed the installation's settings",
       "settings.mail_test": "Sent themselves a test email",
+      "settings.sign_in_provider": "Switched sign-in through an external service on or off",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary
     // backend/internal/auth's Reason* constants declare. Never say more than
@@ -2809,6 +2810,7 @@ const en = {
     external_signin_failed: "Signing in with Microsoft did not work. Try again.",
     external_signin_staff_account: "This address belongs to an organiser's or administrator's account. Sign in with its password, or ask an administrator to reset it.",
     external_signin_closed: "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one.",
+    external_signin_unavailable: "Signing in this way is switched off here. Sign in with your password, or use “Forgot password?” to set one.",
     external_signin_conflict: "You cannot sign in here with this Microsoft account: your account on this site is linked to a different Microsoft account, or your organisation is not admitted. Ask an administrator.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",

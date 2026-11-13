@@ -751,6 +751,7 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		users.ErrAccountBlocked:        {code: "account_blocked"},
 		users.ErrAccountDeleted:        {code: "account_blocked"},
 		auth.ErrAccountBlocked:         {code: "account_blocked"},
+		errSignInSwitchedOff:           {code: "external_signin_unavailable"},
 	}
 
 	declared := map[string]bool{}
@@ -759,7 +760,7 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 	}
 
 	reached := append(append(append(federation.Errors(), connector.Errors()...), microsoft.Errors()...),
-		users.ErrAccountBlocked, users.ErrAccountDeleted, auth.ErrAccountBlocked)
+		users.ErrAccountBlocked, users.ErrAccountDeleted, auth.ErrAccountBlocked, errSignInSwitchedOff)
 	for _, err := range reached {
 		t.Run(err.Error(), func(t *testing.T) {
 			expected, known := want[err]

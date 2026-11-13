@@ -371,6 +371,7 @@ var externalSignInRedirects = []struct {
 	{err: microsoft.ErrTenantNotAllowed, code: codeExternalSignInConflict},
 	{err: connector.ErrStateInvalid, code: codeExternalSignInFailed},
 	{err: connector.ErrStateExpired, code: codeExternalSignInFailed},
+	{err: errSignInSwitchedOff, code: codeExternalSignInUnavailable},
 }
 
 // externalSignInCode is the code err sends the browser back with, whether

@@ -69,6 +69,7 @@
     "contest.table_data_row_delete",
     "event_registration.check_in",
     "settings.change",
-    "settings.mail_test"
+    "settings.mail_test",
+    "settings.sign_in_provider"
   ]
 }

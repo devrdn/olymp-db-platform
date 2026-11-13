@@ -63,9 +63,9 @@ func (c CookieWriter) ClearSignup(w http.ResponseWriter) {
 	http.SetCookie(w, c.cookie(c.SignupName(), "", -1))
 }
 
-// StateName is the name of the cookie carrying one provider's sign-in from
-// its start to its callback, prefixed as SessionName is. Each provider has
-// its own, so a sign-in begun with one cannot be finished at another.
+// StateName is the cookie carrying one provider's sign-in from its start to
+// its callback, prefixed as SessionName is. Each provider has its own, so a
+// sign-in begun with one cannot be finished at another.
 func (c CookieWriter) StateName(provider string) string {
 	if c.secure {
 		return "__Host-dbcontest_" + provider + "_state"
@@ -73,9 +73,8 @@ func (c CookieWriter) StateName(provider string) string {
 	return "dbcontest_" + provider + "_state"
 }
 
-// SetState writes the state cookie with the session cookie's protections.
-// SameSite=Lax still sends it on the provider's redirect back, which is a
-// top-level GET.
+// SetState writes the state cookie with the session cookie's protections;
+// SameSite=Lax still sends it on the provider's redirect back, a top-level GET.
 func (c CookieWriter) SetState(w http.ResponseWriter, provider, sealed string, ttl time.Duration) {
 	http.SetCookie(w, c.cookie(c.StateName(provider), sealed, int(ttl.Seconds())))
 }

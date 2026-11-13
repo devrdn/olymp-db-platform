@@ -33,7 +33,7 @@ func (s *Service) SaveImage(ctx context.Context, actorID uuid.UUID, kind string,
 		if err := s.images.Save(ctx, actorID, img); err != nil {
 			return fmt.Errorf("save image: %w", err)
 		}
-		return s.record(ctx, actorID, map[string]any{
+		return s.record(ctx, actorID, audit.ActionSettingsChange, map[string]any{
 			"image":  kind,
 			"sha256": img.SHA256,
 			"size":   fmt.Sprintf("%dx%d", img.Width, img.Height),
@@ -56,7 +56,7 @@ func (s *Service) RemoveImage(ctx context.Context, actorID uuid.UUID, kind strin
 		if err := s.images.Delete(ctx, kind); err != nil {
 			return fmt.Errorf("remove image: %w", err)
 		}
-		return s.record(ctx, actorID, map[string]any{"image": kind, "removed": true})
+		return s.record(ctx, actorID, audit.ActionSettingsChange, map[string]any{"image": kind, "removed": true})
 	})
 }
 
@@ -142,18 +142,18 @@ func (s *Service) Save(ctx context.Context, actorID uuid.UUID, values Values) er
 		if err := s.repo.Save(ctx, actorID, values); err != nil {
 			return fmt.Errorf("save settings: %w", err)
 		}
-		return s.record(ctx, actorID, changes.Payload())
+		return s.record(ctx, actorID, audit.ActionSettingsChange, changes.Payload())
 	})
 }
 
-func (s *Service) record(ctx context.Context, actorID uuid.UUID, payload map[string]any) error {
+func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, payload map[string]any) error {
 	var actor *uuid.UUID
 	if actorID != uuid.Nil {
 		actor = &actorID
 	}
 	return s.audit.Record(ctx, audit.Entry{
 		ActorID: actor,
-		Action:  audit.ActionSettingsChange,
+		Action:  action,
 		Entity:  "settings",
 		Payload: payload,
 	})

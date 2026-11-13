@@ -44,7 +44,28 @@ type externalFixture struct {
 	auth     *auth.Service
 	logs     *logBuffer
 	trail    *loginTrail
+	switches *fakeSwitches
 	router   http.Handler
+}
+
+// fakeSwitches answers which providers an administrator switched off, and
+// counts how often it was asked.
+type fakeSwitches struct {
+	off   map[string]bool
+	err   error
+	reads int
+}
+
+func (s *fakeSwitches) DisabledSignInProviders(context.Context) (map[string]bool, error) {
+	s.reads++
+	if s.err != nil {
+		return nil, s.err
+	}
+	off := map[string]bool{}
+	for id, v := range s.off {
+		off[id] = v
+	}
+	return off, nil
 }
 
 type externalOptions struct {
@@ -104,6 +125,7 @@ func newExternalFixture(t *testing.T, opts externalOptions) *externalFixture {
 	}
 	providers = append(providers, opts.extra...)
 
+	switches := &fakeSwitches{off: map[string]bool{}}
 	router := chi.NewRouter()
 	api.NewExternalSignInHandler(api.ExternalSignIn{
 		Providers: providers,
@@ -112,8 +134,9 @@ func newExternalFixture(t *testing.T, opts externalOptions) *externalFixture {
 			Store:  repo, Accounts: service, PendingLogins: noPendingLogins{},
 		}),
 		Auth: authService, Limiter: limiter, Middleware: mw, Cookies: cookies, Log: log,
+		Switches: switches,
 	}).Mount(router)
-	return &externalFixture{provider: p, repo: repo, sessions: sessions, auth: authService, logs: logs, trail: trail, router: router}
+	return &externalFixture{provider: p, repo: repo, sessions: sessions, auth: authService, logs: logs, trail: trail, switches: switches, router: router}
 }
 
 func externalStates(provider string) *connector.StateSealer {
@@ -694,5 +717,147 @@ func TestAStateSealedForOneProviderIsRefusedByAnother(t *testing.T) {
 	}
 	if stub.exchanges != 0 {
 		t.Errorf("Exchange called %d times, want none", stub.exchanges)
+	}
+}
+
+func TestASwitchedOffProviderStartLandsOnUnavailable(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{})
+	f.switches.off[users.ProviderMicrosoft] = true
+
+	rec := f.get("192.0.2.1", "/auth/microsoft/start")
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?error=external_signin_unavailable" {
+		t.Errorf("start = %d to %q, want 302 to /login?error=external_signin_unavailable", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == msStateCookieName {
+			t.Errorf("a switched-off start set the state cookie %+v", c)
+		}
+	}
+	if n := f.provider.Requests(); n != 0 {
+		t.Errorf("the provider was contacted %d times, want none", n)
+	}
+}
+
+func TestACallbackAfterTheSwitchOffIsRefused(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	s := f.start(t, "192.0.2.1", "/")
+	f.switches.off[users.ProviderMicrosoft] = true
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_unavailable")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionName && c.Value != "" {
+			t.Errorf("a session cookie was set: %+v", c)
+		}
+	}
+	if n := f.provider.Exchanges(); n != 0 {
+		t.Errorf("the code was exchanged %d times after the switch off, want none", n)
+	}
+}
+
+func TestTheCallbackReadsTheSwitchEveryTime(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{})
+
+	f.callback("192.0.2.1", "code=x&state=y")
+	f.callback("192.0.2.1", "code=x&state=y")
+
+	if f.switches.reads != 2 {
+		t.Errorf("the switch was read %d times for two callbacks, want 2", f.switches.reads)
+	}
+}
+
+func TestLinksSurviveASwitchOffAndOn(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	first := f.signIn(t, "192.0.2.1", f.start(t, "192.0.2.1", "/"), f.claims(msHomeTenant))
+	principal, err := f.sessions.Get(t.Context(), sessionOf(t, first).Value)
+	if err != nil {
+		t.Fatalf("no session: %v", err)
+	}
+
+	f.switches.off[users.ProviderMicrosoft] = true
+	f.get("192.0.2.1", "/auth/microsoft/start")
+	delete(f.switches.off, users.ProviderMicrosoft)
+	again := f.signIn(t, "192.0.2.1", f.start(t, "192.0.2.1", "/"), f.claims(msHomeTenant))
+
+	back, err := f.sessions.Get(t.Context(), sessionOf(t, again).Value)
+	if err != nil || back.UserID != principal.UserID {
+		t.Fatalf("signed into %v (%v), want the linked account %v", back.UserID, err, principal.UserID)
+	}
+	if ids := f.repo.Identities(principal.UserID); len(ids) != 1 {
+		t.Errorf("%d identities, want 1", len(ids))
+	}
+}
+
+func TestTheStartSpendsTheAddressBudgetBeforeReadingTheSwitch(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{})
+	for i := 0; i < api.ExternalSignInsPerAddress; i++ {
+		f.get("192.0.2.9", "/auth/microsoft/start")
+	}
+	f.switches.reads = 0
+
+	rec := f.get("192.0.2.9", "/auth/microsoft/start")
+
+	assertLocation(t, rec, "/login?error=external_signin_failed")
+	if f.switches.reads != 0 {
+		t.Errorf("the switch was read %d times past the budget, want none", f.switches.reads)
+	}
+}
+
+func TestAnUnreadableSwitchRefusesTheCallback(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	s := f.start(t, "192.0.2.1", "/")
+	f.switches.err = errors.New("the database is down")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_failed")
+	if !f.logs.loggedError("a sign-in failed") {
+		t.Error("an unreadable switch was not logged as an error")
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionName && c.Value != "" {
+			t.Errorf("a session cookie was set: %+v", c)
+		}
+	}
+}
+
+func TestEachProviderHasItsOwnAddressBudget(t *testing.T) {
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize"}
+	f := newExternalFixture(t, externalOptions{extra: []api.SignInProvider{stubProvider(users.ProviderGoogle, stub)}})
+	for i := 0; i < api.ExternalSignInsPerAddress; i++ {
+		f.get("192.0.2.9", "/auth/microsoft/start")
+	}
+	assertLocation(t, f.get("192.0.2.9", "/auth/microsoft/start"), "/login?error=external_signin_failed")
+
+	rec := f.get("192.0.2.9", "/auth/google/start")
+
+	if location := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.HasPrefix(location, stub.authorize) {
+		t.Errorf("google start after microsoft's budget = %d to %q, want 302 to the stub", rec.Code, location)
+	}
+}
+
+func TestStartingTheHandlerRefusesAProviderItCannotServe(t *testing.T) {
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize"}
+	for name, p := range map[string]api.SignInProvider{
+		"an id outside users.Providers":    stubProvider("example", stub),
+		"a connector without a state seal": {ID: users.ProviderGoogle, Connector: stub},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("NewExternalSignInHandler did not panic")
+				}
+			}()
+			api.NewExternalSignInHandler(api.ExternalSignIn{Providers: []api.SignInProvider{p}, Switches: &fakeSwitches{}})
+		})
+	}
+}
+
+func assertLocation(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+		t.Errorf("answered %d to %q, want 302 to %q", rec.Code, rec.Header().Get("Location"), want)
 	}
 }
