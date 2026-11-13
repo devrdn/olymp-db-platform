@@ -1,7 +1,8 @@
 -- Accounts that people create and sign in to by themselves: an email the
 -- account has proved to own, no password for an account that signs in through
 -- an external provider, and the provider identities themselves. Existing
--- emails were entered by an administrator, so they count as verified.
+-- emails, typed by an administrator or the event form, count as verified:
+-- the platform already trusted them as the accounts' addresses.
 SET lock_timeout = '5s';
 
 DO $$
