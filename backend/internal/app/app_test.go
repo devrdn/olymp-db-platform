@@ -2,17 +2,23 @@ package app
 
 import (
 	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/mail"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/recovery"
+	"github.com/devrdn/db-contest/backend/internal/signup"
 )
 
 func TestProbeURLTargetsTheConfiguredInternalListener(t *testing.T) {
@@ -128,5 +134,28 @@ func TestTheMicrosoftClientIsBuiltOnlyWhenConfigured(t *testing.T) {
 	}
 	if got := authorize.Host + authorize.Path; got != "login.microsoftonline.com/common/oauth2/v2.0/authorize" {
 		t.Errorf("authorize endpoint = %q, want Microsoft's for the configured tenant", got)
+	}
+}
+
+// Sign-up mail goes to whatever address is typed, and is what a flood would
+// use; recovery must keep its own budget through one.
+func TestASignUpFloodLeavesRecoveryItsMailBudget(t *testing.T) {
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	signups, recoveries := selfServiceMail(auth.NewLimiter(c), logging.New("error", io.Discard))
+
+	for range signup.MailsPerMinute {
+		if ok, err := signups.Spend(t.Context()); !ok || err != nil {
+			t.Fatalf("sign-up mail = %v, %v, want admitted", ok, err)
+		}
+	}
+	if ok, _ := signups.Spend(t.Context()); ok {
+		t.Fatal("sign-up mail past its minute was admitted")
+	}
+
+	for i := range recovery.MailsPerMinute {
+		if ok, err := recoveries.Spend(t.Context()); !ok || err != nil {
+			t.Fatalf("reset link %d after the flood = %v, %v, want admitted", i, ok, err)
+		}
 	}
 }

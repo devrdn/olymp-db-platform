@@ -84,6 +84,18 @@ type Settings interface {
 	All(ctx context.Context) (settings.Values, error)
 }
 
+// Limiter counts attempts per subject in a fixed window (auth.Limiter).
+type Limiter interface {
+	Spend(ctx context.Context, subject string, limit int, window time.Duration) (allowed, firstRefused bool, err error)
+}
+
+// MailBudget is the installation's budget of sign-up mail (mailing.Budget,
+// sized by MailsPerMinute and MailsPerDay).
+type MailBudget interface {
+	// Spend counts one message and reports whether the budget admits it.
+	Spend(ctx context.Context) (bool, error)
+}
+
 type Config struct {
 	// Enabled is SELF_SIGNUP_ENABLED.
 	Enabled    bool
@@ -94,6 +106,8 @@ type Config struct {
 	Outbox     Outbox
 	Texts      Texts
 	Settings   Settings
+	Limiter    Limiter
+	MailBudget MailBudget
 	UnitOfWork storage.UnitOfWork
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
@@ -108,7 +122,8 @@ type Service struct {
 // NewService panics on a missing part, so a wiring fault stops the boot.
 func NewService(cfg Config) *Service {
 	if cfg.Store == nil || cfg.Directory == nil || cfg.Accounts == nil || cfg.Hasher == nil ||
-		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.UnitOfWork == nil {
+		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.Limiter == nil ||
+		cfg.MailBudget == nil || cfg.UnitOfWork == nil {
 		panic("signup: NewService needs every part of its Config")
 	}
 	if cfg.Now == nil {
@@ -121,9 +136,11 @@ func NewService(cfg Config) *Service {
 }
 
 // StartCommand is the sign-up form. Lang is the reader's language; one the
-// texts are not written in falls back to the installation's.
+// texts are not written in falls back to the installation's. Sender is the
+// caller's address as a rate-limit subject (httpx.ClientSubject); callers
+// with none share one.
 type StartCommand struct {
-	FullName, Login, Email, Password, Lang string
+	FullName, Login, Email, Password, Lang, Sender string
 }
 
 // StartResult is what the browser that started a sign-up keeps: Confirm and
@@ -138,8 +155,10 @@ type ConfirmCommand struct {
 	Email, Code, Token string
 }
 
+// ResendCommand is a request for a new code; Lang and Sender are as in
+// StartCommand.
 type ResendCommand struct {
-	Email, Token, Lang string
+	Email, Token, Lang, Sender string
 }
 
 // Start validates the form, stores a pending sign-up with a code and mails
@@ -192,6 +211,11 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	}
 	if waiting >= MaxPending {
 		return "", ErrFull
+	}
+	// Spent before the hash, so a refusal costs no hashing slot that a
+	// sign-in could use.
+	if err := s.admitMail(ctx, "signup", cmd.Sender, email); err != nil {
+		return "", err
 	}
 	passwordHash, err := s.cfg.Hasher.Hash(ctx, cmd.Password)
 	if err != nil {
@@ -420,6 +444,13 @@ func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 			refusal = ErrTooSoon
 			return nil
 		}
+		if err := s.admitMail(ctx, "signup_resend", cmd.Sender, email); err != nil {
+			if !errors.Is(err, ErrMailBudget) && !errors.Is(err, ErrTooManyCodes) {
+				return err
+			}
+			refusal = err
+			return nil
+		}
 		message, err := s.message(ctx, p, code, cmd.Lang)
 		if err != nil {
 			return err
@@ -437,6 +468,36 @@ func (s *Service) Resend(ctx context.Context, cmd ResendCommand) error {
 		s.cfg.Outbox.Wake()
 	}
 	return refusal
+}
+
+// admitMail spends the budgets of a message about to be queued, once
+// nothing that would refuse the request without mail is left: the caller's
+// address, shared by Start and Resend, then the installation's, then the
+// email's for the endpoint. Each is more bounded than the next (CLAUDE.md
+// rule 5), and an earlier refusal charges nothing later, so the installation
+// refusing a person costs them none of their own attempts.
+func (s *Service) admitMail(ctx context.Context, endpoint, sender, email string) error {
+	allowed, _, err := s.cfg.Limiter.Spend(ctx, "signup_mail:ip:"+sender, MailsPerAddress, time.Minute)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrTooManyCodes
+	}
+	if allowed, err = s.cfg.MailBudget.Spend(ctx); err != nil {
+		return fmt.Errorf("spend the sign-up mail budget: %w", err)
+	}
+	if !allowed {
+		return ErrMailBudget
+	}
+	allowed, _, err = s.cfg.Limiter.Spend(ctx, endpoint+":email:"+email, MailsPerEmail, time.Hour)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrTooManyCodes
+	}
+	return nil
 }
 
 // Sweep deletes the sign-ups expired at now; an expired one already holds

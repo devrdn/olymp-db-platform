@@ -49,17 +49,8 @@ func newSignupFixture(t *testing.T) *signupFixture {
 }
 
 // mountSignup serves the sign-up routes of f's service, which decides at
-// mount whether they exist. The installation's mail budget is out of the
-// way; mountSignupWithin gives the real one.
+// mount whether they exist.
 func mountSignup(t *testing.T, f *signuptest.Fixture) *signupFixture {
-	t.Helper()
-	return mountSignupWithin(t, f, unboundedMail, unboundedMail)
-}
-
-// unboundedMail is a mail budget no test of the other budgets reaches.
-const unboundedMail = 1 << 20
-
-func mountSignupWithin(t *testing.T, f *signuptest.Fixture, mailsPerMinute, mailsPerDay int) *signupFixture {
 	t.Helper()
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
@@ -80,8 +71,7 @@ func mountSignupWithin(t *testing.T, f *signuptest.Fixture, mailsPerMinute, mail
 	})
 
 	router := chi.NewRouter()
-	mail := api.NewMailBudget(limiter, mailsPerMinute, mailsPerDay)
-	api.NewSignupHandler(f.Service, service, limiter, mail, mw, cookies, log).Mount(router)
+	api.NewSignupHandler(f.Service, service, limiter, mw, cookies, log).Mount(router)
 	return &signupFixture{Fixture: f, router: router, sessions: sessions, cache: c}
 }
 
@@ -431,7 +421,7 @@ func TestSignupRefusesAnOverlongFieldBeforeTheService(t *testing.T) {
 			f := newSignupFixture(t)
 			// More than one email's budget, each from its own address: none
 			// reaches the email limiter.
-			for i := range api.SignupsPerEmail + 1 {
+			for i := range api.ConfirmsPerEmail + 1 {
 				rec := f.post(fmt.Sprintf("192.0.2.%d", i+1), c.path, c.body, nil)
 				if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
 					t.Fatalf("attempt %d = %d %q, want 400 invalid_request", i, rec.Code, errorCode(t, rec))
@@ -480,80 +470,91 @@ func TestSignupRoutesDoNotExistWhenTheSwitchIsOff(t *testing.T) {
 	}
 }
 
-// signupEndpoint drives one endpoint for the budget tests; admitted is what
-// a request the limiter lets through is answered with.
-type signupEndpoint struct {
-	name     string
-	call     func(f *signupFixture, from, email string) *httptest.ResponseRecorder
-	admitted int
-}
-
-// The start requests are refused for a weak password, so every one is a
-// refusal that still spends the budgets (CLAUDE.md rule 13).
-var signupEndpoints = []signupEndpoint{
-	{"start", func(f *signupFixture, from, email string) *httptest.ResponseRecorder {
-		return f.post(from, "/public/signup", signupForm("Ana Popescu", "ana", email, "short"), nil)
-	}, http.StatusBadRequest},
-	{"confirm", func(f *signupFixture, from, email string) *httptest.ResponseRecorder {
-		return f.confirm(from, email, "123456")
-	}, http.StatusBadRequest},
-	{"resend", func(f *signupFixture, from, email string) *httptest.ResponseRecorder {
-		return f.resend(from, email)
-	}, http.StatusAccepted},
-}
-
 // CLAUDE.md rule 5: a caller refused for its address spends no email budget,
-// so it cannot make counters for addresses it invents.
-func TestSignupSpendsTheAddressBudgetBeforeTheEmailBudget(t *testing.T) {
-	for _, e := range signupEndpoints {
-		t.Run(e.name, func(t *testing.T) {
-			f := newSignupFixture(t)
-			for i := range api.SignupsPerAddress {
-				if rec := e.call(f, "192.0.2.1", fmt.Sprintf("filler%d@example.edu", i)); rec.Code != e.admitted {
-					t.Fatalf("filler %d = %d, want %d (%s)", i, rec.Code, e.admitted, rec.Body.String())
-				}
-			}
-			for range api.SignupsPerEmail {
-				rec := e.call(f, "192.0.2.1", "target@example.edu")
-				if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
-					t.Fatalf("over the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
-				}
-				assertNoStore(t, "refused", rec)
-			}
+// so it cannot make counters for addresses it invents. Confirm is the one
+// route whose email budget the handler spends; Start and Resend spend theirs
+// in the service, only for a message about to be queued.
+func TestConfirmSpendsTheAddressBudgetBeforeTheEmailBudget(t *testing.T) {
+	f := newSignupFixture(t)
+	for i := range api.SignupsPerAddress {
+		if rec := f.confirm("192.0.2.1", fmt.Sprintf("filler%d@example.edu", i), "123456"); rec.Code != http.StatusBadRequest {
+			t.Fatalf("filler %d = %d, want 400 (%s)", i, rec.Code, rec.Body.String())
+		}
+	}
+	for range api.ConfirmsPerEmail {
+		rec := f.confirm("192.0.2.1", "target@example.edu", "123456")
+		if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+			t.Fatalf("over the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
+		}
+		assertNoStore(t, "refused", rec)
+	}
 
-			if rec := e.call(f, "192.0.2.2", "target@example.edu"); rec.Code != e.admitted {
-				t.Errorf("the email from a fresh address = %d, want %d: refusals by address spent its budget", rec.Code, e.admitted)
-			}
-		})
+	if rec := f.confirm("192.0.2.2", "target@example.edu", "123456"); rec.Code != http.StatusBadRequest {
+		t.Errorf("the email from a fresh address = %d, want 400: refusals by address spent its budget", rec.Code)
 	}
 }
 
-func TestEachSignupEndpointLimitsAnEmailWhateverItsCase(t *testing.T) {
-	for _, e := range signupEndpoints {
-		t.Run(e.name, func(t *testing.T) {
-			f := newSignupFixture(t)
-			for i := range api.SignupsPerEmail {
-				if rec := e.call(f, fmt.Sprintf("192.0.2.%d", i+1), "Ana@Example.edu"); rec.Code != e.admitted {
-					t.Fatalf("attempt %d = %d, want %d", i, rec.Code, e.admitted)
-				}
-			}
+func TestConfirmLimitsAnEmailWhateverItsCase(t *testing.T) {
+	f := newSignupFixture(t)
+	for i := range api.ConfirmsPerEmail {
+		if rec := f.confirm(fmt.Sprintf("192.0.2.%d", i+1), "Ana@Example.edu", "123456"); rec.Code != http.StatusBadRequest {
+			t.Fatalf("attempt %d = %d, want 400", i, rec.Code)
+		}
+	}
 
-			rec := e.call(f, "192.0.2.100", " ana@example.EDU")
-			if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
-				t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
-			}
+	rec := f.confirm("192.0.2.100", " ana@example.EDU", "123456")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
+	}
+	if rec := f.start("192.0.2.100", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
+		t.Errorf("a start after confirm spent its budget = %d, want 202", rec.Code)
+	}
+}
 
-			// The other endpoints keep their own budgets for the email and the
-			// address.
-			for _, other := range signupEndpoints {
-				if other.name == e.name {
-					continue
-				}
-				if rec := other.call(f, "192.0.2.100", "ana@example.edu"); rec.Code != other.admitted {
-					t.Errorf("%s after %s spent its budget = %d, want %d", other.name, e.name, rec.Code, other.admitted)
-				}
-			}
-		})
+// The start budget is spent before the body is read, so a caller past it
+// reaches neither the service nor the password hash.
+func TestAStartPastTheAddressBudgetReachesNothing(t *testing.T) {
+	f := newSignupFixture(t)
+	for i := range api.SignupsPerAddress {
+		rec := f.post("192.0.2.1", "/public/signup", signupForm("Ana Popescu", "ana", fmt.Sprintf("filler%d@example.edu", i), "short"), nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("filler %d = %d, want 400 (%s)", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	if rec := f.start("192.0.2.1", "ana@example.edu", "ana"); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("past the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
+	}
+	if f.Hasher.Calls() != 0 || len(f.Outbox.Queued()) != 0 {
+		t.Error("a start past the address budget reached the service")
+	}
+	if rec := f.start("192.0.2.2", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
+		t.Errorf("from another address = %d, want 202: the refusals spent a mail budget", rec.Code)
+	}
+}
+
+// An email's budget counts the codes mailed to it, so a form refused for a
+// weak password leaves the person every attempt.
+func TestAStartsEmailBudgetCountsOnlyTheCodesMailedWhateverTheCase(t *testing.T) {
+	f := newSignupFixture(t)
+	for i := range 2 * signup.MailsPerEmail {
+		rec := f.post(fmt.Sprintf("198.51.100.%d", i+1), "/public/signup", signupForm("Ana Popescu", "ana", "Ana@Example.edu", "short"), nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("weak %d = %d, want 400", i, rec.Code)
+		}
+	}
+	for i := range signup.MailsPerEmail {
+		if rec := f.start(fmt.Sprintf("192.0.2.%d", i+1), "Ana@Example.edu", "ana"); rec.Code != http.StatusAccepted {
+			t.Fatalf("start %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := f.start("192.0.2.100", " ana@example.EDU", "ana")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
+	}
+	if rec := f.start("192.0.2.100", "ion@example.edu", "ion"); rec.Code != http.StatusAccepted {
+		t.Errorf("another email from the same address = %d, want 202", rec.Code)
 	}
 }
 
@@ -600,22 +601,23 @@ func TestTheCodeIsMailedInTheLanguageTheReaderAsksFor(t *testing.T) {
 	}
 }
 
-// mailSpent reads the installation's mail counter for the minute's window.
-func mailSpent(t *testing.T, c *cache.Memory) string {
-	t.Helper()
-	raw, _, err := c.Get(t.Context(), "rl:"+api.SelfServiceMailSubjectPerMinute)
-	if err != nil {
-		t.Fatal(err)
+// withMailBudget gives the fixture an installation budget of sign-up mail
+// of its own size, on a counter of its own.
+func withMailBudget(t *testing.T, perMinute, perDay int) func(*signup.Config) {
+	return func(cfg *signup.Config) {
+		c := cache.NewMemory(1000)
+		t.Cleanup(func() { _ = c.Close() })
+		cfg.MailBudget = mailing.NewBudget("signup", mailing.Limits{PerMinute: perMinute, PerDay: perDay},
+			auth.NewLimiter(c), logging.New("error", io.Discard))
 	}
-	return string(raw)
 }
 
 // A few addresses must not fill the shared relay: past the installation's
 // budget a start from a fresh address and for a fresh email is refused, and
 // queues nothing.
 func TestTheInstallationsMailBudgetRefusesAStartFromAFreshAddress(t *testing.T) {
-	f := mountSignupWithin(t, signuptest.NewFixture(t, nil), api.SelfServiceMailsPerMinute, api.SelfServiceMailsPerDay)
-	for i := range api.SelfServiceMailsPerMinute {
+	f := mountSignup(t, signuptest.NewFixture(t, nil))
+	for i := range signup.MailsPerMinute {
 		if rec := f.start(fmt.Sprintf("192.0.2.%d", i+1), fmt.Sprintf("person%d@example.edu", i), fmt.Sprintf("person%d", i)); rec.Code != http.StatusAccepted {
 			t.Fatalf("start %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
 		}
@@ -628,20 +630,21 @@ func TestTheInstallationsMailBudgetRefusesAStartFromAFreshAddress(t *testing.T) 
 		t.Errorf("past the budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
 	if got := len(f.Outbox.Queued()); got != queued {
-		t.Errorf("queued %d messages, want %d: a refused start reached the service", got, queued)
+		t.Errorf("queued %d messages, want %d", got, queued)
 	}
-	if got, want := mailSpent(t, f.cache), fmt.Sprint(api.SelfServiceMailsPerMinute+1); got != want {
-		t.Errorf("mail counter = %s, want %s: the refusal counts", got, want)
+	if rows := f.Store.Rows(); len(rows) != signup.MailsPerMinute {
+		t.Errorf("%d sign-ups wait, want the refused one not stored", len(rows))
 	}
 }
 
 // Start and Resend queue mail and spend one budget; Confirm queues none.
 func TestTheMailBudgetIsSharedByStartAndResendButNotConfirm(t *testing.T) {
-	f := mountSignupWithin(t, signuptest.NewFixture(t, nil), 2, api.SelfServiceMailsPerDay)
+	f := mountSignup(t, signuptest.NewFixture(t, withMailBudget(t, 2, signup.MailsPerDay)))
 	cookie, code := f.begin(t, "ana@example.edu", "ana")
 	if rec := f.start("192.0.2.2", "ion@example.edu", "ion"); rec.Code != http.StatusAccepted {
 		t.Fatalf("second start = %d, want 202", rec.Code)
 	}
+	f.Clock.Advance(signup.ResendCooldown)
 
 	if rec := f.resend("192.0.2.3", "ana@example.edu", cookie); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("resend past the budget = %d, want 429 too_many_attempts", rec.Code)
@@ -652,7 +655,7 @@ func TestTheMailBudgetIsSharedByStartAndResendButNotConfirm(t *testing.T) {
 }
 
 func TestTheMailBudgetHasADailyCeiling(t *testing.T) {
-	f := mountSignupWithin(t, signuptest.NewFixture(t, nil), unboundedMail, 1)
+	f := mountSignup(t, signuptest.NewFixture(t, withMailBudget(t, signup.MailsPerMinute, 1)))
 	if rec := f.start("192.0.2.1", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
 		t.Fatalf("first start = %d, want 202", rec.Code)
 	}
@@ -662,20 +665,26 @@ func TestTheMailBudgetHasADailyCeiling(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 5: the installation's budget is the last one spent, so a
-// caller another budget refused cannot use it up for everybody.
-func TestTheMailBudgetIsSpentOnlyByWhatTheOtherBudgetsAdmit(t *testing.T) {
-	f := mountSignupWithin(t, signuptest.NewFixture(t, nil), api.SelfServiceMailsPerMinute, api.SelfServiceMailsPerDay)
-	for i := range api.SignupsPerEmail {
-		if rec := f.start(fmt.Sprintf("192.0.2.%d", i+1), "target@example.edu", "target"); rec.Code != http.StatusAccepted {
-			t.Fatalf("start %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
+// A request that ends without mail spends none of the installation's budget,
+// so junk from fresh addresses cannot shut sign-up for everybody.
+func TestJunkSignupRequestsSpendNoMailBudget(t *testing.T) {
+	f := mountSignup(t, signuptest.NewFixture(t, withMailBudget(t, 1, signup.MailsPerDay)))
+	for i := range 20 {
+		from := fmt.Sprintf("203.0.113.%d", i+1)
+		for path, body := range map[string]string{
+			"/public/signup":        fmt.Sprintf(`{"email":"x%d@y"}`, i),
+			"/public/signup/resend": fmt.Sprintf(`{"email":"nobody%d@example.edu"}`, i),
+		} {
+			if rec := f.post(from, path, body, nil); rec.Code == http.StatusTooManyRequests {
+				t.Fatalf("junk %s %d = 429: it spent a budget", path, i)
+			}
 		}
 	}
 
-	if rec := f.start("192.0.2.100", "target@example.edu", "target"); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("over the email budget = %d, want 429", rec.Code)
+	if rec := f.start("192.0.2.1", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
+		t.Errorf("a real start after the junk = %d, want 202 (%s)", rec.Code, rec.Body.String())
 	}
-	if got, want := mailSpent(t, f.cache), fmt.Sprint(api.SignupsPerEmail); got != want {
-		t.Errorf("mail counter = %s, want %s: a refusal by the email budget spent the installation's", got, want)
+	if rec := f.start("192.0.2.2", "ion@example.edu", "ion"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("a second real start = %d, want 429: the budget of one is spent", rec.Code)
 	}
 }

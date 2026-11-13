@@ -21,16 +21,18 @@ import (
 )
 
 // Each sign-up endpoint's budget, its own subjects for each, refusals
-// included (CLAUDE.md rule 13).
+// included (CLAUDE.md rule 13). The mail budgets are signup.Service's, spent
+// only when a message is about to be queued.
 const (
-	// SignupsPerAddress is per address in signupAddressWindow; a class signs
-	// up from behind one address, so it is generous.
+	// SignupsPerAddress is per address in signupAddressWindow, before the body
+	// is read and so before the password hash; a class signs up from behind
+	// one address, so it is generous.
 	SignupsPerAddress   = 120
 	signupAddressWindow = 10 * time.Minute
-	// SignupsPerEmail is per lowercased email in an hour, so neither an inbox
-	// nor a waiting sign-up can be worn down from many addresses.
-	SignupsPerEmail   = 5
-	signupEmailWindow = time.Hour
+	// ConfirmsPerEmail is per lowercased email in an hour, so a waiting
+	// sign-up's code cannot be guessed at from many addresses.
+	ConfirmsPerEmail   = 5
+	confirmEmailWindow = time.Hour
 )
 
 // signupBodyBytes bounds a sign-up body as it arrives. The password is at
@@ -49,14 +51,13 @@ type SignupHandler struct {
 	signups *signup.Service
 	auth    *auth.Service
 	limiter *auth.Limiter
-	mail    *MailBudget
 	mw      *auth.Middleware
 	cookies auth.CookieWriter
 	log     *slog.Logger
 }
 
-func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter *auth.Limiter, mail *MailBudget, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
-	return &SignupHandler{signups: signups, auth: authService, limiter: limiter, mail: mail, mw: mw, cookies: cookies, log: log}
+func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter *auth.Limiter, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
+	return &SignupHandler{signups: signups, auth: authService, limiter: limiter, mw: mw, cookies: cookies, log: log}
 }
 
 // Mount registers the routes under /public/, which needs no session, only
@@ -100,9 +101,9 @@ type signupConfirmedResponse struct {
 	MustChangePassword bool `json:"must_change_password"`
 }
 
-// The address is spent before the body is read, and the email, an unbounded
-// key, only once bounded and for a caller the address admitted (CLAUDE.md
-// rule 5); then the installation's mail budget; all before the password hash.
+// The address is spent before the body is read, and so before the password
+// hash; the mail budgets are spent by the service once the form is known to
+// be one it would mail for.
 func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, "signup:ip:"+addressKey(r), SignupsPerAddress, signupAddressWindow) {
 		return
@@ -120,16 +121,10 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 	) {
 		return
 	}
-	if !h.admit(w, r, "signup:email:"+email, SignupsPerEmail, signupEmailWindow) {
-		return
-	}
-	if !admitMail(w, r, h.mail, h.log) {
-		return
-	}
 
 	started, err := h.signups.Start(r.Context(), signup.StartCommand{
 		FullName: req.FullName, Login: req.Login, Email: req.Email, Password: req.Password,
-		Lang: readerMailLanguage(r),
+		Lang: readerMailLanguage(r), Sender: addressKey(r),
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -156,7 +151,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 	) {
 		return
 	}
-	if !h.admit(w, r, "signup_confirm:email:"+email, SignupsPerEmail, signupEmailWindow) {
+	if !h.admit(w, r, "signup_confirm:email:"+email, ConfirmsPerEmail, confirmEmailWindow) {
 		return
 	}
 
@@ -198,16 +193,10 @@ func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
 	if !withinBounds(w, r, fieldBound{"email", email, users.MaxEmailLength}) {
 		return
 	}
-	if !h.admit(w, r, "signup_resend:email:"+email, SignupsPerEmail, signupEmailWindow) {
-		return
-	}
-	if !admitMail(w, r, h.mail, h.log) {
-		return
-	}
 
 	token := h.signupToken(r)
 	if err := h.signups.Resend(r.Context(), signup.ResendCommand{
-		Email: req.Email, Token: token, Lang: readerMailLanguage(r),
+		Email: req.Email, Token: token, Lang: readerMailLanguage(r), Sender: addressKey(r),
 	}); err != nil {
 		h.fail(w, r, err)
 		return

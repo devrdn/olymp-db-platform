@@ -7,9 +7,10 @@
 // its caller answers before anything is looked up and alike for every
 // account.
 //
-// It does not serve HTTP or throttle callers (internal/api does, before the
-// hand-off and before the password hash), and does not sign the person in:
-// they sign in with the new password.
+// It spends the installation's budget of reset links itself, when a link is
+// about to be mailed, but does not serve HTTP or throttle callers
+// (internal/api does, before the hand-off and before the password hash),
+// and does not sign the person in: they sign in with the new password.
 package recovery
 
 import (

@@ -5,10 +5,12 @@
 // has an account is answered exactly as a new one is, and its owner is mailed
 // instead.
 //
-// It does not serve HTTP or throttle callers (internal/api does, before the
-// password hash, and keeps Start's token for the browser), does not sign the
-// new account in (auth does), and does not decide whether sign-up is offered:
-// the deployment does, with SELF_SIGNUP_ENABLED and mail.
+// It spends the mail budgets itself, just before a message is queued, so a
+// request refused for anything else spends none. It does not serve HTTP or
+// throttle requests (internal/api does, before the body is read, and keeps
+// Start's token for the browser), does not sign the new account in (auth
+// does), and does not decide whether sign-up is offered: the deployment
+// does, with SELF_SIGNUP_ENABLED and mail.
 package signup
 
 import (
@@ -35,6 +37,20 @@ const (
 	TokenBytes = 32
 )
 
+// The mail budgets Start and Resend spend, refusals included (CLAUDE.md rule
+// 13). MailsPerMinute and MailsPerDay are the installation's, which with
+// recovery's six a minute leave the relay's default 25 room for staff mail;
+// MailsPerAddress is per minute for one caller's address, Start and Resend
+// together, so one machine takes half the installation's minute at most;
+// MailsPerEmail is per hour for one typed address, for Start and for Resend
+// each.
+const (
+	MailsPerMinute  = 12
+	MailsPerDay     = 5000
+	MailsPerAddress = 6
+	MailsPerEmail   = 5
+)
+
 var (
 	// ErrNotAvailable means the installation does not offer sign-up: the
 	// switch is off, or mail is, and no code could reach anyone.
@@ -45,13 +61,19 @@ var (
 	ErrCodeExpired = errors.New("the code has expired or was tried too often; sign up again")
 	ErrTooSoon     = errors.New("a code was sent less than a minute ago")
 	ErrFull        = errors.New("too many sign-ups are waiting for their code; try later")
+	// ErrMailBudget means the installation's budget of sign-up mail is spent
+	// for the minute or the day, whoever asks.
+	ErrMailBudget = errors.New("this site is sending too many messages just now; wait a few minutes before trying again")
+	// ErrTooManyCodes means the caller's address or the typed one has asked
+	// for as many codes as it may for now.
+	ErrTooManyCodes = errors.New("too many codes were asked for from this address or for this email; wait before trying again")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
 // users.ErrInvalidAccount, ErrWeakPassword, ErrLoginTaken and ErrEmailTaken
 // and the hasher's password.ErrBusy pass through and belong to those packages.
 func Errors() []error {
-	return []error{ErrNotAvailable, ErrWrongCode, ErrCodeExpired, ErrTooSoon, ErrFull}
+	return []error{ErrNotAvailable, ErrWrongCode, ErrCodeExpired, ErrTooSoon, ErrFull, ErrMailBudget, ErrTooManyCodes}
 }
 
 // Pending is a sign-up waiting for its code.

@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/recovery/recoverytest"
@@ -425,6 +427,8 @@ func gated(t *testing.T) (*recoverytest.Fixture, *recoverytest.GatedDirectory) {
 	f := recoverytest.NewFixture(t, func(c *recovery.Config) {
 		dir = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
 		c.Directory = dir
+		// The bound on requests in flight is under test, not the mail budget.
+		budgetOf(recovery.MaxInFlight)(c)
 	})
 	// Registered after the fixture's Stop, so it runs first and Stop can end.
 	t.Cleanup(gate.Release)
@@ -568,5 +572,64 @@ func TestCompleteReadsTheAccountOnlyOnceItHoldsIt(t *testing.T) {
 				t.Errorf("account = %+v, want neither verified nor reset", after)
 			}
 		})
+	}
+}
+
+// budgetOf gives the fixture a recovery mail budget of perMinute.
+func budgetOf(perMinute int) func(*recovery.Config) {
+	return func(cfg *recovery.Config) {
+		cfg.MailBudget = mailing.NewBudget("recovery", mailing.Limits{PerMinute: perMinute, PerDay: recovery.MailsPerDay},
+			auth.NewLimiter(cache.NewMemory(1000)), cfg.Log)
+	}
+}
+
+// Only a link that is mailed spends the budget, so requests for accounts a
+// link cannot reach leave it whole for the ones it can.
+func TestARequestThatMailsNothingSpendsNoMailBudget(t *testing.T) {
+	f := recoverytest.NewFixture(t, budgetOf(1))
+	f.Users.Add(users.User{
+		Login: "organiser", Email: "organiser@example.edu", FullName: "Org Aniser",
+		Roles: []string{recoverytest.StaffRole}, PasswordHash: "x",
+	})
+	f.Users.Add(users.User{Login: "held", Email: "held@example.edu", FullName: "Held", Status: users.StatusBlocked, PasswordHash: "x"})
+	account := student(t, f, "ana", "ana@example.edu")
+
+	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "held", "", "nobody", "nobody"} {
+		if err := f.Service.Request(t.Context(), typed, "en"); err != nil {
+			t.Fatalf("Request(%q) = %v", typed, err)
+		}
+	}
+	requested(t, f, "ana")
+
+	if q := f.Outbox.Queued(); len(q) != 1 || q[0].UserID != account.ID {
+		t.Errorf("queued %+v, want ana's link alone", q)
+	}
+}
+
+// Past the budget a link is dropped silently: the request was answered long
+// before, and an answer that differed would say the account exists. The
+// link mailed before stays the one that works.
+func TestALinkPastTheRecoveryBudgetIsDroppedAndLogged(t *testing.T) {
+	f := recoverytest.NewFixture(t, budgetOf(1))
+	student(t, f, "ana", "ana@example.edu")
+	first := requested(t, f, "ana")
+
+	if err := f.Service.Request(t.Context(), "ana", "en"); err != nil {
+		t.Fatalf("Request() past the budget = %v, want nil", err)
+	}
+
+	if q := f.Outbox.Queued(); len(q) != 1 {
+		t.Errorf("queued %d messages, want the first link alone", len(q))
+	}
+	digest := sha256.Sum256([]byte(first))
+	if rows := f.Store.Rows(); len(rows) != 1 || !bytes.Equal(rows[0].TokenHash, digest[:]) {
+		t.Errorf("links = %+v, want the first one kept", rows)
+	}
+	logged := f.Log.String()
+	if !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "budget=recovery") {
+		t.Errorf("the spent budget was not logged as a warning:\n%s", logged)
+	}
+	if !strings.Contains(logged, "dropped a password reset link") {
+		t.Errorf("the dropped link was not logged:\n%s", logged)
 	}
 }

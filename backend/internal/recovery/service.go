@@ -76,6 +76,22 @@ type Settings interface {
 	All(ctx context.Context) (settings.Values, error)
 }
 
+// MailBudget is the installation's budget of reset links (mailing.Budget,
+// sized by MailsPerMinute and MailsPerDay).
+type MailBudget interface {
+	// Spend counts one message and reports whether the budget admits it.
+	Spend(ctx context.Context) (bool, error)
+}
+
+// The installation's budget of reset links: apart from sign-up's, so a flood
+// of sign-ups at typed addresses cannot shut recovery, and small, since a
+// link goes only to an account that exists. With sign-up's twelve it leaves
+// the relay's default 25 a minute room for staff mail.
+const (
+	MailsPerMinute = 6
+	MailsPerDay    = 2000
+)
+
 type Config struct {
 	Store      Store
 	Directory  Directory
@@ -84,6 +100,7 @@ type Config struct {
 	Outbox     Outbox
 	Texts      Texts
 	Settings   Settings
+	MailBudget MailBudget
 	UnitOfWork storage.UnitOfWork
 	Log        *slog.Logger
 	// PublicURL is the address the installation is reached at, which a link
@@ -108,7 +125,8 @@ type Service struct {
 // NewService panics on a missing part, so a wiring fault stops the boot.
 func NewService(cfg Config) *Service {
 	if cfg.Store == nil || cfg.Directory == nil || cfg.Accounts == nil || cfg.Hasher == nil ||
-		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.UnitOfWork == nil || cfg.Log == nil {
+		cfg.Outbox == nil || cfg.Texts == nil || cfg.Settings == nil || cfg.MailBudget == nil ||
+		cfg.UnitOfWork == nil || cfg.Log == nil {
 		panic("recovery: NewService needs every part of its Config")
 	}
 	if cfg.Now == nil {
@@ -192,7 +210,9 @@ func (s *Service) Stop(ctx context.Context) error {
 // holds an @, in place of any link mailed to it before. An account a link
 // may not reach (unknown, deleted, blocked, staff or without an address)
 // gets nothing and the same nil, after the same lookup, draw and settings
-// read; no path hashes a password.
+// read; no path hashes a password. Only a link about to be mailed spends the
+// mail budget; past it the link is dropped, logged and answered nil like
+// the rest, since the caller was answered before the lookup.
 func (s *Service) Request(ctx context.Context, loginOrEmail, lang string) error {
 	account, reaches, err := s.find(ctx, loginOrEmail)
 	if err != nil {
@@ -207,6 +227,14 @@ func (s *Service) Request(ctx context.Context, loginOrEmail, lang string) error 
 		return err
 	}
 	if !reaches {
+		return nil
+	}
+	admitted, err := s.cfg.MailBudget.Spend(ctx)
+	if err != nil {
+		return fmt.Errorf("spend the recovery mail budget: %w", err)
+	}
+	if !admitted {
+		s.cfg.Log.InfoContext(ctx, "dropped a password reset link: the installation's recovery mail budget is spent")
 		return nil
 	}
 
