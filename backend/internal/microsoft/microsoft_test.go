@@ -139,7 +139,7 @@ func TestTheCallbackSignsInAVerifiedTokenAsItsObjectID(t *testing.T) {
 	}
 	want := federation.Claims{
 		Provider: users.ProviderMicrosoft, Issuer: p.Issuer(homeTenant), Subject: objectID,
-		Email: "Ana@Example.edu", Name: "Ana Popescu", LoginHint: "ana@example.edu", EmailTrusted: true,
+		Email: "Ana@Example.edu", Name: "Ana Popescu", LoginHint: "ana@example.edu", EmailTrusted: true, HomeDirectory: true,
 	}
 	if got != want {
 		t.Errorf("claims = %+v\nwant %+v", got, want)
@@ -644,5 +644,67 @@ func TestAnAccountTypeOutOfBoundsIsRefused(t *testing.T) {
 
 	if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
 		t.Errorf("Exchange() with a 100-byte acct = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestAMemberOfTheHomeTenantIsTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	got := trustOf(t, p, c, func(m map[string]any) { m["email"] = "ana@example.edu" })
+	if !got.HomeDirectory {
+		t.Errorf("home tenant member: %+v, want the home directory", got)
+	}
+}
+
+func TestAGuestOfTheHomeTenantIsNotTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	for name, edit := range map[string]func(map[string]any){
+		"a foreign idp": guest,
+		"acct = 1":      func(m map[string]any) { m["acct"] = 1 },
+	} {
+		got := trustOf(t, p, c, func(m map[string]any) { edit(m); m["email"] = "ana@example.edu"; m["xms_edov"] = true })
+		if got.HomeDirectory {
+			t.Errorf("%s: %+v, want no home directory", name, got)
+		}
+	}
+}
+
+func TestAVerifiedDomainOfAnotherTenantIsNotTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	got := trustOf(t, p, c, func(m map[string]any) {
+		m["tid"], m["iss"] = otherTenant, p.Issuer(otherTenant)
+		m["email"] = "ana@example.edu"
+		m["xms_edov"] = true
+	})
+	if !got.EmailTrusted || got.HomeDirectory {
+		t.Errorf("other tenant with a verified domain: %+v, want a trusted email and no home directory", got)
+	}
+}
+
+func TestAPersonalAccountIsNotTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	got := trustOf(t, p, c, func(m map[string]any) {
+		m["tid"], m["iss"] = consumer, p.Issuer(consumer)
+		m["email"] = "ana@example.edu"
+	})
+	if got.HomeDirectory {
+		t.Errorf("personal account: %+v, want no home directory", got)
+	}
+}
+
+func TestWithoutAHomeTenantNobodyIsTheHomeDirectory(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	noHome := newClient(t, p, func(cfg *microsoft.Config) { cfg.HomeTenant = "" })
+
+	got := trustOf(t, p, noHome, func(m map[string]any) { m["email"] = "ana@example.edu" })
+	if got.HomeDirectory {
+		t.Errorf("no home tenant configured: %+v, want no home directory", got)
 	}
 }

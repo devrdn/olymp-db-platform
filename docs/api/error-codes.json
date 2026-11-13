@@ -171,7 +171,7 @@
     },
     {
       "code": "external_signin_staff_account",
-      "meaning": "The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is never entered through an external provider. Sign in with that account's password, or have an administrator reset it."
+      "meaning": "The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is entered through a provider only from the installation's own directory. Otherwise sign in with that account's password, or have an administrator reset it."
     },
     {
       "code": "forbidden",

@@ -1251,11 +1251,11 @@ type grantingAccounts struct {
 	t *testing.T
 }
 
-func (a grantingAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) (users.User, error) {
-	if err := a.ReplaceRoles(context.Background(), uuid.Nil, id, []string{users.RoleAdmin}); err != nil {
+func (a grantingAccounts) LinkExternal(ctx context.Context, cmd users.LinkExternalCommand) (users.User, error) {
+	if err := a.ReplaceRoles(context.Background(), uuid.Nil, cmd.UserID, []string{users.RoleAdmin}); err != nil {
 		a.t.Fatalf("grant the role: %v", err)
 	}
-	return a.Service.LinkExternal(ctx, id, identity, at)
+	return a.Service.LinkExternal(ctx, cmd)
 }
 
 func TestARoleGrantedBeforeTheLinkRefusesIt(t *testing.T) {
@@ -1280,6 +1280,36 @@ func TestARoleGrantedBeforeTheLinkRefusesIt(t *testing.T) {
 	}
 	if n := countIdentities(t, ana.ID); n != 0 {
 		t.Errorf("identities = %d, want the account left unlinked", n)
+	}
+	if n := countLogins(t, tag); n != 1 {
+		t.Errorf("accounts = %d, want no second one", n)
+	}
+}
+
+// The home directory's statement is decided at this sign-in, so a role granted
+// between the read and the link does not stop the link it vouched for.
+func TestARoleGrantedBeforeAHomeDirectoryLinkIsLinked(t *testing.T) {
+	tag := "ext-home-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	resolver := federation.NewService(federation.Config{
+		Policy:        federation.Policy{CreateAccounts: true},
+		Store:         NewUsers(testPool),
+		Accounts:      grantingAccounts{Service: service, t: t},
+		PendingLogins: NewSignups(testPool),
+	})
+	identity := externalLink(tag)
+
+	got, err := resolver.Resolve(t.Context(), federation.Claims{
+		Provider: identity.Provider, Issuer: identity.Issuer, Subject: identity.Subject,
+		Email: identity.Email, Name: "Ana", EmailTrusted: true, HomeDirectory: true,
+	})
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
+	}
+	if n := countIdentities(t, ana.ID); n != 1 {
+		t.Errorf("identities = %d, want one", n)
 	}
 	if n := countLogins(t, tag); n != 1 {
 		t.Errorf("accounts = %d, want no second one", n)
@@ -1311,7 +1341,7 @@ func TestLinkExternalWaitsForARoleChangeInFlight(t *testing.T) {
 
 	linked := make(chan error, 1)
 	go func() {
-		_, err := service.LinkExternal(ctx, ana.ID, externalLink(tag), time.Now())
+		_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
 		linked <- err
 	}()
 
@@ -1411,7 +1441,7 @@ func TestTwoConcurrentLinksOfOneIssuerLinkOne(t *testing.T) {
 			<-start
 			identity := externalLink(tag)
 			identity.Subject = subject
-			_, err := service.LinkExternal(context.Background(), ana.ID, identity, time.Now())
+			_, err := service.LinkExternal(context.Background(), users.LinkExternalCommand{UserID: ana.ID, Identity: identity, VerifiedAt: time.Now()})
 			errs <- err
 		}()
 	}

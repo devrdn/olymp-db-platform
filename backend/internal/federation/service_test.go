@@ -56,6 +56,7 @@ func (s *countingStore) ByEmail(ctx context.Context, email string) (users.User, 
 type hookedAccounts struct {
 	federation.Accounts
 	before func()
+	linked []users.LinkExternalCommand
 }
 
 func (a *hookedAccounts) fire() {
@@ -71,9 +72,10 @@ func (a *hookedAccounts) CreateExternal(ctx context.Context, cmd users.CreateExt
 	return a.Accounts.CreateExternal(ctx, cmd)
 }
 
-func (a *hookedAccounts) LinkExternal(ctx context.Context, id uuid.UUID, identity users.ExternalIdentity, at time.Time) (users.User, error) {
+func (a *hookedAccounts) LinkExternal(ctx context.Context, cmd users.LinkExternalCommand) (users.User, error) {
 	a.fire()
-	return a.Accounts.LinkExternal(ctx, id, identity, at)
+	a.linked = append(a.linked, cmd)
+	return a.Accounts.LinkExternal(ctx, cmd)
 }
 
 type fixture struct {
@@ -569,6 +571,163 @@ func TestAnAccountMadeStaffBeforeTheLinkIsRefused(t *testing.T) {
 	}
 	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
 		t.Errorf("identities = %+v, want none", linked)
+	}
+}
+
+func homeDirectory(subject string) federation.Claims {
+	c := trusted(subject)
+	c.HomeDirectory = true
+	return c
+}
+
+func TestAHomeDirectoryMemberLinksAStaffAccount(t *testing.T) {
+	f := newFixture(t)
+	org := f.repo.Add(users.User{Login: "organizer", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
+
+	got, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana"))
+
+	if err != nil || got.ID != org.ID {
+		t.Fatalf("Resolve() = %v, %v; want the organizer's account", got.ID, err)
+	}
+	if linked := f.repo.Identities(org.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, want sub-ana", linked)
+	}
+	if n := f.accountCount(); n != 1 {
+		t.Errorf("accounts = %d, want only the organizer's", n)
+	}
+}
+
+func TestAHomeDirectoryMemberLinksAContestManager(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.repo.AppointToContest(ana.ID)
+
+	got, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana"))
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
+	}
+}
+
+func TestAHomeDirectoryMemberEntersALinkedStaffAccount(t *testing.T) {
+	f := newFixture(t)
+	org := f.repo.Add(users.User{Login: "organizer", FullName: "Org", Roles: []string{"organizer"}})
+	f.link(t, org, "sub-ana")
+
+	got, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana"))
+
+	if err != nil || got.ID != org.ID {
+		t.Fatalf("Resolve() = %v, %v; want the organizer's account", got.ID, err)
+	}
+	if used := f.repo.LastUsed(users.ProviderMicrosoft, issuer, "sub-ana"); !used.Equal(now) {
+		t.Errorf("identity last used %v, want %v", used, now)
+	}
+}
+
+func TestALinkedStaffAccountIsRefusedWithoutTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	org := f.repo.Add(users.User{Login: "organizer", FullName: "Org", Roles: []string{"organizer"}})
+	f.link(t, org, "sub-ana")
+
+	if _, err := f.service().Resolve(t.Context(), trusted("sub-ana")); !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+	if used := f.repo.LastUsed(users.ProviderMicrosoft, issuer, "sub-ana"); !used.IsZero() {
+		t.Errorf("a refused sign-in stamped the identity at %v", used)
+	}
+}
+
+// A student linked through a provider that has no home directory and made
+// staff afterwards stays out: only a home directory sign-in enters staff.
+func TestAStudentLinkedThroughGitHubAndMadeStaffIsRefused(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Roles: []string{users.RoleStudent}})
+	const githubIssuer = "https://github.com"
+	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderGitHub, Issuer: githubIssuer, Subject: "4242",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.ReplaceRoles(t.Context(), ana.ID, []string{"organizer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.service().Resolve(t.Context(), federation.Claims{
+		Provider: users.ProviderGitHub, Issuer: githubIssuer, Subject: "4242",
+		Email: "ana@example.edu", EmailTrusted: true,
+	})
+
+	if !errors.Is(err, federation.ErrStaffAccount) {
+		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
+	}
+}
+
+func TestTheHomeDirectoryNeverOpensABlockedOrDeletedAccount(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status string
+		want   error
+	}{
+		"blocked": {users.StatusBlocked, users.ErrAccountBlocked},
+		"deleted": {users.StatusDeleted, users.ErrAccountDeleted},
+	} {
+		t.Run(name+", known identity", func(t *testing.T) {
+			f := newFixture(t)
+			org := f.repo.Add(users.User{Login: "organizer", FullName: "Org", Status: tc.status, Roles: []string{"organizer"}})
+			f.link(t, org, "sub-ana")
+
+			if _, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana")); !errors.Is(err, tc.want) {
+				t.Errorf("Resolve() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	t.Run("blocked, trusted email", func(t *testing.T) {
+		f := newFixture(t)
+		org := f.repo.Add(users.User{Login: "organizer", FullName: "Org", Email: "ana@example.edu", Status: users.StatusBlocked, Roles: []string{"organizer"}})
+
+		if _, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana")); !errors.Is(err, users.ErrAccountBlocked) {
+			t.Errorf("Resolve() = %v, want ErrAccountBlocked", err)
+		}
+		if len(f.repo.Identities(org.ID)) != 0 {
+			t.Error("the blocked account was linked")
+		}
+	})
+}
+
+func TestTheHomeDirectoryFlagReachesTheLink(t *testing.T) {
+	for _, home := range []bool{true, false} {
+		f := newFixture(t)
+		f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+		c := trusted("sub-ana")
+		c.HomeDirectory = home
+
+		if _, err := f.service().Resolve(t.Context(), c); err != nil {
+			t.Fatalf("home %v: Resolve() = %v", home, err)
+		}
+		if len(f.accounts.linked) != 1 || f.accounts.linked[0].HomeDirectory != home {
+			t.Errorf("home %v: link commands = %+v, want one carrying the flag", home, f.accounts.linked)
+		}
+	}
+}
+
+func TestAnAccountMadeStaffBeforeAHomeDirectoryLinkIsLinked(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.accounts.before = func() {
+		if err := f.repo.ReplaceRoles(t.Context(), ana.ID, []string{"organizer"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana"))
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
 	}
 }
 

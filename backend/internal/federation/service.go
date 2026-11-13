@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/users"
-	"github.com/google/uuid"
 )
 
 // Store finds accounts and their identities (internal/postgres.Users).
@@ -28,14 +27,15 @@ type Store interface {
 // Accounts creates and links accounts (users.Service). Both refuse an
 // identity another request linked first with users.ErrExternalIdentityTaken,
 // leaving nothing behind. LinkExternal re-reads the account under a lock and
-// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
-// users.ErrNotFound when the account no longer holds the identity's email, and
-// users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
+// refuses users.ErrStaffNotLinkable unless the command carries HomeDirectory,
+// the blocked and deleted sentinels, users.ErrNotFound when the account no
+// longer holds the identity's email, and users.ErrIssuerAlreadyLinked when it
+// holds another identity at the issuer.
 // LinkExternal drops a one-time password and returns the account as it then
 // stands, whose session generation a sign-in must use.
 type Accounts interface {
 	CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error)
-	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) (users.User, error)
+	LinkExternal(ctx context.Context, cmd users.LinkExternalCommand) (users.User, error)
 }
 
 // PendingLogins reports the logins sign-ups waiting for their code hold
@@ -96,7 +96,7 @@ func (s *Service) resolve(ctx context.Context, c Claims, identity users.External
 	u, err := s.cfg.Store.ByExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject)
 	switch {
 	case err == nil:
-		return s.enter(ctx, u, identity)
+		return s.enter(ctx, u, identity, c.HomeDirectory)
 	case !errors.Is(err, users.ErrNotFound):
 		return users.User{}, err
 	}
@@ -109,7 +109,7 @@ func (s *Service) resolve(ctx context.Context, c Claims, identity users.External
 		u, err := s.cfg.Store.ByEmail(ctx, email)
 		switch {
 		case err == nil:
-			u, err = s.link(ctx, u, identity)
+			u, err = s.link(ctx, u, identity, c.HomeDirectory)
 			if again && errors.Is(err, users.ErrNotFound) {
 				return s.resolve(ctx, c, identity, false)
 			}
@@ -129,13 +129,20 @@ func (s *Service) resolve(ctx context.Context, c Claims, identity users.External
 }
 
 // refuse says why the account cannot be entered through a provider, if it
-// cannot.
-func (s *Service) refuse(ctx context.Context, u users.User) error {
+// cannot. A blocked or deleted account is refused whatever the provider says.
+// A staff account is entered only when the adapter says, for this sign-in,
+// that the provider vouches for the person as a member of the installation's
+// own directory; users.Service.LinkExternal checks the same again under the
+// lock.
+func (s *Service) refuse(ctx context.Context, u users.User, homeDirectory bool) error {
 	switch {
 	case u.Status == users.StatusDeleted:
 		return users.ErrAccountDeleted
 	case !u.IsActive():
 		return users.ErrAccountBlocked
+	}
+	if homeDirectory {
+		return nil
 	}
 	staff, err := users.ActsAsStaff(ctx, s.cfg.Store, u)
 	if err != nil {
@@ -151,8 +158,8 @@ func (s *Service) refuse(ctx context.Context, u users.User) error {
 // link retired the one issued before it, so this one an administrator issued
 // since, on purpose, and the person must change it as after a password
 // sign-in.
-func (s *Service) enter(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
-	if err := s.refuse(ctx, u); err != nil {
+func (s *Service) enter(ctx context.Context, u users.User, identity users.ExternalIdentity, homeDirectory bool) (users.User, error) {
+	if err := s.refuse(ctx, u, homeDirectory); err != nil {
 		return users.User{}, err
 	}
 	if err := s.cfg.Store.TouchExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject, s.cfg.Now()); err != nil {
@@ -163,22 +170,24 @@ func (s *Service) enter(ctx context.Context, u users.User, identity users.Extern
 
 // known enters the account another request linked the identity to while this
 // one was deciding.
-func (s *Service) known(ctx context.Context, identity users.ExternalIdentity) (users.User, error) {
+func (s *Service) known(ctx context.Context, identity users.ExternalIdentity, homeDirectory bool) (users.User, error) {
 	u, err := s.cfg.Store.ByExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject)
 	if err != nil {
 		return users.User{}, err
 	}
-	return s.enter(ctx, u, identity)
+	return s.enter(ctx, u, identity, homeDirectory)
 }
 
-func (s *Service) link(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
-	if err := s.refuse(ctx, u); err != nil {
+func (s *Service) link(ctx context.Context, u users.User, identity users.ExternalIdentity, homeDirectory bool) (users.User, error) {
+	if err := s.refuse(ctx, u, homeDirectory); err != nil {
 		return users.User{}, err
 	}
-	linked, err := s.cfg.Accounts.LinkExternal(ctx, u.ID, identity, s.cfg.Now())
+	linked, err := s.cfg.Accounts.LinkExternal(ctx, users.LinkExternalCommand{
+		UserID: u.ID, Identity: identity, VerifiedAt: s.cfg.Now(), HomeDirectory: homeDirectory,
+	})
 	switch {
 	case errors.Is(err, users.ErrExternalIdentityTaken):
-		return s.known(ctx, identity)
+		return s.known(ctx, identity, homeDirectory)
 	case errors.Is(err, users.ErrStaffNotLinkable):
 		return users.User{}, ErrStaffAccount
 	case errors.Is(err, users.ErrIssuerAlreadyLinked):
@@ -226,7 +235,7 @@ func (s *Service) create(ctx context.Context, c Claims, identity users.ExternalI
 		case errors.Is(err, users.ErrLoginTaken):
 			continue
 		case errors.Is(err, users.ErrExternalIdentityTaken):
-			return s.known(ctx, identity)
+			return s.known(ctx, identity, c.HomeDirectory)
 		default:
 			return users.User{}, err
 		}

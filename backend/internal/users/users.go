@@ -74,8 +74,9 @@ var (
 	// ErrExternalIdentityTaken refuses linking an identity an account already
 	// holds, as when two first sign-ins of one person race.
 	ErrExternalIdentityTaken = errors.New("this external identity is already linked to an account")
-	// ErrStaffNotLinkable refuses linking an external identity to an account
-	// holding any staff permission.
+	// ErrStaffNotLinkable refuses linking an external identity to a staff
+	// account unless the provider vouched for the person as a member of the
+	// installation's own directory.
 	ErrStaffNotLinkable = errors.New("a staff account cannot be linked to an external identity")
 	// ErrIssuerAlreadyLinked refuses linking an account to a second identity
 	// at an issuer it already holds one at.
@@ -150,9 +151,10 @@ type ContestManagers interface {
 
 // ActsAsStaff reports whether u holds a global permission or manages or owns
 // a contest that is not archived, which reads its reference answers with no
-// global role. Staff are never reached through email nor entered through an
-// external provider, since an address someone typed must not become a way
-// into that power; an administrator resets them. It asks contests whatever u
+// global role. Staff are never reached through email, and enter through an
+// external provider only as members of the installation's own directory,
+// since an address someone typed must not become a way into that power; an
+// administrator resets them. It asks contests whatever u
 // holds, so its time tells one account from another no more than the read
 // that found u. It costs a query: for recovery, sign-up and external
 // sign-in, not for every request.

@@ -283,6 +283,41 @@ func TestAForeignTenantClaimingAnAccountsAddressNeverEntersIt(t *testing.T) {
 	}
 }
 
+func TestAHomeTenantMemberSignsIntoAStaffAccount(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	org := f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
+	s := f.start(t, "192.0.2.1", "/contests/42")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/contests/42" {
+		t.Fatalf("callback = %d to %q, want 302 to the return path (%s)", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	principal, err := f.sessions.Get(t.Context(), sessionOf(t, rec).Value)
+	if err != nil || principal.UserID != org.ID {
+		t.Errorf("session = %+v, %v; want the organizer's", principal, err)
+	}
+}
+
+// A tenant that merely owns the address's domain is not the installation's
+// directory, so it never enters staff.
+func TestAForeignTenantNeverEntersAStaffAccount(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
+	s := f.start(t, "192.0.2.1", "/")
+	claims := f.claims(msOtherTenant)
+	claims["xms_edov"] = true
+
+	rec := f.signIn(t, "192.0.2.1", s, claims)
+
+	assertLandsOnSignIn(t, rec, "external_signin_staff_account")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.NewCookieWriter(false).SessionName() && c.Value != "" {
+			t.Errorf("a session cookie was set: %+v", c)
+		}
+	}
+}
+
 func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
 	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
@@ -383,7 +418,6 @@ func TestARefusedAccountLandsOnItsCode(t *testing.T) {
 		account *users.User
 		code    string
 	}{
-		{"staff", true, &users.User{Login: "org", Email: "ana@example.edu", Roles: []string{"organizer"}}, "external_signin_staff_account"},
 		{"blocked", true, &users.User{Login: "ana", Email: "ana@example.edu", Status: users.StatusBlocked, Roles: []string{users.RoleStudent}}, "account_blocked"},
 		{"closed", false, nil, "external_signin_closed"},
 	} {
