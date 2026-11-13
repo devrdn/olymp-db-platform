@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -204,6 +205,26 @@ func TestTheCallbackRefusesABadSignature(t *testing.T) {
 	parts[1] = strings.Split(p.Sign(t, claims), ".")[1]
 	if _, err := exchangeToken(t, c, p, strings.Join(parts, ".")); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() of a rewritten token = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestATokenUnderAKeyIDNotPublishedIsRefused(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	token := p.SignWithNextKey(t, "never-published", p.Claims(clientID, homeTenant, objectID, "the-nonce"))
+	if _, err := exchangeToken(t, c, p, token); !errors.Is(err, connector.ErrInvalidToken) {
+		t.Errorf("Exchange() under an unpublished kid = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestAKeyOutageIsKeysUnavailable(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+	p.FailKeys(http.StatusServiceUnavailable)
+
+	if _, err := exchange(t, c, p, p.Claims(clientID, homeTenant, objectID, "the-nonce")); !errors.Is(err, connector.ErrKeysUnavailable) {
+		t.Errorf("Exchange() while the keys are down = %v, want ErrKeysUnavailable", err)
 	}
 }
 
