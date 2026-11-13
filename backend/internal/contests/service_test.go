@@ -38,6 +38,19 @@ func TestNewServiceRefusesToAssembleWithoutCovers(t *testing.T) {
 	contests.NewService(contests.ServiceConfig{Gate: contests.NewGate(0), GameReadiness: conteststest.NewGames()})
 }
 
+// Without Appointees an appointment would leave the appointee's sessions,
+// opened when the account did not act as staff, alive.
+func TestNewServiceRefusesToAssembleWithoutAppointees(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService without Appointees did not panic")
+		}
+	}()
+	contests.NewService(contests.ServiceConfig{
+		Gate: contests.NewGate(0), GameReadiness: conteststest.NewGames(), Covers: conteststest.NewCovers(),
+	})
+}
+
 func TestCreateMakesTheAuthorTheOwner(t *testing.T) {
 	// Somebody must be able to appoint managers from the first moment.
 	f := conteststest.NewFixture()

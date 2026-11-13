@@ -35,6 +35,54 @@ func TestAManagerIsAppointedToTheContest(t *testing.T) {
 	t.Errorf("staff = %+v, want the assistant as a manager", staff)
 }
 
+// A session opened before the appointment was opened for somebody who did
+// not act as staff, through whichever provider admitted them then.
+func TestAnAppointmentRetiresTheAppointeesSessions(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	assistant := f.AddUser("assistant")
+	var lockedInTransaction bool
+	f.Users.OnLock = func(id uuid.UUID) { lockedInTransaction = id == assistant.ID && f.UnitOfWork.Open }
+
+	if err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, assistant.ID, rbac.RoleManager); err != nil {
+		t.Fatalf("GrantManager() = %v", err)
+	}
+
+	if !lockedInTransaction {
+		t.Error("the appointee's account was not locked inside the appointment's transaction")
+	}
+	stored, _ := f.Users.ByID(context.Background(), assistant.ID)
+	if stored.SessionGeneration != assistant.SessionGeneration+1 {
+		t.Errorf("session generation = %d, want %d", stored.SessionGeneration, assistant.SessionGeneration+1)
+	}
+	if len(f.Access.Forgotten) != 1 || f.Access.Forgotten[0] != assistant.ID {
+		t.Errorf("forgotten = %v, want the appointee", f.Access.Forgotten)
+	}
+	if f.Access.DuringTransaction != 0 {
+		t.Error("the access cache was told before the appointment committed, so a request could cache the old row again")
+	}
+}
+
+func TestARefusedAppointmentRetiresNoSession(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	student := f.AddUser("s.popescu")
+	if _, err := f.Registrations.Add(context.Background(), c.ID, student.ID); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	if err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, student.ID, rbac.RoleManager); !errors.Is(err, contests.ErrParticipantCannotBeStaff) {
+		t.Fatalf("GrantManager() = %v, want ErrParticipantCannotBeStaff", err)
+	}
+
+	if stored, _ := f.Users.ByID(context.Background(), student.ID); stored.SessionGeneration != student.SessionGeneration {
+		t.Errorf("session generation = %d, want it unchanged", stored.SessionGeneration)
+	}
+	if len(f.Access.Forgotten) != 0 {
+		t.Errorf("forgotten = %v, want nothing", f.Access.Forgotten)
+	}
+}
+
 func TestAppointingAnAccountThatDoesNotExistIsRefused(t *testing.T) {
 	// The foreign key would refuse it too, but as an opaque 500.
 	f := conteststest.NewFixture()

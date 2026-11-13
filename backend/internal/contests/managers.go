@@ -100,11 +100,18 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		return err
 	}
 
-	return s.uow.Do(ctx, func(ctx context.Context) error {
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		// The roster check reads a different table than the write, so a
 		// concurrent Enroll could pass its own staff check at the same time.
 		// The contest lock serialises the two; the check must stay inside it.
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
+			return err
+		}
+		// The appointee now acts as staff, and a staff account is entered
+		// through a provider only from the home directory. The lock makes a
+		// link in flight wait and then see the appointment; the bump ends
+		// every session opened before it.
+		if err := s.appointees.Lock(ctx, user.ID); err != nil {
 			return err
 		}
 		if _, err := s.registrations.ByUser(ctx, contestID, userID); err == nil {
@@ -121,12 +128,20 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		}); err != nil {
 			return err
 		}
+		if _, err := s.appointees.BumpSessionGeneration(ctx, user.ID); err != nil {
+			return err
+		}
 		return s.record(ctx, actorID, audit.ActionManagerGrant, contestID, map[string]any{
 			"user_id": user.ID.String(),
 			"login":   user.Login,
 			"role":    string(role),
 		})
 	})
+	if err != nil {
+		return err
+	}
+	s.forget(ctx, user.ID)
+	return nil
 }
 
 // RevokeManager removes somebody from a contest's staff.

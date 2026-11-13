@@ -39,6 +39,7 @@ type Fixture struct {
 	Submissions   *Submissions
 	Sequence      *SequentialProgress
 	Users         *userstest.Repository
+	Access        *AccessCache
 	Audit         *Sink
 	UnitOfWork    *UnitOfWork
 	Now           time.Time
@@ -69,6 +70,7 @@ func NewFixture() *Fixture {
 		Covers:        NewCovers(),
 		Submissions:   NewSubmissions(),
 		Users:         userstest.New(),
+		Access:        &AccessCache{uow: uow},
 		Audit:         NewSink(),
 		UnitOfWork:    uow,
 		Now:           FixtureNow,
@@ -140,6 +142,7 @@ func NewFixture() *Fixture {
 		Submissions:   f.Submissions,
 		Sequence:      f.Sequence,
 		Users:         f.Users,
+		Appointees:    f.Users,
 		Audit:         audit.New(f.Audit),
 		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
@@ -151,7 +154,7 @@ func NewFixture() *Fixture {
 		DefaultGraceMin: FixtureDefaultGraceMin,
 		PoolTrigger:     f.PoolTrigger,
 	}
-	f.Service = contests.NewService(f.config)
+	f.Service = contests.NewService(f.config).WithAccessCache(f.Access)
 	return f
 }
 
@@ -160,8 +163,24 @@ func NewFixture() *Fixture {
 func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
 	f.Gate = contests.NewGate(grace)
 	f.config.Gate = f.Gate
-	f.Service = contests.NewService(f.config)
+	f.Service = contests.NewService(f.config).WithAccessCache(f.Access)
 	return f
+}
+
+// AccessCache records what the service told auth's cache to forget.
+type AccessCache struct {
+	uow       *UnitOfWork
+	Forgotten []uuid.UUID
+	// DuringTransaction counts the calls made with the unit of work still
+	// open, before a real transaction would have committed.
+	DuringTransaction int
+}
+
+func (c *AccessCache) Forget(_ context.Context, ids []uuid.UUID) {
+	if c.uow.Open {
+		c.DuringTransaction++
+	}
+	c.Forgotten = append(c.Forgotten, ids...)
 }
 
 // UnitOfWork runs fn directly and marks the context as inside a transaction.
