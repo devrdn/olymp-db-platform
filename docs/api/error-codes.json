@@ -783,7 +783,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account or from this address. Also the limit of the event registration form, of each self-service sign-up endpoint and of each password recovery endpoint, per address and per email or account, refused attempts included. Starting a sign-up and asking for a new code also spend mail budgets once the request would mail: the caller's address's, the typed email's, and the installation's for all sign-up mail, which when spent refuses everybody for the rest of its minute or day. Try again later."
     },
     {
       "code": "too_many_connections",

@@ -1,9 +1,12 @@
 package signup_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,11 +20,19 @@ import (
 
 const chosenPassword = "a long enough chosen password"
 
+// start is a sign-up form sent from an address of its own, so only the tests
+// of the address budget meet it.
 func start(email, login string) signup.StartCommand {
 	return signup.StartCommand{
 		FullName: "Ana Popescu", Login: login, Email: email, Password: chosenPassword, Lang: "en",
+		Sender: freshSender(),
 	}
 }
+
+var senders atomic.Int64
+
+// freshSender is an address no other request in the test binary came from.
+func freshSender() string { return fmt.Sprintf("sender-%d", senders.Add(1)) }
 
 var codePattern = regexp.MustCompile(`\b\d{6}\b`)
 
@@ -49,7 +60,7 @@ func (b begun) confirm(code string) signup.ConfirmCommand {
 }
 
 func (b begun) resend() signup.ResendCommand {
-	return signup.ResendCommand{Email: b.email, Token: b.token, Lang: "en"}
+	return signup.ResendCommand{Email: b.email, Token: b.token, Lang: "en", Sender: freshSender()}
 }
 
 // begin runs Start and returns what it handed out.
@@ -841,5 +852,164 @@ func TestStartIsNotAvailableWithMailOffOrTheSwitchOff(t *testing.T) {
 				t.Error("an unavailable sign-up stored or hashed something")
 			}
 		})
+	}
+}
+
+// switchedBudget stands in for the installation's mail budget, refusing
+// while closed and counting what it admits.
+type switchedBudget struct {
+	closed   bool
+	admitted int
+}
+
+func (b *switchedBudget) Spend(context.Context) (bool, error) {
+	if b.closed {
+		return false, nil
+	}
+	b.admitted++
+	return true, nil
+}
+
+func withBudget(b *switchedBudget) func(*signup.Config) {
+	return func(cfg *signup.Config) { cfg.MailBudget = b }
+}
+
+// Only a sign-up whose code is about to be queued spends the installation's
+// budget: a form refused for what it carries, or because too many wait,
+// spends nothing, so junk cannot use the budget up for everybody.
+func TestAStartThatMailsNothingSpendsNoMailBudget(t *testing.T) {
+	budget := &switchedBudget{}
+	f := signuptest.NewFixture(t, withBudget(budget))
+	f.Users.Add(users.User{Login: "taken", FullName: "Taken", Email: "taken@example.edu", PasswordHash: "x"})
+	weak, badName, badLogin, taken, badEmail := start("ion@example.edu", "ion"), start("ion@example.edu", "ion"),
+		start("ion@example.edu", "a.b"), start("ion@example.edu", "taken"), start("x1@y", "ion")
+	weak.Password = "short"
+	badName.FullName = "Visit evil.example"
+	badEmail.Email = strings.Repeat("x", users.MaxEmailLength+1)
+
+	for name, cmd := range map[string]signup.StartCommand{
+		"a weak password": weak, "a name that is no name": badName, "a login of other characters": badLogin,
+		"a taken login": taken, "an address too long": badEmail,
+	} {
+		if err := startErr(t, f, cmd); err == nil {
+			t.Fatalf("%s: Start() = nil, want a refusal", name)
+		}
+	}
+	f.Store.Fill(signup.MaxPending, f.Clock.Now().Add(time.Minute))
+	if err := startErr(t, f, start("ion@example.edu", "ion")); !errors.Is(err, signup.ErrFull) {
+		t.Fatalf("Start() with the table full = %v, want ErrFull", err)
+	}
+
+	if budget.admitted != 0 {
+		t.Errorf("the budget admitted %d messages, want none for starts that mailed nothing", budget.admitted)
+	}
+}
+
+func TestAResendThatMailsNothingSpendsNoMailBudget(t *testing.T) {
+	budget := &switchedBudget{}
+	f := signuptest.NewFixture(t, withBudget(budget))
+	b := begin(t, f, start("ana@example.edu", "ana"))
+	stranger := b.resend()
+	stranger.Token = strings.Repeat("A", 43)
+
+	for name, cmd := range map[string]signup.ResendCommand{
+		"too soon": b.resend(), "another browser": stranger,
+		"no sign-up": {Email: "nobody@example.edu", Sender: freshSender()},
+	} {
+		_ = f.Service.Resend(t.Context(), cmd)
+		if budget.admitted != 1 {
+			t.Fatalf("%s: the budget admitted %d messages, want only the first code", name, budget.admitted)
+		}
+	}
+	f.Clock.Advance(signup.ResendCooldown)
+	if err := f.Service.Resend(t.Context(), b.resend()); err != nil {
+		t.Fatalf("Resend() = %v", err)
+	}
+	if budget.admitted != 2 {
+		t.Errorf("the budget admitted %d messages, want the resent code counted", budget.admitted)
+	}
+}
+
+func TestPastTheMailBudgetAStartAndAResendAreRefusedAndQueueNothing(t *testing.T) {
+	budget := &switchedBudget{}
+	f := signuptest.NewFixture(t, withBudget(budget))
+	b := begin(t, f, start("ana@example.edu", "ana"))
+	f.Clock.Advance(signup.ResendCooldown)
+	budget.closed = true
+
+	if err := startErr(t, f, start("ion@example.edu", "ion")); !errors.Is(err, signup.ErrMailBudget) {
+		t.Errorf("Start() = %v, want ErrMailBudget", err)
+	}
+	if err := f.Service.Resend(t.Context(), b.resend()); !errors.Is(err, signup.ErrMailBudget) {
+		t.Errorf("Resend() = %v, want ErrMailBudget", err)
+	}
+	if n := len(f.Outbox.Queued()); n != 1 {
+		t.Errorf("queued %d messages, want the first code alone", n)
+	}
+	if rows := f.Store.Rows(); len(rows) != 1 || rows[0].Email != "ana@example.edu" {
+		t.Errorf("pending = %+v, want ana's sign-up alone and unchanged", rows)
+	}
+	if f.Hasher.Calls() != 1 {
+		t.Errorf("%d hashes, want none for the refused start", f.Hasher.Calls()-1)
+	}
+}
+
+// One address shares one budget between starts and new codes, well under
+// the installation's minute, so a single machine cannot take it all.
+func TestOneAddressTakesAtMostItsShareOfTheMail(t *testing.T) {
+	f := signuptest.NewFixture(t, withBudget(&switchedBudget{}))
+	const hall = "192.0.2.1"
+	var first begun
+	for i := range signup.MailsPerAddress {
+		cmd := start(fmt.Sprintf("person%d@example.edu", i), fmt.Sprintf("person%d", i))
+		cmd.Sender = hall
+		b := begin(t, f, cmd)
+		if i == 0 {
+			first = b
+		}
+	}
+	f.Clock.Advance(signup.ResendCooldown)
+
+	again := start("one.more@example.edu", "one-more")
+	again.Sender = hall
+	if err := startErr(t, f, again); !errors.Is(err, signup.ErrTooManyCodes) {
+		t.Errorf("Start() past the address's share = %v, want ErrTooManyCodes", err)
+	}
+	resend := first.resend()
+	resend.Sender = hall
+	if err := f.Service.Resend(t.Context(), resend); !errors.Is(err, signup.ErrTooManyCodes) {
+		t.Errorf("Resend() past the address's share = %v, want ErrTooManyCodes", err)
+	}
+	if _, err := f.Service.Start(t.Context(), start("elsewhere@example.edu", "elsewhere")); err != nil {
+		t.Errorf("Start() from another address = %v, want it admitted", err)
+	}
+}
+
+// A refusal the server caused must not cost the person: while the
+// installation's budget refuses, the email's own budget is not charged.
+func TestAnInstallationRefusalChargesNothingPerEmail(t *testing.T) {
+	budget := &switchedBudget{closed: true}
+	f := signuptest.NewFixture(t, withBudget(budget))
+	for range 3 {
+		if err := startErr(t, f, start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrMailBudget) {
+			t.Fatalf("Start() = %v, want ErrMailBudget", err)
+		}
+	}
+	budget.closed = false
+
+	for i := range signup.MailsPerEmail {
+		if err := startErr(t, f, start("ana@example.edu", "ana")); err != nil {
+			t.Fatalf("attempt %d after the budget reopened = %v, want all %d admitted", i+1, err, signup.MailsPerEmail)
+		}
+	}
+	if err := startErr(t, f, start("ana@example.edu", "ana")); !errors.Is(err, signup.ErrTooManyCodes) {
+		t.Errorf("one more = %v, want ErrTooManyCodes", err)
+	}
+}
+
+func TestTheMailBudgetsAreSized(t *testing.T) {
+	if signup.MailsPerMinute != 12 || signup.MailsPerDay != 5000 || signup.MailsPerAddress != 6 || signup.MailsPerEmail != 5 {
+		t.Errorf("budgets = %d a minute, %d a day, %d per address, %d per email; want 12, 5000, 6 and 5",
+			signup.MailsPerMinute, signup.MailsPerDay, signup.MailsPerAddress, signup.MailsPerEmail)
 	}
 }

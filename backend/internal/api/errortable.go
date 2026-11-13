@@ -326,6 +326,8 @@ var signupErrors = errorTable{
 	{err: signup.ErrTooSoon, status: http.StatusTooManyRequests, code: codeSignupTooSoon,
 		retryAfter: signup.ResendCooldown},
 	{err: signup.ErrFull, status: http.StatusServiceUnavailable, code: codeSignupFull},
+	{err: signup.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
+	{err: signup.ErrTooManyCodes, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
 }
 
 // signupExpiredMessage is written out because a spent sign-up whose address

@@ -648,6 +648,10 @@ func TestEverySignupErrorHasItsAnswer(t *testing.T) {
 			message: "a code was sent less than a minute ago", retryAfter: "60"},
 		signup.ErrFull: {status: http.StatusServiceUnavailable, code: "signup_full",
 			message: "too many sign-ups are waiting for their code; try later"},
+		signup.ErrMailBudget: {status: http.StatusTooManyRequests, code: "too_many_attempts",
+			message: "this site is sending too many messages just now; wait a few minutes before trying again"},
+		signup.ErrTooManyCodes: {status: http.StatusTooManyRequests, code: "too_many_attempts",
+			message: "too many codes were asked for from this address or for this email; wait before trying again"},
 	}
 
 	declared := map[string]bool{}

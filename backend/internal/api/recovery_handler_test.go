@@ -41,21 +41,13 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 }
 
 // mountRecovery serves the recovery routes of f's service, which decides at
-// mount whether they exist, with the installation's mail budget out of the
-// way.
+// mount whether they exist.
 func mountRecovery(t *testing.T, f *recoverytest.Fixture) *recoveryFixture {
-	t.Helper()
-	return mountRecoveryWithin(t, f, unboundedMail, unboundedMail)
-}
-
-func mountRecoveryWithin(t *testing.T, f *recoverytest.Fixture, mailsPerMinute, mailsPerDay int) *recoveryFixture {
 	t.Helper()
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
 	router := chi.NewRouter()
-	limiter := auth.NewLimiter(c)
-	api.NewRecoveryHandler(f.Service, limiter, api.NewMailBudget(limiter, mailsPerMinute, mailsPerDay),
-		logging.New("error", io.Discard)).Mount(router)
+	api.NewRecoveryHandler(f.Service, auth.NewLimiter(c), logging.New("error", io.Discard)).Mount(router)
 	return &recoveryFixture{Fixture: f, router: router, cache: c}
 }
 
@@ -400,27 +392,24 @@ func TestForgotAnswers202ForAFailureAfterTheHandOff(t *testing.T) {
 	}
 }
 
-// Forgot spends the installation's mail budget before the hand-off, for an
-// identifier that names nobody too, so the refusal says nothing about one.
-func TestTheInstallationsMailBudgetRefusesAForgotFromAFreshAddress(t *testing.T) {
-	f := mountRecoveryWithin(t, recoverytest.NewFixture(t, nil), api.SelfServiceMailsPerMinute, api.SelfServiceMailsPerDay)
+// The recovery budget is spent in the background, only for a link about to
+// be mailed, so past it a request is answered as every other one is and the
+// link is dropped: a refusal would say the account exists.
+func TestAForgotPastTheRecoveryBudgetIsAnsweredAlike(t *testing.T) {
+	f := mountRecovery(t, recoverytest.NewFixture(t, func(cfg *recovery.Config) {
+		cfg.MailBudget = mailing.NewBudget("recovery", mailing.Limits{PerMinute: 1, PerDay: recovery.MailsPerDay},
+			auth.NewLimiter(cache.NewMemory(1000)), cfg.Log)
+	}))
 	f.student("ana", "ana@example.edu")
-	for i := range api.SelfServiceMailsPerMinute {
-		if rec := f.forgot(fmt.Sprintf("192.0.2.%d", i+1), fmt.Sprintf("nobody%d@example.edu", i)); rec.Code != http.StatusAccepted {
+
+	for i := range 3 {
+		if rec := f.forgot(fmt.Sprintf("192.0.2.%d", i+1), "ana@example.edu"); rec.Code != http.StatusAccepted {
 			t.Fatalf("forgot %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
 		}
+		f.settle(t)
 	}
 
-	rec := f.forgot("198.51.100.1", "ana@example.edu")
-
-	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
-		t.Errorf("past the budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
-	}
-	f.settle(t)
-	if queued := f.Outbox.Queued(); len(queued) != 0 {
-		t.Errorf("queued %d messages, want none: a refused request was handed off", len(queued))
-	}
-	if got, want := mailSpent(t, f.cache), fmt.Sprint(api.SelfServiceMailsPerMinute+1); got != want {
-		t.Errorf("mail counter = %s, want %s: the refusal counts", got, want)
+	if queued := f.Outbox.Queued(); len(queued) != 1 {
+		t.Errorf("queued %d messages, want the one link the budget admits", len(queued))
 	}
 }

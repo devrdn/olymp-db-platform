@@ -7,6 +7,8 @@ package signuptest
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -15,7 +17,9 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/settings"
@@ -57,6 +61,9 @@ func NewFixture(t testing.TB, edit func(*signup.Config)) *Fixture {
 			settings.KeyName:         "DB Contest",
 			settings.KeyMailLanguage: string(mailing.English),
 		},
+		Limiter: auth.NewLimiter(memoryCache(t)),
+		MailBudget: mailing.NewBudget("signup", mailing.Limits{PerMinute: signup.MailsPerMinute, PerDay: signup.MailsPerDay},
+			auth.NewLimiter(memoryCache(t)), slog.New(slog.NewTextHandler(io.Discard, nil))),
 		UnitOfWork: &UnitOfWork{store: store, outbox: outbox},
 		Now:        clock.Now,
 	}
@@ -67,6 +74,12 @@ func NewFixture(t testing.TB, edit func(*signup.Config)) *Fixture {
 		Service: signup.NewService(cfg), Store: store, Outbox: outbox,
 		Users: repo, Hasher: hasher, Clock: clock,
 	}
+}
+
+func memoryCache(t testing.TB) *cache.Memory {
+	c := cache.NewMemory(10000)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }
 
 type Clock struct {

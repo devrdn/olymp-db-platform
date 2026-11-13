@@ -85,6 +85,14 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 // PUBLIC_URL; the application registration names the same address.
 const microsoftCallbackPath = "/api/v1/auth/microsoft/callback"
 
+// selfServiceMail is the installation's two budgets of mail to addresses
+// anyone may type, counted apart so a flood of sign-ups cannot shut
+// recovery: sign-up codes and existing-account notices, and reset links.
+func selfServiceMail(limiter *auth.Limiter, log *slog.Logger) (signups, recoveries *mailing.Budget) {
+	return mailing.NewBudget("signup", mailing.Limits{PerMinute: signup.MailsPerMinute, PerDay: signup.MailsPerDay}, limiter, log),
+		mailing.NewBudget("recovery", mailing.Limits{PerMinute: recovery.MailsPerMinute, PerDay: recovery.MailsPerDay}, limiter, log)
+}
+
 // newMicrosoftClient builds the Microsoft connector, or nil when no client is
 // configured.
 func newMicrosoftClient(cfg config.Config) (*microsoft.Client, error) {
@@ -600,6 +608,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	modules = append(modules, registrationsHandler)
 
+	signupMail, recoveryMail := selfServiceMail(limiter, log)
 	// Built whatever the switch says, so rows left from before it was turned
 	// off are still swept.
 	signups := signup.NewService(signup.Config{
@@ -611,13 +620,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,
+		Limiter:    limiter,
+		MailBudget: signupMail,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 	})
 	a.tasks = append(a.tasks, sweepSignups(log, signups.Sweep))
 	// Mounts its routes only while the switch and mail are both on.
-	// One budget for the mail sign-up and recovery queue to typed addresses.
-	selfServiceMail := api.NewMailBudget(limiter, api.SelfServiceMailsPerMinute, api.SelfServiceMailsPerDay)
-	modules = append(modules, api.NewSignupHandler(signups, authService, limiter, selfServiceMail, authMiddleware, cookies, log))
+	modules = append(modules, api.NewSignupHandler(signups, authService, limiter, authMiddleware, cookies, log))
 
 	// Built whatever mail says, so links left from before it was turned off
 	// are still swept; the routes exist only while it is on.
@@ -629,13 +638,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,
+		MailBudget: recoveryMail,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 		PublicURL:  cfg.PublicURL,
 		Log:        log,
 	})
 	a.tasks = append(a.tasks, sweepPasswordResets(log, recoveries.Sweep))
 	a.workers = append(a.workers, worker{name: "password-reset-requests", stop: recoveries.Stop})
-	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, selfServiceMail, log))
+	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, log))
 
 	// Sign-in with Microsoft mounts its routes only with a client; it creates
 	// accounts only while SELF_SIGNUP_ENABLED is on.

@@ -34,6 +34,7 @@ const journeyPublicURL = "https://contest.example.edu"
 // journey is the account services wired to the test database.
 type journey struct {
 	repo         *Users
+	limiter      *auth.Limiter
 	accounts     *users.Service
 	installation *settings.Service
 	hasher       *password.Hasher
@@ -47,14 +48,22 @@ func newJourney(t *testing.T) journey {
 	hasher := passwordtest.NewHasher()
 	uow := storage.NewUnitOfWork(testPool)
 	recorder := audit.New(NewAuditSink(testPool))
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
 	return journey{
 		repo:         repo,
+		limiter:      auth.NewLimiter(c),
 		accounts:     users.NewService(repo, recorder, uow, hasher).WithExternalIdentities(repo),
 		installation: settings.NewService(NewSettings(testPool), NewSettingsImages(testPool), recorder, uow),
 		hasher:       hasher,
 		outbox:       mailing.NewOutbox(NewMailOutbox(testPool)),
 		uow:          uow,
 	}
+}
+
+// mailBudget is a budget of the journey's mail as internal/app sizes it.
+func (j journey) mailBudget(name string, perMinute, perDay int) *mailing.Budget {
+	return mailing.NewBudget(name, mailing.Limits{PerMinute: perMinute, PerDay: perDay}, j.limiter, logging.New("error", io.Discard))
 }
 
 // lastMailTo is the body of the newest message queued to recipient.
@@ -106,6 +115,7 @@ func TestASignUpConfirmedOnTheRealSchemaMakesOneVerifiedStudent(t *testing.T) {
 		signups := signup.NewService(signup.Config{
 			Enabled: true, Store: store, Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
+			Limiter: j.limiter, MailBudget: j.mailBudget("signup", signup.MailsPerMinute, signup.MailsPerDay),
 			UnitOfWork: j.uow,
 		})
 		const email = "journey.signup@example.edu"
@@ -148,6 +158,7 @@ func TestAPasswordResetByLinkOnTheRealSchemaSetsThePasswordAndVerifiesTheAddress
 		recoveries := recovery.NewService(recovery.Config{
 			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
+			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
 			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
 		})
 		const email = "journey.reset@example.edu"
@@ -252,6 +263,7 @@ func TestAContestManagerOnTheRealSchemaIsNeitherMailedALinkNorLinked(t *testing.
 		recoveries := recovery.NewService(recovery.Config{
 			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
 			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
+			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
 			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
 		})
 		if err := recoveries.Request(ctx, email, ""); err != nil {

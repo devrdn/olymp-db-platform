@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/recovery"
@@ -60,6 +62,7 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 	trail := &Audit{}
 	uow := &UnitOfWork{store: store, outbox: outbox}
 	log := &Log{}
+	logger := slog.New(slog.NewTextHandler(log, nil))
 	cfg := recovery.Config{
 		Store:     store,
 		Directory: repo,
@@ -71,9 +74,11 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 			settings.KeyName:         "DB Contest",
 			settings.KeyMailLanguage: string(mailing.English),
 		},
+		MailBudget: mailing.NewBudget("recovery", mailing.Limits{PerMinute: recovery.MailsPerMinute, PerDay: recovery.MailsPerDay},
+			auth.NewLimiter(memoryCache(t)), logger),
 		UnitOfWork: uow,
 		PublicURL:  PublicURL,
-		Log:        slog.New(slog.NewTextHandler(log, nil)),
+		Log:        logger,
 		Now:        clock.Now,
 	}
 	if edit != nil {
@@ -85,6 +90,12 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 		Service: service, Store: store, Outbox: outbox,
 		Users: repo, Hasher: hasher, Audit: trail, Clock: clock, Log: log,
 	}
+}
+
+func memoryCache(t testing.TB) *cache.Memory {
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }
 
 // Log is a log destination safe for the service's goroutines.

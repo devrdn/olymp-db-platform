@@ -1871,9 +1871,14 @@ it, with the number of questions waiting beside it while the contest runs.
     directly before a letter), since it greets the reader of a message sent
     to whatever address was typed; the password has at least 12 characters.
     Each route spends its address budget (120 in ten minutes) before the
-    email's (5 an hour), and the two that mail (the start and a new code)
-    then the installation's self-service mail budget (below), all before the
-    hash. It needs mail.
+    body is read, and so before the hash; confirming then spends the
+    email's (5 an hour). The two that mail (the start and a new code) spend
+    their mail budgets in the service, only once the request would mail:
+    6 a minute for the caller's address, shared by both, then the
+    installation's sign-up mail budget (below), then 5 an hour for the typed
+    email, each route its own; the start does it before the hash. A refusal
+    by one charges none after it, so a person the installation's budget
+    turned away keeps every attempt of their own. It needs mail.
   - **Recovery by link** (`internal/recovery`). A request names a login or
     an address and is answered at once, before anything is looked up; the
     lookup, the link and the message run in the background, at most eight
@@ -1885,15 +1890,22 @@ it, with the number of questions waiting beside it while the contest runs.
     and ends every session; it is refused when the account has since become
     staff, been blocked or deleted, or changed its address. Each route spends
     its address budget (30 in ten minutes) first, and a request also the
-    identifier's (5 an hour) and then the installation's self-service mail
-    budget. It exists whenever mail does.
-  - **One mail budget for all of self-service.** Sign-up codes,
-    existing-account notices and reset links go to typed addresses through
-    the relay every message shares, so together they may queue at most 15
-    messages a minute and 2000 a day (`api.MailBudget`, one fixed limiter
-    key per window); past it the request answers `too_many_attempts`. A few
-    addresses can then never queue more than the relay sends, and staff
-    mail keeps a share of it.
+    identifier's (5 an hour). The background work spends the installation's
+    recovery mail budget (below) only for a link about to be mailed; past
+    it the link is dropped and logged, and the answer, given before, is the
+    same. It exists whenever mail does.
+  - **Two mail budgets for self-service.** Sign-up codes and
+    existing-account notices go to typed addresses, and reset links to
+    accounts', through the relay every message shares. The installation
+    queues at most 12 sign-up messages a minute and 5000 a day, and 6 reset
+    links a minute and 2000 a day (`mailing.Budget`, one fixed limiter key
+    per window and budget). Each is spent only just before a message is
+    queued, so a request that ends without mail spends nothing, and the two
+    count apart, so a flood of sign-ups cannot shut recovery; recovery's
+    refusal is silent, since its answer was given before the lookup. A few
+    addresses can then never queue more than the relay sends, staff mail
+    keeps a share of it, and the first refusal of each window is logged at
+    warn.
   - **External sign-in** (`internal/federation`). It knows no provider: an
     adapter verifies the provider's answer and hands over the claims (the
     issuer and subject that name the person, an email, a name, a login
