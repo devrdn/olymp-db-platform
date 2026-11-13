@@ -38,7 +38,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         ]
       : []),
     ...(may("audit.view") ? [{ href: "/audit", label: dict.audit.heading }] : []),
-    ...(may("settings.manage") ? [{ href: "/settings", label: dict.settings.heading }] : []),
+    ...(may("settings.manage")
+      ? [
+          { href: "/settings", label: dict.settings.heading },
+          { href: "/integrations", label: dict.settings.integrations.heading },
+        ]
+      : []),
   ];
 
   return (

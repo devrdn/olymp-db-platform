@@ -2,7 +2,7 @@ import { API_PREFIX } from "@/lib/api/client";
 
 import { resumable } from "./destination";
 
-/** The providers the API can offer, in the order it lists them. */
+/** The providers this release knows, in the order they are shown. */
 export const PROVIDER_IDS = ["microsoft", "google", "github"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -14,12 +14,6 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
   github: "GitHub",
 };
 
-/**
- * Signing in through a provider starts on the API, which redirects to the
- * provider; the callback ends at the return path, at `/login` without one (the
- * page sends a signed-in visitor on, as after a password sign-in), or at
- * `/login?error=<code>`.
- */
 /** `connector.MaxReturnPathLength` in the Go service. */
 const MAX_RETURN_PATH_LENGTH = 512;
 
@@ -38,7 +32,13 @@ function returnable(next: string): boolean {
   );
 }
 
-/** The start link for a provider, returning to `next` when it is a path on this site. */
+/**
+ * The start link for a provider, returning to `next` when it is a path on this
+ * site. Signing in through a provider starts on the API, which redirects to
+ * the provider; the callback ends at the return path, at `/login` without one
+ * (the page sends a signed-in visitor on, as after a password sign-in), or at
+ * `/login?error=<code>`.
+ */
 export function externalStartHref(provider: ProviderId, next: string | undefined): string {
   const start = `${API_PREFIX}/auth/${provider}/start`;
   if (!next || !returnable(next)) return start;
