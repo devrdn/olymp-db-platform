@@ -575,6 +575,26 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 	}
 }
 
+// The account's address and the identity's must be the same ASCII address:
+// Unicode folding takes U+212A KELVIN SIGN for k, and PostgreSQL's lower()
+// finds either spelling from the other.
+func TestLinkExternalRefusesAnAddressThatOnlyFoldsToTheIdentitys(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	kelvin := f.repo.Add(users.User{Login: "kate", FullName: "Kate", Email: "\u212Aate@example.edu", Roles: []string{users.RoleStudent}})
+	identity := microsoftIdentity("sub-kate")
+	identity.Email = "kate@example.edu"
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: kelvin.ID, Identity: identity, VerifiedAt: time.Now()})
+
+	if !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("LinkExternal() = %v, want ErrNotFound", err)
+	}
+	if linked := f.repo.Identities(kelvin.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+}
+
 func TestLinkExternalAdmitsStaffFromTheHomeDirectory(t *testing.T) {
 	f := newFixture(t)
 	f.repo.GrantRole("organizer", "contests.manage")

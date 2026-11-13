@@ -7,6 +7,11 @@
 // whether the email in it is trusted, and hands over Claims; another provider
 // needs another adapter and no change here. It does not serve HTTP, open the
 // session (auth does) or throttle callers (internal/api does).
+//
+// Only an ASCII address finds, links or lands on an account. Case folding
+// beyond ASCII, in Go and in PostgreSQL's lower(), takes U+212A KELVIN SIGN
+// for k, so one spelling would find the account of another; an email with any
+// other character is dropped as if the provider sent none, vouched for or not.
 package federation
 
 import (
@@ -117,10 +122,15 @@ func boundedText(s string, limit int) bool {
 }
 
 // address returns raw trimmed and lowercased, and whether it is empty or a
-// bare address of at most MaxEmailLength bytes.
+// bare address of at most MaxEmailLength bytes. A non-ASCII one is returned
+// empty.
 func address(raw string) (string, bool) {
 	if !boundedText(raw, MaxEmailLength) {
 		return "", false
+	}
+	// Checked before lowercasing, which itself folds KELVIN SIGN to k.
+	if strings.ContainsFunc(raw, func(r rune) bool { return r > unicode.MaxASCII }) {
+		return "", true
 	}
 	email := strings.ToLower(strings.TrimSpace(raw))
 	if email == "" {
