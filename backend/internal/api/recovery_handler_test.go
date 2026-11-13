@@ -237,9 +237,13 @@ func TestRecoveryRoutesDoNotExistWhenMailIsOff(t *testing.T) {
 func TestForgotSpendsTheAddressBudgetFirst(t *testing.T) {
 	f := newRecoveryFixture(t)
 	f.student("ana", "ana@example.edu")
+	// Fillers the handler refuses still spend the address. An admitted one
+	// would hold one of the service's MaxInFlight slots, and the request
+	// below, finding them all taken, would be dropped.
+	overlong := strings.Repeat("a", users.MaxEmailLength+1)
 	for i := range api.RecoveriesPerAddress {
-		if rec := f.forgot("192.0.2.1", fmt.Sprintf("filler%d", i)); rec.Code != http.StatusAccepted {
-			t.Fatalf("filler %d = %d, want 202 (%s)", i, rec.Code, rec.Body.String())
+		if rec := f.forgot("192.0.2.1", overlong); rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+			t.Fatalf("filler %d = %d %s, want 400 invalid_request", i, rec.Code, rec.Body.String())
 		}
 	}
 	for range api.RecoveriesPerAccount {
