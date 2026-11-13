@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -28,8 +29,11 @@ const (
 type Provider struct {
 	URL string
 
-	mu           sync.Mutex
-	grants       map[string]grant
+	mu sync.Mutex
+	// codes are the grants not yet redeemed; tokens, the ones redeemed, by
+	// the access token they yielded.
+	codes        map[string]grant
+	tokens       map[string]grant
 	emailsStatus int
 	requests     int
 	last         map[string]*http.Request
@@ -44,7 +48,7 @@ type grant struct {
 
 func NewProvider(t testing.TB) *Provider {
 	t.Helper()
-	p := &Provider{grants: map[string]grant{}, last: map[string]*http.Request{}}
+	p := &Provider{codes: map[string]grant{}, tokens: map[string]grant{}, last: map[string]*http.Request{}}
 	server := httptest.NewServer(http.HandlerFunc(p.serve))
 	t.Cleanup(server.Close)
 	p.URL = server.URL
@@ -76,8 +80,9 @@ func (p *Provider) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// token answers as GitHub does: 200 with an error field for a refusal. A code
-// works once.
+// token answers as GitHub does: form-encoded unless the request accepts
+// application/json, and 200 with an error field for a refusal. A code works
+// once.
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -86,35 +91,45 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	code := r.PostForm.Get("code")
 	p.mu.Lock()
 	p.last[r.URL.Path] = r.Clone(r.Context())
-	g, known := p.grants[code]
+	g, known := p.codes[code]
 	valid := known &&
 		r.PostForm.Get("client_id") == ClientID &&
 		r.PostForm.Get("client_secret") == ClientSecret &&
 		r.PostForm.Get("redirect_uri") == RedirectURL &&
 		subtle.ConstantTimeCompare([]byte(Challenge(r.PostForm.Get("code_verifier"))), []byte(g.challenge)) == 1
 	if valid {
-		delete(p.grants, code)
-		p.grants[tokenFor(code)] = g
+		delete(p.codes, code)
+		p.tokens[tokenFor(code)] = g
 	}
 	p.mu.Unlock()
 
-	w.Header().Set("Content-Type", "application/json")
+	answer := url.Values{"access_token": {tokenFor(code)}, "scope": {"user:email"}, "token_type": {"bearer"}}
 	if !valid {
-		_, _ = w.Write([]byte(`{"error":"bad_verification_code"}`))
+		answer = url.Values{
+			"error":             {"bad_verification_code"},
+			"error_description": {"The code passed is incorrect or expired."},
+		}
+	}
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		body := map[string]string{}
+		for k := range answer {
+			body[k] = answer.Get(k)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"access_token": tokenFor(code), "token_type": "bearer", "scope": "user:email",
-	})
+	w.Header().Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	_, _ = w.Write([]byte(answer.Encode()))
 }
 
-// tokenFor is the access token a code is traded for; the grant moves to it.
+// tokenFor is the access token a code is traded for.
 func tokenFor(code string) string { return "gho_" + code }
 
 func (p *Provider) api(w http.ResponseWriter, r *http.Request, answer func(grant) (int, any)) {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	p.mu.Lock()
-	g, ok := p.grants[token]
+	g, ok := p.tokens[token]
 	p.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if !ok || !strings.HasPrefix(token, "gho_") {
@@ -140,7 +155,7 @@ func Challenge(verifier string) string {
 func (p *Provider) Issue(code, challenge string, user map[string]any, emails []map[string]any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.grants[code] = grant{challenge: challenge, user: user, emails: emails}
+	p.codes[code] = grant{challenge: challenge, user: user, emails: emails}
 }
 
 // EmailsStatus makes /user/emails answer status; 0 serves the emails again.
