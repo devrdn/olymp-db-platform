@@ -266,8 +266,8 @@ func (c *Client) Exchange(ctx context.Context, code string, st connector.State) 
 // federated keys the identity on the issuer and the object ID, never sub:
 // sub is pairwise per application registration, so moving the installation
 // to another registration would change every person's. The display values
-// are cut to federation's bounds; the email is passed whole and refused
-// there if it is not an address.
+// are cut to federation's bounds; the email is passed whole and checked
+// there, refused if trusted and dropped if not.
 func (c *Client) federated(t idTokenClaims) federation.Claims {
 	email := t.Email
 	// A guest carries the home tenant's tid with an address the tenant never

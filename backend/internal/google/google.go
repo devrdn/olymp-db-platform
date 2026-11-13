@@ -203,7 +203,7 @@ func (c *Client) Exchange(ctx context.Context, code string, st connector.State) 
 // federated keys the identity on Google's canonical issuer and sub, so the
 // two spellings of the issuer in a token never split one person in two. The
 // display values are cut to federation's bounds; the email is passed whole
-// and refused there if it is not an address.
+// and checked there, refused if trusted and dropped if not.
 func (c *Client) federated(t idTokenClaims) federation.Claims {
 	verified := emailVerified(t.EmailVerified)
 	return federation.Claims{

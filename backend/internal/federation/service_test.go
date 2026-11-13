@@ -516,6 +516,63 @@ func TestOversizedClaimsAreRefused(t *testing.T) {
 	}
 }
 
+// An address the provider does not vouch for is never used, so one it gets
+// wrong must not stop a person already linked, nor a new account.
+func TestAnUntrustedInvalidEmailIsDropped(t *testing.T) {
+	for name, email := range map[string]string{
+		"too long":       strings.Repeat("x", federation.MaxEmailLength) + "@example.edu",
+		"not an address": "Ana <ana@example.edu>",
+		"no at sign":     "ana.example.edu",
+		"a control char": "ana\x00@example.edu",
+		"invalid UTF-8":  "ana\xff@example.edu",
+	} {
+		t.Run(name+", linked", func(t *testing.T) {
+			f := newFixture(t)
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Roles: []string{users.RoleStudent}})
+			f.link(t, ana, "sub-ana")
+			c := claims("sub-ana")
+			c.Email = email
+
+			if got, err := f.service().Resolve(t.Context(), c); err != nil || got.ID != ana.ID {
+				t.Errorf("Resolve() = %v, %v; want ana's account", got.ID, err)
+			}
+		})
+		t.Run(name+", new", func(t *testing.T) {
+			f := newFixture(t)
+			c := claims("sub-ion")
+			c.Email = email
+
+			got, err := f.service().Resolve(t.Context(), c)
+			if err != nil {
+				t.Fatalf("Resolve() = %v, want a new account", err)
+			}
+			if stored, _ := f.repo.Get(got.ID); stored.Email != "" {
+				t.Errorf("new account's email = %q, want none", stored.Email)
+			}
+			if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Email != "" {
+				t.Errorf("identities = %+v, want one without the invalid address", linked)
+			}
+		})
+	}
+}
+
+func TestATrustedInvalidEmailIsRefused(t *testing.T) {
+	for name, email := range map[string]string{
+		"too long":       strings.Repeat("x", federation.MaxEmailLength) + "@example.edu",
+		"not an address": "Ana <ana@example.edu>",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			c := trusted("sub-ana")
+			c.Email = email
+
+			if _, err := f.service().Resolve(t.Context(), c); !errors.Is(err, federation.ErrInvalidClaims) {
+				t.Errorf("Resolve() = %v, want ErrInvalidClaims", err)
+			}
+		})
+	}
+}
+
 // Two first sign-ins of one person race: the rival commits its account and
 // link first, and this one enters the rival's account instead of making a
 // second.
