@@ -763,7 +763,7 @@
     },
     {
       "code": "signup_wrong_code",
-      "meaning": "The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try at a waiting sign-up counts against its five."
+      "meaning": "The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try from the browser that started the sign-up counts against its five; one from any other browser counts nothing."
     },
     {
       "code": "staff_cannot_participate",

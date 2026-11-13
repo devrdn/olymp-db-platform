@@ -503,7 +503,7 @@ var (
 	codeSignupNotAvailable = httpx.NewCode("signup_not_available",
 		"This installation does not offer self-service sign-up: SELF_SIGNUP_ENABLED is off, or email is, so no code could reach anyone. Nothing was stored.")
 	codeSignupWrongCode = httpx.NewCode("signup_wrong_code",
-		"The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try at a waiting sign-up counts against its five.")
+		"The code is not the one mailed for this sign-up, this browser did not start it, or the address has no sign-up waiting: deliberately one answer, so a confirmation says nothing about which addresses have one. A try from the browser that started the sign-up counts against its five; one from any other browser counts nothing.")
 	codeSignupCodeExpired = httpx.NewCode("signup_code_expired",
 		"The sign-up can no longer be confirmed: thirty minutes passed since its code was mailed, its five tries are spent, or it can no longer finish. Start the sign-up again.")
 	codeSignupTooSoon = httpx.NewCode("signup_too_soon",

@@ -313,23 +313,25 @@ func TestARestartedSignupCannotBeConfirmedFromTheFirstBrowser(t *testing.T) {
 	}
 }
 
-func TestConfirmWithoutTheStartTokenIsAWrongCode(t *testing.T) {
+// Without the token the code cannot confirm, so a mismatch spends none of
+// the sign-up's tries: a stranger who knows only the address cannot void it.
+func TestConfirmWithoutTheStartTokenIsAWrongCodeAndCountsNoTry(t *testing.T) {
 	f := signuptest.NewFixture(t, nil)
 	b := begin(t, f, start("ana@example.edu", "ana"))
 	other := begin(t, f, start("maria@example.edu", "maria"))
 
-	for i, token := range []string{"", other.token, b.token[:42], b.token + "A", strings.Repeat("A", 10_000)} {
+	for _, token := range []string{"", other.token, b.token[:42], b.token + "A", strings.Repeat("A", 10_000), b.token[1:] + "A"} {
 		cmd := b.confirm(b.code)
 		cmd.Token = token
 		if _, err := f.Service.Confirm(t.Context(), cmd); !errors.Is(err, signup.ErrWrongCode) {
 			t.Errorf("Confirm() with token %.12q = %v, want ErrWrongCode", token, err)
 		}
-		if tries := f.Store.Rows()[0].Tries; tries != i+1 {
-			t.Errorf("after %d tries the row counts %d", i+1, tries)
-		}
 	}
-	if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); !errors.Is(err, signup.ErrCodeExpired) {
-		t.Errorf("Confirm() after five tokenless tries = %v, want ErrCodeExpired", err)
+	if tries := f.Store.Rows()[0].Tries; tries != 0 {
+		t.Errorf("tries = %d, want none counted for a token mismatch", tries)
+	}
+	if _, err := f.Service.Confirm(t.Context(), b.confirm(b.code)); err != nil {
+		t.Errorf("Confirm() with the token after six tokenless tries = %v, want the account", err)
 	}
 }
 
@@ -348,8 +350,8 @@ func TestResendNeedsTheStartToken(t *testing.T) {
 	if n := len(f.Outbox.Queued()); n != 1 {
 		t.Errorf("queued %d messages, want only the first code", n)
 	}
-	if tries := f.Store.Rows()[0].Tries; tries != 2 {
-		t.Errorf("tries = %d, want both tokenless resends counted", tries)
+	if tries := f.Store.Rows()[0].Tries; tries != 0 {
+		t.Errorf("tries = %d, want none counted for a token mismatch", tries)
 	}
 	if err := f.Service.Resend(t.Context(), b.resend()); err != nil {
 		t.Errorf("Resend() with the token = %v, want nil", err)
