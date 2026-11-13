@@ -408,6 +408,9 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 		if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
 			return err
 		}
+		if err := s.forgetResetLinks(ctx, changed); err != nil {
+			return err
+		}
 		if err := s.audit.RecordMany(ctx, entries); err != nil {
 			return err
 		}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/recovery"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,6 +64,14 @@ func (r *PasswordResets) Spend(ctx context.Context, tokenHash []byte) (recovery.
 		return recovery.Link{}, false, fmt.Errorf("spend the reset link: %w", err)
 	}
 	return l, true, nil
+}
+
+// DeleteFor deletes the links of the accounts.
+func (r *PasswordResets) DeleteFor(ctx context.Context, ids []uuid.UUID) error {
+	if _, err := storage.QuerierFrom(ctx, r.pool).Exec(ctx, `DELETE FROM password_resets WHERE user_id = ANY($1)`, ids); err != nil {
+		return fmt.Errorf("delete the reset links: %w", err)
+	}
+	return nil
 }
 
 func (r *PasswordResets) Sweep(ctx context.Context, now time.Time) (int64, error) {

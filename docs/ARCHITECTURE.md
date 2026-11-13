@@ -1884,7 +1884,9 @@ it, with the number of questions waiting beside it while the contest runs.
     lookup, the link and the message run in the background, at most eight
     at a time. A link goes to an active student account with an address,
     verified or not, since following it is the proof; a new link replaces
-    the previous one. Its token is 32 random bytes, stored as a SHA-256,
+    the previous one, and a password an administrator issues or the owner
+    changes deletes a waiting one in the same transaction, since the reset
+    may be because the mailbox is no longer the owner's. Its token is 32 random bytes, stored as a SHA-256,
     valid for 30 minutes and spent by its first use. Completing it sets the
     password, marks the address verified, clears the one-time-password flag
     and ends every session; it is refused when the account has since become

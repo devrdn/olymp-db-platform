@@ -154,6 +154,27 @@ func TestPasswordResetsGoWithTheirAccount(t *testing.T) {
 	})
 }
 
+func TestPasswordResetsDeleteForRemovesOnlyTheNamedAccountsLinks(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewPasswordResets(testPool)
+		named, other := makeUser(t, ctx, "reset-"+uuid.NewString()[:8]), makeUser(t, ctx, "reset-"+uuid.NewString()[:8])
+		gone, kept := resetLink(t, named.ID), resetLink(t, other.ID)
+		replaceLink(t, ctx, repo, gone)
+		replaceLink(t, ctx, repo, kept)
+
+		if err := repo.DeleteFor(ctx, []uuid.UUID{named.ID}); err != nil {
+			t.Fatalf("DeleteFor() = %v", err)
+		}
+
+		if _, ok, _ := repo.Spend(ctx, gone.TokenHash); ok {
+			t.Error("the named account's link survived")
+		}
+		if _, ok, _ := repo.Spend(ctx, kept.TokenHash); !ok {
+			t.Error("another account's link was deleted")
+		}
+	})
+}
+
 func TestThePasswordResetsTableRefusesATokenHashOfAnotherLength(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		q := storage.QuerierFrom(ctx, testPool)

@@ -50,6 +50,32 @@ type Service struct {
 	mail *Mail
 	// identities is nil when nothing links external identities.
 	identities ExternalIdentities
+	// resets is nil when nothing mails reset links.
+	resets ResetLinks
+}
+
+// ResetLinks forgets the reset links mailed to accounts
+// (internal/postgres.PasswordResets).
+type ResetLinks interface {
+	// DeleteFor joins the transaction in ctx.
+	DeleteFor(ctx context.Context, ids []uuid.UUID) error
+}
+
+// WithResetLinks is for the composition root, before the service is shared.
+// A password an administrator issues, or the owner changes, then voids a
+// reset link mailed before, in the same transaction: the reset may be
+// because the mailbox that holds the link is no longer the owner's.
+func (s *Service) WithResetLinks(store ResetLinks) *Service {
+	s.resets = store
+	return s
+}
+
+// forgetResetLinks runs inside the caller's transaction.
+func (s *Service) forgetResetLinks(ctx context.Context, ids []uuid.UUID) error {
+	if s.resets == nil {
+		return nil
+	}
+	return s.resets.DeleteFor(ctx, ids)
 }
 
 // WithExternalIdentities is for the composition root, before the service is
@@ -587,6 +613,9 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 		if _, err := s.repo.BumpSessionGeneration(ctx, user.ID); err != nil {
 			return err
 		}
+		if err := s.forgetResetLinks(ctx, []uuid.UUID{user.ID}); err != nil {
+			return err
+		}
 		return s.record(ctx, user.ID, audit.ActionPasswordChange, user.ID, nil)
 	})
 	if err != nil {
@@ -677,6 +706,9 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID, 
 			return err
 		}
 		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
+			return err
+		}
+		if err := s.forgetResetLinks(ctx, []uuid.UUID{userID}); err != nil {
 			return err
 		}
 		if err := s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil); err != nil {
