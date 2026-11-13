@@ -381,7 +381,7 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 // ErrIssuerAlreadyLinked when the account already holds another identity at
 // the same issuer: a provider may reassign a mailbox, and the address must
 // not carry its new holder into the previous one's account. An account still
-// on its one-time password loses it, as RetireOneTimePassword says. It
+// on its one-time password loses it, as retireOneTimePassword says. It
 // returns the account as it then stands. As for CreateExternal, the owner
 // made the change, so the audit entries have no actor.
 func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) (User, error) {
@@ -434,40 +434,6 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		}
 		retired = true
 		return s.retireOneTimePassword(ctx, &u, identity.Provider)
-	})
-	if err != nil {
-		return User{}, err
-	}
-	if retired {
-		s.forget(ctx, userID)
-	}
-	return u, nil
-}
-
-// RetireOneTimePassword drops the one-time password of an account a sign-in
-// through provider has entered, and returns the account as it now stands. It
-// writes nothing for an account whose owner chose its password. The account
-// is locked and read again first, and refused as LinkExternal refuses it:
-// ErrAccountDeleted, ErrAccountBlocked or ErrStaffNotLinkable.
-func (s *Service) RetireOneTimePassword(ctx context.Context, userID uuid.UUID, provider string) (User, error) {
-	var u User
-	retired := false
-	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.repo.Lock(ctx, userID); err != nil {
-			return err
-		}
-		var err error
-		if u, err = s.repo.ByID(ctx, userID); err != nil {
-			return err
-		}
-		if err := refuseExternalEntry(u); err != nil {
-			return err
-		}
-		if !u.MustChangePassword {
-			return nil
-		}
-		retired = true
-		return s.retireOneTimePassword(ctx, &u, provider)
 	})
 	if err != nil {
 		return User{}, err

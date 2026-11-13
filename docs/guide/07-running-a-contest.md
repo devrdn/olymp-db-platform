@@ -250,10 +250,12 @@ one of four ways, and the installation's settings decide which exist
   or one generated from their Microsoft username or name; the picker finds
   it by name or address too.
 - A staff-made student account still on its one-time password loses it
-  when its owner signs in with Microsoft: the person is let in, and from
-  then on signs in with Microsoft, or sets a password of their own with
-  **Forgot password?** (mail on). The one-time password stops working at
-  that sign-in.
+  when its owner first signs in with Microsoft, which links the two: the
+  person is let in, and from then on signs in with Microsoft, or sets a
+  password of their own with **Forgot password?** (mail on). The one-time
+  password stops working at that sign-in. A one-time password an
+  administrator issues after the link stays: the next Microsoft sign-in
+  asks the person to change it, as a password sign-in would.
 - Staff accounts never sign in with Microsoft and never get a reset link:
   an organiser or administrator signs in with their password.
 - With mail on, anyone with an address on a student account can reset a

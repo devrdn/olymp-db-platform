@@ -30,12 +30,11 @@ type Store interface {
 // refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
 // users.ErrNotFound when the account no longer holds the identity's email, and
 // users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
-// LinkExternal and RetireOneTimePassword drop a one-time password and return
-// the account as it then stands, whose session generation a sign-in must use.
+// LinkExternal drops a one-time password and returns the account as it then
+// stands, whose session generation a sign-in must use.
 type Accounts interface {
 	CreateExternal(ctx context.Context, cmd users.CreateExternalCommand) (users.User, error)
 	LinkExternal(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity, verifiedAt time.Time) (users.User, error)
-	RetireOneTimePassword(ctx context.Context, userID uuid.UUID, provider string) (users.User, error)
 }
 
 // PendingLogins reports the logins sign-ups waiting for their code hold
@@ -142,9 +141,10 @@ func refuse(u users.User) error {
 	return nil
 }
 
-// enter signs into a linked account. One still on its one-time password
-// loses it, as a link by email does; the read decides whether to ask, so an
-// ordinary sign-in writes nothing more (CLAUDE.md rule 6).
+// enter signs into a linked account. A one-time password it holds stays: the
+// link retired the one issued before it, so this one an administrator issued
+// since, on purpose, and the person must change it as after a password
+// sign-in.
 func (s *Service) enter(ctx context.Context, u users.User, identity users.ExternalIdentity) (users.User, error) {
 	if err := refuse(u); err != nil {
 		return users.User{}, err
@@ -152,14 +152,7 @@ func (s *Service) enter(ctx context.Context, u users.User, identity users.Extern
 	if err := s.cfg.Store.TouchExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject, s.cfg.Now()); err != nil {
 		return users.User{}, err
 	}
-	if !u.MustChangePassword {
-		return u, nil
-	}
-	u, err := s.cfg.Accounts.RetireOneTimePassword(ctx, u.ID, identity.Provider)
-	if errors.Is(err, users.ErrStaffNotLinkable) {
-		return users.User{}, ErrStaffAccount
-	}
-	return u, err
+	return u, nil
 }
 
 // known enters the account another request linked the identity to while this

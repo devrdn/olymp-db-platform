@@ -24,7 +24,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
-	"github.com/google/uuid"
 )
 
 // Made-up tenants and application; none exists at Microsoft.
@@ -49,8 +48,6 @@ type microsoftFixture struct {
 type microsoftOptions struct {
 	createAccounts bool
 	noClient       bool
-	// accounts, when set, wraps the account service federation uses.
-	accounts func(*users.Service) federation.Accounts
 }
 
 func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture {
@@ -79,10 +76,6 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 	})
 	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
 		WithExternalIdentities(repo)
-	var accounts federation.Accounts = service
-	if opts.accounts != nil {
-		accounts = opts.accounts(service)
-	}
 
 	var client *microsoft.Client
 	if !opts.noClient {
@@ -104,7 +97,7 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 		States: microsoft.NewStateSealer([]byte(strings.Repeat("k", 32)), nil),
 		Accounts: federation.NewService(federation.Config{
 			Policy: federation.Policy{CreateAccounts: opts.createAccounts},
-			Store:  repo, Accounts: accounts, PendingLogins: noPendingLogins{},
+			Store:  repo, Accounts: service, PendingLogins: noPendingLogins{},
 		}),
 		Auth: authService, Limiter: limiter, Middleware: mw, Cookies: cookies, Log: log,
 	}).Mount(router)
@@ -445,18 +438,10 @@ func TestASignInToAnAccountOnItsOneTimePasswordDropsIt(t *testing.T) {
 	}
 }
 
-// unretiringAccounts enters a linked account without dropping its one-time
-// password, as if it had been issued again between the drop and the sign-in.
-type unretiringAccounts struct{ *users.Service }
-
-func (a unretiringAccounts) RetireOneTimePassword(ctx context.Context, id uuid.UUID, _ string) (users.User, error) {
-	return a.ByID(ctx, id)
-}
-
+// A one-time password issued after the link was handed to the person on
+// purpose: the sign-in keeps it and sends them to change it.
 func TestAnAccountThatMustChangeItsPasswordLandsOnThePasswordScreen(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{accounts: func(s *users.Service) federation.Accounts {
-		return unretiringAccounts{s}
-	}})
+	f := newMicrosoftFixture(t, microsoftOptions{})
 	ana := f.repo.Add(users.User{
 		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
 		PasswordHash: passwordtest.Hash(t, "issued again"), MustChangePassword: true,
