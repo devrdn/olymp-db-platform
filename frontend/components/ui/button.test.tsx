@@ -64,8 +64,29 @@ describe("the button's keyboard focus", () => {
     expect(classes.filter((c) => /^(focus-visible:)?outline-(none|0|hidden)$/.test(c))).toEqual([]);
   });
 
-  test("a link styled as a button inherits the same classes, so the same ring", () => {
-    expect(buttonVariants({ variant: "secondary" })).not.toMatch(/(^|\s)outline-none(\s|$)/);
+  test("a link styled as a button carries the same classes, so the same ring", () => {
+    render(
+      // eslint-disable-next-line @next/next/no-html-link-for-pages
+      <a href="/login" className={buttonVariants({ variant: "secondary" })}>
+        Back
+      </a>,
+    );
+
+    const classes = screen.getByRole("link", { name: "Back" }).className.split(/\s+/);
+    expect(classes).not.toContain("outline-none");
+  });
+
+  test.each([
+    "app/(participant)/contests/[contestId]/play/sql-tabs.tsx",
+    "app/(participant)/contests/[contestId]/play/schema-panel.tsx",
+    "app/(admin)/contests/[contestId]/game/game-upload.tsx",
+    "app/(admin)/contests/[contestId]/game/game-builder-table.tsx",
+    "components/product/code-editor.tsx",
+    "app/(participant)/contests/[contestId]/play/result-panel.tsx",
+  ])("%s carries no bare outline-none", (file) => {
+    const source = readFileSync(path.resolve(__dirname, "../..", file), "utf8");
+
+    expect(source).not.toMatch(/(^|[\s"'`])outline-none/);
   });
 });
 

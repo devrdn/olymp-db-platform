@@ -52,6 +52,13 @@
   outline: none;
 }
 
+/* The surface has no box of its own, so the ring goes on the editor around it,
+   and only for keyboard focus. */
+.milkdown:has(.ProseMirror:focus-visible) {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
 /* Headings in the interface face, body in the narrative one — the same split
    the rendered story uses, so the two cannot look like different documents. */
 .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
