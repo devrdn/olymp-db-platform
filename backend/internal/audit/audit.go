@@ -49,7 +49,7 @@ const (
 	ActionUserExternalIdentityLink = "user.external_identity_link"
 	// ActionUserOneTimePasswordRetire records an external sign-in dropping the
 	// one-time password of the account it entered; it carries the provider.
-	ActionUserOneTimePasswordRetire = "user.one_time_password_retire"
+	ActionUserOneTimePasswordRetire = "user.one_time_password_retire" // #nosec G101 -- an audit action name, not a credential.
 
 	ActionContestCreate       = "contest.create"
 	ActionContestUpdate       = "contest.update"
