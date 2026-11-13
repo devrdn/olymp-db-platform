@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { PROVIDER_IDS, type ProviderId } from "@/lib/auth/external";
+
 import { failureCode } from "./client";
 import { serverRequest } from "./server";
 
@@ -10,12 +12,15 @@ export const authMethodsSchema = z
     password_reset: z.boolean(),
     microsoft: z.boolean(),
     trusted_email_domain: z.string(),
+    providers: z.array(z.object({ id: z.string().max(32) })).max(16),
   })
   .transform((body) => ({
     passwordSignup: body.password_signup,
     passwordReset: body.password_reset,
     microsoft: body.microsoft,
     trustedEmailDomain: body.trusted_email_domain,
+    // The fixed order, whatever the API sends; an id this release does not know is dropped.
+    providers: PROVIDER_IDS.filter((id) => body.providers.some((p) => p.id === id)) as ProviderId[],
   }));
 
 export type AuthMethods = z.infer<typeof authMethodsSchema>;
