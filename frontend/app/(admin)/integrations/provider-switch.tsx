@@ -9,14 +9,19 @@ import { messageForCode } from "@/lib/i18n/errors";
 
 import { switchProviderAction, type SwitchState } from "./actions";
 
-/** The button that turns a configured provider off, or back on. */
+/**
+ * The button that turns a configured provider off, or back on. `labelledBy` is the id of the
+ * provider's heading, which names the form: every provider's button reads the same.
+ */
 export function ProviderSwitch({
   provider,
   enabled,
+  labelledBy,
   dict,
 }: {
   provider: ProviderId;
   enabled: boolean;
+  labelledBy: string;
   dict: Dictionary;
 }) {
   const t = dict.settings.integrations;
@@ -24,7 +29,7 @@ export function ProviderSwitch({
   const failure = state.code ? messageForCode(state.code, dict.errors) : null;
 
   return (
-    <form action={submit} className="flex flex-col gap-2">
+    <form action={submit} aria-labelledby={labelledBy} className="flex flex-col gap-2">
       <input type="hidden" name="provider" value={provider} />
       <input type="hidden" name="enabled" value={String(!enabled)} />
       <div>

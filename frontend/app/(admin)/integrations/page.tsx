@@ -83,7 +83,12 @@ export default async function IntegrationsPage() {
 
             {provider.configured ? (
               <div className="flex flex-col gap-3">
-                <ProviderSwitch provider={provider.id} enabled={provider.enabled} dict={dict} />
+                <ProviderSwitch
+                  provider={provider.id}
+                  enabled={provider.enabled}
+                  labelledBy={headingId}
+                  dict={dict}
+                />
                 <p className="max-w-body text-small text-ink-3">{t.note}</p>
               </div>
             ) : null}
