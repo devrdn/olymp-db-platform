@@ -525,64 +525,6 @@ func TestLinkingKeepsAPasswordTheOwnerChose(t *testing.T) {
 	}
 }
 
-func TestEnteringALinkedAccountRetiresItsUnusedOneTimePassword(t *testing.T) {
-	f := newFixture(t)
-	ana := f.oneTimeStudent(t)
-
-	entered, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft)
-	if err != nil {
-		t.Fatalf("RetireOneTimePassword() = %v", err)
-	}
-
-	assertOneTimePasswordRetired(t, f, ana, entered)
-}
-
-func TestEnteringALinkedAccountWithAChosenPasswordWritesNothing(t *testing.T) {
-	f := newFixture(t)
-	ana := f.addUser(t, "ana", "a password ana chose")
-
-	entered, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft)
-	if err != nil {
-		t.Fatalf("RetireOneTimePassword() = %v", err)
-	}
-
-	if entered.PasswordHash != ana.PasswordHash || len(f.sink.entries) != 0 {
-		t.Errorf("returned %+v with audit %v, want the account unchanged and nothing recorded", entered, f.sink.actions())
-	}
-}
-
-// The account is re-read under the lock, as LinkExternal does: one made
-// staff or blocked since the caller's read keeps its password.
-func TestRetiringRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
-	for name, tc := range map[string]struct {
-		account users.User
-		want    error
-	}{
-		"made staff": {users.User{Roles: []string{"organizer"}}, users.ErrStaffNotLinkable},
-		"blocked":    {users.User{Status: users.StatusBlocked}, users.ErrAccountBlocked},
-		"deleted":    {users.User{Status: users.StatusDeleted}, users.ErrAccountDeleted},
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t)
-			f.repo.GrantRole("organizer", "contests.manage")
-			account := tc.account
-			account.Login, account.FullName, account.MustChangePassword = "ana", "Ana", true
-			account.PasswordHash = passwordtest.Hash(t, "issued one-time password")
-			if account.Roles == nil {
-				account.Roles = []string{users.RoleStudent}
-			}
-			ana := f.repo.Add(account)
-
-			if _, err := f.service.RetireOneTimePassword(t.Context(), ana.ID, users.ProviderMicrosoft); !errors.Is(err, tc.want) {
-				t.Errorf("RetireOneTimePassword() = %v, want %v", err, tc.want)
-			}
-			if stored, _ := f.repo.Get(ana.ID); stored.PasswordHash != ana.PasswordHash {
-				t.Error("the password was dropped")
-			}
-		})
-	}
-}
-
 // The account is re-read under its lock: what the caller read before may no
 // longer hold.
 func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {

@@ -262,14 +262,16 @@ password. Each other way in is the installation's choice:
   by address and by the email or login typed; past it, starting a sign-up,
   asking for a new code and asking for a reset link answer
   `too_many_attempts` (429) until the window passes, whoever asks.
-- **A Microsoft sign-in drops an unused one-time password.** When it enters
-  a student account that still holds the one-time password staff issued,
-  whether by linking it through its address or through an identity linked
-  before, the password is removed and every older session ends, in the same
-  transaction. The person never had that password; kept, it would send them
-  to a change form that asks for it. The account then signs in through
-  Microsoft, or with a password its owner sets through **Forgot password?**;
-  a password sign-in is refused, as for any account without one.
+- **A Microsoft sign-in that links an account drops its unused one-time
+  password.** When it links a student account through its address while the
+  account still holds the one-time password staff issued, the password is
+  removed and every older session ends, in the same transaction. The person
+  never had that password; kept, it would send them to a change form that
+  asks for it. The account then signs in through Microsoft, or with a
+  password its owner sets through **Forgot password?**; a password sign-in
+  is refused, as for any account without one. A one-time password an
+  administrator issues after the link is kept: the next Microsoft sign-in
+  lands on the change form, as a password sign-in does.
 - **What the audit trail records.** A password sign-up is `user.create` with
   no actor; a first Microsoft sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account

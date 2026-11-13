@@ -199,7 +199,10 @@ func assertEnteredWithoutTheOneTimePassword(t *testing.T, f *fixture, ana, got u
 	}
 }
 
-func TestAKnownIdentityEntersItsAccountWithoutTheOneTimePassword(t *testing.T) {
+// Once an identity is linked, a one-time password on the account was issued
+// by an administrator on purpose, after the link: the person holds it, and
+// the sign-in sends them on to change it.
+func TestAKnownIdentityKeepsAOneTimePasswordIssuedAfterTheLink(t *testing.T) {
 	f := newFixture(t)
 	ana := f.oneTimeStudent(t)
 	f.link(t, ana, "sub-ana")
@@ -209,7 +212,13 @@ func TestAKnownIdentityEntersItsAccountWithoutTheOneTimePassword(t *testing.T) {
 		t.Fatalf("Resolve() = %v", err)
 	}
 
-	assertEnteredWithoutTheOneTimePassword(t, f, ana, got)
+	stored, _ := f.repo.Get(ana.ID)
+	if stored.PasswordHash != ana.PasswordHash || !stored.MustChangePassword || stored.SessionGeneration != ana.SessionGeneration {
+		t.Errorf("stored %+v, want the issued password, its flag and the sessions kept", stored)
+	}
+	if got.ID != ana.ID || !got.MustChangePassword {
+		t.Errorf("returned %+v, want ana's account still bound to change its password", got)
+	}
 }
 
 func TestATrustedEmailLinksAnAccountWithoutItsOneTimePassword(t *testing.T) {

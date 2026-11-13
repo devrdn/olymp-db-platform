@@ -1902,12 +1902,14 @@ it, with the number of questions waiting beside it while the contest runs.
     linked to another identity of the same issuer, since a provider may
     give a mailbox to somebody new. An address that is not vouched for is
     kept only on the identity, never on the account, and never links.
-    Entering a student account that still holds the one-time password staff
-    issued, by a link or through an identity linked before, drops that
-    password (the hash becomes NULL and the flag clears) and ends the
-    account's older sessions, in the same transaction, recorded as
-    `user.one_time_password_retire`: the person never had it, and kept, it
-    would send them to a change form that asks for it. From then on the
+    Linking a student account that still holds the one-time password staff
+    issued drops that password (the hash becomes NULL and the flag clears)
+    and ends the account's older sessions, in the same transaction,
+    recorded as `user.one_time_password_retire`: the person never had it,
+    and kept, it would send them to a change form that asks for it. A
+    one-time password issued after the link was handed to the person on
+    purpose, so entering through the linked identity keeps it and sends
+    them to `/password`. From then on the
     account signs in through the provider, or with a password its owner sets
     by a reset link. Deleting an account deletes its identities. Another
     provider is another adapter, with no change to federation.
