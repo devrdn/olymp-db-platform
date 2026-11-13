@@ -2582,6 +2582,7 @@ const ro = {
     external_signin_failed: "Autentificarea cu Microsoft nu a reușit. Încercați din nou.",
     external_signin_staff_account: "Această adresă aparține contului unui organizator sau administrator. Autentificați-vă cu parola lui sau rugați un administrator să o reseteze.",
     external_signin_closed: "Acest cont Microsoft nu este legat de niciun cont de aici, iar conturi noi nu se pot crea. Cereți unul organizatorilor.",
+    external_signin_conflict: "Nu vă puteți autentifica aici cu acest cont Microsoft: contul dumneavoastră de pe acest site este legat de alt cont Microsoft sau organizația dumneavoastră nu este admisă. Adresați-vă unui administrator.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
     internal_error: "Serverul nu a putut procesa cererea.",

@@ -358,12 +358,14 @@ var externalSignInRedirects = []struct {
 	{err: users.ErrAccountDeleted, code: codeAccountBlocked},
 	{err: auth.ErrAccountBlocked, code: codeAccountBlocked},
 	{err: federation.ErrInvalidClaims, code: codeExternalSignInFailed},
-	{err: federation.ErrIdentityConflict, code: codeExternalSignInFailed},
+	// Refused on every try, so the person is sent to an administrator, not
+	// back to the button.
+	{err: federation.ErrIdentityConflict, code: codeExternalSignInConflict},
 	{err: microsoft.ErrSignInRefused, code: codeExternalSignInFailed},
 	{err: microsoft.ErrExchangeFailed, code: codeExternalSignInFailed},
 	{err: microsoft.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},
 	{err: microsoft.ErrInvalidToken, code: codeExternalSignInFailed},
-	{err: microsoft.ErrTenantNotAllowed, code: codeExternalSignInFailed},
+	{err: microsoft.ErrTenantNotAllowed, code: codeExternalSignInConflict},
 	{err: microsoft.ErrStateInvalid, code: codeExternalSignInFailed},
 	{err: microsoft.ErrStateExpired, code: codeExternalSignInFailed},
 }

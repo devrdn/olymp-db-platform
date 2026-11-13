@@ -522,7 +522,9 @@ var (
 	// Never a JSON answer: the browser arrives at the sign-in page with the
 	// code in ?error=. A blocked or deleted account arrives as account_blocked.
 	codeExternalSignInFailed = httpx.NewCode("external_signin_failed",
-		"Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, the installation does not admit that provider's tenant, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again.")
+		"Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again.")
+	codeExternalSignInConflict = httpx.NewCode("external_signin_conflict",
+		"Signing in through the external provider will not succeed however often it is tried: the account the address belongs to is already linked to another identity at the same provider, or the installation does not admit that provider's tenant. Ask an administrator.")
 	codeExternalSignInStaffAccount = httpx.NewCode("external_signin_staff_account",
 		"The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is never entered through an external provider. Sign in with that account's password, or have an administrator reset it.")
 	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
