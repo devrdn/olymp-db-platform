@@ -702,10 +702,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			PendingLogins: postgres.NewSignups(pool),
 		}),
 		Auth: authService, Limiter: limiter, Middleware: authMiddleware, Cookies: cookies, Log: log,
+		Switches: installation,
 	}))
 	modules = append(modules, api.NewAuthMethodsHandler(api.AuthMethods{
 		Signups: signups, Recoveries: recoveries,
-		Providers: configuredProviderIDs(providers), TrustedEmailDomain: cfg.TrustedEmailDomain,
+		Providers: configuredProviderIDs(providers), Switches: installation,
+		TrustedEmailDomain: cfg.TrustedEmailDomain, Log: log,
 	}))
 
 	// Covers are not optional: an unwritable directory fails startup, and the

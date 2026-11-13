@@ -2,6 +2,9 @@
 // like and which language its email is written in, changed from a screen
 // rather than a deploy.
 //
+// It also holds, outside the catalogue, the switch that turns sign-in through
+// an external provider off (switches.go); a switch is not a secret.
+//
 // It does not hold what the process needs to start or anything secret; those
 // stay in the environment (platform/config). A wrong value here makes the
 // installation look wrong, not unreachable or unsafe. Nor does it hold

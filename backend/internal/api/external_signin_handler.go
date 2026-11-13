@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
 // Each provider's endpoints have this budget, each route on its own,
@@ -35,9 +38,20 @@ type SignInConnector interface {
 	Exchange(ctx context.Context, code string, st connector.State) (federation.Claims, error)
 }
 
+// SignInSwitches says which providers an administrator switched off
+// (settings.Service).
+type SignInSwitches interface {
+	DisabledSignInProviders(ctx context.Context) (map[string]bool, error)
+}
+
+// errSignInSwitchedOff refuses a start or callback of a provider an
+// administrator switched off; it answers external_signin_unavailable.
+var errSignInSwitchedOff = errors.New("an administrator switched this sign-in off")
+
 // SignInProvider is one way to sign in through someone else's directory.
 // Connector nil means it is not configured and has no routes; Variables name
-// the environment variables that configure it.
+// the environment variables that configure it. States must be sealed for ID,
+// so one provider's state never opens at another's callback.
 type SignInProvider struct {
 	ID        string
 	Connector SignInConnector
@@ -53,6 +67,7 @@ type ExternalSignIn struct {
 	Limiter    *auth.Limiter
 	Middleware *auth.Middleware
 	Cookies    auth.CookieWriter
+	Switches   SignInSwitches
 	Log        *slog.Logger
 }
 
@@ -70,7 +85,18 @@ type ExternalSignInHandler struct {
 	cfg ExternalSignIn
 }
 
+// NewExternalSignInHandler panics when a provider cannot be served: an id
+// no identity can carry, or a connector with nothing to seal its state, or no
+// switches to read. Both are mistakes of the composition root, found at start-up.
 func NewExternalSignInHandler(cfg ExternalSignIn) *ExternalSignInHandler {
+	for _, p := range cfg.Providers {
+		if !slices.Contains(users.Providers, p.ID) {
+			panic(fmt.Sprintf("api: sign-in provider %q is not one of users.Providers", p.ID))
+		}
+		if p.Connector != nil && (p.States == nil || cfg.Switches == nil) {
+			panic(fmt.Sprintf("api: sign-in provider %q has a connector but no state seal or switches", p.ID))
+		}
+	}
 	return &ExternalSignInHandler{cfg: cfg}
 }
 
@@ -100,6 +126,9 @@ func (h signInFlow) start(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, h.provider.ID+"_start:ip:"+addressKey(r)) {
 		return
 	}
+	if !h.switchedOn(w, r) {
+		return
+	}
 	st, err := connector.NewState(r.URL.Query().Get("return"))
 	if err != nil {
 		h.fail(w, r, err)
@@ -115,6 +144,9 @@ func (h signInFlow) start(w http.ResponseWriter, r *http.Request) {
 func (h signInFlow) callback(w http.ResponseWriter, r *http.Request) {
 	h.cfg.Cookies.ClearState(w, h.provider.ID)
 	if !h.admit(w, r, h.provider.ID+"_callback:ip:"+addressKey(r)) {
+		return
+	}
+	if !h.switchedOn(w, r) {
 		return
 	}
 	query := r.URL.Query()
@@ -195,6 +227,21 @@ func (h signInFlow) admit(w http.ResponseWriter, r *http.Request, subject string
 	}
 	if !allowed {
 		redirect(w, signInPage(codeExternalSignInFailed))
+		return false
+	}
+	return true
+}
+
+// switchedOn reads the switches uncached, so a switch-off holds at the next
+// start or callback. A switch that cannot be read refuses the sign-in.
+func (h signInFlow) switchedOn(w http.ResponseWriter, r *http.Request) bool {
+	off, err := h.cfg.Switches.DisabledSignInProviders(r.Context())
+	if err != nil {
+		h.fail(w, r, fmt.Errorf("read the sign-in switches: %w", err))
+		return false
+	}
+	if off[h.provider.ID] {
+		h.fail(w, r, errSignInSwitchedOff)
 		return false
 	}
 	return true

@@ -167,6 +167,9 @@ const (
 	// ActionSettingsMailTest records an administrator sending themselves the
 	// test message, with how the relay answered; it changes nothing.
 	ActionSettingsMailTest = "settings.mail_test"
+	// ActionSettingsSignInProvider records an administrator switching sign-in
+	// through one external provider on or off.
+	ActionSettingsSignInProvider = "settings.sign_in_provider"
 )
 
 // actions lists every action code declared above; TestEveryActionIsListed
@@ -203,7 +206,7 @@ var actions = []string{
 
 	ActionEventRegistrationCheckIn,
 
-	ActionSettingsChange, ActionSettingsMailTest,
+	ActionSettingsChange, ActionSettingsMailTest, ActionSettingsSignInProvider,
 }
 
 var actionSet = func() map[string]struct{} {

@@ -420,7 +420,7 @@ then, and the **Secret ID** beside it is not the secret. The portal suggests
 180 days and allows up to 24 months, unless the tenant's policy allows less.
 Put the expiry in a calendar. On that day every sign-in with Microsoft
 fails: people read "Signing in with Microsoft did not work", and the API's
-log warns `a Microsoft sign-in was refused` with Microsoft's `AADSTS7000222`
+log warns `a sign-in was refused` (`provider=microsoft`) with Microsoft's `AADSTS7000222`
 (an invalid value is `AADSTS7000215`).
 
 To rotate without anybody being refused, use the fact that a registration
@@ -516,8 +516,8 @@ in a query string is redacted too.
 
 A sign-in with Microsoft that does not succeed brings the person back to the
 sign-in page with one of these sentences. The API's log says why: a warning
-`a Microsoft sign-in was refused`, or an error `a Microsoft sign-in failed`
-when Microsoft's signing keys could not be fetched.
+`a sign-in was refused`, or an error `a sign-in failed`, both with
+`provider=microsoft`, when Microsoft's signing keys could not be fetched.
 
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
