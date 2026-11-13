@@ -66,7 +66,9 @@ type Claims struct {
 	Email                     string
 	Name                      string
 	// LoginHint, usually the person's username at the provider, seeds a new
-	// account's login.
+	// account's login. Name and LoginHint are cleaned and cut to their bounds
+	// rather than refused, since a profile's display text is the person's
+	// to choose.
 	LoginHint string
 	// EmailTrusted is the adapter's decision that the provider vouches the
 	// person owns Email. Only a trusted email is put on an account or used to
@@ -96,8 +98,6 @@ func (c Claims) identity() (users.ExternalIdentity, error) {
 		{"provider", c.Provider, MaxProviderLength},
 		{"issuer", c.Issuer, MaxIssuerLength},
 		{"subject", c.Subject, MaxSubjectLength},
-		{"name", c.Name, MaxNameLength},
-		{"login hint", c.LoginHint, MaxLoginHintLength},
 	} {
 		if !boundedText(f.value, f.max) {
 			return users.ExternalIdentity{}, fmt.Errorf("%w: the %s must be at most %d bytes of text", ErrInvalidClaims, f.name, f.max)
@@ -115,6 +115,31 @@ func (c Claims) identity() (users.ExternalIdentity, error) {
 		return users.ExternalIdentity{}, fmt.Errorf("%w: %v", ErrInvalidClaims, err)
 	}
 	return identity, nil
+}
+
+// cleaned returns c with Name and LoginHint stripped of invalid UTF-8 and
+// control characters and cut to their bounds.
+func (c Claims) cleaned() Claims {
+	c.Name = cleanText(c.Name, MaxNameLength)
+	c.LoginHint = cleanText(c.LoginHint, MaxLoginHintLength)
+	return c
+}
+
+// cleanText cuts at a character boundary, so the result stays valid UTF-8.
+func cleanText(s string, limit int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))
+	if len(s) <= limit {
+		return s
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit]
 }
 
 func boundedText(s string, limit int) bool {

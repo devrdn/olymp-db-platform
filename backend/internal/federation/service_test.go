@@ -492,14 +492,12 @@ func TestOversizedClaimsAreRefused(t *testing.T) {
 		"long issuer":      func(c *federation.Claims) { c.Issuer = over(federation.MaxIssuerLength) },
 		"long subject":     func(c *federation.Claims) { c.Subject = over(federation.MaxSubjectLength) },
 		"long email":       func(c *federation.Claims) { c.Email = over(federation.MaxEmailLength-12) + "@example.edu" },
-		"long name":        func(c *federation.Claims) { c.Name = over(federation.MaxNameLength) },
-		"long login hint":  func(c *federation.Claims) { c.LoginHint = over(federation.MaxLoginHintLength) },
 		"no subject":       func(c *federation.Claims) { c.Subject = "" },
 		"no issuer":        func(c *federation.Claims) { c.Issuer = "" },
 		"unknown provider": func(c *federation.Claims) { c.Provider = "elsewhere" },
 		"not an email":     func(c *federation.Claims) { c.Email = "Ana <ana@example.edu>" },
-		"invalid UTF-8":    func(c *federation.Claims) { c.Name = "Ana \xff" },
 		"a control char":   func(c *federation.Claims) { c.Subject = "sub\x00ana" },
+		"invalid UTF-8":    func(c *federation.Claims) { c.Issuer = issuer + "\xff" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
@@ -511,6 +509,61 @@ func TestOversizedClaimsAreRefused(t *testing.T) {
 			}
 			if f.store.calls != 0 {
 				t.Errorf("store calls = %d, want none before the claims are valid", f.store.calls)
+			}
+		})
+	}
+}
+
+// The name and the login hint are only display and a suggestion, so what a
+// provider's profile carries is cleaned and cut, never a refusal. The cases
+// are the shapes each adapter hands over: GitHub's profile name and login,
+// Microsoft's preferred_username, and Google's and Microsoft's email as the
+// hint, vouched for or not.
+func TestTheNameAndTheLoginHintAreCleanedNotRefused(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("ă", n/2) + "x" }
+	for name, tc := range map[string]struct {
+		edit           func(*federation.Claims)
+		fullName, base string
+	}{
+		"a GitHub name with a tab": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\tPopescu" }, fullName: "AnaPopescu", base: "ana"},
+		"a name with a NUL and invalid UTF-8": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\x00 Pop\xffescu" }, fullName: "Ana Popescu", base: "ana"},
+		"an overlong name": {
+			edit: func(c *federation.Claims) { c.Name = long(federation.MaxNameLength) }, fullName: strings.Repeat("ă", federation.MaxNameLength/2), base: "ana"},
+		"a GitHub login with a control character": {
+			edit: func(c *federation.Claims) { c.LoginHint = "ana\x7fp" }, fullName: "Ana Popescu", base: "anap"},
+		"a Microsoft username with invalid UTF-8": {
+			edit: func(c *federation.Claims) { c.LoginHint = "ana\xff.p@example.edu" }, fullName: "Ana Popescu", base: "ana.p"},
+		"an overlong hint": {
+			edit: func(c *federation.Claims) { c.LoginHint = long(federation.MaxLoginHintLength) }, fullName: "Ana Popescu", base: "anapopescu"},
+		"an untrusted email with a control character as the hint": {
+			edit: func(c *federation.Claims) { c.Email = "ana\x00@example.edu"; c.LoginHint = c.Email }, fullName: "Ana Popescu", base: "ana"},
+		"an untrusted email with invalid UTF-8 as the hint": {
+			edit: func(c *federation.Claims) { c.Email = "ana\xff@example.edu"; c.LoginHint = c.Email }, fullName: "Ana Popescu", base: "ana"},
+	} {
+		t.Run(name+", linked", func(t *testing.T) {
+			f := newFixture(t)
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Roles: []string{users.RoleStudent}})
+			f.link(t, ana, "sub-ana")
+			c := claims("sub-ana")
+			tc.edit(&c)
+
+			if got, err := f.service().Resolve(t.Context(), c); err != nil || got.ID != ana.ID {
+				t.Errorf("Resolve() = %v, %v; want ana's account", got.ID, err)
+			}
+		})
+		t.Run(name+", new", func(t *testing.T) {
+			f := newFixture(t)
+			c := claims("sub-ion")
+			tc.edit(&c)
+
+			got, err := f.service().Resolve(t.Context(), c)
+			if err != nil {
+				t.Fatalf("Resolve() = %v, want a new account", err)
+			}
+			if got.FullName != tc.fullName || got.Login != tc.base {
+				t.Errorf("new account %q named %q, want %q named %q", got.Login, got.FullName, tc.base, tc.fullName)
 			}
 		})
 	}

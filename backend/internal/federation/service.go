@@ -81,6 +81,7 @@ func NewService(cfg Config) *Service {
 // users.ErrAccountDeleted, and ErrSignupClosed where an account would have to
 // be created.
 func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
+	c = c.cleaned()
 	identity, err := c.identity()
 	if err != nil {
 		return users.User{}, err
