@@ -63,7 +63,7 @@ export function AppBar({
   return (
     <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0] print:hidden">
       <div />
-      <div className="flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:px-4.5">
+      <div className="flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:h-auto max-narrow:min-h-12 max-narrow:flex-wrap max-narrow:gap-x-3 max-narrow:px-4.5">
         {home ? (
           <Link href={home} className={markClass}>
             {mark}
@@ -74,14 +74,21 @@ export function AppBar({
 
         {children ? (
           <>
-            <span aria-hidden className="h-4.5 w-px shrink-0 bg-line-2" />
-            <div className="flex min-w-0 flex-1 items-center gap-3.5">{children}</div>
+            <span aria-hidden className="h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden" />
+            {/* At phone width the destinations take a row of their own below the
+               mark and controls, scrolling sideways rather than overlapping them. */}
+            <div
+              data-slot="app-bar-nav"
+              className="flex min-w-0 flex-1 items-center gap-3.5 max-narrow:order-last max-narrow:basis-full max-narrow:overflow-x-auto"
+            >
+              {children}
+            </div>
           </>
         ) : (
           <div className="flex-1" />
         )}
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5 max-narrow:ml-auto">
           <ThemeToggle current={theme} labels={dict.chrome.theme} />
           <LanguageSwitcher current={locale} label={dict.chrome.language} />
           {account ? <AccountLink account={account} /> : null}
