@@ -1848,8 +1848,9 @@ it, with the number of questions waiting beside it while the contest runs.
     or linked through an external provider: an address somebody typed must
     not become a way into that power (`users.ActsAsStaff`). It keeps its
     password and the administrator's reset. The contest check is one probe
-    of `contest_managers_user_id_idx`, made only by recovery, a sign-up for
-    a known address and an external sign-in.
+    of `contest_managers_user_id_idx`, made only by recovery, a sign-up's
+    start or new code (for a new address too, so the two take the same
+    queries) and an external sign-in.
   - **Creating an account is one switch.** `SELF_SIGNUP_ENABLED` governs
     both the password sign-up and the accounts an external sign-in creates.
   - **Sign-up with a password** (`internal/signup`). The form (full name,
