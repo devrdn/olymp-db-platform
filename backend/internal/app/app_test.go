@@ -159,3 +159,21 @@ func TestASignUpFloodLeavesRecoveryItsMailBudget(t *testing.T) {
 		}
 	}
 }
+
+// Password sign-up needs mail; with the switch on and mail off only
+// Microsoft creates accounts, which an operator should hear at start-up.
+func TestSelfSignupWithoutMailIsWarnedAtStartUp(t *testing.T) {
+	for name, tc := range map[string]struct {
+		signup, mail, warned bool
+	}{
+		"sign-up on, mail off": {true, false, true},
+		"sign-up on, mail on":  {true, true, false},
+		"sign-up off":          {false, false, false},
+	} {
+		var logs strings.Builder
+		warnSignupWithoutMail(logging.New("info", &logs), tc.signup, tc.mail)
+		if got := strings.Contains(logs.String(), "SELF_SIGNUP_ENABLED") && strings.Contains(logs.String(), `"level":"WARN"`); got != tc.warned {
+			t.Errorf("%s: warned %v, want %v:\n%s", name, got, tc.warned, logs.String())
+		}
+	}
+}

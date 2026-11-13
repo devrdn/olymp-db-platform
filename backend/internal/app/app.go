@@ -85,6 +85,17 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 // PUBLIC_URL; the application registration names the same address.
 const microsoftCallbackPath = "/api/v1/auth/microsoft/callback"
 
+// warnSignupWithoutMail says at start-up that SELF_SIGNUP_ENABLED is on
+// while mail is off: no code can reach anyone, so password sign-up does not
+// exist and only a first Microsoft sign-in creates accounts, which nothing
+// else would tell the operator.
+func warnSignupWithoutMail(log *slog.Logger, selfSignup, mailOn bool) {
+	if selfSignup && !mailOn {
+		log.Warn("SELF_SIGNUP_ENABLED is on but mail is off (SMTP_HOST is empty): password sign-up is not offered, " +
+			"and only a first sign-in through Microsoft, when connected, creates accounts")
+	}
+}
+
 // selfServiceMail is the installation's two budgets of mail to addresses
 // anyone may type, counted apart so a flood of sign-ups cannot shut
 // recovery: sign-up codes and existing-account notices, and reset links.
@@ -609,6 +620,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	modules = append(modules, registrationsHandler)
 
+	warnSignupWithoutMail(log, cfg.SelfSignupEnabled, outbox.Enabled())
 	signupMail, recoveryMail := selfServiceMail(limiter, log)
 	// Built whatever the switch says, so rows left from before it was turned
 	// off are still swept.
