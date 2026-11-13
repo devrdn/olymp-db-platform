@@ -158,7 +158,7 @@ describe("SignInForm, the providers under the password form", () => {
     links.forEach((link, i) => {
       expect(link).toHaveAccessibleName(`Continue with ${NAMES[ALL[i]]}`);
       expect(link).not.toHaveAttribute("aria-label");
-      expect(link.querySelector("svg")).not.toBeNull();
+      expect(link.querySelector("[aria-hidden=true]")).not.toBeNull();
       expect(link).toHaveAttribute("href", `/api/v1/auth/${ALL[i]}/start`);
     });
   });
