@@ -526,7 +526,7 @@ var (
 	codeExternalSignInConflict = httpx.NewCode("external_signin_conflict",
 		"Signing in through the external provider will not succeed however often it is tried: the account the address belongs to is already linked to another identity at the same provider, or the installation does not admit that provider's tenant. Ask an administrator.")
 	codeExternalSignInStaffAccount = httpx.NewCode("external_signin_staff_account",
-		"The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is never entered through an external provider. Sign in with that account's password, or have an administrator reset it.")
+		"The address the provider vouches for, or the identity already linked, belongs to a staff account: one holding a global role, or managing or owning a contest that is not archived. Such an account is entered through a provider only from the installation's own directory. Otherwise sign in with that account's password, or have an administrator reset it.")
 	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
 		"The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored.")
 )

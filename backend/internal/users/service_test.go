@@ -426,7 +426,7 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
 	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
 
-	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), at); err != nil {
+	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: at}); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 
@@ -494,7 +494,7 @@ func TestLinkingRetiresAnUnusedOneTimePassword(t *testing.T) {
 	f.service.WithExternalIdentities(f.repo)
 	ana := f.oneTimeStudent(t)
 
-	linked, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+	linked, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
@@ -513,7 +513,7 @@ func TestLinkingKeepsAPasswordTheOwnerChose(t *testing.T) {
 		PasswordHash: passwordtest.Hash(t, "a password ana chose"),
 	})
 
-	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
+	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()}); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 
@@ -553,7 +553,7 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 			locked := 0
 			f.repo.OnLock = func(uuid.UUID) { locked++ }
 
-			_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+			_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()})
 
 			if !errors.Is(err, tc.want) {
 				t.Errorf("LinkExternal() = %v, want %v", err, tc.want)
@@ -574,6 +574,108 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 	}
 }
 
+func TestLinkExternalAdmitsStaffFromTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.repo.GrantRole("organizer", "contests.manage")
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{"organizer"}})
+	locked := 0
+	f.repo.OnLock = func(uuid.UUID) { locked++ }
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+		UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: true,
+	})
+
+	if err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	if locked != 1 {
+		t.Errorf("locks taken = %d, want one", locked)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
+	}
+	var found bool
+	for _, e := range f.sink.entries {
+		if e.Action == audit.ActionUserExternalIdentityLink {
+			found = true
+			if e.Payload["home_directory"] != true {
+				t.Errorf("audit payload = %v, want home_directory true", e.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("audit = %v, want the link recorded", f.sink.actions())
+	}
+}
+
+func TestLinkExternalRefusesStaffOutsideTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.repo.GrantRole("organizer", "contests.manage")
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{"organizer"}})
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+		UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: false,
+	})
+
+	if !errors.Is(err, users.ErrStaffNotLinkable) {
+		t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+	if len(f.sink.entries) != 0 {
+		t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+	}
+}
+
+func TestLinkExternalStillRefusesABlockedOrDeletedAccountFromTheHomeDirectory(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status string
+		want   error
+	}{
+		"blocked": {users.StatusBlocked, users.ErrAccountBlocked},
+		"deleted": {users.StatusDeleted, users.ErrAccountDeleted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.repo.GrantRole("organizer", "contests.manage")
+			f.service.WithExternalIdentities(f.repo)
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Status: tc.status, Roles: []string{"organizer"}})
+
+			_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+				UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: true,
+			})
+
+			if !errors.Is(err, tc.want) {
+				t.Errorf("LinkExternal() = %v, want %v", err, tc.want)
+			}
+			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+				t.Errorf("identities = %+v, want none", linked)
+			}
+		})
+	}
+}
+
+func TestLinkExternalAdmitsAContestManagerFromTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	f.repo.AppointToContest(ana.ID)
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+		UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: true,
+	})
+
+	if err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
+	}
+}
+
 // A contest's manager reads its reference answers with no global role, so a
 // trusted address must not carry anyone into the account.
 func TestLinkExternalRefusesAContestManager(t *testing.T) {
@@ -582,7 +684,7 @@ func TestLinkExternalRefusesAContestManager(t *testing.T) {
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
 	f.repo.AppointToContest(ana.ID)
 
-	_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now())
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()})
 
 	if !errors.Is(err, users.ErrStaffNotLinkable) {
 		t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
@@ -604,7 +706,7 @@ func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-after"), time.Now())
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-after"), VerifiedAt: time.Now()})
 
 	if !errors.Is(err, users.ErrIssuerAlreadyLinked) {
 		t.Errorf("LinkExternal() = %v, want ErrIssuerAlreadyLinked", err)
@@ -630,7 +732,7 @@ func TestLinkExternalLinksAnIdentityOfAnotherIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := f.service.LinkExternal(t.Context(), ana.ID, microsoftIdentity("sub-ana"), time.Now()); err != nil {
+	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()}); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
@@ -644,7 +746,7 @@ func TestLinkExternalRefusesAnInvalidIdentity(t *testing.T) {
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
 	identity := microsoftIdentity("")
 
-	if _, err := f.service.LinkExternal(t.Context(), ana.ID, identity, time.Now()); !errors.Is(err, users.ErrInvalidAccount) {
+	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: identity, VerifiedAt: time.Now()}); !errors.Is(err, users.ErrInvalidAccount) {
 		t.Errorf("LinkExternal() = %v, want ErrInvalidAccount", err)
 	}
 }

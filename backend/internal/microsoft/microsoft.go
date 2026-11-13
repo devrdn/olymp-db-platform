@@ -359,6 +359,9 @@ func (c *Client) federated(t idTokenClaims) federation.Claims {
 		Name:         cut(t.Name, federation.MaxNameLength),
 		LoginHint:    cut(hint, federation.MaxLoginHintLength),
 		EmailTrusted: email != "" && (home || domainVerified(t.DomainVerified) || t.TenantID == ConsumerTenant),
+		// A verified domain of another tenant vouches for the address, not
+		// for membership of this installation's directory.
+		HomeDirectory: home,
 	}
 }
 

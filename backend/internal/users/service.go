@@ -398,11 +398,23 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 	return created, nil
 }
 
+// LinkExternalCommand is a request to tie an external identity to an account.
+type LinkExternalCommand struct {
+	UserID   uuid.UUID
+	Identity ExternalIdentity
+	// VerifiedAt is when the identity's email was vouched for.
+	VerifiedAt time.Time
+	// HomeDirectory is the adapter's statement, at this sign-in, that the
+	// provider says the person is a member of the installation's own
+	// directory. Only an adapter decides it.
+	HomeDirectory bool
+}
+
 // LinkExternal ties the identity to an existing account and records the
-// identity's email as verified at verifiedAt, in one transaction. The account
+// identity's email as verified at VerifiedAt, in one transaction. The account
 // is locked and read again first, so a change committed since the caller's
 // read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
-// ErrStaffNotLinkable, ErrNotFound when the account no longer holds the
+// ErrStaffNotLinkable unless HomeDirectory is set, ErrNotFound when the account no longer holds the
 // identity's email, which is what vouched for linking it, and
 // ErrIssuerAlreadyLinked when the account already holds another identity at
 // the same issuer: a provider may reassign a mailbox, and the address must
@@ -410,10 +422,12 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 // on its one-time password loses it, as retireOneTimePassword says. It
 // returns the account as it then stands. As for CreateExternal, the owner
 // made the change, so the audit entries have no actor.
-func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity ExternalIdentity, verifiedAt time.Time) (User, error) {
+func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (User, error) {
 	if s.identities == nil {
 		return User{}, errNoIdentityStore
 	}
+	userID, verifiedAt := cmd.UserID, cmd.VerifiedAt
+	identity := cmd.Identity
 	identity.UserID = userID
 	if err := identity.Validate(); err != nil {
 		return User{}, err
@@ -429,7 +443,7 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		if err != nil {
 			return err
 		}
-		if err := s.refuseExternalEntry(ctx, u); err != nil {
+		if err := s.refuseExternalEntry(ctx, u, cmd.HomeDirectory); err != nil {
 			return err
 		}
 		if identity.Email == "" || !strings.EqualFold(u.Email, identity.Email) {
@@ -450,8 +464,9 @@ func (s *Service) LinkExternal(ctx context.Context, userID uuid.UUID, identity E
 		}
 		u.EmailVerifiedAt = &verifiedAt
 		if err := s.record(ctx, uuid.Nil, audit.ActionUserExternalIdentityLink, userID, map[string]any{
-			"provider":      identity.Provider,
-			"email_trusted": true,
+			"provider":       identity.Provider,
+			"email_trusted":  true,
+			"home_directory": cmd.HomeDirectory,
 		}); err != nil {
 			return err
 		}
@@ -488,13 +503,18 @@ func (s *Service) retireOneTimePassword(ctx context.Context, u *User, provider s
 }
 
 // refuseExternalEntry says why an account read under its lock cannot be
-// entered or linked through an external provider, if it cannot.
-func (s *Service) refuseExternalEntry(ctx context.Context, u User) error {
+// entered or linked through an external provider, if it cannot. A blocked or
+// deleted account is refused whatever the provider says; staff only when it
+// does not vouch for the person as a member of the home directory.
+func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory bool) error {
 	switch {
 	case u.Status == StatusDeleted:
 		return ErrAccountDeleted
 	case !u.IsActive():
 		return ErrAccountBlocked
+	}
+	if homeDirectory {
+		return nil
 	}
 	staff, err := ActsAsStaff(ctx, s.repo, u)
 	if err != nil {
