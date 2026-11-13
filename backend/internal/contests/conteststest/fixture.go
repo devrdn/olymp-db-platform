@@ -142,7 +142,7 @@ func NewFixture() *Fixture {
 		Submissions:   f.Submissions,
 		Sequence:      f.Sequence,
 		Users:         f.Users,
-		Appointees:    f.Users,
+		Appointees:    appointees{Repository: f.Users, managers: f.Managers, contests: f.Contests},
 		Audit:         audit.New(f.Audit),
 		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
@@ -165,6 +165,32 @@ func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
 	f.config.Gate = f.Gate
 	f.Service = contests.NewService(f.config).WithAccessCache(f.Access)
 	return f
+}
+
+// appointees answers ManagesContest from the fixture's staff lists, as the
+// real query reads contest_managers, besides what the account fake was told.
+type appointees struct {
+	*userstest.Repository
+	managers *Managers
+	contests *Contests
+}
+
+func (a appointees) ManagesContest(ctx context.Context, id uuid.UUID) (bool, error) {
+	if manages, err := a.Repository.ManagesContest(ctx, id); err != nil || manages {
+		return manages, err
+	}
+	for contestID, staff := range a.managers.byContest {
+		c, err := a.contests.ByID(ctx, contestID)
+		if err != nil || c.Status == contests.StatusArchived {
+			continue
+		}
+		for _, m := range staff {
+			if m.UserID == id {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // AccessCache records what the service told auth's cache to forget.

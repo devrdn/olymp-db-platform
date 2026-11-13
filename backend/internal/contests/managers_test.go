@@ -63,6 +63,51 @@ func TestAnAppointmentRetiresTheAppointeesSessions(t *testing.T) {
 	}
 }
 
+// An appointment that gives no new staff power must not sign the appointee
+// out, an administrator appointing themselves included.
+func TestAppointingAnAccountThatAlreadyActsAsStaffKeepsItsSessions(t *testing.T) {
+	for name, arrange := range map[string]func(f *conteststest.Fixture, c contests.Contest) users.User{
+		"a global role": func(f *conteststest.Fixture, _ contests.Contest) users.User {
+			return f.AddAdministrator("admin")
+		},
+		"a manager of another contest": func(f *conteststest.Fixture, _ contests.Contest) users.User {
+			other := f.SeedContest(contests.StatusDraft)
+			u := f.AddUser("assistant")
+			if err := f.Service.GrantManager(context.Background(), uuid.New(), other.ID, u.ID, rbac.RoleManager); err != nil {
+				t.Fatalf("first GrantManager() = %v", err)
+			}
+			u, _ = f.Users.ByID(context.Background(), u.ID)
+			return u
+		},
+		"a manager of this contest, appointed again": func(f *conteststest.Fixture, c contests.Contest) users.User {
+			u := f.AddUser("assistant")
+			if err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, u.ID, rbac.RoleManager); err != nil {
+				t.Fatalf("first GrantManager() = %v", err)
+			}
+			u, _ = f.Users.ByID(context.Background(), u.ID)
+			return u
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := f.SeedContest(contests.StatusDraft)
+			staff := arrange(f, c)
+			f.Access.Forgotten = nil
+
+			if err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, staff.ID, rbac.RoleManager); err != nil {
+				t.Fatalf("GrantManager() = %v", err)
+			}
+
+			if stored, _ := f.Users.ByID(context.Background(), staff.ID); stored.SessionGeneration != staff.SessionGeneration {
+				t.Errorf("session generation = %d, want %d kept", stored.SessionGeneration, staff.SessionGeneration)
+			}
+			if len(f.Access.Forgotten) != 0 {
+				t.Errorf("forgotten = %v, want nothing", f.Access.Forgotten)
+			}
+		})
+	}
+}
+
 func TestARefusedAppointmentRetiresNoSession(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
