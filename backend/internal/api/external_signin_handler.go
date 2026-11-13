@@ -252,7 +252,10 @@ func (h signInFlow) switchedOn(w http.ResponseWriter, r *http.Request) bool {
 // code nor a token is ever logged: no error here carries one.
 func (h signInFlow) fail(w http.ResponseWriter, r *http.Request, err error) {
 	code, outage, _ := externalSignInCode(err)
-	if outage {
+	// Only when the request's own context ended, so a cancellation of ours
+	// is still an outage.
+	clientLeft := r.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+	if outage && !clientLeft {
 		h.cfg.Log.ErrorContext(r.Context(), "a sign-in failed", "provider", h.provider.ID, "error", err)
 	} else {
 		h.cfg.Log.WarnContext(r.Context(), "a sign-in was refused", "provider", h.provider.ID, "error", err)
