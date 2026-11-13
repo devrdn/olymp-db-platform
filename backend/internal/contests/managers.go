@@ -100,6 +100,7 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		return err
 	}
 
+	retire := false
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		// The roster check reads a different table than the write, so a
 		// concurrent Enroll could pass its own staff check at the same time.
@@ -107,13 +108,23 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
-		// The appointee now acts as staff, and a staff account is entered
-		// through a provider only from the home directory. The lock makes a
-		// link in flight wait and then see the appointment; the bump ends
-		// every session opened before it.
+		// A staff account is entered through a provider only from the home
+		// directory. The lock makes a link in flight wait and then see the
+		// appointment, and the account is read again under it; only an
+		// account that did not act as staff gains power, so only its
+		// sessions, opened through any provider, end.
 		if err := s.appointees.Lock(ctx, user.ID); err != nil {
 			return err
 		}
+		current, err := s.users.ByID(ctx, user.ID)
+		if err != nil {
+			return err
+		}
+		staff, err := users.ActsAsStaff(ctx, s.appointees, current)
+		if err != nil {
+			return err
+		}
+		retire = !staff
 		if _, err := s.registrations.ByUser(ctx, contestID, userID); err == nil {
 			return ErrParticipantCannotBeStaff
 		} else if !errors.Is(err, ErrParticipantNotFound) {
@@ -128,8 +139,10 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		}); err != nil {
 			return err
 		}
-		if _, err := s.appointees.BumpSessionGeneration(ctx, user.ID); err != nil {
-			return err
+		if retire {
+			if _, err := s.appointees.BumpSessionGeneration(ctx, user.ID); err != nil {
+				return err
+			}
 		}
 		return s.record(ctx, actorID, audit.ActionManagerGrant, contestID, map[string]any{
 			"user_id": user.ID.String(),
@@ -140,7 +153,9 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	if err != nil {
 		return err
 	}
-	s.forget(ctx, user.ID)
+	if retire {
+		s.forget(ctx, user.ID)
+	}
 	return nil
 }
 

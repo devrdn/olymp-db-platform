@@ -1943,45 +1943,47 @@ it, with the number of questions waiting beside it while the contest runs.
     another person's account, and an account's address must equal the
     identity's in ASCII for a link. The display name and the login hint,
     which only seeds a new login, lose invalid UTF-8 and control characters
-    and are cut to their bounds, never refused. Linking any account that still holds the
-    one-time password staff issued (a student's, or a staff account linked
-    through the home directory) drops that password (the hash becomes NULL
-    and the flag clears) and ends the account's older sessions, in the same
-    transaction, recorded as `user.one_time_password_retire`: the person
-    never had it, and kept, it would send them to a change form that asks
-    for it. A one-time password issued after the link was handed to the
-    person on purpose, so entering through the linked identity keeps it and
-    sends them to `/password`. From then on the account signs in through the
-    provider, or with a password its owner sets by a reset link, or, for a
-    staff account, which never gets one, a password an administrator issues.
-    Deleting an account deletes its identities, and nothing else unlinks
-    one. A known risk, accepted by the owner: a provider's verified mark
-    is what it checked once, so if the installation gives an address to
-    another person, a previous holder whose address is still verified at
-    GitHub or in a personal Microsoft or Google account is linked into
-    the new holder's account at a first sign-in through that provider.
-    The issuer guard above protects only the other direction. A sign-in
-    through the installation's own directory is not affected; the
-    mitigation is not reusing addresses, and an administrator can block
-    an account so linked. Another provider is another adapter, with no
-    change to federation.
+    and are cut to their bounds, never refused. Linking any account that
+    still holds the one-time password staff issued (a student's, or a staff
+    account linked through the home directory) drops that password (the hash
+    becomes NULL and the flag clears) and ends the account's older sessions,
+    in the same transaction, recorded as `user.one_time_password_retire`:
+    the person never had it, and kept, it would send them to a change form
+    that asks for it. A one-time password issued after the link was handed
+    to the person on purpose, so entering through the linked identity keeps
+    it and sends them to `/password`. From then on the account signs in
+    through the provider, or with a password its owner sets by a reset link,
+    or, for a staff account, which never gets one, a password an
+    administrator issues. Deleting an account deletes its identities, and
+    nothing else unlinks one. A known risk, accepted by the owner: a
+    provider's verified mark is what it checked once, so if the installation
+    gives an address to another person, a previous holder whose address is
+    still verified at GitHub or in a personal Microsoft or Google account is
+    linked into the new holder's account at a first sign-in through that
+    provider. The issuer guard above protects only the other direction. A
+    sign-in through the installation's own directory is not affected; the
+    mitigation is not reusing addresses, and an administrator can block an
+    account so linked. Another provider is another adapter, with no change
+    to federation.
 
     **Staff and the home directory.** A staff account is entered or linked
     through a provider only when the adapter says the provider, at this
     sign-in, puts the person in the installation's own directory. That is
     checked at every sign-in, a linked identity included, and again under
-    the lock that links the account (`users.Service.LinkExternal`). A
-    change of roles and an appointment to a contest's staff both write the
-    account's row in their transaction and raise its session generation,
-    so one made between the read and the link is still caught, and a
-    session opened before it, through any provider, ends. The adapters
-    decide it so: Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose
-    token says so with `acct` = 0; Google, an account whose `hd` claim is
+    the lock that links the account (`users.Service.LinkExternal`). A change
+    of roles and an appointment to a contest's staff both write or lock the
+    account's row in their transaction, so one made between the read and the
+    link is still caught. A change of roles always raises the session
+    generation; an appointment raises it when the account did not act as
+    staff before, so a session opened before it, through any provider, ends,
+    and somebody already staff keeps theirs. The adapters decide it so:
+    Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose token says so
+    with `acct` = 0; Google, an account whose `hd` claim is
     `GOOGLE_HOME_DOMAIN` with a verified email; GitHub, never, because it
-    vouches for no organisation's directory. The flag travels unchanged
-    from the adapter through `federation.Claims` and
-    `users.LinkExternalCommand` to that locked re-read, and is recorded
-    as `home_directory` in the link's audit entry.
+    vouches for no organisation's directory. The flag travels unchanged from
+    the adapter through `federation.Claims` and `users.LinkExternalCommand`
+    to that locked re-read, and is recorded as `home_directory` in the
+    link's audit entry.
   - **The shared connector** (`internal/connector`). Every adapter runs the
     same flow: the authorisation code with PKCE, and a state, nonce, PKCE
     verifier and return path in an `HttpOnly` cookie sealed with a key derived
@@ -2180,10 +2182,10 @@ than the remaining lifetime in the first place.
 
 **Sessions are revoked through a generation counter.**
 `users.session_generation` rises on a block, a password change, a password
-reset, a change of roles and an appointment to a contest's staff, and a
-session records the generation it was issued under. A mismatch means the
-session is dead. That is "sign out everywhere", implemented without an index
-of live sessions over a plain key-value interface.
+reset, a change of roles and an appointment that makes an account contest
+staff, and a session records the generation it was issued under. A mismatch
+means the session is dead. That is "sign out everywhere", implemented without
+an index of live sessions over a plain key-value interface.
 
 The account itself is **checked on every request**, so a block takes effect on
 the next request rather than when the session happens to expire. So that this

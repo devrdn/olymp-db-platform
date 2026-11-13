@@ -43,11 +43,13 @@ type UserDirectory interface {
 }
 
 // AppointeeSessions retires the sessions of an account appointed to a
-// contest's staff (internal/postgres.Users). Both join the transaction in ctx.
+// contest's staff (internal/postgres.Users). Every method joins the
+// transaction in ctx.
 type AppointeeSessions interface {
 	// Lock holds the account's row until the transaction ends.
 	Lock(ctx context.Context, id uuid.UUID) error
 	BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64, error)
+	users.ContestManagers
 }
 
 // AccessCache is auth's short-lived copy of accounts (users.AccessCache).

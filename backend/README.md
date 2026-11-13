@@ -296,6 +296,11 @@ password. Each other way in is the installation's choice:
   account without one. A one-time password an administrator issues after the
   link is kept: the next sign-in through the provider lands on the change
   form, as a password sign-in does.
+- **Only an ASCII address finds or links an account.** An address with any
+  character outside ASCII, vouched for or not, is never used to find or link
+  an account, nor put on one: Unicode case folding would take one spelling
+  for another person's. Such a person enters a separate account, created
+  without an address when sign-up is on.
 - **A reused address is an accepted risk.** A provider's "verified" is what
   it once checked, not who holds the address today. If the installation
   gives an address to another person, a previous holder whose address is
@@ -923,9 +928,9 @@ into a denial of service against its owner. A cache failure refuses the attempt
 holds only its SHA-256. A dump yields digests, which cannot authenticate.
 
 **Sessions outliving their welcome.** `users.session_generation` advances on
-block, password change, password reset, role change and appointment to a
-contest's staff; a session records the generation it was issued at, so all of
-them die at once. The account is also
+block, password change, password reset, role change and an appointment that
+makes an account contest staff; a session records the generation it was issued
+at, so all of them die at once. The account is also
 re-read on every request, so blocking takes effect on the next request rather
 than whenever the session lapses. That costs one indexed query, which is the
 right trade at this scale.
