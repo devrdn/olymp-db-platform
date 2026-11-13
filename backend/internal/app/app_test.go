@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -112,20 +113,43 @@ func jobNames(jobs []task) []string {
 	return names
 }
 
-func TestTheMicrosoftClientIsBuiltOnlyWhenConfigured(t *testing.T) {
-	off, err := newMicrosoftClient(config.Config{MicrosoftTenant: "common"})
-	if err != nil || off != nil {
-		t.Errorf("without a client: %v, %v; want no connector", off, err)
+func TestEachConnectorIsBuiltOnlyWhenConfigured(t *testing.T) {
+	off, err := signInProviders(config.Config{MicrosoftTenant: "common"})
+	if err != nil {
+		t.Fatalf("signInProviders() = %v", err)
+	}
+	wantIDs := []string{"microsoft", "google", "github"}
+	wantVariables := [][]string{
+		{"MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"},
+		{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"},
+		{"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
+	}
+	if len(off) != len(wantIDs) {
+		t.Fatalf("%d providers, want %d", len(off), len(wantIDs))
+	}
+	for i, p := range off {
+		if p.ID != wantIDs[i] || !reflect.DeepEqual(p.Variables, wantVariables[i]) {
+			t.Errorf("provider %d = %q %v, want %q %v", i, p.ID, p.Variables, wantIDs[i], wantVariables[i])
+		}
+		if p.Connector != nil {
+			t.Errorf("%s has a connector without configuration", p.ID)
+		}
+		if p.States == nil {
+			t.Errorf("%s has no state sealer", p.ID)
+		}
 	}
 
-	on, err := newMicrosoftClient(config.Config{
+	on, err := signInProviders(config.Config{
 		MicrosoftClientID: "11111111-2222-4333-8444-555555555555", MicrosoftClientSecret: "a-test-client-secret",
 		MicrosoftTenant: "common", PublicURL: "https://contest.example.edu",
 	})
-	if err != nil || on == nil {
-		t.Fatalf("newMicrosoftClient() = %v, %v", on, err)
+	if err != nil || on[0].Connector == nil {
+		t.Fatalf("signInProviders() = %v, %v; want a Microsoft connector", on, err)
 	}
-	authorize, err := url.Parse(on.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
+	if on[1].Connector != nil || on[2].Connector != nil {
+		t.Error("an unconfigured provider got a connector")
+	}
+	authorize, err := url.Parse(on[0].Connector.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
 	if err != nil {
 		t.Fatal(err)
 	}

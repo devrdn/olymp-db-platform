@@ -181,21 +181,24 @@ func TestTheSignupCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testing.T) {
 	}
 }
 
-func TestTheMicrosoftStateCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testing.T) {
+func TestTheStateCookieIsNamedPerProviderAndProtectedAsTheSessionCookieIs(t *testing.T) {
 	for _, c := range []struct {
-		secure bool
-		name   string
+		secure   bool
+		provider string
+		name     string
 	}{
-		{true, "__Host-dbcontest_ms_state"},
-		{false, "dbcontest_ms_state"},
+		{true, "microsoft", "__Host-dbcontest_microsoft_state"},
+		{false, "microsoft", "dbcontest_microsoft_state"},
+		{true, "google", "__Host-dbcontest_google_state"},
+		{false, "github", "dbcontest_github_state"},
 	} {
 		writer := NewCookieWriter(c.secure)
-		if got := writer.MicrosoftStateName(); got != c.name {
-			t.Errorf("secure=%v: MicrosoftStateName() = %q, want %q", c.secure, got, c.name)
+		if got := writer.StateName(c.provider); got != c.name {
+			t.Errorf("secure=%v: StateName(%q) = %q, want %q", c.secure, c.provider, got, c.name)
 		}
 
 		rec := httptest.NewRecorder()
-		writer.SetMicrosoftState(rec, "sealed-state", 10*time.Minute)
+		writer.SetState(rec, c.provider, "sealed-state", 10*time.Minute)
 		cookie := sessionCookie(t, rec, c.name)
 		if !cookie.HttpOnly || cookie.Secure != c.secure || cookie.SameSite != http.SameSiteLaxMode ||
 			cookie.Path != "/" || cookie.Domain != "" {
@@ -206,7 +209,7 @@ func TestTheMicrosoftStateCookieIsNamedAndProtectedAsTheSessionCookieIs(t *testi
 		}
 
 		rec = httptest.NewRecorder()
-		writer.ClearMicrosoftState(rec)
+		writer.ClearState(rec, c.provider)
 		if cleared := sessionCookie(t, rec, c.name); cleared.MaxAge >= 0 || cleared.Value != "" {
 			t.Errorf("secure=%v: cleared cookie = %+v, want it emptied and expired", c.secure, cleared)
 		}

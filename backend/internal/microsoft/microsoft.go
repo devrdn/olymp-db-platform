@@ -207,8 +207,8 @@ const maxAccountTypeLength = 16
 
 // Exchange trades the code for an ID token, verifies it against st, and
 // returns the claims federation resolves. The signature is checked against
-// the published keys (connector.KeySet), the audience and expiry by go-oidc, and the
-// issuer, nonce and tenant here.
+// the published keys (connector.KeySet), the audience and expiry by go-oidc,
+// and the issuer, nonce and tenant here.
 func (c *Client) Exchange(ctx context.Context, code string, st connector.State) (federation.Claims, error) {
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, c.http)
 	token, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(st.Verifier))
