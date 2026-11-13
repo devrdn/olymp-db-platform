@@ -49,14 +49,17 @@ const COPIED_MS = 2_000;
 /**
  * Copies text, falling back where the async clipboard is missing (plain HTTP),
  * and reports the result in a live region that is always rendered, so the
- * change is announced.
+ * change is announced. `describedBy` names what is copied, where several alike buttons share a
+ * page.
  */
 export function CopyButton({
   text,
   labels,
+  describedBy,
 }: {
   text: string;
   labels: { copy: string; copied: string; copyFailed: string };
+  describedBy?: string;
 }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -71,7 +74,12 @@ export function CopyButton({
 
   return (
     <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={copy} className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}>
+      <button
+        type="button"
+        onClick={copy}
+        aria-describedby={describedBy}
+        className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
+      >
         {labels.copy}
       </button>
       <span role="status" className={cn("text-small", state === "failed" ? "text-bad" : "text-ink-3")}>

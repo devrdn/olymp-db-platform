@@ -73,6 +73,7 @@ export default async function IntegrationsPage() {
                   <code className="min-w-0 break-all font-mono text-data text-ink">{provider.redirectUri}</code>
                   <CopyButton
                     text={provider.redirectUri}
+                    describedBy={headingId}
                     labels={{ copy: t.copy, copied: t.copied, copyFailed: t.copyFailed }}
                   />
                 </div>
@@ -86,7 +87,7 @@ export default async function IntegrationsPage() {
                 <ProviderSwitch
                   provider={provider.id}
                   enabled={provider.enabled}
-                  labelledBy={headingId}
+                  describedBy={headingId}
                   dict={dict}
                 />
                 <p className="max-w-body text-small text-ink-3">{t.note}</p>

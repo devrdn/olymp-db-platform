@@ -117,16 +117,15 @@ describe("the integrations page", () => {
     expect(google.getByRole("button", { name: t().switchOn })).toBeVisible();
   });
 
-  test("each switch is named by its provider, so three alike buttons are told apart", async () => {
+  test("each switch and each copy button is described by its provider, so alike buttons are told apart", async () => {
     answer();
     await renderPage();
 
-    expect(screen.getAllByRole("form")).toHaveLength(2);
-    const microsoft = within(screen.getByRole("form", { name: "Microsoft" }));
-    expect(microsoft.getByRole("button", { name: t().switchOff })).toBeVisible();
-    const google = within(screen.getByRole("form", { name: "Google" }));
-    expect(google.getByRole("button", { name: t().switchOn })).toBeVisible();
-    expect(screen.queryByRole("form", { name: "GitHub" })).toBeNull();
+    expect(screen.getByRole("button", { name: t().switchOff })).toHaveAccessibleDescription("Microsoft");
+    expect(screen.getByRole("button", { name: t().switchOn })).toHaveAccessibleDescription("Google");
+    for (const name of ["Microsoft", "Google", "GitHub"]) {
+      expect(within(section(name)).getByRole("button", { name: t().copy })).toHaveAccessibleDescription(name);
+    }
   });
 
   test("without a public address it says so instead of a redirect URI", async () => {
