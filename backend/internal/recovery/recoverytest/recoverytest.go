@@ -74,6 +74,7 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 			settings.KeyName:         "DB Contest",
 			settings.KeyMailLanguage: string(mailing.English),
 		},
+		Limiter: auth.NewLimiter(memoryCache(t)),
 		MailBudget: mailing.NewBudget("recovery", mailing.Limits{PerMinute: recovery.MailsPerMinute, PerDay: recovery.MailsPerDay},
 			auth.NewLimiter(memoryCache(t)), logger),
 		UnitOfWork: uow,

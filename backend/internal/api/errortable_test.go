@@ -688,6 +688,10 @@ func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		recovery.ErrInvalidLink: {status: http.StatusGone, code: "reset_link_invalid",
 			message: "the reset link is unknown, used or expired"},
+		recovery.ErrTooManyLinks: {status: http.StatusTooManyRequests, code: "too_many_attempts",
+			message: "too many password reset links were asked for from this address; wait before trying again"},
+		recovery.ErrMailBudget: {status: http.StatusTooManyRequests, code: "too_many_attempts",
+			message: "this site is sending too many messages just now; wait a few minutes before trying again"},
 	}
 
 	declared := map[string]bool{}

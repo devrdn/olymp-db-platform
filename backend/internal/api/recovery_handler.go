@@ -78,9 +78,10 @@ type forgotResponse struct {
 
 // The address is spent before the body is read, and the identifier, an
 // unbounded key, only once bounded and for a caller the address admitted
-// (CLAUDE.md rule 5). The lookup, the link, the recovery mail budget and the
-// mail happen after the answer, so neither its time nor a failure tells
-// whether an account was reached.
+// (CLAUDE.md rule 5); then the service spends the recovery mail budgets,
+// alike for every identifier. The lookup, the link and the mail happen after
+// the answer, so neither its time nor a failure tells whether an account was
+// reached.
 func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, "password_forgot:ip:"+addressKey(r), RecoveriesPerAddress, recoveryAddressWindow) {
 		return
@@ -98,7 +99,12 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.recoveries.Submit(r.Context(), recovery.RequestCommand{LoginOrEmail: req.Login, Lang: readerMailLanguage(r)})
+	if _, err := h.recoveries.Submit(r.Context(), recovery.RequestCommand{
+		LoginOrEmail: req.Login, Lang: readerMailLanguage(r), Sender: addressKey(r),
+	}); err != nil {
+		h.fail(w, r, err)
+		return
+	}
 	httpx.JSON(w, r, http.StatusAccepted, forgotResponse{Status: "link_sent"})
 }
 
@@ -141,8 +147,8 @@ func (h *RecoveryHandler) admit(w http.ResponseWriter, r *http.Request, subject 
 	return true
 }
 
-// recoveryAnswers is what the reset answers from: the link's refusal and the
-// new password's.
+// recoveryAnswers is what forgot and the reset answer from: the budgets'
+// refusals, the link's and the new password's.
 var recoveryAnswers = joined(recoveryErrors, usersErrors)
 
 func (h *RecoveryHandler) fail(w http.ResponseWriter, r *http.Request, err error) {

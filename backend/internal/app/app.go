@@ -651,6 +651,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Outbox:     outbox,
 		Texts:      texts,
 		Settings:   installation,
+		Limiter:    limiter,
 		MailBudget: recoveryMail,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 		PublicURL:  cfg.PublicURL,

@@ -5,15 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/recovery"
 	"github.com/devrdn/db-contest/backend/internal/recovery/recoverytest"
@@ -427,8 +428,8 @@ func gated(t *testing.T) (*recoverytest.Fixture, *recoverytest.GatedDirectory) {
 	f := recoverytest.NewFixture(t, func(c *recovery.Config) {
 		dir = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
 		c.Directory = dir
-		// The bound on requests in flight is under test, not the mail budget.
-		budgetOf(recovery.MaxInFlight)(c)
+		// The bound on requests in flight is under test, not the budgets.
+		c.Limiter, c.MailBudget = authtest.Unlimited{}, &countingBudget{}
 	})
 	// Registered after the fixture's Stop, so it runs first and Stop can end.
 	t.Cleanup(gate.Release)
@@ -460,7 +461,7 @@ func TestSubmitRequestsALinkOutlivingTheCallersContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if !f.Service.Submit(ctx, recovery.RequestCommand{LoginOrEmail: "ana", Lang: "en"}) {
+	if taken, err := f.Service.Submit(ctx, recovery.RequestCommand{LoginOrEmail: "ana", Lang: "en"}); err != nil || !taken {
 		t.Fatal("Submit() refused the request")
 	}
 	stop(t, f)
@@ -474,7 +475,7 @@ func TestSubmitRequestsALinkOutlivingTheCallersContext(t *testing.T) {
 func TestARequestInTheBackgroundHasItsOwnDeadline(t *testing.T) {
 	f, dir := gated(t)
 	before := time.Now()
-	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	_, _ = f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
 	arrive(t, dir.Gate, 1)
 	dir.Gate.Release()
 	stop(t, f)
@@ -490,13 +491,13 @@ func TestSubmitHoldsAtMostEightRequestsAndDropsTheRest(t *testing.T) {
 	f, dir := gated(t)
 	student(t, f, "ana", "ana@example.edu")
 	for i := range recovery.MaxInFlight {
-		if !f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+		if taken, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}); err != nil || !taken {
 			t.Fatalf("request %d was dropped below the bound", i)
 		}
 	}
 	arrive(t, dir.Gate, recovery.MaxInFlight)
 
-	if f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+	if taken, _ := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}); taken {
 		t.Error("a request past the bound was taken")
 	}
 	if log := f.Log.String(); !strings.Contains(log, "level=WARN") || !strings.Contains(log, "dropped") {
@@ -514,7 +515,7 @@ func TestSubmitLogsAFailureNobodyIsWaitingFor(t *testing.T) {
 	student(t, f, "ana", "ana@example.edu")
 	f.Store.ReplaceErr = errors.New("the database is away")
 
-	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	_, _ = f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
 	stop(t, f)
 
 	if log := f.Log.String(); !strings.Contains(log, "level=ERROR") || !strings.Contains(log, "the database is away") {
@@ -528,7 +529,7 @@ func TestSubmitLogsAFailureNobodyIsWaitingFor(t *testing.T) {
 func TestStopWaitsForRequestsInFlightUntilItsDeadline(t *testing.T) {
 	f, dir := gated(t)
 	student(t, f, "ana", "ana@example.edu")
-	f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
+	_, _ = f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"})
 	arrive(t, dir.Gate, 1)
 
 	short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -536,7 +537,7 @@ func TestStopWaitsForRequestsInFlightUntilItsDeadline(t *testing.T) {
 	if err := f.Service.Stop(short); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Stop() with a request held = %v, want its deadline", err)
 	}
-	if f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}) {
+	if taken, _ := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana"}); taken {
 		t.Error("a stopped service took a request")
 	}
 
@@ -575,61 +576,140 @@ func TestCompleteReadsTheAccountOnlyOnceItHoldsIt(t *testing.T) {
 	}
 }
 
-// budgetOf gives the fixture a recovery mail budget of perMinute.
-func budgetOf(perMinute int) func(*recovery.Config) {
-	return func(cfg *recovery.Config) {
-		cfg.MailBudget = mailing.NewBudget("recovery", mailing.Limits{PerMinute: perMinute, PerDay: recovery.MailsPerDay},
-			auth.NewLimiter(cache.NewMemory(1000)), cfg.Log)
-	}
+// countingBudget stands in for the installation's recovery budget, refusing
+// while closed and counting every spend.
+type countingBudget struct {
+	mu     sync.Mutex
+	closed bool
+	spent  int
 }
 
-// Only a link that is mailed spends the budget, so requests for accounts a
-// link cannot reach leave it whole for the ones it can.
-func TestARequestThatMailsNothingSpendsNoMailBudget(t *testing.T) {
-	f := recoverytest.NewFixture(t, budgetOf(1))
+func (b *countingBudget) Spend(context.Context) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.spent++
+	return !b.closed, nil
+}
+
+func (b *countingBudget) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
+}
+
+func withBudget(b *countingBudget) func(*recovery.Config) {
+	return func(cfg *recovery.Config) { cfg.MailBudget = b }
+}
+
+// The budget is spent for every request, before anything is looked up: one
+// spent only for an account a link reaches would let a caller who watches
+// their own link learn whether another address has an account.
+func TestSubmitSpendsTheMailBudgetWhateverTheAccount(t *testing.T) {
+	budget := &countingBudget{}
+	f := recoverytest.NewFixture(t, withBudget(budget))
+	student(t, f, "ana", "ana@example.edu")
 	f.Users.Add(users.User{
 		Login: "organiser", Email: "organiser@example.edu", FullName: "Org Aniser",
 		Roles: []string{recoverytest.StaffRole}, PasswordHash: "x",
 	})
 	f.Users.Add(users.User{Login: "held", Email: "held@example.edu", FullName: "Held", Status: users.StatusBlocked, PasswordHash: "x"})
-	account := student(t, f, "ana", "ana@example.edu")
 
-	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "held", "", "nobody", "nobody"} {
-		if err := f.Service.Request(t.Context(), typed, "en"); err != nil {
-			t.Fatalf("Request(%q) = %v", typed, err)
+	for i, typed := range []string{"ana", "organiser", "held", "nobody", "nobody@example.edu", ""} {
+		taken, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: typed, Sender: fmt.Sprintf("sender-%d", i)})
+		if err != nil || !taken {
+			t.Errorf("Submit(%q) = %v, %v, want taken", typed, taken, err)
 		}
-	}
-	requested(t, f, "ana")
-
-	if q := f.Outbox.Queued(); len(q) != 1 || q[0].UserID != account.ID {
-		t.Errorf("queued %+v, want ana's link alone", q)
+		if got := budget.count(); got != i+1 {
+			t.Errorf("after %q the budget spent %d, want one a request", typed, got)
+		}
 	}
 }
 
-// Past the budget a link is dropped silently: the request was answered long
-// before, and an answer that differed would say the account exists. The
-// link mailed before stays the one that works.
-func TestALinkPastTheRecoveryBudgetIsDroppedAndLogged(t *testing.T) {
-	f := recoverytest.NewFixture(t, budgetOf(1))
+// Past the budget the request is refused before the hand-off, so the
+// refusal depends on no account and nothing is looked up.
+func TestSubmitPastTheMailBudgetIsRefusedBeforeTheHandOff(t *testing.T) {
+	budget := &countingBudget{closed: true}
+	gate := recoverytest.NewGate()
+	var dir *recoverytest.GatedDirectory
+	f := recoverytest.NewFixture(t, func(c *recovery.Config) {
+		dir = &recoverytest.GatedDirectory{Directory: c.Directory, Gate: gate}
+		c.Directory, c.MailBudget = dir, budget
+	})
+	t.Cleanup(gate.Release)
 	student(t, f, "ana", "ana@example.edu")
-	first := requested(t, f, "ana")
 
-	if err := f.Service.Request(t.Context(), "ana", "en"); err != nil {
-		t.Fatalf("Request() past the budget = %v, want nil", err)
+	taken, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "ana", Sender: "a"})
+
+	if !errors.Is(err, recovery.ErrMailBudget) || taken {
+		t.Errorf("Submit() = %v, %v, want ErrMailBudget and nothing taken", taken, err)
+	}
+	stop(t, f)
+	if d := dir.Deadlines(); len(d) != 0 {
+		t.Errorf("%d lookups ran, want none", len(d))
+	}
+}
+
+// The worker spends no budget: the request already paid at the hand-off.
+func TestRequestSpendsNoMailBudget(t *testing.T) {
+	budget := &countingBudget{closed: true}
+	f := recoverytest.NewFixture(t, withBudget(budget))
+	student(t, f, "ana", "ana@example.edu")
+
+	requested(t, f, "ana")
+
+	if budget.count() != 0 {
+		t.Errorf("Request spent %d of the budget, want none", budget.count())
+	}
+}
+
+// One address shares two requests a minute, well under the installation's
+// six, so a single machine cannot hold recovery shut for everybody. Its
+// refusal spends none of the installation's budget.
+func TestOneAddressTakesAtMostItsShareOfRecovery(t *testing.T) {
+	budget := &countingBudget{}
+	f := recoverytest.NewFixture(t, withBudget(budget))
+	for i := range recovery.MailsPerAddressPerMinute {
+		if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: fmt.Sprintf("nobody%d", i), Sender: "hall"}); err != nil {
+			t.Fatalf("request %d = %v", i, err)
+		}
 	}
 
-	if q := f.Outbox.Queued(); len(q) != 1 {
-		t.Errorf("queued %d messages, want the first link alone", len(q))
+	if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "one-more", Sender: "hall"}); !errors.Is(err, recovery.ErrTooManyLinks) {
+		t.Errorf("past the address's share = %v, want ErrTooManyLinks", err)
 	}
-	digest := sha256.Sum256([]byte(first))
-	if rows := f.Store.Rows(); len(rows) != 1 || !bytes.Equal(rows[0].TokenHash, digest[:]) {
-		t.Errorf("links = %+v, want the first one kept", rows)
+	if budget.count() != recovery.MailsPerAddressPerMinute {
+		t.Errorf("the installation's budget spent %d, want only the admitted requests", budget.count())
 	}
-	logged := f.Log.String()
-	if !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "budget=recovery") {
-		t.Errorf("the spent budget was not logged as a warning:\n%s", logged)
+	if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "one-more", Sender: "elsewhere"}); err != nil {
+		t.Errorf("from another address = %v, want admitted", err)
 	}
-	if !strings.Contains(logged, "dropped a password reset link") {
-		t.Errorf("the dropped link was not logged:\n%s", logged)
+}
+
+func TestOneAddressHasADailyShareOfRecovery(t *testing.T) {
+	limiter := &authtest.Limiter{}
+	f := recoverytest.NewFixture(t, func(cfg *recovery.Config) {
+		cfg.Limiter = limiter
+		cfg.MailBudget = &countingBudget{}
+	})
+	for i := range recovery.MailsPerAddressPerDay {
+		if i%recovery.MailsPerAddressPerMinute == 0 {
+			limiter.Pass(time.Minute)
+		}
+		if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "nobody", Sender: "hall"}); err != nil {
+			t.Fatalf("request %d = %v", i, err)
+		}
+	}
+	limiter.Pass(time.Minute)
+
+	if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "nobody", Sender: "hall"}); !errors.Is(err, recovery.ErrTooManyLinks) {
+		t.Errorf("past the address's day = %v, want ErrTooManyLinks", err)
+	}
+}
+
+func TestTheRecoveryBudgetsAreSized(t *testing.T) {
+	if recovery.MailsPerMinute != 6 || recovery.MailsPerDay != 2000 ||
+		recovery.MailsPerAddressPerMinute != 2 || recovery.MailsPerAddressPerDay != 100 {
+		t.Errorf("budgets = %d and %d for the installation, %d and %d per address; want 6, 2000, 2 and 100",
+			recovery.MailsPerMinute, recovery.MailsPerDay, recovery.MailsPerAddressPerMinute, recovery.MailsPerAddressPerDay)
 	}
 }
