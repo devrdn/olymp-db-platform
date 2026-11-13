@@ -1922,33 +1922,34 @@ it, with the number of questions waiting beside it while the contest runs.
     of each window is logged at warn.
   - **External sign-in** (`internal/federation`). It knows no provider: an
     adapter verifies the provider's answer and hands over the claims (the
-    issuer and subject that name the person, an email, a name, a login
-    hint, whether the provider vouches for the email, and whether it says
-    the person belongs to the installation's own directory: the
-    `HomeDirectory` claim, set only by an adapter). Federation then
-    enters the account the identity is linked to; or, for a vouched address,
-    links the live account holding it and marks the address verified; or
-    creates a `student` account with no password, carrying the address only
-    when vouched for and a login derived from the hint or the name. It
-    refuses a staff account unless `HomeDirectory` is set for this sign-in,
-    a blocked or deleted one whatever the provider says, a creation while
-    `SELF_SIGNUP_ENABLED` is off, and a link by email to an account already
-    linked to another identity of the same issuer, since a provider may
-    give a mailbox to somebody new. An address that is not vouched for is
-    kept only on the identity, never on the account, and never links; one
-    that is not a bounded address is dropped instead, so it never stops the
-    sign-in, while a vouched-for one refuses it.
-    Linking a student account that still holds the one-time password staff
-    issued drops that password (the hash becomes NULL and the flag clears)
-    and ends the account's older sessions, in the same transaction,
-    recorded as `user.one_time_password_retire`: the person never had it,
-    and kept, it would send them to a change form that asks for it. A
-    one-time password issued after the link was handed to the person on
-    purpose, so entering through the linked identity keeps it and sends
-    them to `/password`. From then on the
-    account signs in through the provider, or with a password its owner sets
-    by a reset link. Deleting an account deletes its identities. Another
-    provider is another adapter, with no change to federation.
+    issuer and subject that name the person, an email, a name, a login hint,
+    whether the provider vouches for the email, and whether it says the
+    person belongs to the installation's own directory: the `HomeDirectory`
+    claim, set only by an adapter). Federation then enters the account the
+    identity is linked to; or, for a vouched address, links the live account
+    holding it and marks the address verified; or creates a `student`
+    account with no password, carrying the address only when vouched for and
+    a login derived from the hint or the name. It refuses a staff account
+    unless `HomeDirectory` is set for this sign-in, a blocked or deleted one
+    whatever the provider says, a creation while `SELF_SIGNUP_ENABLED` is
+    off, and a link by email to an account already linked to another
+    identity of the same issuer, since a provider may give a mailbox to
+    somebody new. An address that is not vouched for is kept only on the
+    identity, never on the account, and never links; one that is not a
+    bounded address is dropped instead, so it never stops the sign-in, while
+    a vouched-for one refuses it. Linking any account that still holds the
+    one-time password staff issued (a student's, or a staff account linked
+    through the home directory) drops that password (the hash becomes NULL
+    and the flag clears) and ends the account's older sessions, in the same
+    transaction, recorded as `user.one_time_password_retire`: the person
+    never had it, and kept, it would send them to a change form that asks
+    for it. A one-time password issued after the link was handed to the
+    person on purpose, so entering through the linked identity keeps it and
+    sends them to `/password`. From then on the account signs in through the
+    provider, or with a password its owner sets by a reset link, or, for a
+    staff account, which never gets one, a password an administrator issues.
+    Deleting an account deletes its identities. Another provider is another
+    adapter, with no change to federation.
 
     **Staff and the home directory.** A staff account is entered or linked
     through a provider only when the adapter says the provider, at this
@@ -2033,30 +2034,34 @@ it, with the number of questions waiting beside it while the contest runs.
     `GET /api/v1/integrations` and writes
     `PUT /api/v1/integrations/{provider}` with `{"enabled": bool}`; both
     need `settings.manage`). The switch is the setting
-    `auth.<provider>.disabled`, outside the settings catalogue, and a
-    change is audited as `settings.sign_in_provider`. Off, the button is
-    gone, `start` and `callback` answer `/login?error=external_signin_unavailable`,
-    and the links already made are kept, so switching it on restores them.
-    An account that was only ever entered through the provider can set a
-    password by recovery when it has an address on the account (an account
-    entered with no trusted email has none) and mail is on; a staff
-    account is reset by an administrator. `GET /api/v1/auth/methods` lists
-    the configured and enabled providers in the fixed order Microsoft,
-    Google, GitHub (`providers`, and the boolean `microsoft`, which
-    follows the switch) and reuses the switches for at most five seconds
-    per process, since every visitor to the sign-in page reads it; `start`
-    and `callback` read them from the database every time, so a switch-off
-    refuses the next request, not the next cache expiry. When the switches
-    cannot be read, `/auth/methods` lists no providers (logged "could not
-    read the sign-in switches") and `start` and `callback` refuse with
-    `external_signin_failed`, logged at error. The integrations routes
-    answer 404 `not_found` for an unknown or unconfigured provider and 400
-    `invalid_request` for a body without a boolean `enabled` or with unknown
-    fields. Every failure of
-    a callback lands on `/login?error=` with a declared code. A sign-in
-    without a usable return path lands on `/login`, which sends a
-    signed-in visitor on as after a password sign-in; one whose account
-    must still change its password lands on `/password`.
+    `auth.<provider>.disabled`, outside the settings catalogue, and a change
+    is audited as `settings.sign_in_provider`. Off, the button is gone,
+    `start` and `callback` answer
+    `/login?error=external_signin_unavailable`, and the links already made
+    are kept, so switching it on restores them. An account that was only
+    ever entered through the provider can set a password by recovery when it
+    has an address on the account (an account created through a provider
+    that gave no trusted email has none) and mail is on; a staff account is
+    reset by an administrator. An administrator who signs in only through a
+    provider loses their way in once their session ends if they switch it
+    off; the way back is another administrator's password reset, or deleting
+    the `auth.<provider>.disabled` row of `settings` on the host.
+    `GET /api/v1/auth/methods` lists the configured and enabled providers in
+    the fixed order Microsoft, Google, GitHub (`providers`, and the boolean
+    `microsoft`, which follows the switch) and reuses the switches for at
+    most five seconds per process, since every visitor to the sign-in page
+    reads it; `start` and `callback` read them from the database every time,
+    so a switch-off refuses the next request, not the next cache expiry.
+    When the switches cannot be read, `/auth/methods` lists no providers
+    (logged "could not read the sign-in switches") and `start` and
+    `callback` refuse with `external_signin_failed`, logged at error. The
+    integrations routes answer 404 `not_found` for an unknown or
+    unconfigured provider and 400 `invalid_request` for a body without a
+    boolean `enabled` or with unknown fields. Every failure of a callback
+    lands on `/login?error=` with a declared code. A sign-in without a
+    usable return path lands on `/login`, which sends a signed-in visitor on
+    as after a password sign-in; one whose account must still change its
+    password lands on `/password`.
 
 ## 7.1 Reaching a contest: enrolment and address restrictions
 

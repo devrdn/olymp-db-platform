@@ -285,15 +285,17 @@ password. Each other way in is the installation's choice:
     first refusal of each budget's minute or day is logged at warn with the
     budget's name.
 - **A provider sign-in that links an account drops its unused one-time
-  password.** When it links a student account through its address while the
-  account still holds the one-time password staff issued, the password is
+  password.** When it links an account through its address while the account
+  still holds the one-time password staff issued (a student's, or a staff
+  account linked through the installation's own directory), the password is
   removed and every older session ends, in the same transaction. The person
   never had that password; kept, it would send them to a change form that
   asks for it. The account then signs in through the provider, or with a
-  password its owner sets through **Forgot password?**; a password sign-in
-  is refused, as for any account without one. A one-time password an
-  administrator issues after the link is kept: the next sign-in through the
-  provider lands on the change form, as a password sign-in does.
+  password its owner sets through **Forgot password?** (a staff account with
+  one an administrator issues); a password sign-in is refused, as for any
+  account without one. A one-time password an administrator issues after the
+  link is kept: the next sign-in through the provider lands on the change
+  form, as a password sign-in does.
 - **What the audit trail records.** A password sign-up is `user.create` with
   no actor; a first provider sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account
@@ -431,6 +433,16 @@ registration asks for them, and each changes what it can believe:
   **Add optional claim**, **ID**, `acct`) only accounts that are not staff
   enter through Microsoft.
 
+**Upgrading to the release that brings Google and GitHub.** Before it, no
+staff account entered or linked through Microsoft. From it, a member of the
+home tenant whose token carries `acct` = 0 enters the staff account holding
+their address, and linking it drops that account's unused one-time
+password. An installation whose `MICROSOFT_TENANT` is a tenant ID has that
+tenant as its home tenant by default, so it starts doing this on upgrade,
+for staff only once its registration emits `acct`. A `MICROSOFT_TENANT`
+that is the personal-account tenant now refuses start-up; set it to
+`consumers`.
+
 #### The client secret
 
 **New client secret** asks for a description and an expiry. Copy the
@@ -541,11 +553,11 @@ signing keys that could not be fetched.
 
 | Code in `/login?error=` | The person reads | What happened |
 |---|---|---|
-| `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; or more than 120 requests to the provider's `start` or `callback` (counted apart per provider and per route, refusals included) came from their address in ten minutes |
+| `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; more than 120 requests to the provider's `start` or `callback` (counted apart per provider and per route, refusals included) came from their address in ten minutes; or the administrator's switches could not be read (logged at error, [Switching a provider off](#switching-a-provider-off)) |
 | `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose token carries `acct` = 0 (a guest, a token without `acct`, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
 | `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
 | `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
-| `external_signin_unavailable` | "Signing in this way is switched off here. Sign in with your password, or use “Forgot password?” to set one." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |
+| `external_signin_unavailable` | "Signing in this way is switched off here. Sign in another way, or ask an administrator." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |
 | `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |
 
 Some refusals stay on Microsoft's own page and never reach the platform:
@@ -687,8 +699,21 @@ boolean `enabled` or with any other field.
 
 An account that was entered only through that provider has no password. Its
 owner can set one with **Forgot password?** when the account has an address
-(an account entered with no trusted email has none) and mail is on. A staff account never gets a reset link: an administrator resets
-its password.
+(an account created through a provider that gave no trusted email has none)
+and mail is on. A staff account never gets a reset link: an administrator
+resets its password.
+
+An administrator who signs in only through a provider, as one whose
+one-time password a link dropped does, should not switch that provider off:
+once their session ends they have no way in. Another administrator can
+reset their password on **Accounts**. Otherwise, on the host, deleting the
+switch's row turns the provider back on at once, without an audit entry:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec -T pg-core \
+  psql --username=<CORE_DB_USER> --dbname=<CORE_DB_NAME> -c "
+    DELETE FROM settings WHERE key = 'auth.<provider>.disabled'"
+```
 
 ## Running locally
 

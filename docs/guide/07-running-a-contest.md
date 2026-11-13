@@ -250,28 +250,34 @@ installation's settings decide which exist
   participants**. An account that made itself has a login its owner chose,
   or one generated from their provider username, email or name; the picker finds
   it by name or address too.
-- A staff-made student account still on its one-time password loses it
-  when its owner first signs in with a provider, which links the two: the
-  person is let in, and from then on signs in with it, or sets a
-  password of their own with **Forgot password?** (mail on). The one-time
-  password stops working at that sign-in. A one-time password an
-  administrator issues after the link stays: the next sign-in through the provider
-  asks the person to change it, as a password sign-in would.
+- A staff-made account still on its one-time password loses it when its
+  owner first signs in with a provider that links the two (a staff account
+  only through the installation's own directory, below): the person is let
+  in, and from then on signs in with it, or sets a password of their own
+  with **Forgot password?** (mail on; staff ask an administrator). The
+  one-time password stops working at that sign-in. A one-time password an
+  administrator issues after the link stays: the next sign-in through the
+  provider asks the person to change it, as a password sign-in would.
 - Staff accounts never get a reset link, and enter through a provider only
   when the provider says, at that sign-in, that the person belongs to the
   installation's own directory: a member of the Microsoft tenant named by
   `MICROSOFT_HOME_TENANT_ID` (not a guest, and only once the registration
-  emits the `acct` claim), or a Google account of
-  `GOOGLE_HOME_DOMAIN` with a verified email. GitHub never does. Anyone
-  else signs in with their password. That includes
-  an account appointed to manage a contest on **People**, even with no role
-  on **Accounts**, for as long as one of its contests is not archived: it
-  reads the reference answers. An administrator resets its password.
+  emits the `acct` claim), or a Google account of `GOOGLE_HOME_DOMAIN` with
+  a verified email. GitHub never does. Anyone else signs in with their
+  password. That includes an account appointed to manage a contest on
+  **People**, even with no role on **Accounts**, for as long as one of its
+  contests is not archived: it reads the reference answers. An administrator
+  resets its password.
 - An administrator can switch a connected provider off on **Integrations**
   (`/integrations`). Its button disappears and its sign-ins are refused, and
   the links already made are kept. Someone who only ever signed in that way
-  sets a password with **Forgot password?** when the account has an
-  address (an account entered with no trusted email has none) and mail is on; a staff account is reset by an administrator.
+  sets a password with **Forgot password?** when the account has an address
+  (an account created through a provider that gave no trusted email has
+  none) and mail is on; a staff account is reset by an administrator. An
+  administrator who signs in only through that provider should not switch it
+  off: once their session ends, the way back is a password reset by another
+  administrator, or the switch turned back on by whoever runs the server
+  ([Switching a provider off](../../backend/README.md#switching-a-provider-off)).
 - With mail on, anyone with an address on a student account can reset a
   forgotten password themselves from **Forgot password?**; the link lasts
   thirty minutes.
